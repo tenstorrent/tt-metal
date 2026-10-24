@@ -1,0 +1,132 @@
+[
+  {
+    "layer": 3,
+    "candidate": "hifi2_fp16",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "HiFi2",
+      "sdpa_fp32": false
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "262142",
+      "--steps",
+      "2",
+      "--prefill-repeats",
+      "1",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"HiFi2\", \"sdpa_fp32\": false}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/sdpa_native_hifi2_fp16_l3.json"
+    ],
+    "prefill_host_us": 3534178.663045168,
+    "host_us": 763.1131447851658,
+    "minimum_pcc": 0.9999777048424282
+  },
+  {
+    "layer": 3,
+    "candidate": "hifi2_fp32",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "HiFi2",
+      "sdpa_fp32": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "262142",
+      "--steps",
+      "2",
+      "--prefill-repeats",
+      "1",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"HiFi2\", \"sdpa_fp32\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/sdpa_native_hifi2_fp32_l3.json"
+    ],
+    "prefill_host_us": 3565967.2610927373,
+    "host_us": 765.8880203962326,
+    "minimum_pcc": 0.9999777048424282
+  }
+]

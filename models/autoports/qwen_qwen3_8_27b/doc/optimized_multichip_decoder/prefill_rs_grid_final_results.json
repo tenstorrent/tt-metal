@@ -1,0 +1,280 @@
+[
+  {
+    "layer": 0,
+    "candidate": "control",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_control_l0.json"
+    ],
+    "prefill_host_us": 5983.126116916537,
+    "host_us": 447.88792729377747,
+    "minimum_pcc": 0.9999485107557732
+  },
+  {
+    "layer": 0,
+    "candidate": "grid10x8",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          10,
+          8
+        ],
+        "subh": 2,
+        "subw": 4
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [10, 8], \"subh\": 2, \"subw\": 4}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_grid10x8_l0.json"
+    ],
+    "prefill_host_us": 5878.806114196777,
+    "host_us": 445.8839539438486,
+    "minimum_pcc": 0.9999485107557732
+  },
+  {
+    "layer": 0,
+    "candidate": "grid11x8_sub5",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          11,
+          8
+        ],
+        "subh": 1,
+        "subw": 5
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [11, 8], \"subh\": 1, \"subw\": 5}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_grid11x8_sub5_l0.json"
+    ],
+    "prefill_host_us": 5843.7190018594265,
+    "host_us": 446.2851211428642,
+    "minimum_pcc": 0.9999485107557732
+  },
+  {
+    "layer": 0,
+    "candidate": "grid11x8_sub3",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          11,
+          8
+        ],
+        "subh": 2,
+        "subw": 3
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [11, 8], \"subh\": 2, \"subw\": 3}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_grid11x8_sub3_l0.json"
+    ],
+    "prefill_host_us": 5822.026869282126,
+    "host_us": 445.5631133168936,
+    "minimum_pcc": 0.9999485107557732
+  },
+  {
+    "layer": 3,
+    "candidate": "control",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_control_l3.json"
+    ],
+    "prefill_host_us": 6277.709966525435,
+    "host_us": 359.0371925383806,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "grid10x8",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          10,
+          8
+        ],
+        "subh": 2,
+        "subw": 4
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [10, 8], \"subh\": 2, \"subw\": 4}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_grid10x8_l3.json"
+    ],
+    "prefill_host_us": 6153.141148388386,
+    "host_us": 358.7470855563879,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "grid11x8_sub5",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          11,
+          8
+        ],
+        "subh": 1,
+        "subw": 5
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [11, 8], \"subh\": 1, \"subw\": 5}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_grid11x8_sub5_l3.json"
+    ],
+    "prefill_host_us": 6234.196946024895,
+    "host_us": 359.0979613363743,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "grid11x8_sub3",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          11,
+          8
+        ],
+        "subh": 2,
+        "subw": 3
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [11, 8], \"subh\": 2, \"subw\": 3}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_final_grid11x8_sub3_l3.json"
+    ],
+    "prefill_host_us": 6163.2010620087385,
+    "host_us": 358.4160003811121,
+    "minimum_pcc": 0.9998216779564711
+  }
+]

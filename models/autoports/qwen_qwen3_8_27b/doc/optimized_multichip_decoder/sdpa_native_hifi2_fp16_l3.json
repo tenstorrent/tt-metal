@@ -1,0 +1,322 @@
+{
+  "capacity_tokens": 262144,
+  "capacity_alignment": 256,
+  "layer_type": "full_attention",
+  "seq": 262142,
+  "batch": 1,
+  "steps": 2,
+  "layout": "phase_specific",
+  "fused": null,
+  "stack": false,
+  "split_prefill": 0,
+  "policy": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "HiFi2",
+    "sdpa_fp32": false
+  },
+  "provenance": {
+    "tests/run_multichip_decoder.py": "96395001727c6f174a117b185a3e893bd022c8910557aff72d00c0019c149d61",
+    "tt/multichip_decoder.py": "5235d110c0f34903534f4282f4422e010c8976afbc9acde5ac5ec84735b66ae4",
+    "tt/optimized_decoder.py": "ed3f7efd9f0e743a0863f264c7c966e9af0677b588d7e90f015a656db368fadf",
+    "tt/decode_workspace.py": "b0973635a484da7ce9734edd83bb6046cd96ec1e2e2a9943cf23e3f5b735aab2"
+  },
+  "baseline": {
+    "watcher_stress_replays": 0,
+    "async_stress": null,
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 2210.21706238389,
+    "decode_host_us": [
+      2206.208882853389,
+      2210.21706238389
+    ],
+    "median_decode_host_us": 2210.21706238389,
+    "prefill_host_us": 13166182.89006874,
+    "prefill_host_times_us": [
+      13166182.89006874
+    ],
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 311394304,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_weights": {
+        "reported_allocated_bytes_per_bank": 0,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      },
+      "after_trace": {
+        "allocated_bytes": 10163566080,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_trace": {
+        "reported_allocated_bytes_per_bank": 6144,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      }
+    },
+    "effective_policy": {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat8_b",
+      "packed_mlp": true,
+      "prefill_chunk": 1024,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 10,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "out": {
+        "cores": 64,
+        "block": 3,
+        "prefill_block": 32,
+        "readers": 2
+      },
+      "down": {
+        "cores": 68,
+        "block": 8,
+        "prefill_block": 32,
+        "readers": 2
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 2,
+      "history_tile_tail": true,
+      "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "prefill_norm_max_tokens": 1024,
+      "l1_mlp": true,
+      "prefill_unit_subw": 3
+    },
+    "effective_sdpa_chunks": [
+      null
+    ]
+  },
+  "multichip": {
+    "watcher_stress_replays": 0,
+    "async_stress": null,
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 755.3480099886656,
+    "decode_host_us": [
+      763.1131447851658,
+      755.3480099886656
+    ],
+    "median_decode_host_us": 763.1131447851658,
+    "prefill_host_us": 3534178.663045168,
+    "prefill_host_times_us": [
+      3534178.663045168
+    ],
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 54345728,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_weights": {
+        "reported_allocated_bytes_per_bank": 176512,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      },
+      "after_trace": {
+        "allocated_bytes": 2570670592,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_trace": {
+        "reported_allocated_bytes_per_bank": 217472,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      }
+    },
+    "effective_policy": {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat8_b",
+      "packed_mlp": true,
+      "prefill_chunk": 4096,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 4,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": false,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 1,
+      "history_tile_tail": true,
+      "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "prefill_norm_max_tokens": 1024,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5,
+      "residual_layout": "replicated",
+      "direct_all_reduce": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "sdpa_fidelity": "HiFi2",
+      "sdpa_fp32": false
+    },
+    "effective_sdpa_chunks": [
+      256
+    ],
+    "scratch_workspace": {
+      "owners": 1,
+      "unique_pools": 1,
+      "slots": 2,
+      "bytes_per_device": 1392640,
+      "batch_capacity": 32,
+      "mesh_lifetime_owned": true,
+      "paired_roles": [
+        "out",
+        "down"
+      ]
+    }
+  },
+  "prefill_pcc": 0.9999777048424282,
+  "decode_pcc": [
+    0.9999918555643511,
+    0.9999863126506544
+  ],
+  "state_pcc": {
+    "key": 0.9998967982123929,
+    "value": 0.9998838694826554
+  },
+  "state_shapes": {
+    "key": [
+      8192,
+      4,
+      32,
+      256
+    ],
+    "value": [
+      8192,
+      4,
+      32,
+      256
+    ]
+  }
+}

@@ -1,0 +1,372 @@
+{
+  "control": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5
+  },
+  "cores16": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_cores": 16
+  },
+  "cores64": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_cores": 64
+  },
+  "chunk128": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_chunk": 128
+  },
+  "chunk512": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_chunk": 512
+  },
+  "chunk1024": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_chunk": 1024
+  },
+  "approx": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "decode_sdpa_approx": true
+  },
+  "hifi2": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "HiFi2"
+  },
+  "lofi": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "LoFi"
+  },
+  "hifi2_fp16": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "HiFi2",
+    "sdpa_fp32": false
+  }
+}

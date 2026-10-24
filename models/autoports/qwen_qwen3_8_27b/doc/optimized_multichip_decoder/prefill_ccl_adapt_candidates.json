@@ -1,0 +1,118 @@
+{
+  "control": {},
+  "ag_mix_l1_bf8_activation": {
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_roles": [
+      "mix"
+    ]
+  },
+  "rs_norm_h1": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_role_block_h": {
+      "gateup": 1
+    }
+  },
+  "rs_norm_h1_bf8": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_role_block_h": {
+      "gateup": 1
+    },
+    "pf_ccl_dtype": "bfloat8_b"
+  },
+  "rs_norm_chunk2048": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "prefill_chunk": 2048
+  },
+  "all_l1_h1": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_role_block_h": {
+      "mix": 1,
+      "gateup": 1
+    }
+  },
+  "all_l1_bf8_h1": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_role_block_h": {
+      "mix": 1,
+      "gateup": 1
+    },
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true
+  },
+  "all_l1_chunk2048": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "prefill_chunk": 2048
+  },
+  "dram_bf8_persistent": {
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_persistent": true
+  },
+  "workers4_bf16": {
+    "pf_workers": 4
+  },
+  "workers4_bf8": {
+    "pf_workers": 4,
+    "pf_ccl_dtype": "bfloat8_b"
+  },
+  "workers4_bf8_activation": {
+    "pf_workers": 4,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true
+  },
+  "workers8_bf16": {
+    "pf_workers": 8
+  },
+  "workers8_bf8": {
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b"
+  },
+  "workers4_buffers4_bf16": {
+    "pf_workers": 4,
+    "pf_buffers": 4
+  },
+  "workers4_chunks4_bf16": {
+    "pf_workers": 4,
+    "pf_chunks": 4
+  },
+  "workers4_chunks16_bf16": {
+    "pf_workers": 4,
+    "pf_chunks": 16
+  },
+  "workers4_persistent_bf16": {
+    "pf_workers": 4,
+    "pf_persistent": true
+  },
+  "workers4_down_l1_bf16": {
+    "pf_workers": 4,
+    "pf_mm_l1_roles": [
+      "down"
+    ]
+  }
+}

@@ -94,6 +94,117 @@
       ],
       "comparison_scope": "All 262142 prefill outputs, both final-position decodes and reconstructed local states compared directly to single-chip optimized TTNN. B1 native context; B8/B16/B32 separately measured at4096+128. Full-model memory is a feasibility ledger, not an allocation measurement.",
       "review_evidence": "multichip_decoder/stage_review.md"
+    },
+    "05-optimized-multichip-decoder": {
+      "status": "final_default_native_context_and_reserve_checks_passed",
+      "target_mesh": [
+        1,
+        4
+      ],
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "largest_tested_prefill_context": 262142,
+      "largest_tested_decode_context": 262144,
+      "full_attention_kv_dtype": "BFP8",
+      "full_attention_kv_bytes_per_token_per_device": 544,
+      "linear_state_layout_per_device": "BF16 row-major [B,3,2560]; FP32 tiled [B,12,128,128]",
+      "linear_state_bytes_per_request_per_device": 801792,
+      "decode_residual_contract": "B1-7 replicated BF16 L1; B8-32 hidden-sharded1280/chip BF16 L1. Prefill hidden-sharded. No inter-layer conversion.",
+      "persistent_workspace_scope": "One shared mesh-lifetime owner: AR slots, native decodeRS batches8..32, and4096-row BFP8 prefillRS out/down buffers, all allocated before capture.",
+      "shared_ar_l1_bytes_per_device": 1392640,
+      "shared_native_rs_l1_bytes_per_device": 11264000,
+      "shared_native_rs_dram_bytes_per_device": 16384000,
+      "all_layer_setup_plus_embedding_head_bytes_per_device": 6562799616,
+      "reserved_activation_trace_bytes_per_device": 13958643712,
+      "context_evidence": [
+        "optimized_multichip_decoder/context262142_l0.json",
+        "optimized_multichip_decoder/context262142_l3.json"
+      ],
+      "memory_evidence": "optimized_multichip_decoder/memory_capacity_plan.json",
+      "residual_contract": "optimized_multichip_decoder/residual_contract.md",
+      "comparison_scope": "All262142 prefill outputs and two final decode positions against accepted single-chip TTNN; separate B8/B16/B32 4096+128. No full-model allocation claim.",
+      "memory_effect": "Packed gateup remains for decode/one-row prefill. Separate native gate/up add25,067,520bytes/device/layer; no interleaved mix copy is selected. V5 grid and transient RoPE changes add no persistent bytes or context reduction. Final native262144 and2MiB L1-reserve probes pass for both kinds; memory_preservation_v5.json confirms unchanged B1 setup/aftertrace allocator reports.",
+      "shared_prefill_rs_dram_bytes_per_device": 55705600,
+      "reserve_evidence": [
+        "optimized_multichip_decoder/final_reserved_context_l0.json",
+        "optimized_multichip_decoder/final_reserved_context_l3.json"
+      ],
+      "separate_prefill_weights_bytes_per_layer_per_device": 25067520,
+      "decoder_sha256": "d999166db24800aec9c16001201f26baad683c76150f5401db4834e4c937e82e",
+      "packed_rope": {
+        "decode_min_batch": 4,
+        "prefill_min_batch": 8,
+        "persistent_bytes_added": 0,
+        "decode_tables": "Transient L1 tables shared by Q/K within one call; final DRAM boundary unchanged. Logical user rows sliced before unpacking.",
+        "prefill": "Tile-aligned internal working rows folded with matching cos/sin; DRAM transpose/view; public padding/masking/slicing unchanged.",
+        "precision": "Original HiFi4/FP32-requested policy preserved; upstream rotary core-group default discrepancy documented in rope_optimization.md.",
+        "prefill_extra_transient_bound_bytes_per_device": 536870912,
+        "bound_basis": "Conservative512MiB scratch allowance for Q/K rotary permutations at B32/S4096, within existing12GiB activation/CCL reserve; not a measured full-stack peak. No new weights/cache/persistent buffers."
+      },
+      "review_evidence": "optimized_multichip_decoder/stage_review.md"
+    }
+  },
+  "stage05_prefill_policy": {
+    "ccl_workers_per_link": 8,
+    "ccl_payload": "bfloat8_b",
+    "norm_stats": "bfloat16",
+    "mix_gateup_input": "bfloat8_b",
+    "row_projection_input": "bfloat16",
+    "larger_rows": "DRAM interleaved",
+    "extra_persistent_bytes": 55705600,
+    "context_change": 0,
+    "status": "v5 final67case/trace/watcher/context/reserve/profile acceptance and independent clean-pass complete",
+    "evidence": "optimized_multichip_decoder/prefill_projection_selection.json",
+    "full_attention_mix_l1_max_working_rows": 4096,
+    "fused_RS": {
+      "batch": 1,
+      "working_rows": 4096,
+      "output_dtype": "bfloat8_b",
+      "other_shapes": "Same TP4 hidden-sharded residual via separate matmul/RS",
+      "geometry": {
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subblock": [
+          2,
+          3
+        ],
+        "compute_grid": [
+          11,
+          8
+        ],
+        "per_core_N": 15,
+        "out_block_w": 15
+      }
+    },
+    "shared_once_across_layers": true,
+    "ccl_workers_scope": "Standalone AG/RS uses8workers/link. Fused RS passes nullopt for workers/chunks/buffers; effective heuristic selects4workers/direction in4096-row prefill (20CCLcores),2 in physicalM32 decode (12CCLcores). Serialized wrapper worker1 is not consumed by factory.",
+    "separate_prefill_weights_bytes_per_layer_per_device": 25067520,
+    "extra_persistent_bytes_scope": "55,705,600 shared prefillRS bytes once; separate weights are layer-owned and separately accounted.",
+    "projection_geometry": {
+      "linear_mix_k": 16,
+      "full_mix_k": 4,
+      "gate_up_grid": [
+        11,
+        8
+      ],
+      "gate_up_k": 20,
+      "gate_up_out_h": 8,
+      "gate_up_subblock": [
+        8,
+        1
+      ],
+      "short_lengths": "outH divides runtime per_core_M; subH divides actual outH; padding and slicing remain internal"
+    },
+    "packed_rope": {
+      "decode_min_batch": 4,
+      "prefill_min_batch": 8,
+      "persistent_bytes_added": 0,
+      "decode_tables": "Transient L1 tables shared by Q/K within one call; final DRAM boundary unchanged. Logical user rows sliced before unpacking.",
+      "prefill": "Tile-aligned internal working rows folded with matching cos/sin; DRAM transpose/view; public padding/masking/slicing unchanged.",
+      "precision": "Original HiFi4/FP32-requested policy preserved; upstream rotary core-group default discrepancy documented in rope_optimization.md.",
+      "prefill_extra_transient_bound_bytes_per_device": 536870912,
+      "bound_basis": "Conservative512MiB scratch allowance for Q/K rotary permutations at B32/S4096, within existing12GiB activation/CCL reserve; not a measured full-stack peak. No new weights/cache/persistent buffers."
     }
   }
 }

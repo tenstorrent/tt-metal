@@ -1,0 +1,7 @@
+{
+  "command": "python3 .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/scripts/check_context_contract.py --model-dir models/autoports/qwen_qwen3_8_27b --stage optimized-multichip-decoder --require-contract --strict-caps",
+  "exit_code": 0,
+  "target_context": 262144,
+  "supported_context": 262144,
+  "scope": "v5 final source native-context and2MiB L1 reserve probes; no full-model allocation claim"
+}

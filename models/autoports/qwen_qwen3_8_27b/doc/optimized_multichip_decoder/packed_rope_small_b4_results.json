@@ -1,0 +1,61 @@
+[
+  {
+    "layer": 3,
+    "candidate": "control",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_packed_rope_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "4",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/packed_rope_small_b4_control_l3.json"
+    ],
+    "prefill_host_us": 25215.34892730415,
+    "host_us": 599.4769744575024,
+    "minimum_pcc": 0.9997925068731386
+  },
+  {
+    "layer": 3,
+    "candidate": "shared",
+    "policy": {
+      "packed_rope_candidate": "shared_tables",
+      "packed_rope_min_batch": 2
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_packed_rope_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "4",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"packed_rope_candidate\": \"shared_tables\", \"packed_rope_min_batch\": 2}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/packed_rope_small_b4_shared_l3.json"
+    ],
+    "prefill_host_us": 25017.661973834038,
+    "host_us": 576.7438560724258,
+    "minimum_pcc": 0.9997925068731386
+  }
+]

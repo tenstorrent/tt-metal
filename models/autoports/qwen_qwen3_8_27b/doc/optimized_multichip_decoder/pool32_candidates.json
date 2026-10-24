@@ -1,0 +1,16 @@
+{
+  "private": {
+    "direct_all_reduce": true,
+    "pooled_all_reduce": false,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b"
+  },
+  "pooled": {
+    "direct_all_reduce": true,
+    "pooled_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b"
+  }
+}

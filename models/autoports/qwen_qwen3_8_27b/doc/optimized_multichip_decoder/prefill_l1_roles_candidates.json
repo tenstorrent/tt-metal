@@ -1,0 +1,41 @@
+{
+  "control": {
+    "prefill_l1_roles": [],
+    "prefill_l1_max_tokens": 4096
+  },
+  "mix": {
+    "prefill_l1_roles": [
+      "mix"
+    ],
+    "prefill_l1_max_tokens": 4096
+  },
+  "out": {
+    "prefill_l1_roles": [
+      "out"
+    ],
+    "prefill_l1_max_tokens": 4096
+  },
+  "down": {
+    "prefill_l1_roles": [
+      "down"
+    ],
+    "prefill_l1_max_tokens": 4096
+  },
+  "without_gateup": {
+    "prefill_l1_roles": [
+      "mix",
+      "out",
+      "down"
+    ],
+    "prefill_l1_max_tokens": 4096
+  },
+  "gateup_h1": {
+    "prefill_l1_roles": [
+      "gateup"
+    ],
+    "prefill_l1_max_tokens": 4096,
+    "prefill_l1_role_block_h": {
+      "gateup": 1
+    }
+  }
+}

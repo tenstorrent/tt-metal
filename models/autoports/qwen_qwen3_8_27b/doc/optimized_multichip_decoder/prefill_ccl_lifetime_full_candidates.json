@@ -1,0 +1,44 @@
+{
+  "control": {},
+  "ag_mix_l1_bf8_h1": {
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_roles": [
+      "mix"
+    ],
+    "pf_role_block_h": {
+      "mix": 1
+    }
+  },
+  "all_l1_allroles_h1": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_role_block_h": {
+      "mix": 1,
+      "gateup": 1,
+      "out": 1,
+      "down": 1
+    }
+  },
+  "all_l1_chunk1024": {
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "prefill_chunk": 1024
+  },
+  "bf8_activation_workers2": {
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "r0_control": {},
+  "r0_bf8": {
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true
+  },
+  "r0_column_bf8": {
+    "pf_workers": 8,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b",
+      "gateup": "bfloat8_b"
+    },
+    "pf_keep_bf8_activation": true
+  },
+  "r1_column_bf8": {
+    "pf_workers": 8,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b",
+      "gateup": "bfloat8_b"
+    },
+    "pf_keep_bf8_activation": true
+  },
+  "r1_bf8": {
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true
+  },
+  "r1_control": {}
+}

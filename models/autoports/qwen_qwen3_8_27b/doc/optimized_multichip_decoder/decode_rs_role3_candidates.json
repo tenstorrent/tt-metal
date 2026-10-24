@@ -1,0 +1,69 @@
+{
+  "control8": {
+    "packed_rope_candidate": "shared_tables"
+  },
+  "grid10": {
+    "packed_rope_candidate": "shared_tables",
+    "candidate_rs_grid": {
+      "grid": [
+        10,
+        1
+      ],
+      "subh": 1,
+      "subw": 4
+    }
+  },
+  "grid11": {
+    "packed_rope_candidate": "shared_tables",
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        1
+      ],
+      "subh": 1,
+      "subw": 5
+    }
+  },
+  "out24": {
+    "packed_rope_candidate": "shared_tables",
+    "candidate_rs_grid": {
+      "grid": [
+        10,
+        1
+      ],
+      "subh": 1,
+      "subw": 4,
+      "role_k": {
+        "out": 24
+      }
+    }
+  },
+  "out48": {
+    "packed_rope_candidate": "shared_tables",
+    "candidate_rs_grid": {
+      "grid": [
+        10,
+        1
+      ],
+      "subh": 1,
+      "subw": 4,
+      "role_k": {
+        "out": 48
+      }
+    }
+  },
+  "down34": {
+    "packed_rope_candidate": "shared_tables",
+    "candidate_rs_grid": {
+      "grid": [
+        10,
+        1
+      ],
+      "subh": 1,
+      "subw": 4,
+      "role_k": {
+        "down": 34
+      }
+    }
+  }
+}

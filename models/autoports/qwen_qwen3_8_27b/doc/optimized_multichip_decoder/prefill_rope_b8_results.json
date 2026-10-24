@@ -1,0 +1,60 @@
+[
+  {
+    "layer": 3,
+    "candidate": "control",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rope_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "8",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rope_b8_control_l3.json"
+    ],
+    "prefill_host_us": 49586.60085685551,
+    "host_us": 720.0180552899837,
+    "minimum_pcc": 0.9998532558037442
+  },
+  {
+    "layer": 3,
+    "candidate": "packed",
+    "policy": {
+      "prefill_packed_rope": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rope_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "8",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_packed_rope\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rope_b8_packed_l3.json"
+    ],
+    "prefill_host_us": 49443.0570397526,
+    "host_us": 719.686970114708,
+    "minimum_pcc": 0.9998537904455453
+  }
+]

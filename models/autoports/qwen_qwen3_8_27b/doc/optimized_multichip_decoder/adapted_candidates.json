@@ -1,0 +1,48 @@
+{
+  "output_ag_1d": {
+    "_layout": "sharded",
+    "_output_ag": true,
+    "output_ag_1d": true,
+    "distributed_norm_l1": true,
+    "persistent_ccl": true
+  },
+  "output_ag_1d_bf8": {
+    "_layout": "sharded",
+    "_output_ag": true,
+    "output_ag_1d": true,
+    "distributed_norm_l1": true,
+    "persistent_ccl": true,
+    "fused_payload_bf8": true
+  },
+  "minimal_k8": {
+    "minimal_mlp": true,
+    "minimal_decode": true
+  },
+  "minimal_k4": {
+    "minimal_mlp": true,
+    "minimal_decode": true,
+    "minimal_k": 4,
+    "minimal_n": 4
+  },
+  "compact": {
+    "persistent_ccl": true,
+    "ccl_compact": true
+  },
+  "ar_l1": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true
+  },
+  "ar_l1_link1": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_links": 1
+  },
+  "ar_l1_bf8": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b"
+  }
+}

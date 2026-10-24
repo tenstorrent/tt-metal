@@ -1,0 +1,172 @@
+[
+  {
+    "layer": 3,
+    "candidate": "fused_k4",
+    "policy": {
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 4,
+        "prefill_l1": true,
+        "prefill_l1_max_tokens": 4096
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 8,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "separate_prefill": true,
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1
+      },
+      "shared_gate_k": 4
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_shared_gate_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_grid\": [11, 8], \"prefill_subh\": 4, \"prefill_l1\": true, \"prefill_l1_max_tokens\": 4096}, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 8, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\"}, \"separate_prefill\": true, \"gate\": {\"cores\": 80, \"block\": 2, \"readers\": 1, \"prefill_block\": 20, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_grid\": [11, 8], \"prefill_subh\": 8, \"prefill_out_block_h\": 8, \"prefill_out_subblock_w\": 1}, \"up\": {\"cores\": 80, \"block\": 2, \"readers\": 1, \"prefill_block\": 20, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_grid\": [11, 8], \"prefill_subh\": 8, \"prefill_out_block_h\": 8, \"prefill_out_subblock_w\": 1}, \"shared_gate_k\": 4}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_shared_gate3_fused_k4_l3.json"
+    ],
+    "prefill_host_us": 6818.61094199121,
+    "host_us": 359.02601666748524,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "fused_k8",
+    "policy": {
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 4,
+        "prefill_l1": true,
+        "prefill_l1_max_tokens": 4096
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 8,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "separate_prefill": true,
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1
+      },
+      "shared_gate_k": 8
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_shared_gate_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_grid\": [11, 8], \"prefill_subh\": 4, \"prefill_l1\": true, \"prefill_l1_max_tokens\": 4096}, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 8, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\"}, \"separate_prefill\": true, \"gate\": {\"cores\": 80, \"block\": 2, \"readers\": 1, \"prefill_block\": 20, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_grid\": [11, 8], \"prefill_subh\": 8, \"prefill_out_block_h\": 8, \"prefill_out_subblock_w\": 1}, \"up\": {\"cores\": 80, \"block\": 2, \"readers\": 1, \"prefill_block\": 20, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_grid\": [11, 8], \"prefill_subh\": 8, \"prefill_out_block_h\": 8, \"prefill_out_subblock_w\": 1}, \"shared_gate_k\": 8}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_shared_gate3_fused_k8_l3.json"
+    ],
+    "prefill_host_us": 6775.188958272338,
+    "host_us": 358.30517299473286,
+    "minimum_pcc": 0.9998216779564711
+  }
+]

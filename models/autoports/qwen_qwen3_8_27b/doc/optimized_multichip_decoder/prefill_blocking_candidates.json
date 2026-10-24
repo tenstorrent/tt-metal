@@ -1,0 +1,105 @@
+{
+  "control_k4": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5
+  },
+  "k8_block_h1": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 8
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 8
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 8
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 8,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 8
+    },
+    "prefill_unit_subw": 5,
+    "prefill_out_block_h": 1
+  },
+  "larger_k_block_h1": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 24
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 17
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 20,
+    "prefill_subh": 1,
+    "prefill_unit_subw": 5,
+    "prefill_out_block_h": 1
+  }
+}

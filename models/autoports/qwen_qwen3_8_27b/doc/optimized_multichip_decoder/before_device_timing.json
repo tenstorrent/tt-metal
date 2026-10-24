@@ -1,0 +1,12 @@
+{
+  "linear_attention": {
+    "prefill_device_us": 8237.612592592594,
+    "decode_device_us": 509.7874074074074,
+    "evidence": "tracy/before_profile_l0/whole_layer_timing.json"
+  },
+  "full_attention": {
+    "prefill_device_us": 10626.325185185186,
+    "decode_device_us": 421.1903703703704,
+    "evidence": "tracy/before_profile_l3/whole_layer_timing.json"
+  }
+}

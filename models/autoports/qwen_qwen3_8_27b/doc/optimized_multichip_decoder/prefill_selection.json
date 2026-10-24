@@ -1,0 +1,111 @@
+{
+  "linear_attention": {
+    "arms_host_us": {
+      "control": [
+        7526.033092290163,
+        7554.967887699604
+      ],
+      "bf8": [
+        6332.705961540341,
+        6468.86695176363
+      ],
+      "column_bf8": [
+        6656.887009739876,
+        6379.385944455862
+      ]
+    },
+    "mean_host_us": {
+      "control": 7540.5004899948835,
+      "bf8": 6400.786456651986,
+      "column_bf8": 6518.136477097869
+    },
+    "selected": "bf8",
+    "evidence": "prefill_ccl_confirm0_results.json"
+  },
+  "full_attention": {
+    "arms_host_us": {
+      "control": [
+        7734.452141448855,
+        7710.976991802454
+      ],
+      "bf8": [
+        6822.454975917935,
+        6716.432049870491
+      ],
+      "column_bf8": [
+        6722.6330284029245,
+        6896.656006574631
+      ],
+      "mix_l1": [
+        6572.436075657606,
+        6567.565957084298
+      ],
+      "column_mix_l1": [
+        6777.547998353839,
+        6586.792878806591
+      ],
+      "down_l1": [
+        6916.654063388705,
+        6736.16910353303
+      ]
+    },
+    "mean_host_us": {
+      "control": 7722.714566625655,
+      "bf8": 6769.443512894213,
+      "column_bf8": 6809.644517488778,
+      "mix_l1": 6570.001016370952,
+      "column_mix_l1": 6682.170438580215,
+      "down_l1": 6826.411583460867
+    },
+    "selected": "mix_l1",
+    "evidence": "prefill_ccl_confirm3_results.json"
+  },
+  "source_sha256": {
+    "tt/multichip_decoder.py": "5b0ceadb74f885a686d12e3d037c6ad778d4a5ce8ce2286ede7373c95ac85315",
+    "tt/optimized_decoder.py": "d493e218026d3f468bbc2d374d83ecdd41d9fe37ec0727208edafd3f0e4e405c",
+    "tt/fused_prefill.py": "5c22e7d924cd0256910c6e8d6f2b61d2a60ae371d66001ed472439cb05b5c38e",
+    "tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "tests/run_multichip_decoder.py": "b0dae32ef8060644693ab295312956df84fe76fa1f2e280ae1b019c62f49c4ae"
+  },
+  "scope": "Warmed host trace confirmation at4096+128,B1,TP4; final default device profiles and full acceptance required.",
+  "fused_rs_selection": {
+    "source": [
+      "prefill_ccl_precision_parity0_results.json",
+      "prefill_ccl_precision_parity3_results.json",
+      "prefill_ccl_rs_tie0_results.json",
+      "prefill_ccl_rs_tie3_results.json"
+    ],
+    "rows": 4096,
+    "batch": 1,
+    "dtype": "bfloat8_b",
+    "out_block_h": 4,
+    "shared_bytes_per_device": 55705600,
+    "paired_linear_us": {
+      "separate": 6542.503950186074,
+      "fused": 6483.986042439938
+    },
+    "paired_full_us": {
+      "separate": 6931.869429536164,
+      "fused": 6706.958520226181
+    },
+    "geometry": {
+      "out_k": 48,
+      "down_k": 17,
+      "block_h": 4,
+      "subh": 2,
+      "subw": 4
+    },
+    "geometry_sources": [
+      "prefill_rs_geometry0_results.json",
+      "prefill_rs_geometry3_results.json",
+      "prefill_rs_geometry_final0_results.json",
+      "prefill_rs_geometry_final3_results.json",
+      "prefill_rs_role_close0_results.json",
+      "prefill_rs_role_close3_results.json",
+      "prefill_rs_attribution0_results.json",
+      "prefill_rs_attribution3_results.json",
+      "prefill_rs_endpoint0_results.json",
+      "prefill_rs_endpoint3_results.json"
+    ]
+  }
+}

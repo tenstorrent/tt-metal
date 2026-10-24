@@ -1,0 +1,87 @@
+{
+  "control_grid": {
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        8
+      ],
+      "subh": 2,
+      "subw": 3
+    }
+  },
+  "down34_h4": {
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        8
+      ],
+      "subh": 2,
+      "subw": 3,
+      "role_h": {
+        "down": 4
+      }
+    },
+    "prefill_rs_geometry": {
+      "out_k": 48,
+      "down_k": 34,
+      "block_h": 4,
+      "subh": 2,
+      "subw": 4
+    }
+  },
+  "down34_h2": {
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        8
+      ],
+      "subh": 2,
+      "subw": 3,
+      "role_h": {
+        "down": 2
+      }
+    },
+    "prefill_rs_geometry": {
+      "out_k": 48,
+      "down_k": 34,
+      "block_h": 4,
+      "subh": 2,
+      "subw": 4
+    }
+  },
+  "down17_h8": {
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        8
+      ],
+      "subh": 2,
+      "subw": 3,
+      "role_h": {
+        "down": 8
+      },
+      "role_subh": {
+        "down": 8
+      },
+      "role_subw": {
+        "down": 1
+      }
+    }
+  },
+  "out_sub4x1": {
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        8
+      ],
+      "subh": 2,
+      "subw": 3,
+      "role_subh": {
+        "out": 4
+      },
+      "role_subw": {
+        "out": 1
+      }
+    }
+  }
+}

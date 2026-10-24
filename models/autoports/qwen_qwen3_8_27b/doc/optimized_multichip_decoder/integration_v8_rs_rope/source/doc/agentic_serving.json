@@ -1,0 +1,368 @@
+{
+  "stage": "05-optimized-multichip-decoder",
+  "workload": {
+    "target_concurrency": 32,
+    "working_set_tokens": 32768,
+    "typical_context_tokens": 4096,
+    "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+  },
+  "batch_sizes": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "tested_batch_sizes": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "status": "optimized_multichip_decoder_v4_acceptance_passed_profiles_review_pending",
+  "stage_scope": "TP4 optimized decoder layers and two-layer stacks only; no full-model or serving execution",
+  "memory_evidence": [
+    "optimized_multichip_decoder/memory_capacity_plan.json"
+  ],
+  "performance_status": "final_device_profiles_pending",
+  "batch_evidence": {
+    "1": [
+      "optimized_multichip_decoder/final_accepted_l0.json",
+      "optimized_multichip_decoder/final_accepted_l3.json"
+    ],
+    "8": [
+      "optimized_multichip_decoder/batch8_l0.json",
+      "optimized_multichip_decoder/batch8_l3.json"
+    ],
+    "16": [
+      "optimized_multichip_decoder/batch16_l0.json",
+      "optimized_multichip_decoder/batch16_l3.json"
+    ],
+    "32": [
+      "optimized_multichip_decoder/batch32_l0.json",
+      "optimized_multichip_decoder/batch32_l3.json"
+    ]
+  },
+  "previous_stages": {
+    "01-functional-decoder": {
+      "stage": "01-functional-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "stage_scope": "Single-layer functional decoder, no scheduler or full-model pool. Target workload is a planning estimate.",
+      "batch_evidence": {
+        "1": [
+          "functional_decoder/profile_linear_b1_complete.json",
+          "functional_decoder/profile_full_b1.json"
+        ],
+        "8": [
+          "functional_decoder/profile_linear_b8.json",
+          "functional_decoder/profile_full_b8.json"
+        ],
+        "16": [
+          "functional_decoder/profile_linear_b16.json",
+          "functional_decoder/profile_full_b16.json"
+        ],
+        "32": [
+          "functional_decoder/profile_linear_b32_decode.json",
+          "functional_decoder/profile_full_b32.json"
+        ]
+      },
+      "performance_evidence": "functional_decoder/performance.json",
+      "prefix_contract_evidence": "functional_decoder/README.md#prefix-cache-and-trace-ownership",
+      "memory_evidence": [
+        "functional_decoder/linear_watcher_requests.json:memory",
+        "functional_decoder/full_watcher_requests.json:memory"
+      ],
+      "status": "functional_decoder_validated",
+      "performance_status": "complete",
+      "trace_allocation_evidence": [
+        "functional_decoder/final_validation.log",
+        "functional_decoder/linear_watcher_requests.json",
+        "functional_decoder/full_watcher_requests.json",
+        "functional_decoder/ragged_decode.json"
+      ]
+    },
+    "02-fused-decoder": {
+      "stage": "02-fused-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "stage_scope": "Single fused decoder layer; no serving scheduler or full-model pool.",
+      "batch_evidence": {
+        "1": [
+          "fused_decoder/history_slice_final.json",
+          "fused_decoder/final_full.json"
+        ],
+        "8": [
+          "fused_decoder/history_slice_workload_b8.json",
+          "fused_decoder/workload_layer3_b8.json"
+        ],
+        "16": [
+          "fused_decoder/history_slice_workload_b16.json",
+          "fused_decoder/workload_layer3_b16.json"
+        ],
+        "32": [
+          "fused_decoder/history_slice_workload_b32.json",
+          "fused_decoder/workload_layer3_b32.json"
+        ]
+      },
+      "performance_evidence": "fused_decoder/performance.json",
+      "prefix_contract_evidence": "fused_decoder/README.md#api-state-and-context",
+      "memory_evidence": [
+        "fused_decoder/watcher_linear_history_slice.json:memory",
+        "fused_decoder/watcher_layer3.json:memory"
+      ],
+      "status": "fused_decoder_clean_pass",
+      "performance_status": "complete",
+      "trace_allocation_evidence": [
+        "fused_decoder/final_validation.log",
+        "fused_decoder/history_slice_validation.log",
+        "fused_decoder/watcher_linear_history_slice.json",
+        "fused_decoder/watcher_layer3.json",
+        "fused_decoder/ragged_decode.json"
+      ],
+      "performance_note": "B1 uses whole-layer device envelopes. B8/B16/B32 use4096+128 supplied-hidden-input workload and separately labeled host-wall traced latency; no host time is substituted for device/roofline fields.",
+      "state_memory": {
+        "linear_bytes_per_request": 3207168,
+        "full_kv_bytes_per_token": 4096,
+        "weight_copies": 1,
+        "trace_region_size": 0,
+        "scope": "Layer state, not a full-model serving memory ledger."
+      }
+    },
+    "03-optimized-decoder": {
+      "stage": "03-optimized-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "stage_scope": "Single optimized decoder layer, no serving scheduler/full-model pool.",
+      "batch_evidence": {
+        "1": [
+          "optimized_decoder/final_accepted_l0.json",
+          "optimized_decoder/final_accepted_l3.json"
+        ],
+        "8": [
+          "optimized_decoder/workload_b8_l0.json",
+          "optimized_decoder/workload_b8_l3.json"
+        ],
+        "16": [
+          "optimized_decoder/workload_b16_l0.json",
+          "optimized_decoder/workload_b16_l3.json"
+        ],
+        "32": [
+          "optimized_decoder/workload_b32_l0.json",
+          "optimized_decoder/workload_b32_l3.json"
+        ]
+      },
+      "performance_evidence": "optimized_decoder/performance.json",
+      "prefix_contract_evidence": "optimized_decoder/README.md",
+      "memory_evidence": [
+        "optimized_decoder/final_accepted_l0.json:memory",
+        "optimized_decoder/final_accepted_l3.json:memory"
+      ],
+      "status": "optimized_decoder_clean-pass",
+      "performance_status": "complete",
+      "trace_allocation_evidence": [
+        "optimized_decoder/final_validation.log",
+        "optimized_decoder/validation_summary.json"
+      ],
+      "performance_note": "B1 device envelopes; B8/B16/B32 are4096+128 host-wall traced workloads. Host time is never substituted for device rooflines.",
+      "state_memory": {
+        "linear_bytes_per_request": 3207168,
+        "full_kv_bytes_per_token": 2176,
+        "trace_region_size": 0,
+        "trace_allocation_mode": "dynamic DRAM",
+        "actual_trace_bytes": null,
+        "trace_memory_missing_reason": "Setup-only snapshots precede capture; zero is configured reservation, not actual trace allocation.",
+        "weight_representations": "One attention/output/down copy; separate and packed gate/up copies for phase-specific latency.",
+        "scope": "Single layer, not a full-model serving pool."
+      }
+    },
+    "04-multichip-decoder": {
+      "stage": "04-multichip-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "status": "multichip_decoder_clean-pass",
+      "stage_scope": "TP4 decoder only; no full-model or serving execution",
+      "memory_evidence": [
+        "multichip_decoder/memory_capacity_plan.json"
+      ],
+      "performance_status": "complete",
+      "batch_evidence": {
+        "1": [
+          "multichip_decoder/watcher_l0.json",
+          "multichip_decoder/watcher_l3.json"
+        ],
+        "8": [
+          "multichip_decoder/batch8_l0.json",
+          "multichip_decoder/batch8_l3.json"
+        ],
+        "16": [
+          "multichip_decoder/batch16_l0.json",
+          "multichip_decoder/batch16_l3.json"
+        ],
+        "32": [
+          "multichip_decoder/batch32_l0.json",
+          "multichip_decoder/batch32_l3.json"
+        ]
+      },
+      "performance_note": "B1 whole-layer device profiles at4096+128. B8/B16/B32 are supplied-hidden-input layer workloads with separate host-wall timing. No host time is used for device rooflines.",
+      "state_memory": {
+        "linear_bytes_per_request_per_device": 801792,
+        "full_kv_bytes_per_token_per_device": 544,
+        "weight_representations": "Single packed gate/up shared across phases; one attention/output/down copy.",
+        "trace_region_size": 0,
+        "trace_allocation_mode": "dynamic DRAM",
+        "actual_trace_bytes": null,
+        "trace_memory_missing_reason": "Allocator snapshots include live tensors and test backups; no isolated full-stack trace peak measured.",
+        "scope": "TP4 layer measured; all-stack memory is a feasibility ledger."
+      },
+      "trace_allocation_evidence": [
+        "multichip_decoder/validation_summary.json",
+        "multichip_decoder/final_validation.log"
+      ],
+      "performance_evidence": "multichip_decoder/performance.json",
+      "review_evidence": "multichip_decoder/stage_review.md"
+    }
+  },
+  "performance_note": "Headline B1 is4096+128, single request. Final B1/B32 device profiles use whole-layer envelopes. Other timing is explicitly host-wall traced latency. Never substitute host time for device rooflines.",
+  "state_memory": {
+    "linear_bytes_per_request_per_device": 801792,
+    "full_kv_bytes_per_token_per_device": 544,
+    "weight_representations": "Original packed gateup retained for decode and one-row prefill; R1 native DRAM-sharded gate/up each12,533,760 bytes,25,067,520 additional bytes/device/layer. Measured final setup deltas match exactly. No interleaved mix copy selected.",
+    "trace_region_size": 0,
+    "trace_allocation_mode": "dynamic DRAM",
+    "actual_trace_bytes": null,
+    "trace_memory_missing_reason": "Allocator snapshots include live tensors and test backups; no isolated full-stack trace peak measured.",
+    "scope": "TP4 layer measured; all-stack memory is a feasibility ledger.",
+    "shared_ar_l1_bytes_per_device": 1392640,
+    "shared_native_rs_l1_bytes_per_device": 11264000,
+    "shared_native_rs_dram_bytes_per_device": 16384000,
+    "workspace_scope": "One shared mesh-lifetime owner: AR slots, native decodeRS batches8..32, and4096-row BFP8 prefillRS out/down buffers, all allocated before capture.",
+    "residual_contract": "optimized_multichip_decoder/residual_contract.md",
+    "shared_prefill_rs_dram_bytes_per_device": 55705600,
+    "separate_prefill_weights_bytes_per_layer_per_device": 25067520
+  },
+  "trace_allocation_evidence": [
+    "optimized_multichip_decoder/validation_summary.json",
+    "optimized_multichip_decoder/final_workspace_lifetime.json",
+    "optimized_multichip_decoder/mixed_traces_l0.json",
+    "optimized_multichip_decoder/mixed_traces_l3.json",
+    "optimized_multichip_decoder/mixed_prefill_decode_traces.json"
+  ],
+  "performance_evidence": "optimized_multichip_decoder/performance.json",
+  "review_evidence": "optimized_multichip_decoder/stage_review_preliminary.md",
+  "prefix_contract_evidence": "optimized_multichip_decoder/residual_contract.md",
+  "stage05_prefill_policy": {
+    "ccl_workers_per_link": 8,
+    "ccl_payload": "bfloat8_b",
+    "norm_stats": "bfloat16",
+    "mix_gateup_input": "bfloat8_b",
+    "row_projection_input": "bfloat16",
+    "larger_rows": "DRAM interleaved",
+    "extra_persistent_bytes": 55705600,
+    "context_change": 0,
+    "status": "v4 final correctness/trace/watcher/native-context/reserve acceptance passed; device profiles and independent review pending",
+    "evidence": "optimized_multichip_decoder/prefill_projection_selection.json",
+    "full_attention_mix_l1_max_working_rows": 4096,
+    "fused_RS": {
+      "batch": 1,
+      "working_rows": 4096,
+      "output_dtype": "bfloat8_b",
+      "other_shapes": "Same TP4 hidden-sharded residual via separate matmul/RS",
+      "geometry": {
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subblock": [
+          2,
+          4
+        ],
+        "compute_grid": [
+          8,
+          8
+        ]
+      }
+    },
+    "shared_once_across_layers": true,
+    "ccl_workers_scope": "Standalone AG/RS uses8workers/link. Fused RS passes nullopt for workers/chunks/buffers; effective heuristic selects4workers/direction in4096-row prefill (20CCLcores),2 in physicalM32 decode (12CCLcores). Serialized wrapper worker1 is not consumed by factory.",
+    "separate_prefill_weights_bytes_per_layer_per_device": 25067520,
+    "extra_persistent_bytes_scope": "55,705,600 shared prefillRS bytes once; separate weights are layer-owned and separately accounted.",
+    "projection_geometry": {
+      "linear_mix_k": 16,
+      "full_mix_k": 4,
+      "gate_up_grid": [
+        11,
+        8
+      ],
+      "gate_up_k": 20,
+      "gate_up_out_h": 8,
+      "gate_up_subblock": [
+        8,
+        1
+      ],
+      "short_lengths": "outH divides runtime per_core_M; subH divides actual outH; padding and slicing remain internal"
+    }
+  }
+}

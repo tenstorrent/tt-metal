@@ -1,0 +1,144 @@
+[
+  {
+    "layer": 0,
+    "candidate": "sharded_compact_l1",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "persistent_ccl": true,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "ccl_l1": true,
+      "ccl_compact": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"persistent_ccl\": true, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"ccl_l1\": true, \"ccl_compact\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/movement32_adapted_sharded_compact_l1_l0.json",
+      "--layout",
+      "sharded"
+    ],
+    "prefill_host_us": 271933.2140404731,
+    "host_us": 3041.6790395975113,
+    "minimum_pcc": 0.9999596419367811
+  },
+  {
+    "layer": 3,
+    "candidate": "sharded_compact_l1",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "persistent_ccl": true,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "ccl_l1": true,
+      "ccl_compact": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "32",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"persistent_ccl\": true, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"ccl_l1\": true, \"ccl_compact\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/movement32_adapted_sharded_compact_l1_l3.json",
+      "--layout",
+      "sharded"
+    ],
+    "prefill_host_us": 251453.33399996161,
+    "host_us": 1975.4560198634863,
+    "minimum_pcc": 0.9999634539290617
+  }
+]

@@ -1,0 +1,30 @@
+{
+  "control": {},
+  "gateup10k16": {
+    "gateup": {
+      "cores": 10,
+      "block": 16,
+      "readers": 2
+    }
+  },
+  "gateup8k20": {
+    "gateup": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2
+    }
+  },
+  "gateup20k8": {
+    "gateup": {
+      "cores": 20,
+      "block": 8,
+      "readers": 2
+    }
+  },
+  "split": {
+    "packed_mlp": false
+  },
+  "persistent": {
+    "persistent_ccl": true
+  }
+}

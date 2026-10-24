@@ -1,0 +1,28 @@
+{
+  "scope": "Static runtime source audit plus dynamic per-run audit in final acceptance; device execution remains TP4.",
+  "source_sha256": {
+    "tt/multichip_decoder.py": "d999166db24800aec9c16001201f26baad683c76150f5401db4834e4c937e82e",
+    "tt/optimized_decoder.py": "d355691a69232c06f4c072bdd417352b081f5bea3f64d603646c74071fb9f2ac",
+    "tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd"
+  },
+  "construction_only_host_work": "Torch weight packing/padding and constant creation are confined to from_state_dict; all weights loaded before capture.",
+  "runtime_exception_behavior": "prefill_forward/decode_forward abort the owner and re-raise; no catch-and-compute fallback.",
+  "public_non_aligned_inputs": "Internal chunk/padding/masking/slicing; final boundary suite includes1/2/3/31/32/33/129/2049/4095/4096/4097 and odd batch/paged paths. 2049 exercises pm9/outputH3/subH3 in separate prefill matmuls.",
+  "shape_specializations": "Native prefill RS only B1 workingrows4096; all other shapes use separate TP4 matmul/RS with the same hidden-sharded residual. B1-7 decode replicated residual is tensor parallel, not replicated model execution. B8-32 selected decode is hidden-sharded nativeRS. Packed decodeRoPE B>=4; packed prefillRoPE B>=8 with internal tile-aligned rows. Other shapes use original TTNN rotary loop; never CPU/model replication fallback.",
+  "dynamic_evidence": "validation_summary.json and final run multichip.runtime_fallback_audit fields; measured profiles must contain all four devices.",
+  "inter_layer": "DecoderStack directly passes output into next layer, sharing one owner; no gather/reshard/all-reduce at the boundary.",
+  "setup_clock_warning": {
+    "observed_mhz": [
+      1331,
+      1337,
+      1343
+    ],
+    "requested_mhz": 1350,
+    "classification": "Firmware-accepted setup settling within5%; accepted runs pass PCC. Not a fallback or assertion.",
+    "source": "tt_metal/third_party/umd/tt-umd/src/tt_device/firmware/blackhole_device_firmware.cpp:235-254",
+    "peak_basis": "Nominal theoretical1350MHz; cycle conversion uses profile header."
+  },
+  "status": "Static audit,67 final-source dynamic acceptance cases and all-four-device profiles passed"
+}

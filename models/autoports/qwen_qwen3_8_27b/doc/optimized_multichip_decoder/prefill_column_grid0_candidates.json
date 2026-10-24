@@ -1,0 +1,121 @@
+{
+  "control": {},
+  "mix_native_k16": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 16,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b"
+    }
+  },
+  "mix_interleaved_k20_h13_w7": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 20,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_out_block_h": 13,
+      "prefill_out_block_w": 7,
+      "prefill_out_subblock_w": 7,
+      "prefill_subh": 1
+    },
+    "column_interleaved_roles": [
+      "mix"
+    ]
+  },
+  "mix_11x8_h8_sub4x2": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 16,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        11,
+        8
+      ],
+      "prefill_out_block_h": 8,
+      "prefill_subh": 4
+    }
+  },
+  "mix_8x8_h8_sub4x2": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 16,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        8,
+        8
+      ],
+      "prefill_out_block_h": 8,
+      "prefill_subh": 4
+    }
+  },
+  "mix_current_sub1x7": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 16,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_subh": 1,
+      "prefill_out_subblock_w": 7
+    }
+  },
+  "gateup_native_k8": {
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 8,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b"
+    }
+  },
+  "gateup_10x8_h8_sub2x4": {
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 8,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        10,
+        8
+      ],
+      "prefill_out_block_h": 8,
+      "prefill_subh": 2
+    }
+  },
+  "gateup_8x8_h8_sub4x2": {
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 8,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        8,
+        8
+      ],
+      "prefill_out_block_h": 8,
+      "prefill_subh": 4
+    }
+  }
+}

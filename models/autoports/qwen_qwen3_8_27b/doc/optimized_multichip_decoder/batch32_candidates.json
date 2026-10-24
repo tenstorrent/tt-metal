@@ -1,0 +1,21 @@
+{
+  "control": {},
+  "persist": {
+    "persistent_ccl": true
+  },
+  "compact": {
+    "persistent_ccl": true,
+    "ccl_compact": true
+  },
+  "ar_l1": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true
+  },
+  "ar_bf8": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b"
+  }
+}

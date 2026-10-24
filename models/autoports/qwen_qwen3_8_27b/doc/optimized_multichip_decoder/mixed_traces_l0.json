@@ -1,0 +1,49 @@
+{
+  "layer_type": "linear_attention",
+  "mesh": [
+    1,
+    4
+  ],
+  "batches": [
+    1,
+    4,
+    8,
+    16,
+    32
+  ],
+  "logical_prefix_tokens": 129,
+  "decode_layouts": [
+    "replicated",
+    "replicated",
+    "sharded",
+    "sharded",
+    "sharded"
+  ],
+  "trace_ids": [
+    "MeshTraceId(0)",
+    "MeshTraceId(1)",
+    "MeshTraceId(2)",
+    "MeshTraceId(3)",
+    "MeshTraceId(4)"
+  ],
+  "captures_before_traffic": 5,
+  "nonblocking_replays": 324,
+  "per_replay_host_syncs": 0,
+  "exact": true,
+  "distinct_real_user_inputs": true,
+  "allocation_tracking": true,
+  "program_cache_tracking": true,
+  "acknowledgments": [],
+  "retired_trace_survivors": 4,
+  "shared_weights": true,
+  "runtime_fallback_audit": true,
+  "provenance": {
+    "tt/multichip_decoder.py": "d999166db24800aec9c16001201f26baad683c76150f5401db4834e4c937e82e",
+    "tt/optimized_decoder.py": "d355691a69232c06f4c072bdd417352b081f5bea3f64d603646c74071fb9f2ac",
+    "tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "tests/probe_mixed_decoder_traces.py": "ba20ebf2730baa20b83d7b5017cf0b006057cafaeb211e2ae3db9f93dfebfeaa",
+    "tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd"
+  },
+  "scope": "Single real decoder; state restored on device inside each trace. Exact eager/replay protocol check, not performance or model-accuracy evidence."
+}

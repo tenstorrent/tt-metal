@@ -1,0 +1,80 @@
+{
+  "control": {},
+  "ag_h2": {
+    "pf_fused": "ag"
+  },
+  "rs_h2": {
+    "pf_fused": "rs"
+  },
+  "both_h2": {
+    "pf_fused": "both"
+  },
+  "ag_large": {
+    "pf_fused": "ag",
+    "pf_fused_role_block_h": {
+      "mix": 8,
+      "gateup": 8,
+      "out": 16,
+      "down": 16
+    }
+  },
+  "rs_large": {
+    "pf_fused": "rs",
+    "pf_fused_role_block_h": {
+      "mix": 8,
+      "gateup": 8,
+      "out": 16,
+      "down": 16
+    }
+  },
+  "both_large": {
+    "pf_fused": "both",
+    "pf_fused_role_block_h": {
+      "mix": 8,
+      "gateup": 8,
+      "out": 16,
+      "down": 16
+    }
+  },
+  "both_large_bf8": {
+    "pf_fused": "both",
+    "pf_fused_role_block_h": {
+      "mix": 8,
+      "gateup": 8,
+      "out": 16,
+      "down": 16
+    },
+    "pf_fused_activation": "bfloat8_b",
+    "pf_fused_activation_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_output_dtype": "bfloat8_b"
+  },
+  "both_l1_h2": {
+    "pf_fused": "both",
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true
+  },
+  "both_l1_bf8_h2": {
+    "pf_fused": "both",
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_fused_activation": "bfloat8_b",
+    "pf_fused_activation_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_output_dtype": "bfloat8_b"
+  }
+}

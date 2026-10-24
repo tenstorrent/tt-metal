@@ -1,0 +1,7 @@
+# Trace preparation repair (validated)
+
+The full-attention → linear-attention B1 stack failed during baseline decode capture with an unwarmed binary. AutoDebug established a preparation discrepancy: eager output was released, whereas capture 2 retains capture 1 output. Native untilize has a live-L1-dependent hash attribute. Its actual threshold crossing was not observed; the causal attribution remains a hypothesis.
+
+Verified the current runner and native untilize source before editing. The minimal repair retains the first eager output while warming one more forward, completes both, releases temporary outputs, and restores state before any capture. Program-cache allocation tracking and the narrow traced2 acknowledgment remain unchanged. No timed decoder operation changes.
+
+Discriminating validation: rerun both stack orders at B1/B8/B32 with two captures, changed inputs, restored state, PCC and exact blocking/nonblocking replay checks. Command: `validate_optimized_multichip --suite stack`. Original failure artifacts are in trace_failure_original, triage_stack_b1_l3, and stack_b1_l3_reset.log. All six cases pass after the repair (stack_validation.json), including the original full→linear B1 failure. Both baseline and native TP4 arms pass exact alternating replay, with program-cache allocations included. The repair resolves the preparation discrepancy; the exact failing C++ hash remains uninstrumented, so the untilize threshold crossing is not claimed as observed.

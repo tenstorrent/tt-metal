@@ -1,0 +1,110 @@
+{
+  "mesh": [
+    1,
+    4
+  ],
+  "real_weights": true,
+  "recorded_activations": true,
+  "prefix_tokens": 129,
+  "checks": [
+    {
+      "batch": 8,
+      "history_update": 1,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 8,
+      "history_update": 2,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 8,
+      "history_update": 3,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 9,
+      "history_update": 1,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 9,
+      "history_update": 2,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 9,
+      "history_update": 3,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 16,
+      "history_update": 1,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 16,
+      "history_update": 2,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 16,
+      "history_update": 3,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 17,
+      "history_update": 1,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 17,
+      "history_update": 2,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 17,
+      "history_update": 3,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 31,
+      "history_update": 1,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 31,
+      "history_update": 2,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 31,
+      "history_update": 3,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 32,
+      "history_update": 1,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 32,
+      "history_update": 2,
+      "all_four_devices_exact": true
+    },
+    {
+      "batch": 32,
+      "history_update": 3,
+      "all_four_devices_exact": true
+    }
+  ],
+  "output_groups": [
+    "q",
+    "k",
+    "v",
+    "raw_history"
+  ],
+  "exact": true,
+  "decoder_sha256": "96c7214c17524a3855803c82dbd2178c45e581823c59d4e35e5cc87e807335d9",
+  "scope": "Convolution intermediate semantics only; three advancing history updates. No performance claim."
+}

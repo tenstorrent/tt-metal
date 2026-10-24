@@ -1,0 +1,104 @@
+{
+  "status": "feasibility_plan_not_full_model_allocation",
+  "mesh": [
+    1,
+    4
+  ],
+  "capacity_bytes_per_device": 34178731008,
+  "layer_counts": {
+    "linear_attention": 48,
+    "full_attention": 16
+  },
+  "per_layer_setup_bytes_per_device": {
+    "linear_attention": 57197056,
+    "full_attention": 54345728
+  },
+  "all_layer_setup_plus_embedding_head_bytes_per_device": 4958478336,
+  "embedding_plus_lm_head_bf16_bytes_per_device": 1271398400,
+  "reserves_bytes_per_device": {
+    "activation_and_CCL_estimate": 12884901888,
+    "trace_estimate": 1073741824
+  },
+  "reserve_basis": "Conservative planning allowance, not a measured peak: at B32,S4096, four replicated BF16 hidden buffers plus one local packed gate/up output require about7.65GB;12GiB leaves additional room for attention/recurrence temporaries, padded intermediates and retained chunk outputs.1GiB separately reserves traces. Full-stack execution is a later stage.",
+  "decode_shared_L1_workspace_bytes_per_device": 1392640,
+  "decode_workspace_slots": 2,
+  "native_RS_shared_DRAM_bytes_per_device": 16384000,
+  "native_RS_shared_L1_bytes_per_device": 11264000,
+  "native_RS_prepared_batches": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32
+  ],
+  "native_RS_allocator_basis": "Shared mesh owner has two role buffers per supported batch8..32. Each L1 output reserves one2048-byte tile per110 banks; two roles give4096 bytes/bank/batch,102400 bytes/bank for25 signatures. This is constant across layer count. Two DRAM intermediates consume655360 bytes/batch/device. Measured initial decoder setup includes the shared DRAM pool; subtract it before multiplying layer counts, then add once.",
+  "native_RS_capacity_evidence": [
+    "final_reserved_context_l0.json",
+    "final_reserved_context_l3.json",
+    "mixed_traces_l0.json",
+    "mixed_traces_l3.json"
+  ],
+  "decode_workspace_scope": "One mesh-lifetime owner shared across serial layer out/down pairs, independent of layer count; distinct concurrently executing CQs need separate owners. L1 scratch is not charged to DRAM.",
+  "kv_bytes_per_token_per_device": 8704,
+  "linear_bytes_per_request_per_device": 38486016,
+  "target_concurrency": 32,
+  "working_set_tokens": 32768,
+  "required_pool_tokens": 1048576,
+  "planned_pool_tokens_upper_bound": 1611909,
+  "target_workload_bytes_per_device": 29275480064,
+  "native_context": 262144,
+  "single_user_native_context_bytes_per_device": 21237309440,
+  "capability_reduction": null,
+  "evidence": [
+    "final_accepted_l0.json:multichip.memory",
+    "final_accepted_l3.json:multichip.memory",
+    "residual_contract.md"
+  ],
+  "limitations": [
+    "Decoder setup allocator snapshots are measured; full-stack weights/reserves/pool feasibility are estimates.",
+    "No full-model allocation, serving or simultaneous B32/native-context claim.",
+    "Earlier private-buffer family:28MiB L1 reservation passes and32MiB fails. Final shared-buffer family allocates all25 batch signatures before capture, with native-context checks adding2MiB background headroom. No per-layer multiplication of the global pool.",
+    "B32 at262144 tokens per user exceeds physical DRAM; native context remains a per-request capability."
+  ],
+  "prefill_RS_shared_DRAM_bytes_per_device": 55705600,
+  "prefill_RS_signature": {
+    "batch": 1,
+    "working_rows": 4096,
+    "roles": [
+      "out",
+      "down"
+    ],
+    "intermediate_width": 5120,
+    "output_width": 1280,
+    "dtype": "bfloat8_b",
+    "tile_bytes": 1088,
+    "before_capture": true,
+    "shared_across_layers": true
+  },
+  "prefill_RS_allocator_basis": "Two roles x4096x(5120+1280)x1088/1024=55,705,600 DRAM bytes/device, shared once. Final default initial setup129,286,656 linear/126,435,328 full; subtract16,384,000 decode pool and55,705,600 prefill pool to obtain layer-owned weights/constants. Both measured deltas versus pre-prefill default equal55,705,600.",
+  "per_layer_setup_basis": "Layer-owned weights/constants only: measured initial setup minus shared native decodeRS16,384,000 and prefillRS55,705,600. Multiply only these layer-owned bytes by48/16; add both pools once.",
+  "measured_initial_setup_bytes_per_device": {
+    "linear_attention": 129286656,
+    "full_attention": 126435328
+  }
+}

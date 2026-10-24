@@ -1,0 +1,100 @@
+{
+  "status": "final_v5_default_verified_clean_pass",
+  "selected": "shared transient cos/sin tables,DRAM output",
+  "rows": [
+    {
+      "batch": 8,
+      "candidate": "control",
+      "traced_warmed_decode_host_us": 719.516072422266,
+      "minimum_pcc": 0.9998532558037442,
+      "evidence": "packed_rope_dram_b8_control_l3.json"
+    },
+    {
+      "batch": 8,
+      "candidate": "shared",
+      "traced_warmed_decode_host_us": 639.4830998033285,
+      "minimum_pcc": 0.9998532558037442,
+      "evidence": "packed_rope_dram_b8_shared_l3.json"
+    },
+    {
+      "batch": 8,
+      "candidate": "separate",
+      "traced_warmed_decode_host_us": 648.0889860540628,
+      "minimum_pcc": 0.9998532558037442,
+      "evidence": "packed_rope_dram_b8_separate_l3.json"
+    },
+    {
+      "batch": 16,
+      "candidate": "control",
+      "traced_warmed_decode_host_us": 947.7019775658846,
+      "minimum_pcc": 0.9999146754515882,
+      "evidence": "packed_rope_dram_b16_control_l3.json"
+    },
+    {
+      "batch": 16,
+      "candidate": "shared",
+      "traced_warmed_decode_host_us": 754.4220425188541,
+      "minimum_pcc": 0.9999146754515882,
+      "evidence": "packed_rope_dram_b16_shared_l3.json"
+    },
+    {
+      "batch": 16,
+      "candidate": "separate",
+      "traced_warmed_decode_host_us": 763.6700756847858,
+      "minimum_pcc": 0.9999146754515882,
+      "evidence": "packed_rope_dram_b16_separate_l3.json"
+    },
+    {
+      "batch": 32,
+      "candidate": "control",
+      "traced_warmed_decode_host_us": 1473.0249531567097,
+      "minimum_pcc": 0.9999421386866261,
+      "evidence": "packed_rope_b32_control_l3.json"
+    },
+    {
+      "batch": 32,
+      "candidate": "packed_shared",
+      "traced_warmed_decode_host_us": 997.777096927166,
+      "minimum_pcc": 0.9999421386866261,
+      "evidence": "packed_rope_b32_packed_shared_l3.json"
+    },
+    {
+      "batch": 32,
+      "candidate": "packed_separate",
+      "traced_warmed_decode_host_us": 1009.9401697516441,
+      "minimum_pcc": 0.9999421386866261,
+      "evidence": "packed_rope_b32_packed_separate_l3.json"
+    },
+    {
+      "batch": 2,
+      "candidate": "control",
+      "traced_warmed_decode_host_us": 492.42214299738407,
+      "minimum_pcc": 0.9997149501311277,
+      "evidence": "packed_rope_small_b2_control_l3.json"
+    },
+    {
+      "batch": 2,
+      "candidate": "shared",
+      "traced_warmed_decode_host_us": 501.7300136387348,
+      "minimum_pcc": 0.9997149501311277,
+      "evidence": "packed_rope_small_b2_shared_l3.json"
+    },
+    {
+      "batch": 4,
+      "candidate": "control",
+      "traced_warmed_decode_host_us": 599.4769744575024,
+      "minimum_pcc": 0.9997925068731386,
+      "evidence": "packed_rope_small_b4_control_l3.json"
+    },
+    {
+      "batch": 4,
+      "candidate": "shared",
+      "traced_warmed_decode_host_us": 576.7438560724258,
+      "minimum_pcc": 0.9997925068731386,
+      "evidence": "packed_rope_small_b4_shared_l3.json"
+    }
+  ],
+  "exact_evidence": "packed_rope_exact_dram.json",
+  "not_device_time": true,
+  "selected_minimum_batch": 4
+}

@@ -1,0 +1,120 @@
+{
+  "rs_k1": {
+    "direct_all_reduce": false,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": null,
+    "pooled_all_reduce": false,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "_layout": "sharded",
+    "distributed_norm_l1": true,
+    "distributed_norm_direct": true,
+    "residual_l1": true,
+    "persistent_ccl": true,
+    "ccl_l1": false,
+    "fused_ag_1d": false,
+    "fused_rs_grid": [
+      8,
+      1
+    ],
+    "fused_rs_subw": 5,
+    "_fused": "rs",
+    "fused_rs_k_multiplier": 1,
+    "fused_l1_interleaved": true,
+    "fused_dram_sharded_weights": true,
+    "fused_ag_subw": 2,
+    "fused_ag_k": 10,
+    "fused_rs_out_block": 20,
+    "ccl_compact": true,
+    "sdpa_fidelity": "HiFi2",
+    "sdpa_fp32": false,
+    "fused_intermediate_dram": true
+  },
+  "rs_k2": {
+    "direct_all_reduce": false,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": null,
+    "pooled_all_reduce": false,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "_layout": "sharded",
+    "distributed_norm_l1": true,
+    "distributed_norm_direct": true,
+    "residual_l1": true,
+    "persistent_ccl": true,
+    "ccl_l1": false,
+    "fused_ag_1d": false,
+    "fused_rs_grid": [
+      8,
+      1
+    ],
+    "fused_rs_subw": 5,
+    "_fused": "rs",
+    "fused_rs_k_multiplier": 2,
+    "fused_l1_interleaved": true,
+    "fused_dram_sharded_weights": true,
+    "fused_ag_subw": 2,
+    "fused_ag_k": 20,
+    "fused_rs_out_block": 20,
+    "ccl_compact": true,
+    "sdpa_fidelity": "HiFi2",
+    "sdpa_fp32": false,
+    "fused_intermediate_dram": true
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "status": "final_v5_default_verified_clean_pass",
+  "selected_geometry": {
+    "grid": [
+      11,
+      8
+    ],
+    "per_core_N": 15,
+    "out_block_w": 15,
+    "out_k": 48,
+    "down_k": 17,
+    "block_h": 4,
+    "subh": 2,
+    "subw": 3
+  },
+  "layer_types": {
+    "linear_attention": {
+      "paired_mean_prefill_host_us": {
+        "control": 6033.0190462991595,
+        "grid10": 5945.456447079778,
+        "grid11": 5873.437970876694,
+        "out4": 5870.147491805255
+      },
+      "samples_host_us": {
+        "control": [
+          6067.513953894377,
+          5998.524138703942
+        ],
+        "grid10": [
+          5926.21392570436,
+          5964.698968455195
+        ],
+        "grid11": [
+          5903.019104152918,
+          5843.85683760047
+        ],
+        "out4": [
+          5873.1629978865385,
+          5867.131985723972
+        ]
+      },
+      "selected": "grid11",
+      "evidence": [
+        "prefill_rs_confirm0_forward_results.json",
+        "prefill_rs_confirm0_reverse_results.json"
+      ]
+    },
+    "full_attention": {
+      "paired_mean_prefill_host_us": {
+        "control": 6280.348519794643,
+        "grid10": 6187.941646203399,
+        "grid11": 6144.758430309594,
+        "out4": 6228.769896551967,
+        "out4_down34": 6328.615476377308
+      },
+      "samples_host_us": {
+        "control": [
+          6295.402068644762,
+          6265.294970944524
+        ],
+        "grid10": [
+          6193.277193233371,
+          6182.606099173427
+        ],
+        "grid11": [
+          6137.229036539793,
+          6152.287824079394
+        ],
+        "out4": [
+          6193.035980686545,
+          6264.503812417388
+        ],
+        "out4_down34": [
+          6312.995916232467,
+          6344.23503652215
+        ]
+      },
+      "selected": "grid11",
+      "evidence": [
+        "prefill_rs_confirm3_forward_results.json",
+        "prefill_rs_confirm3_reverse_results.json"
+      ]
+    }
+  },
+  "note": "25 warmed prefill repetitions per forward/reverse run; all4096/128/B1 PCC and exact replay gates pass. Linear out-sub4x1 mean differs only3.3us (<0.1%) and is not a consistent winner; retain common2x3. Host timing only, not device telemetry.",
+  "review_closure": "Identical selected-grid linear downK34/H2 projection trial and full-attention10x8 adapted trial both pass/slower; reviewer confirms no need for exhaustive layer\u00d7grid Cartesian repeats. H4 capacity bound and K68/K136 bounds retained in native prefill geometry evidence."
+}

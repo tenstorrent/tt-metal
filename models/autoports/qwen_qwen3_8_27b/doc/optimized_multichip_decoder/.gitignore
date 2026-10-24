@@ -1,0 +1,9 @@
+# Raw profiler captures stay local; compact timing, operation tables, reports,
+# commands, source hashes and the capture manifest are committed.
+*.zst
+*.tracy
+**/.logs/
+**/reports/**/profile_log_device.csv
+**/reports/**/ops_perf_results_*.csv
+**/cpp_device_perf_report.csv
+**/ops.csv

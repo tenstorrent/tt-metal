@@ -1,0 +1,458 @@
+[
+  {
+    "role": "mix",
+    "readers": 1,
+    "repeat": 0,
+    "host_us": 120.45097537338734,
+    "k": 5120,
+    "n": 4352,
+    "logical_n": 4160,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "mix",
+    "readers": 2,
+    "repeat": 1,
+    "host_us": 97.46686555445194,
+    "k": 5120,
+    "n": 4608,
+    "logical_n": 4160,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "mix",
+    "readers": 3,
+    "repeat": 2,
+    "host_us": 100.78283958137035,
+    "k": 5120,
+    "n": 4608,
+    "logical_n": 4160,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 20,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "mix",
+    "readers": 3,
+    "repeat": 3,
+    "host_us": 105.18101043999195,
+    "k": 5120,
+    "n": 4608,
+    "logical_n": 4160,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 20,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "mix",
+    "readers": 2,
+    "repeat": 4,
+    "host_us": 97.3858404904604,
+    "k": 5120,
+    "n": 4608,
+    "logical_n": 4160,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "mix",
+    "readers": 1,
+    "repeat": 5,
+    "host_us": 614.9278488010168,
+    "k": 5120,
+    "n": 4352,
+    "logical_n": 4160,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "out",
+    "readers": 1,
+    "repeat": 0,
+    "host_us": 95.42284533381462,
+    "k": 1536,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 6,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "out",
+    "readers": 2,
+    "repeat": 1,
+    "host_us": 93.77999231219292,
+    "k": 1536,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "out",
+    "readers": 3,
+    "repeat": 2,
+    "host_us": 64.76393900811672,
+    "k": 1536,
+    "n": 5376,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 6,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "out",
+    "readers": 3,
+    "repeat": 3,
+    "host_us": 64.18302655220032,
+    "k": 1536,
+    "n": 5376,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 6,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "out",
+    "readers": 2,
+    "repeat": 4,
+    "host_us": 59.314072132110596,
+    "k": 1536,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "out",
+    "readers": 1,
+    "repeat": 5,
+    "host_us": 68.00005212426186,
+    "k": 1536,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 6,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "gateup",
+    "readers": 1,
+    "repeat": 0,
+    "host_us": 154.55600805580616,
+    "k": 5120,
+    "n": 8704,
+    "logical_n": 8704,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "gateup",
+    "readers": 2,
+    "repeat": 1,
+    "host_us": 124.53808449208736,
+    "k": 5120,
+    "n": 8704,
+    "logical_n": 8704,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "gateup",
+    "readers": 3,
+    "repeat": 2,
+    "host_us": 137.12188228964806,
+    "k": 5120,
+    "n": 9216,
+    "logical_n": 8704,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 80,
+      "block": 2,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "gateup",
+    "readers": 3,
+    "repeat": 3,
+    "host_us": 136.3418996334076,
+    "k": 5120,
+    "n": 9216,
+    "logical_n": 8704,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 80,
+      "block": 2,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "gateup",
+    "readers": 2,
+    "repeat": 4,
+    "host_us": 123.11595492064953,
+    "k": 5120,
+    "n": 8704,
+    "logical_n": 8704,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "gateup",
+    "readers": 1,
+    "repeat": 5,
+    "host_us": 506.2499549239874,
+    "k": 5120,
+    "n": 8704,
+    "logical_n": 8704,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "down",
+    "readers": 1,
+    "repeat": 0,
+    "host_us": 85.59389971196651,
+    "k": 4352,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 17,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "down",
+    "readers": 2,
+    "repeat": 1,
+    "host_us": 89.59206752479076,
+    "k": 4352,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "down",
+    "readers": 3,
+    "repeat": 2,
+    "host_us": 107.85716585814953,
+    "k": 4352,
+    "n": 5376,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 17,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "down",
+    "readers": 3,
+    "repeat": 3,
+    "host_us": 98.77001866698265,
+    "k": 4352,
+    "n": 5376,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 17,
+      "readers": 3,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "down",
+    "readers": 2,
+    "repeat": 4,
+    "host_us": 88.7399073690176,
+    "k": 4352,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    }
+  },
+  {
+    "role": "down",
+    "readers": 1,
+    "repeat": 5,
+    "host_us": 89.53199721872807,
+    "k": 4352,
+    "n": 5120,
+    "logical_n": 5120,
+    "weight_dtype": "DataType.BFLOAT4_B",
+    "fidelity": "LoFi",
+    "exact_replay": true,
+    "pcc_vs_one_reader": 1.0,
+    "config": {
+      "cores": 8,
+      "block": 17,
+      "readers": 1,
+      "prefill_block": 4
+    }
+  }
+]

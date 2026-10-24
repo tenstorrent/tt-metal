@@ -1,0 +1,121 @@
+{
+  "control": {},
+  "workers8_bf16": {
+    "pf_workers": 8
+  },
+  "workers8_bf8_activation": {
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true
+  },
+  "workers8_norm2": {
+    "pf_workers": 8,
+    "pf_norm_workers": 2
+  },
+  "workers8_mix_bf8_l1": {
+    "pf_workers": 8,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b"
+    },
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_keep_bf8_roles": [
+      "mix"
+    ]
+  },
+  "workers8_bf8_activation_mix_l1": {
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_ag_l1_roles": [
+      "mix"
+    ]
+  },
+  "workers8_down_l1": {
+    "pf_workers": 8,
+    "pf_mm_l1_roles": [
+      "down"
+    ]
+  },
+  "workers8_bf8_activation_down_l1": {
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_mm_l1_roles": [
+      "down"
+    ]
+  },
+  "workers4_mix_bf8_l1": {
+    "pf_workers": 4,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b"
+    },
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_keep_bf8_roles": [
+      "mix"
+    ]
+  },
+  "workers4_bf8_activation_mix_l1": {
+    "pf_workers": 4,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_ag_l1_roles": [
+      "mix"
+    ]
+  },
+  "workers4_bf8_activation_down_l1": {
+    "pf_workers": 4,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_mm_l1_roles": [
+      "down"
+    ]
+  },
+  "workers4_bf8_activation_norm2": {
+    "pf_workers": 4,
+    "pf_norm_workers": 2,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true
+  },
+  "workers4_column_bf8": {
+    "pf_workers": 4,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b",
+      "gateup": "bfloat8_b"
+    },
+    "pf_keep_bf8_activation": true
+  },
+  "workers4_column_bf8_mix_l1": {
+    "pf_workers": 4,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b",
+      "gateup": "bfloat8_b"
+    },
+    "pf_keep_bf8_activation": true,
+    "pf_ag_l1_roles": [
+      "mix"
+    ]
+  },
+  "workers8_column_bf8": {
+    "pf_workers": 8,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b",
+      "gateup": "bfloat8_b"
+    },
+    "pf_keep_bf8_activation": true
+  },
+  "workers8_column_bf8_mix_l1": {
+    "pf_workers": 8,
+    "pf_ccl_role_dtypes": {
+      "mix": "bfloat8_b",
+      "gateup": "bfloat8_b"
+    },
+    "pf_keep_bf8_activation": true,
+    "pf_ag_l1_roles": [
+      "mix"
+    ]
+  }
+}

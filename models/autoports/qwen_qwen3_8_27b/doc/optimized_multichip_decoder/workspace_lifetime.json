@@ -1,0 +1,70 @@
+{
+  "mesh": [
+    1,
+    4
+  ],
+  "dtype": "bfloat8_b",
+  "batch_sequence": [
+    1,
+    3,
+    8,
+    16,
+    32,
+    1,
+    3,
+    8,
+    16,
+    32,
+    1,
+    3,
+    8,
+    16,
+    32
+  ],
+  "captures_before_traffic": 15,
+  "trace_ids": [
+    "MeshTraceId(0)",
+    "MeshTraceId(1)",
+    "MeshTraceId(2)",
+    "MeshTraceId(3)",
+    "MeshTraceId(4)",
+    "MeshTraceId(5)",
+    "MeshTraceId(6)",
+    "MeshTraceId(7)",
+    "MeshTraceId(8)",
+    "MeshTraceId(9)",
+    "MeshTraceId(10)",
+    "MeshTraceId(11)",
+    "MeshTraceId(12)",
+    "MeshTraceId(13)",
+    "MeshTraceId(14)"
+  ],
+  "nonblocking_replays": 1514,
+  "per_replay_host_syncs": 0,
+  "checked_outputs_all_devices": 60,
+  "exact": true,
+  "scratch_allocations": 2,
+  "scratch_bytes_per_device": 1392640,
+  "scratch_addresses": {
+    "out": [
+      1485824,
+      1485824,
+      1485824,
+      1485824
+    ],
+    "down": [
+      1398720,
+      1398720,
+      1398720,
+      1398720
+    ]
+  },
+  "partial_invocation_rejected": true,
+  "surviving_trace_after_retirement": true,
+  "mid_traffic_releases": 0,
+  "post_traffic_release_before_survivor_check": 1,
+  "allocation_tracking": true,
+  "program_cache_tracking": true,
+  "acknowledgments": [],
+  "scope": "Synthetic rank/epoch-tagged collective protocol; not a target-model precision or performance result."
+}

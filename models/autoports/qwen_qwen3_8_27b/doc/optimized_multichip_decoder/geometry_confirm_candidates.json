@@ -1,0 +1,74 @@
+{
+  "control": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true
+  },
+  "down_2k68": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "down": {
+      "cores": 2,
+      "block": 68,
+      "readers": 2,
+      "prefill_block": 8
+    }
+  },
+  "combined_d34": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 16
+    },
+    "down": {
+      "cores": 34,
+      "block": 4,
+      "readers": 2,
+      "prefill_block": 8
+    }
+  },
+  "combined_d8": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 16
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 8
+    }
+  }
+}

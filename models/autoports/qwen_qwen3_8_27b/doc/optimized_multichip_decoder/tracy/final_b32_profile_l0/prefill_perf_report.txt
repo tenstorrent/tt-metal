@@ -1,0 +1,233 @@
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-du3e9rhi because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL'.
+Using operations until 'PERF_PREFILL_END'.
+Detected data from 4 devices. Merging device data...
+Warning: Unclassified operation 'LayerNormPreAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'LayerNormPostAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'QkvCausalConv1dSiluOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'UntilizeCodegenDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ChunkGdnPrepOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ChunkGdnScanOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SigmoidGatedRmsNormOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                            Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity           
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 1547    0.4 %         LayerNormPreAllGatherDeviceOperation                     0       838 μs                  110                                                       BF16 => BF16
+ 1548    0.2 %         AllGatherAsyncDeviceOperation                            0       470 μs          0 μs     36                                                       BF16 => BF16
+ 1549    0.9 %         LayerNormPostAllGatherDeviceOperation                    0     1,821 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 2075    0.5 %         TypecastDeviceOperation                                  3     1,158 μs          1 μs    110                                                       BF16 => BFP8
+ 1551    3.8 %         AllGatherAsyncDeviceOperation                            0     8,012 μs          1 μs     36                                                       BFP8 => BFP8
+ 1902    7.6 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 4608        2    16,215 μs          1 μs    110  117 GB/s  22.8 %  381.4 TFLOPs   62.7 %  LoFi BFP8 x BFP4 => BF16
+ 1903    2.6 %         SliceDeviceOperation                                     2     5,532 μs          1 μs    110                                                       BF16 => BF16
+ 1554    0.0 %         SliceDeviceOperation                                     0         1 μs          1 μs      3                                                       BF16 => BF16
+ 1555    0.1 %         SliceDeviceOperation                                     0       178 μs          0 μs    110                                                       BF16 => BF16
+ 1556    0.1 %         QkvCausalConv1dSiluOperation                             0       162 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1557    0.0 %         SliceDeviceOperation                                     0         2 μs          1 μs      3                                                       BF16 => BF16
+ 1558    0.1 %         SliceDeviceOperation                                     0       180 μs          0 μs    110                                                       BF16 => BF16
+ 1559    0.1 %         QkvCausalConv1dSiluOperation                             0       161 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1910    0.0 %         SliceDeviceOperation                                     2         2 μs          1 μs      3                                                       BF16 => BF16
+ 1736    0.1 %         SliceDeviceOperation                                     1       178 μs          0 μs    110                                                       BF16 => BF16
+ 1737    0.1 %         QkvCausalConv1dSiluOperation                             1       169 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2088    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1564    0.1 %         SliceDeviceOperation                                     0       181 μs          0 μs    110                                                       BF16 => BF16
+ 1740    0.1 %         QkvCausalConv1dSiluOperation                             1       159 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1916    0.0 %         SliceDeviceOperation                                     2         2 μs          1 μs      3                                                       BF16 => BF16
+ 1742    0.1 %         SliceDeviceOperation                                     1       181 μs          1 μs    110                                                       BF16 => BF16
+ 1568    0.1 %         QkvCausalConv1dSiluOperation                             0       170 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2094    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1745    0.1 %         SliceDeviceOperation                                     1       182 μs          0 μs    110                                                       BF16 => BF16
+ 1746    0.1 %         QkvCausalConv1dSiluOperation                             1       173 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2097    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1748    0.1 %         SliceDeviceOperation                                     1       181 μs          0 μs    110                                                       BF16 => BF16
+ 1749    0.1 %         QkvCausalConv1dSiluOperation                             1       168 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2100    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1576    0.1 %         SliceDeviceOperation                                     0       183 μs          0 μs    110                                                       BF16 => BF16
+ 1577    0.1 %         QkvCausalConv1dSiluOperation                             0       164 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1578    0.0 %         SliceDeviceOperation                                     0         2 μs          1 μs      3                                                       BF16 => BF16
+ 1579    0.1 %         SliceDeviceOperation                                     0       182 μs          1 μs    110                                                       BF16 => BF16
+ 1755    0.1 %         QkvCausalConv1dSiluOperation                             1       167 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2106    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1757    0.1 %         SliceDeviceOperation                                     1       181 μs          0 μs    110                                                       BF16 => BF16
+ 1583    0.1 %         QkvCausalConv1dSiluOperation                             0       166 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2109    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1585    0.1 %         SliceDeviceOperation                                     0       181 μs          1 μs    110                                                       BF16 => BF16
+ 1761    0.1 %         QkvCausalConv1dSiluOperation                             1       167 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2112    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1763    0.1 %         SliceDeviceOperation                                     1       182 μs          0 μs    110                                                       BF16 => BF16
+ 1589    0.1 %         QkvCausalConv1dSiluOperation                             0       166 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2115    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1766    0.1 %         SliceDeviceOperation                                     1       182 μs          0 μs    110                                                       BF16 => BF16
+ 1592    0.1 %         QkvCausalConv1dSiluOperation                             0       167 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2118    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1769    0.1 %         SliceDeviceOperation                                     1       183 μs          0 μs    110                                                       BF16 => BF16
+ 2120    0.1 %         QkvCausalConv1dSiluOperation                             3       163 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2121    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1597    0.1 %         SliceDeviceOperation                                     0       180 μs          0 μs    110                                                       BF16 => BF16
+ 1598    0.1 %         QkvCausalConv1dSiluOperation                             0       171 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2124    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1775    0.1 %         SliceDeviceOperation                                     1       181 μs          1 μs    110                                                       BF16 => BF16
+ 1776    0.1 %         QkvCausalConv1dSiluOperation                             1       172 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2127    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1778    0.1 %         SliceDeviceOperation                                     1       181 μs          0 μs    110                                                       BF16 => BF16
+ 1779    0.1 %         QkvCausalConv1dSiluOperation                             1       172 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1955    0.0 %         SliceDeviceOperation                                     2         1 μs          1 μs      3                                                       BF16 => BF16
+ 1606    0.1 %         SliceDeviceOperation                                     0       183 μs          0 μs    110                                                       BF16 => BF16
+ 1782    0.1 %         QkvCausalConv1dSiluOperation                             1       167 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2133    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1784    0.1 %         SliceDeviceOperation                                     1       181 μs          0 μs    110                                                       BF16 => BF16
+ 1785    0.1 %         QkvCausalConv1dSiluOperation                             1       168 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1611    0.0 %         SliceDeviceOperation                                     0         2 μs          1 μs      3                                                       BF16 => BF16
+ 1787    0.1 %         SliceDeviceOperation                                     1       184 μs          0 μs    110                                                       BF16 => BF16
+ 1788    0.1 %         QkvCausalConv1dSiluOperation                             1       165 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1614    0.0 %         SliceDeviceOperation                                     0         2 μs          1 μs      3                                                       BF16 => BF16
+ 1615    0.1 %         SliceDeviceOperation                                     0       182 μs          1 μs    110                                                       BF16 => BF16
+ 1791    0.1 %         QkvCausalConv1dSiluOperation                             1       168 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2142    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1793    0.1 %         SliceDeviceOperation                                     1       183 μs          0 μs    110                                                       BF16 => BF16
+ 1619    0.1 %         QkvCausalConv1dSiluOperation                             0       179 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2145    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1796    0.1 %         SliceDeviceOperation                                     1       183 μs          1 μs    110                                                       BF16 => BF16
+ 1797    0.1 %         QkvCausalConv1dSiluOperation                             1       169 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1623    0.0 %         SliceDeviceOperation                                     0         2 μs          1 μs      3                                                       BF16 => BF16
+ 1974    0.1 %         SliceDeviceOperation                                     2       185 μs          0 μs    110                                                       BF16 => BF16
+ 1975    0.1 %         QkvCausalConv1dSiluOperation                             2       173 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2151    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1802    0.1 %         SliceDeviceOperation                                     1       182 μs          0 μs    110                                                       BF16 => BF16
+ 1803    0.1 %         QkvCausalConv1dSiluOperation                             1       170 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2154    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1630    0.1 %         SliceDeviceOperation                                     0       182 μs          0 μs    110                                                       BF16 => BF16
+ 1981    0.1 %         QkvCausalConv1dSiluOperation                             2       170 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1807    0.0 %         SliceDeviceOperation                                     1         2 μs          1 μs      3                                                       BF16 => BF16
+ 1983    0.1 %         SliceDeviceOperation                                     2       182 μs          0 μs    110                                                       BF16 => BF16
+ 1634    0.1 %         QkvCausalConv1dSiluOperation                             0       179 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1985    0.0 %         SliceDeviceOperation                                     2         2 μs          1 μs      3                                                       BF16 => BF16
+ 1986    0.1 %         SliceDeviceOperation                                     2       183 μs          0 μs    110                                                       BF16 => BF16
+ 1812    0.1 %         QkvCausalConv1dSiluOperation                             1       178 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2163    0.0 %         SliceDeviceOperation                                     3         1 μs          1 μs      3                                                       BF16 => BF16
+ 1814    0.1 %         SliceDeviceOperation                                     1       184 μs          1 μs    110                                                       BF16 => BF16
+ 1815    0.1 %         QkvCausalConv1dSiluOperation                             1       168 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1816    0.0 %         SliceDeviceOperation                                     1         2 μs          1 μs      3                                                       BF16 => BF16
+ 1817    0.1 %         SliceDeviceOperation                                     1       183 μs          0 μs    110                                                       BF16 => BF16
+ 1993    0.1 %         QkvCausalConv1dSiluOperation                             2       175 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1819    0.0 %         SliceDeviceOperation                                     1         2 μs          1 μs      3                                                       BF16 => BF16
+ 1995    0.1 %         SliceDeviceOperation                                     2       182 μs          0 μs    110                                                       BF16 => BF16
+ 2171    0.1 %         QkvCausalConv1dSiluOperation                             3       167 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2172    0.0 %         SliceDeviceOperation                                     3         2 μs          1 μs      3                                                       BF16 => BF16
+ 1823    0.1 %         SliceDeviceOperation                                     1       184 μs          1 μs    110                                                       BF16 => BF16
+ 2174    0.1 %         QkvCausalConv1dSiluOperation                             3       178 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1650    0.3 %         ConcatDeviceOperation                                    0       726 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 2001    0.3 %         ConcatDeviceOperation                                    2       729 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2002    1.0 %         ConcatDeviceOperation                                    2     2,175 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1653    0.0 %         SliceDeviceOperation                                     0        30 μs          1 μs    110                                                       BF16 => BF16
+ 1654    0.0 %         UntilizeCodegenDeviceOperation                           0        29 μs          1 μs     64                                                       BF16 => BF16
+ 2180    0.0 %         SliceDeviceOperation                                     3         5 μs          1 μs     96                                                       BF16 => BF16
+ 1831    0.0 %         CopyDeviceOperation                                      1         3 μs          1 μs     96                                                 BF16, BF16 => BF16
+ 2007    0.0 %         SliceDeviceOperation                                     2        57 μs          1 μs    110                                                       BF16 => BF16
+ 1833    0.0 %         TypecastDeviceOperation                                  1        70 μs          1 μs    110                                                       BF16 => FP32
+ 2184    0.2 %         BinaryNgDeviceOperation                                  3       362 μs          1 μs    110                                                 FP32, FP32 => FP32
+ 2010    0.0 %         UnaryDeviceOperation                                     2        94 μs          0 μs    110                                                       FP32 => FP32
+ 1836    0.2 %         BinaryNgDeviceOperation                                  1       371 μs          0 μs    110                                                 FP32, FP32 => FP32
+ 1837    0.0 %         SliceDeviceOperation                                     1        56 μs          0 μs    110                                                       BF16 => BF16
+ 1838    0.0 %         TypecastDeviceOperation                                  1        70 μs          0 μs    110                                                       BF16 => FP32
+ 2014    0.0 %         UnaryDeviceOperation                                     2       103 μs          1 μs    110                                                       FP32 => FP32
+ 2015    0.1 %         SliceDeviceOperation                                     2       206 μs          1 μs    110                                                       BF16 => BF16
+ 2016    0.1 %         SliceDeviceOperation                                     2       204 μs          1 μs    110                                                       BF16 => BF16
+ 1842    0.3 %         SliceDeviceOperation                                     1       599 μs          1 μs    110                                                       BF16 => BF16
+ 1668    0.0 %         SliceDeviceOperation                                     0        25 μs          1 μs    110                                                       FP32 => FP32
+ 1844    0.0 %         SliceDeviceOperation                                     1        24 μs          1 μs    110                                                       FP32 => FP32
+ 2020    0.0 %         SliceDeviceOperation                                     2        50 μs          1 μs    110                                                       FP32 => FP32
+ 1671    2.5 %         ChunkGdnPrepOperation                                    0     5,277 μs          1 μs    110                                                 BF16, BF16 => FP32
+ 2197    1.4 %         ChunkGdnScanOperation                                    3     3,057 μs          4 μs    108                                                 FP32, FP32 => FP32
+ 1848    0.1 %         SliceDeviceOperation                                     1       205 μs          0 μs    110                                                       BF16 => BF16
+ 2199    0.1 %         SliceDeviceOperation                                     3       203 μs          1 μs    110                                                       BF16 => BF16
+ 2025    0.3 %         SliceDeviceOperation                                     2       601 μs          1 μs    110                                                       BF16 => BF16
+ 2201    0.0 %         SliceDeviceOperation                                     3        28 μs          1 μs    110                                                       FP32 => FP32
+ 1677    0.0 %         SliceDeviceOperation                                     0        28 μs          1 μs    110                                                       FP32 => FP32
+ 2203    0.0 %         SliceDeviceOperation                                     3        50 μs          1 μs    110                                                       FP32 => FP32
+ 1679    2.5 %         ChunkGdnPrepOperation                                    0     5,368 μs          1 μs    110                                                 BF16, BF16 => FP32
+ 1680    1.4 %         ChunkGdnScanOperation                                    0     3,044 μs          4 μs    108                                                 FP32, FP32 => FP32
+ 2031    0.1 %         SliceDeviceOperation                                     2       204 μs          0 μs    110                                                       BF16 => BF16
+ 2032    0.1 %         SliceDeviceOperation                                     2       205 μs          1 μs    110                                                       BF16 => BF16
+ 1858    0.3 %         SliceDeviceOperation                                     1       603 μs          1 μs    110                                                       BF16 => BF16
+ 1859    0.0 %         SliceDeviceOperation                                     1        28 μs          1 μs    110                                                       FP32 => FP32
+ 2210    0.0 %         SliceDeviceOperation                                     3        28 μs          1 μs    110                                                       FP32 => FP32
+ 1686    0.0 %         SliceDeviceOperation                                     0        50 μs          1 μs    110                                                       FP32 => FP32
+ 1687    2.5 %         ChunkGdnPrepOperation                                    0     5,348 μs          1 μs    110                                                 BF16, BF16 => FP32
+ 1688    1.4 %         ChunkGdnScanOperation                                    0     3,051 μs          4 μs    108                                                 FP32, FP32 => FP32
+ 1864    0.1 %         SliceDeviceOperation                                     1       115 μs          0 μs    110                                                       BF16 => BF16
+ 2040    0.1 %         SliceDeviceOperation                                     2       115 μs          1 μs    110                                                       BF16 => BF16
+ 2041    0.2 %         SliceDeviceOperation                                     2       335 μs          1 μs    110                                                       BF16 => BF16
+ 2217    0.0 %         SliceDeviceOperation                                     3        16 μs          1 μs    110                                                       FP32 => FP32
+ 2043    0.0 %         SliceDeviceOperation                                     2        17 μs          1 μs    110                                                       FP32 => FP32
+ 2044    0.0 %         SliceDeviceOperation                                     2        28 μs          1 μs    110                                                       FP32 => FP32
+ 1870    1.4 %         ChunkGdnPrepOperation                                    1     3,001 μs         49 μs    110                                                 BF16, BF16 => FP32
+ 2221    0.9 %         ChunkGdnScanOperation                                    3     1,885 μs          3 μs     60                                                 FP32, FP32 => FP32
+ 2222    1.9 %         ConcatDeviceOperation                                    3     3,933 μs          0 μs    110                                                 FP32, FP32 => FP32
+ 1698    0.1 %         ConcatDeviceOperation                                    0       143 μs          1 μs    110                                                 FP32, FP32 => FP32
+ 2049    1.3 %         TypecastDeviceOperation                                  2     2,653 μs          1 μs    110                                                       FP32 => BF16
+ 2225    1.7 %         SigmoidGatedRmsNormOperation                             3     3,659 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 2226    0.1 %         CopyDeviceOperation                                      3       141 μs          0 μs    110                                                 FP32, FP32 => FP32
+ 2052    1.0 %         SliceDeviceOperation                                     2     2,154 μs          1 μs    110                                                       BF16 => BF16
+ 2228    1.3 %         BinaryNgDeviceOperation                                  3     2,720 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1704    4.3 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 1536 x 5120        0     9,168 μs          1 μs    110  191 GB/s  37.3 %  224.9 TFLOPs   37.0 %  LoFi BF16 x BFP4 => BF16
+ 2055    2.2 %         TypecastDeviceOperation                                  2     4,595 μs          1 μs    110                                                       BF16 => BFP8
+ 1706    3.2 %         ReduceScatterMinimalAsyncDeviceOperation                 0     6,740 μs          1 μs     36                                                      BFP8 => UINT8
+ 1882    0.7 %         TypecastDeviceOperation                                  1     1,528 μs          1 μs    110                                                       BFP8 => BF16
+ 2233    1.1 %         BinaryNgDeviceOperation                                  3     2,237 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1709    0.4 %         LayerNormPreAllGatherDeviceOperation                     0       837 μs          1 μs    110                                                       BF16 => BF16
+ 1710    0.3 %         AllGatherAsyncDeviceOperation                            0       581 μs          0 μs     36                                                       BF16 => BF16
+ 1711    0.8 %         LayerNormPostAllGatherDeviceOperation                    0     1,727 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2237    0.5 %         TypecastDeviceOperation                                  3     1,159 μs          1 μs    110                                                       BF16 => BFP8
+ 1713    3.8 %         AllGatherAsyncDeviceOperation                            0     8,103 μs          1 μs     36                                                       BFP8 => BFP8
+ 2064    9.3 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        2    19,791 μs          1 μs     88   92 GB/s  18.0 %  295.1 TFLOPs   60.7 %  LoFi BFP8 x BFP4 => BF16
+ 1715    8.2 %   FLOP  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        0    17,292 μs          1 μs     88  105 GB/s  20.6 %  337.8 TFLOPs   69.4 %  LoFi BFP8 x BFP4 => BF16
+ 1716    3.4 %         BinaryNgDeviceOperation                                  0     7,224 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1717    7.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 4352 x 5120        0    16,783 μs          1 μs    110  149 GB/s  29.0 %  348.0 TFLOPs   57.2 %  LoFi BF16 x BFP4 => BF16
+ 1718    1.9 %         TypecastDeviceOperation                                  0     4,102 μs          1 μs    110                                                       BF16 => BFP8
+ 1719    3.2 %         ReduceScatterMinimalAsyncDeviceOperation                 0     6,710 μs          1 μs     36                                                      BFP8 => UINT8
+ 1720    0.7 %         TypecastDeviceOperation                                  0     1,494 μs          0 μs    110                                                       BFP8 => BF16
+ 1721    1.0 %         BinaryNgDeviceOperation                                  0     2,216 μs          1 μs    110                                                 BF16, BF16 => BF16
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         175 device ops, 0 host ops, 0 signposts                      211,904 μs        155 μs          46 GB/s   9.0 %                                                 
+
+💡 Advice 💡
+============
+
+High Op-to-Op Gap
+----------------
+ 1870    1.4 %         ChunkGdnPrepOperation                                    1     3,001 μs         49 μs    110                                                 BF16, BF16 => FP32
+
+These ops have a >6 μs gap since the previous operation. Running with tracing could save 43 μs (0.0% of overall time)
+Alternatively ensure device is not waiting for the host. Experts can try moving runtime args in the kernels to compile-time args.
+
+Matmul Optimization
+-------------------
+ 1902    7.6 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 4608        2    16,215 μs          1 μs    110  117 GB/s  22.8 %  381.4 TFLOPs   62.7 %  LoFi BFP8 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=16 and output subblock 1x2 look good 🤷
+
+ 1704    4.3 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 1536 x 5120        0     9,168 μs          1 μs    110  191 GB/s  37.3 %  224.9 TFLOPs   37.0 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=4 and output subblock 1x5 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 2064    9.3 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        2    19,791 μs          1 μs     88   92 GB/s  18.0 %  295.1 TFLOPs   60.7 %  LoFi BFP8 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=20 and output subblock 8x1 look good 🤷
+
+ 1715    8.2 %   FLOP  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        0    17,292 μs          1 μs     88  105 GB/s  20.6 %  337.8 TFLOPs   69.4 %  LoFi BFP8 x BFP4 => BF16
+- Increase grid size (currently using 88 of 110)
+
+ 1717    7.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 4352 x 5120        0    16,783 μs          1 μs    110  149 GB/s  29.0 %  348.0 TFLOPs   57.2 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=4 and output subblock 1x5 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+

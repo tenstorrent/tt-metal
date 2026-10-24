@@ -1,0 +1,104 @@
+{
+  "fused_k4": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 16,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b"
+    },
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 8,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b"
+    },
+    "separate_prefill": true,
+    "gate": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1,
+      "prefill_block": 20,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        11,
+        8
+      ],
+      "prefill_subh": 8,
+      "prefill_out_block_h": 8,
+      "prefill_out_subblock_w": 1
+    },
+    "up": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1,
+      "prefill_block": 20,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        11,
+        8
+      ],
+      "prefill_subh": 8,
+      "prefill_out_block_h": 8,
+      "prefill_out_subblock_w": 1
+    },
+    "shared_gate_k": 4
+  },
+  "fused_k8": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 16,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b"
+    },
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 8,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b"
+    },
+    "separate_prefill": true,
+    "gate": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1,
+      "prefill_block": 20,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        11,
+        8
+      ],
+      "prefill_subh": 8,
+      "prefill_out_block_h": 8,
+      "prefill_out_subblock_w": 1
+    },
+    "up": {
+      "cores": 80,
+      "block": 2,
+      "readers": 1,
+      "prefill_block": 20,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_grid": [
+        11,
+        8
+      ],
+      "prefill_subh": 8,
+      "prefill_out_block_h": 8,
+      "prefill_out_subblock_w": 1
+    },
+    "shared_gate_k": 8
+  }
+}

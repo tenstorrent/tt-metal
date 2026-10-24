@@ -1,0 +1,20 @@
+{
+  "mix_k80_padded": {
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 80,
+      "weight_pad_readers": 2,
+      "prefill_activation": "bfloat8_b",
+      "prefill_ccl_dtype": "bfloat8_b",
+      "prefill_out_block_h": 1,
+      "prefill_subh": 1,
+      "prefill_out_block_w": 7,
+      "prefill_out_subblock_w": 7
+    },
+    "column_interleaved_roles": [
+      "mix"
+    ]
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "workers8_control": {
+    "pf_workers": 8
+  },
+  "ag_11x8": {
+    "pf_fused": "ag",
+    "pf_fused_block_h": 16,
+    "pf_ag_grid": [
+      11,
+      8
+    ],
+    "pf_workers": 8
+  },
+  "ag_11x8_bf8a": {
+    "pf_fused": "ag",
+    "pf_fused_block_h": 16,
+    "pf_ag_grid": [
+      11,
+      8
+    ],
+    "pf_workers": 8,
+    "pf_fused_activation": "bfloat8_b"
+  },
+  "both_11x8_bf8ag": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "pf_ag_grid": [
+      11,
+      8
+    ],
+    "pf_workers": 8,
+    "pf_fused_activation": "bfloat8_b",
+    "pf_fused_activation_roles": [
+      "mix",
+      "gateup"
+    ]
+  },
+  "both_l1_bf8_chunk1024": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_fused_activation": "bfloat8_b",
+    "pf_fused_activation_roles": [
+      "mix",
+      "gateup"
+    ],
+    "prefill_chunk": 1024,
+    "pf_ag_output_dtype": "bfloat8_b",
+    "pf_rs_output_dtype": "bfloat8_b"
+  },
+  "both_l1_bf8a_chunk2048": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_fused_activation": "bfloat8_b",
+    "pf_fused_activation_roles": [
+      "mix",
+      "gateup"
+    ],
+    "prefill_chunk": 2048
+  }
+}

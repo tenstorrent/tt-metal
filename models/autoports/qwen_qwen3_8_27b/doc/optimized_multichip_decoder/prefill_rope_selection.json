@@ -1,0 +1,38 @@
+{
+  "selected_min_batch": 8,
+  "status": "final_v5_default_verified_clean_pass",
+  "batches": {
+    "8": {
+      "prefill_host_us": {
+        "control": 49586.60085685551,
+        "packed": 49443.0570397526
+      },
+      "evidence": [
+        "prefill_rope_b8_results.json"
+      ]
+    },
+    "16": {
+      "prefill_host_us": {
+        "control": 99205.21499589086,
+        "packed": 99167.86383837461
+      },
+      "evidence": [
+        "prefill_rope_b16_results.json"
+      ]
+    },
+    "32": {
+      "prefill_host_us": {
+        "control": 200602.76298318058,
+        "packed": 199463.4314905852
+      },
+      "evidence": [
+        "prefill_rope_b32_results.json",
+        "prefill_rope_b32_reverse_results.json"
+      ]
+    }
+  },
+  "uniform_FP16_packing_proof": "prefill_rope_exact_uniform_candidate2.json",
+  "original_policy_PCC": "All candidate4096/128 output/statePCC gates pass; production original compute config unchanged.",
+  "limitation": "B16 performance is a measured tie; B8 slight gain, B32 repeated gain. No claim of globally optimal batch-specific prefill configuration.",
+  "precision_assignment_explanation": "rope_optimization.md"
+}

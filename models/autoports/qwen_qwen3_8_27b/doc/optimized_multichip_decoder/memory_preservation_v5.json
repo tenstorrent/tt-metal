@@ -1,0 +1,19 @@
+{
+  "scope": "B1 final-default device allocator reports at setup/aftertrace; no full-stack or batched transient peak claim.",
+  "comparisons": [
+    {
+      "layer_type": "linear_attention",
+      "before_after_weights_and_trace_allocations_identical": true,
+      "before_evidence": "integration_v8_rs_rope/final_accepted_l0.json",
+      "after_evidence": "final_accepted_l0.json"
+    },
+    {
+      "layer_type": "full_attention",
+      "before_after_weights_and_trace_allocations_identical": true,
+      "before_evidence": "integration_v8_rs_rope/final_accepted_l3.json",
+      "after_evidence": "final_accepted_l3.json"
+    }
+  ],
+  "persistent_policy_change_bytes": 0,
+  "batched_transient_bound": "memory_capacity_plan.json packed_rope_transients"
+}

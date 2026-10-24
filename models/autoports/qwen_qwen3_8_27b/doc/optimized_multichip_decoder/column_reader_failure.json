@@ -1,0 +1,13 @@
+{
+  "status": "campaign_stopped_before_remaining_known-unsafe_native_narrow-W_cases",
+  "source_diagnosis": "DRAM-width-sharded IN1 sender bank walker uses per_core_N while CB row stride/storage use out_block_w; reader explicitly assumes one width block per core. Native narrow-W can overlap/overrun CB.",
+  "observed_failures": [
+    "prefill_column_role0_mix_k80_l0.log",
+    "prefill_column_role0_mix_k160_l0.log",
+    "prefill_column_role0_gateup_k40_l0.log",
+    "prefill_column_role0_gateup_k80_l0.log"
+  ],
+  "last_unrecorded_case": "gateup_k80 completed with exact replay assertion and clean device close while sweep parent paused; no fabricated timing/PCC JSON.",
+  "recovery": "prefill_column_known_reader_reset.log: bounded reset/list exit0; prefill_column_recovery_mesh.log: mesh open/close smoke",
+  "adaptation": "Separate setup-only interleaved prefill weights; original decode weights retained; same shape/dtype/K/H/W/subblock. Matching interleaved controls."
+}

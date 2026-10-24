@@ -1,0 +1,388 @@
+[
+  {
+    "layer": 0,
+    "candidate": "mix_interleaved_control",
+    "policy": {
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "column_interleaved_roles": [
+        "mix"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\"}, \"column_interleaved_roles\": [\"mix\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_mix_interleaved_control_l0.json"
+    ],
+    "prefill_host_us": 6394.458003342152,
+    "host_us": 445.4539157450199,
+    "minimum_pcc": 0.9999465216044839
+  },
+  {
+    "layer": 0,
+    "candidate": "mix_k160_interleaved",
+    "policy": {
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 160,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_out_block_h": 1,
+        "prefill_subh": 1,
+        "prefill_out_block_w": 7,
+        "prefill_out_subblock_w": 7
+      },
+      "column_interleaved_roles": [
+        "mix"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 160, \"weight_pad_readers\": 2, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_out_block_h\": 1, \"prefill_subh\": 1, \"prefill_out_block_w\": 7, \"prefill_out_subblock_w\": 7}, \"column_interleaved_roles\": [\"mix\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_mix_k160_interleaved_l0.json"
+    ],
+    "prefill_host_us": 7442.526984959841,
+    "host_us": 447.2271539270878,
+    "minimum_pcc": 0.99991035327263
+  },
+  {
+    "layer": 0,
+    "candidate": "gateup_interleaved_control",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "column_interleaved_roles": [
+        "gateup"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\"}, \"column_interleaved_roles\": [\"gateup\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_gateup_interleaved_control_l0.json"
+    ],
+    "prefill_host_us": 6785.727106034756,
+    "host_us": 446.1151547729969,
+    "minimum_pcc": 0.9999465216044839
+  },
+  {
+    "layer": 0,
+    "candidate": "gateup_k40_interleaved",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 40,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_out_block_h": 1,
+        "prefill_subh": 1,
+        "prefill_out_block_w": 5
+      },
+      "column_interleaved_roles": [
+        "gateup"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 40, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_out_block_h\": 1, \"prefill_subh\": 1, \"prefill_out_block_w\": 5}, \"column_interleaved_roles\": [\"gateup\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_gateup_k40_interleaved_l0.json"
+    ],
+    "prefill_host_us": 8830.467006191611,
+    "host_us": 445.8350595086813,
+    "minimum_pcc": 0.9999499557127787
+  },
+  {
+    "layer": 0,
+    "candidate": "gateup_k80_interleaved",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 80,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_out_block_h": 1,
+        "prefill_subh": 1,
+        "prefill_out_block_w": 5
+      },
+      "column_interleaved_roles": [
+        "gateup"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 80, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_out_block_h\": 1, \"prefill_subh\": 1, \"prefill_out_block_w\": 5}, \"column_interleaved_roles\": [\"gateup\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_gateup_k80_interleaved_l0.json"
+    ],
+    "prefill_host_us": 8895.441889762878,
+    "host_us": 445.73494233191013,
+    "minimum_pcc": 0.9999356101552109
+  },
+  {
+    "layer": 0,
+    "candidate": "gateup_k160_interleaved",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 160,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_out_block_h": 1,
+        "prefill_subh": 1,
+        "prefill_out_block_w": 5
+      },
+      "column_interleaved_roles": [
+        "gateup"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 160, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_out_block_h\": 1, \"prefill_subh\": 1, \"prefill_out_block_w\": 5}, \"column_interleaved_roles\": [\"gateup\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_gateup_k160_interleaved_l0.json"
+    ],
+    "prefill_host_us": 8910.599863156676,
+    "host_us": 445.39407826960087,
+    "minimum_pcc": 0.9999356101552109
+  },
+  {
+    "layer": 0,
+    "candidate": "mix_k20_h13_w7_interleaved",
+    "policy": {
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 20,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_out_block_h": 13,
+        "prefill_out_block_w": 7,
+        "prefill_out_subblock_w": 7,
+        "prefill_subh": 1
+      },
+      "column_interleaved_roles": [
+        "mix"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 20, \"weight_pad_readers\": 2, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_out_block_h\": 13, \"prefill_out_block_w\": 7, \"prefill_out_subblock_w\": 7, \"prefill_subh\": 1}, \"column_interleaved_roles\": [\"mix\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_mix_k20_h13_w7_interleaved_l0.json"
+    ],
+    "prefill_host_us": 6242.706906050444,
+    "host_us": 446.6159734874964,
+    "minimum_pcc": 0.9999396196657098
+  },
+  {
+    "layer": 0,
+    "candidate": "gateup_k10_h13_w5_interleaved",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 10,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_out_block_h": 13,
+        "prefill_out_block_w": 5,
+        "prefill_subh": 1
+      },
+      "column_interleaved_roles": [
+        "gateup"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 10, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_out_block_h\": 13, \"prefill_out_block_w\": 5, \"prefill_subh\": 1}, \"column_interleaved_roles\": [\"gateup\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_gateup_k10_h13_w5_interleaved_l0.json"
+    ],
+    "prefill_host_us": 7079.821079969406,
+    "host_us": 446.5158563107252,
+    "minimum_pcc": 0.9999472531051461
+  },
+  {
+    "layer": 0,
+    "candidate": "gateup_k20_h13_w5_interleaved",
+    "policy": {
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 20,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_out_block_h": 13,
+        "prefill_out_block_w": 5,
+        "prefill_subh": 1
+      },
+      "column_interleaved_roles": [
+        "gateup"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_column_padded_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 20, \"prefill_activation\": \"bfloat8_b\", \"prefill_ccl_dtype\": \"bfloat8_b\", \"prefill_out_block_h\": 13, \"prefill_out_block_w\": 5, \"prefill_subh\": 1}, \"column_interleaved_roles\": [\"gateup\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_column_tail0_gateup_k20_h13_w5_interleaved_l0.json"
+    ],
+    "prefill_host_us": 6908.864015713334,
+    "host_us": 445.79501263797283,
+    "minimum_pcc": 0.9999487586755247
+  }
+]

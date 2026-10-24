@@ -1,0 +1,45 @@
+{
+  "sharded_compact_l1": {
+    "direct_all_reduce": false,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": null,
+    "pooled_all_reduce": false,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "_layout": "sharded",
+    "persistent_ccl": true,
+    "distributed_norm_l1": true,
+    "distributed_norm_direct": true,
+    "residual_l1": true,
+    "ccl_l1": true,
+    "ccl_compact": true
+  }
+}

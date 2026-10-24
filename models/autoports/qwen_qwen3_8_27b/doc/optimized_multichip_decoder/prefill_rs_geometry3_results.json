@@ -1,0 +1,292 @@
+[
+  {
+    "layer": 3,
+    "candidate": "k4_h8",
+    "policy": {
+      "prefill_native_rs": false,
+      "pf_workers": 8,
+      "pf_ccl_dtype": "bfloat8_b",
+      "pf_keep_bf8_activation": true,
+      "pf_fused": "rs",
+      "pf_fused_block_h": 8,
+      "pf_rs_output_dtype": "bfloat8_b",
+      "pf_ag_l1_roles": [
+        "mix"
+      ]
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_ccl_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"prefill_native_rs\": false, \"pf_workers\": 8, \"pf_ccl_dtype\": \"bfloat8_b\", \"pf_keep_bf8_activation\": true, \"pf_fused\": \"rs\", \"pf_fused_block_h\": 8, \"pf_rs_output_dtype\": \"bfloat8_b\", \"pf_ag_l1_roles\": [\"mix\"]}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_geometry3_k4_h8_l3.json"
+    ],
+    "prefill_host_us": 6598.077015951276,
+    "host_us": 359.70984026789665,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "k8_h8",
+    "policy": {
+      "prefill_native_rs": false,
+      "pf_workers": 8,
+      "pf_ccl_dtype": "bfloat8_b",
+      "pf_keep_bf8_activation": true,
+      "pf_fused": "rs",
+      "pf_fused_block_h": 8,
+      "pf_rs_output_dtype": "bfloat8_b",
+      "pf_ag_l1_roles": [
+        "mix"
+      ],
+      "pf_fused_k": 8
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_ccl_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"prefill_native_rs\": false, \"pf_workers\": 8, \"pf_ccl_dtype\": \"bfloat8_b\", \"pf_keep_bf8_activation\": true, \"pf_fused\": \"rs\", \"pf_fused_block_h\": 8, \"pf_rs_output_dtype\": \"bfloat8_b\", \"pf_ag_l1_roles\": [\"mix\"], \"pf_fused_k\": 8}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_geometry3_k8_h8_l3.json"
+    ],
+    "prefill_host_us": 6542.700808495283,
+    "host_us": 358.22601057589054,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "out12_down17_h4",
+    "policy": {
+      "prefill_native_rs": false,
+      "pf_workers": 8,
+      "pf_ccl_dtype": "bfloat8_b",
+      "pf_keep_bf8_activation": true,
+      "pf_fused": "rs",
+      "pf_fused_block_h": 4,
+      "pf_rs_output_dtype": "bfloat8_b",
+      "pf_ag_l1_roles": [
+        "mix"
+      ],
+      "pf_fused_role_k": {
+        "out": 12,
+        "down": 17
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_ccl_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"prefill_native_rs\": false, \"pf_workers\": 8, \"pf_ccl_dtype\": \"bfloat8_b\", \"pf_keep_bf8_activation\": true, \"pf_fused\": \"rs\", \"pf_fused_block_h\": 4, \"pf_rs_output_dtype\": \"bfloat8_b\", \"pf_ag_l1_roles\": [\"mix\"], \"pf_fused_role_k\": {\"out\": 12, \"down\": 17}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_geometry3_out12_down17_h4_l3.json"
+    ],
+    "prefill_host_us": 6538.541987538338,
+    "host_us": 358.2369536161423,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "out24_down34_h1",
+    "policy": {
+      "prefill_native_rs": false,
+      "pf_workers": 8,
+      "pf_ccl_dtype": "bfloat8_b",
+      "pf_keep_bf8_activation": true,
+      "pf_fused": "rs",
+      "pf_fused_block_h": 1,
+      "pf_rs_output_dtype": "bfloat8_b",
+      "pf_ag_l1_roles": [
+        "mix"
+      ],
+      "pf_fused_role_k": {
+        "out": 24,
+        "down": 34
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_ccl_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"prefill_native_rs\": false, \"pf_workers\": 8, \"pf_ccl_dtype\": \"bfloat8_b\", \"pf_keep_bf8_activation\": true, \"pf_fused\": \"rs\", \"pf_fused_block_h\": 1, \"pf_rs_output_dtype\": \"bfloat8_b\", \"pf_ag_l1_roles\": [\"mix\"], \"pf_fused_role_k\": {\"out\": 24, \"down\": 34}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_geometry3_out24_down34_h1_l3.json"
+    ],
+    "prefill_host_us": 7384.1530829668045,
+    "host_us": 357.7249590307474,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "k4_h8_sub2x4",
+    "policy": {
+      "prefill_native_rs": false,
+      "pf_workers": 8,
+      "pf_ccl_dtype": "bfloat8_b",
+      "pf_keep_bf8_activation": true,
+      "pf_fused": "rs",
+      "pf_fused_block_h": 8,
+      "pf_rs_output_dtype": "bfloat8_b",
+      "pf_ag_l1_roles": [
+        "mix"
+      ],
+      "pf_fused_subh": 2,
+      "pf_fused_subw": 4
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_ccl_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"prefill_native_rs\": false, \"pf_workers\": 8, \"pf_ccl_dtype\": \"bfloat8_b\", \"pf_keep_bf8_activation\": true, \"pf_fused\": \"rs\", \"pf_fused_block_h\": 8, \"pf_rs_output_dtype\": \"bfloat8_b\", \"pf_ag_l1_roles\": [\"mix\"], \"pf_fused_subh\": 2, \"pf_fused_subw\": 4}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_geometry3_k4_h8_sub2x4_l3.json"
+    ],
+    "prefill_host_us": 6555.295083671808,
+    "host_us": 358.3261277526617,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "k8_h8_sub2x4",
+    "policy": {
+      "prefill_native_rs": false,
+      "pf_workers": 8,
+      "pf_ccl_dtype": "bfloat8_b",
+      "pf_keep_bf8_activation": true,
+      "pf_fused": "rs",
+      "pf_fused_block_h": 8,
+      "pf_rs_output_dtype": "bfloat8_b",
+      "pf_ag_l1_roles": [
+        "mix"
+      ],
+      "pf_fused_k": 8,
+      "pf_fused_subh": 2,
+      "pf_fused_subw": 4
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_ccl_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"prefill_native_rs\": false, \"pf_workers\": 8, \"pf_ccl_dtype\": \"bfloat8_b\", \"pf_keep_bf8_activation\": true, \"pf_fused\": \"rs\", \"pf_fused_block_h\": 8, \"pf_rs_output_dtype\": \"bfloat8_b\", \"pf_ag_l1_roles\": [\"mix\"], \"pf_fused_k\": 8, \"pf_fused_subh\": 2, \"pf_fused_subw\": 4}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_geometry3_k8_h8_sub2x4_l3.json"
+    ],
+    "prefill_host_us": 6572.757847607136,
+    "host_us": 358.70797000825405,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "k8_h8_sub4x2",
+    "policy": {
+      "prefill_native_rs": false,
+      "pf_workers": 8,
+      "pf_ccl_dtype": "bfloat8_b",
+      "pf_keep_bf8_activation": true,
+      "pf_fused": "rs",
+      "pf_fused_block_h": 8,
+      "pf_rs_output_dtype": "bfloat8_b",
+      "pf_ag_l1_roles": [
+        "mix"
+      ],
+      "pf_fused_k": 8,
+      "pf_fused_subh": 4,
+      "pf_fused_subw": 2
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_ccl_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"prefill_native_rs\": false, \"pf_workers\": 8, \"pf_ccl_dtype\": \"bfloat8_b\", \"pf_keep_bf8_activation\": true, \"pf_fused\": \"rs\", \"pf_fused_block_h\": 8, \"pf_rs_output_dtype\": \"bfloat8_b\", \"pf_ag_l1_roles\": [\"mix\"], \"pf_fused_k\": 8, \"pf_fused_subh\": 4, \"pf_fused_subw\": 2}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_geometry3_k8_h8_sub4x2_l3.json"
+    ],
+    "prefill_host_us": 6569.962948560715,
+    "host_us": 358.6071543395519,
+    "minimum_pcc": 0.9998216779564711
+  }
+]

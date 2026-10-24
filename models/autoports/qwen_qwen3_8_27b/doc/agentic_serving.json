@@ -1,5 +1,5 @@
 {
-  "stage": "04-multichip-decoder",
+  "stage": "05-optimized-multichip-decoder",
   "workload": {
     "target_concurrency": 32,
     "working_set_tokens": 32768,
@@ -14,32 +14,37 @@
   ],
   "tested_batch_sizes": [
     1,
+    4,
     8,
     16,
     32
   ],
-  "status": "multichip_decoder_clean-pass",
-  "stage_scope": "TP4 decoder only; no full-model or serving execution",
+  "status": "optimized_multichip_decoder_v5_clean_pass",
+  "stage_scope": "TP4 optimized decoder layers and two-layer stacks only; no full-model or serving execution",
   "memory_evidence": [
-    "multichip_decoder/memory_capacity_plan.json"
+    "optimized_multichip_decoder/memory_capacity_plan.json"
   ],
-  "performance_status": "complete",
+  "performance_status": "final_default_device_profiles_complete",
   "batch_evidence": {
     "1": [
-      "multichip_decoder/watcher_l0.json",
-      "multichip_decoder/watcher_l3.json"
+      "optimized_multichip_decoder/final_accepted_l0.json",
+      "optimized_multichip_decoder/final_accepted_l3.json"
     ],
     "8": [
-      "multichip_decoder/batch8_l0.json",
-      "multichip_decoder/batch8_l3.json"
+      "optimized_multichip_decoder/batch8_l0.json",
+      "optimized_multichip_decoder/batch8_l3.json"
     ],
     "16": [
-      "multichip_decoder/batch16_l0.json",
-      "multichip_decoder/batch16_l3.json"
+      "optimized_multichip_decoder/batch16_l0.json",
+      "optimized_multichip_decoder/batch16_l3.json"
     ],
     "32": [
-      "multichip_decoder/batch32_l0.json",
-      "multichip_decoder/batch32_l3.json"
+      "optimized_multichip_decoder/batch32_l0.json",
+      "optimized_multichip_decoder/batch32_l3.json"
+    ],
+    "4": [
+      "optimized_multichip_decoder/batch4_l0.json",
+      "optimized_multichip_decoder/batch4_l3.json"
     ]
   },
   "previous_stages": {
@@ -222,23 +227,159 @@
         "weight_representations": "One attention/output/down copy; separate and packed gate/up copies for phase-specific latency.",
         "scope": "Single layer, not a full-model serving pool."
       }
+    },
+    "04-multichip-decoder": {
+      "stage": "04-multichip-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "status": "multichip_decoder_clean-pass",
+      "stage_scope": "TP4 decoder only; no full-model or serving execution",
+      "memory_evidence": [
+        "multichip_decoder/memory_capacity_plan.json"
+      ],
+      "performance_status": "complete",
+      "batch_evidence": {
+        "1": [
+          "multichip_decoder/watcher_l0.json",
+          "multichip_decoder/watcher_l3.json"
+        ],
+        "8": [
+          "multichip_decoder/batch8_l0.json",
+          "multichip_decoder/batch8_l3.json"
+        ],
+        "16": [
+          "multichip_decoder/batch16_l0.json",
+          "multichip_decoder/batch16_l3.json"
+        ],
+        "32": [
+          "multichip_decoder/batch32_l0.json",
+          "multichip_decoder/batch32_l3.json"
+        ]
+      },
+      "performance_note": "B1 whole-layer device profiles at4096+128. B8/B16/B32 are supplied-hidden-input layer workloads with separate host-wall timing. No host time is used for device rooflines.",
+      "state_memory": {
+        "linear_bytes_per_request_per_device": 801792,
+        "full_kv_bytes_per_token_per_device": 544,
+        "weight_representations": "Single packed gate/up shared across phases; one attention/output/down copy.",
+        "trace_region_size": 0,
+        "trace_allocation_mode": "dynamic DRAM",
+        "actual_trace_bytes": null,
+        "trace_memory_missing_reason": "Allocator snapshots include live tensors and test backups; no isolated full-stack trace peak measured.",
+        "scope": "TP4 layer measured; all-stack memory is a feasibility ledger."
+      },
+      "trace_allocation_evidence": [
+        "multichip_decoder/validation_summary.json",
+        "multichip_decoder/final_validation.log"
+      ],
+      "performance_evidence": "multichip_decoder/performance.json",
+      "review_evidence": "multichip_decoder/stage_review.md"
     }
   },
-  "performance_note": "B1 whole-layer device profiles at4096+128. B8/B16/B32 are supplied-hidden-input layer workloads with separate host-wall timing. No host time is used for device rooflines.",
+  "performance_note": "Headline B1 is4096+128, single request. Final B1/B32 device profiles use whole-layer envelopes. Other timing is explicitly host-wall traced latency. Never substitute host time for device rooflines.",
   "state_memory": {
     "linear_bytes_per_request_per_device": 801792,
     "full_kv_bytes_per_token_per_device": 544,
-    "weight_representations": "Single packed gate/up shared across phases; one attention/output/down copy.",
+    "weight_representations": "Original packed gateup retained for decode and one-row prefill; R1 native DRAM-sharded gate/up each12,533,760 bytes,25,067,520 additional bytes/device/layer. Measured final setup deltas match exactly. No interleaved mix copy selected.",
     "trace_region_size": 0,
     "trace_allocation_mode": "dynamic DRAM",
     "actual_trace_bytes": null,
     "trace_memory_missing_reason": "Allocator snapshots include live tensors and test backups; no isolated full-stack trace peak measured.",
-    "scope": "TP4 layer measured; all-stack memory is a feasibility ledger."
+    "scope": "TP4 layer measured; all-stack memory is a feasibility ledger.",
+    "shared_ar_l1_bytes_per_device": 1392640,
+    "shared_native_rs_l1_bytes_per_device": 11264000,
+    "shared_native_rs_dram_bytes_per_device": 16384000,
+    "workspace_scope": "One shared mesh-lifetime owner: AR slots, native decodeRS batches8..32, and4096-row BFP8 prefillRS out/down buffers, all allocated before capture.",
+    "residual_contract": "optimized_multichip_decoder/residual_contract.md",
+    "shared_prefill_rs_dram_bytes_per_device": 55705600,
+    "separate_prefill_weights_bytes_per_layer_per_device": 25067520
   },
   "trace_allocation_evidence": [
-    "multichip_decoder/validation_summary.json",
-    "multichip_decoder/final_validation.log"
+    "optimized_multichip_decoder/validation_summary.json",
+    "optimized_multichip_decoder/final_workspace_lifetime.json",
+    "optimized_multichip_decoder/mixed_traces_l0.json",
+    "optimized_multichip_decoder/mixed_traces_l3.json",
+    "optimized_multichip_decoder/mixed_prefill_decode_traces.json"
   ],
-  "performance_evidence": "multichip_decoder/performance.json",
-  "review_evidence": "multichip_decoder/stage_review.md"
+  "performance_evidence": "optimized_multichip_decoder/performance.json",
+  "review_evidence": "optimized_multichip_decoder/stage_review.md",
+  "prefix_contract_evidence": "optimized_multichip_decoder/residual_contract.md",
+  "stage05_prefill_policy": {
+    "ccl_workers_per_link": 8,
+    "ccl_payload": "bfloat8_b",
+    "norm_stats": "bfloat16",
+    "mix_gateup_input": "bfloat8_b",
+    "row_projection_input": "bfloat16",
+    "larger_rows": "DRAM interleaved",
+    "extra_persistent_bytes": 55705600,
+    "context_change": 0,
+    "status": "v5 final67case/trace/watcher/context/reserve/profile acceptance and independent clean-pass complete",
+    "evidence": "optimized_multichip_decoder/prefill_projection_selection.json",
+    "full_attention_mix_l1_max_working_rows": 4096,
+    "fused_RS": {
+      "batch": 1,
+      "working_rows": 4096,
+      "output_dtype": "bfloat8_b",
+      "other_shapes": "Same TP4 hidden-sharded residual via separate matmul/RS",
+      "geometry": {
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subblock": [
+          2,
+          3
+        ],
+        "compute_grid": [
+          11,
+          8
+        ],
+        "per_core_N": 15,
+        "out_block_w": 15
+      }
+    },
+    "shared_once_across_layers": true,
+    "ccl_workers_scope": "Standalone AG/RS uses8workers/link. Fused RS passes nullopt for workers/chunks/buffers; effective heuristic selects4workers/direction in4096-row prefill (20CCLcores),2 in physicalM32 decode (12CCLcores). Serialized wrapper worker1 is not consumed by factory.",
+    "separate_prefill_weights_bytes_per_layer_per_device": 25067520,
+    "extra_persistent_bytes_scope": "55,705,600 shared prefillRS bytes once; separate weights are layer-owned and separately accounted.",
+    "projection_geometry": {
+      "linear_mix_k": 16,
+      "full_mix_k": 4,
+      "gate_up_grid": [
+        11,
+        8
+      ],
+      "gate_up_k": 20,
+      "gate_up_out_h": 8,
+      "gate_up_subblock": [
+        8,
+        1
+      ],
+      "short_lengths": "outH divides runtime per_core_M; subH divides actual outH; padding and slicing remain internal"
+    },
+    "packed_rope": {
+      "decode_min_batch": 4,
+      "prefill_min_batch": 8,
+      "persistent_bytes_added": 0,
+      "decode_tables": "Transient L1 tables shared by Q/K within one call; final DRAM boundary unchanged. Logical user rows sliced before unpacking.",
+      "prefill": "Tile-aligned internal working rows folded with matching cos/sin; DRAM transpose/view; public padding/masking/slicing unchanged.",
+      "precision": "Original HiFi4/FP32-requested policy preserved; upstream rotary core-group default discrepancy documented in rope_optimization.md.",
+      "prefill_extra_transient_bound_bytes_per_device": 536870912,
+      "bound_basis": "Conservative512MiB scratch allowance for Q/K rotary permutations at B32/S4096, within existing12GiB activation/CCL reserve; not a measured full-stack peak. No new weights/cache/persistent buffers."
+    }
+  }
 }

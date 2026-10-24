@@ -1,0 +1,138 @@
+[
+  {
+    "layer": 0,
+    "candidate": "private",
+    "policy": {
+      "direct_all_reduce": true,
+      "pooled_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b"
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"pooled_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\"}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/pool_private_l0.json"
+    ],
+    "prefill_host_us": 8369.371993467212,
+    "host_us": 462.91714534163475,
+    "minimum_pcc": 0.9999618666878674
+  },
+  {
+    "layer": 0,
+    "candidate": "pooled",
+    "policy": {
+      "direct_all_reduce": true,
+      "pooled_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b"
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"pooled_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\"}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/pool_pooled_l0.json"
+    ],
+    "prefill_host_us": 8442.81306490302,
+    "host_us": 463.74788507819176,
+    "minimum_pcc": 0.9999618666878674
+  },
+  {
+    "layer": 3,
+    "candidate": "private",
+    "policy": {
+      "direct_all_reduce": true,
+      "pooled_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b"
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"pooled_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\"}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/pool_private_l3.json"
+    ],
+    "prefill_host_us": 10770.171880722046,
+    "host_us": 382.01198913156986,
+    "minimum_pcc": 0.9999755888467804
+  },
+  {
+    "layer": 3,
+    "candidate": "pooled",
+    "policy": {
+      "direct_all_reduce": true,
+      "pooled_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b"
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"pooled_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\"}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/pool_pooled_l3.json"
+    ],
+    "prefill_host_us": 10689.737973734736,
+    "host_us": 380.76890632510185,
+    "minimum_pcc": 0.9999755888467804
+  }
+]

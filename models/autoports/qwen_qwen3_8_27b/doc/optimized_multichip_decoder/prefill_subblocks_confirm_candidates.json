@@ -1,0 +1,222 @@
+{
+  "0_control": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 4,
+      "weight_pad_readers": 2
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 1,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "LoFi",
+    "sdpa_fp32": false,
+    "separate_prefill": false,
+    "residual_layout": "phase_specific",
+    "sharded_decode_min_batch": 8,
+    "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+    "batched_native_rs": {
+      "persistent_ccl": false,
+      "persistent_gather": false,
+      "ccl_dtype": null,
+      "compact_column_gather": true,
+      "compact_gather_move": true,
+      "fused_intermediate_dram": true,
+      "fused_compact_input": true
+    },
+    "packed_decode_conv": true
+  },
+  "1_mix11x8_h4": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 4,
+      "weight_pad_readers": 2,
+      "prefill_grid": [
+        11,
+        8
+      ]
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 1,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 4,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "LoFi",
+    "sdpa_fp32": false,
+    "separate_prefill": false,
+    "residual_layout": "phase_specific",
+    "sharded_decode_min_batch": 8,
+    "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+    "batched_native_rs": {
+      "persistent_ccl": false,
+      "persistent_gather": false,
+      "ccl_dtype": null,
+      "compact_column_gather": true,
+      "compact_gather_move": true,
+      "fused_intermediate_dram": true,
+      "fused_compact_input": true
+    },
+    "packed_decode_conv": true
+  },
+  "2_mix11x8_h4": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 4,
+      "weight_pad_readers": 2,
+      "prefill_grid": [
+        11,
+        8
+      ]
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 1,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 4,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "LoFi",
+    "sdpa_fp32": false,
+    "separate_prefill": false,
+    "residual_layout": "phase_specific",
+    "sharded_decode_min_batch": 8,
+    "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+    "batched_native_rs": {
+      "persistent_ccl": false,
+      "persistent_gather": false,
+      "ccl_dtype": null,
+      "compact_column_gather": true,
+      "compact_gather_move": true,
+      "fused_intermediate_dram": true,
+      "fused_compact_input": true
+    },
+    "packed_decode_conv": true
+  },
+  "3_control": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true,
+    "ar_fused_move": true,
+    "mix": {
+      "cores": 8,
+      "block": 20,
+      "readers": 1,
+      "prefill_block": 4,
+      "weight_pad_readers": 2
+    },
+    "out": {
+      "cores": 8,
+      "block": 6,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "down": {
+      "cores": 8,
+      "block": 17,
+      "readers": 1,
+      "prefill_block": 4
+    },
+    "prefill_chunk": 4096,
+    "prefill_block": 4,
+    "prefill_subh": 1,
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "prefill_block": 4
+    },
+    "prefill_unit_subw": 5,
+    "sdpa_fidelity": "LoFi",
+    "sdpa_fp32": false,
+    "separate_prefill": false,
+    "residual_layout": "phase_specific",
+    "sharded_decode_min_batch": 8,
+    "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+    "batched_native_rs": {
+      "persistent_ccl": false,
+      "persistent_gather": false,
+      "ccl_dtype": null,
+      "compact_column_gather": true,
+      "compact_gather_move": true,
+      "fused_intermediate_dram": true,
+      "fused_compact_input": true
+    },
+    "packed_decode_conv": true
+  }
+}

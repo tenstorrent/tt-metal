@@ -1,0 +1,22 @@
+{
+  "previous_decoder_sha256": "3e9254dcaceca76b5d0266337bbab4e5cd000346247805c8555f237aaee7421e",
+  "final_decoder_sha256": "1894e0e0360ceca2a989c87229aa238e5917c26012dc2e275d2141ad72bd9ab8",
+  "reverse_patch_matches_recorded_source_hash": true,
+  "unchanged_paths": [
+    "full_attention all modes",
+    "all prefill modes",
+    "linear_attention decode B1-7"
+  ],
+  "changed_path": "linear_attention decode B>=8; temporal-window convolution only",
+  "superseded_boundary_cases": [
+    "odd_batch9_129_l0",
+    "odd_batch17_129_l0"
+  ],
+  "replacement_cases": [
+    "packed_boundary_b9_l0",
+    "packed_boundary_b17_l0",
+    "packed_boundary_b31_l0"
+  ],
+  "exact_intermediate_proof": "packed_conv_exact.json",
+  "source_delta": "integration_v1/source_delta.patch"
+}

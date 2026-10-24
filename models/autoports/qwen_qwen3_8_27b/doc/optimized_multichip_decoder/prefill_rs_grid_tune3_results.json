@@ -1,0 +1,218 @@
+[
+  {
+    "layer": 3,
+    "candidate": "control_grid",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          10,
+          8
+        ],
+        "subh": 2,
+        "subw": 4
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [10, 8], \"subh\": 2, \"subw\": 4}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_tune3_control_grid_l3.json"
+    ],
+    "prefill_host_us": 6275.70622600615,
+    "host_us": 358.16594026982784,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "down34_h4",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          10,
+          8
+        ],
+        "subh": 2,
+        "subw": 4,
+        "role_h": {
+          "down": 4
+        }
+      },
+      "prefill_rs_geometry": {
+        "out_k": 48,
+        "down_k": 34,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 4
+      }
+    },
+    "exit_code": 1,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [10, 8], \"subh\": 2, \"subw\": 4, \"role_h\": {\"down\": 4}}, \"prefill_rs_geometry\": {\"out_k\": 48, \"down_k\": 34, \"block_h\": 4, \"subh\": 2, \"subw\": 4}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_tune3_down34_h4_l3.json"
+    ],
+    "recovery": "not_required_host_capacity_failure_mesh_closed"
+  },
+  {
+    "layer": 3,
+    "candidate": "down34_h2",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          10,
+          8
+        ],
+        "subh": 2,
+        "subw": 4,
+        "role_h": {
+          "down": 2
+        }
+      },
+      "prefill_rs_geometry": {
+        "out_k": 48,
+        "down_k": 34,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 4
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [10, 8], \"subh\": 2, \"subw\": 4, \"role_h\": {\"down\": 2}}, \"prefill_rs_geometry\": {\"out_k\": 48, \"down_k\": 34, \"block_h\": 4, \"subh\": 2, \"subw\": 4}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_tune3_down34_h2_l3.json"
+    ],
+    "prefill_host_us": 6242.264993488789,
+    "host_us": 359.26513373851776,
+    "minimum_pcc": 0.9998216779564711
+  },
+  {
+    "layer": 3,
+    "candidate": "down17_h8",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          10,
+          8
+        ],
+        "subh": 2,
+        "subw": 4,
+        "role_h": {
+          "down": 8
+        },
+        "role_subh": {
+          "down": 4
+        },
+        "role_subw": {
+          "down": 2
+        }
+      }
+    },
+    "exit_code": 1,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [10, 8], \"subh\": 2, \"subw\": 4, \"role_h\": {\"down\": 8}, \"role_subh\": {\"down\": 4}, \"role_subw\": {\"down\": 2}}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_tune3_down17_h8_l3.json"
+    ],
+    "recovery": "not_required_host_capacity_failure_mesh_closed"
+  },
+  {
+    "layer": 3,
+    "candidate": "out_sub4x1",
+    "policy": {
+      "candidate_rs_grid": {
+        "grid": [
+          10,
+          8
+        ],
+        "subh": 2,
+        "subw": 4,
+        "role_subh": {
+          "out": 4
+        },
+        "role_subw": {
+          "out": 1
+        }
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_rs_grid_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "25",
+      "--policy",
+      "{\"candidate_rs_grid\": {\"grid\": [10, 8], \"subh\": 2, \"subw\": 4, \"role_subh\": {\"out\": 4}, \"role_subw\": {\"out\": 1}}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_rs_grid_tune3_out_sub4x1_l3.json"
+    ],
+    "prefill_host_us": 6215.927889570594,
+    "host_us": 358.43392834067345,
+    "minimum_pcc": 0.9998216779564711
+  }
+]

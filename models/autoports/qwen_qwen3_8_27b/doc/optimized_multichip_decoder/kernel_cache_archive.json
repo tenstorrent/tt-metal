@@ -1,0 +1,9 @@
+{
+  "purpose": "Reversible generated-kernel-cache archival before final profiles; all acceptance device processes have closed. No model/source/evidence removed.",
+  "file_count": 122442,
+  "uncompressed_bytes": 14147519462,
+  "archive": "/home/mvasiljev/tt-metal/.cache/stage05-preprofile-kernels.tar.zst",
+  "archive_bytes": 2790502576,
+  "archive_sha256": "00561d70a2725dbd4c311e2c246cbdb989db5827b689ba2937c6c3ef9713d7e6",
+  "verified_before_removing_original": true
+}

@@ -1,0 +1,1002 @@
+[
+  {
+    "layer": 0,
+    "candidate": "control",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_control_l0.json"
+    ],
+    "prefill_host_us": 7569.4050174206495,
+    "host_us": 445.749843493104,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "mix10x10",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          10,
+          10
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [10, 10]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix10x10_l0.json"
+    ],
+    "prefill_host_us": 7653.756998479366,
+    "host_us": 447.09397479891777,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "mix8x8_h2",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          8,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 2,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [8, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 2, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix8x8_h2_l0.json"
+    ],
+    "prefill_host_us": 7628.030143678188,
+    "host_us": 445.82108967006207,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "mix11x8_h2",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          11,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 2,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [11, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 2, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix11x8_h2_l0.json"
+    ],
+    "prefill_host_us": 7540.624821558595,
+    "host_us": 446.22202403843403,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "mix11x8_h4",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          11,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 4,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [11, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 4, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix11x8_h4_l0.json"
+    ],
+    "prefill_host_us": 7465.021917596459,
+    "host_us": 446.4820958673954,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "mix11x8_h8",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          11,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 8,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [11, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 8, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix11x8_h8_l0.json"
+    ],
+    "prefill_host_us": 7611.163891851902,
+    "host_us": 446.16195373237133,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 3,
+    "candidate": "control",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_control_l3.json"
+    ],
+    "prefill_host_us": 7919.514086097479,
+    "host_us": 358.42391662299633,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "mix10x10",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          10,
+          10
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [10, 10]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix10x10_l3.json"
+    ],
+    "prefill_host_us": 7773.537887260318,
+    "host_us": 358.97595807909966,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "mix8x8_h2",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          8,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 2,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [8, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 2, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix8x8_h2_l3.json"
+    ],
+    "prefill_host_us": 7762.437919154763,
+    "host_us": 358.04486833512783,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "mix11x8_h2",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          11,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 2,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [11, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 2, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix11x8_h2_l3.json"
+    ],
+    "prefill_host_us": 7860.025856643915,
+    "host_us": 359.16618071496487,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "mix11x8_h4",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          11,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 4,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [11, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 4, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix11x8_h4_l3.json"
+    ],
+    "prefill_host_us": 7690.5840542167425,
+    "host_us": 358.4150690585375,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "mix11x8_h8",
+    "policy": {
+      "direct_all_reduce": true,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_grid": [
+          11,
+          8
+        ]
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 8,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "separate_prefill": false,
+      "residual_layout": "phase_specific",
+      "sharded_decode_min_batch": 8,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v2",
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "packed_decode_conv": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"direct_all_reduce\": true, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": \"bfloat8_b\", \"pooled_all_reduce\": true, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 1, \"prefill_block\": 4, \"weight_pad_readers\": 2, \"prefill_grid\": [11, 8]}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 1, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 8, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"sdpa_fidelity\": \"LoFi\", \"sdpa_fp32\": false, \"separate_prefill\": false, \"residual_layout\": \"phase_specific\", \"sharded_decode_min_batch\": 8, \"policy_name\": \"tp4_p300c_bfp4_lofi_compact_v2\", \"batched_native_rs\": {\"persistent_ccl\": false, \"persistent_gather\": false, \"ccl_dtype\": null, \"compact_column_gather\": true, \"compact_gather_move\": true, \"fused_intermediate_dram\": true, \"fused_compact_input\": true}, \"packed_decode_conv\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_subblocks_mix11x8_h8_l3.json"
+    ],
+    "prefill_host_us": 7769.586984068155,
+    "host_us": 357.9137846827507,
+    "minimum_pcc": 0.9997946662001882
+  }
+]

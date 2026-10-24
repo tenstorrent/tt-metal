@@ -1,0 +1,103 @@
+{
+  "mesh": [
+    1,
+    4
+  ],
+  "layers": [
+    0,
+    3
+  ],
+  "shared_owners": 1,
+  "signatures": [
+    {
+      "layer": 0,
+      "phase": "prefill",
+      "batch": 1,
+      "length": 4095
+    },
+    {
+      "layer": 0,
+      "phase": "prefill",
+      "batch": 1,
+      "length": 4096
+    },
+    {
+      "layer": 0,
+      "phase": "prefill",
+      "batch": 1,
+      "length": 4097
+    },
+    {
+      "layer": 0,
+      "phase": "decode",
+      "batch": 1,
+      "length": 1
+    },
+    {
+      "layer": 0,
+      "phase": "decode",
+      "batch": 32,
+      "length": 1
+    },
+    {
+      "layer": 3,
+      "phase": "prefill",
+      "batch": 1,
+      "length": 4095
+    },
+    {
+      "layer": 3,
+      "phase": "prefill",
+      "batch": 1,
+      "length": 4096
+    },
+    {
+      "layer": 3,
+      "phase": "prefill",
+      "batch": 1,
+      "length": 4097
+    },
+    {
+      "layer": 3,
+      "phase": "decode",
+      "batch": 1,
+      "length": 1
+    },
+    {
+      "layer": 3,
+      "phase": "decode",
+      "batch": 32,
+      "length": 1
+    }
+  ],
+  "captures_before_traffic": 10,
+  "trace_ids": [
+    "MeshTraceId(0)",
+    "MeshTraceId(1)",
+    "MeshTraceId(2)",
+    "MeshTraceId(3)",
+    "MeshTraceId(4)",
+    "MeshTraceId(5)",
+    "MeshTraceId(6)",
+    "MeshTraceId(7)",
+    "MeshTraceId(8)",
+    "MeshTraceId(9)"
+  ],
+  "nonblocking_replays": 329,
+  "exact": true,
+  "stable_persistent_addresses": true,
+  "prefill_rs_bytes_per_device": 55705600,
+  "allocation_tracking": true,
+  "program_cache_tracking": true,
+  "acknowledgments": [],
+  "retired_trace_survivors": 9,
+  "provenance": {
+    "tt/multichip_decoder.py": "e2bf0336369f087617f275df839e75990a39436774ec333b852a3e3f9d2ae6fa",
+    "tt/optimized_decoder.py": "d493e218026d3f468bbc2d374d83ecdd41d9fe37ec0727208edafd3f0e4e405c",
+    "tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "tt/fused_decode.py": "0c54fdebc272690bc0952fe78725079e38433b8f184cbf9f484cfd7b3320dcf2",
+    "tt/fused_prefill.py": "912d16542d730a2b22c607b7c685bfded34c2bc7bd3552a0658242c95f2951b3",
+    "tests/probe_mixed_prefill_decode_traces.py": "dc102260beb40043905847a03af2bccc81ae19fafc603936a63f7d51cf113486"
+  },
+  "scope": "Real-weight lifetime/replay check with restored state, not performance or accuracy-policy evidence."
+}

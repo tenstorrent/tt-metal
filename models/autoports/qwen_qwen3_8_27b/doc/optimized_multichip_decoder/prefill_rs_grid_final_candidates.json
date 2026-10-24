@@ -1,0 +1,33 @@
+{
+  "control": {},
+  "grid10x8": {
+    "candidate_rs_grid": {
+      "grid": [
+        10,
+        8
+      ],
+      "subh": 2,
+      "subw": 4
+    }
+  },
+  "grid11x8_sub5": {
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        8
+      ],
+      "subh": 1,
+      "subw": 5
+    }
+  },
+  "grid11x8_sub3": {
+    "candidate_rs_grid": {
+      "grid": [
+        11,
+        8
+      ],
+      "subh": 2,
+      "subw": 3
+    }
+  }
+}

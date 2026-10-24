@@ -1,0 +1,35 @@
+[
+  {
+    "batch": 8,
+    "all_128_decode_pcc_identical": true,
+    "state_pcc_identical": true,
+    "runtime_fallback_audits": true,
+    "evidence": [
+      "packed_rope_dram_b8_control_l3.json",
+      "packed_rope_dram_b8_shared_l3.json",
+      "packed_rope_dram_b8_separate_l3.json"
+    ]
+  },
+  {
+    "batch": 16,
+    "all_128_decode_pcc_identical": true,
+    "state_pcc_identical": true,
+    "runtime_fallback_audits": true,
+    "evidence": [
+      "packed_rope_dram_b16_control_l3.json",
+      "packed_rope_dram_b16_shared_l3.json",
+      "packed_rope_dram_b16_separate_l3.json"
+    ]
+  },
+  {
+    "batch": 32,
+    "all_128_decode_pcc_identical": true,
+    "state_pcc_identical": true,
+    "runtime_fallback_audits": true,
+    "evidence": [
+      "packed_rope_b32_control_l3.json",
+      "packed_rope_b32_packed_shared_l3.json",
+      "packed_rope_b32_packed_separate_l3.json"
+    ]
+  }
+]

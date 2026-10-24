@@ -1,0 +1,19 @@
+{
+  "out24": {
+    "packed_rope_candidate": "shared_tables",
+    "candidate_rs_grid": {
+      "grid": [
+        10,
+        1
+      ],
+      "subh": 1,
+      "subw": 4,
+      "role_k": {
+        "out": 24
+      }
+    }
+  },
+  "control8": {
+    "packed_rope_candidate": "shared_tables"
+  }
+}

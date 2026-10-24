@@ -1,0 +1,75 @@
+{
+  "source": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/tracy/before_profile_l0/reports/2026_10_23_20_41_58/ops_perf_results_2026_10_23_20_41_58.csv",
+  "device_header": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120",
+  "clock_mhz": 1350.0,
+  "time_basis": "Maximum complete per-device whole-layer firmware envelope, all ops and gaps included. Per-chip cycles / MHz = us; never subtract unsynchronized clocks across ASICs.",
+  "ops_csv_sha256": "629806692f7def121fec1b6b78bf80d2f2508ad648623c1e546d3c0cfedbd181",
+  "phases": {
+    "prefill": {
+      "device_us": 8237.612592592594,
+      "per_device": {
+        "0": {
+          "first_cycle": 2200933217878,
+          "last_cycle": 2200944272684,
+          "device_us": 8188.745185185186
+        },
+        "1": {
+          "first_cycle": 2214314106267,
+          "last_cycle": 2214325128420,
+          "device_us": 8164.557777777778
+        },
+        "2": {
+          "first_cycle": 2208018561211,
+          "last_cycle": 2208029645564,
+          "device_us": 8210.631851851851
+        },
+        "3": {
+          "first_cycle": 2213527841849,
+          "last_cycle": 2213538962626,
+          "device_us": 8237.612592592594
+        }
+      },
+      "device_ops": 644,
+      "summed_kernel_us": 32259.902,
+      "trace_ids": [
+        "0"
+      ],
+      "trace_replay_sessions": [
+        "1"
+      ]
+    },
+    "decode": {
+      "device_us": 509.7874074074074,
+      "per_device": {
+        "0": {
+          "first_cycle": 2214745610486,
+          "last_cycle": 2214746297120,
+          "device_us": 508.6177777777778
+        },
+        "1": {
+          "first_cycle": 2228126476402,
+          "last_cycle": 2228127163432,
+          "device_us": 508.9111111111111
+        },
+        "2": {
+          "first_cycle": 2221830969676,
+          "last_cycle": 2221831657889,
+          "device_us": 509.7874074074074
+        },
+        "3": {
+          "first_cycle": 2227340262291,
+          "last_cycle": 2227340949013,
+          "device_us": 508.68296296296296
+        }
+      },
+      "device_ops": 292,
+      "summed_kernel_us": 1814.49,
+      "trace_ids": [
+        "1"
+      ],
+      "trace_replay_sessions": [
+        "128"
+      ]
+    }
+  }
+}

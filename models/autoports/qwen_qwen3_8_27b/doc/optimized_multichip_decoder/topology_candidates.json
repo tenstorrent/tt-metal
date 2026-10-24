@@ -1,0 +1,78 @@
+{
+  "persist": {
+    "persistent_ccl": true
+  },
+  "one_worker": {
+    "persistent_ccl": true,
+    "ccl_workers": 1
+  },
+  "one_link": {
+    "persistent_ccl": true,
+    "ccl_links": 1
+  },
+  "one_link_worker": {
+    "persistent_ccl": true,
+    "ccl_links": 1,
+    "ccl_workers": 1
+  },
+  "l1_ccl": {
+    "persistent_ccl": true,
+    "ccl_l1": true
+  },
+  "l1_residual": {
+    "persistent_ccl": true,
+    "ccl_l1": true,
+    "residual_l1": true,
+    "carry_residual": true,
+    "l1_mlp": true
+  },
+  "bf8_ccl": {
+    "persistent_ccl": true,
+    "ccl_dtype": "bfloat8_b"
+  },
+  "bf8_attention": {
+    "persistent_ccl": true,
+    "attention_activation": "bfloat8_b"
+  },
+  "bf8_mlp": {
+    "persistent_ccl": true,
+    "mlp_activation": "bfloat8_b"
+  },
+  "sharded": {
+    "persistent_ccl": true,
+    "_layout": "sharded"
+  },
+  "sharded_bf8": {
+    "persistent_ccl": true,
+    "_layout": "sharded",
+    "ccl_dtype": "bfloat8_b"
+  },
+  "sharded_l1": {
+    "persistent_ccl": true,
+    "_layout": "sharded",
+    "distributed_norm_l1": true,
+    "residual_l1": true,
+    "ccl_l1": true
+  },
+  "output_ag": {
+    "_layout": "sharded",
+    "_output_ag": true
+  },
+  "fused_ag": {
+    "_layout": "sharded",
+    "_fused": "ag",
+    "fused_ag_1d": true
+  },
+  "fused_rs": {
+    "_layout": "sharded",
+    "_fused": "rs"
+  },
+  "fused_both": {
+    "_layout": "sharded",
+    "_fused": "both",
+    "fused_ag_1d": true
+  },
+  "direct_ar": {
+    "direct_all_reduce": true
+  }
+}

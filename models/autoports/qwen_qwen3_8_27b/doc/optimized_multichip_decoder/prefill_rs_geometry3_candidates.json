@@ -1,0 +1,103 @@
+{
+  "k4_h8": {
+    "prefill_native_rs": false,
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_fused": "rs",
+    "pf_fused_block_h": 8,
+    "pf_rs_output_dtype": "bfloat8_b",
+    "pf_ag_l1_roles": [
+      "mix"
+    ]
+  },
+  "k8_h8": {
+    "prefill_native_rs": false,
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_fused": "rs",
+    "pf_fused_block_h": 8,
+    "pf_rs_output_dtype": "bfloat8_b",
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_fused_k": 8
+  },
+  "out12_down17_h4": {
+    "prefill_native_rs": false,
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_fused": "rs",
+    "pf_fused_block_h": 4,
+    "pf_rs_output_dtype": "bfloat8_b",
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_fused_role_k": {
+      "out": 12,
+      "down": 17
+    }
+  },
+  "out24_down34_h1": {
+    "prefill_native_rs": false,
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_fused": "rs",
+    "pf_fused_block_h": 1,
+    "pf_rs_output_dtype": "bfloat8_b",
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_fused_role_k": {
+      "out": 24,
+      "down": 34
+    }
+  },
+  "k4_h8_sub2x4": {
+    "prefill_native_rs": false,
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_fused": "rs",
+    "pf_fused_block_h": 8,
+    "pf_rs_output_dtype": "bfloat8_b",
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_fused_subh": 2,
+    "pf_fused_subw": 4
+  },
+  "k8_h8_sub2x4": {
+    "prefill_native_rs": false,
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_fused": "rs",
+    "pf_fused_block_h": 8,
+    "pf_rs_output_dtype": "bfloat8_b",
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_fused_k": 8,
+    "pf_fused_subh": 2,
+    "pf_fused_subw": 4
+  },
+  "k8_h8_sub4x2": {
+    "prefill_native_rs": false,
+    "pf_workers": 8,
+    "pf_ccl_dtype": "bfloat8_b",
+    "pf_keep_bf8_activation": true,
+    "pf_fused": "rs",
+    "pf_fused_block_h": 8,
+    "pf_rs_output_dtype": "bfloat8_b",
+    "pf_ag_l1_roles": [
+      "mix"
+    ],
+    "pf_fused_k": 8,
+    "pf_fused_subh": 4,
+    "pf_fused_subw": 2
+  }
+}

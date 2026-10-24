@@ -1,0 +1,4 @@
+{
+  "failure": "Disk full during CPU report copy; raw capture CSVs absent on resume; no surviving complete device measurement.",
+  "recovery": "183GB free on resume; repeat only final four profiles. Existing62 acceptance cases and stress/watcher evidence retained."
+}

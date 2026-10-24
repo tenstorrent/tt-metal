@@ -1,0 +1,68 @@
+{
+  "status": "final_v5_default_verified_clean_pass",
+  "layer_types": {
+    "linear_attention": {
+      "role_screen_host_us": {
+        "control8": 2005.628077313304,
+        "grid10": 2000.7181446999311,
+        "grid11": 2004.4150296598673,
+        "out24": 2004.2750984430313,
+        "out48": 2006.7591685801744,
+        "down34": 2006.5889693796635
+      },
+      "selected": {
+        "grid": [
+          10,
+          1
+        ],
+        "per_core_N": 16,
+        "out_block_w": 16,
+        "subh": 1,
+        "subw": 4,
+        "out_k": 6,
+        "down_k": 17
+      },
+      "evidence": [
+        "decode_rs_role0_results.json",
+        "decode_rs_grid_b32_results.json"
+      ],
+      "paired_mean_host_us": {
+        "control8": 2005.300484597683,
+        "grid10": 2001.097658649087
+      }
+    },
+    "full_attention": {
+      "role_screen_host_us": {
+        "control8": 997.7491572499275,
+        "grid10": 1001.4472063630819,
+        "grid11": 997.7291338145733,
+        "out24": 994.9940722435713,
+        "out48": 1000.2139024436474,
+        "down34": 999.8430032283068
+      },
+      "selected": {
+        "grid": [
+          10,
+          1
+        ],
+        "per_core_N": 16,
+        "out_block_w": 16,
+        "subh": 1,
+        "subw": 4,
+        "out_k": 24,
+        "down_k": 17
+      },
+      "evidence": [
+        "decode_rs_role3_results.json",
+        "decode_rs_confirm3_reverse_results.json"
+      ],
+      "paired_mean_host_us": {
+        "control8": 998.6805962398648,
+        "out24": 994.6185164153576
+      }
+    }
+  },
+  "precision": "BF16A/BFP4W/LoFi/BF16out; unchanged persistent owner,CCLoffset and sharded residual",
+  "full_attention_comparison": "Includes selected shared-table packed decodeRoPE",
+  "capacity_endpoints": "decode_rs_geometry.md"
+}

@@ -1,0 +1,283 @@
+mkdir -p failed for path /.config/matplotlib: [Errno 13] Permission denied: '/.config'
+Matplotlib created a temporary cache directory at /tmp/matplotlib-vt6wrzgs because there was an issue with the default path (/.config/matplotlib); it is highly recommended to set the MPLCONFIGDIR environment variable to a writable directory, in particular to speed up the import of Matplotlib and to better support multiprocessing.
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_PREFILL'.
+Using operations until 'PERF_PREFILL_END'.
+Detected data from 4 devices. Merging device data...
+Warning: Unclassified operation 'LayerNormPreAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'LayerNormPostAllGatherDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'PagedFillCacheDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+
+🚀 Performance Report 🚀
+========================
+
+ID     Total %  Bound  OP Code                                            Device   Device Time  Op-to-Op Gap  Cores  DRAM      DRAM %  FLOPs         FLOPs %  Math Fidelity           
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ 1983    0.4 %         LayerNormPreAllGatherDeviceOperation                     0       837 μs                  110                                                       BF16 => BF16
+ 1984    0.2 %         AllGatherAsyncDeviceOperation                            0       468 μs          1 μs     36                                                       BF16 => BF16
+ 1985    0.9 %         LayerNormPostAllGatherDeviceOperation                    0     1,776 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1986    0.6 %         TypecastDeviceOperation                                  0     1,164 μs          1 μs    110                                                       BF16 => BFP8
+ 1987    4.3 %         AllGatherAsyncDeviceOperation                            0     8,079 μs          1 μs     36                                                       BFP8 => BFP8
+ 2696    8.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 3584        3    16,781 μs          1 μs     88   97 GB/s  18.9 %  286.7 TFLOPs   58.9 %  LoFi BFP8 x BFP4 => BF16
+ 2225    1.5 %         SliceDeviceOperation                                     1     2,764 μs          1 μs    110                                                       BF16 => BF16
+ 1990    1.3 %         NlpCreateHeadsDeviceOperation                            0     2,367 μs          1 μs    110                                                       BF16 => BF16
+ 2463    1.2 %         LayerNormDeviceOperation                                 2     2,208 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1992    0.6 %         SliceDeviceOperation                                     0     1,087 μs          1 μs    110                                                       BF16 => BF16
+ 1993    0.8 %         SliceDeviceOperation                                     0     1,568 μs          0 μs    110                                                       BF16 => BF16
+ 2466    0.3 %         TransposeDeviceOperation                                 2       502 μs          1 μs    110                                                       BF16 => BF16
+ 2703    0.6 %         RotaryEmbeddingDeviceOperation                           3     1,139 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2468    0.3 %         TransposeDeviceOperation                                 2       499 μs          1 μs    110                                                       BF16 => BF16
+ 2469    1.1 %         ConcatDeviceOperation                                    2     2,145 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2470    0.2 %         LayerNormDeviceOperation                                 2       371 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 1999    0.1 %         SliceDeviceOperation                                     0       182 μs          1 μs    110                                                       BF16 => BF16
+ 2000    0.1 %         SliceDeviceOperation                                     0       274 μs          0 μs    110                                                       BF16 => BF16
+ 2001    0.0 %         TransposeDeviceOperation                                 0        87 μs          1 μs    110                                                       BF16 => BF16
+ 2474    0.1 %         RotaryEmbeddingDeviceOperation                           2       195 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2475    0.0 %         TransposeDeviceOperation                                 2        86 μs          0 μs    110                                                       BF16 => BF16
+ 2004    0.2 %         ConcatDeviceOperation                                    0       355 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2241    0.0 %         SliceDeviceOperation                                     1        13 μs          1 μs    110                                                       BF16 => BF16
+ 2478    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2715    0.0 %         PagedFillCacheDeviceOperation                            3         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2244    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2009    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2010    0.0 %         PagedFillCacheDeviceOperation                            0         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2483    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2484    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2249    0.0 %         PagedFillCacheDeviceOperation                            1         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2250    0.0 %         SliceDeviceOperation                                     1        13 μs          1 μs    110                                                       BF16 => BF16
+ 2251    0.0 %         TypecastDeviceOperation                                  1        10 μs          1 μs    110                                                       BF16 => BFP8
+ 2252    0.0 %         PagedFillCacheDeviceOperation                            1         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2489    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2726    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2019    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2020    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2021    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2730    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2023    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2496    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2025    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2498    0.0 %         SliceDeviceOperation                                     2        13 μs          1 μs    110                                                       BF16 => BF16
+ 2499    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2264    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2501    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2266    0.0 %         TypecastDeviceOperation                                  1         9 μs          1 μs    110                                                       BF16 => BFP8
+ 2267    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2504    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2505    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2506    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          1 μs    110                                                 BFP8, BFP8 => BFP8
+ 2271    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2744    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2037    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2274    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2511    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2748    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2041    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2514    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2279    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2516    0.0 %         SliceDeviceOperation                                     2        13 μs          1 μs    110                                                       BF16 => BF16
+ 2753    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2046    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2283    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2756    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2049    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2050    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2287    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2760    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2053    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2762    0.0 %         TypecastDeviceOperation                                  3         9 μs          1 μs    110                                                       BF16 => BFP8
+ 2763    0.0 %         PagedFillCacheDeviceOperation                            3         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2528    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2765    0.0 %         TypecastDeviceOperation                                  3         9 μs          1 μs    110                                                       BF16 => BFP8
+ 2058    0.0 %         PagedFillCacheDeviceOperation                            0         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2531    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2768    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2769    0.0 %         PagedFillCacheDeviceOperation                            3         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2062    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2063    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2536    0.0 %         PagedFillCacheDeviceOperation                            2         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2065    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2774    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2775    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2540    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2305    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2070    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2543    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2072    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2073    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2310    0.0 %         SliceDeviceOperation                                     1        13 μs          1 μs    110                                                       BF16 => BF16
+ 2547    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2312    0.0 %         PagedFillCacheDeviceOperation                            1         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2785    0.0 %         SliceDeviceOperation                                     3        13 μs          1 μs    110                                                       BF16 => BF16
+ 2078    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2079    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2316    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2789    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2790    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          1 μs    110                                                 BFP8, BFP8 => BFP8
+ 2555    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2556    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2557    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2558    0.0 %         SliceDeviceOperation                                     2        13 μs          1 μs    110                                                       BF16 => BF16
+ 2559    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2560    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2325    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2090    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2091    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2800    0.0 %         SliceDeviceOperation                                     3        12 μs          1 μs    110                                                       BF16 => BF16
+ 2093    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2566    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2567    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2804    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2097    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2570    0.0 %         SliceDeviceOperation                                     2        13 μs          1 μs    110                                                       BF16 => BF16
+ 2099    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2100    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2101    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2810    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2103    0.0 %         PagedFillCacheDeviceOperation                            0         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2576    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2813    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2342    0.0 %         PagedFillCacheDeviceOperation                            1         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2815    0.0 %         SliceDeviceOperation                                     3        12 μs          1 μs    110                                                       BF16 => BF16
+ 2816    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2817    0.0 %         PagedFillCacheDeviceOperation                            3         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2818    0.0 %         SliceDeviceOperation                                     3        13 μs          1 μs    110                                                       BF16 => BF16
+ 2583    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2112    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2113    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2586    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2587    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2116    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2825    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2354    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2827    0.0 %         SliceDeviceOperation                                     3        12 μs          1 μs    110                                                       BF16 => BF16
+ 2356    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2357    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2594    0.0 %         SliceDeviceOperation                                     2        13 μs          1 μs    110                                                       BF16 => BF16
+ 2595    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2596    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2125    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2598    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2835    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2600    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2837    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2130    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2131    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2604    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2605    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2370    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2843    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2844    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2373    0.0 %         SliceDeviceOperation                                     1        13 μs          1 μs    110                                                       BF16 => BF16
+ 2138    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2847    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2140    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2377    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2142    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2143    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2852    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2381    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          1 μs    110                                                 BFP8, BFP8 => BFP8
+ 2382    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2855    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2856    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2149    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2386    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2151    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2388    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2625    0.0 %         TypecastDeviceOperation                                  2         9 μs          1 μs    110                                                       BF16 => BFP8
+ 2390    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2391    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2392    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2629    0.0 %         PagedFillCacheDeviceOperation                            2         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2158    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2867    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2632    0.0 %         PagedFillCacheDeviceOperation                            2         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2161    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2870    0.0 %         TypecastDeviceOperation                                  3         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2399    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2872    0.0 %         SliceDeviceOperation                                     3        12 μs          1 μs    110                                                       BF16 => BF16
+ 2165    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2402    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          1 μs    110                                                 BFP8, BFP8 => BFP8
+ 2639    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2168    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2877    0.0 %         PagedFillCacheDeviceOperation                            3         8 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2170    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2643    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2408    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2173    0.0 %         SliceDeviceOperation                                     0        12 μs          1 μs    110                                                       BF16 => BF16
+ 2646    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2647    0.0 %         PagedFillCacheDeviceOperation                            2         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2412    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2413    0.0 %         TypecastDeviceOperation                                  1         9 μs          1 μs    110                                                       BF16 => BFP8
+ 2178    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2651    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2652    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2181    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2654    0.0 %         SliceDeviceOperation                                     2        13 μs          1 μs    110                                                       BF16 => BF16
+ 2419    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2184    0.0 %         PagedFillCacheDeviceOperation                            0         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2185    0.0 %         SliceDeviceOperation                                     0        13 μs          1 μs    110                                                       BF16 => BF16
+ 2658    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2895    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2424    0.0 %         SliceDeviceOperation                                     1        12 μs          1 μs    110                                                       BF16 => BF16
+ 2425    0.0 %         TypecastDeviceOperation                                  1         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2426    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2663    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2192    0.0 %         TypecastDeviceOperation                                  0         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2429    0.0 %         PagedFillCacheDeviceOperation                            1         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2666    0.0 %         SliceDeviceOperation                                     2        12 μs          1 μs    110                                                       BF16 => BF16
+ 2667    0.0 %         TypecastDeviceOperation                                  2         8 μs          1 μs    110                                                       BF16 => BFP8
+ 2904    0.0 %         PagedFillCacheDeviceOperation                            3         7 μs          0 μs    110                                                 BFP8, BFP8 => BFP8
+ 2905   11.4 %         SDPAOperation                                            3    21,481 μs          0 μs    110                                                 BF16, BFP8 => BF16
+ 2670    0.9 %         NLPConcatHeadsDeviceOperation                            2     1,618 μs          1 μs    110                                                       BF16 => BF16
+ 2671    1.1 %         SliceDeviceOperation                                     2     2,005 μs          1 μs    110                                                       BF16 => BF16
+ 2908    1.6 %         BinaryNgDeviceOperation                                  3     3,031 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2673    4.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 1536 x 5120        2     9,156 μs          1 μs    110  191 GB/s  37.3 %  225.2 TFLOPs   37.0 %  LoFi BF16 x BFP4 => BF16
+ 2910    2.4 %         TypecastDeviceOperation                                  3     4,567 μs          1 μs    110                                                       BF16 => BFP8
+ 2203    3.7 %         ReduceScatterMinimalAsyncDeviceOperation                 0     6,953 μs          1 μs     36                                                      BFP8 => UINT8
+ 2676    0.8 %         TypecastDeviceOperation                                  2     1,526 μs          1 μs    110                                                       BFP8 => BF16
+ 2913    1.2 %         BinaryNgDeviceOperation                                  3     2,233 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2206    0.4 %         LayerNormPreAllGatherDeviceOperation                     0       838 μs          1 μs    110                                                       BF16 => BF16
+ 2207    0.3 %         AllGatherAsyncDeviceOperation                            0       631 μs          0 μs     36                                                       BF16 => BF16
+ 2208    0.9 %         LayerNormPostAllGatherDeviceOperation                    0     1,774 μs          0 μs    110                                                 BF16, BF16 => BF16
+ 2209    0.6 %         TypecastDeviceOperation                                  0     1,165 μs          1 μs    110                                                       BF16 => BFP8
+ 2210    4.3 %         AllGatherAsyncDeviceOperation                            0     8,069 μs          0 μs     36                                                       BFP8 => BFP8
+ 2447   10.5 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        1    19,798 μs          1 μs     88   92 GB/s  18.0 %  295.0 TFLOPs   60.6 %  LoFi BFP8 x BFP4 => BF16
+ 2920    9.2 %   FLOP  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        3    17,302 μs          1 μs     88  105 GB/s  20.6 %  337.6 TFLOPs   69.4 %  LoFi BFP8 x BFP4 => BF16
+ 2685    3.9 %         BinaryNgDeviceOperation                                  2     7,348 μs          1 μs    110                                                 BF16, BF16 => BF16
+ 2214    8.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 4352 x 5120        0    16,785 μs          1 μs    110  149 GB/s  29.0 %  348.0 TFLOPs   57.2 %  LoFi BF16 x BFP4 => BF16
+ 2215    2.3 %         TypecastDeviceOperation                                  0     4,410 μs          1 μs    110                                                       BF16 => BFP8
+ 2216    3.5 %         ReduceScatterMinimalAsyncDeviceOperation                 0     6,587 μs          1 μs     36                                                      BFP8 => UINT8
+ 2689    0.8 %         TypecastDeviceOperation                                  2     1,507 μs          1 μs    110                                                       BFP8 => BF16
+ 2690    1.2 %         BinaryNgDeviceOperation                                  2     2,213 μs          1 μs    110                                                 BF16, BF16 => BF16
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+       100.0 %         236 device ops, 0 host ops, 0 signposts                      187,721 μs        128 μs          51 GB/s   9.9 %                                                 
+
+💡 Advice 💡
+============
+
+Matmul Optimization
+-------------------
+ 2696    8.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 3584        3    16,781 μs          1 μs     88   97 GB/s  18.9 %  286.7 TFLOPs   58.9 %  LoFi BFP8 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=4 and output subblock 4x1 look good 🤷
+
+ 2673    4.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 1536 x 5120        2     9,156 μs          1 μs    110  191 GB/s  37.3 %  225.2 TFLOPs   37.0 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=4 and output subblock 1x5 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+
+ 2447   10.5 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        1    19,798 μs          1 μs     88   92 GB/s  18.0 %  295.0 TFLOPs   60.6 %  LoFi BFP8 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=20 and output subblock 8x1 look good 🤷
+
+ 2920    9.2 %   FLOP  MatmulDeviceOperation b={32} x 4096 x 5120 x 4352        3    17,302 μs          1 μs     88  105 GB/s  20.6 %  337.6 TFLOPs   69.4 %  LoFi BFP8 x BFP4 => BF16
+- Increase grid size (currently using 88 of 110)
+
+ 2214    8.9 %   SLOW  MatmulDeviceOperation b={32} x 4096 x 4352 x 5120        0    16,785 μs          1 μs    110  149 GB/s  29.0 %  348.0 TFLOPs   57.2 %  LoFi BF16 x BFP4 => BF16
+- If possible place input 0 in L1 (currently in DEV_0_DRAM_INTERLEAVED)
+- in0_block_w=4 and output subblock 1x5 look good 🤷
+- Use HiFi2 or HiFi4 with BF16 activations for improved accuracy
+

@@ -1,0 +1,90 @@
+[
+  {
+    "layer": 3,
+    "candidate": "control",
+    "policy": {},
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_packed_rope_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "16",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/packed_rope_dram_b16_control_l3.json"
+    ],
+    "prefill_host_us": 98897.1299957484,
+    "host_us": 947.7019775658846,
+    "minimum_pcc": 0.9999146754515882
+  },
+  {
+    "layer": 3,
+    "candidate": "shared",
+    "policy": {
+      "packed_rope_candidate": "shared_tables"
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_packed_rope_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "16",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"packed_rope_candidate\": \"shared_tables\"}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/packed_rope_dram_b16_shared_l3.json"
+    ],
+    "prefill_host_us": 99019.13302019238,
+    "host_us": 754.4220425188541,
+    "minimum_pcc": 0.9999146754515882
+  },
+  {
+    "layer": 3,
+    "candidate": "separate",
+    "policy": {
+      "packed_rope_candidate": "separate_tables"
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_packed_rope_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "16",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"packed_rope_candidate\": \"separate_tables\"}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/packed_rope_dram_b16_separate_l3.json"
+    ],
+    "prefill_host_us": 99119.57196891308,
+    "host_us": 763.6700756847858,
+    "minimum_pcc": 0.9999146754515882
+  }
+]

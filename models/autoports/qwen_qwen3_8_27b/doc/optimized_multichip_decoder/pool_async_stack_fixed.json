@@ -1,0 +1,435 @@
+{
+  "layer_type": "linear_attention",
+  "seq": 129,
+  "batch": 1,
+  "steps": 8,
+  "layout": "phase_specific",
+  "fused": null,
+  "stack": true,
+  "split_prefill": 0,
+  "policy": {
+    "direct_all_reduce": true,
+    "pooled_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b"
+  },
+  "provenance": {
+    "tests/run_multichip_decoder.py": "076d74711cf5d70f71153fadda86a646c29e21e6f630eaf968dde4035159d964",
+    "tt/multichip_decoder.py": "67e14129b3f21677efdf5b835033398dfef5c4ef82d5c8e933a4370112d7c1c4",
+    "tt/optimized_decoder.py": "ff85733835d1d972fb9bb1bdc47cdc761c1a814412d534681834b66d8f05d31a"
+  },
+  "baseline": {
+    "watcher_stress_replays": 0,
+    "async_stress": {
+      "trace_ids": [
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ],
+      "captures": 2,
+      "alternating_replays_per_arm": 32,
+      "blocking_vs_nonblocking_bitwise": true,
+      "acknowledged_output": "traced2 only; consumed after trace2 before any trace1",
+      "program_cache_allocations_included": true
+    },
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 1431.802986189723,
+    "decode_host_us": [
+      1452.3419085890055,
+      1441.7408965528011,
+      1438.4749811142683,
+      1445.4089105129242,
+      1431.9329056888819,
+      1436.0509812831879,
+      1434.618141502142,
+      1431.802986189723
+    ],
+    "median_decode_host_us": 1438.4749811142683,
+    "prefill_host_us": 3511.9368694722652,
+    "prefill_host_times_us": [
+      3511.9368694722652
+    ],
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 631947776,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_weights": {
+        "reported_allocated_bytes_per_bank": 0,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      },
+      "after_trace": {
+        "allocated_bytes": 657350144,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_trace": {
+        "reported_allocated_bytes_per_bank": 12288,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      }
+    },
+    "effective_policy": [
+      {
+        "dram_sharded": true,
+        "fidelity": "LoFi",
+        "mlp_dtype": "bfloat4_b",
+        "attention_dtype": "bfloat4_b",
+        "down_dtype": "bfloat4_b",
+        "block": 4,
+        "sharded_norm": true,
+        "carry_residual": true,
+        "kv_dtype": "bfloat8_b",
+        "packed_mlp": true,
+        "prefill_chunk": 1280,
+        "prefill_grid": [
+          11,
+          10
+        ],
+        "prefill_block": 10,
+        "inplace_recurrence": true,
+        "mix": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "gateup": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "out": {
+          "cores": 64,
+          "block": 3,
+          "prefill_block": 32,
+          "readers": 2
+        },
+        "down": {
+          "cores": 68,
+          "block": 8,
+          "prefill_block": 32,
+          "readers": 2
+        },
+        "l1_intermediates": true,
+        "sdpa_cores": 32,
+        "separate_prefill": true,
+        "prefill_sharded_norm": true,
+        "prefill_norm_block": true,
+        "prefill_sdpa_q": 128,
+        "prefill_sdpa_k": 256,
+        "prefill_sdpa_approx": true,
+        "prefill_subh": 2,
+        "history_tile_tail": true,
+        "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+        "gate": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "up": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "prefill_norm_max_tokens": 1280,
+        "l1_mlp": true,
+        "prefill_unit_subw": 5
+      },
+      {
+        "dram_sharded": true,
+        "fidelity": "LoFi",
+        "mlp_dtype": "bfloat4_b",
+        "attention_dtype": "bfloat4_b",
+        "down_dtype": "bfloat4_b",
+        "block": 4,
+        "sharded_norm": true,
+        "carry_residual": true,
+        "kv_dtype": "bfloat8_b",
+        "packed_mlp": true,
+        "prefill_chunk": 1024,
+        "prefill_grid": [
+          11,
+          10
+        ],
+        "prefill_block": 10,
+        "inplace_recurrence": true,
+        "mix": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "gateup": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "out": {
+          "cores": 64,
+          "block": 3,
+          "prefill_block": 32,
+          "readers": 2
+        },
+        "down": {
+          "cores": 68,
+          "block": 8,
+          "prefill_block": 32,
+          "readers": 2
+        },
+        "l1_intermediates": true,
+        "sdpa_cores": 32,
+        "separate_prefill": true,
+        "prefill_sharded_norm": true,
+        "prefill_norm_block": true,
+        "prefill_sdpa_q": 128,
+        "prefill_sdpa_k": 256,
+        "prefill_sdpa_approx": true,
+        "prefill_subh": 2,
+        "history_tile_tail": true,
+        "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+        "gate": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "up": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "prefill_norm_max_tokens": 1024,
+        "l1_mlp": true,
+        "prefill_unit_subw": 3
+      }
+    ]
+  },
+  "multichip": {
+    "watcher_stress_replays": 0,
+    "async_stress": {
+      "trace_ids": [
+        "MeshTraceId(4)",
+        "MeshTraceId(5)"
+      ],
+      "captures": 2,
+      "alternating_replays_per_arm": 32,
+      "blocking_vs_nonblocking_bitwise": true,
+      "acknowledged_output": "traced2 only; consumed after trace2 before any trace1",
+      "program_cache_allocations_included": true
+    },
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 805.0219621509314,
+    "decode_host_us": [
+      812.0760321617126,
+      815.9729186445475,
+      807.3369972407818,
+      808.8790345937014,
+      806.4049761742353,
+      805.6929800659418,
+      802.2368419915438,
+      805.0219621509314
+    ],
+    "median_decode_host_us": 807.3369972407818,
+    "prefill_host_us": 1632.7779740095139,
+    "prefill_host_times_us": [
+      1632.7779740095139
+    ],
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 111477248,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_weights": {
+        "reported_allocated_bytes_per_bank": 178816,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      },
+      "after_trace": {
+        "allocated_bytes": 124018176,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_trace": {
+        "reported_allocated_bytes_per_bank": 260736,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      }
+    },
+    "effective_policy": [
+      {
+        "dram_sharded": true,
+        "fidelity": "LoFi",
+        "mlp_dtype": "bfloat4_b",
+        "attention_dtype": "bfloat4_b",
+        "down_dtype": "bfloat4_b",
+        "block": 4,
+        "sharded_norm": true,
+        "carry_residual": true,
+        "kv_dtype": "bfloat8_b",
+        "packed_mlp": true,
+        "prefill_chunk": 1280,
+        "prefill_grid": [
+          11,
+          10
+        ],
+        "prefill_block": 10,
+        "inplace_recurrence": true,
+        "mix": {
+          "cores": 40,
+          "block": 4,
+          "readers": 2
+        },
+        "gateup": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "out": {
+          "cores": 16,
+          "block": 3,
+          "prefill_block": 16,
+          "readers": 2
+        },
+        "down": {
+          "cores": 17,
+          "block": 8,
+          "prefill_block": 8,
+          "readers": 2
+        },
+        "l1_intermediates": true,
+        "sdpa_cores": 32,
+        "separate_prefill": false,
+        "prefill_sharded_norm": true,
+        "prefill_norm_block": true,
+        "prefill_sdpa_q": 128,
+        "prefill_sdpa_k": 256,
+        "prefill_sdpa_approx": true,
+        "prefill_subh": 2,
+        "history_tile_tail": true,
+        "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+        "gate": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "up": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "prefill_norm_max_tokens": 1280,
+        "l1_mlp": true,
+        "prefill_unit_subw": 5,
+        "residual_layout": "replicated",
+        "direct_all_reduce": true,
+        "pooled_all_reduce": true,
+        "ccl_dtype": "bfloat8_b"
+      },
+      {
+        "dram_sharded": true,
+        "fidelity": "LoFi",
+        "mlp_dtype": "bfloat4_b",
+        "attention_dtype": "bfloat4_b",
+        "down_dtype": "bfloat4_b",
+        "block": 4,
+        "sharded_norm": true,
+        "carry_residual": true,
+        "kv_dtype": "bfloat8_b",
+        "packed_mlp": true,
+        "prefill_chunk": 1024,
+        "prefill_grid": [
+          11,
+          10
+        ],
+        "prefill_block": 10,
+        "inplace_recurrence": true,
+        "mix": {
+          "cores": 40,
+          "block": 4,
+          "readers": 2
+        },
+        "gateup": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "out": {
+          "cores": 16,
+          "block": 3,
+          "prefill_block": 16,
+          "readers": 2
+        },
+        "down": {
+          "cores": 17,
+          "block": 8,
+          "prefill_block": 8,
+          "readers": 2
+        },
+        "l1_intermediates": true,
+        "sdpa_cores": 32,
+        "separate_prefill": false,
+        "prefill_sharded_norm": true,
+        "prefill_norm_block": true,
+        "prefill_sdpa_q": 128,
+        "prefill_sdpa_k": 256,
+        "prefill_sdpa_approx": true,
+        "prefill_subh": 2,
+        "history_tile_tail": true,
+        "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+        "gate": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "up": {
+          "cores": 80,
+          "block": 2,
+          "readers": 2
+        },
+        "prefill_norm_max_tokens": 1024,
+        "l1_mlp": true,
+        "prefill_unit_subw": 3,
+        "residual_layout": "replicated",
+        "direct_all_reduce": true,
+        "pooled_all_reduce": true,
+        "ccl_dtype": "bfloat8_b"
+      }
+    ],
+    "scratch_workspace": {
+      "owners": 2,
+      "unique_pools": 1,
+      "slots": 2,
+      "bytes_per_device": 1392640,
+      "batch_capacity": 32,
+      "mesh_lifetime_owned": true,
+      "paired_roles": [
+        "out",
+        "down"
+      ]
+    }
+  },
+  "prefill_pcc": 0.9999554430759157,
+  "decode_pcc": [
+    0.9999928018917394,
+    0.9999882027318127,
+    0.9999898534414023,
+    0.9999926160848325,
+    0.9999934194057095,
+    0.9999742639771807,
+    0.9999922440838982,
+    0.9999872406887202
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "linear_attention": {
+    "status": "selected_default_measured",
+    "decoder_sha256": "d999166db24800aec9c16001201f26baad683c76150f5401db4834e4c937e82e",
+    "prefill_device_us": 5667.222222222223,
+    "decode_device_us": 460.8348148148148,
+    "prefill_useful_flops": 3163039465472,
+    "decode_dram_bytes": 227680256.0,
+    "peak_flops_per_s": 2654208000000000.0,
+    "peak_dram_bytes_per_s": 2048000000000.0,
+    "prefill_flops_pct": 21.02807001492228,
+    "decode_dram_pct": 24.12404541194965,
+    "peak_basis": "Four participating p300c ASICs;120 physical cores/ASIC,nominal1.35GHz,4096 LoFi FLOP/cycle/core;512GB/s/ASIC. Whole-layer maximum per-device firmware envelope includes attention, norms, CCL, movement and gaps.",
+    "flops_assumptions": "Useful dense projection, logical causal attention/recurrence and scalar work; no MoE or padding counted useful. BFP4/LoFi weights, BFP8 column inputs/CCL, BF16 row inputs/residuals, FP32 sensitive recurrence. Denominator is the four-ASIC LoFi peak, not an achievable mixed-kernel ceiling.",
+    "traffic_assumptions": "BFP4 tile storage576 bytes/1024 elements, actual local weight padding, compulsory decode projection reads; recurrent/history read+write or4224 prefix KV reads+one token write including BFP8 headers; replicated residual input/output. Excludes intermediate spills, rereads, CCL staging and small constants. Lower-bound estimate, not bus counters.",
+    "source": "single-layer Tracy",
+    "evidence": [
+      "tracy/final_profile_l0/whole_layer_timing.json",
+      "tracy/final_profile_l0/prefill_perf_report.csv",
+      "tracy/final_profile_l0/decode_perf_report.csv",
+      "final_profile_l0.json",
+      "tests/report_optimized_multichip.py"
+    ],
+    "workload": {
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1,
+      "scope": "single-layer supplied-hidden-activation workload",
+      "decode_measurement": "Final warmed step at context4224 after128 advancing decode steps"
+    },
+    "before_prefill_device_us": 8237.612592592594,
+    "before_decode_device_us": 509.7874074074074,
+    "prefill_speedup": 1.4535538345913799,
+    "decode_speedup": 1.1062258992135046,
+    "prefill_host_us": 5787.4449994415045,
+    "decode_host_us": 477.2939719259739
+  },
+  "full_attention": {
+    "status": "selected_default_measured",
+    "decoder_sha256": "d999166db24800aec9c16001201f26baad683c76150f5401db4834e4c937e82e",
+    "prefill_device_us": 5919.607407407408,
+    "decode_device_us": 368.2651851851852,
+    "prefill_useful_flops": 3257527418880.0,
+    "decode_dram_bytes": 218663040.0,
+    "peak_flops_per_s": 2654208000000000.0,
+    "peak_dram_bytes_per_s": 2048000000000.0,
+    "prefill_flops_pct": 20.732908025682384,
+    "decode_dram_pct": 28.99243990341099,
+    "peak_basis": "Four participating p300c ASICs;120 physical cores/ASIC,nominal1.35GHz,4096 LoFi FLOP/cycle/core;512GB/s/ASIC. Whole-layer maximum per-device firmware envelope includes attention, norms, CCL, movement and gaps.",
+    "flops_assumptions": "Useful dense projection, logical causal attention/recurrence and scalar work; no MoE or padding counted useful. BFP4/LoFi weights, BFP8 column inputs/CCL, BF16 row inputs/residuals, FP32 sensitive recurrence. Denominator is the four-ASIC LoFi peak, not an achievable mixed-kernel ceiling.",
+    "traffic_assumptions": "BFP4 tile storage576 bytes/1024 elements, actual local weight padding, compulsory decode projection reads; recurrent/history read+write or4224 prefix KV reads+one token write including BFP8 headers; replicated residual input/output. Excludes intermediate spills, rereads, CCL staging and small constants. Lower-bound estimate, not bus counters.",
+    "source": "single-layer Tracy",
+    "evidence": [
+      "tracy/final_profile_l3/whole_layer_timing.json",
+      "tracy/final_profile_l3/prefill_perf_report.csv",
+      "tracy/final_profile_l3/decode_perf_report.csv",
+      "final_profile_l3.json",
+      "tests/report_optimized_multichip.py"
+    ],
+    "workload": {
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "batch": 1,
+      "concurrency": 1,
+      "scope": "single-layer supplied-hidden-activation workload",
+      "decode_measurement": "Final warmed step at context4224 after128 advancing decode steps"
+    },
+    "before_prefill_device_us": 10626.325185185186,
+    "before_decode_device_us": 421.1903703703704,
+    "prefill_speedup": 1.795106407206684,
+    "decode_speedup": 1.1437148753514979,
+    "prefill_host_us": 6076.6281094402075,
+    "decode_host_us": 382.86298513412476
+  }
+}

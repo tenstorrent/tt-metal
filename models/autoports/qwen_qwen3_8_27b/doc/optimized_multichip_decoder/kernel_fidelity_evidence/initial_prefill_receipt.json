@@ -1,0 +1,44 @@
+[
+  {
+    "matmul_fidelity": "LoFi",
+    "scalar_profiler_fidelity": "HiFi4",
+    "kernels": [
+      {
+        "kernel": "bmm_large_block_zm_fused_bias_activation/12516295527290625845/",
+        "math_fidelity_enum": 0,
+        "descriptor": "kernel_fidelity_evidence/bmm_large_block_zm_fused_bias_activation_12516295527290625845.h",
+        "sha256": "c05eae3ea05863f19f46fe550b887ca60d3f583b8bedad6458bff91083f9b95c",
+        "cache_source": "/home/mvasiljev/tt-metal/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/bmm_large_block_zm_fused_bias_activation/12516295527290625845/chlkc_descriptors.h"
+      },
+      {
+        "kernel": "ring_reduction/7994530787588897892/",
+        "math_fidelity_enum": 4,
+        "descriptor": "kernel_fidelity_evidence/ring_reduction_7994530787588897892.h",
+        "sha256": "dbdb5b0b0b36b1ba96ed6eae466904c2795746d09e71f802c7846261e95e99ff",
+        "cache_source": "/home/mvasiljev/tt-metal/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/ring_reduction/7994530787588897892/chlkc_descriptors.h"
+      }
+    ],
+    "explanation": "process_ops_logs.py overwrites scalar fidelity for each compute kernel; the reduction is last. Kernel descriptors and captured matmul attributes independently prove LoFi."
+  },
+  {
+    "matmul_fidelity": "LoFi",
+    "scalar_profiler_fidelity": "HiFi4",
+    "kernels": [
+      {
+        "kernel": "bmm_large_block_zm_fused_bias_activation/8655772041277188326/",
+        "math_fidelity_enum": 0,
+        "descriptor": "kernel_fidelity_evidence/bmm_large_block_zm_fused_bias_activation_8655772041277188326.h",
+        "sha256": "dc9d00f436c3a33b9b54e12b54bf66f43ad7a3b9f044a01eeb473e162b9f2b64",
+        "cache_source": "/home/mvasiljev/tt-metal/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/bmm_large_block_zm_fused_bias_activation/8655772041277188326/chlkc_descriptors.h"
+      },
+      {
+        "kernel": "ring_reduction/7994530787588897892/",
+        "math_fidelity_enum": 4,
+        "descriptor": "kernel_fidelity_evidence/ring_reduction_7994530787588897892.h",
+        "sha256": "dbdb5b0b0b36b1ba96ed6eae466904c2795746d09e71f802c7846261e95e99ff",
+        "cache_source": "/home/mvasiljev/tt-metal/.cache/tt-metal-cache/tt-metal-cache11838326543599007125/kernels/ring_reduction/7994530787588897892/chlkc_descriptors.h"
+      }
+    ],
+    "explanation": "process_ops_logs.py overwrites scalar fidelity for each compute kernel; the reduction is last. Kernel descriptors and captured matmul attributes independently prove LoFi."
+  }
+]

@@ -1,0 +1,103 @@
+{
+  "control": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "pooled_all_reduce": true
+  },
+  "attn_bf8": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "attention_dtype": "bfloat8_b",
+    "pooled_all_reduce": true
+  },
+  "mlp_bf8": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "mlp_dtype": "bfloat8_b",
+    "pooled_all_reduce": true
+  },
+  "down_bf8": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "down_dtype": "bfloat8_b",
+    "pooled_all_reduce": true
+  },
+  "kv_bf16": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "kv_dtype": "bfloat16",
+    "pooled_all_reduce": true
+  },
+  "mix_hifi2": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "mix": {
+      "cores": 40,
+      "block": 4,
+      "readers": 2,
+      "fidelity": "HiFi2"
+    },
+    "pooled_all_reduce": true
+  },
+  "gateup_hifi2": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "gateup": {
+      "cores": 80,
+      "block": 2,
+      "readers": 2,
+      "fidelity": "HiFi2"
+    },
+    "pooled_all_reduce": true
+  },
+  "out_hifi2": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "out": {
+      "cores": 16,
+      "block": 3,
+      "prefill_block": 16,
+      "readers": 2,
+      "fidelity": "HiFi2"
+    },
+    "pooled_all_reduce": true
+  },
+  "down_hifi2": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "down": {
+      "cores": 17,
+      "block": 8,
+      "prefill_block": 8,
+      "readers": 2,
+      "fidelity": "HiFi2"
+    },
+    "pooled_all_reduce": true
+  },
+  "split_mix": {
+    "direct_all_reduce": true,
+    "carry_residual": true,
+    "l1_mlp": true,
+    "ccl_dtype": "bfloat8_b",
+    "split_mix": true,
+    "pooled_all_reduce": true
+  }
+}

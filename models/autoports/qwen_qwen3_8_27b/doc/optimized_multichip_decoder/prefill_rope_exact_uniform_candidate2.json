@@ -1,0 +1,130 @@
+{
+  "mesh": [
+    1,
+    4
+  ],
+  "real_weights": true,
+  "recorded_activations": true,
+  "exact": true,
+  "checks": [
+    {
+      "batch": 8,
+      "working_sequence": 32,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 8,
+      "working_sequence": 32,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 8,
+      "working_sequence": 160,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 8,
+      "working_sequence": 160,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 32,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 32,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 160,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 160,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 32,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 32,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 160,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 160,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 4096,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 4096,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    }
+  ],
+  "scope": "Packing identity under explicit uniform FP16 rotary accumulation. Production precision unchanged; original-policy whole-layer PCC is separate evidence.",
+  "provenance": {
+    "tests/probe_prefill_rope.py": "b39ec03af229630ec7bef01778b3a44ceb0e8ecea606854d041e6dc1337924ae",
+    "tests/run_prefill_rope_candidate.py": "e94c02eaf56abc52819fd593bb907b3725e73119b598e8ffef25e5edcb4801d4",
+    "tt/multichip_decoder.py": "84bdf5df663cb5adb26fda6ee15c0296b4a08c04f167c075c725ee53122465b4",
+    "tt/optimized_decoder.py": "d355691a69232c06f4c072bdd417352b081f5bea3f64d603646c74071fb9f2ac"
+  }
+}

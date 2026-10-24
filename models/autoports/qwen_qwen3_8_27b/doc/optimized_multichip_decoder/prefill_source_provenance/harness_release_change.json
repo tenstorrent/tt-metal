@@ -1,0 +1,7 @@
+{
+  "before": "238eb4ce4864d5b9d6b7ca9f565c1ed34588db16749ca8ed6bb4ae5359637d19",
+  "after": "84ca246ff7a6141f80799a24947f3dbec480b7d1849a3ea6f7a215b6477eee91",
+  "first_updated_case": "prefill_ccl_adapt_all_l1_chunk2048_l0",
+  "previous_child_closed": "all_l1_bf8_h1_l0 terminated after preserved triage; reset in progress; sweep paused",
+  "reason": "Release unused eager and captured prefill outputs after comparison and trace retirement, outside timing"
+}

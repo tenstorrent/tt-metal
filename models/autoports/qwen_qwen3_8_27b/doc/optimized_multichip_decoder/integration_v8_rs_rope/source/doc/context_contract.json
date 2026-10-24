@@ -1,0 +1,187 @@
+{
+  "hf_model": "Qwen/Qwen3.8-27B",
+  "hf_advertised_context": 262144,
+  "supported_context": 262144,
+  "largest_tested_prefill_context": 262144,
+  "largest_tested_decode_context": 262144,
+  "capability_reduction": null,
+  "status": "validated_no_capability_reduction",
+  "layer_types": [
+    "linear_attention",
+    "full_attention"
+  ],
+  "per_layer": {
+    "linear_attention": {
+      "largest_passed_prefill_context": 262144,
+      "largest_passed_decode_context": 262144,
+      "prefill_evidence": "functional_decoder/linear_262144.json",
+      "decode_evidence": "functional_decoder/linear_262142_decode_max.json",
+      "prefill_compared_tokens": 128,
+      "nonaligned_prefill_context": 262142
+    },
+    "full_attention": {
+      "largest_passed_prefill_context": 262144,
+      "largest_passed_decode_context": 262144,
+      "prefill_evidence": "functional_decoder/full_262144.json",
+      "decode_evidence": "functional_decoder/full_262142_decode_k256.json",
+      "prefill_compared_tokens": 128,
+      "nonaligned_prefill_context": 262142
+    }
+  },
+  "comparison_scope": "All TT outputs computed; long HF reference compares final128 outputs using entire prefix. Decode compares all outputs at positions262142 and262143.",
+  "stage_evidence": {
+    "02-fused-decoder": {
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "linear_state_layout": "BF16 row-major [B,3,10240] convolution history; FP32 tiled [B,48,128,128] recurrent state",
+      "linear_state_bytes_per_request": 3207168,
+      "functional_linear_state_bytes_per_request": 3801088,
+      "full_attention_kv_dtype": "BF16",
+      "full_attention_kv_bytes_per_token": 4096,
+      "linear_prefill_evidence": "fused_decoder/history_slice_262144.json",
+      "linear_nonaligned_prefill_and_final_decode_evidence": "fused_decoder/history_slice_262142.json",
+      "full_prefill_evidence": "fused_decoder/final_layer3_262144.json",
+      "full_nonaligned_prefill_and_final_decode_evidence": "fused_decoder/final_layer3_262142.json",
+      "unchanged_full_path_proof": "fused_decoder/unaffected_full_attention.json",
+      "memory_effect": "Saves593920 physical state bytes/request; no change to advertised capacity, weights precision or KV dtype.",
+      "scope": "Single-request native context. Larger batches separately validated at4096 tokens; not every batch/context Cartesian combination."
+    },
+    "03-optimized-decoder": {
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "linear_state_layout": "BF16 row-major [B,3,10240]; FP32 tiled [B,48,128,128]",
+      "linear_state_bytes_per_request": 3207168,
+      "full_attention_kv_dtype": "BFP8",
+      "full_attention_kv_bytes_per_token": 2176,
+      "full_attention_kv_bytes_at_max_context": 570425344,
+      "linear_prefill_evidence": "optimized_decoder/context262144_l0.json",
+      "linear_nonaligned_prefill_and_final_decode_evidence": "optimized_decoder/context262142_l0.json",
+      "full_prefill_evidence": "optimized_decoder/context262144_l3.json",
+      "full_nonaligned_prefill_and_final_decode_evidence": "optimized_decoder/context262142_l3.json",
+      "allocated_decoder_setup_bytes": {
+        "linear_attention": 320553472,
+        "full_attention": 311394304
+      },
+      "memory_effect": "BFP4 weights, BFP8 KV; two gate/up representations for phase-specific matmuls, adding100270080 bytes versus packed-only. Decode MLP packs users in tile rows to avoid per-user padding. No context reduction.",
+      "scope": "Single-layer capacity at B1; B8/B16/B32 measured at4096+128. Long fixtures repeat recorded HF activations and compare final128 prefill outputs using the whole prefix, plus two final-position decodes."
+    },
+    "04-multichip-decoder": {
+      "status": "validated_clean_pass_no_capability_reduction",
+      "target_mesh": [
+        1,
+        4
+      ],
+      "hardware": "4 Blackhole p300c ASICs, two links per ring edge",
+      "capability_reduction": null,
+      "full_attention_kv_bytes_per_token_per_device": 544,
+      "full_attention_kv_bytes_at_max_context_per_device": 142606336,
+      "all_full_layers_kv_bytes_at_max_context_per_device": 2281701376,
+      "linear_state_bytes_per_request_per_device": 801792,
+      "all_linear_layers_state_bytes_per_request_per_device": 38486016,
+      "weight_bytes_per_device": 4886388736,
+      "reserved_trace_activation_bytes": 3221225472,
+      "plan_evidence": "multichip_decoder/mesh_plan.md",
+      "weight_accounting_scope": "Conservative all-layer setup plus untied BF16 embedding/head estimate; includes non-weight setup.",
+      "memory_evidence": "multichip_decoder/memory_capacity_plan.json",
+      "supported_context": 262144,
+      "largest_tested_prefill_context": 262142,
+      "largest_tested_decode_context": 262144,
+      "full_attention_kv_dtype": "BFP8",
+      "linear_state_layout_per_device": "BF16 row-major [B,3,2560]; FP32 tiled [B,12,128,128]",
+      "context_evidence": [
+        "multichip_decoder/context262142_l0.json",
+        "multichip_decoder/context262142_l3.json"
+      ],
+      "comparison_scope": "All 262142 prefill outputs, both final-position decodes and reconstructed local states compared directly to single-chip optimized TTNN. B1 native context; B8/B16/B32 separately measured at4096+128. Full-model memory is a feasibility ledger, not an allocation measurement.",
+      "review_evidence": "multichip_decoder/stage_review.md"
+    },
+    "05-optimized-multichip-decoder": {
+      "status": "final_default_native_context_and_reserve_checks_passed",
+      "target_mesh": [
+        1,
+        4
+      ],
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "largest_tested_prefill_context": 262142,
+      "largest_tested_decode_context": 262144,
+      "full_attention_kv_dtype": "BFP8",
+      "full_attention_kv_bytes_per_token_per_device": 544,
+      "linear_state_layout_per_device": "BF16 row-major [B,3,2560]; FP32 tiled [B,12,128,128]",
+      "linear_state_bytes_per_request_per_device": 801792,
+      "decode_residual_contract": "B1-7 replicated BF16 L1; B8-32 hidden-sharded1280/chip BF16 L1. Prefill hidden-sharded. No inter-layer conversion.",
+      "persistent_workspace_scope": "One shared mesh-lifetime owner: AR slots, native decodeRS batches8..32, and4096-row BFP8 prefillRS out/down buffers, all allocated before capture.",
+      "shared_ar_l1_bytes_per_device": 1392640,
+      "shared_native_rs_l1_bytes_per_device": 11264000,
+      "shared_native_rs_dram_bytes_per_device": 16384000,
+      "all_layer_setup_plus_embedding_head_bytes_per_device": 6562799616,
+      "reserved_activation_trace_bytes_per_device": 13958643712,
+      "context_evidence": [
+        "optimized_multichip_decoder/context262142_l0.json",
+        "optimized_multichip_decoder/context262142_l3.json"
+      ],
+      "memory_evidence": "optimized_multichip_decoder/memory_capacity_plan.json",
+      "residual_contract": "optimized_multichip_decoder/residual_contract.md",
+      "comparison_scope": "All262142 prefill outputs and two final decode positions against accepted single-chip TTNN; separate B8/B16/B32 4096+128. No full-model allocation claim.",
+      "memory_effect": "Original packed gateup retained for decode and one-row prefill; R1 native DRAM-sharded gate/up each12,533,760 bytes,25,067,520 additional bytes/device/layer. Measured final setup deltas match exactly. No interleaved mix copy selected. Shared decode/prefill pools unchanged; no context reduction. Final native262144 context and additional2MiB L1 reserve probes pass for both layer kinds.",
+      "shared_prefill_rs_dram_bytes_per_device": 55705600,
+      "reserve_evidence": [
+        "optimized_multichip_decoder/final_reserved_context_l0.json",
+        "optimized_multichip_decoder/final_reserved_context_l3.json"
+      ],
+      "separate_prefill_weights_bytes_per_layer_per_device": 25067520,
+      "decoder_sha256": "84bdf5df663cb5adb26fda6ee15c0296b4a08c04f167c075c725ee53122465b4"
+    }
+  },
+  "stage05_prefill_policy": {
+    "ccl_workers_per_link": 8,
+    "ccl_payload": "bfloat8_b",
+    "norm_stats": "bfloat16",
+    "mix_gateup_input": "bfloat8_b",
+    "row_projection_input": "bfloat16",
+    "larger_rows": "DRAM interleaved",
+    "extra_persistent_bytes": 55705600,
+    "context_change": 0,
+    "status": "v4 final correctness/trace/watcher/native-context/reserve acceptance passed; device profiles and independent review pending",
+    "evidence": "optimized_multichip_decoder/prefill_projection_selection.json",
+    "full_attention_mix_l1_max_working_rows": 4096,
+    "fused_RS": {
+      "batch": 1,
+      "working_rows": 4096,
+      "output_dtype": "bfloat8_b",
+      "other_shapes": "Same TP4 hidden-sharded residual via separate matmul/RS",
+      "geometry": {
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subblock": [
+          2,
+          4
+        ],
+        "compute_grid": [
+          8,
+          8
+        ]
+      }
+    },
+    "shared_once_across_layers": true,
+    "ccl_workers_scope": "Standalone AG/RS uses8workers/link. Fused RS passes nullopt for workers/chunks/buffers; effective heuristic selects4workers/direction in4096-row prefill (20CCLcores),2 in physicalM32 decode (12CCLcores). Serialized wrapper worker1 is not consumed by factory.",
+    "separate_prefill_weights_bytes_per_layer_per_device": 25067520,
+    "extra_persistent_bytes_scope": "55,705,600 shared prefillRS bytes once; separate weights are layer-owned and separately accounted.",
+    "projection_geometry": {
+      "linear_mix_k": 16,
+      "full_mix_k": 4,
+      "gate_up_grid": [
+        11,
+        8
+      ],
+      "gate_up_k": 20,
+      "gate_up_out_h": 8,
+      "gate_up_subblock": [
+        8,
+        1
+      ],
+      "short_lengths": "outH divides runtime per_core_M; subH divides actual outH; padding and slicing remain internal"
+    }
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "control": {},
+  "rs_h16": {
+    "pf_fused": "rs",
+    "pf_fused_block_h": 16
+  },
+  "rs_h8": {
+    "pf_fused": "rs",
+    "pf_fused_block_h": 8
+  },
+  "ag_single_block": {
+    "pf_fused": "ag",
+    "pf_fused_block_h": 16
+  },
+  "ag_single_block_chunk2048": {
+    "pf_fused": "ag",
+    "pf_fused_block_h": 16,
+    "prefill_chunk": 2048
+  },
+  "ag_single_block_chunk1024": {
+    "pf_fused": "ag",
+    "pf_fused_block_h": 16,
+    "prefill_chunk": 1024
+  },
+  "both_single_block_chunk2048": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "prefill_chunk": 2048
+  },
+  "both_single_block_chunk2048_bf8ag": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "prefill_chunk": 2048,
+    "pf_fused_activation": "bfloat8_b",
+    "pf_fused_activation_roles": [
+      "mix",
+      "gateup"
+    ]
+  },
+  "ag_mix_single_block": {
+    "pf_fused": "ag",
+    "pf_fused_roles": [
+      "mix"
+    ],
+    "pf_fused_block_h": 16
+  },
+  "ag_single_block_bf8io": {
+    "pf_fused": "ag",
+    "pf_fused_block_h": 16,
+    "pf_fused_activation": "bfloat8_b",
+    "pf_ag_output_dtype": "bfloat8_b"
+  },
+  "both_single_block_l1_chunk2048": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "prefill_chunk": 2048,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true
+  },
+  "both_single_block_l1_chunk1024": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "prefill_chunk": 1024,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true
+  },
+  "both_single_block_l1_bf8_chunk2048": {
+    "pf_fused": "both",
+    "pf_fused_block_h": 16,
+    "prefill_chunk": 2048,
+    "pf_ag_l1_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_rs_l1": true,
+    "pf_norm_l1": true,
+    "pf_return_l1": true,
+    "pf_fused_activation": "bfloat8_b",
+    "pf_fused_activation_roles": [
+      "mix",
+      "gateup"
+    ],
+    "pf_ag_output_dtype": "bfloat8_b",
+    "pf_rs_output_dtype": "bfloat8_b"
+  },
+  "workers8_control": {
+    "pf_workers": 8
+  },
+  "rs_h16_workers8": {
+    "pf_fused": "rs",
+    "pf_fused_block_h": 16,
+    "pf_workers": 8
+  },
+  "ag_mix_single_block_workers8": {
+    "pf_fused": "ag",
+    "pf_fused_roles": [
+      "mix"
+    ],
+    "pf_fused_block_h": 16,
+    "pf_workers": 8
+  }
+}

@@ -1,0 +1,404 @@
+[
+  {
+    "layer": 0,
+    "candidate": "control",
+    "policy": {
+      "prefill_l1_roles": [],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_control_l0.json"
+    ],
+    "prefill_host_us": 7475.169142708182,
+    "host_us": 446.2241195142269,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "mix",
+    "policy": {
+      "prefill_l1_roles": [
+        "mix"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"mix\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_mix_l0.json"
+    ],
+    "prefill_host_us": 7721.021072939038,
+    "host_us": 446.44507579505444,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "out",
+    "policy": {
+      "prefill_l1_roles": [
+        "out"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"out\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_out_l0.json"
+    ],
+    "prefill_host_us": 7566.544925794005,
+    "host_us": 445.76404616236687,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "down",
+    "policy": {
+      "prefill_l1_roles": [
+        "down"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"down\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_down_l0.json"
+    ],
+    "prefill_host_us": 7598.195923492312,
+    "host_us": 446.84484601020813,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "without_gateup",
+    "policy": {
+      "prefill_l1_roles": [
+        "mix",
+        "out",
+        "down"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"mix\", \"out\", \"down\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_without_gateup_l0.json"
+    ],
+    "prefill_host_us": 7845.710963010788,
+    "host_us": 446.88512571156025,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "gateup_h1",
+    "policy": {
+      "prefill_l1_roles": [
+        "gateup"
+      ],
+      "prefill_l1_max_tokens": 4096,
+      "prefill_l1_role_block_h": {
+        "gateup": 1
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"gateup\"], \"prefill_l1_max_tokens\": 4096, \"prefill_l1_role_block_h\": {\"gateup\": 1}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_gateup_h1_l0.json"
+    ],
+    "prefill_host_us": 8925.708942115307,
+    "host_us": 446.96591794490814,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 3,
+    "candidate": "control",
+    "policy": {
+      "prefill_l1_roles": [],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_control_l3.json"
+    ],
+    "prefill_host_us": 7861.6829123348,
+    "host_us": 359.4679292291403,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "mix",
+    "policy": {
+      "prefill_l1_roles": [
+        "mix"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"mix\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_mix_l3.json"
+    ],
+    "prefill_host_us": 7802.380016073585,
+    "host_us": 358.32589492201805,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "out",
+    "policy": {
+      "prefill_l1_roles": [
+        "out"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"out\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_out_l3.json"
+    ],
+    "prefill_host_us": 7976.97389498353,
+    "host_us": 358.97805355489254,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "down",
+    "policy": {
+      "prefill_l1_roles": [
+        "down"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"down\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_down_l3.json"
+    ],
+    "prefill_host_us": 7726.3349667191505,
+    "host_us": 358.5261292755604,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "without_gateup",
+    "policy": {
+      "prefill_l1_roles": [
+        "mix",
+        "out",
+        "down"
+      ],
+      "prefill_l1_max_tokens": 4096
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"mix\", \"out\", \"down\"], \"prefill_l1_max_tokens\": 4096}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_without_gateup_l3.json"
+    ],
+    "prefill_host_us": 7920.105941593647,
+    "host_us": 359.4891168177128,
+    "minimum_pcc": 0.9997946662001882
+  },
+  {
+    "layer": 3,
+    "candidate": "gateup_h1",
+    "policy": {
+      "prefill_l1_roles": [
+        "gateup"
+      ],
+      "prefill_l1_max_tokens": 4096,
+      "prefill_l1_role_block_h": {
+        "gateup": 1
+      }
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_prefill_l1_candidate",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "15",
+      "--policy",
+      "{\"prefill_l1_roles\": [\"gateup\"], \"prefill_l1_max_tokens\": 4096, \"prefill_l1_role_block_h\": {\"gateup\": 1}}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/prefill_l1_roles_gateup_h1_l3.json"
+    ],
+    "prefill_host_us": 9046.775056049228,
+    "host_us": 359.47817377746105,
+    "minimum_pcc": 0.9997946662001882
+  }
+]

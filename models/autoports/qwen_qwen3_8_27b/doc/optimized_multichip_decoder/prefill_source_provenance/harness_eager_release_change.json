@@ -1,0 +1,5 @@
+{
+  "before": "84ca246ff7a6141f80799a24947f3dbec480b7d1849a3ea6f7a215b6477eee91",
+  "after": "6c904d4a7c6203a3b3897e141c4623678c0e56e91d2cd2816a7a9e36ab2beae1",
+  "reason": "Synchronous host copy completed; no later eager-output consumers or state aliases. Independent review verified. Capture begins with same output liveness as first eager forward."
+}

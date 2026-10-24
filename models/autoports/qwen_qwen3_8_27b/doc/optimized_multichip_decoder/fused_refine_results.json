@@ -1,0 +1,642 @@
+[
+  {
+    "layer": 0,
+    "candidate": "rs_k1",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 1,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 1, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_rs_k1_l0.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "rs"
+    ],
+    "prefill_host_us": 7359.782001003623,
+    "host_us": 597.2639191895723,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "rs_k2",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 2,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 2, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_rs_k2_l0.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "rs"
+    ],
+    "prefill_host_us": 7501.603802666068,
+    "host_us": 596.89418412745,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "both_k1",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 1,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 1, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_both_k1_l0.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "both"
+    ],
+    "prefill_host_us": 7471.607998013496,
+    "host_us": 597.6860411465168,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 0,
+    "candidate": "both_k2",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 2,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "0",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 2, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_both_k2_l0.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "both"
+    ],
+    "prefill_host_us": 7455.976912751794,
+    "host_us": 595.2899809926748,
+    "minimum_pcc": 0.9999584868043154
+  },
+  {
+    "layer": 3,
+    "candidate": "rs_k1",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 1,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 1, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_rs_k1_l3.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "rs"
+    ],
+    "prefill_host_us": 7806.539069861174,
+    "host_us": 527.240103110671,
+    "minimum_pcc": 0.9999493329871069
+  },
+  {
+    "layer": 3,
+    "candidate": "rs_k2",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 2,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 2, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_rs_k2_l3.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "rs"
+    ],
+    "prefill_host_us": 7816.33798032999,
+    "host_us": 526.3187922537327,
+    "minimum_pcc": 0.9999431231515375
+  },
+  {
+    "layer": 3,
+    "candidate": "both_k1",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 1,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 1, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_both_k1_l3.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "both"
+    ],
+    "prefill_host_us": 8105.000946670771,
+    "host_us": 506.19011744856834,
+    "minimum_pcc": 0.9999760875900713
+  },
+  {
+    "layer": 3,
+    "candidate": "both_k2",
+    "policy": {
+      "direct_all_reduce": false,
+      "carry_residual": true,
+      "l1_mlp": true,
+      "ccl_dtype": null,
+      "pooled_all_reduce": false,
+      "ar_fused_move": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_chunk": 4096,
+      "prefill_block": 4,
+      "prefill_subh": 1,
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "prefill_unit_subw": 5,
+      "distributed_norm_l1": true,
+      "distributed_norm_direct": true,
+      "residual_l1": true,
+      "persistent_ccl": true,
+      "ccl_l1": true,
+      "fused_ag_1d": true,
+      "fused_rs_grid": [
+        8,
+        1
+      ],
+      "fused_rs_subw": 5,
+      "fused_rs_k_multiplier": 2,
+      "fused_l1_interleaved": true
+    },
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layer",
+      "3",
+      "--batch",
+      "1",
+      "--seq",
+      "4096",
+      "--steps",
+      "128",
+      "--prefill-repeats",
+      "3",
+      "--policy",
+      "{\"direct_all_reduce\": false, \"carry_residual\": true, \"l1_mlp\": true, \"ccl_dtype\": null, \"pooled_all_reduce\": false, \"ar_fused_move\": true, \"mix\": {\"cores\": 8, \"block\": 20, \"readers\": 2, \"prefill_block\": 4}, \"out\": {\"cores\": 8, \"block\": 6, \"readers\": 2, \"prefill_block\": 4}, \"down\": {\"cores\": 8, \"block\": 17, \"readers\": 2, \"prefill_block\": 4}, \"prefill_chunk\": 4096, \"prefill_block\": 4, \"prefill_subh\": 1, \"gateup\": {\"cores\": 80, \"block\": 2, \"readers\": 2, \"prefill_block\": 4}, \"prefill_unit_subw\": 5, \"distributed_norm_l1\": true, \"distributed_norm_direct\": true, \"residual_l1\": true, \"persistent_ccl\": true, \"ccl_l1\": true, \"fused_ag_1d\": true, \"fused_rs_grid\": [8, 1], \"fused_rs_subw\": 5, \"fused_rs_k_multiplier\": 2, \"fused_l1_interleaved\": true}",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/fused_refine_both_k2_l3.json",
+      "--layout",
+      "sharded",
+      "--fused",
+      "both"
+    ],
+    "prefill_host_us": 7861.082907766104,
+    "host_us": 505.8189854025841,
+    "minimum_pcc": 0.9999723100859514
+  }
+]

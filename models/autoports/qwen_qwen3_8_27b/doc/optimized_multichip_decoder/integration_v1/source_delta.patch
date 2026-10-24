@@ -1,0 +1,93 @@
+--- integration_v1/multichip_decoder.py
++++ tt/multichip_decoder.py
+@@ -43,7 +43,8 @@
+              'separate_prefill': False,
+              'residual_layout': 'phase_specific',
+              'sharded_decode_min_batch': 8,
+-             'policy_name': 'tp4_p300c_bfp4_lofi_compact_v1',
++             'policy_name': 'tp4_p300c_bfp4_lofi_compact_v2',
++             'packed_decode_conv': True,
+              'batched_native_rs': {'persistent_ccl': False,
+                                    'persistent_gather': False,
+                                    'ccl_dtype': None,
+@@ -460,30 +461,60 @@
+             x = ttnn.to_memory_config(x, mlp.memory_config())
+         return ttnn.add(x, mlp, memory_config=mlp.memory_config())
+ 
++    def _packed_decode_convolution(self, projected, state):
++        """Each retained fourth row sees only its own user's three history rows.
++
++        Assemble/extract in row-major layout so tile padding cannot become data.
++        The other three outputs per window are discarded, never fed back.
++        """
++        batch=projected.shape[0]
++        current = ttnn.to_layout(projected[..., :2560], ttnn.ROW_MAJOR_LAYOUT)
++        windows = ttnn.concat([state.conv, current], dim=1)
++        packed = ttnn.reshape(windows, [1, batch*4, 2560])
++        physical = ((batch*4 + 31)//32)*32
++        if physical != batch*4:
++            packed = ttnn.pad(packed, [(0,0),(0,physical-batch*4),(0,0)], value=0)
++        packed = ttnn.to_layout(packed, ttnn.TILE_LAYOUT)
++        hist = state.conv[:1]
++        outputs = ttnn.experimental.kda.qkv_causal_conv1d_silu(
++            packed, hist, *self.taps, 512, 512, 1536,
++            actual_start=self.conv_start, predecessor_carry=hist,
++            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128),
++            compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,
++                math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
++        qflat, kflat, vflat = [ttnn.to_layout(
++            ttnn.reshape(ttnn.to_layout(t,ttnn.ROW_MAJOR_LAYOUT)[:,:batch*4], [batch,4,width])[:,3:4],
++            ttnn.TILE_LAYOUT) for t,width in zip(outputs,(512,512,1536))]
++        next_conv = windows[:,1:4]
++        return qflat,kflat,vflat,next_conv
++
+     def _delta(self, x, state):
+         batch, length, _ = x.shape
+         projected = self._linear(x, self.mix)
+-        physical_conv = ((length + 31) // 32) * 32
+-        padded_projected = ttnn.pad(projected, [(0, 0), (0, physical_conv-length), (0, 0)], value=0) if physical_conv != length else projected
+-        qs, ks, vs = [], [], []
+-        for bidx in range(batch):
+-            hist = ttnn.to_layout(state.conv[bidx:bidx+1], ttnn.ROW_MAJOR_LAYOUT)
+-            cq, ck, cv = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+-                padded_projected[bidx:bidx+1], hist, *self.taps, 512, 512, 1536,
+-                actual_start=self.conv_start, predecessor_carry=hist,
+-                program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128),
+-                compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,
+-                    math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
+-            qs.append(cq[:, :length]); ks.append(ck[:, :length]); vs.append(cv[:, :length])
+-        qflat, kflat, vflat = [parts[0] if batch == 1 else ttnn.concat(parts, dim=0) for parts in (qs, ks, vs)]
+-        if self.policy.get("history_tile_tail") and length >= 32 and length % 32 == 0:
+-            # Slice a complete tile before untilize, then select logical rows.
+-            # Direct nonaligned tiled slicing would add an implicit retile.
+-            tail = projected[:, length-32:length, :2560]
+-            next_conv = ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT)[:, -3:, :]
++        if self.policy.get('packed_decode_conv') and batch>=8 and length==1 and not self.policy.get('_prefill_phase'):
++            qflat,kflat,vflat,next_conv=self._packed_decode_convolution(projected,state)
+         else:
+-            next_conv = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)[:, length-3:length, :2560] if length >= 3 else ttnn.concat(
+-                [state.conv[:, length:, :], ttnn.to_layout(projected[..., :2560], ttnn.ROW_MAJOR_LAYOUT)], dim=1)
++            physical_conv = ((length + 31) // 32) * 32
++            padded_projected = ttnn.pad(projected, [(0, 0), (0, physical_conv-length), (0, 0)], value=0) if physical_conv != length else projected
++            qs, ks, vs = [], [], []
++            for bidx in range(batch):
++                hist = ttnn.to_layout(state.conv[bidx:bidx+1], ttnn.ROW_MAJOR_LAYOUT)
++                cq, ck, cv = ttnn.experimental.kda.qkv_causal_conv1d_silu(
++                    padded_projected[bidx:bidx+1], hist, *self.taps, 512, 512, 1536,
++                    actual_start=self.conv_start, predecessor_carry=hist,
++                    program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128),
++                    compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,
++                        math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
++                qs.append(cq[:, :length]); ks.append(ck[:, :length]); vs.append(cv[:, :length])
++            qflat, kflat, vflat = [parts[0] if batch == 1 else ttnn.concat(parts, dim=0) for parts in (qs, ks, vs)]
++            if self.policy.get("history_tile_tail") and length >= 32 and length % 32 == 0:
++                # Slice a complete tile before untilize, then select logical rows.
++                # Direct nonaligned tiled slicing would add an implicit retile.
++                tail = projected[:, length-32:length, :2560]
++                next_conv = ttnn.to_layout(tail, ttnn.ROW_MAJOR_LAYOUT)[:, -3:, :]
++            else:
++                next_conv = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)[:, length-3:length, :2560] if length >= 3 else ttnn.concat(
++                    [state.conv[:, length:, :], ttnn.to_layout(projected[..., :2560], ttnn.ROW_MAJOR_LAYOUT)], dim=1)
+         ttnn.copy(next_conv, state.conv)
+ 
+         def l2(t):

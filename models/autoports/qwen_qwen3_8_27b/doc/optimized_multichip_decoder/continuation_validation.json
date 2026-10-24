@@ -1,0 +1,98 @@
+[
+  {
+    "case": "continuation129_l0",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation129_l0.json",
+      "--layer",
+      "0",
+      "--seq",
+      "129",
+      "--split-prefill",
+      "128",
+      "--steps",
+      "8"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation129_l0.log",
+    "prefill_pcc": 0.9999459166839527,
+    "minimum_decode_pcc": 0.9999812463232763
+  },
+  {
+    "case": "continuation257_l0",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation257_l0.json",
+      "--layer",
+      "0",
+      "--seq",
+      "257",
+      "--split-prefill",
+      "128",
+      "--steps",
+      "8"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation257_l0.log",
+    "prefill_pcc": 0.9999439964182689,
+    "minimum_decode_pcc": 0.9999859474101775
+  },
+  {
+    "case": "continuation129_l3",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation129_l3.json",
+      "--layer",
+      "3",
+      "--seq",
+      "129",
+      "--split-prefill",
+      "128",
+      "--steps",
+      "8"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation129_l3.log",
+    "prefill_pcc": 0.99995930866099,
+    "minimum_decode_pcc": 0.9999634300117652
+  },
+  {
+    "case": "continuation257_l3",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation257_l3.json",
+      "--layer",
+      "3",
+      "--seq",
+      "257",
+      "--split-prefill",
+      "128",
+      "--steps",
+      "8"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/continuation257_l3.log",
+    "prefill_pcc": 0.9999600484386194,
+    "minimum_decode_pcc": 0.9999274924014807
+  }
+]

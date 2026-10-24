@@ -1,0 +1,94 @@
+[
+  {
+    "case": "watcher_l0",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_l0.json",
+      "--layer",
+      "0",
+      "--seq",
+      "4096",
+      "--steps",
+      "128"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_l0.log",
+    "prefill_pcc": 0.9999485107557732,
+    "minimum_decode_pcc": 0.9999738593629846
+  },
+  {
+    "case": "watcher_b32_l0",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_b32_l0.json",
+      "--layer",
+      "0",
+      "--batch",
+      "32",
+      "--seq",
+      "33",
+      "--steps",
+      "8"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_b32_l0.log",
+    "prefill_pcc": 0.999936102886255,
+    "minimum_decode_pcc": 0.9999676727159833
+  },
+  {
+    "case": "watcher_l3",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_l3.json",
+      "--layer",
+      "3",
+      "--seq",
+      "4096",
+      "--steps",
+      "128"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_l3.log",
+    "prefill_pcc": 0.9999610922561095,
+    "minimum_decode_pcc": 0.9998216779564711
+  },
+  {
+    "case": "watcher_b32_l3",
+    "exit_code": 0,
+    "command": [
+      "/opt/venv/bin/python",
+      "-m",
+      "models.autoports.qwen_qwen3_8_27b.tests.run_multichip_decoder",
+      "--layout",
+      "phase_specific",
+      "--output",
+      "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_b32_l3.json",
+      "--layer",
+      "3",
+      "--batch",
+      "32",
+      "--seq",
+      "33",
+      "--steps",
+      "8"
+    ],
+    "log": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/watcher_b32_l3.log",
+    "prefill_pcc": 0.9999618741975838,
+    "minimum_decode_pcc": 0.9999558443910379
+  }
+]

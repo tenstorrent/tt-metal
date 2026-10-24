@@ -227,10 +227,13 @@ class OptimizedDecoder(LightweightModule):
         role = self.weight_roles[id(w)]
         logical_n = self.logical_widths[id(w)]
         group = "mlp" if role in ("gate", "up", "gateup", "down") else "attention"
-        activation_dtype = getattr(ttnn, self.policy.get(group + "_activation", "bfloat16"))
+        cfg = self.policy.get(role, {})
+        activation_name = self.policy.get(group + "_activation", "bfloat16")
+        if self.policy.get("_prefill_phase"):
+            activation_name = cfg.get("prefill_activation", activation_name)
+        activation_dtype = getattr(ttnn, activation_name)
         if x.dtype != activation_dtype:
             x = ttnn.typecast(x, activation_dtype)
-        cfg = self.policy.get(role, {})
         ckc = ttnn.WormholeComputeKernelConfig(
             math_fidelity=getattr(ttnn.MathFidelity, cfg.get("fidelity", self.policy.get("fidelity", "HiFi2"))),
             math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True)
@@ -257,6 +260,8 @@ class OptimizedDecoder(LightweightModule):
                 y = y[..., :logical_n]
             return ttnn.reshape(y, [1, batch, logical_n] if packed_output else [batch, 1, logical_n])
         use_l1 = self.policy.get("prefill_l1") and math.prod(list(x.shape)[:-1]) <= self.policy.get("prefill_l1_max_tokens", 512)
+        if self.policy.get("_prefill_phase") and cfg.get("prefill_l1"):
+            use_l1 = math.prod(list(x.shape)[:-1]) <= cfg.get("prefill_l1_max_tokens", 4096)
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG if use_l1 else ttnn.DRAM_MEMORY_CONFIG)
         kwargs = {}
         if self.policy.get("dram_sharded") or self.policy.get("prefill_config"):
@@ -267,14 +272,21 @@ class OptimizedDecoder(LightweightModule):
             candidate_sub = self.policy.get("prefill_unit_subw", 1)
             if sub == 1 and pn % candidate_sub == 0:
                 sub = candidate_sub
+            sub = cfg.get('prefill_out_subblock_w', sub)
+            while pn % sub:
+                sub -= 1
             pm = math.ceil(m/gy)
-            sh = min(self.policy.get("prefill_subh", 1), pm)
-            while pm % sh or sh * sub > 8:
+            block_h = min(cfg.get('prefill_out_block_h', self.policy.get('prefill_out_block_h', pm)), pm)
+            while pm % block_h:
+                block_h -= 1
+            sh = min(cfg.get("prefill_subh", self.policy.get("prefill_subh", 1)), block_h)
+            while block_h % sh or sh * sub > 8:
                 sh -= 1
             kwargs["program_config"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(gx,gy), in0_block_w=cfg.get("prefill_block", self.policy.get("prefill_block", 4)),
                 out_subblock_h=sh, out_subblock_w=sub, per_core_M=pm, per_core_N=pn,
-                transpose_mcast=False, fused_activation=act, fuse_batch=False)
+                transpose_mcast=False, fused_activation=act, fuse_batch=False,
+                out_block_h=block_h)
         else:
             kwargs["activation"] = activation
             kwargs["core_grid"] = ttnn.CoreGrid(x=11,y=10)

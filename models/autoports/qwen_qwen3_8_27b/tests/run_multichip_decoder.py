@@ -4,6 +4,7 @@ import argparse
 import json
 import time
 import hashlib
+import os
 import math
 from pathlib import Path
 import torch
@@ -35,8 +36,12 @@ def main():
     p.add_argument('--batch',type=int,default=1)
     p.add_argument('--steps',type=int,default=2)
     p.add_argument('--prefill-repeats',type=int,default=1)
+    p.add_argument('--capacity-alignment',type=int,default=256)
+    p.add_argument('--l1-background-bytes',type=int,default=0)
     p.add_argument('--layout',default='phase_specific')
     p.add_argument('--fused',choices=['ag','rs','both'])
+    p.add_argument('--output-ag',action='store_true')
+    p.add_argument('--async-stress',action='store_true')
     p.add_argument('--remap',action='store_true')
     p.add_argument('--stack',action='store_true')
     p.add_argument('--split-prefill',type=int,default=0)
@@ -47,6 +52,7 @@ def main():
     p.add_argument('--baseline-only',action='store_true')
     p.add_argument('--multichip-only',action='store_true')
     args=p.parse_args()
+    assert not (args.async_stress and (args.profile or args.remap))
     if args.profile:
         assert args.seq==4096 and args.steps==128 and (args.baseline_only or args.multichip_only)
         from tracy import signpost
@@ -68,26 +74,37 @@ def main():
             positions=args.seq+i-(torch.arange(args.batch)%11 if args.ragged else torch.zeros(args.batch,dtype=torch.long))
             cd,sd=rope(xd,positions.reshape(1,args.batch,1).expand(3,-1,-1))
             dec.append((xd,cd,sd))
-    capacity=((args.seq+args.steps+255)//256)*256
+    assert args.capacity_alignment%256==0
+    capacity=((args.seq+args.steps+args.capacity_alignment-1)//args.capacity_alignment)*args.capacity_alignment
     pt=torch.randperm(args.batch*capacity//32,dtype=torch.int32).reshape(args.batch,-1)
-    outputs={}; state_outputs={}; result={'layer_type':cfg.layer_types[args.layer],'seq':args.seq,'batch':args.batch,'steps':args.steps,'layout':args.layout,'fused':args.fused,'stack':args.stack,'split_prefill':args.split_prefill,'policy':json.loads(args.policy),'provenance':{str(f.relative_to(root)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [Path(__file__),root/'tt/multichip_decoder.py',root/'tt/optimized_decoder.py']}}
+    outputs={}; state_outputs={}; result={'capacity_tokens':capacity,'capacity_alignment':args.capacity_alignment,'layer_type':cfg.layer_types[args.layer],'seq':args.seq,'batch':args.batch,'steps':args.steps,'layout':args.layout,'fused':args.fused,'stack':args.stack,'split_prefill':args.split_prefill,'policy':json.loads(args.policy),'provenance':{str(f.relative_to(root)):hashlib.sha256(f.read_bytes()).hexdigest() for f in [Path(__file__),root/'tt/multichip_decoder.py',root/'tt/optimized_decoder.py',root/'tt/decode_workspace.py',root/'tt/fused_decode.py',root/'tt/fused_prefill.py']}}
     multi_cls=MultichipDecoder
     if args.fused:
         from .multichip_fused_candidate import FusedCandidate
         multi_cls=FusedCandidate
         candidate_file=root/"tests/multichip_fused_candidate.py"
         result["provenance"]["tests/multichip_fused_candidate.py"]=hashlib.sha256(candidate_file.read_bytes()).hexdigest()
+    if args.output_ag:
+        from .multichip_output_ag_candidate import OutputGatherCandidate
+        multi_cls=OutputGatherCandidate
+        candidate_file=root/'tests/multichip_output_ag_candidate.py'
+        result['output_ag']=True
+        result['provenance']['tests/multichip_output_ag_candidate.py']=hashlib.sha256(candidate_file.read_bytes()).hexdigest()
     choices=[('baseline',OptimizedDecoder,1),('multichip',multi_cls,4)]
     for name,cls,n in choices:
         if args.baseline_only and n!=1 or args.multichip_only and n!=4: continue
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED if n==1 else ttnn.FabricConfig.FABRIC_1D_RING)
         mesh=ttnn.open_mesh_device(ttnn.MeshShape(1,n),physical_device_ids=[0] if n==1 else [],trace_region_size=0)
-        tid=None
+        tid=None; tid2=None
         try:
             def allocated():
                 view=ttnn.get_memory_view(mesh,ttnn.BufferType.DRAM)
                 return {'allocated_bytes':view.total_bytes_allocated_per_bank*view.num_banks,
                         'capacity_bytes':view.total_bytes_per_bank*view.num_banks}
+            def l1_view():
+                view=ttnn.get_memory_view(mesh,ttnn.BufferType.L1)
+                return {'reported_allocated_bytes_per_bank':view.total_bytes_allocated_per_bank,
+                    'reported_capacity_bytes_per_bank':view.total_bytes_per_bank,'reported_num_banks':view.num_banks}
             memory={'before_weights':allocated()}
             model=cls.from_state_dict(weights,hf_config=cfg,layer_idx=args.layer,mesh_device=mesh,
                 **({'policy':{'residual_layout':args.layout,**json.loads(args.policy)}} if n==4 else {}))
@@ -96,20 +113,31 @@ def main():
                 other=3 if args.layer==0 else 0
                 next_model=cls.from_state_dict(load_file(f'.cache/qwen38-weights/layer_{other}.safetensors'),
                     hf_config=cfg,layer_idx=other,mesh_device=mesh,
-                    **({'policy':{'residual_layout':args.layout,**json.loads(args.policy)}} if n==4 else {}))
+                    **({'policy':{'residual_layout':args.layout,**json.loads(args.policy)},'ccl_workspace':model.ar_workspace} if n==4 else {}))
                 model=DecoderStack([model,next_model])
             if n==4 and args.fused: model.prepare_fused(args.batch,args.fused)
+            background_l1=None
+            if n==4 and args.l1_background_bytes:
+                tiles=math.ceil(args.l1_background_bytes/2048)
+                background_l1=ttnn.empty([1,1,32,tiles*32],device=mesh,dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,memory_config=ttnn.L1_MEMORY_CONFIG)
+                memory['synthetic_background_l1_bytes']=tiles*2048
             if not args.profile:
                 model.prefill_forward=audit_runtime(model.prefill_forward)
                 model.decode_forward=audit_runtime(model.decode_forward)
             memory['after_weights']=allocated()
+            memory['l1_after_weights']=l1_view()
             mapper=ttnn.ReplicateTensorToMesh(mesh)
+            first_model=model.models[0] if args.stack else model
+            decode_layout=first_model.decode_residual_layout(args.batch) if n==4 else 'replicated'
+            def sharded_phase(phase):
+                return n==4 and (decode_layout=='sharded' if phase=='decode' else args.layout in ('sharded','phase_specific'))
             def put(t,dtype=ttnn.bfloat16,layout=ttnn.TILE_LAYOUT,hidden=False,phase="decode"):
-                mp=ttnn.ShardTensorToMesh(mesh,dim=2) if hidden and n==4 and (args.layout=='sharded' or (args.layout=='phase_specific' and phase=='prefill')) else mapper
+                mp=ttnn.ShardTensorToMesh(mesh,dim=2) if hidden and sharded_phase(phase) else mapper
                 return ttnn.from_torch(t.contiguous(),device=mesh,dtype=dtype,layout=layout,mesh_mapper=mp)
             def read(t,phase="decode"):
                 ts=ttnn.get_device_tensors(t)
-                if n==4 and (args.layout=='sharded' or (args.layout=='phase_specific' and phase=='prefill')): return torch.cat([ttnn.to_torch(z) for z in ts],dim=-1)
+                if sharded_phase(phase): return torch.cat([ttnn.to_torch(z) for z in ts],dim=-1)
                 values=[ttnn.to_torch(z) for z in ts]
                 if len(values)>1:
                     assert all(torch.equal(values[0],z) for z in values[1:]), 'replica divergence'
@@ -139,6 +167,8 @@ def main():
                 return ttnn.concat(parts,dim=1)
             pre=prefill()
             pre_host=read(pre,phase="prefill")
+            del pre  # Host copy is complete; capture must not retain an unrelated eager output.
+            print(name,'EAGER_PREFILL_DONE',flush=True)
             copy_state(empty,state)
             pre_tid=ttnn.begin_trace_capture(mesh,cq_id=0)
             warm_pre=prefill()
@@ -155,6 +185,9 @@ def main():
             prefill_host_us=sorted(prefill_times)[len(prefill_times)//2]
             assert torch.equal(pre_host,read(warm_pre,phase="prefill")), 'prefill replay mismatch'
             ttnn.release_trace(mesh,pre_tid)
+            # Prefill outputs have been compared and their trace retired.
+            # Decode owns separate inputs/state; do not retain phase-sized L1.
+            del warm_pre
             if args.profile: ttnn.ReadDeviceProfiler(mesh)
             print(name,'PREFILL_DONE',flush=True)
             backup=model.snapshot(state)
@@ -187,10 +220,28 @@ def main():
                 for source,destination in zip(remapped_caches,(state.key,state.value)): ttnn.copy(source,destination)
                 ttnn.copy(put(pt,ttnn.int32,ttnn.ROW_MAJOR_LAYOUT),table);restore()
             for source,destination in updates[0]: ttnn.copy(source,destination)
-            eager=forward();read(eager);del eager;restore()
+            eager=forward();read(eager);restore()
+            if args.async_stress:
+                # Capture 2 retains capture 1's output. Prepare the same L1
+                # liveness before any trace exists; native layout selectors
+                # can choose another program signature as free L1 changes.
+                retained_warm=forward();read(retained_warm)
+                del retained_warm
+            del eager
+            restore();ttnn.synchronize_device(mesh)
+            print('DECODE_WARM_DONE', mesh.num_program_cache_entries(), flush=True)
             tid=ttnn.begin_trace_capture(mesh,cq_id=0)
             traced=forward()
             ttnn.end_trace_capture(mesh,tid,cq_id=0)
+            if args.async_stress:
+                tid2=ttnn.begin_trace_capture(mesh,cq_id=0)
+                traced2=forward()
+                ttnn.end_trace_capture(mesh,tid2,cq_id=0)
+                # Only this later output survives capture2. It may be clobbered
+                # by trace1; consume it only after trace2 and before trace1.
+                # All state, inputs, scratch and programs were prepared earlier.
+                from ttnn.tools import trace_allocation_tracker
+                trace_allocation_tracker.acknowledge_corruptible(traced2)
             restore()
             step_outputs=[];times=[]
             for i,(xd,cd,sd) in enumerate(dec):
@@ -203,6 +254,7 @@ def main():
                 step_outputs.append(read(traced))
                 if args.profile and (i+1)%16==0: ttnn.ReadDeviceProfiler(mesh)
             memory['after_trace']=allocated()
+            memory['l1_after_trace']=l1_view()
             if not args.stack and not args.profile:
                 def state_host(t,field):
                     values=[ttnn.to_torch(z) for z in ttnn.get_device_tensors(t)]
@@ -226,11 +278,57 @@ def main():
                 for source,destination in zip(remap_data[1],(state.key,state.value)): ttnn.copy(source,destination)
                 ttnn.execute_trace(mesh,tid,cq_id=0,blocking=True)
                 assert torch.equal(step_outputs[0],read(traced)), 'page remap under live trace mismatch'
-            result[name]={'page_remap_exact':bool(remap_data),'ragged_positions':args.ragged,'last_decode_host_us':times[-1], 'decode_host_us':times, 'median_decode_host_us':sorted(times)[len(times)//2], 'prefill_host_us':prefill_host_us,'prefill_host_times_us':prefill_times,
-                'restored_replays_bitwise':3,'replica_equality':n==4 and args.layout in ('replicated','phase_specific'),
-                'runtime_fallback_audit':not args.profile,'memory':memory}
+            stress=None
+            if args.async_stress:
+                for source,destination in updates[0]: ttnn.copy(source,destination)
+                restore()
+                for repeat in range(32):
+                    ttnn.execute_trace(mesh,tid if repeat%2==0 else tid2,cq_id=0,blocking=True)
+                expected=read(traced2)
+                restore()
+                for repeat in range(32):
+                    ttnn.execute_trace(mesh,tid if repeat%2==0 else tid2,cq_id=0,blocking=False)
+                ttnn.synchronize_device(mesh)
+                assert torch.equal(expected,read(traced2)), 'alternating asynchronous trace replay differs'
+                stress={'trace_ids':[str(tid),str(tid2)],'captures':2,'alternating_replays_per_arm':32,
+                    'blocking_vs_nonblocking_bitwise':True,'acknowledged_output':'traced2 only; consumed after trace2 before any trace1',
+                    'program_cache_allocations_included':os.environ.get('TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE','0')=='0'}
+            watcher_replays=0
+            if os.environ.get('TT_METAL_WATCHER'):
+                for source,destination in updates[0]: ttnn.copy(source,destination)
+                deadline=time.monotonic()+11
+                while time.monotonic()<deadline:
+                    restore()
+                    if remap_data:
+                        for source,destination in zip(remap_data[1],(state.key,state.value)): ttnn.copy(source,destination)
+                    ttnn.execute_trace(mesh,tid,cq_id=0,blocking=True)
+                    watcher_replays+=1
+                assert torch.equal(step_outputs[0],read(traced)), 'watcher repeated replay mismatch'
+            result[name]={'watcher_stress_replays':watcher_replays,'async_stress':stress,'page_remap_exact' :bool(remap_data),'ragged_positions':args.ragged,'last_decode_host_us':times[-1], 'decode_host_us':times, 'median_decode_host_us':sorted(times)[len(times)//2], 'prefill_host_us':prefill_host_us,'prefill_host_times_us':prefill_times,
+                'restored_replays_bitwise':3,'replica_equality':n==4 and decode_layout=='replicated',
+                'runtime_fallback_audit':not args.profile,'memory':memory,
+                'effective_policy':[m.policy for m in model.models] if args.stack else model.policy}
+            owners=model.models if args.stack else [model]
+            if n==4:result[name]['unique_ccl_contexts']=len({id(m.ccl) for m in owners})
+            decode_owners=[m.decode_implementation(args.batch) for m in owners] if n==4 else owners
+            result[name]['decode_residual_layout']=decode_layout
+            result[name]['effective_decode_policy']=[m.policy for m in decode_owners] if args.stack else decode_owners[0].policy
+            result[name]['effective_sdpa_chunks']=[getattr(m,'effective_sdpa_chunk',None) for m in decode_owners]
+            workspaces=[getattr(m,'ar_workspace',None) for m in owners]
+            if n==4 and any(workspaces):
+                unique={id(w):w for w in workspaces if w is not None}
+                assert all(m.ccl is w.ccl for m,w in zip(owners,workspaces) if w is not None)
+                result[name]['scratch_workspace']={'owners':len(owners),'unique_pools':len(unique),'slots':2*len(unique),
+                    'bytes_per_device':sum(w.scratch_bytes_per_device for w in unique.values()),
+                    'batch_capacity':32,'mesh_lifetime_owned':True,'paired_roles':['out','down'],
+                    'prefill_rs_dram_bytes_per_device':sum(55705600 for w in unique.values() if w.prefill_rs_buffers),
+                    'prefill_rs_roles':sorted({role for w in unique.values() for role in w.prefill_rs_buffers}),
+                    'native_rs_batches':sorted({b for w in unique.values() for b in w.native_rs_buffers}),
+                    'native_rs_dram_bytes_per_device':sum(655360*len(w.native_rs_buffers) for w in unique.values()),
+                    'native_rs_l1_reserved_bytes_per_bank':sum(4096*len(w.native_rs_buffers) for w in unique.values())}
             print(name,'DECODE_DONE',times[-1],flush=True)
         finally:
+            if tid2 is not None: ttnn.release_trace(mesh,tid2)
             if tid is not None: ttnn.release_trace(mesh,tid)
             ttnn.close_mesh_device(mesh)
     if len(outputs)==2:
