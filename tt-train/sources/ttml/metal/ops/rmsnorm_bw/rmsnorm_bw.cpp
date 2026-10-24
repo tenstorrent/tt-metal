@@ -13,20 +13,29 @@ std::vector<std::optional<ttnn::Tensor>> rmsnorm_bw(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& gamma_tensor,
     const ttnn::Tensor& rms_tensor,
-    const ttnn::Tensor& dL_dout_tensor) {
+    const ttnn::Tensor& dL_dout_tensor,
+    bool compute_grad_input,
+    bool compute_grad_gamma) {
     auto result = ttnn::prim::ttml_rmsnorm_bw(
-        input_tensor,   // [B,1,S,C]
-        gamma_tensor,   // [1,1,1,C]
-        rms_tensor,     //[B,1,S,1]
-        dL_dout_tensor  //[B,1,S,C]
-    );
+        input_tensor,    // [B,1,S,C]
+        gamma_tensor,    // [1,1,1,C]
+        rms_tensor,      //[B,1,S,1]
+        dL_dout_tensor,  //[B,1,S,C]
+        /* epsilon */ 1e-6F,
+        /* preallocated_da */ std::nullopt,
+        /* preallocated_dgamma_components */ std::nullopt,
+        compute_grad_input,
+        compute_grad_gamma);
 
     // dL_dgamma requires sum over batches so we cannot perform this sum in the kernel. Instead we return the
     // dL_dgamma_components and reduce it here.
+    if (!compute_grad_gamma) {
+        return {result[0], std::nullopt};
+    }
     return {
         result[0],
         ttnn::sum(
-            result[1],
+            result[1].value(),
             /* dim_arg */ ttsl::SmallVector<int>{0, 1, 2},
             /* keep_dim */ true,
             /* output_mem_config */ std::nullopt,

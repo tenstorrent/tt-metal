@@ -7,12 +7,17 @@
 #include <gtest/gtest.h>
 
 #include <cassert>
+#include <optional>
+#include <ostream>
+#include <string>
 #include <umd/device/cluster.hpp>
+#include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ops/losses.hpp"
 #include "test_utils/random_data.hpp"
 
@@ -491,3 +496,114 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Compare_Masking_Patterns) {
     CompareKernelVsComposite({32U, 1U, 1024U, 4079U});  // C % 32 = 31
     CompareKernelVsComposite({32U, 1U, 1024U, 4097U});  // C % 32 = 1
 }
+
+// ============================================================================
+// Section 4: Skipping one grad in the RMSNorm backward kernel
+// ============================================================================
+// rmsnorm_bw takes a flag for each of dL_dinput and dL_dgamma. A skipped grad is nullopt; the kernel drops its
+// compute, its output CB and, for dL_dinput, gamma and the scale reduction. Rows cover each flag on both kernel paths:
+// everything in L1 (several rows per core, so gamma is read once and reused) and not (gamma re-read every row).
+// ============================================================================
+
+namespace {
+
+struct RMSNormBwSkipCase {
+    std::string name;
+    std::vector<uint32_t> shape;
+    bool compute_grad_input = true;
+    bool compute_grad_gamma = true;
+};
+
+// gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
+void PrintTo(const RMSNormBwSkipCase& c, std::ostream* os) {
+    *os << c.name;
+}
+
+struct RMSNormBwInputs {
+    ttnn::Tensor input;
+    ttnn::Tensor gamma;
+    ttnn::Tensor rms;
+    ttnn::Tensor dL_dout;
+};
+
+RMSNormBwInputs make_rmsnorm_bw_inputs(const std::vector<uint32_t>& shape, uint32_t seed) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const std::vector<uint32_t> gamma_shape{1U, 1U, 1U, shape[3]};
+    auto input = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    auto gamma = core::from_xtensor(test_utils::make_uniform_xarray<float>(gamma_shape, 0.0F, 1.0F, seed + 1U), device);
+    auto dL_dout = core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed + 2U), device);
+    auto rms = metal::rmsnorm_fw(input, gamma, /* return_intermediates */ true)[1].value();
+    return {input, gamma, rms, dL_dout};
+}
+
+}  // namespace
+
+class RMSNormBwSkipTest : public ::testing::TestWithParam<RMSNormBwSkipCase> {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+// The requested grad must equal the one from the full backward bit for bit: the kernel does the same per-tile
+// arithmetic either way. The flags are compile-time, so the first skipping run must compile its own program; a second
+// run with other live inputs must hit that program and read and write the new buffers.
+TEST_P(RMSNormBwSkipTest, RequestedGradMatchesFullBackward) {
+    using namespace ttml;
+    const RMSNormBwSkipCase& c = GetParam();
+    auto* device = &autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    // Both sets stay alive, so the second cannot land at the first's addresses.
+    const RMSNormBwInputs first = make_rmsnorm_bw_inputs(c.shape, 1U);
+    const RMSNormBwInputs second = make_rmsnorm_bw_inputs(c.shape, 11U);
+
+    const auto run = [](const RMSNormBwInputs& in, bool compute_grad_input, bool compute_grad_gamma) {
+        return metal::rmsnorm_bw(in.input, in.gamma, in.rms, in.dL_dout, compute_grad_input, compute_grad_gamma);
+    };
+    // The full backward also compiles the dL_dgamma reduction, so the skipping runs below only add their own program.
+    const auto full_first = run(first, true, true);
+    const auto full_second = run(second, true, true);
+    const size_t grad_idx = c.compute_grad_input ? 0U : 1U;
+    const xt::xarray<float> expected_first = core::to_xtensor(full_first[grad_idx].value());
+    const xt::xarray<float> expected_second = core::to_xtensor(full_second[grad_idx].value());
+
+    const auto entries_before = device->num_program_cache_entries();
+    const auto skip_first = run(first, c.compute_grad_input, c.compute_grad_gamma);
+    const auto entries_after_first = device->num_program_cache_entries();
+    EXPECT_EQ(entries_after_first, entries_before + 1U)
+        << c.name << ": the skipping run must compile exactly one program of its own";
+    const auto skip_second = run(second, c.compute_grad_input, c.compute_grad_gamma);
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_first)
+        << c.name << ": the second skipping run at identical shapes missed the program cache";
+
+    for (const auto* grads : {&skip_first, &skip_second}) {
+        ASSERT_EQ(grads->size(), 2U) << c.name;
+        EXPECT_EQ((*grads)[0].has_value(), c.compute_grad_input) << c.name << ": dL_dinput presence";
+        EXPECT_EQ((*grads)[1].has_value(), c.compute_grad_gamma) << c.name << ": dL_dgamma presence";
+        ASSERT_TRUE((*grads)[grad_idx].has_value()) << c.name;
+    }
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(skip_first[grad_idx].value()), expected_first)))
+        << c.name << ": requested grad differs from the full backward";
+    EXPECT_TRUE(xt::all(xt::equal(core::to_xtensor(skip_second[grad_idx].value()), expected_second)))
+        << c.name << ": cache-hit grad differs from the full backward on the second inputs (stale address?)";
+}
+
+// C = 127: Wt = 4 with masking; 256 tile rows give every core more than one row on Wormhole and Blackhole.
+// C = 16383: Wt = 512, so input and dL_dout alone (2 MB) exceed L1 even without gamma.
+INSTANTIATE_TEST_SUITE_P(
+    RMSNormBwSkipCases,
+    RMSNormBwSkipTest,
+    ::testing::Values(
+        RMSNormBwSkipCase{.name = "InputOnly_FitsInL1", .shape = {1U, 1U, 8192U, 127U}, .compute_grad_gamma = false},
+        RMSNormBwSkipCase{.name = "GammaOnly_FitsInL1", .shape = {1U, 1U, 8192U, 127U}, .compute_grad_input = false},
+        RMSNormBwSkipCase{
+            .name = "InputOnly_DoesNotFitInL1", .shape = {1U, 1U, 64U, 16383U}, .compute_grad_gamma = false},
+        RMSNormBwSkipCase{
+            .name = "GammaOnly_DoesNotFitInL1", .shape = {1U, 1U, 64U, 16383U}, .compute_grad_input = false}),
+    [](const ::testing::TestParamInfo<RMSNormBwSkipCase>& info) { return info.param.name; });

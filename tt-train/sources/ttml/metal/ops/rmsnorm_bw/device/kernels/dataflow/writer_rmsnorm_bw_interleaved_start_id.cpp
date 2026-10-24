@@ -24,6 +24,19 @@ constexpr uint32_t cb_scale_idx = tt::CBIndex::c_11;
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);
 
+// Which outputs to write. A skipped output has no CB and placeholder accessor args.
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
+
+#ifdef COMPUTE_GRAD_GAMMA
+constexpr bool compute_grad_gamma = true;
+#else
+constexpr bool compute_grad_gamma = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t da_output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -31,7 +44,8 @@ void kernel_main() {
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
-    const uint32_t tile_bytes = get_tile_size(cb_dL_da_idx);
+    // Both outputs share a data format; take the tile size from an output CB that exists.
+    const uint32_t tile_bytes = get_tile_size(compute_grad_input ? cb_dL_da_idx : cb_dL_dgamma_components);
     constexpr auto da_args = TensorAccessorArgs<2>();
     constexpr auto dgamma_args = TensorAccessorArgs<da_args.next_compile_time_args_offset()>();
     const auto da_output_addr_generator = TensorAccessor(da_args, da_output_addr);
@@ -46,15 +60,28 @@ void kernel_main() {
         for (uint32_t c = 0; c < Wt; c += block_size) {
             uint32_t start_idx = (r * Wt) + c;
 
-            // Write dL_da block
-            write_tiles_by_row</* UseBarrier = */ false>(
-                cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes, block_size);
-
-            // Write dL_dgamma_components block
-            write_tiles_by_row(
-                cb_dL_dgamma_components, dgamma_output_addr_generator, start_idx, block_size, tile_bytes, block_size);
-            // Barrier called by write_tiles_by_row with UseBarrier=true above
-            cb_pop_front(cb_dL_da_idx, block_size);
+            if constexpr (compute_grad_input) {
+                // Write dL_da block
+                write_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dL_da_idx, da_output_addr_generator, start_idx, block_size, tile_bytes, block_size);
+            }
+            if constexpr (compute_grad_gamma) {
+                // Write dL_dgamma_components block
+                write_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dL_dgamma_components,
+                    dgamma_output_addr_generator,
+                    start_idx,
+                    block_size,
+                    tile_bytes,
+                    block_size);
+            }
+            noc_async_write_barrier();
+            if constexpr (compute_grad_input) {
+                cb_pop_front(cb_dL_da_idx, block_size);
+            }
+            if constexpr (compute_grad_gamma) {
+                cb_pop_front(cb_dL_dgamma_components, block_size);
+            }
         }
     }
 }

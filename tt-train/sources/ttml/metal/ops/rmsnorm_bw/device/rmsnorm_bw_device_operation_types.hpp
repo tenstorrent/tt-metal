@@ -11,6 +11,8 @@ namespace ttml::metal::ops::rmsnorm_bw::device {
 // Attributes for the backward operation (add more if needed)
 struct RMSNormBackwardParams {
     float epsilon = 1e-6F;
+    bool compute_grad_input = true;
+    bool compute_grad_gamma = true;
 };
 
 // Tensors required for backward
@@ -26,8 +28,8 @@ struct RMSNormBackwardInputs {
 using operation_attributes_t = RMSNormBackwardParams;
 using tensor_args_t = RMSNormBackwardInputs;
 
-// Output tensor specs and tensors
-using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
-using tensor_return_value_t = std::vector<ttnn::Tensor>;
+// Output tensor specs and tensors: [dL_da, dL_dgamma_components]. An output whose grad is not requested is nullopt.
+using spec_return_value_t = std::vector<std::optional<tt::tt_metal::TensorSpec>>;
+using tensor_return_value_t = std::vector<std::optional<ttnn::Tensor>>;
 
 }  // namespace ttml::metal::ops::rmsnorm_bw::device

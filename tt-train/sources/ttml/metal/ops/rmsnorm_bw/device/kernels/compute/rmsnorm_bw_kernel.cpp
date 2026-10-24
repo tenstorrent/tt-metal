@@ -42,6 +42,19 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
+// Which outputs to produce. Gamma, cb_scale and the scale reduction are only needed for dL_da.
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
+
+#ifdef COMPUTE_GRAD_GAMMA
+constexpr bool compute_grad_gamma = true;
+#else
+constexpr bool compute_grad_gamma = false;
+#endif
+
 // ============================================================================
 // The following functions are register-only helpers. They perform intermediate
 // computations using registers but do not write results directly to CBs.
@@ -320,7 +333,9 @@ void kernel_main() {
     cb_wait_front(cb_mat_mul_reduce, onetile);
     cb_wait_front(cb_zero_idx, onetile);
 
-    compute_kernel_hw_startup(cb_input_idx, cb_gamma_idx, cb_dL_da_idx);
+    // cb_gamma and cb_dL_da only exist when dL_da is requested, so start up with CBs that are always created and
+    // share their data formats.
+    compute_kernel_hw_startup(cb_input_idx, cb_dL_out_idx, cb_recip_rms_a_bcasted_idx);
     copy_init(cb_input_idx);
     reconfig_data_format(cb_mat_mul_reduce, cb_scale_idx);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
@@ -328,21 +343,30 @@ void kernel_main() {
         // This value is constant for the whole row, so we can compute it once per row.
         compute_recip_rms_a_bcasted();
         cb_wait_front(cb_recip_rms_a_bcasted_idx, onetile);
-        // To compute scale we must iterate over all inner dimension.
-        compute_scale(row);
-        // Wait for the reduced cb_scale to be ready.
-        cb_wait_front(cb_scale_idx, onetile);
+        if constexpr (compute_grad_input) {
+            // To compute scale we must iterate over all inner dimension.
+            compute_scale(row);
+            // Wait for the reduced cb_scale to be ready.
+            cb_wait_front(cb_scale_idx, onetile);
+        }
+#ifdef EVERYTHING_FITS_IN_L1
+        if constexpr (!compute_grad_input) {
+            // compute_scale waits for the whole row; without it, wait here.
+            cb_wait_front(cb_dL_out_idx, Wt);
+            cb_wait_front(cb_input_idx, Wt);
+        }
+#endif
 
         for (uint32_t col = 0; col < Wt; col += block_size) {
-            cb_reserve_back(cb_dL_da_idx, block_size);
-            cb_reserve_back(cb_dL_dgamma_components, block_size);
 #ifndef EVERYTHING_FITS_IN_L1
-            cb_wait_front(cb_gamma_idx, block_size);
+            if constexpr (compute_grad_input) {
+                cb_wait_front(cb_gamma_idx, block_size);
+            }
             cb_wait_front(cb_dL_out_idx, block_size);
             cb_wait_front(cb_input_idx, block_size);
 #endif
             // Compute dL_da.
-            {
+            if constexpr (compute_grad_input) {
                 uint32_t dL_da_register;  // Depending on the block_idx, it will be 0 or 1.
                 const uint32_t rhs_register = 2U;
                 const uint32_t tile_register = 3U;
@@ -366,7 +390,7 @@ void kernel_main() {
             }
 
             // Compute dL_dgamma_components.
-            {
+            if constexpr (compute_grad_gamma) {
                 uint32_t dL_dg_components_register;  // Depending on the block_idx, it will be 0 or 1.
                 const uint32_t tile_register = 2U;
                 tile_regs_acquire();
@@ -387,7 +411,9 @@ void kernel_main() {
                 pack_and_push_block(cb_dL_dgamma_components, block_size);
             }
 #ifndef EVERYTHING_FITS_IN_L1
-            cb_pop_front(cb_gamma_idx, block_size);
+            if constexpr (compute_grad_input) {
+                cb_pop_front(cb_gamma_idx, block_size);
+            }
             cb_pop_front(cb_dL_out_idx, block_size);
             cb_pop_front(cb_input_idx, block_size);
 #endif
@@ -398,10 +424,14 @@ void kernel_main() {
 #endif
         cb_pop_front(cb_rms_a_idx, onetile);
         cb_pop_front(cb_recip_rms_a_bcasted_idx, onetile);
-        cb_pop_front(cb_scale_idx, onetile);
+        if constexpr (compute_grad_input) {
+            cb_pop_front(cb_scale_idx, onetile);
+        }
     }
 #ifdef EVERYTHING_FITS_IN_L1
-    cb_pop_front(cb_gamma_idx, Wt);
+    if constexpr (compute_grad_input) {
+        cb_pop_front(cb_gamma_idx, Wt);
+    }
 #endif
     cb_pop_front(cb_scaler_idx, onetile);
     cb_pop_front(cb_mat_mul_reduce, onetile);

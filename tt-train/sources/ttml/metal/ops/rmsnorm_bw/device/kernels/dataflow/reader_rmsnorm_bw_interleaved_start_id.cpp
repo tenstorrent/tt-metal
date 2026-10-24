@@ -32,6 +32,13 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
+// Gamma, and the second pass over each row when not everything fits in L1, are only needed for dL_da.
+#ifdef COMPUTE_GRAD_INPUT
+constexpr bool compute_grad_input = true;
+#else
+constexpr bool compute_grad_input = false;
+#endif
+
 void kernel_main() {
     uint32_t runtime_args_counter = 0U;
     uint32_t input_address = get_arg_val<uint32_t>(runtime_args_counter++);
@@ -65,7 +72,8 @@ void kernel_main() {
     const auto rms_a_address_generator = TensorAccessor(rms_a_args, rms_a_address);
     const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address);
 
-    // Read input tensors row by row, reading each row's data twice due to compute requirements
+    // Read input tensors row by row. Without everything in L1, dL_da reads each row's data twice: once for the scale
+    // reduction and once for the per-tile outputs. dL_dgamma_components alone needs a single pass.
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         // Read RMS(a) once per row - shape [B,1,S,1], one scalar per row
@@ -81,38 +89,36 @@ void kernel_main() {
                 cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
 #ifndef EVERYTHING_FITS_IN_L1
             // If not everything fits in L1, we need to reread gamma for each row.
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
-            // Barrier called by read_tiles_by_row with UseBarrier=true above
-            cb_push_back(cb_input_idx, block_size);
-            cb_push_back(cb_dL_out_idx, block_size);
+            const bool read_gamma = compute_grad_input;
 #else
             // If everything fits in L1, we can read gamma only once.
-            if (r == start_row) {
+            const bool read_gamma = compute_grad_input && r == start_row;
+#endif
+            if (read_gamma) {
+                read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
+                // Barrier called by read_tiles_by_row with UseBarrier=true above
+            } else {
+                noc_async_read_barrier();
+            }
+            cb_push_back(cb_input_idx, block_size);
+            cb_push_back(cb_dL_out_idx, block_size);
+        }
+
+#ifndef EVERYTHING_FITS_IN_L1
+        if constexpr (compute_grad_input) {
+            // Second pass: read row data again for second compute phase
+            for (uint32_t c = 0; c < Wt; c += block_size) {
+                uint32_t row_tile_idx = (r * Wt) + c;
+
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
+                read_tiles_by_row</* UseBarrier = */ false>(
+                    cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
                 read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
                 // Barrier called by read_tiles_by_row with UseBarrier=true above
                 cb_push_back(cb_input_idx, block_size);
                 cb_push_back(cb_dL_out_idx, block_size);
-            } else {
-                noc_async_read_barrier();
-                cb_push_back(cb_input_idx, block_size);
-                cb_push_back(cb_dL_out_idx, block_size);
             }
-#endif
-        }
-
-#ifndef EVERYTHING_FITS_IN_L1
-        // Second pass: read row data again for second compute phase
-        for (uint32_t c = 0; c < Wt; c += block_size) {
-            uint32_t row_tile_idx = (r * Wt) + c;
-
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_input_idx, input_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
-            read_tiles_by_row</* UseBarrier = */ false>(
-                cb_dL_out_idx, dL_out_address_generator, row_tile_idx, block_size, tile_bytes, block_size);
-            read_tiles_by_row(cb_gamma_idx, gamma_address_generator, c, block_size, tile_bytes, block_size);
-            // Barrier called by read_tiles_by_row with UseBarrier=true above
-            cb_push_back(cb_input_idx, block_size);
-            cb_push_back(cb_dL_out_idx, block_size);
         }
 #endif
     }
