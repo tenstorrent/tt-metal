@@ -7,8 +7,9 @@ Not a test in the usual sense: it asserts nothing about accuracy. It runs each
 requested op over two stimuli per variant and saves ``(src, golden, result)``, so
 the report can compare the base side's results with the head side's lane by lane:
 
-* ``sweep``    -- every finite value of the input format (float32: a stride of
-  them), the same stimuli as the nightly ULP sweep in ``test_unary_sfpu_ulp.py``;
+* ``sweep``    -- every normal value of the input format, and zero on a 16-bit one
+  (float32: a stride of them), the same stimuli as the nightly ULP sweep in
+  ``test_unary_sfpu_ulp.py``; no subnormal, which the unpack path flushes;
 * ``specials`` -- the inputs a sweep never feeds: NaNs, infinities, signed zeros
   and subnormals.
 
@@ -52,7 +53,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.ulp_sweep import golden_input, stimuli_format_for, sweep_spec
+from helpers.ulp_sweep import golden_input, sweep_spec
 
 pytestmark = pytest.mark.accuracy
 
@@ -186,11 +187,10 @@ def test_sfpu_report_accuracy(op_name, in_fmt, out_fmt, approx_mode, dest_acc, k
     classes = None
     if kind == "sweep":
         torch.manual_seed(0)
-        stimuli_format = stimuli_format_for(in_fmt)
         src, tile_cnt, _, _ = generate_stimuli(
-            stimuli_format_A=stimuli_format,
+            stimuli_format_A=in_fmt,
             input_dimensions_A=SWEEP_DIMENSIONS,
-            stimuli_format_B=stimuli_format,
+            stimuli_format_B=in_fmt,
             input_dimensions_B=SWEEP_DIMENSIONS,
             spec_A=sweep_spec(in_fmt),
         )

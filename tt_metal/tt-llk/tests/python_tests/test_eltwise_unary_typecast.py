@@ -71,8 +71,6 @@ _EXCLUDED_PAIRS = {
     (DataFormat.UInt32, DataFormat.Int32),
 }
 
-_BLOCK_FLOAT_FORMATS = (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
-
 # Formats the current architecture's data-format enum actually supports. Used to
 # drop unsupported pairs at collection time so we never generate tests we would
 # otherwise have to skip in the test body.
@@ -93,10 +91,6 @@ TYPECAST_PAIRS = [
     and in_fmt in _ARCH_SUPPORTED_FORMATS
     and out_fmt in _ARCH_SUPPORTED_FORMATS
 ]
-
-
-def _is_block_float(fmt: DataFormat) -> bool:
-    return fmt in _BLOCK_FLOAT_FORMATS
 
 
 def _whole_number_float_spec(high: int) -> StimuliSpec:
@@ -171,8 +165,8 @@ def test_eltwise_unary_typecast(
     #  * float / block-float input: whole numbers so int conversions are exact and
     #    bf16 is lossless; small range when a block-float is involved so the
     #    shared-exponent quantization is (near-)exact per 16-elem block.
-    bfp_involved = _is_block_float(formats.input_format) or _is_block_float(
-        formats.output_format
+    bfp_involved = (
+        formats.input_format.is_block_float() or formats.output_format.is_block_float()
     )
     if formats.input_format.is_integer():
         spec_A = (
@@ -413,7 +407,7 @@ def _build_typecast_config(
     if dest_acc == DestAccumulation.No:
         pack_src = (
             DataFormat.Float16_b
-            if _is_block_float(formats.output_format)
+            if formats.output_format.is_block_float()
             else formats.output_format
         )
         for fmt_config in configuration.formats_config:

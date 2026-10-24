@@ -79,6 +79,8 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
+    # sc1 is sc4's stage 0, so it opens sc4's slots.
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -140,6 +142,10 @@ fi
 if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
+fi
+# tt-run does not forward PREFILL_*: pass a cache-format override to every rank.
+if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
 fi
 echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 

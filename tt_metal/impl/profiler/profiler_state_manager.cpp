@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <thread>
 #include <vector>
 #include "profiler_state_manager.hpp"
@@ -79,13 +80,18 @@ uint32_t get_profiler_dram_bank_size_per_risc_bytes(llrt::RunTimeOptions& rtopti
             profiler_program_support_count.value());
     }
 
-    const uint32_t dram_bank_size_per_risc_bytes =
-        dram_bank_size_per_risc_bytes_single_program * profiler_program_support_count.value();
+    const uint64_t dram_bank_size_per_risc_bytes =
+        static_cast<uint64_t>(dram_bank_size_per_risc_bytes_single_program) * profiler_program_support_count.value();
+    TT_FATAL(
+        dram_bank_size_per_risc_bytes <= std::numeric_limits<uint32_t>::max(),
+        "Profiler program support count {} needs {} B of DRAM per RISC, which does not fit in 32 bits",
+        profiler_program_support_count.value(),
+        dram_bank_size_per_risc_bytes);
 
     rtoptions.set_profiler_program_support_count(profiler_program_support_count.value());
 
     TT_ASSERT(dram_bank_size_per_risc_bytes > kernel_profiler::PROFILER_L1_BUFFER_SIZE);
-    return dram_bank_size_per_risc_bytes;
+    return static_cast<uint32_t>(dram_bank_size_per_risc_bytes);
 }
 
 uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rtoptions) {
@@ -284,36 +290,23 @@ void ProfilerStateManager::start_debug_dump_thread(
 
                 idle_cycles = 0;
                 for (auto* device : active_devices) {
-                    {
-                        auto profiler_it = this->device_profiler_map.find(device->id());
-                        TT_ASSERT(profiler_it != this->device_profiler_map.end());
-                        DeviceProfiler& profiler = profiler_it->second;
-                        profiler.pollDebugDumpResults(
-                            device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
-                    }
-                    constexpr auto state = ProfilerReadState::LAST_FD_READ;
-                    detail::ReadDeviceProfilerResultsInternal(
-                        ctx_,
-                        device->get_mesh_device().get(),
-                        device,
-                        virtual_cores_map.at(device->id()),
-                        state,
-                        {},
-                        was_force_read);
-
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    if (this->env_.get_rtoptions().get_profiler_trace_only() || was_force_read) {
-                        profiler.processResults(
-                            device,
-                            virtual_cores_map.at(device->id()),
-                            state,
-                            ProfilerDataBufferSource::DRAM_AND_L1,
-                            {});
-                    } else {
-                        profiler.processResults(
-                            device, virtual_cores_map.at(device->id()), state, ProfilerDataBufferSource::DRAM, {});
+                    // The kernels are done, but BRISC publishes a core's last chunks in finish_profiler only after it
+                    // has reported completion to dispatch, and stalls there if a buffer is full, so chunks can still
+                    // land while this read runs. Poll again until a poll finds nothing new. Only BRISC and NCRISC
+                    // record NOC events, finish_profiler pushes them first, and each stalls at most once, so 4 polls
+                    // cover the worst case: one before BRISC publishes, BRISC's handover, BRISC's chunk with
+                    // NCRISC's handover, and NCRISC's chunk. Later chunks stay behind the read cursors for the next
+                    // poll.
+                    constexpr uint32_t max_drain_polls = 4;
+                    for (uint32_t poll = 0; poll < max_drain_polls; ++poll) {
+                        const bool found_new_data = profiler.pollDebugDumpResults(
+                            device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
+                        if (!found_new_data && poll > 0) {
+                            break;
+                        }
                     }
                     if (was_force_read && !profiler.device_markers_per_core_risc_map.empty()) {
                         profiler.dumpDeviceResults(/*is_mid_run_dump=*/true);
@@ -336,21 +329,9 @@ void ProfilerStateManager::start_debug_dump_thread(
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
+                    // Kernels may be running, so this must not reset the device's profiler indices: it only parses
+                    // what the riscs have published since the last poll.
                     profiler.pollDebugDumpResults(device, virtual_cores_map.at(device->id()), /*is_final_poll=*/true);
-                    detail::ReadDeviceProfilerResultsInternal(
-                        ctx_,
-                        device->get_mesh_device().get(),
-                        device,
-                        virtual_cores_map.at(device->id()),
-                        ProfilerReadState::LAST_FD_READ,
-                        {},
-                        /*include_l1=*/true);
-                    profiler.processResults(
-                        device,
-                        virtual_cores_map.at(device->id()),
-                        ProfilerReadState::LAST_FD_READ,
-                        ProfilerDataBufferSource::DRAM_AND_L1,
-                        {});
                 }
                 if (auto& noc_debug_state = ctx_.noc_debug_state(); noc_debug_state && !active_devices.empty()) {
                     // Recomputed each pass rather than hoisted, because the aiclk can change at runtime (DVFS).
@@ -362,8 +343,8 @@ void ProfilerStateManager::start_debug_dump_thread(
                 // Discharge the marker set. This is what keeps host memory bounded on a long run: dumpDeviceResults
                 // consumes the markers and its last statement clears device_markers_per_core_risc_map, which
                 // otherwise grows for the whole run (it is only cleared at device close). Safe to clear here because
-                // the set's other job -- deduplicating the repeated parses of one undrained buffer, which is what
-                // gates pushing NOC-debug events.
+                // the set only deduplicates parses within one pass (it gates pushing NOC-debug events), and the read
+                // cursors keep a later pass from parsing the same data again.
                 for (auto* device : active_devices) {
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
