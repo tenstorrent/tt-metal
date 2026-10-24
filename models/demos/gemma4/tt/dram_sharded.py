@@ -134,7 +134,14 @@ def prefill_max_cols_default(mesh_device=None):
 # ``cutoff`` rows (the extra batch dim is iterated by the kernel, reusing CBs).
 # This keeps per_core_M tiny AND avoids the memory blow-up of a chunk+concat
 # (which would need source chunks + a full-size destination simultaneously).
-_PREFILL_CUTOFF = 512 if is_blackhole() else 1024
+# The slab must fill the grid's rows: a 512-row slab is 16 row tiles, which the Blackhole (cols, 10) grid serves with
+# per_core_M = 2 on 8 of its 10 rows (the 0522 profile: every prefill matmul on 56 / 64 cores, at the floor of those
+# cores). Blackhole: grid rows x 8 row tiles (2560 rows; the 8 tiles per core fit the CBs); a prompt the slab does not
+# divide (2048, 8192, ...) takes the remainder path below in chunks of the same size, each filling all rows.
+# Wormhole keeps 1024 rows on its (8,8) grid (32 tiles = 4 per core on all 8 rows). GEMMA4_PREFILL_CUTOFF overrides.
+_PREFILL_CUTOFF = int(
+    os.environ.get("GEMMA4_PREFILL_CUTOFF") or (prefill_grid_default()[1] * 8 * TILE_SIZE if is_blackhole() else 1024)
+)
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
 _PREFILL_M_CHUNK = prefill_grid_default()[1] * 8 * TILE_SIZE
 
@@ -213,10 +220,10 @@ def decode_progcfg(m, k, n, dtype=None):
 
 def activation_memcfg(k, n):
     """WIDTH_SHARDED L1 activation config matching ``decode_progcfg``'s core grid."""
-    rows, cols, num_cores = _decode_core_grid(k, n)
+    grid_rows, cols, num_cores = _decode_core_grid(k, n)
     return ttnn.create_sharded_memory_config(
         shape=(TILE_SIZE, k // num_cores),
-        core_grid=ttnn.CoreGrid(x=cols, y=rows),
+        core_grid=ttnn.CoreGrid(x=cols, y=grid_rows),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -295,6 +302,9 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
         base = prefill_grid_default()
         cols = _best_prefill_cols(n, max_cols if max_cols is not None else base[0])
         grid_size = (cols, base[1])
+    # A short prefill (4 row tiles at 128 tokens) occupies only M/32 of the grid rows: the 2D kernel maps M over the
+    # rows, transpose_mcast is rejected for a sharded weight and the DRAM-sharded kernel takes one row tile only
+    # (measured 2026-10-24), so the small-M grid is not improvable here without a kernel or weight-layout change.
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
     out_subblock_h = 1
@@ -547,7 +557,9 @@ class DramShardedLinear:
         outs = []
         for start in range(0, M, _PREFILL_M_CHUNK):
             end = min(start + _PREFILL_M_CHUNK, M)
-            x_c = ttnn.slice(x_work, [0, 0, start, 0], [1, 1, end, self.k])
+            # a slice over the whole extent is a view of x_work (freeing it would free the caller's activation)
+            whole = start == 0 and end == M
+            x_c = x_work if whole else ttnn.slice(x_work, [0, 0, start, 0], [1, 1, end, self.k])
             pc = self._prefill_pc(end - start)
             outs.append(
                 ttnn.linear(
@@ -558,7 +570,8 @@ class DramShardedLinear:
                     memory_config=out_mc,
                 )
             )
-            x_c.deallocate(True)
+            if not whole:
+                x_c.deallocate(True)
         out = ttnn.concat(outs, dim=-2, memory_config=out_mc)
         for o in outs:
             o.deallocate(True)

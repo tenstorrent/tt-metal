@@ -354,6 +354,13 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     prompt = "The capital of France is"
     input_ids = tokenizer.encode(prompt, return_tensors="pt")  # [1, seq_len]
+    want = int(
+        os.environ.get("GEMMA4_TEST_PROMPT_TOKENS", "0")
+    )  # a long prefill on request (the HF reference on the host)
+    if want > input_ids.shape[1]:
+        body = tokenizer.encode(" " + prompt.lower(), add_special_tokens=False, return_tensors="pt")
+        reps = (want - input_ids.shape[1]) // body.shape[1] + 1
+        input_ids = torch.cat([input_ids, body.repeat(1, reps)], dim=1)[:, :want]
     seq_len = input_ids.shape[1]
     padded_len = ((seq_len + 31) // 32) * 32
     if padded_len > seq_len:
@@ -443,6 +450,22 @@ def test_full_model(mesh_device, reset_seeds, request):
 
     passing, pcc_msg = compare_tensors(tt_compare, hf_compare, pcc_threshold=get_pcc_threshold(request))
     logger.info(f"Full model PCC (seq_len={seq_len}): {pcc_msg}")
+    # the last-token logits (the first generated token's distribution) and its top-1: the prefill gate of a long prompt
+    last_tt, last_hf = tt_compare[0, seq_len - 1].float(), hf_compare[0, seq_len - 1].float()
+    last_pcc = torch.corrcoef(torch.stack([last_tt, last_hf]))[0, 1].item()
+    top1_match = int(last_tt.argmax()) == int(last_hf.argmax())
+    logger.info(
+        f"Full model last-token PCC (seq_len={seq_len}): {last_pcc:.5f}, top-1 match {top1_match} "
+        f"(TT {int(last_tt.argmax())} vs HF {int(last_hf.argmax())})"
+    )
+    if (
+        want
+    ):  # GEMMA4_TEST_PROMPT_TOKENS: the long-prefill gate on the last token (bar GEMMA4_TEST_LAST_PCC, default 0.98)
+        last_bar = float(os.environ.get("GEMMA4_TEST_LAST_PCC", "0.98"))
+        assert last_pcc >= last_bar, f"last-token logits PCC {last_pcc:.5f} < {last_bar} at {seq_len} tokens"
+        assert (
+            top1_match
+        ), f"last-token top-1 differs at {seq_len} tokens: TT {int(last_tt.argmax())} vs HF {int(last_hf.argmax())}"
 
     # Per-token PCC — shows which prompt positions drag down the full-sequence metric.
     from models.common.utility_functions import comp_pcc
@@ -467,7 +490,11 @@ def test_full_model(mesh_device, reset_seeds, request):
         f"TT={tt_last_tok} ('{tokenizer.decode([tt_last_tok])}')"
     )
 
-    assert passing, f"Full model PCC too low: {pcc_msg}"
+    if want:  # the long prefill (GEMMA4_TEST_PROMPT_TOKENS): the full-logits PCC over all rows is informational
+        logger.info(f"Full model PCC over {seq_len} rows not gated (long-prompt mode): {pcc_msg}")
+
+    else:
+        assert passing, f"Full model PCC too low: {pcc_msg}"
 
 
 # ── Full Model DECODE PCC Test ───────────────────────────────────────────
