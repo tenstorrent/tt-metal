@@ -152,6 +152,25 @@ def test_every_stage_measured_still_stops_the_loop(harness):
     assert harness.runs == []
 
 
+def test_it_does_not_re_run_at_a_region_the_run_already_held(harness, monkeypatch):
+    """The ask is a FLOOR (perf_adapter.resolve_trace_region), so a model declaring more than the ask
+    is already holding more -- and the overflow line says how much. Sized off the ask alone, the loop
+    reads the ceiling as a step up from 200 MiB and spends a 25-minute re-run reserving a region the
+    run already had."""
+    held = 1 << 30  # what the model declares and the run therefore reserved
+    monkeypatch.setattr(m, "_TRACE_REGION_MAX", held)  # ... which is also the DRAM ceiling here
+    _grow(_bytes_msg(2 << 30, held) + _ZERO)
+    assert harness.runs == [], "it already held the ceiling -- the trace genuinely does not fit"
+
+
+def test_it_still_grows_past_a_region_bigger_than_the_ask(harness):
+    """The other half of the same rule: holding more than the ask is not a reason to stop."""
+    held = 1 << 30
+    want = 2 << 30
+    _grow(_bytes_msg(want, held) + _ZERO)
+    assert harness.runs and harness.runs[0] >= want, harness.runs
+
+
 def test_a_grow_never_returns_less_than_it_was_handed(harness):
     """A re-run that comes back worse (a bigger region, and now nothing measures) must not be what the
     caller gets: growing may add rows, never cost the ones an earlier attempt already had."""

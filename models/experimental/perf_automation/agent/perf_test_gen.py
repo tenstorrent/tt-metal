@@ -421,6 +421,19 @@ def _needed_trace_region(text: str):
     return int(max(over) * 1.25) if over else None
 
 
+def _reported_trace_region(text: str):
+    """The region the device says was ACTUALLY allocated, or None when it reports none.
+
+    THE ASK IS NOT THE VALUE. TT_PERF_TRACE_REGION is a floor: a model that declares a bigger region
+    keeps its own (perf_adapter.resolve_trace_region), so a run can be holding 1 GiB while the ask
+    still reads 192 MiB. Doubling the ask then spends re-runs -- 25 minutes each on a pipeline this
+    size -- climbing back to a region the run already had. The overflow line states both halves, what
+    the capture wanted and what was allocated, so the loops below grow from the second.
+    """
+    have = [int(alloc) for _n, alloc in _TRACE_REGION_NEED_RE.findall(text or "")]
+    return max(have) if have else None
+
+
 _DEVICE_DISRUPTION_RE = re.compile(
     r"AICLK failed to settle|clamped by max-arbiter|Sysmem mapped at unexpected NOC|"
     r"pin_or_map_sysmem_to_device|failed to open device|could not open device|GetPCIeDeviceID|"
@@ -644,6 +657,8 @@ def _settle_perf_node(_once, ev, max_disrupt, ended_for_heat):
                 int(ev.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or 0)
                 or _DEFAULT_TRACE_REGION_BYTES
             )
+            # ... or what the run actually reserved, when that is larger than what it was asked for.
+            cur = max(cur, _reported_trace_region(out) or 0)
             need = _needed_trace_region(out)
             if need is None:
                 if _MESH_TRACE_OVERFLOW_RE.search(out or ""):

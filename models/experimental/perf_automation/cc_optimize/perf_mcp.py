@@ -2959,7 +2959,12 @@ def _grow_trace_region_and_retry(cmd, repo, env, out, r):
     never cost the caller ones an earlier attempt already had.
     """
     try:
-        from agent.perf_test_gen import _MESH_TRACE_OVERFLOW_RE, _needed_trace_region, _TRACE_REGION_GROW_ROUNDS
+        from agent.perf_test_gen import (
+            _MESH_TRACE_OVERFLOW_RE,
+            _needed_trace_region,
+            _reported_trace_region,
+            _TRACE_REGION_GROW_ROUNDS,
+        )
         from agent.stage_seams import parse_unmeasured
         from agent.tracy_tool import per_token_readings
     except Exception:  # noqa: BLE001
@@ -2989,6 +2994,9 @@ def _grow_trace_region_and_retry(cmd, repo, env, out, r):
         if any(v > 0 for v in readings) and not lost:
             break  # a real trace ran and every stage had the room it asked for -- nothing to grow
         cur = int(env.get("TT_PERF_TRACE_REGION") or os.environ.get("TT_PERF_TRACE_REGION") or _TRACE_REGION_DEFAULT)
+        # ... or what the run actually reserved, when the model's own declaration is larger than the
+        # ask (perf_test_gen._reported_trace_region): doubling the ask climbs back to where it started.
+        cur = max(cur, _reported_trace_region(text) or 0)
         need = _needed_trace_region(text)
         if readings and need is None and not lost and not _MESH_TRACE_OVERFLOW_RE.search(text):
             break  # it finished and measured nothing, but not for want of trace space
