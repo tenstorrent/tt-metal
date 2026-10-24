@@ -59,17 +59,32 @@ std::vector<Tensor> allocate_outputs(
     TT_FATAL(
         supplied_outputs.empty() || supplied_outputs.size() == n,
         "fusion dispatch requires one optional binding per output");
-    TT_FATAL(shared_output_map.empty() || shared_output_map.size() == n, "Invalid shared output map");
-    std::vector<std::optional<Tensor>> bound(n);
+    TT_FATAL(
+        shared_output_map.empty() || shared_output_map.size() == n,
+        "shared_output_map size ({}) must match output_specs size ({})",
+        shared_output_map.size(),
+        n);
+    std::vector<std::optional<Tensor>> bound(supplied_outputs.empty() ? 0 : n);
     for (size_t i = 0; i < supplied_outputs.size(); ++i) {
         if (!supplied_outputs[i].has_value()) {
             continue;
         }
         const auto& tensor = supplied_outputs[i].value();
+        if (tensor.storage_type() == StorageType::DEVICE &&
+            (!tensor.is_allocated() || !tensor.device_storage().is_root_allocated() ||
+             !tensor.device_storage().is_uniform_storage())) {
+            continue;
+        }
         TT_FATAL(
-            tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() &&
-                tensor.device() == mesh_device && tensor.tensor_spec() == output_specs[i],
+            tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated() && tensor.device() == mesh_device &&
+                tensor.tensor_spec() == output_specs[i],
             "fusion dispatch output {} must be allocated on the cached device with the cached TensorSpec",
+            i);
+        TT_FATAL(
+            tensor.tensor_spec().tile().get_transpose_within_face() ==
+                    output_specs[i].tile().get_transpose_within_face() &&
+                tensor.tensor_spec().tile().get_transpose_of_faces() == output_specs[i].tile().get_transpose_of_faces(),
+            "fusion dispatch output {} must have the cached tile transpose flags",
             i);
         const auto canonical = shared_output_map.empty() ? i : shared_output_map[i];
         TT_FATAL(canonical <= i, "Invalid canonical output index");
@@ -84,18 +99,16 @@ std::vector<Tensor> allocate_outputs(
 
     if (shared_output_map.empty()) {
         for (size_t i = 0; i < n; ++i) {
-            outputs.push_back(bound[i].has_value() ? *bound[i] : ttnn::create_device_tensor(output_specs[i], mesh_device));
+            outputs.push_back(
+                !bound.empty() && bound[i].has_value() ? *bound[i]
+                                                       : ttnn::create_device_tensor(output_specs[i], mesh_device));
         }
     } else {
-        TT_FATAL(
-            shared_output_map.size() == n,
-            "shared_output_map size ({}) must match output_specs size ({})",
-            shared_output_map.size(),
-            n);
         for (size_t i = 0; i < n; ++i) {
             if (shared_output_map[i] == static_cast<std::uint32_t>(i)) {
                 outputs.push_back(
-                    bound[i].has_value() ? *bound[i] : ttnn::create_device_tensor(output_specs[i], mesh_device));
+                    !bound.empty() && bound[i].has_value() ? *bound[i]
+                                                           : ttnn::create_device_tensor(output_specs[i], mesh_device));
             } else {
                 auto canonical = shared_output_map[i];
                 TT_FATAL(
@@ -237,6 +250,36 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
         addresses are recorded as semaphore slots (patched separately from
         tensor addresses on each dispatch).
         )doc");
+
+    mod.def(
+        "_descriptor_references_tensor",
+        [](const tt::tt_metal::ProgramDescriptor& desc, const Tensor& tensor) {
+            const auto* buffer = tensor.buffer();
+            const auto address = buffer->address();
+            for (const auto& kernel : desc.kernels) {
+                for (const auto& [core, args] : kernel.runtime_args) {
+                    for (const auto value : args) {
+                        if (value == address) {
+                            return true;
+                        }
+                    }
+                }
+                for (const auto value : kernel.common_runtime_args) {
+                    if (value == address) {
+                        return true;
+                    }
+                }
+            }
+            for (const auto& cb : desc.cbs) {
+                // Compare raw pointers only: old descriptor pointers may be stale.
+                if (cb.buffer == buffer || cb.tensor == &tensor.mesh_tensor()) {
+                    return true;
+                }
+            }
+            return false;
+        },
+        nb::arg("program_descriptor"),
+        nb::arg("tensor"));
 
     mod.def(
         "cb_has_backing",
