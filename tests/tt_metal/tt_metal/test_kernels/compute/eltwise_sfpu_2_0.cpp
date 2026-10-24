@@ -24,6 +24,15 @@
 #if (DST_TILE_START != 0) && (defined(SFPU_OP_CHAIN_0) || defined(SFPU_BINARY_OP) || defined(SFPU_TERNARY_OP))
 #error "DST_TILE_START is a unary datacopy knob: SFPU chains target DEST tile 0, binary / ternary inputs sit at 1 / 2"
 #endif
+// DEST tile packed after the SFPU chain: the ternary result sits at 3; ops that write the tile after their
+// input (ema, reshuffle_rows) set it to 1.
+#ifndef SFPU_OUT_DST
+#if defined(SFPU_TERNARY_OP)
+#define SFPU_OUT_DST 3
+#else
+#define SFPU_OUT_DST DST_TILE_START
+#endif
+#endif
 
 void kernel_main() {
     const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
@@ -105,11 +114,7 @@ void kernel_main() {
 #endif
             tile_regs_commit();
             tile_regs_wait();
-#if defined(SFPU_TERNARY_OP)
-            pack_tile(/*dst_index=*/3, out_id);
-#else
-            pack_tile(/*dst_index=*/DST_TILE_START, out_id);
-#endif
+            pack_tile(/*dst_index=*/SFPU_OUT_DST, out_id);
             tile_regs_release();
 
             dfb_out.push_back(1);
