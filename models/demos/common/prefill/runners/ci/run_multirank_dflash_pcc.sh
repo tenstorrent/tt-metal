@@ -26,14 +26,15 @@ export PYTHONPATH="${TT_METAL_HOME}"
 MANIFEST_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_d_p/tt/runners/manifests"
 MGD_DIR="${TT_METAL_HOME}/models/demos/common/prefill/runners/topology_configuration/ci"
 
-# Two lengths, not one. The request runs to MAX_SEQ_LEN so the drafter is timed at the depth the
+# Two lengths, not one. The request runs to REQUEST_LEN so the drafter is timed at the depth the
 # verifier legs are timed at, while PCC is gated on GOLDEN_LEN: the drafter golden spans 55k and every
 # position past it is unverifiable. Past the trace's own tokens the producer's pool repeats them, which
 # makes the tail a throughput workload and nothing else -- it must never be PCC'd.
 CHUNK_SIZE=5120
 GOLDEN_LEN=56320
-MAX_SEQ_LEN=256000
-REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+MAX_SEQ_LEN=286720
+REQUEST_LEN=256000
+REAL_CHUNKS=$((REQUEST_LEN / CHUNK_SIZE))
 # Measured the way run_multirank_pcc.sh measures the plain Kimi legs, so the two sets of numbers compare:
 # throwaway chunks first. DFlash is traced-only, so without them every rank captures its trace when the
 # first timed chunk arrives.

@@ -20,7 +20,7 @@ CHUNK_SIZE=5120
 # throwaway chunks first, which keeps JIT compile and trace capture off the timed request.
 WARMUP_CHUNKS=10
 GOLDEN_LEN=56320
-MAX_SEQ_LEN=${GOLDEN_LEN}
+MAX_SEQ_LEN=81920
 # Scaled-FP8 KV cache trunk floor, same as run_multirank_pcc.sh's glm53 floor.
 PCC_THRESHOLD=0.83
 # The MTP levels are decoder blocks chained on the trunk output, so their KV inherits the trunk error
@@ -39,7 +39,7 @@ case "${CONFIG}" in
   *) echo "unknown config '${CONFIG}' (expected sc1 or sc4)" >&2; exit 2 ;;
 esac
 
-# The manifest count is the sc4 ceiling at the manifest's 1,044,480 context. The ranks take it through
+# The manifest count is the sc4 ceiling at the manifest's 1,064,960 context. The ranks take it through
 # setdefault but allocate it at MAX_SEQ_LEN, so the leg runs the full slot pool without gating capacity.
 # sc1 runs all 78 layers on one rank, so it overrides down to one user. The export has to be explicit:
 # the rank shell receives a fixed export list, so a value exported into this script does not reach it.
@@ -82,7 +82,7 @@ RANKLOGS="${MR_DIR}/ranklogs"
 TIMING_DIR="${MR_DIR}/timing"
 mkdir -p "${TIMING_DIR}"
 
-REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
+REAL_CHUNKS=$((GOLDEN_LEN / CHUNK_SIZE))
 # Start, ~50k, midpoint and tail: run_multirank_pcc.sh's probes over this leg's one window.
 PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((REAL_CHUNKS / 2 - 1))" \
   "$((REAL_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
