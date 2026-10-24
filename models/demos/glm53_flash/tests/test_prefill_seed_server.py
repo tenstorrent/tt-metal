@@ -80,8 +80,9 @@ def _prefill(model, ids: list[int]):
     """``(streams, logits_last, owner_row)`` of a whole prompt for slot 0: one eager prefill up to ``CHUNK`` tokens,
     16 K chunks above (``GLM53MeshModel.prefill_chunked``)."""
     t = torch.tensor([int(v) for v in ids], dtype=torch.int64)
-    if len(ids) > CHUNK:
-        return model.prefill_chunked(t, user=0, chunk=CHUNK)
+    chunk = int(os.environ.get("GLM53F_PREFILL_CHUNK", CHUNK))  # per call: the diagnosis ops' env can A/B it
+    if len(ids) > chunk:
+        return model.prefill_chunked(t, user=0, chunk=chunk)
     return model.prefill(t, user=0)
 
 
@@ -146,6 +147,21 @@ def _find_sub(ids: list[int], sub: list[int]) -> int:
     return -1
 
 
+def _dram_view(mesh_device) -> dict:
+    """Per-bank DRAM allocator state in MB (G53F-0171: a request OOMed with 30 MB of contiguous DRAM left per bank
+    after ~10 long requests -- leak vs fragmentation is read from this in every reply)."""
+    try:
+        v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+        mb = lambda b: round(b / 1e6, 1)
+        return {
+            "dram_alloc_mb": mb(v.total_bytes_allocated_per_bank),
+            "dram_free_mb": mb(v.total_bytes_free_per_bank),
+            "dram_largest_free_mb": mb(v.largest_contiguous_bytes_free_per_bank),
+        }
+    except Exception as e:  # noqa: BLE001 -- diagnosis only
+        return {"dram_view_error": repr(e)}
+
+
 def _recv(sock) -> tuple[dict, bytes]:
     (hl,) = struct.unpack("<I", _recv_exact(sock, 4))
     header = json.loads(_recv_exact(sock, hl))
@@ -203,7 +219,7 @@ def test_prefill_seed_server(mesh_device):
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind(("0.0.0.0", PORT))
     srv.listen(64)
-    logger.info(f"[seed-server] READY on port {PORT} (max_seq_len {MAX_SEQ})")
+    logger.info(f"[seed-server] READY on port {PORT} (max_seq_len {MAX_SEQ}) {_dram_view(mesh_device)}")
     ranks: dict[int, socket.socket] = {}
     driver = None
     pending = [srv]
@@ -308,6 +324,7 @@ def test_prefill_seed_server(mesh_device):
                     "found": int(top.indices[0]) == int(want),
                     "env": hdr.get("env") or {},
                     "trace": trace.close() if trace is not None else None,
+                    **_dram_view(mesh_device),
                 }
                 logger.info(f"[seed-server] needle: {rep}")
                 _send(s, rep)
@@ -333,6 +350,7 @@ def test_prefill_seed_server(mesh_device):
                         "top_vals": top.values.tolist(),
                         "cands": {str(int(t)): float(vec[int(t)]) for t in hdr.get("cands", [])},
                         "trace": trace.close() if trace is not None else None,
+                        **_dram_view(mesh_device),
                     },
                 )
                 continue
@@ -366,11 +384,6 @@ def test_prefill_seed_server(mesh_device):
             ttnn.deallocate(st)
             # device -> host export on this thread (ttnn reads stay single-threaded), then the pushes in parallel
             bodies = {}
-            for L in layers:
-                dec = decs[L]
-                state = _dsa_state_host(model, dec, sp) if dec.cache is not None else _kda_state_host(model, dec)
-                bodies[L] = save({k: v.contiguous() for k, v in state.items()})
-            t_exp = time.perf_counter()
 
             def push(L):
                 tx = time.perf_counter()
@@ -378,8 +391,21 @@ def test_prefill_seed_server(mesh_device):
                 ack, _ = _recv(ranks[L])
                 return L, len(bodies[L]), time.perf_counter() - tx, ack
 
+            # GLM53F_SEED_OVERLAP=1 (default): each layer's push starts as soon as its export is done (the pushes are
+            # socket I/O on the pool's threads; the ttnn reads stay on this thread), so push_ack_s is only the tail
+            # after the last export (G53F-0171: 8.3 s export + 8.8 s push at 1M back to back); 0 = export all first
+            overlap = os.environ.get("GLM53F_SEED_OVERLAP", "1") == "1"
+            futs = []
+            for L in layers:
+                dec = decs[L]
+                state = _dsa_state_host(model, dec, sp) if dec.cache is not None else _kda_state_host(model, dec)
+                bodies[L] = save({k: v.contiguous() for k, v in state.items()})
+                if overlap:
+                    futs.append(pool.submit(push, L))
+            t_exp = time.perf_counter()
+
             try:
-                outs = list(pool.map(push, layers))
+                outs = [f.result() for f in futs] if overlap else list(pool.map(push, layers))
             except (ConnectionError, OSError, ValueError) as e:  # a rank died mid-push: this ring is gone
                 try:
                     _send(s, {"op": "error", "request": request, "error": repr(e)})
@@ -398,6 +424,7 @@ def test_prefill_seed_server(mesh_device):
                 bytes=nbytes,
                 next_token=nxt,
                 server_s=round(t3 - t1, 4),
+                **_dram_view(mesh_device),
             )
             logger.info(f"[seed-server] request {request}: {rep}")
             _send(s, rep)
