@@ -5,10 +5,16 @@
 #include <gtest/gtest.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <bit>
+#include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/mock_device/mock_device.hpp>
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -378,6 +384,114 @@ TEST(MetalEnv, FailedCreateUnitMeshesDoesNotLeakContext) {
     }
 
     EXPECT_EQ(next_free_context_id(mock_path).get(), baseline.get());
+}
+
+// --- MeshDevice device properties ---
+
+namespace {
+
+void expect_same_properties(const MetalDeviceProperties& expected, const MetalDeviceProperties& actual) {
+    EXPECT_EQ(actual.arch(), expected.arch());
+    EXPECT_EQ(actual.arch_name(), expected.arch_name());
+    EXPECT_EQ(actual.node_local_mem_size(), expected.node_local_mem_size());
+    EXPECT_EQ(actual.dram_alignment(), expected.dram_alignment());
+    EXPECT_EQ(actual.node_local_mem_alignment(), expected.node_local_mem_alignment());
+    EXPECT_EQ(actual.num_dataflow_buffers(), expected.num_dataflow_buffers());
+    EXPECT_EQ(actual.max_worker_node_local_mem_unreserved_size(), expected.max_worker_node_local_mem_unreserved_size());
+    EXPECT_EQ(actual.sfpu_eps(), expected.sfpu_eps());
+    EXPECT_EQ(std::bit_cast<uint32_t>(actual.sfpu_nan()), std::bit_cast<uint32_t>(expected.sfpu_nan()));
+    EXPECT_EQ(actual.sfpu_inf(), expected.sfpu_inf());
+}
+
+void expect_mesh_matches(const distributed::MeshDevice& mesh, const MetalDeviceProperties& expected) {
+    expect_same_properties(expected, experimental::get_device_properties(mesh));
+    for (const auto& coord : distributed::MeshCoordinateRange(mesh.shape())) {
+        SCOPED_TRACE(::testing::Message() << "coord " << coord);
+        expect_same_properties(expected, experimental::get_device_properties(mesh, coord));
+    }
+}
+
+MetalEnvDescriptor wormhole_n300_mock_descriptor() {
+    return {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)};
+}
+
+struct LegacyMockCleanup {
+    bool active = false;
+    ~LegacyMockCleanup() {
+        if (active) {
+            experimental::disable_mock_mode();
+        }
+    }
+};
+
+}  // namespace
+
+TEST(MeshDeviceProperties, ExplicitEnvMatchesEnv) {
+    MetalEnv env(wormhole_n300_mock_descriptor());
+    auto mesh =
+        distributed::MeshDevice::open_mesh_device(env, distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+    ASSERT_NE(mesh, nullptr);
+
+    const auto props = experimental::get_device_properties(*mesh);
+    EXPECT_EQ(props.arch(), tt::ARCH::WORMHOLE_B0);
+    expect_mesh_matches(*mesh, env.get_device_properties());
+
+    mesh->close();
+}
+
+TEST(MeshDeviceProperties, LegacyOpenMatchesEnv) {
+    LegacyMockCleanup cleanup;
+    experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, /*num_chips=*/2);
+    cleanup.active = true;
+
+    auto mesh = distributed::MeshDevice::create(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+    ASSERT_NE(mesh, nullptr);
+
+    EXPECT_EQ(experimental::get_device_properties(*mesh).arch(), tt::ARCH::WORMHOLE_B0);
+    expect_mesh_matches(*mesh, MetalContext::instance().get_env().get_device_properties());
+
+    mesh->close();
+}
+
+TEST(MeshDeviceProperties, OutOfRangeCoordinateThrows) {
+    MetalEnv env(wormhole_n300_mock_descriptor());
+    auto mesh =
+        distributed::MeshDevice::open_mesh_device(env, distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+    ASSERT_NE(mesh, nullptr);
+
+    EXPECT_THROW(experimental::get_device_properties(*mesh, distributed::MeshCoordinate(0, 2)), std::runtime_error);
+    EXPECT_THROW(experimental::get_device_properties(*mesh, distributed::MeshCoordinate(1, 0)), std::runtime_error);
+
+    mesh->close();
+}
+
+TEST(MeshDeviceProperties, SubmeshAndUnitMesh) {
+    {
+        MetalEnv env(wormhole_n300_mock_descriptor());
+        auto mesh = distributed::MeshDevice::open_mesh_device(
+            env, distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+        ASSERT_NE(mesh, nullptr);
+
+        // Submesh coordinates are local: {0, 1} exists in the parent but not in a 1x1 submesh.
+        auto submesh = mesh->create_submesh(distributed::MeshShape(1, 1));
+        ASSERT_NE(submesh, nullptr);
+        expect_mesh_matches(*submesh, env.get_device_properties());
+        EXPECT_THROW(
+            experimental::get_device_properties(*submesh, distributed::MeshCoordinate(0, 1)), std::runtime_error);
+
+        submesh.reset();
+        mesh->close();
+    }
+    {
+        MetalEnv env(wormhole_n300_mock_descriptor());
+        auto unit_mesh = distributed::MeshDevice::open_unit_mesh(env, 0);
+        ASSERT_NE(unit_mesh, nullptr);
+        expect_same_properties(env.get_device_properties(), experimental::get_device_properties(*unit_mesh));
+        expect_same_properties(
+            env.get_device_properties(),
+            experimental::get_device_properties(*unit_mesh, distributed::MeshCoordinate(0, 0)));
+        unit_mesh->close();
+    }
 }
 
 }  // namespace tt::tt_metal
