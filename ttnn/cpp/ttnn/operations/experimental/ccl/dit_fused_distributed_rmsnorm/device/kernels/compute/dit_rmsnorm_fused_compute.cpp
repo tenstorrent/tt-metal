@@ -546,10 +546,6 @@ void kernel_main() {
                                 if constexpr (has_weight) {
                                     cb_weight.wait_front(group_abs_base + col_tile + tiles_in_block);
                                     cb_mul_rms_result.wait_front(block_size);
-                                    if constexpr (per_token_weight == 0) {
-                                        reconfig_data_format(mul_rms_result_cb, weight_cb);
-                                        mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
-                                    }
                                     cb_mul_weight_result.reserve_back(block_size);
                                     tile_regs_acquire();
                                     for (uint32_t i = 0; i < tiles_in_block; i++) {
@@ -690,10 +686,6 @@ void kernel_main() {
                         if constexpr (has_weight) {
                             cb_weight.wait_front(col_tile + block_size);
                             cb_mul_rms_result.wait_front(block_size);
-                            if constexpr (per_token_weight == 0) {
-                                reconfig_data_format(mul_rms_result_cb, weight_cb);
-                                mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
-                            }
                             cb_mul_weight_result.reserve_back(block_size);
                             tile_regs_acquire();
                             for (uint32_t i = 0; i < block_size; i++) {
@@ -824,10 +816,6 @@ void kernel_main() {
                     // tiles, with this row's slice at the front. Use mul_tiles
                     // directly (no broadcast) and pop the row's slice at end of
                     // row.
-                    if constexpr (per_token_weight == 0) {
-                        reconfig_data_format(mul_rms_result_cb, weight_cb);
-                        mul_bcast_rows_init(mul_rms_result_cb, weight_cb);
-                    }
 
                     for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                         const uint32_t tiles_in_block =

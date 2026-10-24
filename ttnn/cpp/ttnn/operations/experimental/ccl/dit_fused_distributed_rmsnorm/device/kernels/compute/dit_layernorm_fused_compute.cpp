@@ -383,10 +383,6 @@ void kernel_main() {
                 if constexpr (has_weight != 0) {
                     cb_weight.wait_front(col_tile + block_size);
                     cb_norm_result.wait_front(block_size);
-                    if constexpr (per_token_weight == 0) {
-                        reconfig_data_format(norm_result_cb, weight_cb);
-                        mul_bcast_rows_init(norm_result_cb, weight_cb);
-                    }
                     cb_weight_result.reserve_back(block_size);
                     tile_regs_acquire();
                     for (uint32_t i = 0; i < block_size; i++) {
@@ -490,10 +486,6 @@ void kernel_main() {
 
             // Sub-phase C: * weight (gamma).
             if constexpr (has_weight != 0) {
-                if constexpr (per_token_weight == 0) {
-                    reconfig_data_format(norm_result_cb, weight_cb);
-                    mul_bcast_rows_init(norm_result_cb, weight_cb);
-                }
                 for (uint32_t col = 0; col < num_tile_cols; col += block_size) {
                     const uint32_t n = (col + block_size <= num_tile_cols) ? block_size : (num_tile_cols - col);
                     // whole-row weight: cumulative wait_front; per-batch offsets into this batch's
