@@ -3,9 +3,11 @@
 """EP experts under lane-sharded batches on a (2,4) block (tp=4 over axis 1, ep=2 = lanes over axis 0):
 lane-parallel rows, single-owner prefill for every owner lane, decode-shaped rows, and the served
 interleaving (owner prefill -> decode -> other owner prefill -> decode), each against the HF experts."""
+import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.config import MeshConfig, ModeConfig
 from models.demos.gemma4.tt.ccl import CCLManager
 from models.demos.gemma4.tt.experts import Gemma4ExpertConfig, Gemma4Experts
@@ -14,6 +16,7 @@ from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
     get_pcc_threshold,
+    lanes_fabric_config,
     parametrize_mesh_with_fabric,
     skip_if_not_moe,
 )
@@ -227,3 +230,65 @@ def test_traced_decode_rows_around_eager_prefill(mesh_device, reset_seeds, reque
         )
     _replay(hidden_d, routing_d, idx_d, wts_d, "replay after lane-parallel prefill")
     ttnn.release_trace(mesh_device, trace_id)
+
+
+def _build_engine(mesh_device):
+    """The lane engine's own orientation on any (R, C) mesh: TP over the rows (axis 0), the C columns are the lanes and
+    the EP axis, fractured dense weights, the decode MoE kernel on (frame 128 = one 32-row tile per lane over 2 rows on
+    the (2,4) block; the Galaxy's default frame on the (8,4)). This is the layout the served Galaxy entry and the (2,4)
+    block emulation run, as opposed to ``_build``'s lanes-over-rows (2,4) case."""
+    hf_text_config = TestFactory.create_hf_text_config()
+    hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
+    hf_experts = hf_layer.experts
+    state_dict = {
+        "gate_up_proj": hf_experts.gate_up_proj.data.clone(),
+        "down_proj": hf_experts.down_proj.data.clone(),
+    }
+    hf_config = TestFactory.create_hf_config()
+    tp, ep = mesh_device.shape[0], mesh_device.shape[1]
+    mesh_config = MeshConfig(
+        mesh_device.shape,
+        decode=ModeConfig(tp=tp, ep=ep),
+        prefill=ModeConfig(tp=tp, ep=ep),
+        tp_axis=0,
+        weight_fracture=True,
+    )
+    mesh_config.lane_sharded = True
+    experts = Gemma4Experts(
+        mesh_device=mesh_device,
+        config=Gemma4ExpertConfig(hf_config),
+        state_dict=state_dict,
+        ccl_manager=CCLManager(mesh_device, num_links=1),
+        mesh_config=mesh_config,
+        program_config=None,
+        weight_dtype=ttnn.bfloat8_b,
+    )
+    assert experts.moe_decode is not None, "the engine layout runs the decode MoE kernel"
+    return hf_config, hf_experts, mesh_config, experts
+
+
+@skip_if_not_moe
+@pytest.mark.skipif(not is_blackhole(), reason="the decode MoE kernel is Blackhole-only")
+@parametrize_mesh_with_fabric(
+    mesh_shapes=[(2, 4), (8, 4)],
+    device_params_extra={"fabric_config": lanes_fabric_config(), "l1_small_size": 65536},
+)
+def test_single_owner_prefill_every_lane_engine_layout(mesh_device, reset_seeds, request, monkeypatch):
+    """A 128-token single-user prefill owned by each lane in turn through the decode MoE kernel, in the engine's own
+    orientation (TP over the rows, lanes over the columns). On the (2,4) block the full model's eager prefill passed for
+    lane 0 and hung on lane 1 (2026-10-24 devq 0593: fetch-queue timeout after lane 1's call was enqueued); this is the
+    one-layer version of that sequence."""
+    monkeypatch.setenv("GEMMA4_MOE_DECODE_KERNEL", "1")
+    if tuple(mesh_device.shape) == (2, 4):
+        monkeypatch.setenv("GEMMA4_MOE_DECODE_FRAME", "128")
+    rows = 128  # one user's 128-token prompt on the owner lane
+    hf_config, hf_experts, mesh_config, experts = _build_engine(mesh_device)
+    lanes = mesh_config.lanes
+    hidden, routing, idx, wts = _inputs(hf_config, lanes, rows, seed=11)
+    for owner in range(lanes):
+        mesh_config._g4_single_lane_prefill_owner = owner
+        per_lane = _run(experts, mesh_device, mesh_config, hidden, routing)
+        ref = _ref(hf_experts, hidden, idx, wts, owner, rows)
+        for lane in range(lanes):
+            _check(per_lane[lane], ref, request, f"engine layout owner {owner} seen from lane {lane}")
+    mesh_config._g4_single_lane_prefill_owner = None
