@@ -493,9 +493,8 @@ ALWI void fast_tilize_block_body(
 template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void fast_tilize_block(
     uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
-#ifdef ARCH_WORMHOLE
-    reconfig_data_format_srcb(icb);
-#endif
+    reconfig_data_format(icb, icb);
+    pack_reconfig_data_format(ocb);
     fast_tilize_detail::fast_tilize_init_impl<true, is_fp32_dest_acc_en>(icb, block, ocb, __builtin_LINE());
     fast_tilize_detail::fast_tilize_block_body<is_fp32_dest_acc_en>(icb, block, ocb, input_tile_index, output_tile_index);
     fast_tilize_uninit<is_fp32_dest_acc_en>(icb, ocb, block);
