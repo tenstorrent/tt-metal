@@ -148,7 +148,7 @@ def decode_forward(
     heads_fused = (
         decode_flag("GEMMA4_QKV_HEADS_FUSED") == "1"
         and fused_rope_ok
-        and int(config.head_dim) <= 256
+        and int(config.head_dim) % 64 == 0
         and not xqkv.is_sharded()
         and xqkv.memory_config().buffer_type == ttnn.BufferType.L1
     )

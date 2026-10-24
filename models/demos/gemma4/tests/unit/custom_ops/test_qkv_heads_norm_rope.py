@@ -4,6 +4,8 @@
 vs the shipped chain (nlp_create_qkv_heads_decode -> QkvNormRope) and the torch golden, single chip, at the dense
 per-chip head counts (31B / 12B at TP=4 / TP=8)."""
 
+import os
+
 import pytest
 import torch
 
@@ -27,30 +29,35 @@ def _cos_sin(B, D, seed=0):
     return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)  # [32, D] rows
 
 
-@pytest.mark.parametrize(
-    "B, hq, hkv, D",
-    [
-        (32, 8, 4, 256),
-        (1, 8, 4, 256),
-        (8, 8, 4, 256),
-        (32, 4, 2, 256),
-        (32, 2, 1, 256),
-        (1, 2, 1, 256),
-        (32, 8, 1, 512),
-        (32, 4, 1, 512),
-    ],
-    ids=[
-        "31b_tp4_b32",
-        "31b_tp4_b1",
-        "31b_tp4_b8",
-        "31b_tp8_12b_tp4",
-        "12b_tp8",
-        "12b_tp8_b1",
-        "31b_tp4_global",
-        "12b_tp4_global",
-    ],
-)
-@pytest.mark.parametrize("grid", [None, "8x8"], ids=["device_grid", "grid8x8"])
+CI = os.environ.get("CI") == "true"
+SHAPES = {
+    "31b_tp4_b32": (32, 8, 4, 256),
+    "31b_tp4_b1": (1, 8, 4, 256),
+    "31b_tp4_b8": (8, 8, 4, 256),
+    "31b_tp8_12b_tp4": (32, 4, 2, 256),
+    "12b_tp8": (32, 2, 1, 256),
+    "12b_tp8_b1": (1, 2, 1, 256),
+    "31b_tp4_global": (32, 8, 1, 512),
+    "12b_tp4_global": (32, 4, 1, 512),
+    "31b_global_b1": (1, 8, 1, 512),
+    "12b_global_b1": (1, 4, 1, 512),
+}
+CI_SHAPES = ("31b_tp4_b32", "31b_tp4_b1", "12b_tp8", "31b_tp4_global", "31b_global_b1")
+
+
+def _cases():
+    """(B, hq, hkv, D, forced grid): the full sweep locally; under CI=true (the ~60 s budget of a one-chip unit
+    test) the dense tp4 shapes at b32 / b1 / global on the device grid plus one forced-8x8 case."""
+    out = []
+    for name, (B, hq, hkv, D) in SHAPES.items():
+        for grid, g_id in ((None, "device_grid"), ("8x8", "grid8x8")):
+            in_ci = name in CI_SHAPES and (grid is None or name == "31b_tp4_b32")
+            marks = [] if in_ci or not CI else [pytest.mark.skip(reason="CI subset: the dense tp4 shapes")]
+            out.append(pytest.param(B, hq, hkv, D, grid, id=f"{name}-{g_id}", marks=marks))
+    return out
+
+
+@pytest.mark.parametrize("B, hq, hkv, D, grid", _cases())
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
 def test_qkv_heads_norm_rope_matches_chain(mesh_device, device_params, B, hq, hkv, D, grid, monkeypatch):
     """``grid8x8``: the Wormhole-sized split (GEMMA4_TEST_GRID=8x8: at B=32 one user per core with its three
