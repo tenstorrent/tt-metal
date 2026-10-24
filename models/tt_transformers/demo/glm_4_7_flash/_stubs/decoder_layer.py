@@ -156,8 +156,8 @@ class TtDecoderLayer:
             )
 
         # ---- Upload ----
-        self._w_q_a = rep(Wq_a)
-        self._w_kv_a = rep(Wkv_a)
+        self._w_q_a = rep_bf8(Wq_a)
+        self._w_kv_a = rep_bf8(Wkv_a)
 
         if shard:
             self._w_q_b = shd_bf8(Wq_b, 1)
