@@ -1101,7 +1101,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 // ------------------------------------------------------------------------
 // These tests aim to cover usage of these API calls:
 // - copy_init
-// - reconfig_data_format_srca (replaces the deprecated copy_tile_to_dst_init_short_with_dt: reconfig + copy_init)
+// - reconfig_data_format_srca (replaces the removed copy_tile_to_dst_init_short_with_dt: reconfig + copy_init)
 // - reconfig_data_format
 // - unpack_reconfig_data_format
 // - unpack_reconfig_data_format_srca

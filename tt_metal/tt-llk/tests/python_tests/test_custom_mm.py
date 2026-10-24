@@ -97,7 +97,7 @@ _BFP_UNPACKERS = {
 
 @dataclass
 class CUSTOM_MM_PRESERVE_SRC_ZERO_FLAG(TemplateParameter):
-    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_tile_init does."""
+    """Math sets the Src zero flag to keep before the custom_mm init, as a preceding copy_init does."""
 
     preserve: bool = False
 
