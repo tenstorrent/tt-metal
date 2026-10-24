@@ -54,6 +54,25 @@ def _norm_component(mesh, spec, layer, weight_name):
     return fn
 
 
+def _residual_component(mesh):
+    from models.demos.mimo_v26_flash_rl.tt.mesh_io import residual_to_host, residual_to_mesh
+    from models.demos.mimo_v26_flash_rl.tt.residual import ResidualAdd
+
+    add = ResidualAdd()
+
+    def fn(ctx, a, b):
+        with _op_hooks():
+            ta, tb = residual_to_mesh(mesh, a), residual_to_mesh(mesh, b)
+            ty = add(ta, tb)
+            ta.deallocate(True)
+            tb.deallocate(True)
+            out = residual_to_host(mesh, ty).to(a.dtype)
+            ty.deallocate(True)
+        return out
+
+    return fn
+
+
 SLOTS = 2  # serving_answers.yaml slots
 
 
@@ -106,6 +125,8 @@ def device_component(mesh, spec, layer, step):
         return _norm_component(mesh, spec, layer, "input_layernorm.weight")
     if step == "attention":
         return _attention_component(mesh, spec, layer)
+    if step == "attn_residual":
+        return _residual_component(mesh)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 

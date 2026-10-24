@@ -65,3 +65,13 @@
   (fp32 dest is not allowed on the kv_actual_isl path). Next lever if a later layer misses: Float32 sum / out CBs in the
   fork (as the GLM sparse_sdpa high_precision fork did).
 - Re-run: `bfw job check --task C.attn_dense.attention --gate-only`.
+
+## C.attn_dense.attn_residual (layer 0): PASS
+
+- `tt/residual.py` `ResidualAdd`: one `ttnn.add` (bf16 out, DRAM) on each chip's local `[1, 1, 160, 4096]` rows; both
+  operands are already in the residual row layout (attention ends with its TP reduce_scatter), so there is no collective.
+  Wired as `attn_residual` in `bringup/hooks.py` (`_residual_component`, two-input adapter via `tt/mesh_io.py`); the
+  same class serves `mlp_residual` when that task wires it.
+- Job attempts 2-6 never reached the code: the container image pull failed (`GHCR ... unauthorized`).
+- Gate: PCC 0.999997, rel vs CPU 0.00176 (limit 0.0035), auto_margin_min 1.98, 1 ttnn op, host FLOPs 0, determinism ok.
+- Re-run: `bfw job check --task C.attn_dense.attn_residual --gate-only`.
