@@ -95,20 +95,27 @@ struct RingJointRuntimeDerivation {
     bool kernel_is_causal = false;
 };
 
+// Where the per-dispatch values sit in each SDPA kernel's runtime args: the reader's KV-cache slot, and the start of
+// each kernel's scalar block (RingJointScalarBlocks).
 struct RingJointRuntimeArgLayout {
     uint32_t reader_kv_cache_batch_idx = 0;
-    uint32_t reader_logical_nt = 0;
-    uint32_t reader_active_ring_iter_mask = 0;
-    uint32_t writer_logical_nt = 0;
-    uint32_t writer_active_ring_iter_mask = 0;
-    uint32_t writer_single_valid_kv_chunk_mask = 0;
-    uint32_t compute_logical_nt = 0;
-    uint32_t compute_q_pre_wrap_start_tile = 0;
-    uint32_t compute_q_pre_wrap_tile_count = 0;
-    uint32_t compute_q_post_wrap_start_tile = 0;
-    uint32_t compute_q_valid_tile_count = 0;
-    uint32_t compute_active_ring_iter_mask = 0;
+    uint32_t reader_scalars = 0;
+    uint32_t writer_scalars = 0;
+    uint32_t compute_scalars = 0;
     CoreCoord grid_size = {0, 0};
+};
+
+// The runtime args that change between dispatches of one cached program (logical length, ring work masks, KV-pad Q
+// mapping). The only list of them and their order: the create path appends these blocks and the cache-hit patch
+// rewrites them. Every core of a program gets the same values.
+struct RingJointScalarBlocks {
+    // logical_nt, active ring-iteration mask, KV-pad Q mapping (pre-wrap start / count, post-wrap start, valid
+    // count), the fused gather's slice rows.
+    std::array<uint32_t, 7> reader;
+    // logical_nt, active ring-iteration mask, single-valid-K-chunk mask.
+    std::array<uint32_t, 3> writer;
+    // logical_nt, KV-pad Q mapping (as the reader's), active ring-iteration mask.
+    std::array<uint32_t, 6> compute;
 };
 
 struct RingWritePlan {
@@ -274,6 +281,19 @@ struct CheckedRuntimeArgList {
     void append(const std::vector<uint32_t>& values) {
         args.append(values);
         size += values.size();
+    }
+
+    template <std::size_t N>
+    void push_block_checked(uint32_t expected_index, const std::array<uint32_t, N>& values, const char* name) {
+        TT_FATAL(
+            size == expected_index,
+            "RingJoint runtime arg block {} expected index {}, got {} before append",
+            name,
+            expected_index,
+            size);
+        for (uint32_t value : values) {
+            push_back(value);
+        }
     }
 
     template <typename T>
@@ -565,18 +585,10 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t gqa_chain_args =
         enable_kv_chains && gqa_grouped_kv ? (kRingJointChainConfigArgCount + kReaderGQAChainExtraArgCount) : 0;
     layout.reader_kv_cache_batch_idx = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args + 2;
-    layout.reader_logical_nt = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
-                               kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
-    layout.reader_active_ring_iter_mask = layout.reader_logical_nt + 1;
-    layout.writer_logical_nt = kWriterBaseArgCount;
-    layout.writer_active_ring_iter_mask = layout.writer_logical_nt + 1;
-    layout.writer_single_valid_kv_chunk_mask = layout.writer_active_ring_iter_mask + 1;
-    layout.compute_logical_nt = kComputeRingSequencerArgCount;
-    layout.compute_q_pre_wrap_start_tile = layout.compute_logical_nt + 1;
-    layout.compute_q_pre_wrap_tile_count = layout.compute_q_pre_wrap_start_tile + 1;
-    layout.compute_q_post_wrap_start_tile = layout.compute_q_pre_wrap_tile_count + 1;
-    layout.compute_q_valid_tile_count = layout.compute_q_post_wrap_start_tile + 1;
-    layout.compute_active_ring_iter_mask = layout.compute_q_valid_tile_count + 1;
+    layout.reader_scalars = kReaderBaseBufferArgCount + joint_buffer_args + gathered_joint_buffer_args +
+                            kReaderQWorkArgCount + head_chain_args + batch_chain_args + gqa_chain_args;
+    layout.writer_scalars = kWriterBaseArgCount;
+    layout.compute_scalars = kComputeRingSequencerArgCount;
     return layout;
 }
 
@@ -651,6 +663,32 @@ uint32_t fused_gather_slice_rows(
     return std::min(compute_gather_valid_Ht(args, tensor_args).value_or(k_rows), k_rows);
 }
 
+RingJointScalarBlocks ring_joint_scalar_blocks(
+    const ttnn::prim::RingJointSDPAParams& args,
+    const ttnn::prim::RingJointSDPAInputs& tensor_args,
+    const RingJointRuntimePlan& runtime_plan) {
+    const RingWorkMasks& masks = runtime_plan.ring_work_plan.masks;
+    const ring_joint::ChunkedQMapping& q_mapping = runtime_plan.kv_pad_q_mapping;
+    return {
+        .reader =
+            {runtime_plan.logical_nt,
+             masks.active_ring_iter_mask,
+             q_mapping.q_pre_wrap_start_tile,
+             q_mapping.q_pre_wrap_tile_count,
+             q_mapping.q_post_wrap_start_tile,
+             q_mapping.q_valid_tile_count,
+             fused_gather_slice_rows(args, tensor_args)},
+        .writer = {runtime_plan.logical_nt, masks.active_ring_iter_mask, masks.single_valid_kv_chunk_mask},
+        .compute =
+            {runtime_plan.logical_nt,
+             q_mapping.q_pre_wrap_start_tile,
+             q_mapping.q_pre_wrap_tile_count,
+             q_mapping.q_post_wrap_start_tile,
+             q_mapping.q_valid_tile_count,
+             masks.active_ring_iter_mask},
+    };
+}
+
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
@@ -667,7 +705,6 @@ void apply_ring_joint_scalar_runtime_args(
     // plans here would incorrectly select device 0's halo tail when no KV-pad rotation is present.
     const RingWritePlan ring_write_plan = build_ring_write_plan(args, tensor_args, mesh_dispatch_coordinate);
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
-    const RingWorkMasks& ring_work_masks = runtime_plan.ring_work_plan.masks;
     const RingJointRuntimeArgLayout layout = get_runtime_arg_layout(args, tensor_args);
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
 
@@ -875,35 +912,8 @@ void apply_ring_joint_scalar_runtime_args(
         }
     }
 
-    // These fields occupy adjacent slots in the descriptor. Validate the layout once,
-    // then check and write each complete block on every core, including inactive receivers.
-    TT_FATAL(
-        layout.reader_active_ring_iter_mask == layout.reader_logical_nt + 1 &&
-            layout.writer_active_ring_iter_mask == layout.writer_logical_nt + 1 &&
-            layout.writer_single_valid_kv_chunk_mask == layout.writer_logical_nt + 2 &&
-            layout.compute_q_pre_wrap_start_tile == layout.compute_logical_nt + 1 &&
-            layout.compute_q_pre_wrap_tile_count == layout.compute_logical_nt + 2 &&
-            layout.compute_q_post_wrap_start_tile == layout.compute_logical_nt + 3 &&
-            layout.compute_q_valid_tile_count == layout.compute_logical_nt + 4 &&
-            layout.compute_active_ring_iter_mask == layout.compute_logical_nt + 5,
-        "RingJoint scalar runtime argument blocks must be contiguous");
-    const std::array reader_values = {
-        runtime_plan.logical_nt,
-        ring_work_masks.active_ring_iter_mask,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
-        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
-        fused_gather_slice_rows(args, tensor_args)};
-    const std::array writer_values = {
-        runtime_plan.logical_nt, ring_work_masks.active_ring_iter_mask, ring_work_masks.single_valid_kv_chunk_mask};
-    const std::array compute_values = {
-        runtime_plan.logical_nt,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_pre_wrap_tile_count,
-        runtime_plan.kv_pad_q_mapping.q_post_wrap_start_tile,
-        runtime_plan.kv_pad_q_mapping.q_valid_tile_count,
-        ring_work_masks.active_ring_iter_mask};
+    // Written as whole blocks on every core, including inactive receivers.
+    const RingJointScalarBlocks scalars = ring_joint_scalar_blocks(args, tensor_args, runtime_plan);
     // The SDPA kernels, and with floaters (ring_joint_floaters.hpp) their kernel group after the
     // dense gather's four kernels. A floater program's home kernels leave out the last grid column (all floaters), so
     // their argument grid is narrower than the SDPA grid.
@@ -947,11 +957,11 @@ void apply_ring_joint_scalar_runtime_args(
                 if (!patch_kv_pad_rotation) {
                     continue;
                 }
-                write_runtime_arg_block(reader_args, layout.reader_logical_nt, reader_values, "reader.scalars");
+                write_runtime_arg_block(reader_args, layout.reader_scalars, scalars.reader, "reader.scalars");
                 write_runtime_arg_block(
-                    (*writer_grid_args)[x][y], layout.writer_logical_nt, writer_values, "writer.scalars");
+                    (*writer_grid_args)[x][y], layout.writer_scalars, scalars.writer, "writer.scalars");
                 write_runtime_arg_block(
-                    compute_grid_args[x][y], layout.compute_logical_nt, compute_values, "compute.scalars");
+                    compute_grid_args[x][y], layout.compute_scalars, scalars.compute, "compute.scalars");
             }
         }
     }
@@ -1176,8 +1186,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     const RingJointRuntimePlan runtime_plan = build_runtime_plan(args, tensor_args, ring_write_plan);
     const RingJointRuntimeArgLayout runtime_arg_layout = get_runtime_arg_layout(args, tensor_args);
+    const RingJointScalarBlocks scalar_blocks = ring_joint_scalar_blocks(args, tensor_args, runtime_plan);
     const uint32_t logical_nt = runtime_plan.logical_nt;
-    const ring_joint::ChunkedQMapping& kv_pad_q_mapping = runtime_plan.kv_pad_q_mapping;
 
     /*
     For non-causal case we must provide a padded mask if the K sequence length has been padded
@@ -1729,7 +1739,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // per-iteration sync order described in RingWorkPlan.
     const RingWorkPlan& ring_work_plan = runtime_plan.ring_work_plan;
     const uint32_t active_ring_iter_mask = ring_work_plan.masks.active_ring_iter_mask;
-    const uint32_t single_valid_kv_chunk_mask = ring_work_plan.masks.single_valid_kv_chunk_mask;
     const RingAttentionRankMapping rank_mapping{
         .full_mesh = ag.full_mesh,
         .orientation = ag.snake_orientation,
@@ -3671,15 +3680,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
 
-        reader_args.push_checked(runtime_arg_layout.reader_logical_nt, logical_nt, "reader.logical_nt");
-        reader_args.push_checked(
-            runtime_arg_layout.reader_active_ring_iter_mask, active_ring_iter_mask, "reader.active_ring_iter_mask");
-        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_start_tile);
-        reader_args.push_back(kv_pad_q_mapping.q_pre_wrap_tile_count);
-        reader_args.push_back(kv_pad_q_mapping.q_post_wrap_start_tile);
-        reader_args.push_back(kv_pad_q_mapping.q_valid_tile_count);
-        // The gather's slice extent, for slice readiness (re-applied per dispatch with the scalars above).
-        reader_args.push_back(fused_gather_slice_rows(args, tensor_args));
+        reader_args.push_block_checked(runtime_arg_layout.reader_scalars, scalar_blocks.reader, "reader.scalars");
 
         // Inject fused-op synchronization RT args (AllGather) here; it will append to reader_args
         std::vector<uint32_t> reader_signaler_args;
@@ -3719,13 +3720,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         writer_args.push_back(stats_buf);
         writer_args.push_back(global_q_start);
         writer_args.push_back(global_q_end);
-        writer_args.push_checked(runtime_arg_layout.writer_logical_nt, logical_nt, "writer.logical_nt");
-        writer_args.push_checked(
-            runtime_arg_layout.writer_active_ring_iter_mask, active_ring_iter_mask, "writer.active_ring_iter_mask");
-        writer_args.push_checked(
-            runtime_arg_layout.writer_single_valid_kv_chunk_mask,
-            single_valid_kv_chunk_mask,
-            "writer.single_valid_kv_chunk_mask");
+        writer_args.push_block_checked(runtime_arg_layout.writer_scalars, scalar_blocks.writer, "writer.scalars");
         std::vector<uint32_t> writer_signaler_args;
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
@@ -3801,25 +3796,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_args.push_back(transport_rank);
         compute_args.push_back(forward_writes_expected);
         compute_args.push_back(backward_writes_expected);
-        compute_args.push_checked(runtime_arg_layout.compute_logical_nt, logical_nt, "compute.logical_nt");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_pre_wrap_start_tile,
-            kv_pad_q_mapping.q_pre_wrap_start_tile,
-            "compute.q_pre_wrap_start_tile");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_pre_wrap_tile_count,
-            kv_pad_q_mapping.q_pre_wrap_tile_count,
-            "compute.q_pre_wrap_tile_count");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_post_wrap_start_tile,
-            kv_pad_q_mapping.q_post_wrap_start_tile,
-            "compute.q_post_wrap_start_tile");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_q_valid_tile_count,
-            kv_pad_q_mapping.q_valid_tile_count,
-            "compute.q_valid_tile_count");
-        compute_args.push_checked(
-            runtime_arg_layout.compute_active_ring_iter_mask, active_ring_iter_mask, "compute.active_ring_iter_mask");
+        compute_args.push_block_checked(runtime_arg_layout.compute_scalars, scalar_blocks.compute, "compute.scalars");
         // Static multicast loop count (the reader's padded slot loop); rotated groups derive theirs per ordinal.
         uint32_t static_mcast_q_count = global_q_end - global_q_start;
         if (enable_kv_chains && !use_rotated_q_split) {
