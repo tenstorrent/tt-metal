@@ -317,7 +317,7 @@ class TPAttention:
                     weight,
                     compute_kernel_config=self.compute_cfg,
                     program_config=pc,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=tpc.l1_or_dram(x.shape[-2]),
                 )
             return ttnn.linear(x, weight, compute_kernel_config=self.wo_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return tpc.sharded_decode_matmul(

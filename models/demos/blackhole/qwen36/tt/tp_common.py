@@ -292,6 +292,18 @@ def kv_cache_bf8_enabled():
     return os.environ.get("QWEN_SDPA_BF8", "0") == "1" or os.environ.get("QWEN36_KV_BF8", "1") == "1"
 
 
+def prefill_l1_rows_ok(rows):
+    """L1 placement of prefill activations is validated up to 2048 rows (the serving chunk); a larger prefill chunk
+    (QWEN36_PREFILL_L1_MAX_ROWS, default 2048) keeps those tensors in DRAM so their L1 banks do not clash with the
+    matmul circular buffers that grow with rows."""
+    return int(rows) <= int(os.environ.get("QWEN36_PREFILL_L1_MAX_ROWS", "2048"))
+
+
+def l1_or_dram(rows):
+    """L1 for prefill tensors of at most QWEN36_PREFILL_L1_MAX_ROWS rows, else DRAM."""
+    return ttnn.L1_MEMORY_CONFIG if prefill_l1_rows_ok(rows) else ttnn.DRAM_MEMORY_CONFIG
+
+
 def sdpa_prefill_exp_approx():
     """QWEN36_SDPA_PREFILL_EXP_APPROX (default 1): prefill SDPA uses the fast approximate exponential. Since tt-metal
     #57180 the fp32-dest SDPA kernel honours exp_approx_mode=False with the accurate SFPU exponential (~20x the SFPU cost
@@ -648,6 +660,14 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     tuning = tuning or _PREFILL_TUNING[4]
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
+    # Above the validated 2048-row chunk the per-core block (and its circular buffers) grows with rows past L1:
+    # block the output at the 2048-row block height and round per_core_M up to a multiple of it.
+    blocked = {}
+    if not prefill_l1_rows_ok(m):
+        ob = max(1, math.ceil(2048 / TILE_SIZE / grid_size[1]))
+        if per_core_M > ob:
+            per_core_M = math.ceil(per_core_M / ob) * ob
+            blocked = {"out_block_h": ob}
 
     out_subblock_h = 1
     out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
@@ -671,6 +691,7 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
         transpose_mcast=False,
         fused_activation=fused_activation,
         fuse_batch=False,
+        **blocked,
     )
 
 

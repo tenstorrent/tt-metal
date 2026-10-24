@@ -2056,7 +2056,7 @@ class TPGatedDeltaNet:
             self.reset_state()
 
         # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG if tpc.prefill_l1_rows_ok(T) else None)
 
         # Causal conv + SiLU; conv_state = previous chunk's last K-1 inputs (None/zero from scratch).
         # q/k/v/beta/g stay DRAM — alive across chunk kernel; L1 crashes it.
@@ -2086,7 +2086,7 @@ class TPGatedDeltaNet:
                 self.K,
                 self.mesh,
                 # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=tpc.l1_or_dram(T),
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,
@@ -2194,7 +2194,7 @@ class TPGatedDeltaNet:
                 self._conv_win_stale = True
             ttnn.deallocate(conv_new_state)
         # Gated RMSNorm + SiLU(z); norm/flatten in L1, gated output in DRAM for out-proj
-        _L1 = ttnn.L1_MEMORY_CONFIG
+        _L1 = tpc.l1_or_dram(T)
         if self._gdn_fuse_out:
             # Fuse adapter relayout with per-head rms_norm + head-flatten.
             # TILE-native head->token relayout (transpose + fold), dropping the
