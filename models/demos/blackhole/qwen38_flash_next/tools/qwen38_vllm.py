@@ -30,6 +30,16 @@ slab, where ``QWEN38_LONG_CHUNKS=1`` still turns the 128-row chunks on.  The sla
 admitted against the free DRAM when the chain opens; a refusal ends the start-up naming the knob, never a silent
 fallback.  One log line after the open states the form the chain opened in.
 
+Batch mode (``max_num_seqs`` 2..32, P2a): one plain-lane-body trace with B = ``max_num_seqs`` lanes, residue-free, over
+a paged KV pool that IS vLLM's block pool (page size = block size, page id = vLLM block id; vLLM never hands out block
+0, which is the pool's scratch page).  ``initialize_vllm_model`` builds the weights and components but does not open the
+chain; ``allocate_kv_cache`` reads ``num_blocks`` and ``block_size`` from the plugin's shape, opens the chain with the
+lane decoder's ``prepare`` as its warm hook (the lane tensors must exist before the chain captures) and captures the
+lane trace.  ``prefill_forward`` runs the B=1 chain prefill per row and imports it into the lane that owns
+``empty_slots[i]``; ``decode_forward`` replays the lane trace once for all live rows.  A host map slot -> lane follows
+the plugin's ``slot_remap`` (no device moves: the lanes stay where they are).  ``max_num_seqs`` 1 keeps the single-slot
+path above unchanged.
+
 vLLM imports this module in its registry inspection, frontend, engine and worker processes: no device is opened
 here and ``sys.argv`` is not read.
 """
@@ -37,9 +47,12 @@ here and ``sys.argv`` is not read.
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+import time
+from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -54,6 +67,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic impor
     construct_live_decode_diagnostic,
     prepare_live_decode_diagnostic,
 )
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import WARM_TOKEN_ID, Qwen38PlainLaneDecoder
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     CHUNK_PREFILL_MIN_ROWS,
     RESIDUE_CLASSES,
@@ -75,6 +89,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     TP_SIZE,
     is_slab_rows,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 
 OPTIMIZATIONS = (None, "performance", "accuracy")  # the plugin's tt.optimizations values; no effect on this chain
 # The warmup smoke's prompt: one full 32-row chunk, a 7-row padded tail, the hand-off, one forced step, one gather.
@@ -86,6 +101,12 @@ REDUCED_CANDIDATES = 1024  # the top candidates the host sampler works on in pla
 PREFILL_SLAB_VARIABLE = "QWEN38_PREFILL_SLAB"  # the slab's rows; default DEFAULT_SLAB_ROWS; "0" / "off": no slab
 LONG_CHUNKS_VARIABLE = "QWEN38_LONG_CHUNKS"  # "1": the 128-row chunks without a slab (a slab implies them)
 PREFILL_SLAB_OFF = ("0", "off")
+BATCH_MAX_LANES = 32  # batch mode: max_num_seqs 2..32 (one 32-row tile)
+MAX_TOKENS_ALL_USERS_VARIABLE = "QWEN38_MAX_TOKENS_ALL_USERS"  # the KV token pool the plugin sizes its blocks from
+BATCH_LANE_INDEXER_FORM = "wide"
+KV_BYTES_PER_TOKEN = 12 * 512 * 2  # 12 QSA layers x one 512-wide bf16 row, per device
+BATCH_MIN_BLOCK_SIZE = 32  # the QSA page scatter works in 32-row slabs
+BATCH_MAX_BLOCK_SIZE = 4096
 # The DRAM admission's refusal of the slab's resident prefill weights (ttnn/prefill_dense.py, admit_prefill_dense_dram).
 PREFILL_DENSE_REFUSAL_MARK = "refused: the resident prefill weights need"
 
@@ -113,18 +134,26 @@ class Qwen38HostSamplingPolicy:
         return self.presence_penalty != 0.0 or self.frequency_penalty != 0.0 or self.repetition_penalty != 1.0
 
     @classmethod
-    def from_contract(cls, sampling_params: Any) -> "Qwen38HostSamplingPolicy":
+    def from_contract(cls, sampling_params: Any, row: int | None = None) -> "Qwen38HostSamplingPolicy":
         """The one slot's row of the plugin's per-row lists (tensors and scalars accepted); refused before the device
-        is touched when it holds more than one row or asks for logprobs (never sent on one device)."""
+        is touched when it holds more than one row or asks for logprobs (never sent on one device).  Batch mode
+        passes ``row``: that row of the padded per-row lists (a scalar applies to every row)."""
 
         def one(name: str, default: Any = None) -> Any:
             value = getattr(sampling_params, name, default)
             if isinstance(value, torch.Tensor):
                 value = value.tolist()
             if isinstance(value, (list, tuple)):
-                if len(value) != 1:
-                    raise ValueError(f"one resident slot: sampling_params.{name} must hold one row, got {len(value)}")
-                value = value[0]
+                if row is None:
+                    if len(value) != 1:
+                        raise ValueError(
+                            f"one resident slot: sampling_params.{name} must hold one row, got {len(value)}"
+                        )
+                    value = value[0]
+                else:
+                    if not 0 <= row < len(value):
+                        raise ValueError(f"sampling_params.{name} holds {len(value)} rows, row {row} is missing")
+                    value = value[row]
             return value
 
         if one("enable_log_probs", False):
@@ -146,32 +175,48 @@ class Qwen38HostSamplingPolicy:
         )
 
 
-def penalty_history(prompt_tokens: Any, output_tokens: Any) -> tuple[torch.Tensor, torch.Tensor]:
-    """The one slot's prompt and output token ids out of the contract's ``[rows, L]`` int32 histories (``-1`` pads
-    the rows and the batch), sent by the plugin whenever a penalty is active."""
+def penalty_history(prompt_tokens: Any, output_tokens: Any, row: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+    """Row ``row``'s (the one slot's: 0) prompt and output token ids out of the contract's ``[rows, L]`` int32
+    histories (``-1`` pads the rows and the batch), sent by the plugin whenever a penalty is active."""
 
     if prompt_tokens is None or output_tokens is None:
         raise ValueError("a penalty is active but the plugin sent no prompt_tokens / output_tokens history")
 
     def ids(history: Any) -> torch.Tensor:
         history = torch.as_tensor(history)
-        if history.dim() != 2 or history.shape[0] < 1:
-            raise ValueError(f"token history must be [rows, L], got {tuple(history.shape)}")
-        row = history[0].to(torch.long)
-        return row[(row >= 0) & (row < VOCAB_SIZE)]
+        if history.dim() != 2 or history.shape[0] < row + 1:
+            raise ValueError(f"token history must be [rows, L] with row {row}, got {tuple(history.shape)}")
+        ids_row = history[row].to(torch.long)
+        return ids_row[(ids_row >= 0) & (ids_row < VOCAB_SIZE)]
 
     return ids(prompt_tokens), ids(output_tokens)
 
 
-def device_greedy_contract(sampling_params: Any) -> bool:
+def device_greedy_contract(sampling_params: Any, row: int | None = None) -> bool:
     """True when the contract is plain greedy for the one row: temperature below the epsilon (the policy's own
     ``greedy``), no penalty active (presence 0, frequency 0, repetition 1) and no logprobs (``from_contract`` refuses
     those).  Such a row's token is the device's greedy resolve, so the full logits need not leave the device."""
 
     if sampling_params is None:
         return False
-    policy = Qwen38HostSamplingPolicy.from_contract(sampling_params)
+    policy = Qwen38HostSamplingPolicy.from_contract(sampling_params, row)
     return policy.greedy and not policy.penalized
+
+
+def greedy_batch_sampling_params(rows: int) -> SimpleNamespace:
+    """The plugin's ``TTSamplingParams`` (as lists) for ``rows`` plain greedy rows: the warmup's and the tests' input."""
+
+    return SimpleNamespace(
+        temperature=[0.0] * rows,
+        top_k=[1] * rows,
+        top_p=[0.0] * rows,
+        presence_penalty=[0.0] * rows,
+        frequency_penalty=[0.0] * rows,
+        repetition_penalty=[1.0] * rows,
+        seed=[None] * rows,
+        num_logprobs=[0] * rows,
+        enable_log_probs=[False] * rows,
+    )
 
 
 def apply_penalties(
@@ -308,6 +353,76 @@ def is_prefill_dense_refusal(error: BaseException) -> bool:
     return prefill_dense_refusal(error) is not None
 
 
+# Paged pool budget.  M1 (2026-10-24, QB2, context 32768, DRAM per device, ``test_vllm_batch_contract_device.py`` ids
+# m1_b8 / m1_b32): 13,368,200,192 B free when the lane decoder's ``prepare`` starts (chain built, no lanes yet); the lane
+# states and what the lane capture holds then took 1,045,793,792 B at B=8 and 3,093,709,824 B at B=32 (each beside a
+# 0.75 GiB pool), i.e. 363.2 MB + 85.3 MB per lane (rounded up here).
+DRAM_CHAIN_FREE_32K = 13_368_200_192  # bytes free per device when the lane decoder's prepare starts
+LANE_FIXED_BASE_32K = 364_000_000  # bytes: the lane states' intercept at context 32768
+LANE_FIXED_PER_LANE_32K = 85_400_000  # bytes: and per lane
+CONTEXT_BYTES_PER_TOKEN = 13 * 1024  # per extra allocated-context token: the chain's B=1 KV and index caches
+CONTEXT_BYTES_PER_TOKEN_PER_LANE = 768  # and each lane's compressed index cache
+POOL_MARGIN_BYTES = 1 << 30  # transients: the full-logits gather, prefill scratch, fragmentation
+# The pool admission refuses with half the margin: the plugin adds ``max(block_size, 1) * max_num_seqs`` tokens (and a
+# rounding block) to the budget the cap returned, which the cap's full margin covers.
+POOL_ADMISSION_MARGIN_BYTES = POOL_MARGIN_BYTES // 2
+
+
+def batch_pool_token_cap(max_model_len: int, max_num_seqs: int) -> int:
+    """Tokens the paged KV pool may hold in batch mode: ``(free - lanes - margin) // KV_BYTES_PER_TOKEN`` where
+    ``free`` is the DRAM free per device after the chain build at the allocated context, and ``lanes`` the lane states
+    (GDN, ring, PLE and compressed index caches) of ``max_num_seqs`` lanes.  Both are measured at context 32768 and
+    scaled by ``CONTEXT_BYTES_PER_TOKEN`` (and per lane) for the other contexts."""
+
+    context = resident_allocated_context(max_model_len)
+    extra = context - 32768
+    free = DRAM_CHAIN_FREE_32K - extra * CONTEXT_BYTES_PER_TOKEN
+    lanes = LANE_FIXED_BASE_32K + max_num_seqs * (LANE_FIXED_PER_LANE_32K + extra * CONTEXT_BYTES_PER_TOKEN_PER_LANE)
+    return max(0, (free - lanes - POOL_MARGIN_BYTES) // KV_BYTES_PER_TOKEN)
+
+
+def check_block_size(block_size: Any) -> int:
+    """Batch mode's page size is vLLM's block size: a power of two >= 32 (the QSA page scatter works in 32-row slabs),
+    at most ``BATCH_MAX_BLOCK_SIZE``; anything else is refused naming the knob (``--block-size``)."""
+
+    if isinstance(block_size, bool) or not isinstance(block_size, int):
+        raise ValueError(f"vLLM block_size must be an int, got {block_size!r}")
+    if block_size < BATCH_MIN_BLOCK_SIZE or block_size & (block_size - 1) or block_size > BATCH_MAX_BLOCK_SIZE:
+        raise ValueError(
+            f"batch mode serves a paged KV pool whose page is vLLM's block: --block-size must be a power of two in "
+            f"{BATCH_MIN_BLOCK_SIZE}..{BATCH_MAX_BLOCK_SIZE}, got {block_size}"
+        )
+    return block_size
+
+
+def batch_max_blocks(allocated_context: int, block_size: int) -> int:
+    """The lane page table's width: ``ceil(allocated_context / block_size)`` rounded up to a multiple of 8."""
+
+    return -(-(-(-allocated_context // block_size)) // 8) * 8
+
+
+def resident_allocated_context(max_model_len: int) -> int:
+    """The smallest resident QSA cache capacity whose context limit holds ``max_model_len`` (ValueError if none)."""
+
+    limits = {capacity: Qwen38ResidentContext(capacity).context_limit for capacity in RESIDENT_QSA_CACHE_CAPACITIES}
+    fitting = [capacity for capacity, limit in limits.items() if limit >= max_model_len]
+    if not fitting:
+        raise ValueError(f"max_model_len {max_model_len} exceeds every resident context limit {list(limits.values())}")
+    return fitting[0]
+
+
+def parse_slot_remap(slot_remap: Any, lanes: int) -> list[int]:
+    """The plugin's ``slot_remap`` as a list: ``None`` is the identity; else an absolute permutation of all ``lanes``
+    state slots (row ``i`` reads the state now in slot ``remap[i]``)."""
+
+    if slot_remap is None:
+        return list(range(lanes))
+    remap = [int(slot) for slot in torch.as_tensor(slot_remap).reshape(-1).tolist()]
+    if len(remap) != lanes or sorted(remap) != list(range(lanes)):
+        raise ValueError(f"slot_remap must be a permutation of the {lanes} state slots, got {remap}")
+    return remap
+
+
 @dataclass
 class Qwen38VLLMSlot:
     """Host mirror of the one resident slot: the tokens the device consumed (their count is the device position),
@@ -336,13 +451,36 @@ class Qwen38ForCausalLM:
     }
     decode_input_update_contract = 1
 
-    def __init__(self, chain: Any, *, allocated_context: int, **kwargs: Any) -> None:
-        self.chain = chain
+    def __init__(
+        self,
+        chain: Any,
+        *,
+        allocated_context: int,
+        batch_lanes: int = 1,
+        chain_opener: Callable[[Callable[[Any], None] | None], Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        self.chain = chain  # batch mode: None until allocate_kv_cache opens it
         self.allocated_context = allocated_context
         self.context_limit = Qwen38ResidentContext(allocated_context).context_limit
         self.slot = Qwen38VLLMSlot()
         self.trace_mode_warned = False
         self._warned_padded_greedy = False
+        # batch mode (batch_lanes > 1); single-slot mode never reads these
+        self.lanes = batch_lanes
+        self.batch_mode = batch_lanes > 1
+        self.chain_opener = chain_opener
+        self.decoder: Qwen38PlainLaneDecoder | None = None
+        self.block_size: int | None = None
+        self.num_blocks: int | None = None
+        self.lane_of_slot: list[int] = list(range(batch_lanes))  # slot -> lane (the lane holding that slot's state)
+        self.lane_slots: list[Qwen38VLLMSlot] = [Qwen38VLLMSlot() for _ in range(batch_lanes)]  # per-lane policy/RNG
+        self.batch_failed = False
+        self._pending_note: dict[int, int] | None = None  # the moves decode_forward applied, not yet noted
+        self.decode_stats: deque[dict[str, float]] = deque(maxlen=4096)  # per decode call: total/step/gather seconds
+        self.dram: dict[
+            str, dict[str, int]
+        ] = {}  # free DRAM per device: "chain_only" (lanes not built), "after_capture"
 
     # -- vLLM's text-generation protocol: inspected by the registry, never called on the TT path ---------------------
 
@@ -368,9 +506,21 @@ class Qwen38ForCausalLM:
         max_num_seqs: int | None = None,
         **kwargs: Any,
     ) -> int:
-        """The KV token pool the plugin sizes its block table from: one context per sequence."""
+        """The KV token pool the plugin sizes its block table from.  ``QWEN38_MAX_TOKENS_ALL_USERS`` (a positive int)
+        overrides it in both modes.  Single-slot mode (``max_num_seqs`` 1): one context per sequence,
+        ``max_model_len * max_num_seqs``.  Batch mode: ``min(max_model_len * max_num_seqs, cap)``, where ``cap`` is the
+        paged pool's DRAM budget (``batch_pool_token_cap``): the free DRAM per device after the chain build, less the
+        lane states of ``max_num_seqs`` lanes and a margin, over the pool's 12,288 bytes per token per device."""
 
-        return int(max_model_len) * int(max_num_seqs)
+        tokens = int(max_model_len) * int(max_num_seqs)
+        override = os.environ.get(MAX_TOKENS_ALL_USERS_VARIABLE, "").strip()
+        if override:
+            if not override.isascii() or not override.isdigit() or int(override) < 1:
+                raise ValueError(f"{MAX_TOKENS_ALL_USERS_VARIABLE} must be a positive integer, got {override!r}")
+            return int(override)
+        if int(max_num_seqs) <= 1:
+            return tokens
+        return min(tokens, batch_pool_token_cap(int(max_model_len), int(max_num_seqs)))
 
     @classmethod
     def initialize_vllm_model(
@@ -391,14 +541,16 @@ class Qwen38ForCausalLM:
         The checkpoint is ``MODEL_WEIGHTS_DIR``, else the ``--model`` path, else the pinned revision of the repo id
         (``QWEN38_HF_REPO``, else ``--model``, else ``Qwen/Qwen3.8-Flash-Next``) in the local Hugging Face hub cache.
         The prefill form is ``prefill_form()``'s (the slab rows and the 128-row chunks); the slab's DRAM admission
-        refusal is re-raised naming ``QWEN38_PREFILL_SLAB``."""
+        refusal is re-raised naming ``QWEN38_PREFILL_SLAB``.  ``max_batch_size`` 1: the chain is open on return.
+        ``max_batch_size`` 2..32 (batch mode): the construction is done and the chain is NOT open; ``allocate_kv_cache``
+        opens it (the lane tensors need the pool's size)."""
 
         if not TRACE_ALLOC_TRACKING:
             raise ValueError("the trace chain needs TT_METAL_TRACE_ALLOC_TRACKING=1 exported before ttnn is imported")
-        if max_batch_size != 1 or tt_data_parallel != 1:
+        if not 1 <= max_batch_size <= BATCH_MAX_LANES or tt_data_parallel != 1:
             raise ValueError(
-                f"the Qwen3.8 adapter serves one resident slot: max_num_seqs 1 and no data parallelism, "
-                f"got batch {max_batch_size}, DP {tt_data_parallel}"
+                f"the Qwen3.8 adapter serves one resident slot (max_num_seqs 1) or a batch of lanes (max_num_seqs "
+                f"2..{BATCH_MAX_LANES}) and no data parallelism, got batch {max_batch_size}, DP {tt_data_parallel}"
             )
         if optimizations not in OPTIMIZATIONS:
             raise ValueError(f"optimizations must be one of {OPTIMIZATIONS}, got {optimizations!r}")
@@ -411,13 +563,7 @@ class Qwen38ForCausalLM:
             )
         if mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError(f"Qwen3.8 needs a Blackhole mesh, got {mesh_device.arch()}")
-        limits = {capacity: Qwen38ResidentContext(capacity).context_limit for capacity in RESIDENT_QSA_CACHE_CAPACITIES}
-        fitting = [capacity for capacity, limit in limits.items() if limit >= max_seq_len]
-        if not fitting:
-            raise ValueError(
-                f"max_model_len {max_seq_len} exceeds every resident context limit {list(limits.values())}"
-            )
-        allocated_context = fitting[0]
+        allocated_context = resident_allocated_context(max_seq_len)
         physical_ids = tuple(int(device_id) for device_id in mesh_device.get_device_ids())
         weights_dir = os.environ.get("MODEL_WEIGHTS_DIR")
         name_or_path = getattr(hf_config, "_name_or_path", None)
@@ -490,31 +636,52 @@ class Qwen38ForCausalLM:
             marker=logger.info,
             stage_missing_bf4=os.environ.get("QWEN38_VLLM_ALLOW_BF4_CONVERSION") == "1",
         )
-        try:
-            chain = Qwen38TracedChain.open(
-                construction,
-                marker=logger.info,
-                chunked_prefill=True,
-                sampling=True,
-                long_chunks=long_chunks,
-                slab_rows=slab_rows,
-            )
-        except Exception as error:
-            refusal = None if slab_rows is None else prefill_dense_refusal(error)
-            if refusal is None:
-                raise
-            detail = str(error) if refusal is error else f"{error} (cause: {refusal})"
-            raise ValueError(
-                f"the {slab_rows}-row prefill slab does not fit beside the resident build at context "
-                f"{allocated_context}: {detail}; {PREFILL_SLAB_VARIABLE}=0 serves this context without the slab "
-                f"({LONG_CHUNKS_VARIABLE}=1 keeps the 128-row chunks)"
-            ) from error
-        logger.info(f"prefill form: {describe_prefill_form(long_chunks, slab_rows)}")  # the form the chain opened in
-        return cls(chain, allocated_context=allocated_context)
+
+        def open_chain(warm_hook: Callable[[Any], None] | None) -> Any:
+            options = {} if warm_hook is None else {"warm_hook": warm_hook}
+            try:
+                chain = Qwen38TracedChain.open(
+                    construction,
+                    marker=logger.info,
+                    chunked_prefill=True,
+                    sampling=True,
+                    long_chunks=long_chunks,
+                    slab_rows=slab_rows,
+                    **options,
+                )
+            except Exception as error:
+                refusal = None if slab_rows is None else prefill_dense_refusal(error)
+                if refusal is None:
+                    raise
+                detail = str(error) if refusal is error else f"{error} (cause: {refusal})"
+                raise ValueError(
+                    f"the {slab_rows}-row prefill slab does not fit beside the resident build at context "
+                    f"{allocated_context}: {detail}; {PREFILL_SLAB_VARIABLE}=0 serves this context without the slab "
+                    f"({LONG_CHUNKS_VARIABLE}=1 keeps the 128-row chunks)"
+                ) from error
+            logger.info(
+                f"prefill form: {describe_prefill_form(long_chunks, slab_rows)}"
+            )  # the form the chain opened in
+            return chain
+
+        if max_batch_size > 1:
+            # Batch mode: the chain opens in allocate_kv_cache, where the pool's size is known (see the module docstring).
+            return cls(None, allocated_context=allocated_context, batch_lanes=max_batch_size, chain_opener=open_chain)
+        return cls(open_chain(None), allocated_context=allocated_context)
 
     def allocate_kv_cache(self, kv_cache_shape: Any, dtype: Any, num_layers: int) -> None:
-        """vLLM's paged KV is not used: the chain allocated the resident QSA caches at open, sized by the context."""
+        """Single-slot mode: vLLM's paged KV is not used, the chain allocated the resident QSA caches at open, sized by
+        the context.  Batch mode: the shape's ``num_blocks`` (``shape[0]``) and ``block_size`` (``shape[2]``) size the
+        lane pool (the head count, head size, dtype and layer count of vLLM's spec are ignored: the pool's rows are the
+        QSA's 512-wide bf16 rows); the chain opens here with the lane decoder's ``prepare`` as its warm hook, then the
+        lane trace is captured.  Returns None (the pool is the decoder's; vLLM's ``kv_cache`` argument is not read)."""
 
+        if self.batch_mode:
+            shape = tuple(int(extent) for extent in kv_cache_shape)
+            if len(shape) != 4:
+                raise ValueError(f"kv_cache_shape must be (num_blocks, heads, block_size, head_size), got {shape}")
+            self._open_batch(num_blocks=shape[0], block_size=shape[2])
+            return None
         logger.info(
             f"vLLM KV cache {tuple(kv_cache_shape)} {dtype} x {num_layers} layers not allocated: "
             f"resident QSA caches at context {self.allocated_context}"
@@ -538,6 +705,16 @@ class Qwen38ForCausalLM:
         """The prompt into the reset state; returns the last position's logits (or, for a plain greedy
         ``sampling_params``, the device's greedy token as int32 ``[1, 1]``) and the zero mrope delta."""
 
+        if self.batch_mode:
+            return self._prefill_batch(
+                tokens=tokens,
+                page_table=page_table,
+                enable_trace=enable_trace,
+                prompt_lens=prompt_lens,
+                start_pos=start_pos,
+                empty_slots=empty_slots,
+                sampling_params=sampling_params,
+            )
         greedy_token = sampling_params is not None
         if greedy_token and not device_greedy_contract(sampling_params):
             raise ValueError("prefill returns logits: sample_on_device_mode must be decode_only, not all")
@@ -558,6 +735,14 @@ class Qwen38ForCausalLM:
         if min(ids) < 0 or max(ids) >= TOKENIZER_SIZE:
             raise ValueError(f"prompt ids must be in [0, {TOKENIZER_SIZE}), got {min(ids)}..{max(ids)}")
         self._require_serviceable(enable_trace, recovering=True)
+        out = self._prefill_one(ids, greedy_token=greedy_token)
+        return out, torch.zeros(1, dtype=torch.long)
+
+    def _prefill_one(self, ids: list[int], *, greedy_token: bool) -> torch.Tensor:
+        """The B=1 chain prefill of ``ids`` into the reset state (the single-slot path, and batch mode's per-row
+        prefill before its import); returns the device greedy token ``[1, 1]`` int32 or the masked full logits
+        ``[1, 1, VOCAB_SIZE]``.  The state it leaves (``self.slot``, the chain's generic state) is the one request's."""
+
         head = ids[:-1]
         try:
             self.chain.reset_and_seed(SEED_TOKEN_ID)
@@ -587,7 +772,7 @@ class Qwen38ForCausalLM:
         except BaseException:
             self.slot.failed = True
             raise
-        return out, torch.zeros(1, dtype=torch.long)
+        return out
 
     def decode_forward(
         self,
@@ -618,6 +803,18 @@ class Qwen38ForCausalLM:
             raise TypeError("decode_input_update_contract 1: reset_batch is not accepted")
         if reload_inputs is False:
             raise ValueError("host tokens are authoritative on this adapter: reload_inputs must be True")
+        if self.batch_mode:
+            return self._decode_batch(
+                tokens=tokens,
+                start_pos=start_pos,
+                page_table=page_table,
+                enable_trace=enable_trace,
+                slot_remap=slot_remap,
+                reset_sampling_state=reset_sampling_state,
+                sampling_params=sampling_params,
+                prompt_tokens=prompt_tokens,
+                output_tokens=output_tokens,
+            )
         if slot_remap is not None and list(slot_remap) != [0]:
             raise ValueError(f"one resident slot: slot_remap must be None or [0], got {list(slot_remap)}")
         if tokens.shape[0] != 1:
@@ -653,11 +850,14 @@ class Qwen38ForCausalLM:
             apply_penalties(row, *history, policy)
         return torch.tensor([[sample_from_row(row, policy, self.slot.generator)]], dtype=torch.int32)
 
-    def _adopt_policy(self, policy: Qwen38HostSamplingPolicy, *, reseed: bool) -> None:
+    def _adopt_policy(
+        self, policy: Qwen38HostSamplingPolicy, *, reseed: bool, slot: Qwen38VLLMSlot | None = None
+    ) -> None:
         """The request's policy, logged when it changes; the draw generator is seeded from ``seed`` for a new request
-        (the prefill cleared the slot), a new seed, or the plugin's ``reset_sampling_state``."""
+        (the prefill cleared the slot), a new seed, or the plugin's ``reset_sampling_state``.  ``slot``: batch mode's
+        per-lane slot (default: the one resident slot)."""
 
-        slot = self.slot
+        slot = self.slot if slot is None else slot
         if policy != slot.policy:
             logger.info(f"host sampler under the device-sampling contract: {policy}")
             reseed = reseed or slot.policy is None or policy.seed != slot.policy.seed
@@ -673,8 +873,10 @@ class Qwen38ForCausalLM:
         """Nothing to compile or capture (``open`` did both): checks only, in both phases.  The plugin's flag here is
         ``sample_on_device_mode == "all"`` (prefill would have to return tokens): refused, prefill returns the row."""
 
-        if can_sample_on_device:
+        if can_sample_on_device and not self.batch_mode:
             raise ValueError("prefill returns logits: sample_on_device_mode must be decode_only, not all")
+        if self.chain is None:
+            raise Qwen38ChatChainError("batch mode: allocate_kv_cache opens the chain, call it before warmup")
         if self.chain.closed or not self.chain.misses_forbidden:
             raise Qwen38ChatChainError("the chain must be open with its miss guard closed before warmup")
 
@@ -693,6 +895,12 @@ class Qwen38ForCausalLM:
         served: the sampled decode steps draw on the host from the row the greedy path reads."""
 
         self.warmup_model_prefill(enable_trace=enable_trace, kv_cache=kv_cache, can_sample_on_device=False)
+        if self.batch_mode:
+            if max_batch_size != self.lanes:
+                raise ValueError(f"batch mode: max_batch_size must be the {self.lanes} lanes, got {max_batch_size}")
+            if enable_trace:
+                self._warmup_batch()
+            return
         if max_batch_size != 1:
             raise ValueError(f"one resident slot: max_batch_size must be 1, got {max_batch_size}")
         if not enable_trace:
@@ -725,18 +933,441 @@ class Qwen38ForCausalLM:
     def release_request(self, slot: int) -> None:
         """The request's slot is free; the device is untouched (the next prefill resets it)."""
 
+        if self.batch_mode:
+            self._release_lane_of_slot(slot)
+            return
         if slot != 0:
             raise ValueError(f"one resident slot: slot must be 0, got {slot}")
         self.slot.committed = []
         self.slot.ple_context = None
 
     def release_persistent_capture(self) -> None:
-        """Worker shutdown while the mesh is open: the chain's release order, skipped after a failed chain call."""
+        """Worker shutdown while the mesh is open: the chain's release order, skipped after a failed chain call.  Batch
+        mode: the lane decoder (lane trace, pagers, lane state) first, then the chain."""
 
-        if self.slot.failed:
+        if self.slot.failed or self.batch_failed:
             logger.warning("a chain call failed; the traces and states are left to the mesh close")
             return
+        if self.batch_mode:
+            if self.decoder is not None:
+                self.decoder.release()
+            if self.chain is None:
+                return  # allocate_kv_cache never ran: nothing is captured
         self.chain.close()
+
+    def note_state_slots_moved(self, moves: Mapping[int, int]) -> None:
+        """The plugin's ``{old_slot: new_slot}`` after it committed a slot movement (batch mode: the slot -> lane map;
+        single-slot mode: nothing to do).  ``decode_forward`` already applied the permutation its ``slot_remap`` carried,
+        and the plugin sends the same permutation here once the decode was accepted: that call changes nothing.  A
+        permutation ``decode_forward`` did not carry is applied here, once (the lanes never move on the device)."""
+
+        if not self.batch_mode:
+            return
+        moves = {int(old): int(new) for old, new in dict(moves).items()}
+        pending, self._pending_note = self._pending_note, None
+        if not moves or moves == pending:
+            return
+        if set(moves) != set(moves.values()) or any(not 0 <= slot < self.lanes for slot in moves):
+            raise ValueError(f"note_state_slots_moved: {moves} is not a permutation of state slots")
+        lane_of_slot = list(self.lane_of_slot)
+        for old, new in moves.items():
+            lane_of_slot[new] = self.lane_of_slot[old]
+        self.lane_of_slot = lane_of_slot
+
+    # -- batch mode (max_num_seqs 2..32) -----------------------------------------------------------------------------
+
+    def _open_batch(self, *, num_blocks: int, block_size: int) -> None:
+        """Open the chain with the lane decoder's prepare as its warm hook and capture the lane trace.  ``num_blocks``
+        pages of ``block_size`` rows form the pool; page id = vLLM block id, page 0 (vLLM's null block) the scratch."""
+
+        if self.decoder is not None:
+            raise RuntimeError("the lane pool is already allocated: allocate_kv_cache runs once")
+        if self.chain_opener is None:
+            raise RuntimeError("batch mode needs the chain opener initialize_vllm_model hands in")
+        block_size = check_block_size(block_size)
+        if isinstance(num_blocks, bool) or not isinstance(num_blocks, int) or num_blocks < 2:
+            raise ValueError(f"vLLM num_blocks must be an int >= 2 (block 0 is the scratch), got {num_blocks!r}")
+        paging = Qwen38LanePaging(
+            page_size=block_size,
+            num_pages=num_blocks,
+            max_blocks=batch_max_blocks(self.allocated_context, block_size),
+        ).validate(self.allocated_context)
+        decoder = Qwen38PlainLaneDecoder(self.lanes, paging=paging, indexer_form=BATCH_LANE_INDEXER_FORM)
+        decoder.warm_logits_gather = True  # host-sampled rows and host logits read the lane logits under the miss guard
+        self.decoder, self.block_size, self.num_blocks = decoder, block_size, num_blocks
+        logger.info(
+            f"batch mode: {self.lanes} lanes, KV pool {num_blocks} blocks x {block_size} rows = "
+            f"{paging.pool_rows} rows ({paging.pool_rows * KV_BYTES_PER_TOKEN / 2**30:.2f} GiB per device), page table "
+            f"{paging.max_blocks} blocks per lane, context {self.allocated_context}, indexer {decoder.indexer_form}"
+        )
+
+        def warm_hook(chain: Any) -> None:
+            self._admit_pool(chain, paging)
+            decoder.prepare(chain)
+
+        self.chain = self.chain_opener(warm_hook)
+        decoder.capture(self)
+        self.dram["after_capture"] = self._dram_free(self.chain.mesh)
+        logger.info(
+            f"batch mode ready: free DRAM per device {self.dram['after_capture']['free_bytes'] / 2**30:.2f} GiB after "
+            f"the lane capture (chain only: {self.dram.get('chain_only', {}).get('free_bytes', 0) / 2**30:.2f} GiB)"
+        )
+
+    @staticmethod
+    def _dram_free(mesh: Any) -> dict[str, int]:
+        """The mesh allocator's DRAM view (one virtual allocator, every card alike), per device, in bytes."""
+
+        view = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
+        banks = int(view.num_banks)
+        return {
+            "banks": banks,
+            "free_bytes": banks * int(view.total_bytes_free_per_bank),
+            "allocated_bytes": banks * int(view.total_bytes_allocated_per_bank),
+            "largest_contiguous_per_bank": int(view.largest_contiguous_bytes_free_per_bank),
+        }
+
+    def _admit_pool(self, chain: Any, paging: Qwen38LanePaging) -> None:
+        """Refuse a pool the free DRAM cannot hold (the chain is built, the lanes are not yet), naming the knob."""
+
+        self.dram["chain_only"] = self._dram_free(chain.mesh)
+        free = self.dram["chain_only"]["free_bytes"]
+        pool = paging.pool_rows * KV_BYTES_PER_TOKEN
+        lanes = LANE_FIXED_BASE_32K + self.lanes * (
+            LANE_FIXED_PER_LANE_32K + (self.allocated_context - 32768) * CONTEXT_BYTES_PER_TOKEN_PER_LANE
+        )
+        logger.info(
+            f"batch pool admission: free {free / 2**30:.2f} GiB per device, pool {pool / 2**30:.2f} GiB, lane states "
+            f"~{lanes / 2**30:.2f} GiB, margin {POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB"
+        )
+        if pool + lanes + POOL_ADMISSION_MARGIN_BYTES > free:
+            raise ValueError(
+                f"the KV pool of {paging.num_pages} blocks x {paging.page_size} rows needs {pool / 2**30:.2f} GiB per "
+                f"device beside ~{lanes / 2**30:.2f} GiB of lane states and a {POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB "
+                f"margin, the free DRAM is {free / 2**30:.2f} GiB: set {MAX_TOKENS_ALL_USERS_VARIABLE} lower (or "
+                f"--max-model-len, --max-num-seqs)"
+            )
+
+    def _require_batch_ready(self) -> Qwen38PlainLaneDecoder:
+        if self.decoder is None or self.chain is None or self.decoder.ls is None:
+            raise Qwen38ChatChainError("batch mode: allocate_kv_cache opens the chain and captures the lanes first")
+        if self.batch_failed:
+            raise Qwen38ChatChainError("a lane call failed earlier; the lane state is not trusted")
+        return self.decoder
+
+    def _page_row(self, row: Any, *, needed: int, label: str) -> list[int]:
+        """The vLLM block ids of one page-table row (zero padded): its leading nonzero entries.  Refused: block 0
+        (vLLM's null block, our scratch page) among them, an id outside the pool, more than the lane table holds, or
+        fewer than ``needed`` blocks (the step would write into the scratch page)."""
+
+        ids = [int(block) for block in torch.as_tensor(row).reshape(-1).tolist()]
+        count = len(ids)
+        while count and ids[count - 1] == 0:
+            count -= 1
+        pages = ids[:count]
+        if 0 in pages:
+            raise ValueError(f"{label}: block 0 (vLLM's null block) inside the page-table row {pages}")
+        if pages and (min(pages) < 0 or max(pages) >= self.num_blocks):
+            raise ValueError(f"{label}: block ids must be in [1, {self.num_blocks}), got {pages}")
+        if len(pages) > self.decoder.paging.max_blocks:
+            raise ValueError(f"{label}: {len(pages)} blocks exceed the lane table's {self.decoder.paging.max_blocks}")
+        if len(pages) < needed:
+            raise ValueError(f"{label}: needs {needed} blocks for its tokens, the page-table row holds {len(pages)}")
+        return pages
+
+    def _release_lane_of_slot(self, slot: int) -> None:
+        """``release_request`` in batch mode: the slot's lane is free (host state cleared, page row zeroed, parked at
+        the next replay); vLLM frees the blocks."""
+
+        if isinstance(slot, bool) or not isinstance(slot, int) or not 0 <= slot < self.lanes:
+            raise ValueError(f"slot must be in [0, {self.lanes}), got {slot!r}")
+        decoder = self._require_batch_ready()
+        lane = self.lane_of_slot[slot]
+        decoder.release_lane_external(lane)
+        self.lane_slots[lane] = Qwen38VLLMSlot()
+
+    def _prefill_batch(
+        self,
+        *,
+        tokens: torch.Tensor,
+        page_table: Any,
+        enable_trace: bool,
+        prompt_lens: Any,
+        start_pos: Any,
+        empty_slots: Any,
+        sampling_params: Any,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Each row alone: the B=1 chain prefill, then its import into the lane that owns ``empty_slots[i]`` with the
+        row's vLLM blocks as its pages.  Returns ``(out, rope_deltas)``: with ``sampling_params`` the next tokens int32
+        ``[rows, 1]`` (a plain greedy row: the device greedy token; any other row: drawn on the host from the row's
+        logits, penalties over the prompt), else the host logits ``[rows, 1, VOCAB_SIZE]``; ``rope_deltas`` zeros."""
+
+        decoder = self._require_batch_ready()
+        rows = int(tokens.shape[0])
+        if not 1 <= rows <= self.lanes or tokens.dim() != 2:
+            raise ValueError(f"batch mode: tokens must be [1..{self.lanes}, P], got {tuple(tokens.shape)}")
+        if empty_slots is None or not (len(empty_slots) == len(prompt_lens) == len(start_pos) == rows):
+            raise ValueError("batch mode: empty_slots, prompt_lens and start_pos must hold one entry per row")
+        slots = [int(slot) for slot in empty_slots]
+        if len(set(slots)) != rows or any(not 0 <= slot < self.lanes for slot in slots):
+            raise ValueError(f"batch mode: empty_slots must be distinct slots in [0, {self.lanes}), got {slots}")
+        if page_table is None or torch.as_tensor(page_table).shape[0] < rows:
+            raise ValueError("batch mode: prefill needs the page-table row of every row")
+        page_table = torch.as_tensor(page_table)
+        prompts: list[list[int]] = []
+        pages: list[list[int]] = []
+        policies: list[Qwen38HostSamplingPolicy | None] = []
+        for i in range(rows):
+            if int(start_pos[i]) != 0:
+                raise ValueError(
+                    f"prefill must start at position 0 (no prefix caching, no chunking), got {int(start_pos[i])}"
+                )
+            length = int(prompt_lens[i])
+            if not 1 <= length <= min(self.context_limit, tokens.shape[1]):
+                raise ValueError(
+                    f"prompt length {length} must be in [1, {self.context_limit}] and within tokens "
+                    f"{tuple(tokens.shape)}"
+                )
+            ids = tokens[i, :length].tolist()
+            if min(ids) < 0 or max(ids) >= TOKENIZER_SIZE:
+                raise ValueError(f"prompt ids must be in [0, {TOKENIZER_SIZE}), got {min(ids)}..{max(ids)}")
+            prompts.append(ids)
+            pages.append(self._page_row(page_table[i], needed=-(-length // self.block_size), label=f"prefill row {i}"))
+            policies.append(
+                None if sampling_params is None else Qwen38HostSamplingPolicy.from_contract(sampling_params, i)
+            )
+        self._require_serviceable(enable_trace, recovering=True)
+        outputs: list[torch.Tensor] = []
+        for i in range(rows):
+            lane = self.lane_of_slot[slots[i]]
+            if decoder.positions[lane] is not None:
+                logger.warning(f"prefill into slot {slots[i]} whose lane {lane} still holds a request: released")
+                decoder.release_lane_external(lane)
+            policy = policies[i]
+            device_greedy = policy is not None and policy.greedy and not policy.penalized
+            out = self._prefill_one(prompts[i], greedy_token=device_greedy)
+            try:
+                decoder.import_lane(self, lane, len(prompts[i]), self.slot.ple_context, pages[i])
+            except BaseException:
+                self.batch_failed = True
+                raise
+            self.slot.committed = []  # the B=1 scratch state is free again
+            self.slot.ple_context = None
+            lane_slot = self.lane_slots[lane] = Qwen38VLLMSlot()
+            if policy is not None:
+                self._adopt_policy(policy, reseed=True, slot=lane_slot)
+            if policy is not None and not device_greedy:
+                row = out[0, 0]
+                if policy.penalized:
+                    prompt_ids = torch.tensor(prompts[i], dtype=torch.long)
+                    apply_penalties(row, prompt_ids, torch.zeros(0, dtype=torch.long), policy)
+                out = torch.tensor([[sample_from_row(row, policy, lane_slot.generator)]], dtype=torch.int32)
+            outputs.append(out)
+        return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
+
+    def _decode_batch(
+        self,
+        *,
+        tokens: torch.Tensor,
+        start_pos: Any,
+        page_table: Any,
+        enable_trace: bool,
+        slot_remap: Any,
+        reset_sampling_state: bool,
+        sampling_params: Any,
+        prompt_tokens: Any,
+        output_tokens: Any,
+    ) -> torch.Tensor:
+        """One replay of the lane trace for the live rows.  Row ``i`` is live when ``start_pos[i] >= 0``; it runs in lane
+        ``lane_of_slot[i]`` after ``slot_remap`` was applied to the slot -> lane map.  Every lane that holds a request
+        must have a live row (the trace advances every lane).  Lanes without a request run the warm token on the scratch
+        page, parked at position 0.  Returns the next tokens int32 ``[lanes, 1]`` under ``sampling_params`` (device
+        greedy ids; host draws for the other live rows; padding rows 0), else the host logits ``[lanes, 1, VOCAB_SIZE]``
+        (padding rows 0)."""
+
+        started = time.perf_counter()
+        decoder = self._require_batch_ready()
+        lanes = self.lanes
+        if tuple(tokens.shape) != (lanes, 1):
+            raise ValueError(f"batch mode: tokens must be [{lanes}, 1], got {tuple(tokens.shape)}")
+        positions = [int(position) for position in torch.as_tensor(start_pos).reshape(-1).tolist()]
+        if len(positions) != lanes:
+            raise ValueError(f"batch mode: start_pos must hold {lanes} rows, got {len(positions)}")
+        if page_table is None or torch.as_tensor(page_table).shape[0] < lanes:
+            raise ValueError(f"batch mode: page_table must hold {lanes} rows")
+        page_table = torch.as_tensor(page_table)
+        remap = parse_slot_remap(slot_remap, lanes)
+        new_map = [self.lane_of_slot[remap[row]] for row in range(lanes)]
+        live_rows = [row for row, position in enumerate(positions) if position >= 0]
+        if not live_rows:
+            raise ValueError("batch mode: a decode needs a live row (start_pos >= 0)")
+        holders = {lane for lane in range(lanes) if decoder.positions[lane] is not None}
+        row_lanes = {row: new_map[row] for row in live_rows}
+        orphans = sorted(holders - set(row_lanes.values()))
+        if orphans:
+            raise Qwen38ChatChainError(
+                f"contract error: lanes {orphans} hold live requests but no live row of this decode maps to them "
+                f"(rows {live_rows}, slot -> lane {new_map}); the replay advances every lane and would corrupt them"
+            )
+        strangers = [row for row in live_rows if row_lanes[row] not in holders]
+        if strangers:
+            raise Qwen38ChatChainError(
+                f"contract error: live rows {strangers} map to lanes with no prefilled request (slot -> lane {new_map})"
+            )
+        lane_tokens = [WARM_TOKEN_ID] * lanes
+        pages: dict[int, list[int]] = {}
+        policies: dict[int, Qwen38HostSamplingPolicy] = {}
+        for row in live_rows:
+            lane, position = row_lanes[row], positions[row]
+            token_id = int(tokens[row, 0])
+            if not 0 <= token_id < TOKENIZER_SIZE:
+                raise ValueError(f"decode token must be in [0, {TOKENIZER_SIZE}), got {token_id} (row {row})")
+            if position >= self.context_limit:
+                raise ValueError(f"row {row}: position {position} is past the context limit {self.context_limit}")
+            mirror = decoder.lane_position(lane)
+            if position != mirror:
+                raise Qwen38ChatChainError(
+                    f"runner position {position} vs device position {mirror} (row {row}, lane {lane})"
+                )
+            pages[row] = self._page_row(
+                page_table[row], needed=position // self.block_size + 1, label=f"decode row {row}"
+            )
+            lane_tokens[lane] = token_id
+            if sampling_params is not None:
+                policies[row] = Qwen38HostSamplingPolicy.from_contract(sampling_params, row)
+        host_rows = [row for row, policy in policies.items() if not (policy.greedy and not policy.penalized)]
+        histories = {
+            row: penalty_history(prompt_tokens, output_tokens, row) for row in host_rows if policies[row].penalized
+        }
+        if not enable_trace and not self.trace_mode_warned:
+            self.trace_mode_warned = True
+            logger.warning("trace_mode is not honoured: every step replays the captured traces")
+        # Accepted: the map moves, the lanes' page rows and policies follow, then the one replay.
+        self._pending_note = (
+            {remap[row]: row for row in range(lanes) if remap[row] != row} if remap != list(range(lanes)) else None
+        )
+        self.lane_of_slot = new_map
+        for row in live_rows:
+            decoder.set_page_row(row_lanes[row], pages[row])
+            if row in policies:
+                self._adopt_policy(policies[row], reseed=reset_sampling_state, slot=self.lane_slots[row_lanes[row]])
+        try:
+            decoder.sync_page_table()
+            decoder.park_idle([lane for lane in range(lanes) if lane not in holders])
+            step_started = time.perf_counter()
+            lane_ids = decoder.step(lane_tokens)
+            step_s = time.perf_counter() - step_started
+        except BaseException:
+            self.batch_failed = True
+            raise
+        gather_started = time.perf_counter()
+        logits = None
+        if sampling_params is None or host_rows:
+            logits = self._read_lane_logits()
+        if sampling_params is None:
+            out = torch.zeros(lanes, 1, VOCAB_SIZE, dtype=torch.float32)
+            for row in live_rows:
+                out[row, 0] = logits[row_lanes[row]]
+        else:
+            out = torch.zeros(lanes, 1, dtype=torch.int32)
+            for row in live_rows:
+                lane = row_lanes[row]
+                if row in host_rows:
+                    values = logits[lane]
+                    if row in histories:
+                        apply_penalties(values, *histories[row], policies[row])
+                    out[row, 0] = sample_from_row(values, policies[row], self.lane_slots[lane].generator)
+                    continue
+                token = int(lane_ids[lane])
+                if not 0 <= token < TOKENIZER_SIZE:
+                    if not self._warned_padded_greedy:
+                        self._warned_padded_greedy = True
+                        logger.warning(
+                            f"device greedy token {token} is outside the tokenizer [0, {TOKENIZER_SIZE}): "
+                            "falling back to the host argmax over the masked full logits"
+                        )
+                    if logits is None:
+                        logits = self._read_lane_logits()
+                    token = int(logits[lane].argmax())
+                out[row, 0] = token
+        now = time.perf_counter()
+        self.decode_stats.append(
+            {
+                "rows": len(live_rows),
+                "total_s": now - started,
+                "step_s": step_s,
+                "gather_s": now - gather_started,
+                "overhead_s": (now - started) - step_s,
+            }
+        )
+        return out
+
+    def _read_lane_logits(self) -> torch.Tensor:
+        """The last replay's logits of every lane, fp32 ``[lanes, VOCAB_SIZE]``, the LM head's padding masked."""
+
+        try:
+            logits = self.decoder.read_full_logits()
+        except BaseException:
+            self.batch_failed = True
+            raise
+        logits[:, TOKENIZER_SIZE:] = float("-inf")
+        return logits
+
+    def _warmup_batch(self) -> None:
+        """Batch mode's traced warmup, under the closed miss guard: one prompt through slot 0 (the B=1 chain prefill,
+        the import), two lane steps (device greedy ids, then the host logits gather), the slot released.  The pool's
+        first blocks take the prompt's rows (a request rewrites every block it reads before it reads it)."""
+
+        length = len(WARMUP_PROMPT_TOKEN_IDS)
+        needed = (length + 1) // self.block_size + 1
+        if self.num_blocks < needed + 1:
+            raise ValueError(f"warmup needs {needed} blocks beside the scratch block, the pool has {self.num_blocks}")
+        table = torch.zeros(self.lanes, self.decoder.paging.max_blocks, dtype=torch.int32)
+        table[0, :needed] = torch.arange(1, needed + 1, dtype=torch.int32)
+        prompt = torch.tensor([WARMUP_PROMPT_TOKEN_IDS], dtype=torch.int32)
+        out, _ = self.prefill_forward(
+            tokens=prompt,
+            page_table=table[:1],
+            kv_cache=None,
+            enable_trace=True,
+            prompt_lens=[length],
+            start_pos=[0],
+            empty_slots=[0],
+            sampling_params=greedy_batch_sampling_params(1),
+        )
+        row_tokens = torch.zeros(self.lanes, 1, dtype=torch.int32)
+        row_tokens[0, 0] = int(out.reshape(-1)[0])
+        positions = torch.full((self.lanes,), -1, dtype=torch.int32)
+        positions[0] = length
+        ids = self.decode_forward(
+            tokens=row_tokens,
+            start_pos=positions,
+            page_table=table,
+            kv_cache=None,
+            enable_trace=True,
+            read_from_device=False,
+            sampling_params=greedy_batch_sampling_params(self.lanes),
+        )
+        row_tokens[0, 0] = int(ids[0, 0])
+        positions[0] = length + 1
+        self.decode_forward(
+            tokens=row_tokens,
+            start_pos=positions,
+            page_table=table,
+            kv_cache=None,
+            enable_trace=True,
+            read_from_device=False,
+        )
+        self.release_request(0)
+        self.lane_of_slot = list(range(self.lanes))
+        self.lane_slots = [Qwen38VLLMSlot() for _ in range(self.lanes)]
+        self._pending_note = None
+        self.decode_stats.clear()
+        try:
+            self.chain.reset_and_seed(SEED_TOKEN_ID)
+        except BaseException:
+            self.slot.failed = True
+            raise
+        self.slot = Qwen38VLLMSlot()
 
     # -- the per-token step and its readback -----------------------------------------------------------------------
 

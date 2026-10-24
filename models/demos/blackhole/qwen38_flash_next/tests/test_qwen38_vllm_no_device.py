@@ -1110,7 +1110,7 @@ def test_construction_requires_the_cache_root_and_disjoint_cache_roots(construct
 @pytest.mark.parametrize(
     "overrides, message",
     (
-        ({"max_batch_size": 2}, "max_num_seqs 1"),
+        ({"max_batch_size": 33}, "max_num_seqs 1"),  # 2..32 is batch mode (P2a)
         ({"tt_data_parallel": 2}, "data parallelism"),
         ({"optimizations": "fast"}, "optimizations"),
         ({"mesh_device": _mesh(shape=(4, 1))}, "mesh of 4 devices"),

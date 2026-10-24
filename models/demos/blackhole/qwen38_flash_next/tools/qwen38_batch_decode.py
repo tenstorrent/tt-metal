@@ -151,6 +151,9 @@ class Qwen38PlainLaneDecoder:
         self.released = False
         self.page_table_dirty = False  # a page row changed since the last table write (grow, release)
         self.last_admit: dict[str, float] = {}
+        # P2a (vLLM adapter): compile the full-vocabulary gather of the lane logits in ``prepare`` (eager, misses allowed)
+        # so ``read_full_logits`` runs under the closed miss guard; off for the P1 drivers (they read greedy ids only).
+        self.warm_logits_gather = False
 
     # -- the two build phases ----------------------------------------------------------------------
 
@@ -196,6 +199,8 @@ class Qwen38PlainLaneDecoder:
         output = model.forward_decode_lanes(ls)
         candidates, token_row = model.resolve_lane_tokens(output, ls)
         ttnn.synchronize_device(mesh)
+        if self.warm_logits_gather:
+            chain.sampling.read_full_logits_rows(output.logits)
         output.release_tensors()
         for tensor in (
             token_row,
@@ -356,6 +361,75 @@ class Qwen38PlainLaneDecoder:
             return False
         position.park(lanes)
         return True
+
+    # -- vLLM-owned pages (P2a) --------------------------------------------------------------------
+    #
+    # The vLLM adapter owns the block ids (the scheduler's), so it never calls ``allocator``: it writes the page rows
+    # itself (``set_page_row``), imports a prefill into a lane with the rows it was given (``import_lane``) and frees a
+    # lane without returning pages to the unused allocator (``release_lane_external``).
+
+    def lane_position(self, lane: int) -> int:
+        """The lane's position mirror: the position its next step consumes (the device row's host twin)."""
+
+        return int(self.ls.position.positions[lane])
+
+    def set_page_row(self, lane: int, pages: Sequence[int]) -> bool:
+        """Lane ``lane``'s page row (vLLM block ids, no padding); marks the table dirty only when the row changed.
+        Returns whether it changed; the upload is left to ``sync_page_table``."""
+
+        if self.paging is None:
+            raise RuntimeError("set_page_row writes the page table: the decoder is not paged")
+        pages = [int(page) for page in pages]
+        if len(pages) > self.paging.max_blocks:
+            raise ValueError(f"lane {lane} holds {len(pages)} pages, the table {self.paging.max_blocks}")
+        if pages == self.page_rows[lane]:
+            return False
+        self.page_rows[lane] = pages
+        self.page_table_dirty = True
+        return True
+
+    def import_lane(self, vm: Any, lane: int, length: int, context: Any, pages: Sequence[int]) -> None:
+        """Move the B=1 chain's just-prefilled state (``length`` tokens, PLE context ``context``) into lane ``lane``
+        with the page row ``pages``: ``admit`` without its prefill and without the allocator (the pages are vLLM's)."""
+
+        model, ls = self.model, self.ls
+        started = time.perf_counter()
+        if self.page_rows[lane] or self.positions[lane] is not None:
+            raise RuntimeError(f"lane {lane} is still live: release_lane_external first")
+        slot = self.pool.slots[0]
+        self.page_rows[lane] = []
+        self.set_page_row(lane, pages)
+        model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
+        self.page_table_dirty = False  # the whole table, other lanes' pending changes included
+        self.pager_g.evict(0, slot)
+        self.pager_g.rotate_ring_canonical(slot, length)
+        slot.position = length
+        model.admit_lane(ls, lane, length, rope_shift=0)
+        model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
+        self.pager_l.readmit(slot, lane, position_row=None)
+        ttnn.synchronize_device(self.mesh)
+        self.positions[lane] = length
+        self.contexts[lane] = context
+        self.last_admit = {"prefill_s": 0.0, "import_s": time.perf_counter() - started}
+
+    def release_lane_external(self, lane: int) -> bool:
+        """Free lane ``lane`` (host state cleared, page row zeroed; the upload is left to ``sync_page_table``, the
+        parking to ``park_idle``); the blocks are vLLM's to free.  Returns whether the lane was live."""
+
+        was_live = self.positions[lane] is not None or bool(self.page_rows[lane])
+        if self.page_rows[lane]:
+            self.page_rows[lane] = []
+            self.page_table_dirty = True
+        self.positions[lane] = None
+        self.contexts[lane] = None
+        return was_live
+
+    def read_full_logits(self) -> torch.Tensor:
+        """The last replay's logits of every lane, gathered over the vocabulary shards: fp32 ``[lanes, VOCAB]`` (the
+        LM head's padding columns are not masked here).  The capture retains the logits tensor."""
+
+        logits = self.captures[0].output.logits
+        return self.chain.sampling.read_full_logits_rows(logits)[: self.lanes]
 
     # -- decode ------------------------------------------------------------------------------------
 
