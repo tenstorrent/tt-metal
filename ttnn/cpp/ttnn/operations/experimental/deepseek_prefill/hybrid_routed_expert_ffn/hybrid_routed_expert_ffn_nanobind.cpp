@@ -42,6 +42,12 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         the call returns. forwarding_buffer is combine's DRAM staging buffer from
         hybrid_routed_expert_moe_forwarding_buffer; omitted, combine allocates its own at the first
         call and keeps it for the program's lifetime.
+
+        weight_address_table is every expert's weight base address as one uint32 ROW_MAJOR DRAM
+        page, [gate[0..E), up[0..E), down[0..E)], read by the kernels in place of per-expert runtime
+        args, which is what lets the union program fit its kernel-config ring at the production
+        expert count. The caller builds it once, alongside the weights, and keeps the two in step:
+        only its shape is checked.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -70,7 +76,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("final_arrived_semaphore") = nb::none(),
         nb::arg("expert_go_semaphore") = nb::none(),
         nb::arg("forwarding_buffer") = nb::none(),
-        nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{});
+        nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
+        nb::arg("weight_address_table") = nb::none());
 
     ttnn::bind_function<
         "hybrid_routed_expert_moe_channel_semaphore_count",

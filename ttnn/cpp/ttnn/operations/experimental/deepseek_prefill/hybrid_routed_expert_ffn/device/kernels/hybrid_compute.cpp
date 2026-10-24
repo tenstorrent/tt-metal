@@ -22,6 +22,13 @@
 // the program factory computed, applied by the shims its wrapper pulls in. Neither body is
 // renumbered; see hybrid_arg_shims.hpp for why that works.
 
+// The union binary only just fits the kernel-config ring. Size-optimise the pack thread: it
+// frees ~2.6 KB for ~0.2% device time. Unpack and math keep the kernel's O3 -- the unpacker
+// feeds the matmul, and Os there measured up to 2.5x slower.
+#if defined(TRISC_PACK)
+#pragma GCC optimize("Os")
+#endif
+
 #define HYB_MERGED 1
 #include "hybrid_merged_prologue.hpp"
 // Ahead of the LLK pack lib too: it renames the pack source-format table that lib reads.
@@ -65,7 +72,18 @@
 #define HYB_NS hyb_unified
 #define HYB_CT_BASE HYB_UNIFIED_CT_BASE
 #define HYB_RT_BASE HYB_UNIFIED_RT_BASE
+// The unified half's unpack and math at O2, not the binary's O3, to give the kernel-config ring the
+// ~2.9 KB the union program needs: this half's matmuls run on large M, where O2 measured within
+// noise, while the fused half is compute-bound from 64 tokens and loses up to 1.9x at O2. The pack
+// thread keeps the file-wide Os above.
+#if !defined(TRISC_PACK)
+#pragma GCC push_options
+#pragma GCC optimize("O2")
+#endif
 #include "compute/fused_swiglu.cpp"
+#if !defined(TRISC_PACK)
+#pragma GCC pop_options
+#endif
 #undef HYB_NS
 #undef HYB_CT_BASE
 #undef HYB_RT_BASE
