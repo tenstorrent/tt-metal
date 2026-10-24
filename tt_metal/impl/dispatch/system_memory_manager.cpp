@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include "impl/context/metal_context.hpp"
+#include <internal/l1_ecc_halt.hpp>
 #include "system_memory_manager.hpp"
 #include <tt-metalium/tt_align.hpp>
 #include <algorithm>
@@ -61,7 +62,9 @@ void loop_and_wait_with_timeout(
     std::chrono::duration<float> timeout_duration,
     const GetProgress& get_progress,
     ContextId context_id,
+    ChipId device_id,
     std::atomic<bool>* exit_condition = nullptr) {
+    tt::tt_metal::internal::L1EccHaltWatch ecc_watch(tt::tt_metal::MetalContext::instance(context_id), device_id);
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
         uint32_t last_progress_value = 0;
@@ -98,9 +101,11 @@ void loop_and_wait_with_timeout(
             auto elapsed = std::chrono::duration<float>(current_time - last_progress_time).count();
 
             if (elapsed >= timeout_duration.count()) {
+                ecc_watch.check_now();
                 on_timeout();
                 break;
             }
+            ecc_watch.stalled();
 
             // Sleep briefly to avoid busy-waiting
             std::this_thread::yield();
@@ -110,6 +115,7 @@ void loop_and_wait_with_timeout(
             if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
                 break;
             }
+            ecc_watch.stalled();
             func_body();
         } while (wait_condition());
     }
@@ -747,7 +753,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
             fetch_on_timeout,
             timeout_duration,
             get_dispatch_progress,
-            this->context_id);
+            this->context_id,
+            this->device_id);
     };
 
     wait_for_fetch_q_space();
@@ -811,6 +818,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
         tt::tt_metal::MetalContext::instance(this->context_id).rtoptions().get_timeout_duration_for_operations(),
         get_dispatch_progress,
         this->context_id,
+        this->device_id,
         &exit_condition);
 
     return write_ptr_and_toggle;

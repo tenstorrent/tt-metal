@@ -64,7 +64,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 2560)
+#define MEM_BRISC_FIRMWARE_SIZE (6 * 1024 + 3072)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 2560
 #define MEM_TRISC0_FIRMWARE_SIZE 2560
@@ -110,7 +110,7 @@
 // Hardcode below due to compiler bug that cannot statically resolve the expression see GH issue #19265
 #define MEM_MAILBOX_BASE 96  // (MEM_NCRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)  // 2 nocs * 2 (B,NC)
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 13696
+#define MEM_MAILBOX_SIZE 13728
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -334,7 +334,7 @@
 // mailboxes_t is unconditional: every debug/profiling feature that lives in the mailbox reserves its space
 // whether or not it is enabled at runtime, so this number must cover the watcher, DPRINT and the kernel
 // profiler simultaneously.
-#define MEM_DRISC_MAILBOX_SIZE 4432
+#define MEM_DRISC_MAILBOX_SIZE 4464
 #define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
 #define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
