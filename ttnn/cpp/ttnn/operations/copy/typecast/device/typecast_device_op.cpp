@@ -4,9 +4,12 @@
 
 #include "typecast_device_op.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/caller_owned_topology.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include <tt-metalium/hal.hpp>
+
+#include <algorithm>
 
 using namespace tt::tt_metal;
 
@@ -143,6 +146,9 @@ void TypecastDeviceOperation::validate_on_program_cache_miss(
             "Typecast operation requires input and output layouts to match. Input layout: {}, Output layout: {}",
             input_tensor.layout(),
             preallocated_output_tensor.value().layout());
+        TT_FATAL(
+            preallocated_output_tensor.value().device() == input_tensor.device(),
+            "Typecast operation requires input and preallocated output to be on the same device.");
     }
 }
 
@@ -164,6 +170,39 @@ Tensor TypecastDeviceOperation::create_output_tensors(const TypecastParams& args
         return *tensor_args.preallocated_output;
     }
     return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
+}
+
+std::vector<tt::tt_metal::TensorTopology> TypecastDeviceOperation::compute_output_topologies(
+    const TypecastParams& /*args*/, const TypecastInputs& tensor_args) {
+    const Tensor& src = tensor_args.input;
+    if (!tensor_args.preallocated_output.has_value()) {
+        // Fresh output: a typecast of the source is distributed exactly like the source.
+        return {src.tensor_topology()};
+    }
+    // Preallocated output: same rule as prim::copy. On every mesh coordinate src occupies the op performs
+    // dst[coord] := cast(src[coord]); validation forces src and dst onto the same device.
+    //
+    // Full coverage (src and dst span the same SET of mesh coordinates, compared with std::is_permutation rather
+    // than vector equality, because two full-mesh tensors may list the same devices in a different mesh_coords()
+    // order): dst now holds src's shard on every device, so the output adopts src's topology, order included.
+    //
+    // Partial coverage (src occupies a strict subset of dst's coordinates): only those devices are rewritten and no
+    // single label of dst's describes all of its shards. The shared caller-owned rule declines for an operand on a
+    // different coordinate set, so the hook returns {} and the framework's union labels the result -- the
+    // data-preserving choice, since a Replicate label kept over shards that now differ is deduplicated by the
+    // flatbuffer serialiser. launch() has already restricted the returned tensor to src's coordinates in that case,
+    // so the caller's own dst handle keeps its label.
+    const Tensor& dst = *tensor_args.preallocated_output;
+    const auto& src_coords = src.tensor_topology().mesh_coords();
+    const auto& dst_coords = dst.tensor_topology().mesh_coords();
+    if (std::is_permutation(src_coords.begin(), src_coords.end(), dst_coords.begin(), dst_coords.end())) {
+        return {src.tensor_topology()};
+    }
+    if (const auto label =
+            ttnn::operations::core::caller_owned_output_topology(dst, {&src}, "typecast (preallocated output)")) {
+        return {*label};
+    }
+    return {};
 }
 
 bool TypecastDeviceOperation::skip_launch(
