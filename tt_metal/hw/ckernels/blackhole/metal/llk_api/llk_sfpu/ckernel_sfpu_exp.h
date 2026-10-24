@@ -367,32 +367,58 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
+// The FP32 constants of _sfpu_exp_fp32_accurate_: 1/ln2, the two-part Cody-Waite split of -ln2, and the degree-6
+// minimax for exp(f) on [-ln2/2, ln2/2]. Written as literals, as here, each use reloads its constant (two SFPLOADI for
+// all but c5), and the compiler does not hoist them out of a row loop.
+struct ExpFp32Constants {
+    static constexpr float one_ln2 = 1.442695f;
+    static constexpr float neg_ln2_hi = -6.93145752e-1f;
+    static constexpr float neg_ln2_lo = -1.42860677e-6f;
+    static constexpr float c5 = 1.37805939e-3f;
+    static constexpr float c4 = 8.37312452e-3f;  // 0x1.125edcp-7
+    static constexpr float c3 = 4.16695364e-2f;  // 0x1.555b5ap-5
+    static constexpr float c2 = 1.66664720e-1f;  // 0x1.555450p-3
+    static constexpr float c1 = 4.99999851e-1f;  // 0x1.fffff6p-2
+};
+
+// The same constants with the range reduction's three in lregs, for a caller that loads them once before its row
+// loop: six SFPLOADI fewer per row. The exponential needs the other five lregs for its temporaries and the
+// coefficients it still loads, so a fourth hoisted vFloat runs out of lregs. The programmable constants are left
+// alone, so neither this nor another op's init can clobber the other's.
+struct ExpFp32PreloadedConstants : ExpFp32Constants {
+    sfpi::vFloat one_ln2 = ExpFp32Constants::one_ln2;
+    sfpi::vFloat neg_ln2_hi = ExpFp32Constants::neg_ln2_hi;
+    sfpi::vFloat neg_ln2_lo = ExpFp32Constants::neg_ln2_lo;
+};
+
 // Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
-template <bool unsafe = false>
-sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
+// k supplies the constants (ExpFp32Constants or ExpFp32PreloadedConstants); the operations and their order are the
+// same either way, so the result is bit-identical.
+template <bool unsafe = false, typename Constants = ExpFp32Constants>
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a, const Constants& k = Constants{}) {
     sfpi::vInt i, e;
     sfpi::vFloat f, r, j, y;
     sfpi::vSMag16 sm;
 
     // j = round(a / ln2)
     // interleaved with first coefficient of polynomial
-    j = 1.442695f * a;
-    r = 1.37805939e-3f;
+    j = k.one_ln2 * a;
+    r = k.c5;
     sm = sfpi::convert<sfpi::vSMag16>(j, sfpi::RoundMode::Nearest);
     j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::Nearest);
 
     // f = a - i*j (two-part cody-waite)
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+    f = j * k.neg_ln2_hi + a;
+    f = j * k.neg_ln2_lo + f;
 
     // approximate r = exp(f) on [-ln2/2, ln2/2]
     // interleaved with conversion of i from sign-mag to two's complement via abs and copysgn
-    r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
-    r = r * f + 4.16695364e-2f;  // 0x1.555b5ap-5
-    r = r * f + 1.66664720e-1f;  // 0x1.555450p-3
-    r = r * f + 4.99999851e-1f;  // 0x1.fffff6p-2
+    r = r * f + k.c4;
+    r = r * f + k.c3;
+    r = r * f + k.c2;
+    r = r * f + k.c1;
     i = sfpi::abs(sfpi::as<sfpi::vInt>(sm));
     y = r * f + 1.0f;
     i = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i), j));
@@ -491,10 +517,14 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             // effectively free (no other instruction to interleave with SFPMAD).
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
+            // _ckernel_sfpu_exp_accurate_ for an FP32 destination, its range-reduction constants loaded once per call.
+            const ExpFp32PreloadedConstants constants;
             for (int d = 0; d < ITERATIONS; d++) {
                 sfpi::vFloat val = sfpi::dst_reg[0];
-                sfpi::dst_reg[0] =
-                    _ckernel_sfpu_exp_accurate_<SCALE_EN, is_fp32_dest_acc_en>(val, exp_base_scale_factor);
+                if constexpr (SCALE_EN) {
+                    val = val * sfpi::sFloat16b(exp_base_scale_factor);
+                }
+                sfpi::dst_reg[0] = _sfpu_exp_fp32_accurate_(val, constants);
                 sfpi::dst_reg++;
             }
         }
