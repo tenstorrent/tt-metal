@@ -25,10 +25,10 @@ inline constexpr const char* matmul_forms_table[48] = {
     "RRRRR", "rRrrR", "RRRRR", "rRrRR", // k 2-4, HiFi2
     "rRRrR", "rRrrR", "rRRRR", "rRRrR", // k 2-4, HiFi3
     "RRRRR", "RRRRR", "rrrrr", "rrrrr", // k 2-4, HiFi4
-    "hRRhR", "RRRRR", "hRRhR", "RRrRR", // k 5+, LoFi
-    "hRRhR", "RRRRR", "hRRhR", "RRRRR", // k 5+, HiFi2
+    "RRRRR", "RRRRR", "RRRRR", "RRrRR", // k 5+, LoFi
+    "RRRRR", "RRRRR", "RRRRR", "RRRRR", // k 5+, HiFi2
     "RRRRR", "RRRRR", "RRRRR", "RRRRR", // k 5+, HiFi3
-    "hRRhR", "RRRRR", "hrrhr", "rrrrr", // k 5+, HiFi4
+    "RRRRR", "RRRRR", "RrrRr", "rrrrr", // k 5+, HiFi4
 };
 
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format>
