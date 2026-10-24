@@ -1346,7 +1346,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_dram_sharded_mult
     const uint32_t Mt = total_Mt / CM;
     const uint32_t workers_per_m = cores_per_bank / CM;
     const uint32_t CN = std::min(workers_per_m, Nbt);
-    const uint32_t CK = workers_per_m > Nbt ? workers_per_m / Nbt : 1;
+    // Every K group must compute a partial; empty groups would publish unwritten tiles.
+    const uint32_t CK = workers_per_m > Nbt ? std::min(workers_per_m / Nbt, Kt) : 1;
     const uint32_t ncmax = div_up(Nbt, CN);
     TT_FATAL(k_block >= 1, "num_workers_per_dram_bank: in0_block_w must be at least 1");
     const uint32_t KB = std::min(k_block, div_up(Kt, CK));
