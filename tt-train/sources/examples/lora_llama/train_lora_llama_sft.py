@@ -39,7 +39,7 @@ WEIGHT_DECAY = 0.01
 
 LORA_RANK = 8
 LORA_ALPHA = 16
-LORA_TARGET_MODULES = ["q_linear", "kv_linear", "out_linear"]
+LORA_TARGET_MODULES = ["qkv_linear", "out_linear"]
 LORA_DROPOUT = 0.05
 
 

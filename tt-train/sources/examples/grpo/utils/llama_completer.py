@@ -16,7 +16,7 @@ import ttml
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import no_grad, round_up_to_tile
 from ttml.models import RunnerType, WeightTyingType
-from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
+from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors
 from huggingface_hub import snapshot_download
 from transformers import AutoTokenizer
 
@@ -24,7 +24,6 @@ from ttml.trainers.grpo_trainer import GRPOCompleter
 from ttml.common.sampling import positions_to_tensor
 
 from .completer_common import deallocate_tensors, async_read_to_host
-from .llama_overrides import LlamaCompositeKV
 
 TILE_SIZE = 32
 SAMPLE_SEED = 42
@@ -163,9 +162,11 @@ class LlamaGRPOCompleter(GRPOCompleter):
             runner_type=runner_type,
             weight_tying=weight_tying,
             rope_scaling=rope_scaling,
+            # The completer emits non-broadcast (B, 1, S, S) masks, which only the composite kernel accepts.
+            use_composite_sdpa=True,
         )
 
-        tt_model = LlamaCompositeKV(llama_cfg)
+        tt_model = Llama(llama_cfg)
 
         if dev_config.enable_ddp:
             # NOTE: TP is intentionally disabled here. The cross_entropy_loss call below

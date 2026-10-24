@@ -144,6 +144,8 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
             runner_type=runner_type,
             weight_tying=weight_tying,
             rope_scaling=rope_scaling,
+            # The completer emits non-broadcast (B, 1, S, S) masks, which only the composite kernel accepts.
+            use_composite_sdpa=True,
         )
 
         tt_model = LlamaCompositeKV(llama_cfg)
