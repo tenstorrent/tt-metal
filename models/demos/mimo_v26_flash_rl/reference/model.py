@@ -4,8 +4,8 @@
 """Standalone CPU reference for MiMo-V2.6-Flash (mimo_v2), following the checkpoint's modeling_mimo_v2.py.
 
 Per layer: x -> input_layernorm -> attention -> + x -> post_attention_layernorm -> (dense SwiGLU MLP on layer 0 |
-routed MoE elsewhere: sigmoid router, noaux_tc top-8 with the correction bias, 256 mxfp4 experts, no shared
-expert) -> + residual.
+routed MoE elsewhere: sigmoid router, noaux_tc top-8; the gate input and correction bias are rounded to config
+moe_router_dtype (bf16, as the upstream trace ran them), logits fp32, 256 mxfp4 experts, no shared expert) -> + residual.
 
 Attention: fused qkv (fp8, per-TP-rank slabs), head_dim 192 for q/k and 128 for v, v scaled by
 attention_value_scale before the cache, partial RoPE (half-split rotate_half) on the first 64 dims of each head.
@@ -111,7 +111,10 @@ class Layer:
             self.norm_topk = cfg["norm_topk_prob"]
             self.routed_scale = cfg.get("routed_scaling_factor") or 1.0
             self.gate_w = ck.get(f"{p}.mlp.gate.weight")
-            self.gate_bias = ck.get(f"{p}.mlp.gate.e_score_correction_bias")
+            # The checkpoint stores the correction bias fp32, but config moe_router_dtype (bf16) is the dtype upstream
+            # runs the gate parameters in: the HF trace's top-k reproduces only with the bias rounded to bf16.
+            self.router_dtype = getattr(torch, cfg.get("moe_router_dtype") or "float32")
+            self.gate_bias = ck.raw(f"{p}.mlp.gate.e_score_correction_bias").to(self.router_dtype)
 
             def load(e):
                 q = f"{p}.mlp.experts.{e}"
@@ -205,7 +208,10 @@ class Layer:
 
     def router(self, ctx: Ctx, x: torch.Tensor) -> torch.Tensor:
         """Dense routing weights [S, n_experts] (fp32): the top-k experts' normalized sigmoid scores, zero elsewhere."""
-        logits = F.linear(x.to(torch.float32), self.gate_w.to(torch.float32))
+        # Upstream's gate sees bf16 activations (moe_router_dtype); rounding here makes the selection a function of the
+        # bf16 input, so it is the same whether x arrives fp32 (one forward) or bf16 (a stored boundary, the device).
+        x = x.to(self.router_dtype).to(torch.float32)
+        logits = F.linear(x, self.gate_w.to(torch.float32))
         scores = logits.sigmoid()
         choice = scores + self.gate_bias.to(torch.float32)
         idx = torch.topk(choice, k=self.top_k, dim=-1, sorted=False).indices
