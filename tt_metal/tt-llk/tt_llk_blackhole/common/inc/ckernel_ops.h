@@ -195,7 +195,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 
 #define TT_OP_DMANOP     TT_OP(0x60, 0)
 #define TT_IP_DMANOP(IP) TT_IP_INSN(IP, TT_OP_DMANOP)
-#define TTI_DMANOP       TT_OP_DMANOP(nullptr)
+#define TTI_DMANOP       TT_IP_DMANOP(nullptr)
 
 #define TT_OP_DOTPV(clear_dvalid, dest_accum_en, instr_mod19, addr_mode, dst) \
     TT_OP(0x29, (((clear_dvalid) << 22) + ((dest_accum_en) << 21) + ((instr_mod19) << 19) + ((addr_mode) << 14) + ((dst) << 0)))
@@ -1101,15 +1101,15 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 
 #define TT_OP_TBUFCMD     TT_OP(0x4b, 0)
 #define TT_IP_TBUFCMD(IP) TT_IP_INSN(IP, TT_OP_TBUFCMD)
-#define TTI_TBUFCMD       TT_OP_TBUFCMD(nullpt)
+#define TTI_TBUFCMD       TT_OP_TBUFCMD(nullptr)
 
 #define TT_OP_TRNSPSRCA     TT_OP(0x14, 0)
 #define TT_IP_TRNSPSRCA(IP) TT_IP_INSN(IP, TT_OP_TRNSPSRCA)
-#define TTI_TRNSPSRCA       TT_OP_TRNSPSRCA(nullpt)
+#define TTI_TRNSPSRCA       TT_OP_TRNSPSRCA(nullptr)
 
 #define TT_OP_TRNSPSRCB     TT_OP(0x16, 0)
 #define TT_IP_TRNSPSRCB(IP) TT_IP_INSN(IP, TT_OP_TRNSPSRCB)
-#define TTI_TRNSPSRCB       TT_OP_TRNSPSRCB(nullpt)
+#define TTI_TRNSPSRCB       TT_OP_TRNSPSRCB(nullptr)
 
 #define TT_OP_UNPACR(                                                                                                                                \
     Unpack_block_selection,                                                                                                                          \
