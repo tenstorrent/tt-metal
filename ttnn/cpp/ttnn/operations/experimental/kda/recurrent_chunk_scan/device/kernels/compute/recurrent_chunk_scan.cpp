@@ -263,6 +263,8 @@ FORCE_INLINE void multiply_by_decay(
 
 // output[Mt, Nt] = state[Mt, Nt] * decay[Mt] (broadcast across the columns) + a[Mt, Kt] @ b[Kt, Nt]: the decayed
 // state is formed in DST and the product accumulates on top of it, so neither round-trips through a buffer.
+// b, typically the previous stage's packed result, is waited for here, after the first group's decayed state is in
+// DST: that work needs only the state, so it overlaps b's pack. Callers must not wait on b first.
 template <
     uint32_t Mt,
     uint32_t Kt,
@@ -300,6 +302,8 @@ FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, D
                         row * group_columns + column);
                 }
             }
+            // Returns at once after the first group.
+            b.wait_front(Kt * Nt);
             reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
             matmul_block_init(a_id, b_id, false, group_columns, 1, Kt);
             for (uint32_t row = 0; row < group_rows; ++row) {
@@ -376,7 +380,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         final_decay.wait_front(Kt);
         // U = T_inv (v_beta - kd S), S' = dl S + k_dec_t U, and with EmitOutputs Y = q_decay S + intra U. The stages
         // that read only the incoming state are issued first, so the correction's wait on the packed difference
-        // overlaps them.
+        // overlaps them, and the state update forms dl S before it waits on the packed U.
         current.wait_front(key_pair_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, pair_columns, Vt>(
             kd, current, v_beta, value_new);  // v_beta - kd S
@@ -386,7 +390,6 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         }
         value_new.wait_front(Ct * pair_columns);
         matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
-        scratch.wait_front(Ct * pair_columns);
         value_new.pop_front(Ct * pair_columns);
         decayed_state_plus_product<Kt, Ct, pair_columns>(
             current,
