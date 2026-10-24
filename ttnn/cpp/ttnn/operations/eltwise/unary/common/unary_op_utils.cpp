@@ -758,7 +758,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
     switch (op_type) {
         case UnaryOpType::BITWISE_NOT: return {"bitwise_not_tile_init();", fmt::format("bitwise_not_tile({});", idst)};
         case UnaryOpType::RECIP: return {"recip_tile_init();", fmt::format("recip_tile({});", idst)};
-        case UnaryOpType::GELU: return {"gelu_tile_init();", fmt::format("gelu_tile({});", idst)};
+        case UnaryOpType::GELU: return {"gelu_tile_init<0u>();", fmt::format("gelu_tile<0u>({});", idst)};
         case UnaryOpType::GELU_TANH: return {"gelu_tanh_tile_init();", fmt::format("gelu_tanh_tile({});", idst)};
         case UnaryOpType::LOG: return {"log_tile_init();", fmt::format("log_tile({});", idst)};
         case UnaryOpType::LOG1P: return {"log1p_tile_init();", fmt::format("log1p_tile({});", idst)};
@@ -813,7 +813,7 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::I1: return {"i1_tile_init();", fmt::format("i1_tile({});", idst)};
         case UnaryOpType::EXP: return {"exp_tile_init();", fmt::format("exp_tile({});", idst)};
         case UnaryOpType::SIGMOID: return {"sigmoid_tile_init();", fmt::format("sigmoid_tile({});", idst)};
-        case UnaryOpType::ERF: return {"erf_tile_init();", fmt::format("erf_tile({0});", idst)};
+        case UnaryOpType::ERF: return {"erf_tile_init<0u>();", fmt::format("erf_tile<0u>({0});", idst)};
         case UnaryOpType::ERFC: return {"erfc_tile_init();", fmt::format("erfc_tile({});", idst)};
         case UnaryOpType::ERFINV: return {"erfinv_tile_init();", fmt::format("erfinv_tile({});", idst)};
         case UnaryOpType::LOG10:
