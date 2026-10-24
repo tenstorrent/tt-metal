@@ -30,8 +30,8 @@ from helpers.llk_params import (
     format_tile_sizes,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     quasar_mx_smoke,
     runtime,
@@ -160,9 +160,7 @@ def matmul_dest_acc_modes(format):
 def matmul_tile_dimensions(
     dest_acc, dest_sync, *, exact_dest_fill=False, is_perf=False
 ):
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (
-        2 if dest_acc == DestAccumulation.Yes else 1
-    )
+    max_tiles = max_dest_tiles(dest_acc, dest_sync)
     # Perf keeps dest-full tall (max_tiles, 1) and wide (1, max_tiles) so both
     # ct>=rt and ct<rt MOP addr_mod branches are covered, and kt=1 vs kt=4.
     rt_dims = (1, max_tiles) if is_perf else range(1, max_tiles + 1)

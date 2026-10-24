@@ -14,7 +14,7 @@ from helpers.matmul_sweep import (
     generate_matmul_dimension_combinations,
     generate_tile_dims,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import input_output_formats, max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -43,18 +43,6 @@ if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
     THROTTLE_LEVELS = [0, 1, 2, 3, 4, 5]
 else:
     THROTTLE_LEVELS = [0]
-
-
-def _dest_bank_max_tiles(formats, dest_acc):
-    """Max result-tile count for a (format, dest_acc) pair on DestSync.Half.
-
-    A 32-bit destination register (dest_acc=Yes, or a format the harness forces
-    onto 32-bit dest) holds 4 tiles; the 16-bit destination holds 8. Mirrors
-    perf_matmul._dest_bank_max_tiles so test and perf coverage share the rule.
-    """
-    if is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes:
-        return 4
-    return 8
 
 
 MATMUL_FORMATS = input_output_formats(
@@ -180,7 +168,7 @@ def _run_matmul_custom(
     # own axis -- rather than a packed (format, dest_acc, dims) tuple -- so test and
     # perf coverage line up axis-for-axis (cf. perf_matmul.matmul_combos).
     dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(
-        _dest_bank_max_tiles(formats, dest_acc)
+        max_dest_tiles(is_dest_acc_needed(formats) or dest_acc == DestAccumulation.Yes)
     ),
 )
 def test_matmul_custom(

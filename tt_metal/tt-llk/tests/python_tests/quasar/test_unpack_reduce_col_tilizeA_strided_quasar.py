@@ -28,9 +28,9 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     generate_perf_input_dimensions,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
     runtime,
     select_perf_tile_sizes,
@@ -78,8 +78,7 @@ def generate_corner_case_input_dimensions(
     block_rt) and max-square (both loops at capacity), where max is the number of tiles that
     fit into dest for the given dest_sync / dest_acc pair.
     """
-    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles_in_dest = max_dest_tiles(dest_acc, dest_sync)
     square_side = math.isqrt(max_tiles_in_dest)
 
     tile_counts = [

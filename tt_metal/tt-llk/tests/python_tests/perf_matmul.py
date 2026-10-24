@@ -21,8 +21,8 @@ from helpers.matmul_sweep import (
     unpack_matmul_fits_perf_ring,
 )
 from helpers.param_config import (
-    DEST_SYNC_TILE_LIMITS,
     input_output_formats,
+    max_dest_tiles,
     parametrize,
 )
 from helpers.perf.core import PerfConfig
@@ -73,16 +73,8 @@ def matmul_combos(
     def _acc_modes(fmt: FormatConfig) -> List[DestAccumulation]:
         return dest_acc(fmt) if callable(dest_acc) else dest_acc
 
-    def _dest_bank_max_tiles(
-        format: FormatConfig, dest_acc: DestAccumulation, dest_sync: DestSync
-    ):
-        capacity_divisor = (
-            2 if is_dest_acc_needed(format) or dest_acc == DestAccumulation.Yes else 1
-        )
-        return DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
-
     unique_max_tiles = set(
-        _dest_bank_max_tiles(fmt, acc, sync)
+        max_dest_tiles(is_dest_acc_needed(fmt) or acc == DestAccumulation.Yes, sync)
         for fmt in formats
         for acc in _acc_modes(fmt)
         for sync in DEST_SYNC_MODES
@@ -97,7 +89,12 @@ def matmul_combos(
         for format in formats
         for accumulation in _acc_modes(format)
         for dest_sync in DEST_SYNC_MODES
-        for dims in dimensions[_dest_bank_max_tiles(format, accumulation, dest_sync)]
+        for dims in dimensions[
+            max_dest_tiles(
+                is_dest_acc_needed(format) or accumulation == DestAccumulation.Yes,
+                dest_sync,
+            )
+        ]
     ]
 
 
