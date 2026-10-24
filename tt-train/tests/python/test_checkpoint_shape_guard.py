@@ -257,22 +257,38 @@ def test_replica_check_can_be_disabled(tp_mesh, tmp_path, expect_error):
     assert os.path.exists(path)
 
 
-def test_save_keeps_nd_replicated_tensor(tp_mesh, tmp_path):
-    """A tensor replicated under an N-D label (``[1, 2] / (Replicate, Replicate)``, what an explicit N-D mapper makes)
-    saves at its own shape with the replica check on and off: the check passes on identical copies, and the composer
-    keeps one copy per ``Replicate`` axis (each on its own tensor dim: "dims must be unique")."""
+def test_save_keeps_tensors_under_nd_labels(tp_mesh, tmp_path):
+    """Tensors under N-D labels (what an explicit N-D mapper makes) save whole and exact, with the replica check on and
+    off: ``[1, 2] / (Replicate, Replicate)``, where the composer keeps a single copy, and ``[1, 2] / (Replicate,
+    Shard(0))``, the layout ``Mesh.axis_mapper(name, tdim=0)`` gives expert weights, where the composer concatenates
+    the shards on dim 0 and the Replicate axis has to take another tensor dim ("dims must be unique").
+
+    Negative control: composing ``(Replicate, Shard(0))`` with dim 0 for the Replicate axis too (``dims = [0, 0]``)
+    fails in ``concat_ndim``. With every axis Replicate the composer has a single view and never checks its dims, so
+    the first layout alone would not catch that."""
     device = ttml.autograd.AutoContext.get_instance().get_device()
-    mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig([ttnn.PlacementReplicate() for _ in tp_mesh.shape]))
-    data = np.random.default_rng(4).standard_normal((1, 1, 32, 32), dtype=np.float32)
-    t = ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
-    assert len(ttml.Sharding.from_tensor(t).dist_shape) == 2, "precondition: an N-D label"
+    rng = np.random.default_rng(4)
+    layouts = {
+        "replicated": ([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()], (1, 1, 32, 32)),
+        "experts": ([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)], (2, 1, 32, 32)),
+    }
     params = ttml.NamedParameters()
-    params["nd"] = t
+    expected = {}
+    for name, (placements, shape) in layouts.items():
+        data = rng.standard_normal(shape, dtype=np.float32)
+        mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
+        params[name] = ttml.autograd.Tensor.from_numpy(data, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
+        assert len(ttml.Sharding.from_tensor(params[name]).dist_shape) == 2, f"precondition: {name} has an N-D label"
+        expected[name] = data.astype(ml_dtypes.bfloat16).astype(np.float32)
     for verify in (True, False):
         path = str(tmp_path / f"nd_{verify}.ckpt")
         checkpointing.save_checkpoint(path, header={}, model_params=params, verify_replicas=verify)
-        _, record = _stream_records(path)
-        assert tuple(record.shape) == (1, 1, 32, 32), (verify, record.shape)
+        header, *records = _stream_records(path)
+        keys = _record_keys(header["manifest"])
+        for name in layouts:
+            record = np.asarray(records[keys.index(("model", name))]).astype(np.float32)
+            assert record.shape == expected[name].shape, (verify, name, record.shape)
+            np.testing.assert_array_equal(record, expected[name], err_msg=f"{name}, verify_replicas={verify}")
 
 
 @pytest.mark.parametrize("dtype", [ttnn.DataType.BFLOAT16, ttnn.DataType.FLOAT32])
