@@ -5,6 +5,7 @@
 #include "tt_metal/impl/event/dispatch.hpp"
 
 #include <algorithm>
+#include <array>
 #include <tt_stl/span.hpp>
 #include <tt_align.hpp>
 #include <utility>
@@ -51,7 +52,7 @@ void issue_record_event_commands(
     uint32_t num_command_queues,
     SystemMemoryManager& manager,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     bool notify_host,
     bool clear_count) {
     std::vector<uint32_t> event_payload(DispatchSettings::EVENT_PADDED_SIZE / sizeof(uint32_t), 0);
@@ -59,7 +60,18 @@ void issue_record_event_commands(
 
     MetalContext& metal_ctx = MetalContext::instance(manager.get_context_id());
     const uint32_t l1_alignment = metal_ctx.hal().get_alignment(HalMemType::L1);
-    const uint32_t num_worker_counters = sub_device_ids.size();
+    // Waits for the sub-devices' work. Clearing the counts waits on and clears each of a sub-device's counters;
+    // otherwise its current counter covers all of its work. Either way there is at most one wait per counter.
+    std::array<CompletionWait, DispatchSettings::DISPATCH_COMPLETION_COUNTERS> worker_waits;
+    uint32_t num_worker_counters = 0;
+    for (const SubDeviceId sub_device_id : sub_device_ids) {
+        if (clear_count) {
+            expected_num_workers_completed.for_each_clear_wait(
+                sub_device_id, [&](const CompletionWait& wait) { worker_waits.at(num_worker_counters++) = wait; });
+        } else {
+            worker_waits.at(num_worker_counters++) = expected_num_workers_completed.current_wait(sub_device_id);
+        }
+    }
     const uint32_t num_cqs_per_dispatch_core =
         metal_ctx.get_dispatch_query_manager().cq_dispatch_layout().num_cqs_per_core;
     const uint32_t num_dispatch_cores = num_command_queues / num_cqs_per_dispatch_core;
@@ -97,7 +109,7 @@ void issue_record_event_commands(
     HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, cmd_sequence_sizeB);
 
     for (uint32_t i = 0; i < num_worker_counters; ++i) {
-        auto offset_index = *sub_device_ids[i];
+        const CompletionWait& worker_wait = worker_waits[i];
         // recording an event does not have any side-effects on the dispatch completion count
         // hence clear_count is set to false, i.e. the number of workers on the dispatcher is
         // not reset
@@ -110,14 +122,14 @@ void issue_record_event_commands(
             command_sequence.add_dispatch_wait_with_prefetch_stall(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index]);
+                metal_ctx.dispatch_mem_map().get_completion_stream(worker_wait.counter),
+                worker_wait.count);
         } else {
             command_sequence.add_dispatch_wait(
                 wait_flags,
                 0,
-                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-                expected_num_workers_completed[offset_index]);
+                metal_ctx.dispatch_mem_map().get_completion_stream(worker_wait.counter),
+                worker_wait.count);
         }
     }
 

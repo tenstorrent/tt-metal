@@ -56,9 +56,9 @@ inline void wait_cycles(uint32_t cycles) {
     }
 }
 
-// Sub-device i is signalled with FDS group i + 1, since group 0 is idle.
-constexpr uint32_t go_group_for_sub_device(uint32_t sub_device_index) { return sub_device_index + 1; }
-constexpr uint32_t sub_device_from_go_group(uint32_t group_id) { return group_id - 1; }
+// The gos of, and the dones into, completion counter c use FDS group c + 1, since group 0 is idle.
+constexpr uint32_t group_for_completion_counter(uint32_t counter) { return counter + 1; }
+constexpr uint32_t completion_counter_from_group(uint32_t group_id) { return group_id - 1; }
 
 // One interrupt bit per payload group, shifted past the idle group 0.
 constexpr uint32_t go_interrupt_mask(uint32_t num_go_groups) { return ((uint32_t{1} << num_go_groups) - 1) << 1; }

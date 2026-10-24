@@ -160,6 +160,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
     static_config_.first_stream_used = my_dispatch_constants.get_dispatch_stream_index(0);
     static_config_.completion_counter_offset = my_dispatch_constants.get_completion_counter_offset(cq_id_);
     static_config_.max_num_worker_sems = DispatchSettings::DISPATCH_MESSAGE_ENTRIES;
+    static_config_.max_num_completion_counters = DispatchSettings::DISPATCH_COMPLETION_COUNTERS;
     static_config_.realtime_profiler_msg_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG, cq_id_);
     static_config_.dispatch_telemetry_addr =
@@ -326,6 +327,7 @@ void DispatchSKernel::CreateKernel() {
         {"FIRST_STREAM_USED", std::to_string(static_config_.first_stream_used.value())},
         {"COMPLETION_COUNTER_OFFSET", std::to_string(static_config_.completion_counter_offset.value())},
         {"MAX_NUM_WORKER_SEMS", std::to_string(static_config_.max_num_worker_sems.value())},
+        {"MAX_NUM_COMPLETION_COUNTERS", std::to_string(static_config_.max_num_completion_counters.value())},
         {"WORKER_MCAST_GRID",
          std::to_string(device_->get_noc_multicast_encoding(noc_selection_.downstream_noc, virtual_core_range))},
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
@@ -366,7 +368,7 @@ void DispatchSKernel::CreateKernel() {
         std::map<std::string, std::string> compute_defines = {
             {"DISPATCH_KERNEL", "1"},
             {"FIRST_STREAM_INDEX", std::to_string(static_config_.first_stream_used.value())},
-            {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_worker_sems.value())},
+            {"NUM_STREAMS_TO_MONITOR", std::to_string(static_config_.max_num_completion_counters.value())},
             {"REALTIME_PROFILER_MSG_ADDR", std::to_string(static_config_.realtime_profiler_msg_addr.value())},
             {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
             {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},

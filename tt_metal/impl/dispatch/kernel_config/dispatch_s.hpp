@@ -24,6 +24,7 @@ struct dispatch_s_static_config_t {
     std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> completion_counter_offset;
     std::optional<uint32_t> max_num_worker_sems;
+    std::optional<uint32_t> max_num_completion_counters;
 
     // Dispatch-core-local L1 address of the realtime_profiler_msg_t block (includes the
     // program-id handoff FIFO consumed by this kernel). Assigned by DispatchMemMap via

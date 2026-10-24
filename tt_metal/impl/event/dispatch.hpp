@@ -10,6 +10,7 @@
 
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"
+#include "dispatch/expected_worker_completions.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -38,7 +39,7 @@ void issue_record_event_commands(
     uint32_t num_command_queues,
     SystemMemoryManager& manager,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    ttsl::Span<const uint32_t> expected_num_workers_completed,
+    const ExpectedWorkerCompletions& expected_num_workers_completed,
     bool notify_host = true,
     bool clear_count = false);
 
