@@ -94,6 +94,12 @@ ALWI void custom_mm_block_init(
 
     UNPACK(({
         const auto in0_id = get_operand_id(in0_cb_id);
+        const ckernel::TensorShape in0_shape = get_operand_tensor_shape(in0_id);
+        LLK_ASSERT(
+            (in0_shape.face_r_dim == 1 || in0_shape.face_r_dim == 2 || in0_shape.face_r_dim == 4 ||
+             in0_shape.face_r_dim == 8) &&
+                in0_shape.num_faces_r_dim == 1 && in0_shape.num_faces_c_dim == 2,
+            "custom_mm: in0 tile must be [1|2|4|8, 32]: face row count 1/2/4/8 and a 1x2 face grid");
         _llk_unpack_hw_configure_<fp32_dest_acc_en>(
             static_cast<std::uint32_t>(F1),
             unpack_src_format[in0_id],
@@ -111,6 +117,12 @@ ALWI void custom_mm_block_init(
 
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
+        const ckernel::TensorShape in0_shape = get_operand_tensor_shape(in0_id);
+        LLK_ASSERT(
+            (in0_shape.face_r_dim == 1 || in0_shape.face_r_dim == 2 || in0_shape.face_r_dim == 4 ||
+             in0_shape.face_r_dim == 8) &&
+                in0_shape.num_faces_r_dim == 1 && in0_shape.num_faces_c_dim == 2,
+            "custom_mm: in0 tile must be [1|2|4|8, 32]: face row count 1/2/4/8 and a 1x2 face grid");
         llk_math_pack_sync_init<fp32_dest_acc_en>();
         _llk_math_hw_configure_<fp32_dest_acc_en>(
             static_cast<std::uint32_t>(in1_register_format), unpack_dst_format[in0_id]);
@@ -171,11 +183,23 @@ ALWI void custom_mm_block_init_short(
     constexpr auto in1_register_format = infer_unpack_dst_format(F1, DST_ACCUM_MODE);
     UNPACK(({
         const auto in0_id = get_operand_id(in0_cb_id);
+        const ckernel::TensorShape in0_shape = get_operand_tensor_shape(in0_id);
+        LLK_ASSERT(
+            (in0_shape.face_r_dim == 1 || in0_shape.face_r_dim == 2 || in0_shape.face_r_dim == 4 ||
+             in0_shape.face_r_dim == 8) &&
+                in0_shape.num_faces_r_dim == 1 && in0_shape.num_faces_c_dim == 2,
+            "custom_mm: in0 tile must be [1|2|4|8, 32]: face row count 1/2/4/8 and a 1x2 face grid");
         _llk_unpack_AB_custom_mm_init_<transpose, clear_src>(
             get_operand_face_r_dim(in0_id), static_cast<std::uint32_t>(in1_register_format), ct_dim);
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
+        const ckernel::TensorShape in0_shape = get_operand_tensor_shape(in0_id);
+        LLK_ASSERT(
+            (in0_shape.face_r_dim == 1 || in0_shape.face_r_dim == 2 || in0_shape.face_r_dim == 4 ||
+             in0_shape.face_r_dim == 8) &&
+                in0_shape.num_faces_r_dim == 1 && in0_shape.num_faces_c_dim == 2,
+            "custom_mm: in0 tile must be [1|2|4|8, 32]: face row count 1/2/4/8 and a 1x2 face grid");
         _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(get_operand_face_r_dim(in0_id), ct_dim);
     }));
 

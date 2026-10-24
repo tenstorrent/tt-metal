@@ -65,10 +65,22 @@ ALWI void compressed_custom_mm_block_init_short(
         "compressed_custom_mm: in1 tile shape must be [32, 32]");
     UNPACK(({
         const auto in0_id = get_operand_id(in0_cb_id);
+        const ckernel::TensorShape in0_shape = get_operand_tensor_shape(in0_id);
+        LLK_ASSERT(
+            (in0_shape.face_r_dim == 1 || in0_shape.face_r_dim == 2 || in0_shape.face_r_dim == 4 ||
+             in0_shape.face_r_dim == 8) &&
+                in0_shape.num_faces_r_dim == 1 && in0_shape.num_faces_c_dim == 2,
+            "compressed_custom_mm: in0 tile must be [1|2|4|8, 32]: face row count 1/2/4/8 and a 1x2 face grid");
         _llk_unpack_AB_compressed_custom_mm_init_<transpose, clear_src>(get_operand_face_r_dim(in0_id));
     }));
     MATH(({
         const auto in0_id = get_operand_id(in0_cb_id);
+        const ckernel::TensorShape in0_shape = get_operand_tensor_shape(in0_id);
+        LLK_ASSERT(
+            (in0_shape.face_r_dim == 1 || in0_shape.face_r_dim == 2 || in0_shape.face_r_dim == 4 ||
+             in0_shape.face_r_dim == 8) &&
+                in0_shape.num_faces_r_dim == 1 && in0_shape.num_faces_c_dim == 2,
+            "compressed_custom_mm: in0 tile must be [1|2|4|8, 32]: face row count 1/2/4/8 and a 1x2 face grid");
         _llk_math_compressed_custom_mm_init_<transpose, false, dense_packing>(get_operand_face_r_dim(in0_id));
     }));
     PACK((_llk_pack_custom_mm_init_<dense_packing>()));
