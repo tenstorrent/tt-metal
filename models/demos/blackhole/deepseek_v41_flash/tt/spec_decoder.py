@@ -107,6 +107,7 @@ class SpecVerifier(DSV41Decoder):
 
 
 TAP_LAYERS = (37, 38, 39)  # dspark_target_layer_ids
+TOP2 = os.environ.get("DSV41_SPEC_TOP2", "0") == "1"  # per-round top-2 logits for the demo's near-tie diagnostics (off: the round does not compute them)
 
 
 class SpecDecoder(SpecVerifier):
@@ -319,8 +320,12 @@ class SpecDecoder(SpecVerifier):
             logits, self.mesh_config, self.ccl
         )  # [T,1] uint32 RM: argmax of every row (a round with sampled rows runs trace A / S / B instead)
         # top-2 logits of every row (per column shard, all-gathered): near-tie evidence for exactness analysis, read only on request
-        t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]  # [1,1,T,2] fp32 per column shard
-        self.top2 = self.mesh_config.allgather(t2, self.ccl, axis=1, dim=3)  # [1,1,T,2*cols]
+        # (DSV41_SPEC_TOP2=1 only: a top-k over the 129,280-wide logits on ONE core + an all-gather, ~2.4 ms of a ~62 ms round, read only by the demo's near-tie diagnostics)
+        if TOP2:
+            t2 = ttnn.topk(logits, k=2, dim=-1, largest=True, sorted=True)[0]  # [1,1,T,2] fp32 per column shard
+            self.top2 = self.mesh_config.allgather(t2, self.ccl, axis=1, dim=3)  # [1,1,T,2*cols]
+        else:
+            self.top2 = None
         if self.stop_after == "verify":  # timing breakdown only
             return a
         return self._accept_commit_draft(

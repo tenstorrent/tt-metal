@@ -829,14 +829,17 @@ class SpecRunner:
                     self.log(
                         f"SPEC_DBG round {len(walls)} user {b_} base {int(base[b_])} X {X[b_].tolist()} a {a[b_].tolist()} m {int(mm[b_])} newd {d[b_].tolist()} conf {None if self.conf is None else [round(float(c_), 2) for c_ in self.conf[b_]]}"
                     )
-            v2 = torch.cat(
-                [
-                    ttnn.to_torch(ttnn.get_device_tensors(self.dec.top2)[r * self.cols]).reshape(self.U * n, -1)
-                    for r in range(self.rows)
-                ]
-            ).float()
-            t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
-            gp = t2[..., 0] - t2[..., 1]
+            if self.dec.top2 is None:  # (DSV41_SPEC_TOP2=0: no near-tie evidence)
+                gp = torch.full((B, n), float("nan"))
+            else:
+                v2 = torch.cat(
+                    [
+                        ttnn.to_torch(ttnn.get_device_tensors(self.dec.top2)[r * self.cols]).reshape(self.U * n, -1)
+                        for r in range(self.rows)
+                    ]
+                ).float()
+                t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
+                gp = t2[..., 0] - t2[..., 1]
             for b in range(B):
                 if done[b]:
                     continue
@@ -1028,14 +1031,17 @@ class AdaptiveSpec:
             e0 = len(emitted)
             tk = "probe" if probing else k
             self.times[tk] = 0.8 * self.times[tk] + 0.2 * w if tk in self.times else w
-            v2 = torch.cat(
-                [
-                    ttnn.to_torch(ttnn.get_device_tensors(r.dec.top2)[row * r.cols]).reshape(r.U * n, -1)
-                    for row in range(r.rows)
-                ]
-            ).float()
-            t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
-            gp = t2[..., 0] - t2[..., 1]
+            if r.dec.top2 is None:  # (DSV41_SPEC_TOP2=0: no near-tie evidence)
+                gp = torch.full((B, n), float("nan"))
+            else:
+                v2 = torch.cat(
+                    [
+                        ttnn.to_torch(ttnn.get_device_tensors(r.dec.top2)[row * r.cols]).reshape(r.U * n, -1)
+                        for row in range(r.rows)
+                    ]
+                ).float()
+                t2 = v2.topk(2, dim=-1).values.reshape(B, n, 2)
+                gp = t2[..., 0] - t2[..., 1]
             newconf = r.conf
             for b in range(B):
                 if done[b]:
