@@ -77,6 +77,10 @@ PREFILL_PREFETCH = "TT_V41_PREFILL_PREFETCH"
 # call's host work (the scheduler, the stage of the next chunk) overlaps the device; the next
 # chunk's copies and replay are ordered behind this chunk's on the command queue.
 PREFILL_DRAIN = "TT_V41_PREFILL_DRAIN"
+# "1": a generic chunk builds each index mask once (per ratio and score width, row-major) and its index sources
+# add it to the score kernel's row-major output directly; default "0": every index source
+# builds its own mask and tilizes the score around the add.
+PREFILL_MASK_ONCE = "TT_V41_PREFILL_MASK_ONCE"
 
 
 def prefill_prefetch() -> int:
@@ -85,6 +89,10 @@ def prefill_prefetch() -> int:
 
 def prefill_drain() -> bool:
     return os.environ.get(PREFILL_DRAIN, "0") == "1"
+
+
+def prefill_mask_once() -> bool:
+    return os.environ.get(PREFILL_MASK_ONCE, "0") == "1"
 
 
 def prefill_generic() -> bool:
@@ -341,6 +349,7 @@ class TtV41Transformer(LightweightModule):
             self.layers,
             kv_format=self.kv_format,
             generic=generic,
+            tiled_index_k=generic and prefill_mask_once(),
         )
         if self.dspark is not None:
             state.dspark_rings = self.dspark.new_rings()
@@ -413,6 +422,9 @@ class TtV41Transformer(LightweightModule):
         x = mhc_expand(ttnn.typecast(h, ttnn.float32), self.config.HC_MULT)
         pre = self.pre_mix
         taps = []
+        mask_once = state.generic and prefill_mask_once()
+        if mask_once:
+            state.tables.begin_chunk_masks()
         for layer, block in zip(self.layers, self.blocks):
             if layer in self.engram:
                 x = self.engram[layer](x, engram_inputs[layer])
@@ -421,6 +433,8 @@ class TtV41Transformer(LightweightModule):
             x, pre = block(x, pre, state, length, image_rows)
             if on_block is not None:
                 on_block(layer, x, start, length)
+        if mask_once:
+            state.tables.end_chunk_masks()
         if image_rows is not None:
             ttnn.deallocate(image_rows)
         if self.dspark is not None:

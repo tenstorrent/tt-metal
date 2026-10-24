@@ -211,6 +211,7 @@ class V41ChunkTables:
         self._query_rows = rows
         self._chunk_start = None
         self._host_cache: dict[int, list] = {}
+        self._chunk_masks = None  # per-chunk row-major masks shared by the index sources (begin_chunk_masks)
 
     def _sharded_u32(self, host):
         return ttnn.from_torch(
@@ -323,6 +324,39 @@ class V41ChunkTables:
         beyond = ttnn.ge(iota, self._visible[ratio])
         return ttnn.typecast(ttnn.where(beyond, float("-inf"), 0.0), ttnn.bfloat16)
 
+    # --- the masks built once per chunk (TT_V41_PREFILL_MASK_ONCE) ------------------------
+    def begin_chunk_masks(self) -> None:
+        """Generic: from here to ``end_chunk_masks`` the index sources share one row-major mask per (ratio, width)
+        (``chunk_mask``), built at the first use in this chunk's graph. The mask depends on the chunk only through
+        the visible counts (a device input), so it is the same tensor for every index source of a ratio; the score
+        kernel writes row-major and ``ttnn.add`` runs row-major, so the per-layer tilize of the score, the mask
+        build and the untilize of the sum go: one add a layer."""
+        assert self.generic
+        self._chunk_masks = {}
+
+    def end_chunk_masks(self) -> None:
+        if self._chunk_masks:
+            for t in self._chunk_masks.values():
+                ttnn.deallocate(t)
+        self._chunk_masks = None
+
+    def chunk_mask(self, ratio: int, width: int):
+        """The chunk's shared row-major mask of this ratio and score width (``mask``'s values), or None outside
+        ``begin_chunk_masks`` .. ``end_chunk_masks`` (the caller builds its own, tiled, as before)."""
+        if self._chunk_masks is None:
+            return None
+        mask = self._chunk_masks.get((ratio, width))
+        if mask is None:
+            # bf16 from the comparison on (no fp32 intermediate to typecast), untilized once for the chunk
+            iota = ttnn.slice(self._iota[ratio], [0, 0, 0, 0], [1, 1, 1, width])
+            beyond = ttnn.ge(iota, self._visible[ratio], dtype=ttnn.bfloat16)
+            tiled = ttnn.where(beyond, float("-inf"), 0.0)
+            mask = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
+            for t in (beyond, tiled):  # not the iota slice: at the widest bucket it is the table itself
+                ttnn.deallocate(t)
+            self._chunk_masks[(ratio, width)] = mask
+        return mask
+
     def row_index(self, ratio: int):
         """Generic: the chunk's compressed row indices of a ratio-``ratio`` source, [1, 1, 1, chunk / ratio]."""
         return self._row_index[ratio]
@@ -426,9 +460,15 @@ class V41PrefillState:
         layers: list[int],
         kv_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         generic: bool = False,
+        tiled_index_k: bool = False,
     ):
         """``generic``: position-generic chunk graphs (``V41ChunkTables`` generic mode; ``V41GenericPrefillTrace``):
-        the cache writes scatter by an uploaded row index instead of a start-dependent slice."""
+        the cache writes scatter by an uploaded row index instead of a start-dependent slice. ``tiled_index_k``
+        (generic only; ``TT_V41_PREFILL_MASK_ONCE``): keep a tiled twin of each index-K cache with one zero tile past
+        its rows (``index_k_tiled``), written by ``write_compressed`` beside the row-major rows, so an index source's
+        score kernel reads a tile-aligned prefix of it (one slice) instead of slicing, tilizing and padding the
+        row-major rows at every chunk. The row-major cache stays the one the candidate scorer
+        and the decode join read."""
         assert kv_format in self.FORMATS, f"V4.1 KV format must be one of {self.FORMATS}, got {kv_format}"
         self.mesh_device = mesh_device
         self.config = config
@@ -454,6 +494,14 @@ class V41PrefillState:
         sources = [l for l in config.KV_SOURCE_LAYERS if l in self.layers]
         self.kv = {l: kv_zeros(g.kv_rows(config.compress_ratio(l)), config.compress_ratio(l)) for l in sources}
         self.index_k = {l: zeros(g.compressed_rows(config.compress_ratio(l)), idim) for l in sources}
+        self.index_k_tiled = {}
+        if generic and tiled_index_k:
+            self.index_k_tiled = {
+                l: replicated_zeros(
+                    mesh_device, g.compressed_rows(config.compress_ratio(l)) + 32, idim, ttnn.bfloat16, ttnn.TILE_LAYOUT
+                )
+                for l in sources
+            }
         self.swa_scratch = (
             kv_zeros(g.kv_rows(0), 0) if any(config.compress_ratio(l) == 0 for l in self.layers) else None
         )
@@ -573,9 +621,10 @@ class V41PrefillState:
                 # same at every chunk start: row ``i`` of the encoded rows lands at ``dst_base + row_index[i]``
                 from models.demos.deepseek_v3_d_p.tt.v41.pool import scatter_rows
 
-                scatter_rows(
-                    self._encode(rows, fmt), cache, self.tables.row_index(ratio), dst_base=offset - first, rows=count
-                )
+                encoded = self._encode(rows, fmt)
+                scatter_rows(encoded, cache, self.tables.row_index(ratio), dst_base=offset - first, rows=count)
+                if cache is self.index_k[source] and source in self.index_k_tiled:
+                    scatter_rows(encoded, self.index_k_tiled[source], self.tables.row_index(ratio), rows=count)
             else:
                 self._write_rows(cache, self._encode(rows, fmt), offset)
 
@@ -590,6 +639,7 @@ class V41PrefillState:
         return dst
 
     def write_compressed_row(self, source: int, kv_rows, index_k_rows, j: int):
+        assert source not in self.index_k_tiled, "the tiled index-K twin follows write_compressed only (prefill chunks)"
         """Decode: compressed row ``j`` of ``source`` from row 0 of ``kv_rows`` ``[1, 1, n, d]`` (logical values of the
         source's format) and ``index_k_rows`` ``[1, 1, n, index_head_dim]`` (the same on every chip)."""
         ratio = self.config.compress_ratio(source)
@@ -602,6 +652,7 @@ class V41PrefillState:
 
     def copy_compressed_row(self, source: int, src: int, dst: int):
         """Decode: copy compressed row ``src`` of ``source`` (KV and index key, as stored) to row ``dst``."""
+        assert source not in self.index_k_tiled, "the tiled index-K twin follows write_compressed only (prefill chunks)"
         for cache, offset in ((self.kv[source], self.geometry.kv_row_of_compressed(0)), (self.index_k[source], 0)):
             row = ttnn.slice(cache, [0, 0, offset + src, 0], [1, 1, offset + src + 1, cache.shape[3]])
             self._write_rows(cache, row, offset + dst)

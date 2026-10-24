@@ -310,20 +310,35 @@ class TtV41Indexer(LightweightModule):
         q = self.qdq(self.rope(q, cos, sin))
         return q, self._query_shard(self.ccl.tp_all_reduce(ttnn.linear(x, self.weights_proj)))
 
-    def scores(self, x, qr, index_k, tables, start: int, length: int):
+    def scores(self, x, qr, index_k, tables, start: int, length: int, index_k_tiled=None):
         """x [1,1,S/sp,hidden/tp] bf16, qr [1,1,S/sp,q_lora] bf16 (TP-replicated), index_k [1,1,T_max,d] row-major,
         ``tables`` the geometry's ``V41ChunkTables`` -> (scores [1, 1, S/(sp*tp), W] bf16 row-major DRAM-interleaved,
-        -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows)."""
+        -inf where not visible, W the visible rows rounded up to tiles (ratio 2: plus one -inf tile); visible rows).
+        ``index_k_tiled``: the state's tiled twin of ``index_k`` with a zero tile past its rows
+        (``V41PrefillState.index_k_tiled``), read instead of ``index_k`` by the generic path under the chunk's shared
+        masks (``V41ChunkTables.chunk_mask``)."""
         visible, width = self._width(start, length, tables)
         q, w = self._query(x, qr, tables, start)
         q_rows = q.shape[2]
-        k = ttnn.to_layout(ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, width, self.head_dim]), ttnn.TILE_LAYOUT)
+        mask = tables.chunk_mask(self.ratio, width + 32) if tables.generic else None
+        if mask is not None and index_k_tiled is not None:
+            # the tiled prefix with its pad tile in one slice (TT_V41_PREFILL_MASK_ONCE)
+            k = ttnn.slice(index_k_tiled, [0, 0, 0, 0], [1, 1, width + 32, self.head_dim])
+        else:
+            k = ttnn.to_layout(ttnn.slice(index_k, [0, 0, 0, 0], [1, 1, width, self.head_dim]), ttnn.TILE_LAYOUT)
+            if tables.generic:
+                k = ttnn.pad(k, [(0, 0), (0, 0), (0, 32), (0, 0)], 0.0)
         if tables.generic:
             # position-generic: the kernel's causal window masks nothing real (it starts at ``width``, past every
             # row; K is padded by one zero tile for it), and the rows a query may not see (at or past its visible
             # count, a device input) are masked over the whole score: one add, the same graph at every start
-            k = ttnn.pad(k, [(0, 0), (0, 0), (0, 32), (0, 0)], 0.0)
             score = self._score(q, k, w, chunk_start_idx=width)  # [1, 1, q_rows, width + 32]
+            if mask is not None:
+                # the chunk's shared row-major mask (TT_V41_PREFILL_MASK_ONCE): the add runs row-major on the
+                # kernel's output, no layout round trip of the score, no mask build a layer
+                masked = ttnn.add(score, mask)
+                ttnn.deallocate(score)
+                return masked, visible
             masked = ttnn.add(ttnn.to_layout(score, ttnn.TILE_LAYOUT), tables.mask(self.ratio, score.shape[3]))
             ttnn.deallocate(score)
             return ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT), visible
@@ -563,11 +578,21 @@ class TtV41Indexer(LightweightModule):
                 return self._topk_in_blocks(score, candidates.ids, k), None
         return _topk(score, k), published
 
-    def forward(self, x, qr, index_k, tables, start: int, length: int, candidates: CandidateBlocks | None = None):
+    def forward(
+        self,
+        x,
+        qr,
+        index_k,
+        tables,
+        start: int,
+        length: int,
+        candidates: CandidateBlocks | None = None,
+        index_k_tiled=None,
+    ):
         """-> (top-k rows [1, 1, S/(sp*tp), k] uint32 row-major (sentinel tail), published CandidateBlocks or None)."""
         visible, width = self._width(start, length, tables)
         if self.uses_candidates and candidates.ids is not None and width >= SPARSE_SCORE_MIN_WIDTH:
             rows = self.candidate_rows(x, qr, index_k, tables, start, candidates.ids)
             return self._topk_in_rows(rows, candidates.ids, min(self.config.INDEX_TOPK, visible)), None
-        score, visible = self.scores(x, qr, index_k, tables, start, length)
+        score, visible = self.scores(x, qr, index_k, tables, start, length, index_k_tiled)
         return self.select(score, tables, start, visible, candidates)

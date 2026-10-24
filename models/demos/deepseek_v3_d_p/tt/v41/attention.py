@@ -289,7 +289,14 @@ class TtV41Attention(LightweightModule):
             if self.is_index_source:
                 src = self.config.kv_source(self.layer)
                 compressed, candidates = self.indexer(
-                    x, qr, state.index_k[src], tables, start, length, state.selection.get("candidates")
+                    x,
+                    qr,
+                    state.index_k[src],
+                    tables,
+                    start,
+                    length,
+                    state.selection.get("candidates"),
+                    index_k_tiled=state.index_k_tiled.get(src),
                 )
                 state.selection["topk"] = compressed
                 if candidates is not None:

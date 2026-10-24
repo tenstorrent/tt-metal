@@ -5,12 +5,24 @@
 """Device-profiler run of the generic prefill chunk at chosen shapes.
 
 Under ``python -m tracy -r -p -v -m pytest ...`` with ``TT_METAL_DEVICE_PROFILER=1``: the layers
-``V41_PROF_LAYERS`` (default 0,1,2,3,20,21,24: the sharing schedule plus an Engram layer) in a generic state of
+``V41_PROF_LAYERS`` (default 0,1,2,3,20,21,24: the sharing schedule plus an Engram layer) in a generic state
+of
 ``V41_PROF_MAX_SEQ`` tokens, one eager chunk per shape of ``V41_PROF_SHAPES`` (``start:length`` pairs, comma
-separated; default ``0:5120,0:1028,0:2052,0:4100,<last chunk of the 1M bucket>:5120``), each run twice (the first
-compiles the profiler kernels) and the second between tracy signposts named ``shape <start>:<length>``, the device
-profiler read after every block (no marker overflow). Synthetic tokens; the state's contents do not matter to a
+separated; default ``0:5120,0:1028,0:2052,0:4100,<last chunk of the 1M bucket>:5120``), each run twice (the
+first
+compiles the profiler kernels) and the second between tracy signposts named ``shape <start>:<length>``, the
+device
+profiler read after every block (no marker overflow). Synthetic tokens; the state's contents do not matter to
+a
 chunk's timing. Reports each shape's wall time as ``V41_PROF_RESULT``.
+
+``V41_PROF_COMPARE=<variable>`` (e.g. ``TT_V41_PREFILL_MASK_ONCE``; no profiler needed) runs each shape with
+the
+variable unset and then set to ``1`` on the same state (built with it set; its index-K caches filled with
+seeded
+random keys, so the selections are not tie-breaks over zero scores) and compares the logits and every block's
+output and selection bit
+for bit (``compare`` in the result; the test fails on a difference).
 """
 
 import json
@@ -53,6 +65,9 @@ def test_v41_prefill_profile(mesh_device, device_params):
     default_shapes = f"0:{chunk},0:1028,0:2052,0:4100,{last_1m}:{chunk}"
     shapes = [tuple(int(v) for v in s.split(":")) for s in os.environ.get("V41_PROF_SHAPES", default_shapes).split(",")]
     profile = os.environ.get("TT_METAL_DEVICE_PROFILER", "0") == "1"
+    compare = os.environ.get("V41_PROF_COMPARE", "")
+    if compare:
+        os.environ[compare] = "1"  # the state is built with the variable set (its optional tensors exist)
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
@@ -94,7 +109,7 @@ def test_v41_prefill_profile(mesh_device, device_params):
         if profile:
             ttnn.ReadDeviceProfiler(mesh_device)
 
-    def one_chunk(start: int, length: int, on_block) -> float:
+    def one_chunk(start: int, length: int, on_block, outputs: dict | None = None) -> float:
         model.reset_state(state)
         state.start = start
         request = _Request(tokens[:length], length - 1, None, None)
@@ -104,9 +119,31 @@ def test_v41_prefill_profile(mesh_device, device_params):
         state.tables.prepare_chunk(start, length)
         ttnn.synchronize_device(mesh_device)
         t0 = time.time()
-        model._chunk_forward(state, host, token_ids, engram_inputs, None, None, start + length - 1, on_block)
+        scored = model._chunk_forward(state, host, token_ids, engram_inputs, None, None, start + length - 1, on_block)
         ttnn.synchronize_device(mesh_device)
-        return time.time() - t0
+        wall = time.time() - t0
+        if outputs is not None:
+            outputs["logits"] = torch.cat([_down(mesh_device, logits) for logits, *_ in scored])
+        return wall
+
+    if compare:
+        # seeded random index keys in every source's cache (the chunk's own rows are overwritten by the chunk)
+        g = torch.Generator().manual_seed(1)
+        for src, t in state.index_k.items():
+            keys = torch.randn(tuple(t.shape), generator=g).to(torch.bfloat16)
+            targets = [(keys, t)]
+            twin = state.index_k_tiled.get(src)
+            if twin is not None:  # the tiled twin: the same keys, its zero tile past them
+                targets.append((torch.cat([keys, torch.zeros(1, 1, 32, keys.shape[3], dtype=keys.dtype)], dim=2), twin))
+            for host, dst in targets:
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        host, dtype=dst.dtype, layout=dst.layout, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+                    ),
+                    dst,
+                )
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"prefill profile: compare {compare} unset vs 1; index keys seeded in {sorted(state.index_k)}")
 
     if profile:
         ttnn.ReadDeviceProfiler(mesh_device)
@@ -124,8 +161,55 @@ def test_v41_prefill_profile(mesh_device, device_params):
         times[name] = {"warm_s": round(warm, 3), "wall_s": round(wall, 3)}
         logger.info(f"prefill profile: shape {name} eager {wall:.3f} s (first {warm:.3f})")
     report["times"] = times
+    if compare:
+        report["compare"], mismatches = {}, []
+        for start, length in shapes:
+            name, runs = f"{start}:{length}", {}
+            for value in ("", "1"):
+                if value:
+                    os.environ[compare] = value
+                else:
+                    os.environ.pop(compare, None)
+                blocks: dict = {}
+
+                def record(layer, x, start, length):
+                    blocks[f"x[{layer}]"] = _down(mesh_device, x)
+                    for key, t in state.selection.items():
+                        if t is not None and getattr(t, "ids", t) is not None:
+                            blocks[f"{key}[{layer}]"] = _down(mesh_device, getattr(t, "ids", t))
+
+                one_chunk(start, length, record)  # compile (the first graph of each setting)
+                wall = one_chunk(start, length, record, blocks)
+                runs[value or "unset"] = {"wall_s": round(wall, 3), "outputs": blocks}
+            off, on = runs["unset"]["outputs"], runs["1"]["outputs"]
+            diff = []
+            for key in sorted(off):
+                if key not in on:
+                    diff.append(f"{key}: missing with {compare}=1")
+                elif off[key].shape != on[key].shape:
+                    diff.append(f"{key}: shape {tuple(off[key].shape)} vs {tuple(on[key].shape)}")
+                elif not torch.equal(off[key], on[key]):
+                    a, b = off[key].float(), on[key].float()
+                    n = int((a != b).sum())
+                    diff.append(f"{key}: {n} of {a.numel()} elements differ, max |d| {float((a - b).abs().max())}")
+            report["compare"][name] = {
+                "unset_s": runs["unset"]["wall_s"],
+                "set_s": runs["1"]["wall_s"],
+                "compared": sorted(off),
+                "mismatches": diff,
+            }
+            mismatches += [f"{name} {d}" for d in diff]
+            logger.info(f"prefill profile: compare {name}: {report['compare'][name]}")
+        os.environ.pop(compare, None)
     logger.info("V41_PROF_RESULT " + json.dumps(report))
     out = os.environ.get("V41_PROF_OUT")
     if out:
         with open(out, "w") as f:
             json.dump(report, f, indent=1)
+    if compare:
+        assert not mismatches, "\n".join(mismatches)
+
+
+def _down(mesh_device, t) -> torch.Tensor:
+    """Every chip's copy of ``t`` as one host tensor (uint32 and bf16 both compare exactly as torch tensors)."""
+    return ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
