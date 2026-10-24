@@ -82,6 +82,16 @@ static const StringEnumMapper<NocSendType> noc_send_type_mapper({
     {"unicast_scatter_write", NocSendType::NOC_UNICAST_SCATTER_WRITE},
 });
 
+// Name used in parametrized test names: the YAML ntype name, plus each non-default option
+// (e.g. "unicast_scatter_write_atomic_inc_flush", "unicast_scatter_write_chunks_4").
+inline std::string noc_send_type_spec_name(const NocSendTypeSpec& spec) {
+    std::string name = noc_send_type_mapper.to_string(spec.type, "NocSendType");
+    for (const auto& tag : noc_send_type_option_tags(spec)) {
+        name += "_" + tag;
+    }
+    return name;
+}
+
 static const StringEnumMapper<RoutingDirection> routing_direction_mapper({
     {"N", RoutingDirection::N},
     {"S", RoutingDirection::S},
@@ -323,6 +333,8 @@ private:
     template <typename T>
     std::vector<T> get_elements_in_range(T start, T end);
     ParametrizationOptionsMap parse_parametrization_params(const YAML::Node& params_yaml);
+    NocSendTypeSpec parse_noc_send_type_spec(const YAML::Node& ntype_yaml);
+    std::vector<NocSendTypeSpec> parse_noc_send_type_specs(const YAML::Node& ntype_yaml);
     HighLevelPatternConfig parse_high_level_pattern_config(const YAML::Node& pattern_yaml);
 };
 
@@ -622,6 +634,7 @@ private:
 
     static std::string to_string(ChipSendType ftype);
     static std::string to_string(NocSendType ntype);
+    static void to_yaml(YAML::Emitter& out, const NocSendTypeSpec& spec);
     static std::string to_string(RoutingDirection dir);
     static std::string to_string(FabricTensixConfig ftype);
     static std::string to_string(FabricReliabilityMode mode);
