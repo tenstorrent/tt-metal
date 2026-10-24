@@ -41,8 +41,9 @@ ROUTING_CONFIGS = [
     (1, 384, 1, 1, 8, 2.827, {}),  # Kimi single expert group -> collapses to a plain top-k
     (1, 256, 1, 1, 6, 1.5, {}),  # DeepSeek-V4 Flash single-group top-k
     (1, 384, 1, 1, 6, 2.5, {}),  # DeepSeek-V4 Pro single-group top-k
+    (1, 32, 1, 1, 8, 1.0, {}),  # single group, one tile of experts
 ]
-ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv4pro-1g384e"]
+ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv4pro-1g384e", "1g32e"]
 
 # Router affinity activation: sigmoid for DeepSeek-V3/Kimi, sqrtsoftplus for DeepSeek-V4.
 SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]

@@ -20,6 +20,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
+#include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "ttnn/operations/reduction/topk/device/kernels/compute/topk_common_funcs.hpp"
@@ -403,18 +404,32 @@ void topk(
     reconfig_data_format_srca(cb_winning_group_scores_id);
     transpose_init(cb_winning_group_scores_id);
     transpose_tile(cb_winning_group_scores_id, 0, 0);
-    transpose_tile(cb_winning_group_scores_id, 1, 1);
+    if (tiles > 1) {
+        transpose_tile(cb_winning_group_scores_id, 1, 1);
+    }
 
     // transpose and unpack into dest regs
     reconfig_data_format_srca(cb_winning_group_indices_id);
     if constexpr (indices_pretransposed) {
         copy_init(cb_winning_group_indices_id);
         copy_tile(cb_winning_group_indices_id, 0, 2);
-        copy_tile(cb_winning_group_indices_id, 1, 3);
+        if (tiles > 1) {
+            copy_tile(cb_winning_group_indices_id, 1, 3);
+        }
     } else {
         transpose_init(cb_winning_group_indices_id);
         transpose_tile(cb_winning_group_indices_id, 0, 2);
-        transpose_tile(cb_winning_group_indices_id, 1, 3);
+        if (tiles > 1) {
+            transpose_tile(cb_winning_group_indices_id, 1, 3);
+        }
+    }
+    if (tiles == 1) {
+        // One tile of candidates: fill the second slot so it never wins. -FLT_MAX stays finite once rank tags are
+        // stamped into the low bits.
+        fill_tile_init();
+        fill_tile_bitcast(1, 0xFF7FFFFFU);
+        fill_tile_int<DataFormat::UInt32>(3, 0xFFFFU);
+        gate_topk_init<rank_tag>();
     }
     // llk_topk_sort -> inplace
     if constexpr (rank_tag) {

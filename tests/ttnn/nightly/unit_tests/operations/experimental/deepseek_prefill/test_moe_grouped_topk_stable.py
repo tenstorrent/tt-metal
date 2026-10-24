@@ -57,7 +57,7 @@ DIFFERENTIAL_CONFIG_IDS = ["kimi-1g384e", "dsv4flash-1g256e"]
 
 # total_experts -> width tiles -> merge rounds in the blocks::topk insertion chain (tiles - 2).
 # n_groups == 1 only requires experts % 32 == 0, so the expert axis is free to sweep here.
-WIDTH_SWEEP = [64, 128, 256, 384, 512]
+WIDTH_SWEEP = [32, 64, 128, 256, 384, 512]
 WIDTH_SWEEP_IDS = [f"e{e}-{e // 32}tiles-{max(e // 32 - 2, 0)}rounds" for e in WIDTH_SWEEP]
 
 INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
