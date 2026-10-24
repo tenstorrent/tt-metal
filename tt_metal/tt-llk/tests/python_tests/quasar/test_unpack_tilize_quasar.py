@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, FormatConfig
 from helpers.golden_generators import (
     TilizeGolden,
@@ -116,8 +117,7 @@ def generate_unpack_tilize_combinations(
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                             continue
                         if (
-                            in_fmt.is_32_bit()
-                            and dest_acc == DestAccumulation.Yes
+                            unpacks_to_dest(in_fmt, dest_acc)
                             and tile_dims not in MX_SUPPORTED_TILE_SIZES
                         ):
                             continue
@@ -265,9 +265,7 @@ def test_unpack_tilize_quasar(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc),
         "dest_acc": dest_acc,
     }
 

@@ -10,7 +10,7 @@ from typing import Dict
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
-from helpers.data_format_inference import effective_dest_acc
+from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -2327,9 +2327,7 @@ def _run_sfpu_binary_bcast(
 
     # Only FP32 inputs with dest_acc=Yes take the unpack-to-dest path; all
     # other float formats go through srcA + MATH datacopy into dest.
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     test_config_kwargs = {
         "test_name": "sources/sfpu_binary_bcast_test.cpp",

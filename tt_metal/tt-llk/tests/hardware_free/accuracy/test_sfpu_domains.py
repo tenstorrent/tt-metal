@@ -19,12 +19,14 @@ import math
 import struct
 
 import pytest
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
     DestAccumulation,
     MathOperation,
     ReducePool,
+    Tilize,
 )
 from helpers.sfpu_domains import (
     GENERATED_NAN_SIGN_OPS,
@@ -857,6 +859,20 @@ def test_dest_acc_rejects_non_flags(bad):
         TypeError
     ):
         specials_safe(DataFormat.Float32, DataFormat.Float32, bad)
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        TypeError
+    ):
+        unpacks_to_dest(DataFormat.Float32, bad)
+
+
+def test_unpacks_to_dest():
+    """Only a 32-bit input at dest_acc=Yes unpacks to Dest, and a tilized Float32 never does."""
+    assert unpacks_to_dest(DataFormat.Float32, DestAccumulation.Yes)
+    assert unpacks_to_dest(DataFormat.Int32, True)
+    assert not unpacks_to_dest(DataFormat.Float32, DestAccumulation.No)
+    assert not unpacks_to_dest(DataFormat.Float16_b, DestAccumulation.Yes)
+    assert not unpacks_to_dest(DataFormat.Float32, DestAccumulation.Yes, Tilize.Yes)
+    assert unpacks_to_dest(DataFormat.Int32, DestAccumulation.Yes, Tilize.Yes)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

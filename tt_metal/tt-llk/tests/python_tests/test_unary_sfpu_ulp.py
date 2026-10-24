@@ -36,6 +36,7 @@ import pytest
 import torch
 from helpers import ulp_sweep
 from helpers.chip_architecture import get_chip_architecture
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -60,7 +61,6 @@ from helpers.sfpu_accuracy_budget import (
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     sfpu_unary_ops,
-    unpacks_to_dest,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli

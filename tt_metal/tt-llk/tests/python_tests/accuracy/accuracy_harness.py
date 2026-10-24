@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import torch
 from helpers.accuracy_metrics import compute_pointwise_metrics
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     UnarySFPUGolden,
@@ -422,9 +423,7 @@ def run_case(
         tile_count_res=tile_cnt_A,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     _, _, faces_to_generate = calculate_tile_and_face_counts(
         input_dimensions, input_dimensions, face_r_dim=16, num_faces=4

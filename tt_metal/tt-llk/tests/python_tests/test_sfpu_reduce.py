@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -994,11 +995,7 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     format, and both are cells the measured matrix accepts.
     """
 
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
 
     # The pipeline gate, same as every other cat-B consumer in this repo. Asserted rather than
     # assumed: if the measured matrix ever stops accepting one of these two cells, this test must
