@@ -916,9 +916,12 @@ class ShapeLab:
             print(f"RESULT best {self.tag} baseline=none best=none")
             return
         k = best["knobs"]
+        # the resolver-row form parse_config_spec reads (pc / osw as plain ints; in1 / form are informational)
+        pcn = str(k["pc"]).split("x")[-1]
+        osw = str(k["osub"]).split("x")[-1]
         cfg = (
-            f"{best['family']}:grid={k['gspec']},bw={k['bw']},osub={k['osub']},pc={k['pc']},fid={k['fid']},"
-            f"acc={k['acc']},in1={k['in1']},out={k['out']},wpb={k['wpb']},form={k['form']}"
+            f"{best['family']}:grid={k['gspec']},bw={k['bw']},pc={pcn},osw={osw},fid={k['fid']},"
+            f"acc={k['acc']},wpb={k['wpb']},out={k['out']},in1={k['in1']},form={k['form']}"
         )
         gain = (base["us"] - best["us"]) / base["us"] * 100
         print(
