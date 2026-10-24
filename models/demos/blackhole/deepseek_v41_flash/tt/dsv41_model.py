@@ -71,6 +71,19 @@ from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import T
 GATE_CUTOFFS = json.loads((Path(__file__).resolve().parents[1] / "configs" / "gate_cutoffs.json").read_text())
 
 
+def _return_lag():
+    """windows allowed in flight when a call with no final row returns (``DSV41_PF_RETURN_LAG``; ``DSV41_PF_RETURN_LAG_FILE`` = a file holding the value, read at every call: a live switch for A/B runs):
+    -1 = do not return early (wait for the device like before), 0 = wait for the last window, 1 = the last window has started (default), 2 = no wait
+    """
+    f = os.environ.get("DSV41_PF_RETURN_LAG_FILE")
+    if f:
+        try:
+            return int(open(f).read().strip())
+        except Exception:
+            pass
+    return int(os.environ.get("DSV41_PF_RETURN_LAG", "1"))
+
+
 class _UpOnly:
     """marker: the recorded upload ops of the token half of a window (``Model._one`` lookahead); the position half is recorded when the window starts"""
 
@@ -1622,6 +1635,7 @@ class Model:
             and fin_users is not None
             and not fin_users
             and os.environ.get("DSV41_PF_DEFER_RETURN", "1") == "1"
+            and _return_lag() >= 0
         )  # (a call with no final row returns once its windows are enqueued)
         lookahead = os.environ.get("DSV41_PF_LOOKAHEAD", "1") == "1"
         spec_enq = os.environ.get("DSV41_PF_SPEC_ENQ", "1") == "1"
@@ -1971,7 +1985,13 @@ class Model:
                 }
             )
         if defer_return:
-            pass  # (no user of the call ends its sequence: the scheduler discards every token of this step; the windows stay in flight and the NEXT call, a decode step or any read orders itself behind them)
+            # (no user of the call ends its sequence: the scheduler discards every token of this step; the windows stay in flight and the NEXT call, a decode step or any read orders itself behind them.)
+            # The step boundary the scheduler sees moves earlier by the windows still in flight: a request that arrives in that span misses the next step. DSV41_PF_RETURN_LAG = windows allowed to be
+            # in flight at the return (default 1: the last window has started; 0 = wait for the device, 2 = no wait): it bounds that added admission latency to one window.
+            lag = _return_lag()
+            h_ = pm.__dict__.get("_ev_hist") or []
+            if lag in (0, 1) and len(h_) >= lag + 1:
+                ttnn.event_synchronize(h_[-(lag + 1)])
         elif pm.__dict__.get(
             "_ev_hist"
         ):  # (a trailing enqueued window: nothing reads its result, but the call must not return with the device still busy)
