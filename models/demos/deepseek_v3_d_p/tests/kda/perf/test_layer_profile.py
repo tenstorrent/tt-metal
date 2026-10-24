@@ -7,7 +7,8 @@ Captures one layer call in a trace and replays it several times under the real-t
 chip it records every program's start and end, and writes the JSON to KDA_PROFILE_OUT (default
 generated/kda_profile.json): the per-op times, the gaps between programs and the skew between chips.
 
-KDA_PROFILE_TOKENS sets the chunk length (default 5120; multiples of 256 from 1024), KDA_PROFILE_REPLAYS the replays.
+KDA_PROFILE_TOKENS sets the chunk length (default 5120; multiples of 256 from 1024), KDA_PROFILE_REPLAYS the replays
+and KDA_PROFILE_CALLS the calls each replay runs back to back.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profil
 
 _TOKENS = int(os.environ.get("KDA_PROFILE_TOKENS", "5120"))
 _REPLAYS = int(os.environ.get("KDA_PROFILE_REPLAYS", "5"))
+# Calls per replay, run back to back without a host sync between them, so the chips reach their steady-state skew.
+_CALLS = int(os.environ.get("KDA_PROFILE_CALLS", "4"))
 _OUT = Path(os.environ.get("KDA_PROFILE_OUT", "generated/kda_profile.json"))
 _SP = 8
 _SETTLE_SECONDS = 0.5
@@ -40,7 +43,8 @@ _TIMEOUT_SECONDS = 20.0
 
 
 def _replay_records(mesh_device: ttnn.MeshDevice, trace_id: int) -> tuple[float, list[dict]]:
-    """Host wall (ms) of one replay and every program record it produced, with raw timestamps."""
+    """Host wall (ms) per call of _CALLS back-to-back replays and every program record they produced, with raw
+    timestamps (each chip's records in start order hold the calls one after another)."""
     records: list[dict] = []
     dropped = [0]
 
@@ -64,9 +68,10 @@ def _replay_records(mesh_device: ttnn.MeshDevice, trace_id: int) -> tuple[float,
     handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
     try:
         begin = time.perf_counter()
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        for _ in range(_CALLS):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
-        wall_ms = (time.perf_counter() - begin) * 1e3
+        wall_ms = (time.perf_counter() - begin) * 1e3 / _CALLS
         deadline = time.monotonic() + _TIMEOUT_SECONDS
         last, changed = -1, time.monotonic()
         while time.monotonic() < deadline:
@@ -112,7 +117,17 @@ def test_kimi_k3_layer_profile(mesh_device: ttnn.MeshDevice, device_params: dict
         _release_layer_trace(mesh_device, trace)
     _OUT.parent.mkdir(parents=True, exist_ok=True)
     _OUT.write_text(
-        json.dumps({"tokens": _TOKENS, "local_rows": local_rows, "actual_start": actual_start, "replays": replays})
+        json.dumps(
+            {
+                "tokens": _TOKENS,
+                "local_rows": local_rows,
+                "calls_per_replay": _CALLS,
+                "actual_start": actual_start,
+                # Chip ids in row-major mesh order: index // 4 is the SP rank, index % 4 the TP rank.
+                "mesh_device_ids": [int(i) for i in mesh_device.get_device_ids()],
+                "replays": replays,
+            }
+        )
     )
     walls = [r["wall_ms"] for r in replays]
     print(f"KDA_PROFILE tokens={_TOKENS} median_wall_ms={statistics.median(walls):.4f} -> {_OUT}")
