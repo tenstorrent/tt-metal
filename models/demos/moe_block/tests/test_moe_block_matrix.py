@@ -225,41 +225,55 @@ def test_moe_block_matrix(mesh_device, device_params, case: Case):
     )
 
 
-# switching in one process: chunks, eager <-> traced, each block closed before the next is built
-SWITCH = (
-    ("k3", 640, 4),
-    ("k3", 1024, 0),
-    ("k3", 128, 4),
-    ("k3", 2048, 0),
-    ("k3", 640, 0),
-    ("k3", 256, 4),
-    ("k3", 640, 4),
-)
+# switching in one process: chunks, eager <-> traced, models (one fabric payload: the largest row's); each block closed
+# before the next is built. (model, rows a mesh row, checked trace replays - 0: eager only)
+SWITCH = {
+    "k3": (
+        ("k3", 640, 4),
+        ("k3", 1024, 0),
+        ("k3", 128, 4),
+        ("k3", 2048, 0),
+        ("k3", 640, 0),
+        ("k3", 256, 4),
+        ("k3", 640, 4),
+    ),
+    "models": (
+        ("k3", 1024, 0),
+        ("k3", 640, 4),
+        ("glm53_flash", 640, 4),
+        ("m3", 512, 4),
+        ("dsv41_flash", 512, 4),
+        ("glm53", 1024, 4),
+        ("k3", 1024, 4),
+    ),
+}
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
+    "mesh_device, device_params, seq",
     [
         pytest.param(
             (R, C),
             _fab(
-                fabric_payload_size=fabric_payload(KIMI_K3.routed_width),
+                fabric_payload_size=max(fabric_payload(BASE[mn].routed_width) for mn, _, _ in SWITCH[k]),
                 l1_small_size=0,
                 trace_region_size=TRACE_REGION,
             ),
-            id="switch-k3",
+            k,
+            id=f"switch-{k}",
         )
+        for k in SWITCH
     ],
-    indirect=True,
+    indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(7200)
-def test_moe_block_switch(mesh_device, device_params):
-    """Blocks of other chunks built one after another on one mesh (each closed first), eager and traced: every one
-    checked - nothing a closed block left behind (L1, program cache, semaphores) breaks the next."""
+def test_moe_block_switch(mesh_device, device_params, seq):
+    """Blocks of other chunks / models built one after another on one mesh (each closed first), eager and traced:
+    every one checked - nothing a closed block left behind (L1, program cache, semaphores) breaks the next."""
     import gc
 
     chips = R * C
-    for i, (mn, rows, replays) in enumerate(SWITCH):
+    for i, (mn, rows, replays) in enumerate(SWITCH[seq]):
         m = mesh_model(mn, chips)
         w = scenario_weights(m, "uniform", chips, seed=i)
         block = MoEBlock(mesh_device, m, rows * R, w, WeightCache(path=None, layer=0))

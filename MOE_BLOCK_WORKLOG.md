@@ -1638,3 +1638,8 @@ Structural (not fixed here):
   Fix: where rows straddle (SE_FIN_ROWS), each (chunk, row)'s own y base in the args. Parts test 768 / 1280 rows
   full head (RS, latent, router, routing + planner, prep) bit-exact / PCC .9998; block K3 768 PCC .9961, span 2389 us;
   K3 640 / 1024 unchanged (2082 / 2765).
+- Switching models in one process (test_moe_block_switch[switch-models], one fabric payload: the largest row's, 12352):
+  K3 1024 / 640, GLM-5.3-Flash 640, M3 512, DeepSeek V4.1 512, GLM-5.3 1024, K3 1024, eager + traced - all PCC as
+  alone. The last K3 1024 first fell back to the ops head: words the earlier blocks' ops left mid-L1 split the free L1,
+  the arena cap's probe landed above them and the arena below (into the movers' CBs). The free-L1 estimate is now also
+  capped by the largest free block - fused again. K3 switching chunks (128 - 2048): clean.

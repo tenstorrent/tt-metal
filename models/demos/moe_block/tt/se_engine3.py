@@ -60,13 +60,18 @@ def arena_cap(mesh_device, kb):
 
 
 def l1_free_bytes(mesh_device):
-    """L1 a core from the allocator's base up to the lowest L1 allocated now (a probe: L1 is placed top-down)."""
+    """L1 a core from the allocator's base up to the lowest L1 allocated now (a probe: L1 is placed top-down), at most
+    the largest free block."""
     probe = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, 32, 32]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, ttnn.L1_MEMORY_CONFIG
     )
     top = int(probe.buffer_address())
     ttnn.deallocate(probe)
-    return top - ttnn._ttnn.device.GetAllocatorBaseAddress(mesh_device, ttnn.BufferType.L1)
+    # (and no more than the largest free block: words a closed block's ops left mid-L1 split it - the probe lands above
+    # them, a large arena below; an earlier block's leftovers moved a K3 head's arena into the movers' CBs)
+    mv = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    free = top - ttnn._ttnn.device.GetAllocatorBaseAddress(mesh_device, ttnn.BufferType.L1)
+    return min(free, int(mv.largest_contiguous_bytes_free_per_bank))
 
 
 _BRISC = r"""
