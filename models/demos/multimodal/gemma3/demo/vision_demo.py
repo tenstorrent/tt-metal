@@ -122,15 +122,18 @@ def create_multimodal_model(
             checkpoint = tt_model_args.load_state_dict()
             loaded_real_weights = bool(checkpoint) and not tt_model_args.dummy_weights
 
-    model = TtGemmaModel(
-        mesh_device=mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(cache_dtype),
-        dtype=cache_dtype,
-        args=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-        paged_attention_config=paged_attention_config,
-    )
+    # A placeholder state_dict holds no weight data, so as_tensor must raise on an unloadable cache
+    # file rather than rebuild it from the placeholder.
+    with ttnn.as_tensor_cache_repair(not getattr(checkpoint, "is_placeholder", False)):
+        model = TtGemmaModel(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(cache_dtype),
+            dtype=cache_dtype,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+            paged_attention_config=paged_attention_config,
+        )
 
     if loaded_real_weights and num_layers is None:
         mark_weight_cache_complete(cache_dir, checkpoint, is_host_weight=is_gemma3_host_weight, **cache_identity)

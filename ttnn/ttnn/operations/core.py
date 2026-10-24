@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import math
 import os
 import pathlib
@@ -809,6 +810,27 @@ def dump_tensor(
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
+_as_tensor_cache_repair = True
+
+
+@contextlib.contextmanager
+def as_tensor_cache_repair(enabled: bool):
+    """Scopes whether ``ttnn.as_tensor`` regenerates a cache file that exists but fails to load.
+
+    On by default: the file is rewritten from the tensor passed to ``as_tensor``. Wrap a warm-cache
+    build, whose tensors are dataless placeholders, in ``with ttnn.as_tensor_cache_repair(False):``
+    so a failed load raises instead of overwriting a good cache file with the placeholder's
+    contents. The previous setting is restored on exit.
+    """
+    global _as_tensor_cache_repair
+    previous = _as_tensor_cache_repair
+    _as_tensor_cache_repair = enabled
+    try:
+        yield
+    finally:
+        _as_tensor_cache_repair = previous
+
+
 def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):
     # as_tensor applies the caller's preprocess callback to the Torch input before conversion.
     if preprocess is not None:
@@ -932,6 +954,8 @@ def as_tensor(
         tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
         logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
     except RuntimeError as e:
+        if not _as_tensor_cache_repair:
+            raise RuntimeError(f"Failed to load cache file {cache_file_name}: {e}. Delete it to regenerate.") from e
         logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
         tensor = from_torch_and_dump(torch_tensor, dtype, layout, cache_file_name, mesh_mapper)
 
