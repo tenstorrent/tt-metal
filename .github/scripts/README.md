@@ -75,7 +75,7 @@ prepare_test_matrix.py <tests_yaml> <enabled_skus> <sku_config_yaml>
 | Input | Behavior |
 |-------|----------|
 | `enabled_skus` | Comma-separated SKUs, or `ALL_SKUS_IN_TESTS` to take every key under any test's `skus:` map. |
-| `--event` | When `merge_group`, rewrite each logical SKU that defines `merge_queue_sku` in `.github/sku_config.yaml` to that concrete prio SKU (sets `logical_sku` on the row). Other events leave the logical key unchanged. |
+| `--event` | When `merge_group`, rewrite each logical SKU that defines `merge_queue_sku` in `.github/sku_config.yaml` to that concrete prio SKU (sets `logical_sku` on the row). On any other event, rewrite each logical SKU that defines `default_sku` to that SKU. Logical SKUs without the matching key are unchanged. |
 | `--sku-allowlist` | Omit for no extra filter. Empty string → skip all (`matrix=[]`, exit 0). Otherwise CSV of logical SKUs intersected with coverage (used for LLK change gating). |
 
 Gate workflows typically pass `enabled-skus: ALL_SKUS_IN_TESTS` so the test list owns device coverage. LLK jobs also pass `sku-allowlist` (`*` in the workflow means “omit flag / no filter”; empty skips; else CSV)—see `llk-unit-tests-impl.yaml` / `llk-smoke-impl.yaml`.
