@@ -32,7 +32,7 @@ void bind_convert_to_hwc(nb::module_& mod) {
         memory_config (Optional[ttnn.MemoryConfig]): Output memory configuration.
                                                      Required only for DRAM inputs. If omitted for L1 inputs, the output memory_config is automatically inferred.
                                                      The output shard width will be rounded up to the next multiple of the alignment requirement for proper memory alignment.
-        dtype (Optional[ttnn.DataType]): Output data type (defaults to input dtype)
+        dtype (Optional[ttnn.DataType]): Output data type. Defaults to the input dtype; if given, it must equal the input dtype.
 
     Returns:
         ttnn.Tensor: Output tensor in HWC format, height-sharded
