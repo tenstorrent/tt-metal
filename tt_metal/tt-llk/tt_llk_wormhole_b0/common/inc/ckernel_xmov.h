@@ -80,17 +80,35 @@ inline void xmov_l1_to_l1_non_compact(const std::uint32_t src_addr_16B, const st
     SIZE_ADDR[0] = xfer_size_16B;
     DIR_ADDR[0]  = 3; // L1 to L1
     risc_compact_mov_instrn_u risc_mov_instrn;
+    // The documented command decode uses bits 0..7 (opcode) and bit 31 (compact / parametrised);
+    // bits 8..30 are not decoded for a parametrised command, so zero them to keep the stored word
+    // defined.
+    risc_mov_instrn.val         = 0;
     risc_mov_instrn.f.instrn    = 0x40; // mov instruction
     risc_mov_instrn.f.no_params = 0;    // Use xmov inputs from param registers
     XMOV_CMD[0]                 = risc_mov_instrn.val;
 }
 
+// Call right after issuing the move; on return the move is done and its destination can be read.
 inline void xmov_wait_till_idle()
 {
+    volatile std::uint32_t *XMOV_CMD    = reinterpret_cast<volatile std::uint32_t *>(RISCV_TDMA_REG_COMMAND_ADDR);
     volatile std::uint32_t *XMOV_STATUS = reinterpret_cast<volatile std::uint32_t *>(RISCV_TDMA_REG_STATUS);
-    while (XMOV_STATUS[0] & 0x1)
+    // A load from the same address as the command store (reads return 0) is ordered behind that
+    // store, and the TDMA block processes the store, this load and the status loads below in that
+    // order, so the first status read already sees the command queued.
+    (void)XMOV_CMD[0];
+    // A queued command does not show as mover busy, and the command processor pops it only after
+    // starting the mover, so the move is done once the queue is empty and the mover idle.
+    constexpr std::uint32_t mask = RISCV_TDMA_STATUS_FLAG_MOVER0_BUSY_MASK | RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK;
+    while ((XMOV_STATUS[0] & mask) != RISCV_TDMA_STATUS_FLAG_FIFO_EMPTY_MASK)
     {
     }
+    // The mover wrote L1 behind the RISC data cache (Blackhole; no-op on Wormhole), so drop the
+    // cache before the caller reads the destination, and keep the compiler from moving the
+    // caller's destination reads above the wait.
+    invalidate_data_cache();
+    fence_compiler();
 }
 
 } // namespace ckernel
