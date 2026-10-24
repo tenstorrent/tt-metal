@@ -1,0 +1,9 @@
+{
+  "repo": "/home/mvasiljev/tt-metal",
+  "branch": "exp26-qwen38-bringup",
+  "implementation_commit": "a5539a939e3989337da5a60615b1c7e3199048b0",
+  "review": "stage_review.md",
+  "verdict": "clean-pass",
+  "pushed": false,
+  "receipt_commit_location": "External stage commit receipt and final telemetry packet; this file is part of the receipt commit."
+}

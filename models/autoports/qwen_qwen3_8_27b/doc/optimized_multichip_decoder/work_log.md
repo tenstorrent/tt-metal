@@ -181,3 +181,5 @@ Supplemental case67 passes: B8/S4097/8decode prefillPCC.9999653295,min decode.99
 Independent fresh xhigh stage review returned clean-pass with Required Work: None; canonical report stage_review.md read and verified. It independently checks all67cases,4profiles,86exactcomparisons,2524nonblockingreplays,4watcher runs, finalsource hashes and controlled anomalies. No optimization remains deferred. Post-review local checkpoint/receipt commits follow; never push.
 
 Checkpoint infrastructure: checkout has no Git author configuration. Use command-local `git -c user.name=Codex -c user.email=codex@localhost commit ...` for these authorized local commits; no repository/global identity setting is changed.
+
+Local implementation/evidence checkpoint: repo `/home/mvasiljev/tt-metal`, branch `exp26-qwen38-bringup`, SHA `a5539a939e3989337da5a60615b1c7e3199048b0`. Independent clean-pass preceded this commit. No push was performed. This receipt commit records that SHA; both implementation and receipt SHAs are logged in the external stage commit receipt and final a07f750e-34af-4431-bb22-90aaafd34e60 telemetry packet to avoid a self-referential commit hash.
