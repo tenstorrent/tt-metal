@@ -58,6 +58,8 @@ class MyModelAdapter(PrefillModelAdapter):
     supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
                                # drafter is a separate checkpoint targeting ONE architecture (today only
                                # Kimi-K2.7), so leave it False unless a matching drafter exists.
+    supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Gates
+                               # PREFILL_FORWARD_CHUNKS > 1; the runner checks it before building the runtime.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -135,10 +137,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output).
 
-        `request_id` is the engine's chunk counter; the runner ALWAYS passes it, so accept it
-        even if unused. Only the pipelined layer-completion sink consumes it (to build a
-        globally-dense `seq = request_id * num_layers + layer_idx`); a single-rank LayerAck
-        channel carries no payload and can ignore it."""
+        `request_id` is the runner's chunk counter, increasing by one per chunk; the runner ALWAYS
+        passes it, so accept it even if unused."""
 
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
@@ -186,16 +186,56 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         `set_d2h_ack_service(service)` on the runtime; without it the runner refuses
         PREFILL_LAYER_ACK_D2H=1 right after building the runtime.
 
-        Call `sink(layer_idx, request_id)` once per layer, where `request_id` is the one
-        `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
-        callback fires synchronously mid-forward.
+        As KV-writing layers finish, call `sink.layers_completed(layer_start, layer_end, slot_id,
+        actual_start, actual_end)` for the layers `[layer_start, layer_end)` (one layer, or a span), naming
+        the chunk `prefill_chunk` was given -- bind it per call rather than reading mutable state, since the
+        callback fires synchronously mid-forward. The consumer retires a chunk once completions cover all of
+        its KV-writing layers.
 
-        `layer_idx` MUST be the layer's GLOBAL index. The sink keys on
-        seq = request_id * num_layers + layer_idx, so a rank-local index makes every rank's local
-        layer k collide on one seq and all but one completion is dropped -- silently, since the
-        router just sees a duplicate. If your model enumerates only its own slice, add
+        Layer indices MUST be GLOBAL: with rank-local indices every rank reports the same layers and the
+        chunk never retires. If your model enumerates only its own slice, add
         `config.first_layer_idx`; if it numbers its blocks globally at build time, pass it through."""
 ```
+
+### 2.1 Packed forwards (optional)
+
+With `PREFILL_FORWARD_CHUNKS=F` (`PrefillRunParams.forward_chunks`, default 1) one forward carries F
+chunk *entries* of `chunk_size` tokens: `forward_tokens = F * chunk_size` rows. F = 1 is the
+`prefill_chunk` path above, unchanged. F > 1 needs `supports_packed_forward = True` on the adapter, and
+the runtime then gets `prefill_forward` instead of `prefill_chunk`:
+
+```python
+    def prefill_forward(self, input_tensor, kv_cache, entries, request_id=0, d2h_service=None, *, metadata_msg=None):
+        """One forward of `params.forward_chunks` entries (`forward_entries.PrefillEntry(slot, start, end)`, in
+        pack order). `input_tensor` is the forward's packed H2D tokens on the first rank (chip c holds slice c
+        of every entry's rotated chunk, in entry order: `chunk_layout.pack_forward_tokens`), or the
+        `[1, 1, forward_tokens, H]` activation from the previous rank. Return the forward_tokens-row
+        activation on a non-last rank, None on the last. Size the non-first-rank placeholder input to
+        forward_tokens. Report layer completions as `prefill_chunk` does, once for each non-empty entry,
+        after that entry's layers ran. `request_id` is the runner's chunk counter at the forward's first
+        entry; it advances by the forward's non-empty entries."""
+```
+
+Metadata (`forward_entries`), little-endian uint32: at F = 1 today's 12 B `(slot, start, end)` record; at
+F > 1 tt-d-gen's `PrefillBatchMetadata`, 8 + 12 * F B: `{num_chunks, 0}` then F `(slot, start, end)` records,
+those past `num_chunks` set to `(0xFFFFFFFF, 0, 0)`. `num_chunks` (1..F) is the forward's non-empty entry
+count; the runtime gets F entries, the ones past `num_chunks` empty. The H2D producer must use the same F
+(tt-d-gen's `max_chunks_per_batch`); `prefill_producer.py` pushes one chunk per forward.
+`[start, end)` keeps its single-chunk meaning; `start == end` is an empty entry (no attention, no KV
+write, slot ignored). The SHUTDOWN / WARMUP sentinels fill every word with -1 / -2. Order contract,
+validated on the first rank (`forward_entries.validate_forward_entries`):
+
+- at least one non-empty entry; empty entries only after every non-empty one;
+- a slot's entries are one run of consecutive chunks (`start` of each = `end` of the previous), and only
+  the run's last entry may be partial; entries never overlap, so a last chunk near the cache end pads into
+  the cache instead of moving back over its predecessor;
+- `start % 32 == 0`, `start < end <= start + chunk_size`, `start + chunk_size <= max_seq_len`;
+- runs of different slots may come in any order.
+
+Each layer completion names one entry, so a consumer retires each chunk on its own.
+
+The runner refuses F > 1 at startup, before the model loads, together with `PREFILL_MTP_LEVELS > 0`,
+`PREFILL_DFLASH=1`, `PREFILL_USE_TRACE=1` or `PREFILL_LAYER_ACK_D2H=1`.
 
 ---
 
