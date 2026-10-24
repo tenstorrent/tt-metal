@@ -1742,7 +1742,7 @@
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    export TT_DIT_WEIGHTS_ROOT=/mnt/weka/model-weights/video  # local mirror of HF repos; see models/tt_dit/utils/checkpoint.py
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
@@ -1773,7 +1773,7 @@
     export NO_PROMPT=1
     export HF_HOME=/mnt/models/huggingface
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    export TT_DIT_WEIGHTS_ROOT=/mnt/weka/model-weights/video  # local mirror of HF repos; see models/tt_dit/utils/checkpoint.py
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
@@ -1806,7 +1806,7 @@
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
-    export TT_DIT_WEIGHTS_ROOT=/mnt/weka/model-weights/video  # local mirror of HF repos; see models/tt_dit/utils/checkpoint.py
+    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
     MGD="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/32x4_quad_bh_galaxy_torus_xy_graph_descriptor.textproto"
     UNIT_TEST="${TT_METAL_HOME}/models/tt_dit/tests/models/wan2_2/test_transformer_wan.py"
     TTRUN_PY="${TTRUN_PY:-${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py}"
