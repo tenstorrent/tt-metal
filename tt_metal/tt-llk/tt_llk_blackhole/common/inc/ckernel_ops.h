@@ -860,8 +860,8 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_SFPMOV_VALID(imm12_math, lreg_c, lreg_dest, instr_mod1) \
     (ckernel::is_valid(imm12_math, 12) && ckernel::is_valid(lreg_c, 4) && ckernel::is_valid(lreg_dest, 4) && ckernel::is_valid(instr_mod1, 4))
 #define TT_IP_SFPMOV(IP, imm12_math, lreg_c, lreg_dest, instr_mod1) TT_IP_INSN(IP, TT_OP_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1))
-#define TT_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_IP_SFPMOV(::ckernel::instrn_buffer, imm12_math, lreg_c, lreg_dest, instr_mod1))
-#define TTI_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_IP_SFPMOV(nullptr, imm12_math, lreg_c, lreg_dest, instr_mod1))
+#define TT_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1)  TT_IP_SFPMOV(::ckernel::instrn_buffer, imm12_math, lreg_c, lreg_dest, instr_mod1)
+#define TTI_SFPMOV(imm12_math, lreg_c, lreg_dest, instr_mod1) TT_IP_SFPMOV(nullptr, imm12_math, lreg_c, lreg_dest, instr_mod1)
 
 #define TT_OP_SFPMUL(lreg_src_a, lreg_src_b, lreg_src_c, lreg_dest, instr_mod1) \
     TT_OP(0x86, (((lreg_src_a) << 16) + ((lreg_src_b) << 12) + ((lreg_src_c) << 8) + ((lreg_dest) << 4) + ((instr_mod1) << 0)))

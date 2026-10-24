@@ -1161,7 +1161,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0) \
     TT_IP_STALLWAIT(::ckernel::instrn_buffer, stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0))
 #define TTI_STALLWAIT(stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0) \
-    TT_IP_STALLWAIT(nullptr, stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0))
+    TT_IP_STALLWAIT(nullptr, stall_res, wait_res_idx_2, wait_res_idx_1, wait_res_idx_0)
 
 #define TT_OP_STOREIND(SizeSel, MemSel, OffsetIndex, AutoIncSpec, Data_GPR_Index, Addr_GPR_Index) \
     TT_OP(0x66, (((SizeSel) << 22) + ((MemSel) << 21) + ((OffsetIndex) << 14) + ((AutoIncSpec) << 12) + ((Data_GPR_Index) << 6) + ((Addr_GPR_Index) << 0)))
@@ -2071,7 +2071,7 @@ extern "C" void __builtin_rvtt_ttinsn(unsigned long volatile *, unsigned, unsign
 #define TT_ZEROACC(clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where) \
     TT_IP_ZEROACC(::ckernel::instrn_buffer, clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where)
 #define TTI_ZEROACC(clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where) \
-    TT_IP_ZEROACC(nullptr, clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where))
+    TT_IP_ZEROACC(nullptr, clear_mode, use_32_bit_mode, clear_zero_flags, addr_mode, where)
 
 #define TT_OP_ZEROSRC(packed_fmt, int_fmt, exp_bias, zero_val, write_mode, bank_mask, src_mask) \
     TT_OP(0x11, (((packed_fmt) << 7) + ((int_fmt) << 6) + ((exp_bias) << 5) + ((zero_val) << 4) + ((write_mode) << 3) + ((bank_mask) << 2) + ((src_mask) << 0)))
