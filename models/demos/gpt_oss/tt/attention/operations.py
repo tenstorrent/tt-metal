@@ -5,21 +5,25 @@ import math
 
 import ttnn
 
+from ..batched_prefill import batched_reduce_links, per_user_reduce, ring_reduce_scatter
 from .weights import AttentionWeights
 
 
-def apply_qkv_projection(hidden_states, weights: AttentionWeights):
+def apply_qkv_projection(hidden_states, weights: AttentionWeights, program_config=None):
     """
     Apply QKV projection and add bias.
 
     Args:
         hidden_states: Input tensor [batch, seq_len, hidden_size]
         weights: Attention weights container
+        program_config: matmul program config (None: ttnn default)
 
     Returns:
         Fused QKV tensor [batch, seq_len, total_qkv_dim]
     """
-    xqkv_fused = ttnn.linear(hidden_states, weights.wqkv, bias=weights.wqkv_bias, dtype=ttnn.bfloat16)
+    xqkv_fused = ttnn.linear(
+        hidden_states, weights.wqkv, bias=weights.wqkv_bias, dtype=ttnn.bfloat16, program_config=program_config
+    )
     return xqkv_fused
 
 
@@ -98,7 +102,7 @@ def concat_heads(tensor, is_decode_mode: bool):
     return ttnn.experimental.nlp_concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype):
+def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype, unpadded=False, program_config=None):
     """
     Apply output projection and bias.
 
@@ -106,15 +110,70 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
         tensor: Attention output tensor
         weights: Attention weights container
         activation_dtype: Target dtype for output
+        unpadded: use the prefill o_proj without the CCL padding columns (weights.o_proj_prefill)
+        program_config: matmul program config (None: ttnn default)
 
     Returns:
         Output tensor after projection
     """
-    tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
-    out = ttnn.matmul(tensor, weights.o_proj, dtype=activation_dtype)
-    tensor.deallocate(True)
-    ttnn.add(out, weights.o_proj_bias, output_tensor=out)
+    w, b = (weights.o_proj_prefill, weights.o_proj_bias_prefill) if unpadded else (weights.o_proj, weights.o_proj_bias)
+    # The prefill attention casts the heads to bf8 before the concat (already bf8 here); the caller owns the input.
+    cast = tensor if tensor.dtype == ttnn.bfloat8_b else ttnn.typecast(tensor, ttnn.bfloat8_b)
+    # Bias fused into the matmul (one pass over the output instead of a separate in-place add).
+    out = ttnn.linear(cast, w, bias=b, dtype=activation_dtype, program_config=program_config)
+    if cast is not tensor:
+        cast.deallocate(True)
     return out
+
+
+def apply_output_projection_allreduce_prefill(
+    tensor,
+    weights: AttentionWeights,
+    activation_dtype,
+    mesh_config,
+    ccl_manager,
+    program_config=None,
+    scatter=False,
+    batch_size=1,
+):
+    """Prefill o_proj on the unpadded weight, then one TP all_reduce over the full hidden width.
+
+    Replaces o_proj (padded width) + reduce_scatter_minimal_async + all_gather_async + slice of the padding columns.
+    Measured standalone on BH 1x4 at [S, 2880] vs the padded RS + AG + slice chain: bf16 1.99 -> 1.36 ms at S = 8192,
+    7.90 -> 5.38 ms at S = 32768 (l10/probe_attn_ccl*.py).
+
+    ttnn.all_reduce scatters over the innermost dim whose tile count divides by the TP size. The width
+    (2880 = 90 tiles) does not at TP = 4, so the rows do: S % (32 * TP) == 0, i.e. S % 128 == 0 at TP = 4. Otherwise
+    it falls back to the composite all-gather + local sum: still correct, but slower and with a TP-times larger
+    intermediate.
+
+    scatter: return only the reduce-scatter half (each device keeps its S / TP rows, the sequence-parallel prefill of
+    DecoderLayer); the same ttnn.reduce_scatter that ttnn.all_reduce runs first, so the rows are bit-identical.
+
+    batch_size > 1 (batched prefill, rows stacked by user): batched_prefill.per_user_reduce, which reduces every
+    user's rows as this function does for that user alone.
+    """
+    out = apply_output_projection(tensor, weights, activation_dtype, unpadded=True, program_config=program_config)
+    links = batched_reduce_links(ccl_manager, mesh_config.tp_axis)  # 2 on BH 1x4, batch 1 too (bit-exact vs 1 link)
+    if batch_size > 1:
+        reduced = per_user_reduce(out, batch_size, mesh_config.tp_axis, links, scatter=scatter)
+        out.deallocate(True)
+        return reduced
+    if scatter:
+        reduced = ring_reduce_scatter(
+            out, mesh_config.tp_axis, links, topology=ccl_manager.topology, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        out.deallocate(True)
+        return reduced
+    reduced = ttnn.all_reduce(
+        out,
+        num_links=links,
+        topology=ccl_manager.topology,
+        cluster_axis=mesh_config.tp_axis,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out.deallocate(True)
+    return reduced
 
 
 # Per-M_tiles tuned config for the fused attention o_proj matmul + reduce-scatter.

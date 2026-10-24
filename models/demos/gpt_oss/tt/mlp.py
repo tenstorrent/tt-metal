@@ -10,7 +10,9 @@ from models.demos.gpt_oss.tt.expert_configs import GPTOSSProgramConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name
 from models.demos.gpt_oss.utils.substate import substate
 
+from .batched_prefill import gather_users
 from .experts import ExpertConfig, Experts
+from .experts.prefill_routed import RoutedPrefillExperts, routed_prefill_supported
 from .experts_throughput import (
     DeepSeekPrefillConfig,
     ThroughputExpertConfig,
@@ -19,6 +21,11 @@ from .experts_throughput import (
 )
 from .fused_decode.config import DENSE_MOE_TOKENS, dense_moe_decode_supported, fused_decode_supported
 from .topk import TopKRouter
+
+# dtype of the expert input rows that MLP.prefill_sequence_parallel all-gathers. bf8 measured TTFT 8K -3.3%, 32K -3.0%
+# together with the local-rows router (L11c); bf16 makes the sequence-parallel prefill bit-identical to the
+# replicated one.
+PREFILL_SP_EXPERT_INPUT_DTYPE = ttnn.bfloat8_b
 
 
 class MLP:
@@ -35,6 +42,7 @@ class MLP:
         mesh_config=None,
         use_throughput_experts=True,
         tokens_per_device=32,
+        layer_idx=None,
     ):
         # Split state dict
         router_state_dict = substate(state_dict, "router")
@@ -174,7 +182,74 @@ class MLP:
                 dense_decode_tokens=DENSE_MOE_TOKENS if self.dense_decode else None,
             )
 
-    def __call__(self, hidden_states, is_decode):
+        # Routed top-k prefill experts (experts/prefill_routed.py): only the routed (token, expert) pairs are computed,
+        # with local expert parallelism over the mesh row. On by default on Blackhole 1xN meshes;
+        # GPT_OSS_ROUTED_PREFILL=0 selects the dense prefill path. Prefills shorter than GPT_OSS_ROUTED_PREFILL_MIN_SEQ
+        # (default 128) or not a multiple of 64 still run dense. A batched prefill (B users flattened to [1, 1, B*S, H])
+        # takes the routed path too: the experts are per token, the closing reduction is per user (batch_size).
+        # With the flag on, missing routed weights (no HF expert weights and an incomplete routed cache) raise
+        # RoutedWeightsUnavailable instead of silently falling back to dense.
+        self.routed_prefill = None
+        if mesh_config is not None and routed_prefill_supported(
+            mesh_device, mesh_config, hf_config, use_throughput_experts
+        ):
+            self.routed_prefill = RoutedPrefillExperts(
+                mesh_device,
+                hf_config,
+                experts_state_dict,
+                ccl_manager,
+                mesh_config,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "experts"),
+                layer_idx=layer_idx,
+            )
+        # The routed experts may hold the experts in a per-layer calibrated order (device-load balance,
+        # experts/prefill_routed_placement.py); their router then emits slot ids (expert order[v] as id v).
+        self.routed_router = self.router
+        if self.routed_prefill is not None and self.routed_prefill.expert_order is not None:
+            self.routed_router = self.router.with_expert_order(self.routed_prefill.expert_order)
+
+    def routed_prefill_supports(self, shape):
+        """Whether a prefill input of this shape takes the routed experts (else the dense prefill path)."""
+        return self.routed_prefill is not None and self.routed_prefill.supports(shape)
+
+    def prefill_sequence_parallel(self, x_rows, cluster_axis, batch_size=1):
+        """Routed MoE of a sequence-parallel prefill. x_rows: this device's S / N rows of the normed input
+        ([1, 1, S / N, H] bf16, device d holding rows d * S / N onward). Returns the reduce-scattered MoE output rows
+        [1, 1, S / N, H] (bf8).
+
+        The router is row-wise, so it runs on the local rows and only its top-k ids / weights ([S / N, k]) are
+        all-gathered. The experts need all S rows: those are gathered in PREFILL_SP_EXPERT_INPUT_DTYPE (bf8, half the
+        bytes of bf16). The expert op packs its bf16 input to bf8 itself, but this typecast rounds differently from
+        that pack, so the output is not bit-identical to the replicated path (gate v4 neutral); with the constant at
+        bf16 it is (tests/unit/test_prefill_sequence_parallel.py).
+
+        batch_size > 1 (batched prefill): x_rows holds rows d * S / N onward of each of the B users (stacked by
+        user); the gathers return all rows stacked by user (batched_prefill.gather_users)."""
+        idx_rows, w_rows = self.routed_router(x_rows, True, batch_size)
+        n = x_rows.shape[-2]
+        k = idx_rows.shape[-1]
+
+        def gather_rows(t):
+            t4 = ttnn.reshape(t, (1, 1, n, k))
+            full = gather_users(t4, batch_size, cluster_axis)
+            t.deallocate(True)
+            return ttnn.reshape(full, (full.shape[-2], k))
+
+        expert_indices = gather_rows(idx_rows)
+        expert_weights = gather_rows(w_rows)
+        dtype = PREFILL_SP_EXPERT_INPUT_DTYPE
+        x_in = x_rows if x_rows.dtype == dtype else ttnn.typecast(x_rows, dtype)
+        x_full = gather_users(x_in, batch_size, cluster_axis, self.routed_prefill.ccl_manager)
+        if x_in is not x_rows:
+            x_in.deallocate(True)
+        assert self.routed_prefill_supports(x_full.shape), "SP prefill needs routed MoE"
+        out = self.routed_prefill(x_full, expert_indices, expert_weights, scatter=True, batch_size=batch_size)
+        x_full.deallocate(True)
+        ttnn.deallocate(expert_indices)
+        ttnn.deallocate(expert_weights)
+        return out
+
+    def __call__(self, hidden_states, is_decode, batch_size=1):
         """Forward pass: route -> experts
         Args:
             hidden_states: Input tensor [batch, seq_len, hidden_size]
@@ -192,6 +267,12 @@ class MLP:
             return self.experts(
                 x, topk_expert_indices=expert_indices, topk_expert_weights=expert_weights, is_decode=True
             )
+        if not is_decode and self.routed_prefill_supports(hidden_states.shape):
+            expert_indices, expert_weights = self.routed_router(hidden_states, True, batch_size)
+            expert_output = self.routed_prefill(hidden_states, expert_indices, expert_weights, batch_size=batch_size)
+            ttnn.deallocate(expert_indices)
+            ttnn.deallocate(expert_weights)
+            return expert_output
         if is_decode and self.dense_decode:
             # Batched decode (dense MoE): dense [tokens, experts] routing weights straight from the router.
             expert_weights = self.router.dense_decode(hidden_states)

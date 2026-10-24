@@ -29,6 +29,8 @@ from ..fused_decode.boundary import KERNEL_DIR
 
 TILE = ttnn.TILE_SIZE
 TREE_SEM = 9
+OUT_SEM = 12  # BA_OUT_SPLIT: the reader's half of the root's output written
+Q_SEM = 13  # BA_Q_SPLIT: the writer's half of the packed Q tile read
 LAND_SEM, COPY_SEM = 10, 11  # the shared K / V reads: groups landed in the leader / copied by its partner
 MIN_CHUNKS = 4  # 32-position chunks per slice at least
 G = 8  # chunks per K / V group (one running-softmax step)
@@ -56,33 +58,43 @@ class BlockAttention:
         window=0,
         q_rows=False,
         min_chunks=None,
+        swin=0,
+        users=1,
     ):
         """cores: cores_needed(n_kv, rows, slices) logical cores: (kv head g, tile group t, slice s) = cores[(g Tt + t)
         slices + s], each tile group (packed Q tile t, one per core) with its own slices and merge tree.
         uniform: every row attends [0, pos[M - 1]] (the drafter's block: no causal mask inside it), no sinks; window
         (uniform only): the rows attend the last `window` positions [pos[M - 1] + 1 - window, pos[M - 1]].
         q_rows: q comes in the rows layout [1, M, heads, 64] (the reader gathers the packed tiles: no repacking op).
+        swin (not uniform): a sliding window, row r attends [pos[r] + 1 - swin, pos[r]] (with the sinks).
+        users (batch-32 verify, parts(user=...)): users side by side in one kernel set, cores user-major
+        (cores_needed cores each).
         """
-        assert head_dim == 64 and n_heads // n_kv == 8 and rows == 8
+        assert head_dim == 64 and n_heads // n_kv == 8 and rows in (1, 2, 4, 8)
         assert uniform or not window
+        assert not (uniform and swin) and (not swin or swin >= 128)
         self.mesh, self.M, self.nq, self.nkv, self.hd = mesh_device, rows, n_heads, n_kv, head_dim
-        self.block, self.S, self.Tt = block_size, slices, rows // 4
-        self.uniform, self.window, self.q_rows = uniform, window, q_rows
+        # Tt packed Q tiles per kv head (M < 4: one, its first M row groups real)
+        self.block, self.S, self.Tt = block_size, slices, max(1, rows // 4)
+        self.uniform, self.window, self.q_rows, self.swin = uniform, window, q_rows, swin
         # one DRAM read of each K / V group per (kv head, slice): the tile-group-1 core copies it from the tile-group-0
         # core's L1
-        assert len(cores) == self.cores_needed(n_kv, rows, slices)
+        assert len(cores) == users * self.cores_needed(n_kv, rows, slices)
+        self.users = users
         self.core_list = list(cores)
         self.grid = mesh_device.compute_with_storage_grid_size()
         assert len(self.core_list) < 0xFF
         self.cores = _rects(self.core_list)
         self.min_chunks = min_chunks or MIN_CHUNKS
         self.rounds = max(1, (slices - 1).bit_length())
+        # one 256-byte segment per page, interleaved over L1 (as one DRAM page every core of a program read its masks
+        # from one bank: a 16-user verify program 57 us vs 37 with 8 users)
         self.mask_lib = ttnn.from_torch(
-            self._mask_lib(),
+            self._mask_lib().reshape(1, 1, -1, 64),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         # the packed Q (a producer writes it in this layout: the verify QKV with spec_tt) and the packed output (o_proj
@@ -116,7 +128,7 @@ class BlockAttention:
 
     @staticmethod
     def cores_needed(n_kv, rows, slices):
-        return n_kv * (rows // 4) * slices
+        return n_kv * max(1, rows // 4) * slices
 
     def noc_cores(self):
         return [self.mesh.worker_core_from_logical_core(c) for c in self.core_list]
@@ -127,11 +139,30 @@ class BlockAttention:
         noc = self.noc_cores()
         return [noc[i] for i in sorted(range(len(noc)), key=lambda i: (i % self.S, i))]
 
-    def parts(self, q, k_cache, v_cache, pos, page_table, sinks, scale, wait, patch=None, out_notify=None):
+    def parts(
+        self,
+        q,
+        k_cache,
+        v_cache,
+        pos,
+        page_table,
+        sinks,
+        scale,
+        wait,
+        patch=None,
+        out_notify=None,
+        user=None,
+        out=None,
+    ):
         """(kernels, cbs, io); q: the packed Q [1, nkv, Tt * 32, 64] (tile (g, t, d) at page (g Tt + t) 2 + d); pos:
         INT32 [>= M] (row r at pos[r], non-decreasing, consecutive rows within 32 positions); page_table: INT32 [*,
         blocks] (row 0 used); sinks: the heads' [heads, 32] BF16 sink tile; wait = (semaphore id, count): the QKV
-        writers' signal that q and the block's K / V rows are written."""
+        writers' signal that q and the block's K / V rows are written.
+        user = (u, users) (batch 32, q_rows): the block of user u among `users` (with self.users > 1: users u ..
+        u + self.users - 1, one per core group): positions pos[M u ..], page table row u; q in the heads layout [1,
+        heads, M users, 64] (the RoPE output) and `out` in the concatenated-heads layout [1, 1, M users, heads * 64]
+        (o_proj's input), row r users + u."""
+        out = self.out if out is None else out
         cap, S = CAP, self.S
         sinks = sinks if sinks is not None else self.mask_lib  # uniform: no sinks (a placeholder address)
         kv_dtype = k_cache.dtype
@@ -155,7 +186,7 @@ class BlockAttention:
             cb(cb_q, bf16, 2048, 2),
             cb(cb_k, kv_dtype, kv_tile, 2 * G * cap),
             cb(cb_v, kv_dtype, kv_tile, 2 * G * cap),
-            cb(cb_aux, bf16, 2048, 6),
+            cb(cb_aux, bf16, 2048, 8 if self.swin else 6),  # [scaler, NM masks, sink mask, sink, zero]
             cb(cb_scr, bf16, 256 + max(pt_page, 64), 1),
             cb(cb_qs, bf16, 2048, 2),
             cb(cb_s, f32, 4096, 2 * (G + 1)),  # 2 groups: the next group's scores while P of this one runs
@@ -189,7 +220,7 @@ class BlockAttention:
         for t in (q, k_cache, v_cache, pos, page_table, sinks, self.mask_lib):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         writer_ct = [cb_out, cb_scr2, cb_send, cb_recv, self.M, S, self.min_chunks, partial]
-        writer_ct += ttnn.TensorAccessorArgs(self.out).get_compile_time_args()
+        writer_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
         compute_ct = [cb_q, cb_k, cb_v, cb_aux, cb_qs, cb_s, cb_p, cb_m, cb_l, cb_o, cb_ab, cb_out, cb_send, cb_recv]
         compute_ct += [cb_lacc, _f32_bits(scale), self.M, G]
         # every argument is common (no per-core runtime args: dispatch writes those core by core): each core finds its
@@ -225,9 +256,9 @@ class BlockAttention:
             pn = [(x << 8) | y for x, y in patch[2][: self.M]] + [0] * (self.M % 2)
             reader_common += [patch[0].buffer_address(), patch[1].buffer_address()]
             reader_common += [pn[w] | (pn[w + 1] << 16) for w in range(0, len(pn), 2)]
-        writer_common = [self.out.buffer_address()] + idx_words + noc_words
+        writer_common = [out.buffer_address()] + idx_words + noc_words
         defines = [("BA_WAIT_SEM", str(wait[0])), ("BA_WAIT_N", str(wait[1])), ("BA_TREE_SEM", str(TREE_SEM))]
-        defines += [("BA_TQ", str(self.Tt)), ("BA_GX", str(gx))]
+        defines += [("BA_TQ", str(self.Tt)), ("BA_GX", str(gx)), ("BA_NKV", str(self.nkv))]
         defines += [("BA_NIDX", str(len(idx_words))), ("BA_CB_POS", str(cb_scr2))]
         defines += [("BA_LAND_SEM", str(LAND_SEM)), ("BA_COPY_SEM", str(COPY_SEM))]
         if self.uniform:
@@ -244,8 +275,29 @@ class BlockAttention:
                 ("BA_OUT_NOTIFY_ARG", str(len(writer_common))),
             ]
             writer_common += [nw[w] | (nw[w + 1] << 16) for w in range(0, len(nw), 2)]
+        if user is not None:
+            assert self.q_rows and patch is None and out_notify is None
+            defines += [("BA_USER_ARG", str(len(reader_common))), ("BA_USER_ARG_W", str(len(writer_common)))]
+            defines += [("BA_Q_RSTRIDE", str(user[1]))]
+            defines += [("BA_Q_HEADS", str(q.shape[2] // TILE)), ("BA_OUT_CONCAT", str(out.shape[-1] // TILE))]
+            # the root's output writes split between the writer (column tile 0) and the reader (1)
+            defines += [
+                ("BA_OUT_SPLIT", str(len(reader_common) + 1)),
+                ("BA_OUT_SEM", str(OUT_SEM)),
+                ("BA_CB_OUT", str(cb_out)),
+            ]
+            reader_ct += ttnn.TensorAccessorArgs(out).get_compile_time_args()
+            reader_common.append(user[0])  # (BA_USER_ARG)
+            writer_common.append(user[0])
+            reader_common.append(out.buffer_address())  # (BA_OUT_SPLIT)
+            # the packed Q tile's reads split between the reader (column tile 0) and the writer (1)
+            defines += [("BA_Q_SPLIT", str(len(writer_common))), ("BA_Q_SEM", str(Q_SEM)), ("BA_CB_Q", str(cb_q))]
+            writer_common.append(q.buffer_address())
+            writer_ct += ttnn.TensorAccessorArgs(q).get_compile_time_args()
         if self.window:  # one window for all rows
             defines.append(("BA_WINDOW", str(self.window)))
+        if self.swin:
+            defines.append(("BA_SWIN", str(self.swin)))
         dm = ttnn.DataMovementConfigDescriptor
         kernels = [
             ttnn.KernelDescriptor(
@@ -271,7 +323,7 @@ class BlockAttention:
                 core_ranges=self.cores,
                 compile_time_args=compute_ct,
                 runtime_args=[],
-                defines=[(k, v) for k, v in defines if k == "BA_UNIFORM"],
+                defines=[(k, v) for k, v in defines if k in ("BA_UNIFORM", "BA_SWIN")],
                 config=ttnn.ComputeConfigDescriptor(
                     math_fidelity=ttnn.MathFidelity.HiFi2,
                     fp32_dest_acc_en=True,
@@ -279,13 +331,14 @@ class BlockAttention:
                 ),
             ),
         ]
-        io = [q, k_cache, v_cache, pos, page_table, sinks, self.mask_lib, self.out]
+        io = [q, k_cache, v_cache, pos, page_table, sinks, self.mask_lib, out]
         return kernels, cbs, [t for i, t in enumerate(io) if all(t is not u for u in io[:i])]
 
     def semaphores(self):
         """The op's own program semaphores (besides the wait semaphore)."""
         return [
-            ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, self.cores, 0) for i in (TREE_SEM, LAND_SEM, COPY_SEM)
+            ttnn.SemaphoreDescriptor(i, ttnn.CoreType.WORKER, self.cores, 0)
+            for i in (TREE_SEM, LAND_SEM, COPY_SEM, OUT_SEM, Q_SEM)
         ]
 
 

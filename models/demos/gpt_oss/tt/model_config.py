@@ -25,6 +25,10 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import convert_hf_qkv_to_meta_format
 
+# Batched prefill in groups (generator hook batched_prefill_group_size): padded length -> users per forward, for
+# lengths where all 32 users exceed the generator's token budget (B x S < 128K). Measured on BH 1x4 (keep 05).
+BATCHED_PREFILL_GROUPS = {4096: 16, 8192: 8}
+
 
 class ModelArgs:
     """GPT-OSS ModelArgs compatible with tt_transformers create_tt_model interface"""
@@ -113,9 +117,29 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
-        self.disable_batched_prefill = True
+        # Batched prefill (several users flattened into one [1, 1, B*S, H] forward, attention per user) is validated
+        # on the Blackhole 1x4 mesh only (the routed-MoE prefill placement, experts/prefill_routed_placement.py, and
+        # the per-user exact reductions of batched_prefill.py); other meshes keep the sequential per-user prefill.
+        mesh_shape = tuple(mesh_device.shape) if mesh_device is not None else ()
+        self.disable_batched_prefill = not (mesh_shape == (1, 4) and is_blackhole())
+        # Padded length -> users per batched forward where all users do not fit the generator's token budget
+        # (batched_prefill_group_size). GPT_OSS_PREFILL_GROUPS="4096:16,8192:8" overrides it (tuning).
+        self.batched_prefill_groups = dict(BATCHED_PREFILL_GROUPS)
+        groups_env = os.getenv("GPT_OSS_PREFILL_GROUPS")
+        if groups_env is not None:
+            self.batched_prefill_groups = {
+                int(k): int(v) for k, v in (item.split(":") for item in groups_env.split(",") if item.strip())
+            }
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
+
+    def batched_prefill_group_size(self, padded_len, batch_size):
+        """Users per batched prefill forward for batch_size users of padded_len (generator opt-in hook), or None
+        (the generator default: all users in one forward if they fit its token budget, else sequential)."""
+        if self.disable_batched_prefill:
+            return None
+        group = self.batched_prefill_groups.get(padded_len)
+        return group if group is not None and 1 < group < batch_size else None
 
     def get_warmup_prefill_supported_seq_lens(self):
         DEFAULT_VALUE = self.capped_warmup_seq_len
@@ -131,6 +155,14 @@ class ModelArgs:
         to_warmup_seq_lens = calculate_prefill_warmup_seq_lens(
             max_seq_len_to_warmup, self.trace_prefill_supported_seq_lens
         )
+        # calculate_prefill_warmup_seq_lens lists the shared buckets (128, 1024, 2048, ...). Add every bucket that
+        # self.get_padded_prefill_len can produce up to the cap (256 and 512), so those compile during warmup too.
+        bucket = 128
+        while bucket <= max_seq_len_to_warmup:
+            if bucket not in to_warmup_seq_lens:
+                to_warmup_seq_lens.append(bucket)
+            bucket = self.get_padded_prefill_len(bucket + 1)
+        to_warmup_seq_lens.sort()
 
         to_warmup_seq_lens = self.filter_warmup_seq_lens(to_warmup_seq_lens)
 
@@ -154,6 +186,16 @@ class ModelArgs:
     @property
     def base_model_name(self):
         return get_base_model_name(self.model_name)
+
+    def get_padded_prefill_len(self, seq_len):
+        """Prefill bucket, read by the generator in place of common.get_padded_prefill_len (opt-in hook).
+
+        The next power of two, at least 128. It differs from the shared rule only for 129-512 tokens, which pad to
+        256 or 512 instead of 1024. Every bucket is a multiple of 64 and at least 128, as the routed MoE needs.
+        """
+        if seq_len <= 128:
+            return 128
+        return 1 << (int(seq_len) - 1).bit_length()
 
     def can_enable_trace(self, prefill_seq_len, num_cached_tokens=0):
         """
@@ -352,8 +394,34 @@ class ModelArgs:
             return False
         if dense_moe and meta.get("dense_moe_decode_weights") != self.DENSE_MOE_DECODE_WEIGHTS_VERSION:
             return False
+        routed_version = self._routed_prefill_weights_version()
+        if routed_version and meta.get("routed_prefill_weights") != routed_version:
+            # The routed prefill experts (experts/prefill_routed.py) cache their own weight layout; a cache built
+            # without them must cold-load once so they get written.
+            return False
         # Belt-and-suspenders: the cache dir must still actually hold tensor files.
         return any(cache_path.glob("*.tensorbin"))
+
+    def _routed_prefill_weights_version(self):
+        """Routed prefill expert weight-cache version when this model builds them (env flag + mesh), else None."""
+        from models.demos.gpt_oss.tt.experts.prefill_routed import (
+            ROUTED_PREFILL_NUM_EXPERTS,
+            ROUTED_PREFILL_WEIGHTS_VERSION,
+            routed_prefill_bf8_layers,
+            routed_prefill_enabled,
+            routed_prefill_mesh_supported,
+        )
+
+        num_experts = getattr(getattr(self, "hf_config", None), "num_local_experts", None)
+        if (
+            routed_prefill_enabled()
+            and num_experts == ROUTED_PREFILL_NUM_EXPERTS
+            and routed_prefill_mesh_supported(self.mesh_device, num_experts)
+        ):
+            bf8 = routed_prefill_bf8_layers()
+            # The bf8 layer set changes which routed caches must exist, so it is part of the marker.
+            return f"{ROUTED_PREFILL_WEIGHTS_VERSION}:bf8={bf8}" if bf8 else ROUTED_PREFILL_WEIGHTS_VERSION
+        return None
 
     def mark_weight_cache_complete(self, dtype, fused_decode=False, dense_moe=False):
         """Record that the ttnn weight cache for this (model, dtype, mesh shape) was fully
@@ -388,6 +456,9 @@ class ModelArgs:
                             self.DENSE_MOE_DECODE_WEIGHTS_VERSION
                             if dense_moe
                             else previous.get("dense_moe_decode_weights", False)
+                        ),
+                        "routed_prefill_weights": (
+                            self._routed_prefill_weights_version() or previous.get("routed_prefill_weights", False)
                         ),
                     }
                 )

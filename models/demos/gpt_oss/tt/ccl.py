@@ -27,7 +27,11 @@ class CCLManager:
         self.barrier_idx = 0
 
     def _init_subdevice(self):
-        compute_grid_size = ttnn.CoreCoord(8, 8)
+        # The semaphores below must exist on every core a CCL op may pick as a worker: reduce_scatter_minimal_async and
+        # all_gather_async choose their workers from the whole worker grid (11x10 on Blackhole), and a global semaphore
+        # is created and zeroed only on its own cores. A fixed 8x8 grid left the workers outside it polling whatever an
+        # earlier op or process left at the semaphore address (wrong / NaN all-reduce rows; tests/unit/test_ccl_manager.py).
+        compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )

@@ -153,9 +153,21 @@ void kernel_main() {
     const uint32_t down_col_end =
         (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
 
-    constexpr uint32_t out_accessor_offset = 33;
+    // ROW_MAJOR bf16 output (op.output_row_major): compute pushes each tile-row of cb_out untilized,
+    // [32 rows][per_core_N_d * 32] bf16, and this writer stores it as 32 row segments at the core's
+    // column offset. One output page is one row of N_down_tiles_full * 32 bf16 values.
+    constexpr bool output_row_major = get_compile_time_arg_val(33) != 0;
+    // Output row set to zeros (UINT32_MAX: none), by one core, from the zero-filled cb_zero_row.
+    constexpr uint32_t zero_output_row = get_compile_time_arg_val(34);
+    constexpr uint32_t cb_zero_row = get_compile_time_arg_val(35);
+    constexpr uint32_t RM_COL_BYTES = 32 * 2;  // one tile column of one bf16 row
+    constexpr uint32_t rm_row_bytes = N_down_tiles_full * RM_COL_BYTES;
+    constexpr uint32_t rm_l1_row_stride = per_core_N_d * RM_COL_BYTES;
+
+    constexpr uint32_t out_accessor_offset = 36;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
-    const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
+    const auto out_acc =
+        TensorAccessor(out_args, output_addr, output_row_major ? rm_row_bytes : cb_out_buf.get_tile_size());
 
     constexpr uint32_t start_accessor_offset = out_args.next_compile_time_args_offset();
     constexpr auto start_args = TensorAccessorArgs<start_accessor_offset>();
@@ -198,6 +210,19 @@ void kernel_main() {
         noc.async_read_barrier();
     }
     const volatile tt_l1_ptr uint32_t* start_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(start_l1);
+
+    // Zero row: issued first on one core (the first M-row, first down column) and waited on at the end. cb_zero_row
+    // is this RISC's own, so the expert writes below never touch its bytes.
+    constexpr bool has_zero_row = output_row_major && zero_output_row != 0xFFFFFFFFu;
+    const bool zeroes_row = has_zero_row && my_mt == 0 && my_nt_d == 0;
+    if constexpr (has_zero_row) {
+        if (zeroes_row) {
+            CircularBuffer cb_zero_row_buf(cb_zero_row);
+            noc.async_write_zeros(cb_zero_row_buf, rm_row_bytes);
+            noc.write_zeros_l1_barrier();
+            noc.async_write_zeros(out_acc, rm_row_bytes, {.page_id = zero_output_row}, cb_zero_row_buf);
+        }
+    }
 
     // ---- UP_SPLIT up-weight read setup (see header) ----
     // The writer reads `up` from DRAM on NoC 1 concurrent with the reader's
@@ -426,6 +451,32 @@ void kernel_main() {
             // (runtime) rows; the rest are MAC-skipped zeros that map onto other
             // cores' rows and must not be emitted (the local_row < per_core_M guard below).
             const uint32_t sb_m_bound = d_in1_num_subblocks_M;
+            if constexpr (output_row_major) {
+                // Same row guards as the tile path below (d_out_subblock_h == 1, so sb_m is the tile-row);
+                // the column guard becomes the segment width: this core's real columns only.
+                const uint32_t seg_bytes = (down_col_end > down_col0 ? down_col_end - down_col0 : 0) * RM_COL_BYTES;
+                for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
+                    cb_out_buf.wait_front(per_core_N_d);
+                    const uint32_t row = row0 + sb_m;
+                    const uint32_t dst_row = row_offset_tiles + row;
+                    if (sb_m < per_core_M && seg_bytes > 0 && row < M_tiles_full && row < count_tiles) {
+                        ASSERT(dst_row < dst_M_tiles);
+                        if (dst_row < dst_M_tiles) {
+                            for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                                noc.async_write(
+                                    cb_out_buf,
+                                    out_acc,
+                                    seg_bytes,
+                                    {.offset_bytes = r * rm_l1_row_stride},
+                                    {.page_id = dst_row * TILE_HEIGHT + r, .offset_bytes = col0 * RM_COL_BYTES});
+                            }
+                        }
+                    }
+                    noc.async_writes_flushed();
+                    cb_out_buf.pop_front(per_core_N_d);
+                }
+                continue;
+            }
             for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
                 for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
                     const uint32_t this_w =
@@ -497,6 +548,11 @@ void kernel_main() {
     // Ensure all outstanding writes complete at the destination before the
     // kernel returns (the next dispatched op may read this output).
     noc.async_write_barrier();
+    if constexpr (has_zero_row) {
+        if (zeroes_row) {
+            noc.write_zeros_dram_barrier();
+        }
+    }
     // UP_SPLIT issues only per-K-block-barriered NoC-1 `up` reads (no NoC-1
     // worker multicast and no NoC-1 atomics), so no extra NoC-1 drain is needed
     // here — which is exactly why it is safe beside the fabric CCL ops.
