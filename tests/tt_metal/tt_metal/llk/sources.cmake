@@ -15,6 +15,7 @@ set(UNIT_TESTS_LLK_SRC
     test_generic_moe_gate_compute.cpp
     test_golden_impls.cpp
     test_hadamard_compute.cpp
+    test_max_reduce_with_indices_guard.cpp
     test_mul_reduce_scalar.cpp
     test_mxfp4_typecast.cpp
     test_mxfp6_typecast.cpp
