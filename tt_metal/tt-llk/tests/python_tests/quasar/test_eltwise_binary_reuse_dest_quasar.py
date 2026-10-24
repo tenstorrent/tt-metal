@@ -52,13 +52,6 @@ from helpers.tile_constants import FACE_C_DIM, get_tile_params
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
-INPUT_DIMENSIONS = [
-    [512, 32],
-]
-OUTPUT_DIMENSIONS = [
-    [128, 32],
-]
-
 REUSE_DEST_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,
@@ -66,7 +59,40 @@ REUSE_DEST_FORMATS = input_output_formats(
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
-TILE_DIMENSIONS = [32, 32]
+# Tile shapes swept on the reuse_dest path. (32, 32) is the pre-existing baseline and doubles as
+# the no-regression guard. (16, 32) and (16, 16) keep face_r_dim at 16 but shrink the dest tile
+# stride to 32 and 16 rows; (8, 32) halves the face stride and the MOV* count; (4, 32) drives the
+# sparse 8-row face slot, the ceiling MOP loop count and the CLR_SPECIFIC face clear.
+# (32, 16) is excluded: the kernel builds its TensorShape with tensor_shape_from_num_faces, which
+# maps num_faces == 2 to a 1x2 (wide) face grid and cannot express the 2x1 (narrow) one.
+TILE_DIMENSIONS = [(32, 32), (16, 32), (16, 16), (8, 32), (4, 32)]
+
+# Tiles per input and output matrix, held constant across tile shapes so every shape runs the same
+# 4-deep accumulation into 4 output tiles that the 32x32 baseline ran.
+INPUT_TILE_COUNT = 16
+OUTPUT_TILE_COUNT = 4
+
+
+def reuse_dest_tile_dimensions(formats):
+    """Tile shapes swept for a given format pair.
+
+    The tile geometry the reuse_dest math path depends on is independent of packer format
+    conversion, so only the same-format plain pairs carry the sweep. MX formats are valid only
+    at (16, 16) and (32, 32) on the FPU path (MX_SUPPORTED_TILE_SIZES), and (16, 16) is already
+    swept by the plain pairs, so every converting pair stays on 32x32 and serves as the
+    unchanged-shape guard.
+    """
+    if formats.input_format != formats.output_format:
+        return [(32, 32)]
+    if formats.input_format.is_mx_format():
+        return [(32, 32)]
+    return TILE_DIMENSIONS
+
+
+def reuse_dest_input_dimensions(tile_dimensions) -> list:
+    """Input matrix holding INPUT_TILE_COUNT tiles of the given tile shape, one tile wide."""
+    tile_rows, tile_cols = tile_dimensions
+    return [[INPUT_TILE_COUNT * tile_rows, tile_cols]]
 
 
 def reuse_dest_dest_sync_modes(*, is_perf=False):
@@ -88,12 +114,14 @@ def reuse_dest_mathops(formats, *, is_perf=False):
     return supported_mathops
 
 
-def _reuse_dest_tile_count(dimensions) -> int:
-    tile_rows, tile_cols = TILE_DIMENSIONS
+def _reuse_dest_tile_count(dimensions, tile_dimensions) -> int:
+    tile_rows, tile_cols = tile_dimensions
     return (dimensions[0] // tile_rows) * (dimensions[1] // tile_cols)
 
 
-def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
+def valid_output_dimensions(
+    formats, dest_sync_mode, input_dimensions, tile_dimensions
+) -> list:
     """Output dims compatible with reuse_dest for a given input size, format and dest_sync.
 
     Three constraints, all decidable at collection time so incompatible combinations are
@@ -103,10 +131,11 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
       - the output must fit in a single block (the Quasar reuse_dest kernel uses
         block-relative indexing; multi-block accumulates wrongly).
     """
-    tile_cnt_input = _reuse_dest_tile_count(input_dimensions)
+    tile_rows, tile_cols = tile_dimensions
+    tile_cnt_input = _reuse_dest_tile_count(input_dimensions, tile_dimensions)
     valid = []
-    for out_dims in OUTPUT_DIMENSIONS:
-        tile_cnt_output = _reuse_dest_tile_count(out_dims)
+    for out_dims in [[OUTPUT_TILE_COUNT * tile_rows, tile_cols]]:
+        tile_cnt_output = _reuse_dest_tile_count(out_dims, tile_dimensions)
         if tile_cnt_output == 0 or tile_cnt_input % tile_cnt_output != 0:
             continue
         if tile_cnt_input // tile_cnt_output <= 1:
@@ -117,7 +146,7 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
                 DestAccumulation.No,
                 formats,
                 out_dims,
-                (TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]),
+                (tile_rows, tile_cols),
                 BlocksCalculationAlgorithm.Standard,
             )
         except ValueError:
@@ -138,7 +167,8 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
     dest_sync_mode=lambda: reuse_dest_dest_sync_modes(is_perf=False),
-    input_dimensions=runtime(INPUT_DIMENSIONS),
+    tile_dimensions=runtime(reuse_dest_tile_dimensions),
+    input_dimensions=runtime(reuse_dest_input_dimensions),
     output_dimensions=runtime(valid_output_dimensions),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -149,6 +179,7 @@ def test_eltwise_binary_reuse_dest_quasar(
     reuse_dest_type,
     math_fidelity,
     dest_sync_mode,
+    tile_dimensions,
     input_dimensions,
     output_dimensions,
     run_types,
@@ -161,7 +192,7 @@ def test_eltwise_binary_reuse_dest_quasar(
 
     use_mx = formats.input_format.is_mx_format() or formats.output_format.is_mx_format()
 
-    tile_rows, tile_cols = TILE_DIMENSIONS
+    tile_rows, tile_cols = tile_dimensions
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(
         [tile_rows, tile_cols]
     )
@@ -341,7 +372,11 @@ def test_eltwise_binary_reuse_dest_quasar(
             DEST_SYNC(dest_sync_mode),
         ],
         "runtimes": [
-            generate_input_dim(input_dimensions, input_dimensions),
+            generate_input_dim(
+                input_dimensions,
+                input_dimensions,
+                tile_dimensions=tile_dimensions_tuple,
+            ),
             TILE_COUNT(tile_cnt_input),
             INPUT_TILE_CNT(tile_cnt_input),
             OUTPUT_TILE_CNT(tile_cnt_output),
