@@ -644,7 +644,7 @@ void kernel_main() {
             // this core's h slice (and h round) went out, so the issue cost stays off phase 2's
             // critical path; the writer would otherwise idle here until compute's first output row.
             if (kPrefetchNextW && pf_next != PF_NONE && b + 1 == m_blocks) {
-                const auto wu_next = TensorAccessor(wu_args, get_arg_val<uint32_t>(RT_WEIGHTS + pf_next), W_TILE);
+                const auto wu_next = TensorAccessor(wu_args, w_up_addr(pf_next), W_TILE);
                 static_assert(GU_CHUNKS * WU_CHUNK_TILES == WU_BLOCK_TILES, "prefetch fills the whole W_up CB");
                 wu_buf.reserve_back(WU_BLOCK_TILES);
                 const uint32_t pf_wp = wu_buf.get_write_ptr();

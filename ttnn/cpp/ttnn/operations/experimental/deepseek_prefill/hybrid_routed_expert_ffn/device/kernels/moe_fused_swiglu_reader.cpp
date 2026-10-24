@@ -629,9 +629,13 @@ void kernel_main() {
             }
             banded_ready = true;
         }
-        // The idx/counts barrier above drained every outstanding read, a prefetch included, so a
-        // prefetch for an expert that ends up not running can no longer land over later reads.
+        // The counts come from the once-per-dispatch broadcast here, so nothing at an expert's start
+        // drains reads: a prefetch aimed at an expert that is not this one is drained explicitly,
+        // before anything else can be read into cb_w_gate.
         const bool pf_hit = kPrefetchNextW && (pf_expert == local_expert_id);
+        if (kPrefetchNextW && pf_expert != PF_NONE && !pf_hit) {
+            noc.async_read_barrier();
+        }
         pf_expert = PF_NONE;
 
         uint32_t m_t = (banded_count + TILE_H - 1) / TILE_H;
@@ -1162,7 +1166,7 @@ void kernel_main() {
             const uint32_t pf_target =
                 (kPrefetchNextW && block_idx + 1 == m_blocks) ? next_active(local_expert_id) : PF_NONE;
             if (pf_target != PF_NONE) {
-                const auto wg_next = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + pf_target), W_TILE);
+                const auto wg_next = TensorAccessor(wg_args, w_gate_addr(pf_target), W_TILE);
                 static_assert(GU_CHUNKS * WG_CHUNK_TILES == WG_BLOCK_TILES, "prefetch fills the whole W_gate CB");
                 cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
                 const uint32_t pf_wp = get_write_ptr(cb_w_gate);
