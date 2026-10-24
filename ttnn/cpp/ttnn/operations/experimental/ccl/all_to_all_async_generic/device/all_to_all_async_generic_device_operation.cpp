@@ -9,6 +9,7 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
+#include <internal/mesh_device.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -38,7 +39,7 @@ DrainCoreMapping gather_drain_virtual_cores(
         if (!mesh_device->is_local(coord)) {
             continue;
         }
-        auto* coordinate_device = mesh_device->get_device(coord);
+        auto* coordinate_device = tt::tt_metal::internal::get_device(*mesh_device, coord);
         const size_t node_index = coord.to_linear_index(mesh_shape);
         for (size_t candidate = 0; candidate < candidates_per_node; ++candidate) {
             const auto drain_virtual_core =
