@@ -475,5 +475,7 @@ def test_multirow_float32_partials(device, workers, packer_l1_acc):
 )
 def test_multicast_multirow_weight_ring(device, fp32, m, k, n, storage, block):
     # Exercise the single-block reservation, final drain and a larger working set.
+    # Cap each bank at 16 weight columns so the tall case also fits seven-bank devices.
+    n = min(n, device.dram_grid_size().x * 16 * 32)
     # Spread the tall output across 64 cores to leave room for weight read lookahead.
     _run(device, m, k, n, storage, block, 0, fp32=fp32, output_storage=64 if m == 256 else 32)
