@@ -262,7 +262,7 @@ def _get_valid_math_fidelity(formats, math_op=None):
     input_format = formats.input_format
     if input_format == DataFormat.Int8:
         return [MathFidelity.LoFi]
-    if input_format in [DataFormat.Bfp8_b, DataFormat.Bfp4_b]:
+    if input_format.is_block_float():
         return [MathFidelity.LoFi]
     elif input_format == DataFormat.Float16_b:
         return [MathFidelity.LoFi, MathFidelity.HiFi2]
@@ -380,7 +380,7 @@ def _run_eltwise_binary_test(
             golden_src_A,
             (
                 DataFormat.Float16_b
-                if formats.input_format in [DataFormat.Bfp4_b, DataFormat.Bfp8_b]
+                if formats.input_format.is_block_float()
                 else formats.input_format
             ),
             num_tiles=tile_cnt_A,

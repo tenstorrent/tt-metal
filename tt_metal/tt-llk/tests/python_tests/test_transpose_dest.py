@@ -362,8 +362,8 @@ def transpose_dest(formats, dest_acc, math_transpose_faces, unpack_to_dest):
     if (
         unpack_to_dest == True
         and dest_acc == DestAccumulation.Yes
-        and formats.input_format in (DataFormat.Int32, DataFormat.Float32)
-        and formats.output_format in (DataFormat.Int32, DataFormat.Float32)
+        and formats.input_format.is_32_bit()
+        and formats.output_format.is_32_bit()
     ):
         is_equal = torch.equal(res_tensor, golden_tensor)
         assert is_equal, "Assert against golden failed"
