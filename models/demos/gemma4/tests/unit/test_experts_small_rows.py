@@ -95,3 +95,57 @@ def test_experts_small_rows_vs_dispatch(seq_len, mesh_device, reset_seeds, reque
     )
     assert p > 0.9999, p
     assert d.max() < 0.05 * outs["dispatch"].abs().max() + 0.05, d.max()
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="the small-row path is a Blackhole (4,1) feature")
+@parametrize_mesh_with_fabric(mesh_shapes=[(4, 1)])
+@pytest.mark.parametrize("tokens", [32, 64, 128], ids=lambda t: f"tok{t}")  # the experts take tile-aligned rows
+def test_experts_small_rows_eager_timing(tokens, mesh_device, reset_seeds, request, monkeypatch):
+    """Eager per-call wall of one layer's experts at a few tokens, dispatch path vs the small-row path (the served
+    cached-prefix continuations run eagerly per user; the traced replay cannot see this). Timing only: prints one
+    RESULT-style line per path; the small path is forced for every size (min bound 1). devq 0465 (4,1): dispatch /
+    small-row ms per call = 2.17 / 0.90 at 32 tokens (the dispatch number is the masked-dense path below the
+    dispatch minimum), 2.08 / 1.18 at 64, 3.27 / 1.45 at 128."""
+    import time
+
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
+    monkeypatch.setenv("GEMMA4_MOE_DISPATCH_FIT_CHUNK", "1")
+    monkeypatch.setenv("GEMMA4_SMALL_ROW_MIN_TOKENS", "1")
+    monkeypatch.setenv("GEMMA4_SMALL_ROW_MAX_TOKENS", "128")
+    hf_text_config = TestFactory.create_hf_text_config()
+    hf_experts = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0).experts
+    state_dict = {"gate_up_proj": hf_experts.gate_up_proj.data.clone(), "down_proj": hf_experts.down_proj.data.clone()}
+    hf_config = TestFactory.create_hf_config()
+    E, K, H = hf_config.num_experts, hf_config.top_k_experts, hf_config.hidden_size
+    x = torch.randn(1, 1, tokens, H, dtype=torch.bfloat16)
+    routing = torch.zeros(1, 1, tokens, E)
+    for s_ in range(tokens):
+        sel = torch.randperm(E)[:K]
+        w = torch.rand(K) + 0.1
+        routing[0, 0, s_, sel] = w / w.sum()
+    rep = ttnn.ReplicateTensorToMesh(mesh_device)
+    x_tt = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=rep)
+    r_tt = ttnn.from_torch(
+        routing.to(torch.bfloat16), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=rep
+    )
+    iters = 10
+    for name, flag in (("dispatch", "0"), ("small_rows", "1")):
+        monkeypatch.setenv("GEMMA4_SMALL_ROW_EXPERTS", flag)
+        experts = _build(mesh_device, state_dict, hf_config)
+        for _ in range(2):  # compile + program cache
+            ttnn.deallocate(experts(x_tt, r_tt))
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            ttnn.deallocate(experts(x_tt, r_tt))
+        ttnn.synchronize_device(mesh_device)
+        ms = (time.perf_counter() - t0) / iters * 1e3
+        plan = min(
+            (q for q in experts.dispatch_experts._plans.values() if q.chunk_tokens >= tokens),
+            key=lambda q: q.chunk_tokens,
+        )
+        print(
+            f"[eager tok{tokens} {name}] {ms:.2f} ms per call (chunk {plan.chunk_tokens}, small_path={plan.gather is not None})"
+        )
+        del experts

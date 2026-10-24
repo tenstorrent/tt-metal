@@ -74,3 +74,24 @@ def test_small_row_max_tokens_default_env_and_cap(monkeypatch):
     assert small_row_max_tokens() == 256
     monkeypatch.setenv("GEMMA4_SMALL_ROW_MAX_TOKENS", "4096")
     assert small_row_max_tokens() == ExpertGatherSmall.MAX_TOKENS
+
+
+def test_small_row_bounds_keep_the_cached_prefix_continuations_on_the_dispatch_path(monkeypatch):
+    from models.demos.gemma4.tt.experts.dispatch_prefill import small_row_min_tokens, small_rows_admit
+
+    monkeypatch.delenv("GEMMA4_SMALL_ROW_MIN_TOKENS", raising=False)
+    lo = small_row_min_tokens()
+    assert lo == 32
+    for rows, ok in (
+        (1, False),
+        (21, False),
+        (29, False),
+        (31, False),
+        (32, True),
+        (64, True),
+        (128, True),
+        (129, False),
+    ):
+        assert small_rows_admit(rows, lo, 128) == ok, rows
+    monkeypatch.setenv("GEMMA4_SMALL_ROW_MIN_TOKENS", "1")
+    assert small_row_min_tokens() == 1 and small_rows_admit(8, small_row_min_tokens(), 128)

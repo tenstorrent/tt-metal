@@ -80,6 +80,20 @@ def small_row_max_tokens() -> int:
     return min(int(os.environ.get("GEMMA4_SMALL_ROW_MAX_TOKENS", "128")), ExpertGatherSmall.MAX_TOKENS)
 
 
+def small_row_min_tokens() -> int:
+    """Shortest call the small-row path takes: ``GEMMA4_SMALL_ROW_MIN_TOKENS``, default 32. The served c32 check
+    (devq 0534) showed the cached-prefix per-user continuations (21-29 uncached tokens behind a prefix hit) cost
+    ~60 ms each on the path against ~39 ms on the dispatch path: at a few tokens the device work is small and the
+    Python generic op's per-call host cost (descriptor, runtime args, four allocations per layer) dominates, so
+    those calls stay on the dispatch path until the descriptor is cached."""
+    return max(1, int(os.environ.get("GEMMA4_SMALL_ROW_MIN_TOKENS", "32")))
+
+
+def small_rows_admit(rows: int, lo: int, hi: int) -> bool:
+    """Pure bounds rule of the small-row path: ``lo <= rows <= hi`` tokens (unit-tested)."""
+    return int(lo) <= int(rows) <= int(hi)
+
+
 def small_fit_chunk_tokens(rows: int, dispatch_group_size: int) -> int:
     """Chunk (tokens across the mesh) of the small-row path for a call of ``rows`` tokens: the smallest multiple
     of ``dispatch_group_size * 32`` that holds them (a 128-token prompt on the 4-chip group runs a 128-row plan:
@@ -578,13 +592,13 @@ class Gemma4DispatchExperts:
 
     def _small_rows_call(self, rows: int, sparse: bool) -> bool:
         """Whether a call of ``rows`` tokens takes the small-row expert path (GEMMA4_SMALL_ROW_EXPERTS=1, dense
-        routing, no ring, at most ``small_row_max_tokens()`` tokens)."""
+        routing, no ring, ``small_row_min_tokens() <= rows <= small_row_max_tokens()``)."""
         return (
             ExpertGatherSmall.enabled()
             and not sparse
             and not self.ring
             and self.fit_chunk
-            and int(rows) <= small_row_max_tokens()
+            and small_rows_admit(rows, small_row_min_tokens(), small_row_max_tokens())
         )
 
     def forward(self, hidden, routing):
