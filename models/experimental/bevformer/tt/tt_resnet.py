@@ -135,10 +135,11 @@ class TTResLayer:
 
     With ``cameras``, the layer runs its blocks on that many cameras at a time with every activation
     in L1 (TTCameraBottleneck): each group's rows of the DRAM input go into L1, pass through every
-    block there, and only the layer's output returns to DRAM. A strided first block whose group
-    input would take more than CAMERA_INPUT_MAX_SHARD_BYTES per core runs on the whole batch first
-    (``whole_first_block``), as the subsample holds a second copy of that input. Such a layer takes
-    the weights of a DRAM layer.
+    block there, and only the layer's output returns to DRAM. A strided first block runs on the whole
+    batch first (``whole_first_block``) when its group input would take more than
+    CAMERA_INPUT_MAX_SHARD_BYTES per core, as the subsample holds a second copy of that input, or
+    when its stride is on the 3x3 conv2 (pytorch style), which TTCameraBottleneck does not take.
+    Such a layer takes the weights of a DRAM layer.
     """
 
     CAMERA_INPUT_MAX_SHARD_BYTES = 512 * 1024
@@ -167,7 +168,7 @@ class TTResLayer:
         if cameras is not None:
             assert input_layout == ttnn.TILE_LAYOUT, "a per-camera layer slices its cameras out of a TILE input"
             self.whole_first_block = None
-            if self._first_block_too_wide(conv_args[0].conv1, cameras, device):
+            if self._first_block_too_wide(conv_args[0].conv1, cameras, device) or self._strided_conv2(conv_args[0]):
                 self.whole_first_block = TTBottleneck(
                     conv_args[0],
                     conv_pth[0],
@@ -236,6 +237,12 @@ class TTResLayer:
         rows = cameras * conv1.input_height * conv1.input_width
         shard_rows = math.ceil(math.ceil(rows / ttnn.TILE_SIZE) / (grid.x * grid.y)) * ttnn.TILE_SIZE
         return shard_rows * conv1.in_channels * 2 > cls.CAMERA_INPUT_MAX_SHARD_BYTES
+
+    @staticmethod
+    def _strided_conv2(block_args):
+        """Whether a block's 3x3 conv2 carries its stride."""
+        conv2 = block_args.conv2.conv_offset if "conv_offset" in block_args.conv2 else block_args.conv2
+        return tuple(conv2.stride) != (1, 1)
 
     def __call__(self, x):
         if self.cameras is not None:
