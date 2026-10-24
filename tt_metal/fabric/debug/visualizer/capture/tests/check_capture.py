@@ -33,6 +33,7 @@ import jsonschema
 
 from tt_metal.fabric.debug.visualizer.capture.reads import ManifestError, get_read_plan
 from tt_metal.fabric.debug.visualizer.capture.snapshot import OpenedRouter, take_snapshot
+from tt_metal.fabric.debug.visualizer.common.router_paths import get_node, get_router
 
 SCHEMA_PATH = pathlib.Path(__file__).resolve().parents[1] / "fabric_snapshot_schema.json"
 MAX_PROBLEMS_SHOWN = 20
@@ -61,19 +62,6 @@ def find_manifests(args):
         path = pathlib.Path(arg)
         paths.extend(sorted(path.rglob("fabric_manifest_rank_*.json")) if path.is_dir() else [path])
     return paths
-
-
-def resolve(router: dict, path: str):
-    """
-    The manifest node a region's path names inside its router, object keys and array indices joined by "/", or None.
-    """
-    node = router
-    try:
-        for key in path.split("/"):
-            node = node[int(key)] if isinstance(node, list) else node[key]
-    except (KeyError, IndexError, ValueError, TypeError):
-        return None
-    return node
 
 
 def sha256_of(path: pathlib.Path) -> str:
@@ -140,12 +128,14 @@ def check_routers(manifest: dict, snapshot: dict, raw_path: pathlib.Path) -> lis
         if times != sorted(times):
             problems.append(f"{router.path}: the liveness samples' and main pass's times {times} are out of order")
 
-        mesh_key, chip_key, router_key = router.path.split("/")
-        router_node = manifest["meshes"][mesh_key]["chips"][chip_key]["routers"][router_key]
+        router_node, router_where = get_router(manifest, router.path)
         for kind in ("areas", "regions"):
             for key, item in entry[kind].items():
                 where = f"{router.path}.{kind}.{key}"
-                node = areas.get(key) if kind == "areas" else resolve(router_node, key)
+                try:
+                    node = areas.get(key) if kind == "areas" else get_node(router_node, key, router_where)
+                except ManifestError:
+                    node = None
                 copied = (item["address"], item["size"])
                 if not isinstance(node, dict) or copied != (node.get("address"), node.get("size")):
                     problems.append(f"{where}: {item} doesn't match the manifest's {str(node)[:200]}")

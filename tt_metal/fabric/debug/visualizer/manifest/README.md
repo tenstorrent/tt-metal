@@ -256,7 +256,8 @@ TT_METAL_FABRIC_MANIFEST_WRITE_DOCS=tt_metal/fabric/debug/visualizer/manifest/FI
 
 `tests/scripts/run_fabric_manifest_tests.sh` runs the tests that need no fabric hardware: the device-free unit tests,
 the manifest fixtures using mock clusters, and the schema check on every manifest they write. It then runs capture's
-unit tests, and its check on the same manifests ([capture/README.md](../capture/README.md#running-the-tests)).
+unit tests and checks on the same manifests, then decode's. "Running the tests" in the
+[capture README](../capture/README.md) and the [decode README](../decode/README.md) describes them.
 
 To check other manifests against the schema, pass their files or directories to the check, which needs `jsonschema`:
 
