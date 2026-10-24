@@ -23,6 +23,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, compute_constants
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import routed_expert_weight_memory_config
 
@@ -112,10 +113,12 @@ def get_shared(md, n_tokens):
 
 
 def _cache_name(layer_id, name):
+    ensure_stamp(UNIFIED_CACHE)
     return str(Path(UNIFIED_CACHE) / f"layer_{layer_id}" / f"local_{name}")
 
 
 def _cache_complete(layer_id):
+    ensure_stamp(UNIFIED_CACHE)
     d = Path(UNIFIED_CACHE) / f"layer_{layer_id}"
     return all(
         any(d.glob(f"local_{l}_{p}_dtype_{W_DTYPE.name}_*.tensorbin"))
@@ -147,6 +150,7 @@ def build_expert_weights(md, layer_id, log=print, cache_only=False):
     """-> (gate_projs, up_projs, down_projs), lists of EPC per-device tensors (K, N) bf8 DRAM ND-sharded.
     Host cache miss: dequantise the checkpoint (fp4 + e8m0 scales -> bf16), the same source and rounding as the moe_compute cache.
     """
+    ensure_stamp(UNIFIED_CACHE)
     os.makedirs(Path(UNIFIED_CACHE) / f"layer_{layer_id}", exist_ok=True)
     warm = _cache_complete(layer_id)
     src = None

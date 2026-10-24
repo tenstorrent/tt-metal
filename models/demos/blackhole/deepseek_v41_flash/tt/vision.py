@@ -22,6 +22,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import _Shards
 from models.demos.blackhole.deepseek_v41_flash.tt.vision_args import VisionArgs  # noqa: F401 (re-exported)
 
@@ -51,6 +52,7 @@ def _bucket(n, buckets, mult):
 def _cache(name):
     if not WEIGHT_CACHE or WEIGHT_CACHE == "0":
         return None
+    ensure_stamp(WEIGHT_CACHE)
     Path(WEIGHT_CACHE).mkdir(parents=True, exist_ok=True)
     return str(Path(WEIGHT_CACHE) / name)
 

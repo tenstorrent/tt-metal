@@ -22,6 +22,7 @@ import torch
 from safetensors import safe_open
 
 from models.demos.blackhole.deepseek_v41_flash.reference import ref_kernels
+from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 
 CKPT_DIR = os.environ.get("DSV41_CKPT", "/mnt/tt-data/ssinghal/deepseek-v41-flash")
 NUM_ROUTED = 384
@@ -66,6 +67,7 @@ WEIGHT_CACHE = os.environ.get("DSV41_WEIGHT_CACHE", "/mnt/tt-data/ssinghal/dsv4-
 
 def expert_cache_dir(layer_id: int):
     """Directory of the packed + quantized routed-expert tensors (see TTMoEDecode ``weight_cache_dir``); None = off."""
+    ensure_stamp(WEIGHT_CACHE)
     return os.path.join(WEIGHT_CACHE, f"layer_{layer_id}") if WEIGHT_CACHE and WEIGHT_CACHE != "0" else None
 
 

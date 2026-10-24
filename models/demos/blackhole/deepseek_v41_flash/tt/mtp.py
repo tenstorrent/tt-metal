@@ -23,6 +23,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, NH, WINDOW, DSV41Attention
+from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 from models.demos.blackhole.deepseek_v41_flash.tt.layer import DSV41Layer
 from models.demos.blackhole.deepseek_v41_flash.tt.loader import _fp8, rope_freqs
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC
@@ -60,6 +61,7 @@ def _l1v(md, tag):
 
 # ---------------------------------------------------------------------------------------------------- weights
 def mtp_cache_dir(stage):
+    ensure_stamp(WEIGHT_CACHE)
     return os.path.join(WEIGHT_CACHE, f"mtp_{stage}") if WEIGHT_CACHE and WEIGHT_CACHE != "0" else None
 
 

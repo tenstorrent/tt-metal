@@ -21,6 +21,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 
 WEIGHT_CACHE = os.environ.get("DSV41_WEIGHT_CACHE", "/mnt/tt-data/ssinghal/dsv4-weight-cache")
 VOCAB, DIM, HC = 129280, 5120, 4
@@ -29,6 +30,7 @@ VOCAB, DIM, HC = 129280, 5120, 4
 def _cache(name):
     if not WEIGHT_CACHE or WEIGHT_CACHE == "0":
         return None
+    ensure_stamp(WEIGHT_CACHE)
     Path(WEIGHT_CACHE).mkdir(parents=True, exist_ok=True)
     return str(Path(WEIGHT_CACHE) / name)
 
