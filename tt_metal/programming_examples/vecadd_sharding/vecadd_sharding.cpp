@@ -62,11 +62,12 @@ CBHandle MakeCircularBufferBFP16(
     uint32_t n_tiles,
     const std::shared_ptr<distributed::MeshBuffer>& l1_buf) {
     constexpr uint32_t tile_size = sizeof(bfloat16) * tt::constants::TILE_HW;
-    CircularBufferConfig cb_config = CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
-                                         .set_page_size(cb, tile_size)
-                                         // IMPORTANT: assign L1 buffer address to circular buffer directly so that
-                                         // no extra allocation and data copy
-                                         .set_globally_allocated_address(*(l1_buf->get_backing_buffer()));
+    CircularBufferConfig cb_config =
+        CircularBufferConfig(n_tiles * tile_size, {{cb, tt::DataFormat::Float16_b}})
+            .set_page_size(cb, tile_size)
+            // IMPORTANT: assign L1 buffer address to circular buffer directly so that
+            // no extra allocation and data copy
+            .set_globally_allocated_address(*l1_buf->get_device_buffer(distributed::MeshCoordinate(0, 0)));
     return CreateCircularBuffer(program, core, cb_config);
 }
 

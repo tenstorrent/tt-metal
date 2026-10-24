@@ -73,7 +73,7 @@ void RunSharedNocCmdBufTest(
 
     // Each buffer is one interleaved page, which lives in L1 bank 0. The kernels address the buffers as local
     // L1, so they run on bank 0's core.
-    const auto& allocator = *brisc_src->get_backing_buffer()->allocator();
+    const auto& allocator = *brisc_src->device()->allocator();
     const CoreCoord core = allocator.get_logical_core_from_bank_id(0);
     const CoreCoord virtual_core = device->worker_core_from_logical_core(core);
     const auto l1_addr = [&](const std::shared_ptr<distributed::MeshBuffer>& buffer) {

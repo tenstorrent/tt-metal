@@ -989,14 +989,16 @@ tt_metal::Program create_program_single_core(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(in0_CB_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size)
-            .set_globally_allocated_address(*in0_cb_addr->get_backing_buffer());
+            .set_globally_allocated_address(
+                *in0_cb_addr->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0)));
     tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(in1_CB_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size)
-            .set_globally_allocated_address(*in1_cb_addr->get_backing_buffer());
+            .set_globally_allocated_address(
+                *in1_cb_addr->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0)));
     tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t out_cb_index = tt::CBIndex::c_16;
@@ -1018,7 +1020,8 @@ tt_metal::Program create_program_single_core(
         tt_metal::CircularBufferConfig cb_out_config =
             tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size)
-                .set_globally_allocated_address(*out_cb_addr->get_backing_buffer());
+                .set_globally_allocated_address(
+                    *out_cb_addr->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0)));
         tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     } else if (packer_l1 and cb_data_format == tt::DataFormat::Bfp8_b) {
         tt_metal::CircularBufferConfig cb_interm_config =
@@ -1029,7 +1032,8 @@ tt_metal::Program create_program_single_core(
         tt_metal::CircularBufferConfig cb_out_config =
             tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, cb_data_format}})
                 .set_page_size(out_cb_index, single_tile_size)
-                .set_globally_allocated_address(*out_cb_addr->get_backing_buffer());
+                .set_globally_allocated_address(
+                    *out_cb_addr->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0)));
         tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
     } else {
         std::map<uint8_t, tt::DataFormat> partials_and_out_data_format_spec = {
@@ -1038,7 +1042,8 @@ tt_metal::Program create_program_single_core(
             tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
                 .set_page_size(interm0_cb_index, single_tile_size)
                 .set_page_size(out_cb_index, single_tile_size)
-                .set_globally_allocated_address(*out_cb_addr->get_backing_buffer());
+                .set_globally_allocated_address(
+                    *out_cb_addr->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0)));
         tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), cb_out_config);
     }
 

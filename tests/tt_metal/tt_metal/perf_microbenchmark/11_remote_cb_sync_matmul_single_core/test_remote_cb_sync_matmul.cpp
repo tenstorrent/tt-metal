@@ -202,7 +202,8 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
     tt_metal::CircularBufferConfig in0_reader_cb_config =
         tt_metal::CircularBufferConfig(in0_reader_cb_size, {{in0_reader_cb_index, tile_format}})
             .set_page_size(in0_reader_cb_index, single_tile_size)
-            .set_globally_allocated_address(*in0_buffer->get_backing_buffer());
+            .set_globally_allocated_address(
+                *in0_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0)));
     tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, in0_reader_cb_config);
 
     // in1 receiver CB
@@ -222,7 +223,8 @@ std::tuple<std::vector<tt_metal::Program>, ::tt_metal::experimental::GlobalCircu
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(output_cb_size, {{output_cb_index, tile_format}})
             .set_page_size(output_cb_index, single_tile_size)
-            .set_globally_allocated_address(*output_buffer->get_backing_buffer());
+            .set_globally_allocated_address(
+                *output_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0)));
     tt_metal::CreateCircularBuffer(receiver_program, l1_receiver_cores, output_cb_config);
 
     // sync CB

@@ -266,7 +266,8 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
     const auto host_size_in_bytes = mesh_buffer->device_local_size();
     const auto bank_base_address = mesh_buffer->address();
     const auto page_size = mesh_buffer->page_size();
-    const auto aligned_page_size = mesh_buffer->get_backing_buffer()->aligned_page_size();
+    const auto aligned_page_size =
+        mesh_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0))->aligned_page_size();
 
     // Double check that mesh buffer properties match local single-device buffer properties
     ASSERT_EQ(host_size_in_bytes, shard_view->size());

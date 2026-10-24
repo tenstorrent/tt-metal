@@ -95,7 +95,7 @@ uint32_t get_address_for_test(bool use_eth_core, tt::tt_metal::HalL1MemAddrType 
 CoreCoord get_core_coord_for_test(const std::shared_ptr<distributed::MeshBuffer>& buffer) {
     if (buffer->device_local_config().buffer_type == tt_metal::BufferType::L1) {
         return buffer->device()->worker_core_from_logical_core(
-            buffer->get_backing_buffer()->allocator()->get_logical_core_from_bank_id(0));
+            buffer->device()->allocator()->get_logical_core_from_bank_id(0));
     }
     auto logical_dram_core = buffer->device()->logical_core_from_dram_channel(0);
     return buffer->device()->virtual_core_from_logical_core(logical_dram_core, CoreType::DRAM);
