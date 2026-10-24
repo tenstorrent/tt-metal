@@ -488,6 +488,49 @@ def test_summarize_chunk_recurrence_height_sharded_l1_output(zero_actual_start, 
     )
 
 
+def test_summarize_chunk_recurrence_activates_columns_on_idle_cores(zero_actual_start, device: ttnn.Device) -> None:
+    """The column activation run beside the summary on the cores it leaves idle writes ttnn.sigmoid's FP32-accurate
+    sigmoid of a BF16 column window into a window of an FP32 tensor, bit for bit, leaves the tensor's other columns
+    alone, and leaves the summary unchanged."""
+    batch_heads, num_chunks, dim = 4, 2, 32
+    host_inputs = host_protocol(batch_heads, num_chunks, dim, dim, seed=814)
+    inputs = device_protocol(host_inputs, device)
+    rows, input_column, output_column, columns = 96, 3, 2, 4
+    generator = torch.Generator().manual_seed(815)
+    source_host = torch.randn(1, rows, 9 * 32, generator=generator, dtype=torch.bfloat16)
+    source = ttnn.from_torch(
+        source_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    sentinel = torch.full((1, rows, 7 * 32), -3.0)
+    target = ttnn.from_torch(
+        sentinel, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    with ttnn.manage_config("throw_exception_on_fallback", True):
+        plain = ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, actual_start=zero_actual_start)
+        activated = ttnn.experimental.kda.summarize_chunk_recurrence(
+            *inputs,
+            actual_start=zero_actual_start,
+            column_activation_input=source,
+            column_activation_input_column=input_column,
+            column_activation_output=target,
+            column_activation_output_column=output_column,
+            column_activation_columns=columns,
+            column_activation=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0)],
+        )
+    # The head transform (the tail is unspecified on an unsplit rank).
+    for name, expected, actual in zip(("affine_a", "affine_b"), plain[:2], activated[:2], strict=True):
+        assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name=f"{name} beside the activation")
+
+    window = slice(input_column * 32, (input_column + columns) * 32)
+    expected = ttnn.to_torch(ttnn.sigmoid(ttnn.typecast(source, ttnn.float32)))[..., window]
+    got = ttnn.to_torch(target)
+    written = slice(output_column * 32, (output_column + columns) * 32)
+    assert_bit_identical(expected, got[..., written], name="activated columns")
+    untouched = torch.cat((got[..., : written.start], got[..., written.stop :]), dim=-1)
+    assert torch.equal(untouched, torch.full_like(untouched, -3.0)), "the activation wrote outside its columns"
+
+
 @pytest.mark.parametrize(
     ("batch_heads", "num_chunks", "dim", "bf16_names"),
     [

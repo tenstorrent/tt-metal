@@ -112,10 +112,32 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<Tensor>& actual_end,
     bool packed_head,
     bool emit_outputs,
-    const std::optional<ttnn::MemoryConfig>& emit_memory_config) {
+    const std::optional<ttnn::MemoryConfig>& emit_memory_config,
+    const std::optional<ttnn::Tensor>& column_activation_input,
+    uint32_t column_activation_input_column,
+    const std::optional<ttnn::Tensor>& column_activation_output,
+    uint32_t column_activation_output_column,
+    uint32_t column_activation_columns,
+    const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& column_activation) {
     constexpr std::string_view operation_name = "summarize_chunk_recurrence";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
+    std::optional<ttnn::experimental::prim::kda_factory_detail::TileColumnActivationParams> activation;
+    if (column_activation_input) {
+        activation = ttnn::experimental::prim::kda_factory_detail::TileColumnActivationParams{
+            .op_chain = column_activation,
+            .input_column = column_activation_input_column,
+            .output_column = column_activation_output_column,
+            .columns = column_activation_columns,
+            // FP32 accumulation and precise SFPU: an FP32 output carries the chain at full precision.
+            .compute_kernel_config = init_device_compute_kernel_config(
+                v_beta.device()->arch(),
+                std::nullopt,
+                tt::tt_metal::MathFidelity::HiFi4,
+                /*default_approx_mode=*/false,
+                /*default_fp32_acc=*/true,
+                /*default_l1_acc=*/false)};
+    }
     return ttnn::experimental::prim::recurrent_chunk_scan(
         v_beta,
         kd,
@@ -136,7 +158,10 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         actual_end,
         packed_head,
         emit_outputs,
-        emit_memory_config);
+        emit_memory_config,
+        activation,
+        column_activation_input,
+        column_activation_output);
 }
 
 }  // namespace ttnn::experimental::kda

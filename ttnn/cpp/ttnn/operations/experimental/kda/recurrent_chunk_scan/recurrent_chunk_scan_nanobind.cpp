@@ -3,6 +3,8 @@
 
 #include "recurrent_chunk_scan_nanobind.hpp"
 
+#include <nanobind/stl/vector.h>
+
 #include "recurrent_chunk_scan.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
@@ -178,6 +180,21 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 tail's entry state from it on. Defaults to False.
             emit_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the
                 emitted ``F(0)`` and ``F(I)``. Defaults to ``memory_config``.
+            column_activation_input (ttnn.Tensor, optional): A TILE tensor whose tile columns
+                ``[column_activation_input_column, column_activation_input_column + column_activation_columns)``
+                the summary's program also activates, on the worker cores the summary leaves idle: it writes
+                ``column_activation`` of them into the same tile columns of ``column_activation_output``
+                from ``column_activation_output_column``, every tile row, at that tensor's dtype. The chain runs
+                as ttnn's unary ops run it (FP32 accumulation, precise SFPU); an empty chain copies. Both
+                tensors are interleaved BFLOAT16 or FLOAT32 with the same tile rows. Defaults to None.
+            column_activation_input_column (int, optional): First input tile column. Defaults to 0.
+            column_activation_output (ttnn.Tensor, optional): The tensor the activation writes in
+                place; required with ``column_activation_input``. Defaults to None.
+            column_activation_output_column (int, optional): First output tile column. Defaults to 0.
+            column_activation_columns (int, optional): Tile columns activated. Defaults to 0.
+            column_activation (list[ttnn.UnaryWithParam], optional): The eltwise unary chain, such as
+                ``[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4, 0)]`` for the FP32-accurate sigmoid.
+                Defaults to an empty chain.
 
         Returns:
             tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
@@ -214,7 +231,13 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("packed_head") = false,
         nb::arg("emit_outputs") = false,
-        nb::arg("emit_memory_config") = nb::none());
+        nb::arg("emit_memory_config") = nb::none(),
+        nb::arg("column_activation_input") = nb::none(),
+        nb::arg("column_activation_input_column") = 0,
+        nb::arg("column_activation_output") = nb::none(),
+        nb::arg("column_activation_output_column") = 0,
+        nb::arg("column_activation_columns") = 0,
+        nb::arg("column_activation") = std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>{});
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

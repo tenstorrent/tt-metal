@@ -531,6 +531,16 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
         writer.dfb_bindings.push_back(tt::tt_metal::experimental::ConsumerOf(writer_chronology, "chronology_writer"));
     }
     spec.kernels = {std::move(reader), std::move(writer), std::move(compute)};
+    if (attrs.column_activation) {
+        // Its own work unit on the worker cores the value blocks leave idle (rows below a column split's lanes).
+        kda_factory_detail::add_tile_column_activation(
+            spec,
+            run_args,
+            *attrs.column_activation,
+            *in.column_activation_input,
+            *in.column_activation_output,
+            kda_factory_detail::idle_cores(device.compute_with_storage_grid_size(), cores));
+    }
     return kda_factory_detail::chronology_workload(
         ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)},
         tensor_coords,

@@ -156,6 +156,24 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         !attrs.packed_head || attrs.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "{}: packed_head requires an interleaved output",
         operation_name);
+    TT_FATAL(
+        attrs.column_activation.has_value() == in.column_activation_input.has_value() &&
+            attrs.column_activation.has_value() == in.column_activation_output.has_value(),
+        "{}: a column activation needs its input and output tensors, and they need the activation",
+        operation_name);
+    if (attrs.column_activation) {
+        TT_FATAL(
+            attrs.mode == RecurrentChunkScanMode::SUMMARY,
+            "{}: a column activation runs beside the summary",
+            operation_name);
+        check_tile_column_activation(
+            *attrs.column_activation, *in.column_activation_input, *in.column_activation_output, operation_name);
+        check_same_device(in.v_beta, *in.column_activation_input, operation_name, "column activation input");
+        TT_FATAL(
+            !idle_cores(in.v_beta.device()->compute_with_storage_grid_size(), distribution.core_set).empty(),
+            "{}: the summary leaves no worker core idle for the column activation",
+            operation_name);
+    }
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
@@ -266,7 +284,10 @@ std::vector<Tensor> recurrent_chunk_scan(
     const std::optional<Tensor>& actual_end,
     bool packed_head,
     bool emit_outputs,
-    const std::optional<MemoryConfig>& emit_mem_config) {
+    const std::optional<MemoryConfig>& emit_mem_config,
+    const std::optional<kda_factory_detail::TileColumnActivationParams>& column_activation,
+    const std::optional<Tensor>& column_activation_input,
+    const std::optional<Tensor>& column_activation_output) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -283,6 +304,7 @@ std::vector<Tensor> recurrent_chunk_scan(
             .packed_head = packed_head,
             .emit_outputs = emit_outputs,
             .emit_mem_config = emit_mem_config,
+            .column_activation = column_activation,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
@@ -297,7 +319,9 @@ std::vector<Tensor> recurrent_chunk_scan(
             .group_entry_states = group_entry_states,
             .tail_entry_states = tail_entry_states,
             .actual_start = actual_start,
-            .actual_end = actual_end});
+            .actual_end = actual_end,
+            .column_activation_input = column_activation_input,
+            .column_activation_output = column_activation_output});
 }
 
 }  // namespace ttnn::experimental::prim

@@ -31,6 +31,7 @@ target_sources(
     PRIVATE
         factory/kda_projection.cpp
         factory/kda_factory_utils.cpp
+        factory/kda_tile_columns.cpp
         kda_performance_model.cpp
 )
 target_include_directories(ttnn_op_experimental_kda_common PRIVATE ${FixmeOpAPIDir})

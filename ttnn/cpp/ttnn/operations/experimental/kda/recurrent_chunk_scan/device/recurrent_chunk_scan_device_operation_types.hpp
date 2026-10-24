@@ -10,6 +10,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/kda/factory/kda_tile_columns.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
@@ -34,6 +35,9 @@ struct RecurrentChunkScanParams {
     bool emit_outputs = false;
     // Memory of the emitted base and sensitivity (default: output_mem_config), e.g. sharded on their consumers.
     std::optional<tt::tt_metal::MemoryConfig> emit_mem_config = std::nullopt;
+    // SUMMARY only: an eltwise activation of tile columns, from column_activation_input into column_activation_output,
+    // run beside the summary on the worker cores its value blocks leave idle.
+    std::optional<kda_factory_detail::TileColumnActivationParams> column_activation = std::nullopt;
     uint32_t sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -53,6 +57,9 @@ struct RecurrentChunkScanInputs {
     std::optional<Tensor> tail_entry_states;
     Tensor actual_start;
     std::optional<Tensor> actual_end;
+    std::optional<Tensor> column_activation_input;
+    // Written in place: its window of the column activation's tile columns.
+    std::optional<Tensor> column_activation_output;
 };
 
 }  // namespace ttnn::experimental::prim

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -45,6 +46,12 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<Tensor>& actual_end = std::nullopt,
     bool packed_head = false,
     bool emit_outputs = false,
-    const std::optional<ttnn::MemoryConfig>& emit_memory_config = std::nullopt);
+    const std::optional<ttnn::MemoryConfig>& emit_memory_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& column_activation_input = std::nullopt,
+    uint32_t column_activation_input_column = 0,
+    const std::optional<ttnn::Tensor>& column_activation_output = std::nullopt,
+    uint32_t column_activation_output_column = 0,
+    uint32_t column_activation_columns = 0,
+    const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& column_activation = {});
 
 }  // namespace ttnn::experimental::kda

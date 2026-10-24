@@ -45,6 +45,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     const std::optional<Tensor>& actual_end,
     bool packed_head = false,
     bool emit_outputs = false,
-    const std::optional<tt::tt_metal::MemoryConfig>& emit_mem_config = std::nullopt);
+    const std::optional<tt::tt_metal::MemoryConfig>& emit_mem_config = std::nullopt,
+    const std::optional<kda_factory_detail::TileColumnActivationParams>& column_activation = std::nullopt,
+    const std::optional<Tensor>& column_activation_input = std::nullopt,
+    const std::optional<Tensor>& column_activation_output = std::nullopt);
 
 }  // namespace ttnn::experimental::prim
