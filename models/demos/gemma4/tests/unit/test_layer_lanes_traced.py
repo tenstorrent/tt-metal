@@ -103,6 +103,14 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
     users = lanes * ROWS_PER_LANE
 
     hf_text_config = _create_hf_text_config(num_experts=_reduced_experts(mesh_device), top_k=2)
+    # One layer: the decode MoE module is shared by every layer of a model and built once the last one registers
+    # (Gemma4MoEDecode, num_layers from the config's num_hidden_layers); a 30-layer config with one built layer never
+    # builds it (window 5 arms workers4 / buffers4 / ag_sum_links1: "decode MoE module not built"). The 26B has no
+    # KV-shared layers (num_kv_shared_layers 0), so a one-layer config keeps layer 0 a plain sliding layer.
+    assert layer_idx == 0 and hf_text_config.layer_types[0] == "sliding_attention"
+    assert int(getattr(hf_text_config, "num_kv_shared_layers", 0) or 0) == 0, "a one-layer config would share KV"
+    hf_text_config.num_hidden_layers = 1
+    hf_text_config.layer_types = list(hf_text_config.layer_types[:1])
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
     tt_state = _hf_state_to_tt_state(hf_layer.state_dict(), layer_idx)
     model_args = _create_gemma4_model_args(hf_text_config)
@@ -133,6 +141,10 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
         mesh_config=mesh_config,
     )
     tt_layer.self_attn.kv_cache = kv_cache
+    moe_decode = getattr(getattr(tt_layer, "moe", None), "experts", None)
+    moe_decode = getattr(moe_decode, "moe_decode", None)
+    if moe_decode is not None:
+        assert moe_decode.num_layers == 1 and moe_decode._reg["module"] is not None, "decode MoE module not built"
 
     # The decode frame exactly as prepare_decode_inputs_host hands it to the layer (lane-major batch of
     # lanes x 32 rows, each tensor lane-sharded over the columns): hidden rows on dim 2, the RoPE positions
