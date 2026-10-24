@@ -13,9 +13,10 @@
 namespace tt::tt_fabric::detail {
 
 /**
- * Thin IPASIR-style facade over CaDiCaL (`cadical.hpp`). DIMACS wire protocol: positive variable ids, 0 ends a
- * clause; solve() returns kSat / kUnsat / 0 (IPASIR). CaDiCaL is incremental — add() after solve() is supported,
- * which multi-model and blocking-clause enumeration rely on for throughput versus one-shot solvers.
+ * Thin IPASIR-style facade over a pluggable incremental SAT engine (CaDiCaL or kissat_extras; selected by the
+ * TT_TOPO_SAT_ENGINE env var — see topology_solver_sat_solver.cpp). DIMACS wire protocol: positive variable ids,
+ * 0 ends a clause; solve() returns kSat / kUnsat / 0 (IPASIR). Both engines are incremental — add() after solve()
+ * is supported, which multi-model and blocking-clause enumeration rely on for throughput versus one-shot solvers.
  */
 struct TopologySatSolver {
     TopologySatSolver();
@@ -28,6 +29,16 @@ struct TopologySatSolver {
     TopologySatSolver& operator=(TopologySatSolver&&) noexcept;
 
     int declare_one_more_variable();
+
+    /**
+     * Protect a variable from bounded-variable-elimination across incremental solves. Blocking-clause
+     * enumeration adds new clauses (referencing the assignment variables) *between* solve() calls; if the engine
+     * eliminated such a variable during an earlier solve, a later blocking clause over it would be unsound. Call
+     * this for every variable that future added clauses may reference, before the first solve(). Engines that
+     * preserve reusable variables implicitly (e.g. CaDiCaL) may treat this as a no-op.
+     */
+    void protect_variable(int var);
+
     void add(int lit);
     // Assume a literal for the next solve() only (retracted afterwards). Lets callers add a symmetry-breaking hint
     // that is sound for any instance: if the assumption makes it UNSAT, re-solve() without it.
@@ -44,15 +55,24 @@ struct TopologySatSolver {
     int active_vars() const;
     int64_t irredundant_clauses() const;
     int64_t redundant_clauses() const;
+    // Total clauses handed to add() so far (counts the 0 terminators). Engine-agnostic (works for kissat, which
+    // exposes no clause getter); used by the conflict-cap scaling policy as the CNF-size signal.
+    int64_t clauses_added() const;
     // Dump CaDiCaL's full statistics (incl. conflicts/decisions/propagations). Only prints when the solver
     // was constructed un-quiet (TT_METAL_SAT_VERBOSE=1).
     void print_statistics();
 
     /**
      * Must be called immediately after construction, before any add() / encoding.
-     * Tunes CaDiCaL for AllSAT-style enumeration: repeated solve() after permanent blocking clauses.
+     * Tunes the engine for AllSAT-style enumeration: repeated solve() after permanent blocking clauses.
      */
     void configure_for_blocking_clause_enumeration();
+
+    // One-shot-first (#1): before any add(), switch to non-incremental solving so the engine runs full
+    // bounded-variable-elimination for a single solve. Only valid when no clause will be added after solve()
+    // (no blocking-clause enumeration) and no assumptions are made over unprotected variables. Pass true to
+    // restore incremental (the default). Deterministic; single-threaded.
+    void set_incremental(bool on);
 
     static constexpr int kSat = 10;
     static constexpr int kUnsat = 20;

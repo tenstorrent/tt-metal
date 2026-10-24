@@ -1109,10 +1109,16 @@ public:
     // Per-solve conflict budget applied to every solve() in this backend. Must be set before start().
     void set_conflict_cap(int cap);
 
+    // Incremental (true, default) keeps the solver alive to add blocking clauses and re-solve for
+    // enumeration; non-incremental (false) runs a single one-shot solve with full variable elimination
+    // (faster, single solution only). Must be set before start(). See topology_solver_sat.cpp.
+    void set_incremental(bool on);
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
     int conflict_cap_ = 300'000;  // mirrors kDefaultConflictCap; copied into Impl on start()
+    bool incremental_ = true;     // copied into Impl on start(); false => one-shot where sound
 };
 
 /**
@@ -1366,6 +1372,14 @@ public:
     virtual void set_conflict_cap(int /*cap*/) {}
 
     /**
+     * Select incremental (true) or one-shot/non-incremental (false) solving for SAT engines. Incremental is
+     * required for multi-solution enumeration (add blocking clause after solve, re-solve); one-shot lets the
+     * engine run full variable-elimination for a single solution and is faster. No-op for DFS. Must be called
+     * before start(). Default incremental.
+     */
+    virtual void set_incremental(bool /*on*/) {}
+
+    /**
      * @brief One-shot search: start() then next().
      *
      * @return true if a complete mapping was found
@@ -1517,6 +1531,8 @@ public:
 
     void set_conflict_cap(int cap) override { backend_.set_conflict_cap(cap); }
 
+    void set_incremental(bool on) override { backend_.set_incremental(on); }
+
 private:
     TopologySearchState state_;
     bool quiet_mode_ = false;
@@ -1649,7 +1665,8 @@ public:
         bool quiet_mode = false,
         TopologyMappingSolverEngine solver_engine = TopologyMappingSolverEngine::Auto,
         bool unique_shapes = false,
-        int conflict_cap = 0);  // 0 = leave the SAT backend's default; >0 overrides the per-solve conflict budget
+        int conflict_cap = 0,   // 0 = leave the SAT backend's default; >0 overrides the per-solve conflict budget
+        bool incremental = true);  // false => this session solves one-shot (single solution); see set_incremental
     TopologyMappingEnumerationSession(const TopologyMappingEnumerationSession&) = delete;
     TopologyMappingEnumerationSession& operator=(const TopologyMappingEnumerationSession&) = delete;
     TopologyMappingEnumerationSession(TopologyMappingEnumerationSession&&) = delete;
@@ -1685,6 +1702,7 @@ private:
     bool quiet_{false};
     bool unique_shapes_{false};
     bool use_sat_{false};
+    bool incremental_{true};  // false => one-shot single-solution solve (see ctor / set_incremental)
     int conflict_cap_{0};  // >0 overrides the SAT backend per-solve conflict budget (see ctor)
     size_t sat_solve_calls_{0};
     size_t sat_hard_constraint_encode_calls_{0};

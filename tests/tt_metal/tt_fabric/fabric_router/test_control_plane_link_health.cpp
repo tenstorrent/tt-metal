@@ -383,27 +383,34 @@ TEST_F(FactoryDescriptorControlPlaneFixture, MeshGraphCountAboveTheFactoryDropsT
         EXPECT_EQ(control_plane.get_num_usable_routing_planes(mesh_back->src_node, mesh_back->src_direction), 2u);
     }
 
-    // Intermesh, all RELAXED, a different count on each boundary. This graph asks for 16 on the
-    // boundary missing chip 5 chan 9 -- chip 29 chan 9 (16 factory cables, 15 live). That one
-    // cable stays downed, and 15 live cables are registered.
+    // Intermesh, all RELAXED. The MGD requests >= the factory cable count on every boundary, so every
+    // factory cable is routed regardless of how the solver rotates mesh ids onto physical hosts; the one
+    // missing factory cable is therefore always needed and stays DOWNED (never merely unused). Identify
+    // that cable by its PHYSICAL identity (the sole downed inter-mesh cable) rather than hardcoded chip
+    // indices -- those go through the mock's rank binding and so depend on the SAT engine's placement.
     expect_distinct_intermesh(control_plane, true);
-    const auto* inter = find_cable(control_plane, downed, 5, 9, 29, 9);
-    ASSERT_NE(inter, nullptr);
-    const auto* inter_back = find_cable(control_plane, downed, 29, 9, 5, 9);
-    ASSERT_NE(inter_back, nullptr);
-    EXPECT_FALSE(has_cable(control_plane, unused, 5, 9, 29, 9));
-    EXPECT_FALSE(has_cable(control_plane, unused, 29, 9, 5, 9));
-    std::size_t intermesh_downed = 0;
     std::size_t intermesh_unused = 0;
-    for (const auto& link : downed) {
-        intermesh_downed += link.is_intermesh();
-    }
     for (const auto& link : unused) {
         intermesh_unused += link.is_intermesh();
     }
-    EXPECT_EQ(intermesh_downed, 2u);
+    std::vector<const experimental::LinkInfo*> inter_downed;
+    for (const auto& link : downed) {
+        if (link.is_intermesh()) {
+            inter_downed.push_back(&link);
+        }
+    }
+    // One missing inter-mesh cable, recorded in both directions (2 entries); none merely unused.
     EXPECT_EQ(intermesh_unused, 0u);
-    EXPECT_EQ(intermesh_request(control_plane.get_mesh_graph(), inter->src_mesh(), inter->dst_mesh()), 16u);
+    ASSERT_EQ(inter_downed.size(), 2u);
+    const auto* inter = inter_downed[0];
+    const auto* inter_back = inter_downed[1];
+    // The two entries are the two directions of the same physical cable: same ASIC pair + channels, swapped.
+    EXPECT_EQ(inter->src_asic, inter_back->dst_asic);
+    EXPECT_EQ(inter->dst_asic, inter_back->src_asic);
+    EXPECT_EQ(inter->src_chan, inter_back->dst_chan);
+    EXPECT_EQ(inter->dst_chan, inter_back->src_chan);
+    // Count-above-factory: the downed cable's boundary requests more than the 15 live cables it has.
+    EXPECT_GT(intermesh_request(control_plane.get_mesh_graph(), inter->src_mesh(), inter->dst_mesh()), 15u);
     if (owns(inter->src_node)) {
         EXPECT_EQ(assigned_toward(control_plane, inter->src_mesh(), inter->dst_mesh()), 15u);
     }

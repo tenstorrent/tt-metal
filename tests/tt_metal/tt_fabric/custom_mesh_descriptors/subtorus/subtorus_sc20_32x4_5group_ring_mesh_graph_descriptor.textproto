@@ -17,35 +17,14 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 8 policy: RELAXED }
-        assign_z_direction: true
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    channels { count: 8 policy: RELAXED }
-        assign_z_direction: true
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 8 policy: RELAXED }
-        assign_z_direction: true
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
-    channels { count: 8 policy: RELAXED }
-        assign_z_direction: true
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 4 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    channels { count: 8 policy: RELAXED }
-        assign_z_direction: true
+  # All-to-all inter-mesh seams (was a 5-mesh ring): every mesh cables to every other, so each 32x4
+  # mesh's exit links spread across all four of its host-rank galaxies instead of concentrating on the
+  # two that happen to face a ring neighbor. This removes the degree-2 host-rank "twins" that made the
+  # native-ring pipeline unembeddable under a different solver's ring rotation (same physical ASICs,
+  # RELAXED so uncabled pairs simply bind zero links).
+  graph_topology: {
+    layout_type: ALL_TO_ALL
+    channels { count: 4 policy: RELAXED }
   }
 }
 
