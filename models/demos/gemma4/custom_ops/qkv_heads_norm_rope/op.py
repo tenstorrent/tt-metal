@@ -126,7 +126,7 @@ class QkvHeadsNormRope:
             cb(cls.CB_G, cols_t),
             cb(cls.CB_COS, cols_t),
             cb(cls.CB_SIN, cols_t),
-            cb(cls.CB_SCALER, 2),
+            cb(cls.CB_SCALER, 1 + 2 * cols_t),  # the scaler + the cos / sin staging pages
             cb(cls.CB_SQ, cols_t, page=f32_tile, fmt=ttnn.float32),
             cb(cls.CB_INV, 1, page=f32_tile, fmt=ttnn.float32),
             cb(cls.CB_N, cols_t),

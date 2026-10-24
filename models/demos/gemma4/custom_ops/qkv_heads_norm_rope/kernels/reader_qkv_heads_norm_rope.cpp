@@ -50,10 +50,10 @@ void kernel_main() {
     const uint32_t src_off = (user >> 4) * 2 * face_bytes + (user & 15) * 32;
     const uint32_t src_face = (user >> 4) * 2;
     const uint32_t src_word = (user & 15) * 8;
-    // unit scaler for the row reduce: bf16 1.0 in the first row of every face, zeros elsewhere; the second page
-    // of the CB is the staging tile for the cos / sin row copies
+    // unit scaler for the row reduce: bf16 1.0 in the first row of every face, zeros elsewhere; the 2 x cols_t
+    // pages after it stage the cos / sin tiles of a tensor (never pushed)
     CircularBuffer cs(cb_scaler);
-    cs.reserve_back(2);
+    cs.reserve_back(1 + 2 * cols_t);
     const uint32_t scaler_addr = get_write_ptr(cb_scaler);
     const uint32_t stage_addr = scaler_addr + tile_bytes;
     {
@@ -67,7 +67,7 @@ void kernel_main() {
             }
         }
     }
-    cs.push_back(1);  // the scaler; the staging page is never pushed
+    cs.push_back(1);
     CircularBuffer cx(cb_x), cg(cb_g), ccos(cb_cos), csin(cb_sin);
     for (uint32_t t = t0; t < t0 + t_count; ++t) {
         const uint32_t heads = t == 0 ? hq : hkv;
@@ -97,14 +97,22 @@ void kernel_main() {
             cg.push_back(cols_t);
             ccos.reserve_back(cols_t);
             csin.reserve_back(cols_t);
+            // the user's cos / sin row into row 0 of each destination tile (the row the bcast-rows multiply
+            // reads): every cos / sin tile staged whole (a DRAM source: whole-tile reads only, tt-metal #16667),
+            // all 2 x cols_t reads in flight, one barrier, then the local row copies
             const uint32_t a_cos = get_write_ptr(cb_cos), a_sin = get_write_ptr(cb_sin);
-            volatile tt_l1_ptr uint32_t* stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_addr);
             for (uint32_t which = 0; which < 2; ++which) {
                 const auto& acc = which == 0 ? s_cos : s_sin;
+                for (uint32_t c = 0; c < cols_t; ++c) {
+                    noc_async_read(acc.get_noc_addr(c), stage_addr + (which * cols_t + c) * tile_bytes, tile_bytes);
+                }
+            }
+            noc_async_read_barrier();
+            for (uint32_t which = 0; which < 2; ++which) {
                 const uint32_t dst_base2 = which == 0 ? a_cos : a_sin;
                 for (uint32_t c = 0; c < cols_t; ++c) {
-                    noc_async_read(acc.get_noc_addr(c), stage_addr, tile_bytes);
-                    noc_async_read_barrier();
+                    volatile tt_l1_ptr uint32_t* stage =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage_addr + (which * cols_t + c) * tile_bytes);
                     volatile tt_l1_ptr uint32_t* dst =
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_base2 + c * tile_bytes);
                     for (uint32_t j = 0; j < 8; ++j) {
@@ -113,7 +121,6 @@ void kernel_main() {
                     }
                 }
             }
-            noc_async_read_barrier();
             ccos.push_back(cols_t);
             csin.push_back(cols_t);
         }
