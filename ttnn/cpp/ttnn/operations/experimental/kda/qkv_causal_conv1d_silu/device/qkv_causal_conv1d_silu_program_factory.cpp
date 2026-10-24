@@ -415,12 +415,7 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
                 tt::tt_metal::experimental::DFBBinding{
                     output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
-        .compile_time_args =
-            {{"block_ct", block_ct},
-             {"Mt", Mt},
-             {"group", group},
-             {"dest_limit", dest_limit},
-             {"defer_first_rows", uint32_t(exchange)}},
+        .compile_time_args = {{"block_ct", block_ct}, {"Mt", Mt}, {"group", group}, {"dest_limit", dest_limit}},
         .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
         .hw_config = ttnn::to_compute_hardware_config(attrs.compute_kernel_config),
     };

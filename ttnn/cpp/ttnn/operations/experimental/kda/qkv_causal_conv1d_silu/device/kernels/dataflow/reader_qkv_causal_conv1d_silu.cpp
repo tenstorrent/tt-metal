@@ -230,5 +230,5 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         previous_work = work;
         parity ^= 1;
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process);
+    for_each_work_item(wi_start, wi_count, Mt, exchange ? predecessor_tile_row(topology) : no_deferred_row, process);
 }

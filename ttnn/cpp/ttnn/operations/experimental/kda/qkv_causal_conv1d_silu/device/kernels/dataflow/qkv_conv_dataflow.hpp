@@ -34,4 +34,14 @@ inline kda_chronology::Topology read_chronology(Noc& noc, uint32_t slot) {
     }
 }
 
+// The tile row whose segment continues from the predecessor's rows, which the fabric exchange delivers late: row 0
+// on every rank but the first, the head/tail split row on a split first rank, none on an unsplit first rank. The
+// reader and writer defer it (for_each_work_item) so a late predecessor only delays that row's items.
+inline uint32_t predecessor_tile_row(const kda_chronology::Topology& topology) {
+    if (topology.rank != topology.first_rank) {
+        return 0;
+    }
+    return topology.local_split ? topology.head_rows / tile_height : no_deferred_row;
+}
+
 }  // namespace qkv_conv

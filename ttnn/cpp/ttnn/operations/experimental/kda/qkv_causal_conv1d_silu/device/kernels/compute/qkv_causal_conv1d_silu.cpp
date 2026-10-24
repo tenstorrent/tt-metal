@@ -14,7 +14,7 @@
 // (weights in row 0). Scaling a tile's columns by a tap is a matmul with that tap's diagonal, so the four taps
 // accumulate in the destination registers with no partial round trip; SiLU then runs in place. The diagonals are
 // built here once per channel block, as the identity times the row-broadcast tap.
-template <uint32_t block_ct, uint32_t Mt, uint32_t group, uint32_t dest_limit, uint32_t defer_first_rows>
+template <uint32_t block_ct, uint32_t Mt, uint32_t group, uint32_t dest_limit>
 TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
     using qkv_conv::tap_count;
     static_assert(dest_limit <= compute_kernel_lib::DEST_AUTO_LIMIT);
@@ -81,7 +81,9 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             activation.pop_front(group * tap_count);
         }
     };
-    qkv_conv::for_each_work_item(wi_start, wi_count, Mt, defer_first_rows, process);
+    // The reader and writer may defer a tile row within each block; compute depends only on the block sequence, which
+    // deferral does not change.
+    qkv_conv::for_each_work_item(wi_start, wi_count, Mt, qkv_conv::no_deferred_row, process);
     if (current_block != no_block) {
         weights.pop_front(weight_tiles);
     }

@@ -42,18 +42,21 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
     // With the fabric exchange, stage this core's share of the rows the exchange core sends, channel tiles
     // [ct_start, ct_start + ct_count) of this rank's outgoing rows and, on the final segment's owner, its end rows.
     // The writer has nothing to write until compute's first output, so staging first does not delay the convolution.
+    // It walks the reader's order, which defers the tile row that waits for the predecessor's rows.
+    uint32_t deferred_row = no_deferred_row;
     if constexpr (exchange) {
+        Scratchpad<uint32_t> scratch(scratch::staging);
+        // Raw: base/offset arithmetic below feeds raw reads/writes into scratch; no handle form yet.
+        const uint32_t scratch_base = local_mem::detail::AddressAccess::address(scratch.local_mem());
+        const uint32_t base = align_up(scratch_base, read_alignment);
+        const uint32_t offset = base - scratch_base;
+        const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, base);
+        deferred_row = predecessor_tile_row(interval);
         const auto stage_exchanged_rows = [&](uint32_t ct_start, uint32_t ct_count) {
             const auto input = TensorAccessor(tensor::input);
             const auto exchange_buffer = TensorAccessor(tensor::exchange_buffer);
-            Scratchpad<uint32_t> scratch(scratch::staging);
             constexpr StagingScratch layout{max_staged_ct};
-            // Raw: base/offset arithmetic below feeds raw reads/writes into scratch; no handle form yet.
-            const uint32_t scratch_base = local_mem::detail::AddressAccess::address(scratch.local_mem());
-            const uint32_t base = align_up(scratch_base, read_alignment);
-            const uint32_t offset = base - scratch_base;
 
-            const auto interval = read_chronology<has_actual_end, sp_rank, sp_size, local_rows>(noc, base);
             uint32_t source_rows[StagingScratch::rows];
             for (uint32_t i = 0; i < history_rows; ++i) {
                 source_rows[i] = interval.outgoing_rows_begin() + i;
@@ -139,5 +142,5 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
             }
         }
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process);
+    for_each_work_item(wi_start, wi_count, Mt, deferred_row, process);
 }
