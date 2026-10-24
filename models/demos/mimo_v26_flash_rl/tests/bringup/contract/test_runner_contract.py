@@ -19,7 +19,10 @@ slot and prefix the engine picks):
 The producer feeds two slots round robin, multi-turn, mid-chunk ends (it never pulls back).
 
 Pass (failures listed in results <task>_runner_contract.json, metric runner_contract_failures == 0):
-    transport    the engine and the runner agree on the H2D service, the 12-byte header and the ack channel
+    transport    the engine and the runner agree on the H2D service, the 12-byte header and the ack channel (the
+                 runner's LayerCompletionQueue ring /tt_prefill_layer_completions_<service_id>, same wire format in
+                 tt-d-gen's tt-blaze tt-metal and the workspace); the engine reads completions_per_chunk from the
+                 ring header, so the driver runs through _dgen_driver_shim.py
     feeder       exit 0; engine: every request PREFILL_DONE at its prompt length (the acks retired every chunk);
                  producer: one completion per served layer per chunk drained from the runner's completion ring
     coverage     two slots interleaved, a follow-up on a resident slot, (engine) a pulled-back last chunk
@@ -104,6 +107,8 @@ def test_runner_contract(mesh_device, tmp_path):
     from bringup_fw.testing import chunk_starts as CS
     from bringup_fw.testing import dgen_engine as DE
 
+    from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
+
     s = spec()
     geo = S.geometry(s)
     from models.demos.common.prefill.adapter import ADAPTER_PATHS
@@ -154,11 +159,12 @@ def test_runner_contract(mesh_device, tmp_path):
             max_seq=geo["max_seq"],
             requests=_engine_requests(g.tokens().tolist()),
             kv_block_size=S.BLOCK,
+            ack_shm_name=scheduler_shm_name(service_id),  # the runner's completion ring (tt-d-gen #1600)
             connect_timeout_ms=600000,
             stall_s=900,
             run_timeout_s=int(s.get("box.test_timeout_s")) - 300,
         )
-        case["driver"] = DE.driver_shell(
+        case["driver"] = S.driver_shell(
             build, str(plan), str(out / "driver_out.json"), str(out / "driver.rc"), service_id
         )
     (out / "case.json").write_text(json.dumps(case, indent=1))

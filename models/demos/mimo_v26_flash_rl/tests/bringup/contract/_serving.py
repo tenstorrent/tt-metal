@@ -147,10 +147,50 @@ def transport_problems(repo: Path, workspace: Path, chunk: int, sp: int) -> list
     if counter.exists():
         out.append(
             f"layer acks: the pinned tt-d-gen attaches an InterProcessCounterChannel at "
-            f"/tt_prefill_layer_acks_<service_id> (prefill_pipeline.cpp:103-107, tools/launch_harness/"
-            f"config.py:515-518); tt-metal's runner publishes a LayerCompletionQueue ring at "
-            f"{runner_ack}<service_id> (layer_completion_ring_reader.py) and has no counter channel. The "
-            "engine cannot attach, so it retires no chunk. tt-d-gen #1600 (1cf34388, after this pin) moves the "
-            "engine to the ring: re-pin tt-d-gen to a commit that has it"
+            f"/tt_prefill_layer_acks_<service_id>; tt-metal's runner publishes a LayerCompletionQueue ring at "
+            f"{runner_ack}<service_id> (layer_completion_ring_reader.py) and has no counter channel. tt-d-gen "
+            "#1600 (1cf34388) moves the engine to the ring: pin tt-d-gen at or after it"
         )
+        return out
+    m = re.search(r'ack = "(/tt_prefill_layer_\w+_)" \+ service', (repo / "tools/launch_harness/config.py").read_text())
+    engine_ack = m.group(1) if m else "?"
+    if engine_ack != runner_ack:
+        out.append(
+            f"layer acks: tt-d-gen attaches {engine_ack}<service_id> (tools/launch_harness/config.py), tt-metal's "
+            f"runner publishes {runner_ack}<service_id> (layer_completion_ring_reader.py scheduler_shm_name)"
+        )
+    # The ring's wire format: tt-d-gen links the LayerCompletionQueue of its tt-blaze tt-metal, the runner the
+    # workspace's. Same message struct and queue header (comments aside), or the engine reads garbage.
+    blaze = repo / "third_party/tt-blaze/tt-metal"
+    for rel in (
+        "tt_metal/api/internal/disaggregation/layer_completion_message.hpp",
+        "tt_metal/api/internal/disaggregation/layer_completion_queue.hpp",
+    ):
+        a, b = workspace / rel, blaze / rel
+        if not a.is_file() or not b.is_file():
+            out.append(f"layer acks: {rel} missing in {'the workspace' if not a.is_file() else blaze}")
+        elif _code_lines(a) != _code_lines(b):
+            out.append(
+                f"layer acks: {rel} differs between tt-d-gen's tt-blaze tt-metal and the workspace (ring wire format)"
+            )
     return out
+
+
+def _code_lines(p: Path) -> list[str]:
+    return [ln.strip() for ln in p.read_text().splitlines() if ln.strip() and not ln.strip().startswith("//")]
+
+
+def driver_shell(build, plan: str, out: str, rc_file: str, service_id: str) -> list[str]:
+    """dgen_engine.driver_shell, with the driver started through _dgen_driver_shim.py (the pinned engine's
+    device_prefill_pipeline takes no layers_per_chunk: the ring header carries completions_per_chunk)."""
+    import shlex
+
+    from bringup_fw.testing import dgen_engine as DE
+
+    shim = str(Path(__file__).resolve().with_name("_dgen_driver_shim.py"))
+    cmd = DE.driver_shell(build, plan, out, rc_file, service_id)
+    old = f"{shlex.quote(build.python)} {shlex.quote(str(DE.DRIVER))}"
+    if old not in cmd[-1]:
+        raise RuntimeError(f"dgen_engine.driver_shell changed shape; cannot insert the shim: {cmd[-1][:300]}")
+    cmd[-1] = cmd[-1].replace(old, f"{shlex.quote(build.python)} {shlex.quote(shim)} {shlex.quote(str(DE.DRIVER))}", 1)
+    return cmd
