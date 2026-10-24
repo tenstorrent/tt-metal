@@ -145,10 +145,15 @@ class DSV41DeviceHead:
             packer_l1_acc=False,
         )
 
-    def forward(self, streams, pre):
+    def forward(self, streams, pre, collapse_l1=False):
         """streams [T,1,4,D] fp32, pre [T,1,1,4] fp32 -> logits shard [1,1,T,vocab/cols] fp32 (this column's vocab slice)."""
         T = streams.shape[0]
-        y = ttnn.matmul(pre, streams, compute_kernel_config=self.ckc32)  # hc_pre collapse -> [T,1,1,D]
+        y = ttnn.matmul(
+            pre,
+            streams,
+            compute_kernel_config=self.ckc32,
+            memory_config=ttnn.L1_MEMORY_CONFIG if collapse_l1 else ttnn.DRAM_MEMORY_CONFIG,
+        )  # hc_pre collapse -> [T,1,1,D]
         y = ttnn.reshape(y, [1, 1, T, DIM])
         x = ttnn.typecast(ttnn.typecast(y, ttnn.bfloat16), ttnn.float32)  # reference rounds to bf16 first
         ms = ttnn.mean(ttnn.multiply(x, x), dim=-1, keepdim=True)

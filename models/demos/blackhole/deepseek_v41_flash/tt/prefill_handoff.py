@@ -296,7 +296,7 @@ class GenPrefillModel(DSV41PrefillModel):
                     sel_x = xc if sel_x is None else ttnn.add(sel_x, xc)
                     sel_p = pc if sel_p is None else ttnn.add(sel_p, pc)
                 sel_x, sel_p = self._sum_cols(sel_x), self._sum_cols(sel_p)
-                lg = self.head.forward(sel_x, sel_p)
+                lg = self.head.forward(sel_x, sel_p, collapse_l1=True)
                 tk = self.head.sample_global(lg, self.mesh_config, self.ccl)
                 self.head_out.append((lg, tk))
                 continue
@@ -305,7 +305,7 @@ class GenPrefillModel(DSV41PrefillModel):
                 xc, pc = ttnn.multiply(xs[u * K + c], m), ttnn.multiply(pres[u * K + c], m)
                 sel_x = xc if sel_x is None else ttnn.add(sel_x, xc)
                 sel_p = pc if sel_p is None else ttnn.add(sel_p, pc)
-            lg = self.head.forward(sel_x, sel_p)
+            lg = self.head.forward(sel_x, sel_p, collapse_l1=True)
             tk = self.head.sample_global(lg, self.mesh_config, self.ccl)
             self.head_out.append((lg, tk))
 
