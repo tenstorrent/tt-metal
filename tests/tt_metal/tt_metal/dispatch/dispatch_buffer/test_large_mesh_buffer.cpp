@@ -3,11 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cstdint>
 #include <tt-metalium/distributed.hpp>
 #include <numeric>
 #include <optional>
 #include <random>
+#include <span>
 #include <tuple>
 #include <vector>
 #include <iomanip>
@@ -36,8 +38,7 @@ namespace {
 
 // Helper function to detect and print mismatch ranges with formatted output
 template <typename T>
-void print_mismatch_ranges(
-    const std::vector<T>& src_vec, const std::vector<T>& dst_vec, const std::string& context = "") {
+void print_mismatch_ranges(std::span<const T> src_vec, std::span<const T> dst_vec, const std::string& context = "") {
     if (src_vec.size() != dst_vec.size()) {
         log_info(
             tt::LogTest,
@@ -120,22 +121,51 @@ constexpr auto KB{1ul << 10};
 constexpr auto MB{1ul << 20};
 constexpr auto GB{1ul << 30};
 
-// Returns `num_elements` distinct values in scrambled order, so a page read back from the wrong address never matches.
-// Each value is the splitmix64 output function (https://prng.di.unimi.it/splitmix64.c) of its index plus a random
-// offset; every step of that function is invertible, so distinct indices give distinct values. The random offset makes
-// each case write different data than an earlier case or run left at the same DRAM address. Cases call this after their
-// skip checks, so a skipped case costs no host time or memory.
-std::vector<ElementType> make_src_vec(size_t num_elements) {
-    const uint64_t offset = std::mt19937_64(std::random_device{}())();
-    std::vector<ElementType> src_vec;
-    src_vec.reserve(num_elements);
-    for (size_t i = 0; i < num_elements; ++i) {
+// The 12 GB LargeInterleavedReadback case below; no other case is larger.
+constexpr auto max_case_size{12 * GB};
+// Each case's data starts this much further into the shared sequence than the previous case's, wrapping at
+// max_src_shift (1024 distinct starts, far more than there are cases).
+constexpr auto src_shift_step{1 * KB};
+constexpr auto max_src_shift{1 * MB};
+
+// Returns `num_elements` consecutive values of one per-process sequence of distinct values in scrambled order, so a
+// page read back from the wrong address never matches. Value i is the splitmix64 output function
+// (https://prng.di.unimi.it/splitmix64.c) of i plus a random per-process offset; every step of that function is
+// invertible, so distinct indices give distinct values. Because each call starts src_shift_step past the last one,
+// consecutive cases write different data to every DRAM address they share.
+//
+// Cases share the sequence and read it in place, and it is generated only as far as the largest case so far has
+// needed, so a run fills its largest case once and a skipped case costs nothing. Capacity for the largest case plus
+// the largest shift is reserved on first use: that only maps address space, and growing within it never moves the
+// data.
+//
+// ShardDataTransfer::host_data() takes a non-const pointer for writes too, so callers const_cast the result for
+// enqueue_write_shards, which only reads it.
+std::span<const ElementType> src_data(size_t num_elements) {
+    static const uint64_t offset = std::mt19937_64(std::random_device{}())();
+    static std::vector<ElementType> data = [] {
+        std::vector<ElementType> reserved;
+        reserved.reserve((max_case_size + max_src_shift) / ElementSize);
+        return reserved;
+    }();
+    static size_t next_shift = 0;
+    const size_t first = next_shift / ElementSize;
+    next_shift = (next_shift + src_shift_step) % max_src_shift;
+
+    const size_t end = first + num_elements;
+    TT_FATAL(
+        end <= data.capacity(),
+        "A case needs source elements [{}, {}) but only {} are reserved; raise max_case_size to the largest case",
+        first,
+        end,
+        data.capacity());
+    for (size_t i = data.size(); i < end; ++i) {
         uint64_t z = offset + i;
         z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
         z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
-        src_vec.push_back(z ^ (z >> 31));
+        data.push_back(z ^ (z >> 31));
     }
-    return src_vec;
+    return {data.data() + first, num_elements};
 }
 
 bool validate_interleaved_test_inputs(size_t size, MeshDevice& mesh_device) {
@@ -188,14 +218,15 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     EXPECT_TRUE(mesh_buffer->is_allocated());
 
     auto num_elements = tensor_size / ElementSize;
-    std::vector<ElementType> src_vec = make_src_vec(num_elements);
+    const std::span<const ElementType> src = src_data(num_elements);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<distributed::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
     for (const auto& coord : coord_range) {
-        input_shards.emplace_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
+        input_shards.emplace_back(
+            distributed::ShardDataTransfer{coord}.host_data(const_cast<ElementType*>(src.data())));
     }
 
     std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
@@ -212,8 +243,8 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     for (auto& dst : dst_vec) {
         std::string context =
             "Device coord (" + std::to_string(dst.first[0]) + "," + std::to_string(dst.first[1]) + ")";
-        print_mismatch_ranges(src_vec, dst.second, context);
-        EXPECT_EQ(dst.second, src_vec);
+        print_mismatch_ranges<ElementType>(src, dst.second, context);
+        EXPECT_TRUE(std::ranges::equal(dst.second, src));
     }
 }
 
@@ -455,12 +486,13 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     auto mesh_buffer = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device_.get());
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
 
-    std::vector<ElementType> src_vec = make_src_vec(num_elements);
+    const std::span<const ElementType> src = src_data(num_elements);
     auto mesh_size = coord_range.shape().mesh_size();
     std::vector<distributed::ShardDataTransfer> input_shards = {};
     input_shards.reserve(mesh_size);
     for (const auto& coord : coord_range) {
-        input_shards.emplace_back(distributed::ShardDataTransfer{coord}.host_data(src_vec.data()));
+        input_shards.emplace_back(
+            distributed::ShardDataTransfer{coord}.host_data(const_cast<ElementType*>(src.data())));
     }
 
     std::unordered_map<distributed::MeshCoordinate, std::vector<ElementType>> dst_vec = {};
@@ -477,8 +509,8 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     for (auto& dst : dst_vec) {
         std::string context =
             "Device coord (" + std::to_string(dst.first[0]) + "," + std::to_string(dst.first[1]) + ")";
-        print_mismatch_ranges(src_vec, dst.second, context);
-        EXPECT_EQ(dst.second, src_vec);
+        print_mismatch_ranges<ElementType>(src, dst.second, context);
+        EXPECT_TRUE(std::ranges::equal(dst.second, src));
     }
 }
 
