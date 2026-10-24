@@ -87,7 +87,7 @@ class _Transforms:
             mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
         )
 
-    def reference(self, start: int):
+    def reference(self, start: int, final_in_landing: bool = False):
         """Each rank's entry state, the final carry and the ranks the relay leaves the carry on."""
         first_rank = (start // _ROWS) % self.sp_size
         carry = self.initial.double()
@@ -96,10 +96,12 @@ class _Transforms:
             rank = (first_rank + step) % self.sp_size
             entries[rank] = carry.float()
             carry = self.a[rank].double() @ carry + self.b[rank].double()
-        # The final state is valid where the relay leaves it: the last chronological rank and the first.
-        return entries, carry.float(), {first_rank, (first_rank + self.sp_size - 1) % self.sp_size}
+        # The final state is valid where the relay leaves it: the last chronological rank, and the first unless it
+        # stays in the first rank's final landing.
+        last_rank = (first_rank + self.sp_size - 1) % self.sp_size
+        return entries, carry.float(), {last_rank} if final_in_landing else {first_rank, last_rank}
 
-    def assert_matches_gather_and_chain(self, entry, final, actual_start, start: int):
+    def assert_matches_gather_and_chain(self, entry, final, actual_start, start: int, final_in_landing: bool = False):
         chained_entry, chained_final = distributed_prefix(
             self.packed,
             self.initial_tt,
@@ -108,7 +110,7 @@ class _Transforms:
             actual_start=actual_start,
             local_rows=_ROWS,
         )
-        entries, carry, final_ranks = self.reference(start)
+        entries, carry, final_ranks = self.reference(start, final_in_landing)
 
         def assert_matches_chain(got, chained, expected, name):
             # The same products at the same fidelity in another operand and accumulation order (the relay accumulates
@@ -151,6 +153,29 @@ def _relay(mesh_device, cores=None) -> RelayAffinePrefix:
     )
 
 
+def _relay_columns(mesh_device) -> list:
+    """The right-hand three worker columns, column by column (as the model places the relay): the head cores are then
+    not in the row-major order of the landing buffers' shard grid."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    return [ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)]
+
+
+def landed_final_states(relay: RelayAffinePrefix, landing_device_tensor) -> torch.Tensor:
+    """The [BH, K, K] states in one device's final landing, head h's taken from the relay's h-th head core (the
+    landing stores each state by tile column)."""
+    landing = ttnn.to_torch(landing_device_tensor)
+    grid = relay.final_landing.memory_config().shard_spec.grid
+    shard_of = {(c.x, c.y): i for i, c in enumerate(ttnn.corerange_to_cores(grid, row_wise=True))}
+    kt = _KEY // 32
+    states = []
+    for core in relay.head_cores:
+        shard = shard_of[(core.x, core.y)]
+        stored = landing[shard * _KEY : (shard + 1) * _KEY].reshape(kt, 32, kt, 32)
+        # The stored tile (i, j) is the state's tile (j, i).
+        states.append(stored.permute(2, 1, 0, 3).reshape(_KEY, _KEY))
+    return torch.stack(states)
+
+
 @_MESH
 # Only the rank holding the first token orders the relay; "split" checks that an offset within that rank is ignored.
 @pytest.mark.parametrize(
@@ -182,7 +207,7 @@ def test_relay_affine_prefix_with_output_gate(mesh_device):
     transforms = _Transforms(mesh_device, seed=start)
     actual_start = make_actual_start(mesh_device, start)
     grid = mesh_device.compute_with_storage_grid_size()
-    relay_columns = [ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)]
+    relay_columns = _relay_columns(mesh_device)
     relay = _relay(mesh_device, cores=relay_columns)
     copy_cores = [core for core in relay_columns if core not in relay.cores]
     replicate = lambda host: ttnn.from_torch(
@@ -259,3 +284,26 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
                 name=f"carry start={start} rank={rank} tp={tp}",
                 nrmse_threshold=0.03,
             )
+
+
+@_MESH
+@pytest.mark.parametrize("start", [640, 672], ids=["rotated", "split"])
+def test_relay_affine_prefix_leaves_final_in_landing(mesh_device, start):
+    """With leave_final_in_landing the first rank does not take the last rank's final state: it stays in the first
+    rank's final landing, head h's on the relay's h-th head core, and the final-state output is valid on the last
+    rank only. The head cores go column by column, so their order differs from the landing's shard order."""
+    transforms = _Transforms(mesh_device, seed=start)
+    actual_start = make_actual_start(mesh_device, start)
+    relay = _relay(mesh_device, cores=_relay_columns(mesh_device))
+    entry, final, _ = relay(transforms.packed, transforms.initial_tt, actual_start, leave_final_in_landing=True)
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start, final_in_landing=True)
+    _, carry, _ = transforms.reference(start)
+    first_rank = (start // _ROWS) % transforms.sp_size
+    landings = ttnn.get_device_tensors(relay.final_landing)
+    for tp in range(transforms.tp_size):
+        assert_accurate(
+            carry,
+            landed_final_states(relay, landings[first_rank * transforms.tp_size + tp]),
+            name=f"landed final start={start} tp={tp}",
+            nrmse_threshold=0.03,
+        )

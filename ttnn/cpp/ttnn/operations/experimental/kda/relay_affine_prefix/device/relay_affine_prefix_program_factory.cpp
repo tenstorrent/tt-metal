@@ -96,6 +96,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     writer_ct.insert(writer_ct.end(), chronology.begin(), chronology.end());
     writer_ct.push_back(kt);
     writer_ct.push_back(ack_semaphore_id);
+    writer_ct.push_back(static_cast<uint32_t>(!attrs.leave_final_in_landing));
     for (const auto* tensor : {&entry, &final_state}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(writer_ct);
     }

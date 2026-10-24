@@ -40,6 +40,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> relay_affine
     const std::optional<ttnn::Tensor>& output_gate_copy_source = std::nullopt,
     uint32_t output_gate_copy_source_column = 0,
     uint32_t output_gate_copied_columns = 0,
-    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores = {});
+    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores = {},
+    bool leave_final_in_landing = false);
 
 }  // namespace ttnn::experimental::kda

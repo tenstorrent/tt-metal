@@ -127,9 +127,20 @@ class RelayAffinePrefix:
         # Where the entry states land for their reader (the chunk scan, or the entry correction's many cores).
         self.entry_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    def __call__(self, packed, initial_state, actual_start, output_gate: RelayOutputGate | None = None):
+    def __call__(
+        self,
+        packed,
+        initial_state,
+        actual_start,
+        output_gate: RelayOutputGate | None = None,
+        leave_final_in_landing: bool = False,
+    ):
         """Return this rank's entry states and the final state, both [BH, K, K] FP32, and the output gate's output
-        (None without one)."""
+        (None without one).
+
+        With ``leave_final_in_landing`` the first rank does not wait for the last rank's final state: it stays in
+        ``final_landing``, counted on ``final_semaphore``, for a later program to take (EntryCorrection's tail
+        landing), and the returned final state is valid on the last chronological rank only."""
         gate = {}
         if output_gate is not None:
             gate = dict(
@@ -157,5 +168,11 @@ class RelayAffinePrefix:
             sequence_parallel_axis=self.axis,
             entry_memory_config=self.entry_memory_config,
             compute_kernel_config=self.compute_config,
+            leave_final_in_landing=leave_final_in_landing,
             **gate,
         )
+
+    @property
+    def final_semaphore(self):
+        """The first rank's arrival counter of the last rank's final state (one count per tile column)."""
+        return self.semaphores[1]
