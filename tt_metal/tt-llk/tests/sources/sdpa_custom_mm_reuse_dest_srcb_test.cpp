@@ -173,7 +173,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // dst_index here is a TILE index (datacopy writes 32x32 tiles), so ceil(KT_DIM/2)
     // tiles hold all KT_DIM 16-row P chunks the matmul reads at (SRC_INDEX + i*16).
     _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
-        TILE_NUM_FACES, formats.math);
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
     for (std::uint32_t k = 0; k < (KT_DIM + 1) / 2; ++k)
     {
         _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, false>(

@@ -84,7 +84,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Use B2D for all broadcasts except NONE (data in srcB), A2D for NONE (data in srcA)
     constexpr DataCopyType copy_type = (BROADCAST_TYPE == BroadcastType::NONE || unpack_to_dest) ? DataCopyType::A2D : DataCopyType::B2D;
     _llk_math_eltwise_unary_datacopy_init_wrapper_<copy_type, is_fp32_dest_acc_en, BROADCAST_TYPE, is_int_fpu_en, PackMode::Default>(
-        params.num_faces, formats.math);
+        ckernel::make_tensor_shape(params.TEST_FACE_R_DIM, params.TEST_FACE_C_DIM, params.num_faces_r_dim_A, params.num_faces_c_dim_A), formats.math);
     _llk_math_pack_sync_init_<sync_mode, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     for (std::uint32_t block = 0; block < num_blocks; ++block)

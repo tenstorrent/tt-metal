@@ -77,7 +77,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     _llk_math_hw_configure_<false>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, false>();
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, false, BroadcastType::NONE, false, PackMode::Default>(TILE_NUM_FACES, formats.math);
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, false, BroadcastType::NONE, false, PackMode::Default>(
+        ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>();
     for (std::uint32_t base = 0; base < params.TILE_CNT; base += DEST_NUM_TILES_FP16_HALF)
     {

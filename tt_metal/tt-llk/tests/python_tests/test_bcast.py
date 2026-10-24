@@ -108,7 +108,7 @@ def get_valid_broadcast_types(formats, dest_acc, tile_dimensions):
         # TODO(#47328): Column broadcast for tiny tiles needs kernel support
         if broadcast_type == BroadcastType.Column and tile_dimensions != [32, 32]:
             continue
-        # TODO: pgardner - known WH issue with row broadcast + dest accumulation
+        # Known WH issue with row broadcast + dest accumulation: https://github.com/tenstorrent/tt-llk/issues/1680
         if (
             get_chip_architecture() == ChipArchitecture.WORMHOLE
             and broadcast_type == BroadcastType.Row

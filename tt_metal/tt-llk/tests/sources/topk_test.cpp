@@ -333,7 +333,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         is_fp32_dest_acc_en,
                         BroadcastType::NONE,
                         false /* is_int_fpu_en */,
-                        PackMode::Default>(/*num_rows_per_matrix=*/4, /*math_format=*/math_format);
+                        PackMode::Default>(ckernel::DEFAULT_TENSOR_SHAPE, /*math_format=*/math_format);
 
                     const int first_tile_in_pair_idx = stage_index * NUM_TILES_PER_STAGE;
 
