@@ -47,6 +47,14 @@ void kernel_main() {
     constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::USE_ATTENTION_SINK) != 0;
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_ATTENTION_SINK);
     constexpr uint32_t cb_sink_scratch = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SINK_SCRATCH);
+    constexpr bool split_k = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::SPLIT_K) != 0;
+    constexpr uint32_t cb_send_out = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SEND_OUT);
+    constexpr uint32_t cb_send_max = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SEND_MAX);
+    constexpr uint32_t cb_send_sum = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SEND_SUM);
+    constexpr uint32_t cb_recv_out = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_OUT);
+    constexpr uint32_t cb_recv_max = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_MAX);
+    constexpr uint32_t cb_recv_sum = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_SUM);
+    constexpr uint32_t cb_merge_ctrl = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_MERGE_CTRL);
     constexpr auto out_args =
         TensorAccessorArgs<sparse_sdpa::writer_ct_arg::END, sparse_sdpa::writer_common_arg::END>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
@@ -54,8 +62,12 @@ void kernel_main() {
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
 
     const uint32_t out_addr = get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::OUTPUT_ADDRESS);
-    const uint32_t tok_start = get_arg_val<uint32_t>(0);
-    const uint32_t tok_count = get_arg_val<uint32_t>(1);
+    const uint32_t tok_start = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::TOK_START);
+    const uint32_t tok_count = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::TOK_COUNT);
+    const uint32_t head_c0 = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::HEAD_C0);
+    const uint32_t tail_c1 = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::TAIL_C1);
+    const uint32_t prev_noc_x = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::PREV_NOC_X);
+    const uint32_t prev_noc_y = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::PREV_NOC_Y);
     const uint32_t kv_addr =
         get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_ADDRESS);  // dual-NoC K-half gather
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
@@ -147,10 +159,30 @@ void kernel_main() {
         }
     }
 
-    for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
-        // K-gather phase: process this token's active chunks (reader signals per chunk; is_last ends the token).
+    // split-K: the neighbour (core i+1) NoC-writes its HEAD state straight into our cb_recv_* bases, which are the
+    // same L1 addresses on every core (identical CB layout); capture them before any local FIFO movement.
+    experimental::CB recv_out_cb(cb_recv_out), recv_max_cb(cb_recv_max), recv_sum_cb(cb_recv_sum);
+    experimental::CB send_out_cb(cb_send_out), send_max_cb(cb_send_max), send_sum_cb(cb_send_sum);
+    experimental::CB merge_ctrl_cb(cb_merge_ctrl);
+    constexpr uint32_t sqt = H / tt::constants::TILE_HEIGHT;
+    constexpr uint32_t state_tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);  // bf16 flash state
+    uint32_t recv_out_l1 = 0, recv_max_l1 = 0, recv_sum_l1 = 0;
+    if constexpr (split_k) {
+        recv_out_l1 = recv_out_cb.get_write_ptr();
+        recv_max_l1 = recv_max_cb.get_write_ptr();
+        recv_sum_l1 = recv_sum_cb.get_write_ptr();
+    }
+    const uint32_t head_segs = head_c0 != 0 ? 1u : 0u;
+    const uint32_t n_segs = head_segs + tok_count + (tail_c1 != 0 ? 1u : 0u);
+    for (uint32_t seg = 0; seg < n_segs; ++seg) {
+        const bool is_head = seg < head_segs;
+        const uint32_t f = seg - head_segs;
+        const uint32_t tok = is_head ? tok_start - 1 : tok_start + f;
+        const bool is_tail = !is_head && f >= tok_count;
+        // K-gather phase: process this segment's active chunks (reader signals per slab; is_last ends it).
         // Gather rows [0,split) on the writer's NoC into the reader-reserved destination, then ack.
         bool last = false;
+        bool empty = false;
         while (!last) {
             kreq_cb.wait_front(1);
             uint32_t base, split, dst_l1, scale_dst_l1 = 0;
@@ -161,11 +193,15 @@ void kernel_main() {
                 split = request[sparse_sdpa::gather_request::SPLIT];
                 last = request[sparse_sdpa::gather_request::IS_LAST] != 0;
                 dst_l1 = request[sparse_sdpa::gather_request::DST_L1];
+                empty = request[sparse_sdpa::gather_request::EMPTY] != 0;
                 if constexpr (scaled_kv) {
                     scale_dst_l1 = request[sparse_sdpa::gather_request::SCALE_DST_L1];
                 }
             }
             kreq_cb.pop_front(1);
+            if (empty) {
+                break;  // empty HEAD segment: no gather, no ack
+            }
             if constexpr (scaled_kv) {
                 sparse_sdpa::trid_ring_gather<
                     block_cyclic,
@@ -209,6 +245,53 @@ void kernel_main() {
             }
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
+        }
+        if constexpr (split_k) {
+            if (is_head) {
+                // Ship this HEAD's unnormalized state to core i-1 (which owns the token's first chunks).
+                const uint32_t sem_l1 = get_semaphore(0);
+                const uint64_t prev_sem = get_noc_addr(prev_noc_x, prev_noc_y, sem_l1);
+                if (empty) {
+                    noc_semaphore_inc(prev_sem, sparse_sdpa::SPLIT_PARTIAL_EMPTY);
+                } else {
+                    send_out_cb.wait_front(sqt * vDHt);
+                    send_max_cb.wait_front(sqt);
+                    send_sum_cb.wait_front(sqt);
+                    noc_async_write(
+                        send_out_cb.get_read_ptr(),
+                        get_noc_addr(prev_noc_x, prev_noc_y, recv_out_l1),
+                        sqt * vDHt * state_tile_bytes);
+                    noc_async_write(
+                        send_max_cb.get_read_ptr(), get_noc_addr(prev_noc_x, prev_noc_y, recv_max_l1), sqt * state_tile_bytes);
+                    noc_async_write(
+                        send_sum_cb.get_read_ptr(), get_noc_addr(prev_noc_x, prev_noc_y, recv_sum_l1), sqt * state_tile_bytes);
+                    noc_async_write_barrier();
+                    noc_semaphore_inc(prev_sem, sparse_sdpa::SPLIT_PARTIAL_VALID);
+                    send_out_cb.pop_front(sqt * vDHt);
+                    send_max_cb.pop_front(sqt);
+                    send_sum_cb.pop_front(sqt);
+                }
+                noc_async_atomic_barrier();
+                continue;  // core i-1 writes this token's output
+            }
+            if (is_tail) {
+                // Wait for core i+1's HEAD state (it ran first on that core, so this rarely blocks).
+                volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(0));
+                noc_semaphore_wait_min(sem, 1);
+                const uint32_t v = *sem;
+                noc_semaphore_set(sem, 0);
+                merge_ctrl_cb.reserve_back(1);
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(merge_ctrl_cb.get_write_ptr())[0] = v;
+                merge_ctrl_cb.push_back(1);
+                if (v == sparse_sdpa::SPLIT_PARTIAL_VALID) {
+                    recv_out_cb.reserve_back(sqt * vDHt);
+                    recv_out_cb.push_back(sqt * vDHt);
+                    recv_max_cb.reserve_back(sqt);
+                    recv_max_cb.push_back(sqt);
+                    recv_sum_cb.reserve_back(sqt);
+                    recv_sum_cb.push_back(sqt);
+                }
+            }
         }
         out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
         for (uint32_t h = 0; h < H; ++h) {

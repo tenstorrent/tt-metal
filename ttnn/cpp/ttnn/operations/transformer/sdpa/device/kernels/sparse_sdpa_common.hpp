@@ -68,19 +68,71 @@ constexpr uint32_t SPLIT = 1;
 constexpr uint32_t IS_LAST = 2;
 constexpr uint32_t DST_L1 = 3;
 constexpr uint32_t SCALE_DST_L1 = 4;
-constexpr uint32_t WORD_COUNT = 5;
+constexpr uint32_t EMPTY = 5;  // split-K: the segment has no active chunk (no gather, no ack)
+constexpr uint32_t WORD_COUNT = 6;
 constexpr uint32_t PAGE_BYTES = align_cb_page(WORD_COUNT * sizeof(uint32_t));
 }  // namespace gather_request
 
 // Reader -> compute token control message.
 namespace control_message {
-constexpr uint32_t ACTIVE_CHUNKS = 0;
+constexpr uint32_t ACTIVE_CHUNKS = 0;  // active chunks in THIS segment (whole token unless split-K)
 constexpr uint32_t VALID_KEYS = 1;
-constexpr uint32_t WORD_COUNT = 2;
+constexpr uint32_t CHUNK_BASE = 2;  // first (global) chunk index of the segment
+constexpr uint32_t SEG_KIND = 3;    // seg_kind::*
+constexpr uint32_t WORD_COUNT = 4;
 constexpr uint32_t PAGE_BYTES = align_cb_page(WORD_COUNT * sizeof(uint32_t));
 }  // namespace control_message
 
 constexpr uint32_t ACK_PAGE_BYTES = CB_PAGE_ALIGNMENT;
+
+// Split-K work distribution (S > cores, S % cores != 0): the (token, chunk) units are dealt contiguously over the
+// cores, so a token may straddle two neighbouring cores. Core i runs, in order: an optional HEAD segment (the last
+// chunks of token full_start-1; its unnormalized flash state is sent to core i-1), its FULL tokens, and an optional
+// TAIL segment (the first chunks of token full_start+full_count; core i+1's HEAD state is merged in before the
+// normalize). Per-core runtime args after (tok_start, tok_count): head_c0 (0 = none), tail_c1 (0 = none), and the
+// NoC xy of core i-1 (HEAD destination).
+namespace seg_kind {
+constexpr uint32_t FULL = 0;
+constexpr uint32_t HEAD = 1;
+constexpr uint32_t TAIL = 2;
+}  // namespace seg_kind
+namespace split_rt_arg {
+enum : uint32_t { TOK_START = 0, TOK_COUNT, HEAD_C0, TAIL_C1, PREV_NOC_X, PREV_NOC_Y, END };
+}
+// Semaphore values written by the HEAD sender into core i-1's semaphore.
+constexpr uint32_t SPLIT_PARTIAL_EMPTY = 1;
+constexpr uint32_t SPLIT_PARTIAL_VALID = 2;
+
+// Perf-ablation / profiling bitmask (host: SPARSE_SDPA_DBG env -> kernel define SPARSE_SDPA_DBG). Debug only.
+namespace dbg {
+constexpr uint32_t NO_GATHER = 1u;        // reader/writer skip the KV-row NoC reads (compute-only timing)
+constexpr uint32_t NO_COMPUTE = 2u;       // compute only drains the CBs (gather-only timing)
+constexpr uint32_t PROF_COMPUTE = 4u;     // per-chunk compute phase zones (<=1 token/core or markers overflow)
+constexpr uint32_t PROF_READER = 8u;      // per-slab reader zones
+constexpr uint32_t NO_DEQUANT_MUL = 16u;  // skip the latent * scale multiply (timing only; wrong numerics)
+constexpr uint32_t NO_KTILIZE = 32u;      // skip the latent/rope tilize (timing only; wrong numerics)
+constexpr uint32_t PROF_READER_GATHER = 64u;  // per-slab reader zone around the gather + writer join
+constexpr uint32_t PROF_COMPUTE_WAIT = 128u;  // per-slab compute zone around the K-row wait
+#if defined(SPARSE_SDPA_DBG)
+constexpr uint32_t MASK = SPARSE_SDPA_DBG;
+#else
+constexpr uint32_t MASK = 0;
+#endif
+}  // namespace dbg
+#if !defined(KERNEL_BUILD)
+}  // namespace sparse_sdpa
+#include <cstdlib>
+namespace sparse_sdpa {
+inline uint32_t debug_mask() {
+    const char* v = std::getenv("SPARSE_SDPA_DBG");
+    return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
+}
+// Split-K work distribution (prototype): SPARSE_SDPA_SPLITK=1 enables, unset/0 keeps the whole-token split.
+inline bool split_k_enabled() {
+    const char* v = std::getenv("SPARSE_SDPA_SPLITK");
+    return v != nullptr && v[0] == '1';
+}
+#endif
 
 // Compile-time argument positions. The factory checks the vector size against each END value before appending
 // TensorAccessorArgs, while the kernels use the same names to decode the stream.
@@ -110,6 +162,7 @@ enum : uint32_t {
     PACKED_ROW_BYTES,
     CB_KREQ,
     CB_KACK,
+    SPLIT_K,
     END,
 };
 }  // namespace reader_ct_arg
@@ -139,6 +192,14 @@ enum : uint32_t {
     USE_ATTENTION_SINK,
     CB_ATTENTION_SINK,
     CB_SINK_SCRATCH,
+    SPLIT_K,
+    CB_SEND_OUT,
+    CB_SEND_MAX,
+    CB_SEND_SUM,
+    CB_RECV_OUT,
+    CB_RECV_MAX,
+    CB_RECV_SUM,
+    CB_MERGE_CTRL,
     END,
 };
 }  // namespace writer_ct_arg
@@ -180,6 +241,16 @@ enum : uint32_t {
     PACKED_ROW_BYTES,
     USE_ATTENTION_SINK,
     CB_ATTENTION_SINK,
+    SPLIT_K,
+    CB_SEND_OUT,
+    CB_SEND_MAX,
+    CB_SEND_SUM,
+    CB_RECV_OUT,
+    CB_RECV_MAX,
+    CB_RECV_SUM,
+    CB_MERGE_CTRL,
+    CB_MMAX,
+    CB_CORR2,
     END,
 };
 }  // namespace compute_ct_arg
