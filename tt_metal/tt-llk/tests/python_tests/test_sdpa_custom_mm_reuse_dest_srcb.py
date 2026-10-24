@@ -41,8 +41,8 @@ asserted on. Within that face the op reproduces the P@V matmul correctly on the
 TOP 8 rows (the [1, N] "single output row" the header comments describe, broadcast
 across the top face-row band): with an M-invariant stimulus (P constant across its
 M and K axes) the top 8 rows x 16 cols match the tiled MatmulGolden bit-exactly on
-ttsim (maxdiff 0.0 for LoFi; HiFi4 differs only by the usual fidelity rounding,
-which passed_test's tolerance absorbs). The BOTTOM 8 rows of the face carry an
+ttsim (maxdiff 0.0 for LoFi; the math LLK has no fidelity phases, so only LoFi
+is swept). The BOTTOM 8 rows of the face carry an
 extra accumulation (a MOVD2B 16-row DEST-band fold: for P=V=1 the face is uniform
 and exact, but a column-varying V doubles rows 8..15) -- an op-level layout quirk
 matching the header's "Further work will uplift the custom mm to support tiles
@@ -85,10 +85,13 @@ ELEMENTS_PER_TILE = TILE_DIM * TILE_DIM
 # format-conversion noise on top of the DEST-reuse question being asked.
 FORMATS = input_output_formats([DataFormat.Float16_b], same=True)
 
-# The unpack MOP requires an even kt_dim >= 2 (see the "kt_dim: even number from
-# 2 to 256" note in the unpack LLK header); nt_dim in 1..16. Smallest valid config.
-KT_DIM = 2  # number of P/V K tiles (== chunk_size / ov_kt_dim in sdpa.h)
-NT_DIM = 1  # number of V head-dim tiles (== num_tiles_v in sdpa.h)
+# kt_dim in 1..256: the unpack MOP covers K tiles in pairs and replays an odd last
+# one directly, so odd kt_dim (1, 3, 5, 7) runs that tail, after 0..3 MOP iterations.
+# nt_dim in 1..16. (kt_dim == chunk_size / ov_kt_dim, nt_dim == num_tiles_v in sdpa.h.)
+# kt_dim <= 8 keeps the ceil(kt_dim/2)-tile P preload clear of the O accumulator at
+# DST_TILE in the C++ harness. nt_dim >= 2 misses this harness's golden region on the
+# even-kt_dim path too, so it is not swept here.
+KT_NT_DIMS = [(kt_dim, 1) for kt_dim in range(1, 9)]
 
 # The op writes a single 16x16 face (face 0) of output tile 0. Within that face only
 # the top 8 rows reproduce the P@V golden for an M-invariant stimulus; the bottom 8
@@ -98,17 +101,17 @@ FACE0_TOP_ROWS = 8
 DEFINED_LANES = FACE0_TOP_ROWS * FACE_DIM  # 128
 
 
-def _run(math_fidelity, formats, dest_acc):
+def _run(math_fidelity, formats, dest_acc, kt_dim, nt_dim):
     torch.manual_seed(0)
 
     torch_format = format_dict[formats.output_format]
 
     # V is unpacked into SrcA; P is preloaded into DEST (SrcB). Golden is P @ V.
     # MatmulGolden's operand1 is the lhs (SrcB) and operand2 the rhs (SrcA), which
-    # matches P->SrcB, V->SrcA exactly. Single output tile: P is [32, KT_DIM*32]
-    # (reduced over K), V is [KT_DIM*32, NT_DIM*32] -> C is [32, NT_DIM*32].
-    input_A_dimensions = [TILE_DIM, KT_DIM * TILE_DIM]  # P (lhs): M x K
-    input_B_dimensions = [KT_DIM * TILE_DIM, NT_DIM * TILE_DIM]  # V (rhs): K x N
+    # matches P->SrcB, V->SrcA exactly. Single output tile: P is [32, kt_dim*32]
+    # (reduced over K), V is [kt_dim*32, nt_dim*32] -> C is [32, nt_dim*32].
+    input_A_dimensions = [TILE_DIM, kt_dim * TILE_DIM]  # P (lhs): M x K
+    input_B_dimensions = [kt_dim * TILE_DIM, nt_dim * TILE_DIM]  # V (rhs): K x N
 
     unit_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     # buffer_A carries V (SrcA), buffer_B carries P (goes to DEST). Generate both to
@@ -158,7 +161,7 @@ def _run(math_fidelity, formats, dest_acc):
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=KT_DIM, nt_dim=NT_DIM),
+            SDPA_CUSTOM_MM_REUSE_DEST(kt_dim=kt_dim, nt_dim=nt_dim),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -171,7 +174,7 @@ def _run(math_fidelity, formats, dest_acc):
             formats.output_format,
             tile_count_A=tile_cnt_V,
             tile_count_B=tile_cnt_P,
-            tile_count_res=NT_DIM,
+            tile_count_res=nt_dim,
         ),
         dest_acc=dest_acc,
     )
@@ -186,13 +189,17 @@ def _run(math_fidelity, formats, dest_acc):
 
 
 @parametrize(
-    math_fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
+    # The math LLK implements LoFi only (no fidelity phases), so HiFi4 would only
+    # pass while the HiFi4-vs-LoFi gap stays inside tolerance (it no longer does at kt_dim=7).
+    math_fidelity=[MathFidelity.LoFi],
     formats=FORMATS,
     dest_acc=[DestAccumulation.No],
+    kt_nt_dims=KT_NT_DIMS,
 )
-def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc):
+def test_sdpa_custom_mm_reuse_dest_srcb(math_fidelity, formats, dest_acc, kt_nt_dims):
     """P @ V with SrcB reused from DEST; defined output lanes must match P@V golden."""
-    golden, device = _run(math_fidelity, formats, dest_acc)
+    kt_dim, nt_dim = kt_nt_dims
+    golden, device = _run(math_fidelity, formats, dest_acc, kt_dim, nt_dim)
 
     assert passed_test(golden, device, formats.output_format), (
         "sdpa_custom_mm_reuse_dest_srcb did not reproduce the tiled P@V golden on the "
