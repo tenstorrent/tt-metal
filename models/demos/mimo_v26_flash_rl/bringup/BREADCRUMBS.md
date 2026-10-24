@@ -75,3 +75,11 @@
 - Job attempts 2-6 never reached the code: the container image pull failed (`GHCR ... unauthorized`).
 - Gate: PCC 0.999997, rel vs CPU 0.00176 (limit 0.0035), auto_margin_min 1.98, 1 ttnn op, host FLOPs 0, determinism ok.
 - Re-run: `bfw job check --task C.attn_dense.attn_residual --gate-only`.
+
+## C.attn_dense.ffn_norm (layer 0): PASS
+
+- Reuses `tt/rms_norm.py` `RMSNorm` (the attn_norm module) with `post_attention_layernorm.weight`; wired as `ffn_norm`
+  in `bringup/hooks.py` through `_norm_component`. Output stays on the local `[1, 1, 160, 4096]` residual rows; the
+  TP all_gather the MLP needs belongs to the MLP module.
+- Gate: PCC 0.999996, auto_margin_min 2.49, 1 ttnn op, host FLOPs 0.
+- Re-run: `bfw job check --task C.attn_dense.ffn_norm --gate-only`.

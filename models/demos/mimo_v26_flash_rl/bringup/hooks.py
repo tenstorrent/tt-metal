@@ -127,6 +127,8 @@ def device_component(mesh, spec, layer, step):
         return _attention_component(mesh, spec, layer)
     if step == "attn_residual":
         return _residual_component(mesh)
+    if step == "ffn_norm":
+        return _norm_component(mesh, spec, layer, "post_attention_layernorm.weight")
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
