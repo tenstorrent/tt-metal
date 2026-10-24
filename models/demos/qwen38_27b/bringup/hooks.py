@@ -188,5 +188,25 @@ class _ops_visible:
         return False
 
 
+class _DeviceModel:
+    """The all-device model (tt/model.py:TtModel) as the framework drives it. Each layer call runs through
+    ``_ops_visible`` (harness boundary: the gate's device proof counts the ttnn ops of one layer); everything else is
+    the model's own."""
+
+    def __init__(self, model):
+        self.model = model
+        self.load_seconds = model.load_seconds
+
+    def __getattr__(self, name):
+        return getattr(self.model, name)
+
+    def layer(self, i, h, start, state, end=None):
+        with _ops_visible():
+            return self.model.layer(i, h, start, state, end=end)
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    raise NotImplementedError("assemble stage: no device model yet")
+    from models.demos.qwen38_27b.tt.model import TtModel
+
+    chunk, max_seq = int(spec.get("target.chunk")), int(spec.get("target.seq"))
+    return _DeviceModel(TtModel(mesh, spec.hf_dir, list(layers), chunk, max_seq, lm_head=lm_head))

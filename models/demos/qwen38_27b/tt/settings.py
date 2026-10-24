@@ -62,6 +62,9 @@ TABLE = {
     ),
     "ATTN_SDPA_K_CHUNK": Setting(64, (64, 128, 256), "ring SDPA k chunk; see ATTN_SDPA_Q_CHUNK"),
     "ATTN_RING_LINKS": Setting(1, (1, 2), "fabric links of the ring SDPA's KV all-gather over axis 0"),
+    "KV_SLOTS": Setting(
+        2, (1, 2), "request slots of the served state (serving_answers slots: 2); KV user-major, slot * n_attn + layer"
+    ),
 }
 
 MAX_PRECISION = {

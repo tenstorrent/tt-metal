@@ -163,9 +163,9 @@ class TtGatedAttention:
         self.cos = up(emb.cos(), ttnn.bfloat16, row_mapper)  # [1, 1, capacity / sp, rot] per chip
         self.sin = up(emb.sin(), ttnn.bfloat16, row_mapper)
 
-        self.ring = _Ring.shared(mesh, capacity, hd)
+        grid = mesh.compute_with_storage_grid_size()
         self.sdpa_pc = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.ring.sdpa_grid,
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # the ring's CCL takes the last column
             q_chunk_size=settings.get("ATTN_SDPA_Q_CHUNK"),
             k_chunk_size=settings.get("ATTN_SDPA_K_CHUNK"),
             exp_approx_mode=False,
@@ -173,20 +173,25 @@ class TtGatedAttention:
         self.links = settings.get("ATTN_RING_LINKS")
 
     # ---- cache (host <-> device: load time and the harness boundary only)
-    def new_cache(self, num_layers: int = 1, slots: int = 1) -> KvCache:
-        return self.cache_from_host(None, None, 0, num_layers, slots)
+    def new_cache(self, num_layers: int = 1, slots: int = 1, capacity: int | None = None) -> KvCache:
+        return self.cache_from_host(None, None, 0, num_layers, slots, capacity=capacity)
 
-    def cache_from_host(self, key, value, length: int, num_layers: int = 1, slots: int = 1, layer: int = 0) -> KvCache:
+    def cache_from_host(
+        self, key, value, length: int, num_layers: int = 1, slots: int = 1, layer: int = 0, capacity: int | None = None
+    ) -> KvCache:
         """key, value [n_kv, >= length, hd] in natural order (the reference's layout), positions [0, length) valid; the
-        rest of the cache is zero. Written into slot 0, layer ``layer``."""
+        rest of the cache is zero. Written into slot 0, layer ``layer``. ``capacity``: tokens per slot (a multiple of
+        the chunk, at most the module's; default the module's)."""
         rows, cols = self.sp, self.tp
-        local = self.capacity // rows
-        idx = blockcyclic_positions(rows, self.chunk, self.capacity)
+        capacity = capacity or self.capacity
+        assert capacity % self.chunk == 0 and capacity <= self.capacity, capacity
+        local = capacity // rows
+        idx = blockcyclic_positions(rows, self.chunk, capacity)
         mapper = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=(rows, cols), dims=(2, 1))
         mem = kv_memory_config(self.mesh, self.hd)
 
         def one(t):
-            full = torch.zeros(slots * num_layers, self.cfg.n_kv, self.capacity, self.hd)
+            full = torch.zeros(slots * num_layers, self.cfg.n_kv, capacity, self.hd)
             if t is not None and length:
                 full[layer, :, :length] = t[:, :length].float()
             dev = full[:, :, idx].reshape(slots * num_layers, cols, rows * local, self.hd)
@@ -199,16 +204,21 @@ class TtGatedAttention:
                 mesh_mapper=mapper,
             )
 
-        return KvCache(k=one(key), v=one(value), num_layers=num_layers, capacity=self.capacity)
+        _Ring.shared(self.mesh, capacity, self.hd)  # the ring's scratch for this capacity, at load time
+        return KvCache(k=one(key), v=one(value), num_layers=num_layers, capacity=capacity)
 
     # ---- forward
-    def __call__(self, x, cache: KvCache, start: int, slot: int = 0, layer: int = 0) -> ttnn.Tensor:
+    def __call__(self, x, cache: KvCache, start: int, slot: int = 0, layer: int = 0, end: int | None = None):
         """x: this chunk's rows [1, 1, 640, H]; ``start``: the chunk's first absolute position (a multiple of the
-        chunk); K/V go to (slot, layer) of ``cache``."""
+        chunk); K/V go to (slot, layer) of ``cache``. ``end``: the chunk's actual_end (rows at or past it are pad):
+        only K/V rows [start, end) are written and the pad rows of the last 32-token record are zeroed."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         T, nq, nkv, hd, rot = x.shape[-2], self.nq, self.nkv, self.hd, self.rot
         assert T == self.local_rows and start % self.chunk == 0, f"{T} rows at {start}"
-        assert start + self.chunk <= cache.capacity
+        assert start + self.chunk <= cache.capacity <= self.capacity
+        end = start + self.chunk if end is None else end
+        assert start < end <= start + self.chunk, f"actual_end {end} outside the chunk at {start}"
+        ring = _Ring.shared(self.mesh, cache.capacity, hd)
 
         qkvg = ttnn.linear(x, self.w_qkvg, dtype=ttnn.bfloat16, compute_kernel_config=self.mm_cfg, memory_config=dram)
         qkv = ttnn.slice(qkvg, (0, 0, 0, 0), (1, 1, T, self.qkv_width), memory_config=dram)
@@ -227,6 +237,7 @@ class TtGatedAttention:
         ttnn.deallocate(cos)
         ttnn.deallocate(sin)
 
+        partial = end < start + self.chunk
         for c, t in ((cache.k, k), (cache.v, v)):
             t8 = ttnn.typecast(t, ttnn.bfloat8_b, memory_config=dram)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -237,7 +248,19 @@ class TtGatedAttention:
                 num_layers=cache.num_layers,
                 kv_actual_global=start,
                 cluster_axis=self.sp_axis,
+                **({"valid_global": end} if partial else {}),
             )
+            if end % KV_RECORD:
+                ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
+                    c,
+                    slot_idx=slot,
+                    layer_idx=layer,
+                    num_layers=cache.num_layers,
+                    valid_global=end,
+                    chunk_size_global=self.chunk,
+                    cluster_axis=self.sp_axis,
+                    pad_align=KV_RECORD,
+                )
             ttnn.deallocate(t8)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
@@ -249,20 +272,20 @@ class TtGatedAttention:
             None,
             None,
             None,
-            persistent_output_buffer_k=self.ring.gathered[0],
-            persistent_output_buffer_v=self.ring.gathered[1],
+            persistent_output_buffer_k=ring.gathered[0],
+            persistent_output_buffer_v=ring.gathered[1],
             joint_strategy="rear",
             logical_n=start + self.chunk,
             program_config=self.sdpa_pc,
             scale=hd**-0.5,
             compute_kernel_config=self.sdpa_cfg,
             dim=2,
-            multi_device_global_semaphore=self.ring.semaphores,
+            multi_device_global_semaphore=ring.semaphores,
             num_links=self.links,
             cluster_axis=self.sp_axis,
             mesh_device=self.mesh,
             topology=ttnn.Topology.Linear,
-            ccl_core_grid_offset=self.ring.ccl_offset,
+            ccl_core_grid_offset=ring.ccl_offset,
             use_column_major_ccl=True,
             is_causal=True,
             is_balanced=False,

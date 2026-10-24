@@ -92,3 +92,22 @@
 - Gate: PCC 0.999982; vs CPU rel 0.0042 (limit 0.0142); vs golden rel 0.0059 (limit 0.0183); chunk0 / layer0 /
   mixed / small / big all pass; auto_margin_min 1.21; 27 device ops, host FLOPs 0; bit-identical determinism.
   Re-run: `bfw job check --task C.attn.attention --gate-only`.
+
+## M.1 assemble (layers 0-3, all on device)
+
+- `tt/model.py:TtModel`: no prior; assembled from the validated modules. Hidden state [1, 1, 640, 5120] bf16 per chip
+  from embedding to final norm. embed: uint32 ids sharded over rows -> `to_layout(TILE)` -> `ttnn.minimum(ids, V - 1)`
+  (0xFFFFFFFF pad id) -> ROW_MAJOR -> `ttnn.embedding` on the replicated bf16 table. Each block runs through
+  `run_block` with the device steps; the block's intermediates are freed after it. lm_head bfp8, vocab split over TP,
+  gathered on the host in `logits` (harness boundary).
+- `TtState`: one served KV cache for all attention layers (bfp8, ND-sharded [1, 1, 32, 256] ROUND_ROBIN_1D,
+  batch = slot * n_attn + attention ordinal, `KV_SLOTS` = 2) and per (slot, linear layer) a GdnState (conv bf16,
+  recurrent fp32). `formats()` / `device_tensors()` for the contract; `to_torch` / `load_prefix` at the harness
+  boundary. Start 0 runs the linear layers from a load-time zero state (a slot reused by a new request resets).
+- actual_start / actual_end are replicated uint32 scalars built once (one per chunk-aligned position, at
+  `new_state`): no host transfer inside `layer`.
+- Pad tail (contract): attention writes K/V with `update_padded_kv_cache(valid_global=end)` and zeroes the last
+  record with `zero_padded_kv_cache(pad_align=32)`; GDN gets `actual_end` on the conv (carry cut at the end) and
+  g = beta = 0 on pad rows (a device mask `row_offset < end - start` built at load), so the recurrent state skips them.
+- `bringup/hooks.py:device_model` wraps TtModel; only `layer` runs under `_ops_visible` (device-op proof).
+- Re-run: `bfw job check --task M.1 --gate-only`.

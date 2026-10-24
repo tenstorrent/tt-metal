@@ -190,6 +190,12 @@ class TtGatedDeltaNet:
         self.place = up(place, ttnn.bfloat16, rep)
         self.fold_eye = up(torch.eye(dv).expand(nv, dv, dv).contiguous(), ttnn.float32, rep)
         self.const_tiles = self._delta_const_tiles(up, rep)
+        # each local row's offset inside the chunk (mesh row r holds offsets [r * T, (r + 1) * T)): the pad mask of a
+        # chunk that ends early is offset < actual_end - actual_start, one device compare
+        offsets = torch.arange(rows * local_rows, dtype=torch.float32).reshape(1, -1, 1)
+        self.row_offset = up(
+            offsets, ttnn.float32, ttnn.ShardTensor2dMesh(mesh, mesh_shape=(rows, cols), dims=(1, None))
+        )
 
     @staticmethod
     def _delta_const_tiles(up, rep):
@@ -260,7 +266,10 @@ class TtGatedDeltaNet:
         return ttnn.typecast(y, ttnn.bfloat16, memory_config=dram)
 
     # ---- forward
-    def __call__(self, x, state: GdnState, actual_start) -> tuple[ttnn.Tensor, GdnState]:
+    def __call__(self, x, state: GdnState, actual_start, valid: int | None = None, actual_end=None):
+        """``valid``: real rows of this chunk (actual_end - actual_start; None = the whole chunk) and ``actual_end`` its
+        replicated uint32 device scalar. Pad rows get g = beta = 0 (an identity step of the delta rule), so neither
+        the recurrent state nor the conv carry (cut at actual_end) absorbs them."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         T = x.shape[-2]
         nk, nv, dk, dv, kd, vd = self.nk, self.nv, self.dk, self.dv, self.kd, self.vd
@@ -280,6 +289,7 @@ class TtGatedDeltaNet:
             actual_start=actual_start,
             exchange_buffer=self.exchange.buffer,
             exchange_semaphores=self.exchange.semaphores,
+            actual_end=actual_end,
             sequence_parallel_axis=self.sp_axis,
             memory_config=dram,
         )
@@ -299,6 +309,11 @@ class TtGatedDeltaNet:
         ttnn.deallocate(b)
         g = ttnn.slice(g, (0, 0, 0), (1, T, nv), memory_config=dram)
         beta = ttnn.slice(beta, (0, 0, 0), (1, T, nv), memory_config=dram)
+        if valid is not None and valid < self.sp * T:
+            keep = ttnn.lt(self.row_offset, float(valid), memory_config=dram)  # [1, T, 1] 1.0 / 0.0
+            g = ttnn.multiply(g, keep, memory_config=dram)
+            beta = ttnn.multiply(beta, keep, memory_config=dram)
+            ttnn.deallocate(keep)
 
         # fold: v' = [0 | v] per head (exact 0/1 matmul), from S'_0 = [I | 0]
         vf = ttnn.matmul(v, self.place, dtype=ttnn.bfloat16, compute_kernel_config=self.exact_cfg, memory_config=dram)
