@@ -1035,6 +1035,19 @@ class DSV41PrefillModel:
             self.begin_chunk(s0, C)
         return ops
 
+    def record_upload(self, prepped, C):
+        """The token-dependent half of ``record_window`` alone (Engram rows / tokens uploads): recorded ahead of the call that uses it (``lookahead``)."""
+        with recording() as ops:
+            self.upload_inputs(prepped, self._bufs[C])
+        return ops
+
+    def record_begin(self, s0, C, active):
+        """The position / user dependent half of ``record_window`` alone (RoPE tables, masks, hand-off index tables: ``begin_chunk``)."""
+        self.active_mask = torch.as_tensor(active).bool()
+        with recording() as ops:
+            self.begin_chunk(s0, C)
+        return ops
+
     def replay_window(self, tokens, hashes, s0, C, active, vis=None, prepped=None, overlap=None, ops=None, sync=True):
         """One replay of the captured chunk trace for the window of positions [s0, s0 + C): tokens [B, C] (fillers 0), hashes of the active users only,
         ``active`` bool [B]; ``vis`` (DSV41_VISION=1): (image mask [B, C] bool, embedding override [B, C, dim] bf16) or None. Returns (host seconds, device seconds).

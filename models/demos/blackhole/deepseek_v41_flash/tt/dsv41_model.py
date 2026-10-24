@@ -11,6 +11,7 @@ history, per-user positions, device token feedback).
 
 import functools
 import gc
+import hashlib
 import json
 import os
 import time
@@ -67,6 +68,15 @@ def UNI_LAYERS(layer_ids):
 from models.demos.blackhole.deepseek_v41_flash.tt.prefill_model import T
 
 GATE_CUTOFFS = json.loads((Path(__file__).resolve().parents[1] / "configs" / "gate_cutoffs.json").read_text())
+
+
+class _UpOnly:
+    """marker: the recorded upload ops of the token half of a window (``Model._one`` lookahead); the position half is recorded when the window starts"""
+
+    __slots__ = ("ops",)
+
+    def __init__(self, ops):
+        self.ops = ops
 
 
 def window_needs_sync(users, C, async_win, apc_wants=None, vis=None):
@@ -1531,6 +1541,7 @@ class Model:
             C, S_pad
         ):  # (re)captured: the carried state of every user is gone, the decode trace shares the freed DRAM
             resume.clear()
+            self.__dict__.pop("_look", None)
             if getattr(self, "apc", None) is not None:
                 self.apc.clear()  # (the FIFO geometry follows S_pad)
             self.__dict__.pop("pf_slot_of", None)
@@ -1565,6 +1576,7 @@ class Model:
         )  # (deferred snapshots need the asynchronous windows: their reads are ordered by the queue, not by a host wait)
         t_apc_ovl = [0.0]  # seconds of snapshot completions run while the device replays a window
         early_bk = os.environ.get("DSV41_PF_EARLY_BK", "1") == "1"
+        lookahead = os.environ.get("DSV41_PF_LOOKAHEAD", "1") == "1"
         t_first = 0.0  # host seconds of window builds that were not overlapped with a replay
         t_pre = time.perf_counter() - t_start
         per_row = (
@@ -1645,6 +1657,12 @@ class Model:
                                 ovr = torch.zeros(rows * Up, C, vs.dim, dtype=torch.bfloat16) if ovr is None else ovr
                                 img[slot_of[b], :n], ovr[slot_of[b], :n] = m_, emb_
                         vw = (img, ovr) if ovr is not None else None
+                    look = self.__dict__.pop(
+                        "_look", None
+                    )  # (hashes / Engram rows of this window built during the previous call's last replay: ``_look_build``)
+                    if look is not None and vw is None and look[0] == _look_key(part, k):
+                        pm.timing["lookahead_hits"] = pm.timing.get("lookahead_hits", 0) + 1
+                        return part, active, lens, tok, slot_b, vw, look[1], look[2], 0.0, s0v, _UpOnly(look[3])
                     th0 = time.perf_counter()
                     if self.host_rows is not None:
                         hs = self.hasher(
@@ -1701,6 +1719,61 @@ class Model:
 
                 bk_done = set()
 
+                def _fp(t_, s0_, n_):
+                    # fingerprint of the tokens a window hashes: the window and the 16 tokens before it (the n-gram context of the hash: max_ngram_size - 1 tokens, checked below): a different request that reuses the
+                    # user / slot at the same position can never take another prompt's inputs
+                    return hashlib.blake2b(t_[max(0, s0_ - 16) : s0_ + n_].numpy().tobytes(), digest_size=12).digest()
+
+                def _look_key(part_, k_):
+                    return (C,) + tuple(
+                        sorted(
+                            (
+                                slot_of[it_[0]],
+                                it_[0],
+                                s0_of(it_, k_),
+                                min(it_[3] - s0_of(it_, k_), C),
+                                _fp(it_[1], s0_of(it_, k_), min(it_[3] - s0_of(it_, k_), C)),
+                            )
+                            for it_ in part_
+                        )
+                    )
+
+                def _look_build():
+                    """The NEXT call's first window, token part: when a user's chunk ended on a chunk boundary and the tokens passed for it go further (the plugin sends the whole prompt, or at least the tokens
+                    of the longest user of the call), its next window is [e, e + n) of those tokens whatever the next call's end is. The Engram hashes + rows and their uploads are built NOW, during the last
+                    replay of this call (the first window of a call has nothing to hide behind), and used by the next call's first window iff it asks for exactly the same (slot, user, start, length) set.
+                    """
+                    ent = [
+                        it_
+                        for it_ in wave
+                        if it_[3] % C == 0 and it_[1].numel() > it_[3] and not (vis and it_[0] in vis)
+                    ]
+                    if not ent or self.host_rows is None or self.hasher.st.layout.max_ngram_size > 17:
+                        return
+                    t_l0 = time.perf_counter()
+                    tok_l = self._filler_tokens(rows * Up, C).clone()
+                    act_l, slot_l, s0_l, key_l = (
+                        torch.zeros(rows * Up, dtype=torch.bool),
+                        [None] * (rows * Up),
+                        [0] * (rows * Up),
+                        [],
+                    )
+                    for b_, t_, st_, e_ in ent:
+                        sl_, n_ = slot_of[b_], min(t_.numel() - e_, C)
+                        tok_l[sl_, :n_] = t_[e_ : e_ + n_]
+                        tok_l[sl_, n_:] = t_[e_ + n_ - 1]
+                        act_l[sl_], slot_l[sl_], s0_l[sl_] = True, b_, e_
+                        key_l.append((sl_, b_, e_, n_, _fp(t_, e_, n_)))
+                    idx_l = act_l.nonzero().reshape(-1)
+                    hs_l = self.hasher(
+                        tok_l[idx_l],
+                        torch.tensor([s0_l[i] for i in idx_l.tolist()], dtype=torch.long),
+                        rows=torch.tensor([slot_l[i] for i in idx_l.tolist()]),
+                    )
+                    prepped_l = pm.prep_inputs(tok_l, hs_l, idx_l, vis=None)
+                    self._look = ((C,) + tuple(sorted(key_l)), hs_l, prepped_l, pm.record_upload(prepped_l, C))
+                    pm.timing["lookahead_build"] = pm.timing.get("lookahead_build", 0.0) + time.perf_counter() - t_l0
+
                 ahead = {}
                 if (
                     pm.__dict__.get("build_prof") is not None
@@ -1725,6 +1798,12 @@ class Model:
                         continue
                     part, active, lens, tok, slot_b, vw, hs, prepped, th_h, s0v = bw[:10]
                     rec_ops = bw[10] if len(bw) > 10 else None
+                    if isinstance(
+                        rec_ops, _UpOnly
+                    ):  # (the token half of the uploads was recorded during the previous call: add the position half now)
+                        self.sink.set_lengths(lens)
+                        self.sink.set_map(slot_b if general else None)
+                        rec_ops = rec_ops.ops + pm.record_begin(s0v if per_row else k, C, active)
                     s0 = s0v if per_row else k
                     t_hash += th_h
                     self.sink.set_lengths(lens)
@@ -1754,6 +1833,8 @@ class Model:
                                 if it_[3] % C == 0 and it_[3] < self.max_ctx - 1:
                                     nxt[slot_of[it_[0]]] = it_[3]
                             pm.dyn.prebuild(nxt)
+                            if lookahead:
+                                _look_build()
                         for kn in win_keys[k_s0 + 1 :]:
                             nbw = _build(kn)
                             if nbw is None:
