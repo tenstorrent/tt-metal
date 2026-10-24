@@ -13,23 +13,6 @@ import os
 from . import gitio
 
 
-_OP_BUDGET = 60_000  # total profiled op invocations one capture should not exceed
-
-
-def _coverage_ops_per_step(repo_root, node, case):
-    """The op invocations this model's own coverage probe already counted, or None.
-
-    Shared by the OSL bound and the heavy-axis bound so one cache read is spelled one way; a signal
-    that cannot be read must never block the profile, so every failure answers None.
-    """
-    from .probes import _cc_optimize
-
-    try:
-        return _cc_optimize("run").coverage_cache_get_ops_per_step(repo_root, node, case, allow_stale=True)
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def _capacity_scaled_osl(ctx, repo_root, node, case, declared_osl: int):
     """Shrink the declared OSL for THIS profiling capture when the model's own coverage probe
     already measured enough op invocations per decode step that running the full declared OSL would
@@ -53,9 +36,15 @@ def _capacity_scaled_osl(ctx, repo_root, node, case, declared_osl: int):
     incident this OSL convention was built to prevent) clears the budget at its full declared OSL and
     is left untouched.
     """
-    ops_per_step = _coverage_ops_per_step(repo_root, node, case)
+    from .probes import _cc_optimize
+
+    try:
+        ops_per_step = _cc_optimize("run").coverage_cache_get_ops_per_step(repo_root, node, case, allow_stale=True)
+    except Exception:  # noqa: BLE001 -- a signal that cannot be read must not block the profile
+        ops_per_step = None
     if not ops_per_step or ops_per_step <= 0:
         return None
+    _OP_BUDGET = 60_000  # total profiled op invocations this capture should not exceed
     if ops_per_step * declared_osl <= _OP_BUDGET:
         return None  # cheap enough already at the declared unit -- leave it alone
     from .layer_depth import MIN_TOKEN_WINDOW
@@ -73,71 +62,6 @@ def _capacity_scaled_osl(ctx, repo_root, node, case, declared_osl: int):
     from .profiler_drain import capacity_cadence
 
     return str(osl), str(capacity_cadence())
-
-
-def _read_perf_src(ctx, perf) -> str:
-    """The generated perf test's source, or "" when it cannot be read (then nothing is resized)."""
-    from pathlib import Path
-
-    try:
-        return (Path(gitio.repo_root(ctx.model_root())) / perf).read_text()
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _declared_stages(model_root) -> tuple:
-    """The stage names THE MODEL declares, via the contract's own reader (PIPELINE_STAGES).
-
-    Needed so a per-stage depth/trace knob is recognised as the tool's, not as an invented axis.
-    Read from the model rather than listed here: a model that renames a stage keeps working, and
-    there is no second copy of the spelling to drift.
-    """
-    try:
-        from .model_contract import declared_stage_names
-
-        return tuple(declared_stage_names(model_root) or ())
-    except Exception:  # noqa: BLE001
-        return ()
-
-
-def heavy_axis_scaled(repo_root, node, case, perf_src: str, stages=()):
-    """Size THIS model's own heavy axis to the same op budget the OSL bound uses.
-
-    THE PROFILE MUST SAMPLE THE REQUEST IT RANKS AGAINST -- the rule _capacity_scaled_osl's comment
-    states for tokens, applied to the axis a non-token model actually scales on. The tool drives
-    TT_PERF_OSL_TOKENS and nothing else, so a diffusion/audio/video test's own axis kept the small
-    literal the generator gave it: Qwen-Image-Edit profiled 2 of 50 denoise steps, under-counting
-    denoise 25x, and 77% of its attempts went at the three encoder stages worth 0.8% of per-image
-    time while denoise (98.1%) took 14.5% -- and won 17 of 19, the best rate of any stage.
-
-    Returns (var, value_str) or None. None means "changed nothing", for every case that is not an
-    unambiguous win: no invented axis (every LLM), more than one candidate, or no coverage count.
-
-    CONSERVATIVE BY CONSTRUCTION. The cached count is the probe's WHOLE capture at the test's own
-    default, not the per-unit cost, so the budget multiple is applied as if EVERY op in it scaled
-    with the axis. Nothing in a real model does -- its fixed stages don't repeat -- so the value
-    this returns is an under-estimate of what the budget allows. It can only under-sample, never
-    overrun the capture the budget exists to bound. The axis is never lowered below the default the
-    test chose for itself.
-
-    KNOWN BOUND: the request LENGTH is not discoverable here -- a schedule lives in the model's own
-    inputs, under no name the tool can assume -- so this sizes to the op budget, not to the request.
-    A model cheap enough per unit can therefore be given more units than its real request has, which
-    costs profile time but cannot breach the budget (it is priced as if every op scaled). Sampling
-    past the request is wasteful; sampling a fraction of it is what mis-ranks the run, so the bound
-    errs on the side the budget already bounds.
-    """
-    from .perf_test_gen import model_heavy_axis
-
-    axis = model_heavy_axis(perf_src or "", stages)
-    if not axis:
-        return None
-    var, default = axis
-    ops_per_step = _coverage_ops_per_step(repo_root, node, case)
-    if not ops_per_step or ops_per_step <= 0:
-        return None  # withhold rather than invent, exactly as the OSL bound does
-    value = max(int(default), int(default) * max(1, _OP_BUDGET // ops_per_step))
-    return (var, str(value)) if value > int(default) else None
 
 
 def measure_runs(ctx) -> list[dict]:
@@ -179,22 +103,6 @@ def measure_runs(ctx) -> list[dict]:
     )
     if _scaled:
         xenv["TT_PERF_FLUSH_EVERY"] = _scaled[1]
-    # THE SAME RULE ON THE AXIS THIS MODEL ACTUALLY SCALES ON. Above drives the token axis the tool
-    # owns; a model whose heavy axis is anything else had nobody driving it, so the generated test
-    # kept its own literal and the capture sampled a fraction of the request it ranks against. An
-    # operator who set the var keeps it: explicit always wins, as it does for the OSL above.
-    try:
-        _axis = heavy_axis_scaled(
-            gitio.repo_root(ctx.model_root()),
-            perf,
-            case,
-            _read_perf_src(ctx, perf),
-            _declared_stages(ctx.model_root()),
-        )
-        if _axis and not os.environ.get(_axis[0]):
-            xenv[_axis[0]] = _axis[1]
-    except Exception:  # noqa: BLE001 -- sizing is an optimisation; never block the profile
-        pass
     from .mesh_descriptor import apply_scope
 
     apply_scope(xenv, cfg)
