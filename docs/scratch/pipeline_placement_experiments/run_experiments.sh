@@ -73,6 +73,31 @@ carve_repo() {
     "$PY" "$HERE/carve/carve_bench_repo.py" "${1:-quick}" | tee "$OUT/carve_repo.txt"
 }
 
+# Four SAT encodings of the carve (positions, positions + symmetry breaking, slice-level grouping,
+# grouping + symmetry) against the DFS, on larger and tighter grids. 'open' reruns the cases every
+# solver capped; CARVE_ENCODINGS=dfs,pos limits the columns.
+carve_encodings() {
+    log "Carve SAT encodings vs DFS (${1:-quick}; each solve killed after ${CARVE_TIMEOUT:-20} s)"
+    "$PY" "$HERE/carve/carve_bench_encodings.py" "${1:-quick}" | tee "$OUT/carve_encodings.txt"
+}
+
+# The same single-slice ring instances through the two C++ engines: the resolver search copied out
+# of pipeline_builder.cpp, and solve_topology_mapping (needs libtt_metal from a build newer than
+# the solver sources; set BUILD_DIR, default build_RelWithDebInfo for this group).
+topo() {
+    local bdir="${TOPO_BUILD_DIR:-$TT_METAL_HOME/build_RelWithDebInfo}"
+    local group="${1:-all}"  # all | multi | multi2 | slots | quick
+    log "resolver vs solve_topology_mapping, group $group (${TOPO_TIMEOUT:-60} s cap per solve)"
+    extract_resolver
+    g++ -O2 -std=c++20 -I "$OUT/resolver" -I "$HERE/topo" -o "$OUT/resolver_same_cases" "$HERE/topo/resolver_same_cases.cpp"
+    "$OUT/resolver_same_cases" "$group" | tee "$OUT/topo_resolver_$group.txt"
+    if "$HERE/topo/make_topo_bench.sh" "$bdir" "$OUT/topo_solver_bench"; then
+        "$OUT/topo_solver_bench" "$group" | grep -v "| info" | tee "$OUT/topo_solver_$group.txt"
+    else
+        echo "topo: could not build topo_solver_bench (needs libcadical.a from a tt-metal build and the header-only deps); skipping"
+    fi
+}
+
 planner() {
     : "${TT_BLAZE:?set TT_BLAZE to a tt-blaze checkout}"
     log "Blaze carve planner vs a brute-force ring of rectangles (TT_BLAZE=$TT_BLAZE)"
@@ -140,7 +165,7 @@ quick() {
 cmd="${1:-quick}"
 case "$cmd" in
     setup) setup ;;
-    quick | tier_b | tier_b_designed | tier_b_timing | carve | carve_repo | planner | resolver | resolver_sat)
+    quick | tier_b | tier_b_designed | tier_b_timing | carve | carve_repo | carve_encodings | planner | resolver | resolver_sat | topo)
         need_setup
         "$cmd" "${@:2}"
         ;;

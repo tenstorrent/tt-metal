@@ -1,0 +1,6 @@
+encodings: ['dfs2']  timeout 600s
+random 8x8: 30 stages                     64/64  | dfs2 ???  >600s      
+random 8x8: 34 stages                     64/64  | dfs2 yes   4.408s       
+random 8x16 s1.0: 37 stages              121/128 | dfs2 ???  >600s      
+random 8x16 s1.1: 32 stages              127/128 | dfs2 ???  >600s      
+random 8x16 s1.2: 32 stages              122/128 | dfs2 yes 211.012s       

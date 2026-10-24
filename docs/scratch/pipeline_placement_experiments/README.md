@@ -30,9 +30,11 @@ cd docs/scratch/pipeline_placement_experiments
 | `tier_b_timing` | `tier_b/run3.py`: time of each check, split by outcome | same limits as `tier_b` |
 | `carve` | `carve/carve_bench.py`: ring of rectangles on one grid, DFS vs CaDiCaL | about 10 s |
 | `carve_repo` | `carve/carve_bench_repo.py`: the same on repo-shaped grids | each solve killed after `CARVE_TIMEOUT` (default 30 s); about 35 s with `CARVE_TIMEOUT=5` |
+| `carve_encodings` | `carve/carve_bench_encodings.py`: four SAT encodings (positions, slice-level grouping, each with and without symmetry breaking) vs the DFS on 8x8 to 16x16 grids | 17 cases x 5 solvers, many hit the cap: about 25 min with `CARVE_TIMEOUT=60`; `open` reruns the undecided cases, `sizes` prints clause counts only |
 | `planner` | `carve/carve_probe.py`: blaze's `plan_ring_carve` vs brute force | needs `TT_BLAZE=/path/to/tt-blaze`; seconds |
 | `resolver` | `resolver/bench.cpp`: the resolver search, groups `feas` and `cables` | about 6 s |
 | `resolver_sat` | `resolver/sat.cpp`: a CaDiCaL encoding of the same placement | needs a tt-metal build for CaDiCaL; capped at 60 s |
+| `topo` | `topo/`: the same instances through the resolver and through `solve_topology_mapping` (SAT and DFS engines): single-slice rings (`all`), rings and chains over 2 to 8 meshes of 32 ranks (`multi2`), and pre-carved slots with 2x2, 2x4 and mixed stages (`slots`) | the solver half is built by `topo/make_topo_bench.sh` from the solver's own sources plus `libcadical.a` from a tt-metal build (`TOPO_BUILD_DIR`), with the header-only deps from the CPM cache or `TOPO_DEPS`; 60 s cap per solve, `all` about 25 min, `multi2` about 40 min, `slots` seconds |
 
 The folder is self-contained and can be copied anywhere. Outside a tt-metal checkout, set
 `TT_METAL_HOME` to one (it supplies the MGD files and `mesh_graph_descriptor.proto`). Needs
@@ -130,6 +132,14 @@ fail-fast, as they are for the resolver in section 4.
 
 **Reading.** SAT is no faster when a carve exists and no better when it does not. The slow "no"
 cases fail on a counting argument that a pre-check settles instantly.
+
+A follow-up (`carve_encodings`, table in the 2026-10-23 report) tried a slice-level encoding, where
+each stage is broken down to its slices and grouping rules tie them to one rectangle, with and
+without symmetry breaking. It is slower than the position encoding on every 8x8 case and caps where
+positions finish; the DFS stayed fastest on 9 of the 11 decided cases and lost only on 8x16 and
+16x16 grids packed with identical wide stages. Slice-level propagation and symmetry breaking do
+speed up infeasibility proofs (7x7: 5 s vs 40 s for the DFS), which the lattice pre-check already
+answers in microseconds.
 
 ## 3. Blaze's carve planner
 
