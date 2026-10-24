@@ -16,6 +16,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/tt_metal.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
@@ -415,13 +416,22 @@ MetalEnvDescriptor wormhole_n300_mock_descriptor() {
     return {.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2)};
 }
 
+// disable_mock_mode() only tears down the default context while its device manager is initialized, which is no
+// longer the case once the mesh is closed. Drop it explicitly so later tests in this binary never inherit a mock
+// default context.
 struct LegacyMockCleanup {
     bool active = false;
-    ~LegacyMockCleanup() {
-        if (active) {
-            experimental::disable_mock_mode();
+    void release() {
+        if (!active) {
+            return;
+        }
+        active = false;
+        experimental::disable_mock_mode();
+        if (MetalContext::instance_exists()) {
+            tt::tt_metal::detail::ReleaseOwnership();
         }
     }
+    ~LegacyMockCleanup() { release(); }
 };
 
 }  // namespace
@@ -439,6 +449,33 @@ TEST(MeshDeviceProperties, ExplicitEnvMatchesEnv) {
     mesh->close();
 }
 
+TEST(MeshDeviceProperties, EachMeshUsesItsOwnEnv) {
+    MetalEnv wh_env(wormhole_n300_mock_descriptor());
+    MetalEnv bh_env({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    ASSERT_EQ(wh_env.get_device_properties().arch(), tt::ARCH::WORMHOLE_B0);
+    ASSERT_EQ(bh_env.get_device_properties().arch(), tt::ARCH::BLACKHOLE);
+
+    auto wh_mesh = distributed::MeshDevice::open_mesh_device(
+        wh_env, distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
+    auto bh_mesh = distributed::MeshDevice::open_unit_mesh(bh_env, 0);
+    ASSERT_NE(wh_mesh, nullptr);
+    ASSERT_NE(bh_mesh, nullptr);
+
+    {
+        SCOPED_TRACE("blackhole mesh");
+        EXPECT_EQ(experimental::get_device_properties(*bh_mesh).arch(), tt::ARCH::BLACKHOLE);
+        expect_mesh_matches(*bh_mesh, bh_env.get_device_properties());
+    }
+    {
+        SCOPED_TRACE("wormhole mesh");
+        EXPECT_EQ(experimental::get_device_properties(*wh_mesh).arch(), tt::ARCH::WORMHOLE_B0);
+        expect_mesh_matches(*wh_mesh, wh_env.get_device_properties());
+    }
+
+    bh_mesh->close();
+    wh_mesh->close();
+}
+
 TEST(MeshDeviceProperties, LegacyOpenMatchesEnv) {
     LegacyMockCleanup cleanup;
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, /*num_chips=*/2);
@@ -451,6 +488,10 @@ TEST(MeshDeviceProperties, LegacyOpenMatchesEnv) {
     expect_mesh_matches(*mesh, MetalContext::instance().get_env().get_device_properties());
 
     mesh->close();
+    mesh.reset();
+    cleanup.release();
+    EXPECT_FALSE(experimental::is_mock_mode_registered());
+    EXPECT_FALSE(MetalContext::instance_exists());
 }
 
 TEST(MeshDeviceProperties, OutOfRangeCoordinateThrows) {
