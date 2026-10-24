@@ -9,11 +9,13 @@
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/builder/protected_domain_effect.hpp"
+#include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
+#include <algorithm>
 #include <set>
 #include <string>
 
@@ -282,7 +284,7 @@ void FabricBuilder::create_kernels() {
         router_channels_mask |= (1 << static_cast<uint32_t>(router_chan));
     }
 
-    KernelCreationContext ctx{
+    kernel_creation_context_ = KernelCreationContext{
         .is_2D_routing = fabric_context_.is_2D_routing_enabled(),
         .master_router_chan = master_router_chan_,
         .num_local_fabric_routers = routers_.size(),
@@ -290,8 +292,30 @@ void FabricBuilder::create_kernels() {
     };
 
     for (auto& [eth_chan, router_builder] : routers_) {
-        router_builder->create_kernel(program_, ctx);
+        router_builder->create_kernel(program_, kernel_creation_context_);
     }
+}
+
+void FabricBuilder::build_and_publish_manifest_chip() const {
+    const auto& ctx = kernel_creation_context_;
+    manifest::Chip chip{
+        .z_port_role = z_role_of(chip_facts_.per_direction_capabilities),
+        .local_sync =
+            manifest::LocalSync{
+                .master_eth_chan = ctx.master_router_chan,
+                .num_routers = static_cast<uint32_t>(ctx.num_local_fabric_routers),
+                .router_channels_mask = ctx.router_channels_mask,
+            },
+        .routers = {},
+    };
+    chip.routers.reserve(routers_.size());
+    for (const auto& [eth_chan, router_builder] : routers_) {
+        chip.routers.push_back(router_builder->collect_manifest_router(chip_facts_));
+    }
+    std::sort(chip.routers.begin(), chip.routers.end(), [](const manifest::Router& a, const manifest::Router& b) {
+        return a.identity.eth_chan < b.identity.eth_chan;
+    });
+    builder_context_.publish_manifest_chip(device_->id(), std::move(chip));
 }
 
 }  // namespace tt::tt_fabric
