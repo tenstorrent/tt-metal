@@ -135,12 +135,23 @@ class Flux3KleinPromptEncoder:
             [{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True
         )
 
-    def tokenize(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor, int]:
-        """``(input_ids [1, L] int64, attention_mask [1, L] int64, L)`` by the reference recipe (``text_encoder.py:33-36``)."""
+    def tokenize(self, prompt: str, *, pad_to: int | None = None) -> tuple[torch.Tensor, torch.Tensor, int]:
+        """``(input_ids [1, L] int64, attention_mask [1, L] int64, L)`` by the reference recipe (``text_encoder.py:33-36``).
+        ``pad_to`` (benchmarking, ``Flux3KleinRequest.text_pad_to``) replaces the multiple-of-80 rule with an exact
+        ``L = pad_to``; the rows beyond the real token count are the tokenizer's pad rows exactly as under the
+        default rule (``padding="max_length"``, attention mask 0). ``ValueError`` when ``pad_to`` is below the real
+        token count or above ``MAX_LENGTH``."""
         text = self.render(prompt)
         tokenizer = self._processor.tokenizer
         real = tokenizer(text, return_tensors="pt", truncation=True, max_length=self.MAX_LENGTH)["input_ids"].shape[1]
-        length = padded_text_length(real)
+        if pad_to is None:
+            length = padded_text_length(real)
+        else:
+            length = int(pad_to)
+            if not real <= length <= self.MAX_LENGTH:
+                raise ValueError(
+                    f"text_pad_to {pad_to} must be between the prompt's {real} tokens and {self.MAX_LENGTH}"
+                )
         inputs = tokenizer(text, return_tensors="pt", padding="max_length", truncation=True, max_length=length)
         return inputs["input_ids"], inputs["attention_mask"], length
 
@@ -154,8 +165,8 @@ class Flux3KleinPromptEncoder:
 
     # --- device -------------------------------------------------------------------------------------------------------
 
-    def encode(self, prompt: str) -> Flux3KleinTextEncoding:
-        input_ids, attention_mask, length = self.tokenize(prompt)
+    def encode(self, prompt: str, *, pad_to: int | None = None) -> Flux3KleinTextEncoding:
+        input_ids, attention_mask, length = self.tokenize(prompt, pad_to=pad_to)
         real_length = int(attention_mask.sum())
         cos, sin = self.rope_tables(self.positions(attention_mask))
 
@@ -190,9 +201,10 @@ class Flux3KleinPromptEncoder:
             sp_axis=self._output_sp_axis,
         )
 
-    def encode_host(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
-        """``((L, 20480) bf16 host tensor, ids)``: the reference's return pair (the M4 sampler / golden-parity path)."""
-        encoding = self.encode(prompt)
+    def encode_host(self, prompt: str, *, pad_to: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+        """``((L, 20480) bf16 host tensor, ids)``: the reference's return pair (the M4 sampler / golden-parity path).
+        ``pad_to``: see :meth:`tokenize`."""
+        encoding = self.encode(prompt, pad_to=pad_to)
         rows, ids = self.to_host(encoding)
         ttnn.deallocate(encoding.tokens)
         return rows, ids

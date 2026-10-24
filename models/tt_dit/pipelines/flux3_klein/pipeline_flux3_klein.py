@@ -90,7 +90,14 @@ from ...parallel.manager import CCLManager
 from ...reference.flux3_klein import bbox
 from ...utils import cache, tensor
 from .denoise_flux3_klein import Flux3KleinDenoiser, Flux3KleinDenoiseRequest, Flux3KleinPreparedRequest
-from .packing import FLUX3_KLEIN_IN_CHANNELS, FLUX3_KLEIN_MAX_REFERENCES, image_ids, latent_shape, padded_length
+from .packing import (
+    FLUX3_KLEIN_IN_CHANNELS,
+    FLUX3_KLEIN_MAX_REFERENCES,
+    FLUX3_KLEIN_MAX_TEXT_LENGTH,
+    image_ids,
+    latent_shape,
+    padded_length,
+)
 from .policy import Admission, Flux3KleinAdmissionError, admit
 from .prompt_encoder import Flux3KleinPromptEncoder
 from .references import TOO_MANY_REFERENCES, CropBox, PreparedReferences, open_image, prepare_references
@@ -204,6 +211,12 @@ class Flux3KleinRequest:
     cache: object = None
     """DBCache (cache-dit) for the DiT single stage, eager only: ``None`` (off), a ``Flux3KleinCacheConfig``, a dict
     of its fields, or a spec string such as ``"F8B0:0.08:w8"`` (``cache_flux3_klein.Flux3KleinCacheConfig.from_spec``)."""
+    text_pad_to: int | None = None
+    """Benchmarking only: an EXACT text length. ``None`` (the default) keeps the reference rule (the caption's token
+    count rounded up to a multiple of 80, capped at 4096; ``packing.padded_text_length``). An int makes the resolved
+    ``text_length`` exactly that value: the tokenizer pads the caption to it with the same pad rows the multiple-of-80
+    rule produces (``Flux3KleinPromptEncoder.tokenize``). It must be at least the caption's real token count and at
+    most ``FLUX3_KLEIN_MAX_TEXT_LENGTH``; ``ValueError`` otherwise. Ignored with ``text_override``."""
     """Read the final latent state back to the host (``Flux3KleinResult.final_tokens``; the tests and the sweep's
     replay check need it). A serving request does not: at 4096x4096 that read is ~1.5 s of the ``to_host`` stage
     (sweep 2026-10-21: to_host 1.94 s, of which the uint8 image is ~0.3 s). ``False`` leaves ``final_tokens`` None."""
@@ -230,6 +243,13 @@ class Flux3KleinRequest:
         guidance = defaults["guidance"] if self.guidance is None else float(self.guidance)
         if self.output_format not in OUTPUT_FORMATS:
             raise ValueError(f"output_format {self.output_format!r} not in {OUTPUT_FORMATS}")
+        text_pad_to = None
+        if self.text_pad_to is not None:
+            if isinstance(self.text_pad_to, bool) or int(self.text_pad_to) != self.text_pad_to:
+                raise ValueError(f"text_pad_to must be an int, got {self.text_pad_to!r}")
+            text_pad_to = int(self.text_pad_to)
+            if not 1 <= text_pad_to <= FLUX3_KLEIN_MAX_TEXT_LENGTH:
+                raise ValueError(f"text_pad_to must be in 1..{FLUX3_KLEIN_MAX_TEXT_LENGTH}, got {text_pad_to}")
         if self.text_override is not None:
             text, null = self.text_override
             if (null is None) != flow_map:
@@ -272,6 +292,7 @@ class Flux3KleinRequest:
             crop=prepared.crop,
             prompt_upsampling=bool(self.prompt_upsampling),
             boxes=boxes,
+            text_pad_to=text_pad_to,
         )
 
 
@@ -301,6 +322,8 @@ class Flux3KleinResolved:
     prompt_upsampling: bool = True
     boxes: tuple | None = None
     """The 0-1 layout boxes (validated), or ``None``."""
+    text_pad_to: int | None = None
+    """The request's exact text length override (``Flux3KleinRequest.text_pad_to``), or ``None``."""
 
 
 def caption_seed(caption: str) -> int:
@@ -725,7 +748,9 @@ class Flux3KleinPipeline:
 
             _linear.DTYPE_OVERRIDE, _linear.FIDELITY_OVERRIDE = _dit_weight_override()
             if _linear.DTYPE_OVERRIDE is not None:
-                logger.warning(f"MEASUREMENT PROFILE: DiT linears {_linear.DTYPE_OVERRIDE} fidelity {_linear.FIDELITY_OVERRIDE} (FLUX3_KLEIN_DIT_WEIGHTS)")
+                logger.warning(
+                    f"MEASUREMENT PROFILE: DiT linears {_linear.DTYPE_OVERRIDE} fidelity {_linear.FIDELITY_OVERRIDE} (FLUX3_KLEIN_DIT_WEIGHTS)"
+                )
             try:
                 model = Flux3KleinTransformer(
                     flow_map=variant == "distilled", device=self._device, ccl_manager=ccl, parallel_config=parallel
@@ -815,8 +840,9 @@ class Flux3KleinPipeline:
     def _encode(self, prompt: str) -> TextPair:
         return self._prompt_encoder.encode_host(prompt)
 
-    def text_length(self, prompt: str) -> int:
-        return self._prompt_encoder.tokenize(prompt)[2]
+    def text_length(self, prompt: str, *, pad_to: int | None = None) -> int:
+        """The padded text length of ``prompt`` (the multiple-of-80 rule, or exactly ``pad_to`` when given)."""
+        return self._prompt_encoder.tokenize(prompt, pad_to=pad_to)[2]
 
     # --- the request -----------------------------------------------------------------------------------------------------
 
@@ -832,7 +858,7 @@ class Flux3KleinPipeline:
         if resolved.text_override is not None:
             text_length = int(resolved.text_override[0][0].shape[0])
         else:
-            text_length = self.text_length(caption)
+            text_length = self.text_length(caption, pad_to=resolved.text_pad_to)
         # generate.py:73: an unseeded request hashes the caption (after the upsampler), as upstream's CLI.
         seed = resolved.seed if resolved.seed is not None else caption_seed(caption)
         resolved = replace(resolved, text_length=text_length, seed=seed)
@@ -855,7 +881,7 @@ class Flux3KleinPipeline:
         if resolved.text_override is not None:
             text, null = resolved.text_override
         else:
-            text = layout.prompt_encoder.encode_host(caption)
+            text = layout.prompt_encoder.encode_host(caption, pad_to=resolved.text_pad_to)
             null = None if resolved.flow_map else layout.null_text
         encode_s = time.time() - t0
 
