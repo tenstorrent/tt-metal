@@ -22,7 +22,7 @@ void bind_embedding_backward(nb::module_& mod) {
 
         Args:
             input_tensor (ttnn.Tensor): the input indices tensor.
-            weight (ttnn.Tensor): the embeddings tensor that corresponds to the indices tensor. This tensor is only used to extract the vocabulary size.
+            weight (ttnn.Tensor): the embeddings tensor that corresponds to the indices tensor. Its shape gives the vocabulary size (shape[-2]) and the shape of the returned gradient.
             output_gradient_tensor (ttnn.Tensor): the output gradient tensor from the previous backwards op.
 
 
@@ -33,7 +33,7 @@ void bind_embedding_backward(nb::module_& mod) {
 
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the weight gradient, shaped like `weight`; a preallocated `output_tensor` is returned as given.
 
         Note:
             The input and the output gradient tensors must have the same datatype.
