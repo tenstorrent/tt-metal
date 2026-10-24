@@ -168,7 +168,11 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
     )
     logger.info(f"LANE_LAYER frame per column: {columns}")
     lane_map = lambda d: mesh_config.lane_shard_mapper(mesh_device, d)  # noqa: E731
-    x_tt = ttnn.from_torch(
+    # The layer CONSUMES its hidden-state input (the fused norm chain frees the residual, as the engine's fresh
+    # per-step embedding allows), so the persistent input is cloned per step inside the step itself -- a device
+    # copy the trace records, as the engine's trace embeds its token buffer inside the trace. Window 5b: the
+    # second step's first norm found the first step's freed input (x.device() None).
+    x_in = ttnn.from_torch(
         x_torch, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=lane_map(2)
     )
     rope_pos_tt = ttnn.from_torch(
@@ -182,9 +186,18 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
     )
     cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, CACHE_LEN + 64, layer_idx)
 
+    for name, t in (
+        ("hidden", x_in),
+        ("rope_positions", rope_pos_tt),
+        ("cache_positions", cache_pos_tt),
+        ("page_table", page_table_tt),
+    ):
+        assert t.device() is not None and t.is_allocated(), f"{name}: not a live device tensor"
+
     def step():
+        x_step = ttnn.clone(x_in, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # the layer frees this copy, not x_in
         return tt_layer(
-            x_tt,
+            x_step,
             rope_mats=(cos_tt, sin_tt),
             position_idx=rope_pos_tt,
             page_table=page_table_tt,
@@ -199,6 +212,15 @@ def test_layer_lanes_traced_step(mesh_device, layer_idx, reset_seeds, monkeypatc
     out = step()
     ttnn.synchronize_device(mesh_device)
     ttnn.deallocate(out)
+    for name, t in (
+        ("hidden", x_in),
+        ("rope_positions", rope_pos_tt),
+        ("cache_positions", cache_pos_tt),
+        ("page_table", page_table_tt),
+    ):
+        assert (
+            t.is_allocated()
+        ), f"{name}: the step consumed a persistent input (the engine binds these as trace inputs)"
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     out = step()
     ttnn.synchronize_device(mesh_device)
