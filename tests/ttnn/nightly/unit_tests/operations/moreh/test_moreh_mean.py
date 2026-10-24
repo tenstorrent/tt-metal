@@ -297,3 +297,17 @@ def test_moreh_mean_backward_callback(input_shape_dim, device):
 def test_moreh_mean_backward_create_input_grad(input_shape_dim, keepdim, create_input_grad, device):
     torch.manual_seed(2024)
     run_moreh_mean_backward(input_shape_dim, device, keepdim=keepdim, create_input_grad=create_input_grad)
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [([16384, 32], 0), ([32, 16384], 1), ([128, 128], [0, 1])],
+    ids=["H", "W", "HW"],
+)
+def test_moreh_mean_bfloat16_long_reduction_default_config(input_shape, dim, device):
+    torch_input = torch.ones(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_output = ttnn.to_torch(ttnn.operations.moreh.mean(tt_input, dim=dim, keepdim=True))
+
+    assert torch.equal(tt_output.float(), torch.mean(torch_input.float(), dim, keepdim=True))
