@@ -1,0 +1,38 @@
+name: "LLK raw-LREG metadata host checks"
+
+# Syntax and static mask checks only; no target toolchain or device is used.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - "main"
+    paths:
+      - "tt_metal/tt-llk/common/ckernel_lreg_metadata.h"
+      - "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_ops.h"
+      - "tt_metal/tt-llk/tt_llk_wormhole_b0/common/inc/ckernel_ops.h"
+      - "tt_metal/tt-llk/tt_llk_quasar/common/inc/ckernel_ops.h"
+      - "tt_metal/tt-llk/tests/corpus/raw_lreg_macro_metadata_compile.cpp"
+      - "tt_metal/tt-llk/tests/corpus/selftest_raw_lreg_metadata.sh"
+      - ".github/workflows/llk-raw-lreg-host.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: llk-raw-lreg-host-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  raw-lreg-host:
+    name: Check raw-LREG masks and compatibility
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Run host compile checks
+        shell: bash
+        run: bash tt_metal/tt-llk/tests/corpus/selftest_raw_lreg_metadata.sh
