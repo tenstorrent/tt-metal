@@ -23,6 +23,8 @@ from helpers.llk_params import (
 )
 from helpers.logger import logger
 from helpers.matmul_sweep import (
+    ODD_REUSE_KT_DIMS,
+    ODD_REUSE_RT_CT,
     MatmulConfig,
     generate_face_layout_config_sweep,
     generate_tile_dims,
@@ -122,17 +124,7 @@ TINY_TILE_LOW_THROTTLE = 1
 # in tt_metal/hw/inc/api/compute/matmul.h is 5, so cover 5 rather than 4.
 TINY_TILE_HIGH_THROTTLE = 5
 
-# Reuse length 3 or more with an odd parity: rt_dim and ct_dim both >= 3 and min(rt, ct) odd. The
-# sweep above caps an output block at 8 tiles, so min(rt, ct) never exceeds 2 there; these blocks
-# need the 16-tile dest (SyncFull with a 16-bit dest). Wormhole walks the reused operand two tiles
-# at a time, so the unpaired last tile is a code path of its own; Blackhole walks it one at a time.
-ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
-# kt 1 runs the block once; kt 2 runs it twice on the same dest, so the bank the step ends on
-# carries into the next block.
-ODD_REUSE_KT_DIMS = (1, 2)
-# One run per tile at LoFi and HiFi4 (throttle 0, the production shape); HiFi4 at throttle 5 runs
-# the MOP once per fidelity phase, the other shape of the per-tile step. LoFi at throttle 5 has the
-# same step shape as LoFi at throttle 0 and is left out.
+# One run per tile (LoFi and HiFi4 at throttle 0) and one run per fidelity phase (HiFi4 at 5).
 ODD_REUSE_FIDELITY_THROTTLE = (
     (MathFidelity.LoFi, 0),
     (MathFidelity.HiFi4, 0),
