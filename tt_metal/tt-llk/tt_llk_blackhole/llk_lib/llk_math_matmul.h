@@ -93,13 +93,18 @@ inline void matmul_configure_addrmod(
         const bool reuse_a                   = ct_dim >= rt_dim;
         const std::uint32_t dest_tile_stride = (reuse_a ? 1 : ct_dim) << DstTileSizeLog2[DstTileShape::Tile32x32];
         LLK_ASSERT(dest_tile_stride <= DEST_INCR_MASK, "matmul row MOP: the DEST step to the next tile does not fit the dest increment");
-        addr_mod_t {
+        const addr_mod_t next_tile {
             .srca     = {.incr = 0, .clr = 1, .cr = 1},
             .srcb     = {.incr = 0, .clr = 1, .cr = 1},
             .dest     = {.incr = static_cast<std::int16_t>(dest_tile_stride), .clr = 0, .cr = 1},
             .fidelity = {.incr = 0, .clr = 1},
-        }
-            .set(ADDR_MOD_6);
+        };
+        // As next_tile.set(ADDR_MOD_6), but the dest word goes through the instruction buffer: the DEST step depends
+        // on ct_dim / rt_dim, which may be run-time values (a kernel whose subblock shape is a runtime arg), and
+        // set() encodes every SETC16 as an immediate.
+        TTI_SETC16(addr_mod_t::addr_mod_src_reg_addr[ADDR_MOD_6], next_tile.srca.val() | (next_tile.srcb.val() << 8));
+        TT_SETC16(addr_mod_t::addr_mod_dest_reg_addr[ADDR_MOD_6], next_tile.dest.val() | (next_tile.fidelity.val() << 13));
+        TTI_SETC16(addr_mod_t::addr_mod_bias_reg_addr[ADDR_MOD_6], next_tile.bias.val());
     }
     else
     {
