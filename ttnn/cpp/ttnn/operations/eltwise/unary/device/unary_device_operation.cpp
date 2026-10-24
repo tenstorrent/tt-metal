@@ -88,6 +88,8 @@ bool unary_op_supports_integer_dtype(UnaryOpType op_type, DataType dtype) {
     }
 }
 
+}  // namespace
+
 void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_chain, DataType input_dtype) {
     if (!is_integer_dtype(input_dtype)) {
         return;
@@ -109,8 +111,6 @@ void validate_integer_input_dtype(const std::vector<EltwiseUnaryWithParam>& op_c
             input_dtype);
     }
 }
-
-}  // namespace
 
 ttsl::hash::hash_t UnaryDeviceOperation::operation_attributes_t::to_hash() const {
     return ttsl::hash::hash_objects_with_default_seed(
