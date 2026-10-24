@@ -560,6 +560,47 @@ def test_ring_joint_golden_resolves_indexed_layer_metadata():
     torch.testing.assert_close(output, expected)
 
 
+@pytest.mark.parametrize("shards", [1, 2])
+def test_ring_joint_golden_serves_each_lane_from_its_own_slot_and_prefix(shards, expect_error):
+    """Lanes: each Q shard stacks the requests' local rows, as comparison mode composes them ([shard, lane, row]).
+    Each lane's reference is the one-request golden of its rows across the shards, with its own slot and prefix."""
+    torch.manual_seed(6)
+    local_rows, num_layers, layer_idx = 2, 2, 1
+    slots, prefixes = [2, 0, 1], [4, 0, 2]
+    requests = [torch.randn(1, 2, shards * local_rows, 4) for _ in slots]  # each request's rows in sequence order
+    query = torch.stack([q.unflatten(-2, (shards, local_rows)) for q in requests], dim=-3).flatten(
+        -4, -2
+    )  # [shard, lane, local row]
+    key = torch.randn(3 * num_layers, 1, 8, 4)
+    value = torch.randn(3 * num_layers, 1, 8, 3)
+    options = dict(logical_n=8, is_causal=True, kv_cache_num_layers=num_layers, kv_cache_layer_idx=layer_idx)
+
+    golden = ttnn.get_golden_function(ttnn.transformer.ring_joint_scaled_dot_product_attention)
+    output, joint_output, _ = golden(
+        query,
+        key,
+        value,
+        slot_id=torch.tensor(slots),
+        kv_actual_isl_tensor=torch.tensor(prefixes),
+        _ttnn_ring_joint_q_shards=shards,
+        **options,
+    )
+    by_lane = output.unflatten(-2, (shards, len(slots), local_rows))
+    for b, (slot, prefix) in enumerate(zip(slots, prefixes)):
+        expected, _, _ = golden(
+            requests[b],
+            key,
+            value,
+            slot_id=torch.tensor([slot]),
+            kv_actual_isl_tensor=torch.tensor([prefix]),
+            **options,
+        )
+        torch.testing.assert_close(by_lane.select(-3, b).flatten(-3, -2), expected)
+    assert joint_output.shape[-2] == 0
+    with expect_error(ValueError, "one element per lane"):
+        golden(query, key, value, slot_id=torch.tensor(slots), kv_actual_isl_tensor=torch.tensor([0]), **options)
+
+
 def test_ring_joint_golden_uses_actual_kv_length_as_causal_query_offset():
     torch.manual_seed(4)
     query = torch.randn(1, 1, 2, 3)
