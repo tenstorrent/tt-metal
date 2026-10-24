@@ -53,10 +53,11 @@ def _indices(G, H, topk, num_routed_experts, hot_expert):
     torch.manual_seed(42)
     if hot_expert is None:
         return torch.randint(0, num_routed_experts, (G, H, _SEQ_LEN, topk), dtype=torch.int64)
-    others = torch.randint(0, num_routed_experts - 1, (G, H, _SEQ_LEN, topk), dtype=torch.int64)
-    indices = others + (others >= hot_expert).to(torch.int64)
-    indices[..., 0] = hot_expert
-    return indices
+    else:
+        others = torch.randint(0, num_routed_experts - 1, (G, H, _SEQ_LEN, topk), dtype=torch.int64)
+        indices = others + (others >= hot_expert).to(torch.int64)
+        indices[..., 0] = hot_expert
+        return indices
 
 
 def _routing(indices, H, G, num_routed_experts, experts_per_chip, topk, capacity):

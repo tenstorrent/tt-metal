@@ -45,7 +45,6 @@ def device_spread(run):
     per_phase = defaultdict(lambda: defaultdict(list))
     for path in sorted(run.glob("reports/*/ops_perf_results*.csv")):
         # One CSV per profiled process: timestamps only order within one, so each is matched alone.
-        # Profiling truncates after roughly twenty phases, so a full sweep is run in chunks.
         rows = list(csv.DictReader(path.open()))
         posts = sorted(
             (int(r["HOST START TS"]), r["OP CODE"])
