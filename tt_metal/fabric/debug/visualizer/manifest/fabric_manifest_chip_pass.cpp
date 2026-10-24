@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_fields.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
@@ -418,7 +419,7 @@ manifest::Chip join_chip(
     return chip;
 }
 
-manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
+manifest::Arch describe_arch(const tt::tt_metal::Hal& hal, const PacketHeaderConfig& packet_header) {
     namespace dev_msgs = tt::tt_metal::dev_msgs;
     const auto& factory = hal.get_dev_msgs_factory(HalProgrammableCoreType::ACTIVE_ETH);
     const layout::Type go_msg{
@@ -427,8 +428,12 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
         layout::element::Struct{enchantum::type_name<dev_msgs::launch_msg_t>},
         static_cast<uint32_t>(factory.size_of<dev_msgs::launch_msg_t>()),
         0};
+    const layout::Type routing_table{
+        layout::element::Struct{layout::routing_l1_info_name}, sizeof(routing_l1_info_t), 0};
     std::vector<layout::StructType> types = layout::described_struct_types();
     std::ranges::move(layout::hal_struct_types(hal), std::back_inserter(types));
+    std::ranges::move(layout::packet_header_struct_types(packet_header), std::back_inserter(types));
+    std::ranges::move(layout::routing_table_struct_types(packet_header.is_2d), std::back_inserter(types));
     return manifest::Arch{
         .arch = hal.get_arch(),
         .areas =
@@ -436,7 +441,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
                 .heartbeat = heartbeat(hal.get_arch()),
                 .fabric_telemetry =
                     hal_area(hal, HalL1MemAddrType::FABRIC_TELEMETRY, layout::type_of<FabricTelemetry>()),
-                .routing_table = hal_area(hal, HalL1MemAddrType::ROUTING_TABLE, layout::type_of<routing_l1_info_t>()),
+                .routing_table = hal_area(hal, HalL1MemAddrType::ROUTING_TABLE, routing_table),
                 // Active ERISC firmware only reads and writes go_messages[0].
                 .go_msg = hal_area(hal, HalL1MemAddrType::GO_MSG, go_msg, 1),
                 // The HAL's LAUNCH is the ring's first entry; firmware and the router index the ring by its read
@@ -457,6 +462,7 @@ manifest::Arch describe_arch(const tt::tt_metal::Hal& hal) {
         .stream_registers = stream_registers(hal),
         .core_registers = core_registers(hal),
         .types = std::move(types),
+        .unions = layout::described_union_types(),
     };
 }
 

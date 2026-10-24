@@ -6,6 +6,8 @@
 
 #include <filesystem>
 
+#include <nlohmann/json_fwd.hpp>
+
 namespace tt::llrt {
 class RunTimeOptions;
 }  // namespace tt::llrt
@@ -26,5 +28,9 @@ void remove_stale_fabric_manifest(const tt::llrt::RunTimeOptions& rtoptions);
 // Writes this rank's fabric manifest, which includes facts about the fabric that are fixed for the run.
 // This requires the fabric routers to be compiled.
 void write_fabric_manifest(const ControlPlane& control_plane, const tt::llrt::RunTimeOptions& rtoptions);
+
+// The manifest's routing_encodings block: the values the fabric encodes routes with, read from the constants it
+// encodes them with.
+nlohmann::ordered_json make_routing_encodings_json();
 
 }  // namespace tt::tt_fabric
