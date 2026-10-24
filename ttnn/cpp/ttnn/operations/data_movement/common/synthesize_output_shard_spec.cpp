@@ -174,8 +174,8 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     if (rm_page_valid(spec.shape[1])) {
         return spec;
     }
-    // Only WIDTH_SHARDED can be repaired by shrinking nc; {H,B}_SHARDED pin shard_width to tensor_width.
-    // Lenient returns `spec` unchanged (downstream FATAL surfaces later); Strict rejects so caller falls back.
+    // Only WIDTH_SHARDED can be repaired by shrinking nc; HEIGHT pins shard_width to tensor_width, BLOCK to the grid.
+    // Lenient returns `spec` unchanged; Strict rejects so caller falls back.
     if (memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
         return (mode == RmPageAlignmentMode::Strict) ? std::optional<ShardSpec>{std::nullopt} : std::optional{spec};
     }
@@ -212,6 +212,27 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
     }
     auto new_grid = tt::tt_metal::num_cores_to_corerangeset(chosen_cores, compute_grid_size, row_wise);
     return ShardSpec(new_grid, {spec.shape[0], new_shard_width}, spec.orientation);
+}
+
+bool rm_shard_page_valid(const ShardSpec& spec, uint32_t element_size_bytes, uint64_t tensor_width) {
+    const uint64_t page = static_cast<uint64_t>(spec.shape[1]) * element_size_bytes;
+    return page != 0 && page % tt::tt_metal::hal::get_l1_alignment() == 0 && tensor_width % spec.shape[1] == 0;
+}
+
+std::optional<ShardSpec> rm_block_shard_spec_or_fallback(
+    const ShardSpec& rm_spec,
+    const ShardSpec& tile_spec,
+    uint32_t element_size_bytes,
+    uint64_t tensor_width,
+    TensorMemoryLayout memory_layout) {
+    if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED ||
+        rm_shard_page_valid(rm_spec, element_size_bytes, tensor_width)) {
+        return rm_spec;
+    }
+    if (rm_shard_page_valid(tile_spec, element_size_bytes, tensor_width)) {
+        return tile_spec;
+    }
+    return std::nullopt;
 }
 
 tt::tt_metal::NdShardSpec rescale_nd_shard_spec_for_output(
