@@ -9,6 +9,7 @@
 #include <string>
 #include <utility>
 
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -213,7 +214,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     const uint32_t bf16_bytes = 2;
     uint32_t k_chunk_size = num_cores * uint32_bytes;
     uint32_t p_chunk_size = num_cores * bf16_bytes;
-    uint32_t temp_chunk_size = num_cores * bf16_bytes;
+    uint32_t temp_chunk_size = tt::round_up(num_cores * bf16_bytes, hal::get_l1_alignment());
 
     Group<DataflowBufferSpec> dataflow_buffers{
         // Two tiles are loaded in for sampling_local_sort at a time, and we double buffer to avoid
