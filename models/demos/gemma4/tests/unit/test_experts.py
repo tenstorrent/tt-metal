@@ -21,6 +21,7 @@ from ...tests.test_factory import (
     TestFactory,
     compare_tensors,
     get_pcc_threshold,
+    lanes_fabric_config,
     mesh_tp_and_axis,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
@@ -74,30 +75,33 @@ def test_experts_dispatch_fit(seq_len, sparse, mesh_device, reset_seeds, request
 
 
 # single-row meshes (the 4-chip and 8-chip entries) dispatch along their columns over the hop-forwarding
-# dispatch_fabric2d / combine_fabric2d pair, which needs the axis wrap-wired (FABRIC_1D_RING)
+# dispatch_fabric2d / combine_fabric2d pair, which needs the axis wrap-wired (FABRIC_1D_RING; skipped on the line)
 @skip_if_not_moe
 @pytest.mark.skipif(
     not is_blackhole(), reason="token-dispatch prefill runs the Blackhole-only unified_routed_expert_ffn"
 )
 @parametrize_mesh_with_fabric(
-    mesh_shapes=[(1, 4), (1, 8)], device_params_extra={"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
+    mesh_shapes=[(1, 4), (1, 8)], device_params_extra={"fabric_config": lanes_fabric_config()}
 )
 @pytest.mark.parametrize("seq_len", [128, 1024, 4096 + 128], ids=["prefill_128", "prefill_1024", "prefill_4224"])
 def test_experts_dispatch_ring(seq_len, mesh_device, reset_seeds, request, monkeypatch):
     """Token-dispatch prefill on the ring transport (single-row mesh) vs the HF reference."""
+    if lanes_fabric_config() != ttnn.FabricConfig.FABRIC_1D_RING:
+        pytest.skip("the ring transport (dispatch_fabric2d / combine_fabric2d) needs FABRIC_1D_RING")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_RING", "1")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
     run_experts(1, seq_len, mesh_device, request)
 
 
-# the decode MoE kernel's ops require the ring fabric (models/common TTMoEDecode: "topology must be Ring")
+# the decode MoE kernel dispatches on the lane fabric: FABRIC_1D_RING on the Galaxy, a FABRIC_1D line on the (2,4)
+# block (GEMMA4_TEST_FABRIC_1D=1; the wrapper then picks the Linear topology from the fabric)
 @skip_if_not_moe
 @pytest.mark.skipif(
     not is_blackhole(), reason="the decode MoE kernel's sharded CCL address generation is Blackhole-only"
 )
 @parametrize_mesh_with_fabric(
-    mesh_shapes=[(2, 4), (8, 4)], device_params_extra={"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
+    mesh_shapes=[(2, 4), (8, 4)], device_params_extra={"fabric_config": lanes_fabric_config()}
 )
 @pytest.mark.parametrize("seq_len", [64, 128, 256], ids=["frame_64", "frame_128", "frame_256"])
 def test_experts_decode_kernel(seq_len, mesh_device, reset_seeds, request, monkeypatch):

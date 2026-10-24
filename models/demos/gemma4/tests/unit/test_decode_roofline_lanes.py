@@ -36,7 +36,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma4.tests.test_factory import skip_if_config_only_checkpoint
+from models.demos.gemma4.tests.test_factory import (
+    lanes_fabric_config,
+    parametrize_mesh_with_fabric,
+    skip_if_config_only_checkpoint,
+)
 from models.demos.gemma4.tests.unit.test_decode_roofline import (
     N_STEPS,
     PREFILL_LEN,
@@ -50,33 +54,15 @@ SLOTS_PER_LANE = 32
 BLOCKS_PER_USER = 4  # 256 tokens at block 64: the 128-token prompt plus the warm and profiled steps
 
 
-def _lane_mesh_params(extra):
-    """The lane engine's meshes with the fabric each can open: the (2,4) block as a FABRIC_1D line (its x8 mesh
-    descriptor has no wraparound, so FABRIC_1D_RING fails at mesh open) and the (8,4) Galaxy on the ring the decode MoE
-    kernel's 8-row dispatch uses; ids ``2x4`` / ``8x4`` as ``parametrize_mesh_with_fabric`` names them."""
-    try:
-        num_devices = ttnn.get_num_devices()
-    except RuntimeError:
-        num_devices = 0
-    fabrics = {(2, 4): ttnn.FabricConfig.FABRIC_1D, (8, 4): ttnn.FabricConfig.FABRIC_1D_RING}
-    params = [
-        pytest.param(shape, {"fabric_config": fabric, **extra}, id=f"{shape[0]}x{shape[1]}")
-        for shape, fabric in fabrics.items()
-        if shape[0] * shape[1] <= num_devices
-    ]
-    return params or [
-        pytest.param(
-            (2, 4), {"fabric_config": None, **extra}, id="2x4", marks=pytest.mark.skip(reason="Not enough devices")
-        )
-    ]
-
-
-# the Galaxy's decode MoE kernel dispatch runs on the ring fabric, the block opens as a FABRIC_1D line; the served
-# entry keeps the collective semaphores in L1_SMALL
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    _lane_mesh_params({"l1_small_size": 65536, "trace_region_size": 512_000_000}),
-    indirect=True,
+# the decode MoE kernel dispatches on the lane fabric (FABRIC_1D_RING on the Galaxy; GEMMA4_TEST_FABRIC_1D=1 opens the
+# (2,4) block as a FABRIC_1D line); the served entry keeps the collective semaphores in L1_SMALL
+@parametrize_mesh_with_fabric(
+    mesh_shapes=[(2, 4), (8, 4)],
+    device_params_extra={
+        "fabric_config": lanes_fabric_config(),
+        "l1_small_size": 65536,
+        "trace_region_size": 512_000_000,
+    },
 )
 @pytest.mark.parametrize("users_per_lane", [1, 32], ids=["upl_1", "upl_32"])
 def test_decode_roofline_lanes(mesh_device, users_per_lane, monkeypatch):
@@ -86,10 +72,8 @@ def test_decode_roofline_lanes(mesh_device, users_per_lane, monkeypatch):
     monkeypatch.setenv("GEMMA4_MOE_DECODE_KERNEL", os.environ.get("GEMMA4_MOE_DECODE_KERNEL", "1"))
     shape = tuple(mesh_device.shape)
     if shape == (2, 4):
-        # 4 lanes x 32 rows over 2 mesh rows: the kernel frame must hold 128 rows (64 tokens per row-chip), and the
-        # block's x8 descriptor opens as a FABRIC_1D line (Linear dispatch / combine)
+        # 4 lanes x 32 rows over 2 mesh rows: the kernel frame must hold 128 rows (64 tokens per row-chip)
         monkeypatch.setenv("GEMMA4_MOE_DECODE_FRAME", os.environ.get("GEMMA4_MOE_DECODE_FRAME", "128"))
-        monkeypatch.setenv("GEMMA4_MOE_DECODE_TOPOLOGY", os.environ.get("GEMMA4_MOE_DECODE_TOPOLOGY", "linear"))
 
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.tt_transformers.tt.common import PagedAttentionConfig

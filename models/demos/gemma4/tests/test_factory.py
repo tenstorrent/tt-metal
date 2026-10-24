@@ -440,6 +440,16 @@ def mesh_tp_and_axis(mesh_device):
     return shape[axis], axis
 
 
+def lanes_fabric_config():
+    """Fabric for the lane-engine tests (the decode MoE kernel's 8-row dispatch, the lane generator): FABRIC_1D_RING,
+    the Galaxy's torus descriptor, by default; GEMMA4_TEST_FABRIC_1D=1 opens the mesh as a FABRIC_1D line for the (2,4)
+    block emulation, whose p150_x8 MESH descriptor has no wraparound (a ring fabric fails at mesh open there, and the
+    decode MoE wrapper then dispatches with the Linear topology). Touches ttnn only when called."""
+    if os.environ.get("GEMMA4_TEST_FABRIC_1D", "0") == "1":
+        return ttnn.FabricConfig.FABRIC_1D
+    return ttnn.FabricConfig.FABRIC_1D_RING
+
+
 def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
     """Universal mesh parametrization with FABRIC_1D.
 

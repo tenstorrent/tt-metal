@@ -3,7 +3,8 @@
 """Traced decode step of one 8-chip engine on the (2,4) block with the mesh opened on the RING fabric.
 
 Same body as ``test_decode_roofline`` (prefill, traced warm-up, ``GEMMA4_ROOFLINE_STEPS`` timed steps, WALL ms/step
-and tok/s), but the mesh is opened with ``FABRIC_1D_RING`` (``ROOFLINE_FABRIC`` overrides the name), which the decode
+and tok/s), but the mesh is opened with ``FABRIC_1D_RING`` (``ROOFLINE_FABRIC`` overrides the name, and
+``GEMMA4_TEST_FABRIC_1D=1`` opens the line fabric the block's p150_x8 MESH descriptor supports), which the decode
 MoE kernel path (``GEMMA4_MOE_DECODE_KERNEL=1``: all_to_all dispatch along mesh axis 0, moe_compute, reduce-scatter
 over the columns) requires; ``parametrize_mesh_with_fabric`` hard-wires FABRIC_1D. The model's own collectives keep
 ``GEMMA4_CCL_TOPOLOGY`` (linear on the serving entries).
@@ -17,11 +18,15 @@ import os
 import pytest
 
 import ttnn
-from models.demos.gemma4.tests.test_factory import GEMMA4_TEST_L1_SMALL_SIZE
+from models.demos.gemma4.tests.test_factory import GEMMA4_TEST_L1_SMALL_SIZE, lanes_fabric_config
 from models.demos.gemma4.tests.unit.test_decode_roofline import model_path  # noqa: F401  (fixture)
 from models.demos.gemma4.tests.unit.test_decode_roofline import test_decode_roofline as _roofline_body
 
-_FABRIC = getattr(ttnn.FabricConfig, os.environ.get("ROOFLINE_FABRIC", "FABRIC_1D_RING"))
+_FABRIC = (
+    getattr(ttnn.FabricConfig, os.environ["ROOFLINE_FABRIC"])
+    if os.environ.get("ROOFLINE_FABRIC")
+    else lanes_fabric_config()
+)
 MESHES = [
     pytest.param(
         (2, 4),

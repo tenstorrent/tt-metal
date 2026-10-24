@@ -12,7 +12,11 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.gemma4.tests.test_factory import parametrize_mesh_with_fabric, skip_if_config_only_checkpoint
+from models.demos.gemma4.tests.test_factory import (
+    lanes_fabric_config,
+    parametrize_mesh_with_fabric,
+    skip_if_config_only_checkpoint,
+)
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("HF_MODEL", "google/gemma-4-26B-A4B-it").find("26B") < 0, reason="MoE only"
@@ -21,7 +25,7 @@ pytestmark = pytest.mark.skipif(
 
 @parametrize_mesh_with_fabric(
     mesh_shapes=[(8, 4)],
-    device_params_extra={"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 65536},
+    device_params_extra={"fabric_config": lanes_fabric_config(), "l1_small_size": 65536},
 )
 @pytest.mark.parametrize("n_tokens", [128, 2065], ids=["n128", "n2065"])
 def test_dispatch_padding_matches_full_chunk(mesh_device, n_tokens, reset_seeds, request, monkeypatch):

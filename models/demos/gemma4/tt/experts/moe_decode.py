@@ -90,9 +90,6 @@ class Gemma4MoEDecode:
             "created_with_nd_shard_spec": False,
             "per_core_allocation": False,
         }
-        # The dispatch / combine run on the mesh's 1-D fabric: Ring on FABRIC_1D_RING (the Galaxy's 8-row dispatch
-        # axis), Linear on a FABRIC_1D line (the (2,4) block, whose x8 mesh descriptor has no wraparound: a ring
-        # fabric cannot even open there). GEMMA4_MOE_DECODE_TOPOLOGY=ring|linear overrides the detection.
         tt_config = TTMoEDecodeConfig.from_yaml(yaml.safe_dump(data, sort_keys=False), topology=self._topology())
         I = self.inter
         layers = [reg["layers"][l] for l in range(self.num_layers)]
@@ -111,21 +108,23 @@ class Gemma4MoEDecode:
         logger.info(
             f"Gemma4MoEDecode: shared module for {self.num_layers} layers on mesh {self.rows}x{self.cols}, frame "
             f"{self.frame_rows} rows ({self.batch_per_device}/chip), post_combine_tilize="
-            f"{getattr(tt_config, 'use_post_combine_tilize', None)}"
+            f"{getattr(tt_config, 'use_post_combine_tilize', None)}, topology={tt_config.topology}"
         )
 
     @staticmethod
     def _topology():
+        """Dispatch / combine topology from the mesh's 1-D fabric: Ring on FABRIC_1D_RING (the Galaxy's 8-row dispatch
+        axis), Linear on a FABRIC_1D line (the (2,4) block, whose p150_x8 MESH descriptor has no wraparound: a ring
+        fabric cannot even open there). GEMMA4_MOE_DECODE_TOPOLOGY=ring|linear overrides the detection."""
         forced = os.environ.get("GEMMA4_MOE_DECODE_TOPOLOGY", "").strip().lower()
         if forced in ("ring", "linear"):
             return ttnn.Topology.Ring if forced == "ring" else ttnn.Topology.Linear
         try:
-            fabric = str(ttnn.get_fabric_config())
+            fabric = ttnn.get_fabric_config()
         except Exception:  # noqa: BLE001 - no query on this build: the served default
             return ttnn.Topology.Ring
-        if fabric.endswith("FABRIC_1D"):
-            return ttnn.Topology.Linear
-        return ttnn.Topology.Ring
+        name = getattr(fabric, "name", None) or str(fabric).rsplit(".", 1)[-1]
+        return ttnn.Topology.Linear if name == "FABRIC_1D" else ttnn.Topology.Ring
 
     @property
     def module(self):
