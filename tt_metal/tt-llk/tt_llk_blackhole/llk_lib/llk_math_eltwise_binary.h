@@ -143,15 +143,24 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
-        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
+        const std::uint32_t loop_op = eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod);
+        constexpr std::uint32_t end_op = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
-            // For partial faces (face_r_dim < 16), we still need to increment counters by MAX_FPU_ROWS
-            // to maintain proper 16-row spacing between faces
-            tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            // Partial faces: INCRWC as loop_op1 via the two-op constructor to keep 16-row face spacing.
+            // The two-op constructor also makes INCRWC the last-iteration instruction. With innerloop == 1
+            // the INCRWC slot is always the last inner iteration, so a one-op template with set_loop_op1
+            // would have that slot overridden by a second ELWADD/ELWSUB, which writes rows 8-15 of the face.
+            ckernel_template tmp(outerloop, innerloop, loop_op, TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_end_op(end_op);
+            tmp.program();
         }
-        tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-        tmp.program();
+        else
+        {
+            ckernel_template tmp(outerloop, innerloop, loop_op);
+            tmp.set_end_op(end_op);
+            tmp.program();
+        }
     }
     else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
     {
@@ -414,14 +423,24 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
 
     if constexpr ((eltwise_binary_type == EltwiseBinaryType::ELWADD) || (eltwise_binary_type == EltwiseBinaryType::ELWSUB))
     {
-        ckernel_template tmp(outerloop, innerloop, eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod));
+        const std::uint32_t loop_op = eltwise_binary_func<eltwise_binary_type>(0 /*clr_src*/, acc_to_dest, broadcast_type, addr_mod);
+        constexpr std::uint32_t end_op = TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB);
         if (tensor_shape.face_r_dim <= MAX_FPU_ROWS)
         {
-            // For partial faces, still increment by MAX_FPU_ROWS to maintain 16-row face spacing
-            tmp.set_loop_op1(TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            // Partial faces: INCRWC as loop_op1 via the two-op constructor to keep 16-row face spacing.
+            // The two-op constructor also makes INCRWC the last-iteration instruction. With innerloop == 1
+            // the INCRWC slot is always the last inner iteration, so a one-op template with set_loop_op1
+            // would have that slot overridden by a second ELWADD/ELWSUB, which writes rows 8-15 of the face.
+            ckernel_template tmp(outerloop, innerloop, loop_op, TT_OP_INCRWC(0, MAX_FPU_ROWS, MAX_FPU_ROWS, MAX_FPU_ROWS));
+            tmp.set_end_op(end_op);
+            tmp.program();
         }
-        tmp.set_end_op(TT_OP_SETRWC(CLR_SRC, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-        tmp.program();
+        else
+        {
+            ckernel_template tmp(outerloop, innerloop, loop_op);
+            tmp.set_end_op(end_op);
+            tmp.program();
+        }
     }
     else if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWMUL)
     {
