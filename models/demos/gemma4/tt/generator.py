@@ -3,11 +3,12 @@
 
 import os
 import time
+from numbers import Integral
 from pathlib import Path
 
 import torch
 from loguru import logger
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, GenerationConfig
 
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
@@ -47,6 +48,38 @@ GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 # vLLM token-chunked continuations can land on unaligned start_pos (e.g. 48);
 # align down and re-prefill the prefix (Galaxy SDPA_CHUNK_ALIGN pattern).
 SDPA_CHUNK_ALIGN = 128
+
+
+def _normalize_stop_token_ids(value):
+    """Return the non-negative integer token IDs represented by ``value``."""
+    values = value if isinstance(value, (list, tuple, set, frozenset)) else [value]
+    return [
+        int(token_id)
+        for token_id in values
+        if isinstance(token_id, Integral) and not isinstance(token_id, bool) and token_id >= 0
+    ]
+
+
+def _known_special_token_id(tokenizer, token):
+    return None if token is None else tokenizer.get_vocab().get(str(token))
+
+
+def _resolve_stop_tokens(tokenizer, model_path):
+    """Merge checkpoint-declared EOS IDs with tokenizer stop-token metadata."""
+    stop_tokens = set(_normalize_stop_token_ids(getattr(tokenizer, "stop_tokens", None)))
+    try:
+        generation_config = GenerationConfig.from_pretrained(model_path)
+        stop_tokens.update(_normalize_stop_token_ids(generation_config.eos_token_id))
+    except Exception as exc:
+        logger.warning("Could not load generation_config stop tokens from {}: {}", model_path, exc)
+
+    stop_tokens.update(_normalize_stop_token_ids(tokenizer.eos_token_id))
+    stop_tokens.update(_normalize_stop_token_ids(getattr(tokenizer, "eot_token_id", None)))
+    named_eot = tokenizer.special_tokens_map.get("eot_token")
+    named_eot_id = _known_special_token_id(tokenizer, named_eot)
+    if named_eot_id is not None:
+        stop_tokens.add(named_eot_id)
+    return sorted(stop_tokens)
 
 
 def align_num_cached_tokens_to_sdpa(num_cached_per_user: list[int]) -> list[int]:
@@ -2084,8 +2117,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         bounded_sliding_kv_cache=False,
     ):
         tokenizer = _load_text_tokenizer(model_path)
-        if not hasattr(tokenizer, "stop_tokens"):
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+        tokenizer.stop_tokens = _resolve_stop_tokens(tokenizer, model_path)
 
         model_args, model, tt_kv_cache, _ = create_tt_model(
             mesh_device=mesh_device,
