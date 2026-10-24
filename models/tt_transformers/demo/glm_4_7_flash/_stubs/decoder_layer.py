@@ -135,6 +135,26 @@ class TtDecoderLayer:
                 mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=_mesh_shape, dims=(None, dim)),
             )
 
+        def rep_bf16(t, layout=ttnn.TILE_LAYOUT):
+            if _is_mesh:
+                return ttnn.from_torch(
+                    t,
+                    dtype=ttnn.bfloat16,
+                    layout=layout,
+                    device=device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device)
+
+        def shd_bf16(t, dim, layout=ttnn.TILE_LAYOUT):
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=layout,
+                device=device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=_mesh_shape, dims=(None, dim)),
+            )
+
         # ---- Upload ----
         self._w_q_a = rep(Wq_a)
         self._w_kv_a = rep(Wkv_a)
@@ -169,7 +189,7 @@ class TtDecoderLayer:
         self._cached_rope = {}
         # HiFi4 + fp32 accumulation: the default (approx) rms_norm config under-scales by ~1%.
         self._norm_ckc = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True
         )
         self.ckc = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4,
