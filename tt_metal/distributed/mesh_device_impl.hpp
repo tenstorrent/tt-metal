@@ -15,6 +15,7 @@
 #include <optional>
 #include <ostream>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -198,10 +199,26 @@ private:
     std::shared_ptr<ThreadPool> reader_thread_pool_;
     std::unique_ptr<program_cache::detail::ProgramCache> program_cache_;
 
-    // Owns the real-time profiler subsystem (per-device sockets, receiver thread, Tracy
-    // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
-    // before the rest of the mesh shutdown so its receiver thread observes a live device.
-    std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+    // Holds the real-time profiler subsystem (per-device sockets, receiver thread, Tracy handler). It is shared by the
+    // mesh that owns the profiler and every submesh under it, so a submesh reaches the profiler without walking
+    // parent_mesh_. The manager is constructed by init_realtime_profiler_socket() and torn down by the owner's
+    // close_impl() before the rest of the mesh shutdown so its receiver thread observes a live device. The holder
+    // itself outlives that: it stays reachable (empty) from any submesh that is still around.
+    struct RealtimeProfilerHolder {
+        // Shared by readers (with_realtime_profiler, the sync check). The owner's close takes it exclusively just
+        // long enough to move the manager out.
+        std::shared_mutex mutex;
+        std::unique_ptr<RealtimeProfilerManager> manager;
+    };
+    // Set once before the mesh is handed out (by init_realtime_profiler_socket for the owner, by create_submesh for a
+    // submesh) and never reset, so reading the pointer needs no lock. Null if the family has no profiler.
+    std::shared_ptr<RealtimeProfilerHolder> realtime_profiler_;
+    // The chips of this mesh, for filtering records of the shared profiler. nullopt on the owner (it sees all of its
+    // chips), and for a mesh without a profiler. An empty set (a remote-only submesh) selects nothing. Set together
+    // with realtime_profiler_.
+    std::optional<std::unordered_set<uint32_t>> realtime_profiler_chip_filter_;
+    // True on the mesh that created the holder: only it shuts the manager down.
+    bool owns_realtime_profiler_ = false;
 
     // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
     // close_impl().
@@ -390,8 +407,17 @@ public:
         bool minimal = false);
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device);
+    // Acts on the owner only; a no-op on a submesh.
     void trigger_realtime_profiler_sync_check();
+    // Test-only, and not synchronized with close(). Returns the manager on the owner, nullptr on a submesh or once the
+    // owner has closed.
     RealtimeProfilerManager* get_realtime_profiler() const;
+    // Runs f with the family's real-time profiler and this mesh's chip filter, under the holder's shared lock. Returns
+    // false, without calling f, if the family has no profiler or its owner has closed. f must not close a mesh in this
+    // family (the owner's close waits for f to return).
+    bool with_realtime_profiler(
+        const std::function<void(RealtimeProfilerManager&, const std::optional<std::unordered_set<uint32_t>>&)>& f)
+        const;
 
     // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
     // pages_sent allocations. Constructed eagerly in initialize_impl() when the

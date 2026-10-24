@@ -18,14 +18,17 @@
 // nullified, IOMMU-off on BH, etc.) the test skips gracefully via
 // IsProgramRealtimeProfilerActive().
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -41,6 +44,8 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -421,6 +426,205 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
                                  << ")";
 
     EXPECT_TRUE(mesh_device->close());
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// A mesh and its submeshes share one real-time profiler. These tests look at the sharing itself (which manager a mesh
+// reaches, and with which chip filter), not at the records that flow through it.
+// ---------------------------------------------------------------------------------------------------------------------
+
+using ProfilerChipFilter = std::optional<std::unordered_set<uint32_t>>;
+
+struct ProfilerReach {
+    bool reached = false;
+    const void* manager = nullptr;
+    ProfilerChipFilter filter;
+};
+
+// What `mesh` reaches through its shared profiler holder.
+ProfilerReach reach_profiler(distributed::MeshDevice& mesh) {
+    ProfilerReach result;
+    result.reached = mesh.impl().with_realtime_profiler(
+        [&result](distributed::RealtimeProfilerManager& manager, const ProfilerChipFilter& filter) {
+            result.manager = &manager;
+            result.filter = filter;
+        });
+    return result;
+}
+
+std::unordered_set<uint32_t> chips_of(distributed::MeshDevice& mesh) {
+    const auto ids = mesh.impl().get_device_ids();
+    return {ids.begin(), ids.end()};
+}
+
+std::shared_ptr<distributed::MeshDevice> open_unit_mesh(int device_id) {
+    return distributed::MeshDevice::create_unit_mesh(
+        device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+}
+
+TEST(RealtimeProfilerMeshFamily, SubmeshSharesOwnerProfiler) {
+    auto parent = open_unit_mesh(0);
+    ASSERT_NE(parent, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        parent->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+    auto nested = submesh->create_submesh(distributed::MeshShape(1, 1));
+
+    const ProfilerReach from_parent = reach_profiler(*parent);
+    const ProfilerReach from_submesh = reach_profiler(*submesh);
+    const ProfilerReach from_nested = reach_profiler(*nested);
+
+    ASSERT_TRUE(from_parent.reached);
+    ASSERT_TRUE(from_submesh.reached);
+    ASSERT_TRUE(from_nested.reached);
+    ASSERT_NE(from_parent.manager, nullptr);
+    EXPECT_EQ(from_submesh.manager, from_parent.manager);
+    EXPECT_EQ(from_nested.manager, from_parent.manager);
+
+    EXPECT_EQ(parent->impl().get_realtime_profiler(), from_parent.manager);
+    EXPECT_EQ(submesh->impl().get_realtime_profiler(), nullptr) << "Only the owner exposes the manager";
+
+    EXPECT_FALSE(from_parent.filter.has_value()) << "The owner sees all of its chips";
+    ASSERT_TRUE(from_submesh.filter.has_value());
+    EXPECT_EQ(*from_submesh.filter, chips_of(*submesh));
+    ASSERT_TRUE(from_nested.filter.has_value());
+    EXPECT_EQ(*from_nested.filter, chips_of(*nested));
+
+    EXPECT_TRUE(nested->close());
+    EXPECT_TRUE(submesh->close());
+    EXPECT_TRUE(parent->close());
+}
+
+TEST(RealtimeProfilerMeshFamily, ClosedSubmeshStillReachesOwner) {
+    auto parent = open_unit_mesh(0);
+    ASSERT_NE(parent, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        parent->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+    const ProfilerReach before = reach_profiler(*submesh);
+    ASSERT_TRUE(before.reached);
+
+    EXPECT_TRUE(submesh->close());
+
+    // Closing a submesh leaves the shared profiler alone.
+    const ProfilerReach after = reach_profiler(*submesh);
+    EXPECT_TRUE(after.reached);
+    EXPECT_EQ(after.manager, before.manager);
+    EXPECT_TRUE(reach_profiler(*parent).reached);
+
+    EXPECT_TRUE(parent->close());
+}
+
+TEST(RealtimeProfilerMeshFamily, OwnerCloseEmptiesFamily) {
+    auto parent = open_unit_mesh(0);
+    ASSERT_NE(parent, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        parent->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+    ASSERT_TRUE(reach_profiler(*submesh).reached);
+
+    EXPECT_TRUE(submesh->close());
+    EXPECT_TRUE(parent->close());
+
+    // The holder outlives the owner's close, but is empty.
+    EXPECT_FALSE(reach_profiler(*parent).reached);
+    EXPECT_FALSE(reach_profiler(*submesh).reached);
+    EXPECT_EQ(parent->impl().get_realtime_profiler(), nullptr);
+
+    // Closing again must not touch the profiler.
+    EXPECT_TRUE(submesh->close());
+    EXPECT_TRUE(parent->close());
+}
+
+TEST(RealtimeProfilerMeshFamily, UnitMeshesHaveSeparateProfilers) {
+    if (GetNumAvailableDevices() < 2) {
+        GTEST_SKIP() << "Needs at least 2 devices";
+    }
+
+    auto unit_meshes = distributed::MeshDevice::create_unit_meshes(
+        {0, 1}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{DispatchCoreType::WORKER});
+    ASSERT_EQ(unit_meshes.size(), 2u);
+    auto& mesh0 = unit_meshes.at(0);
+    auto& mesh1 = unit_meshes.at(1);
+
+    if (!reach_profiler(*mesh0).reached || !reach_profiler(*mesh1).reached) {
+        mesh0->close();
+        mesh1->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    auto sub0 = mesh0->create_submesh(distributed::MeshShape(1, 1));
+    const ProfilerReach reach0 = reach_profiler(*mesh0);
+    const ProfilerReach reach1 = reach_profiler(*mesh1);
+    EXPECT_NE(reach0.manager, reach1.manager) << "Each unit mesh owns its own profiler";
+    EXPECT_EQ(reach_profiler(*sub0).manager, reach0.manager);
+    EXPECT_FALSE(reach0.filter.has_value());
+    EXPECT_FALSE(reach1.filter.has_value());
+
+    EXPECT_TRUE(sub0->close());
+    EXPECT_TRUE(mesh0->close());
+    // Closing one unit mesh does not empty the other.
+    EXPECT_FALSE(reach_profiler(*mesh0).reached);
+    EXPECT_TRUE(reach_profiler(*mesh1).reached);
+    EXPECT_TRUE(mesh1->close());
+}
+
+// Smoke test: use the shared profiler from another thread while the submesh and then the owner close. It must neither
+// crash nor hang, and must start failing to reach the profiler once the owner has closed.
+TEST(RealtimeProfilerMeshFamily, ConcurrentAccessDuringClose) {
+    auto parent = open_unit_mesh(0);
+    ASSERT_NE(parent, nullptr);
+    if (!IsProgramRealtimeProfilerActive()) {
+        parent->close();
+        GTEST_SKIP() << "Real-time profiler is not active on this dispatch config";
+    }
+
+    auto submesh = parent->create_submesh(distributed::MeshShape(1, 1));
+
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> reached{0};
+    std::atomic<uint64_t> missed{0};
+    std::thread reader([&] {
+        while (!stop.load()) {
+            if (submesh->impl().with_realtime_profiler(
+                    [](distributed::RealtimeProfilerManager&, const ProfilerChipFilter&) {})) {
+                reached.fetch_add(1);
+            } else {
+                missed.fetch_add(1);
+            }
+            // Real callers are not a tight loop. The pause also keeps this reader from starving the owner's close on
+            // a reader-preferring shared_mutex.
+            std::this_thread::sleep_for(std::chrono::microseconds(50));
+        }
+    });
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (reached.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    EXPECT_TRUE(submesh->close());
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_TRUE(parent->close());
+    while (missed.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+
+    stop.store(true);
+    reader.join();
+
+    EXPECT_GT(reached.load(), 0u);
+    EXPECT_GT(missed.load(), 0u) << "The reader should lose the profiler once the owner has closed";
 }
 
 }  // namespace
