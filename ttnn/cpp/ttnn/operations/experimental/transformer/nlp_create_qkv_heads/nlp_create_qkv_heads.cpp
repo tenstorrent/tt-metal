@@ -73,6 +73,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads(
             input_tensor_q.padded_shape()[3] % (num_q_heads + 2 * num_kv_heads_val) == 0, "Unsupported input shape");
         head_dim = input_tensor_q.padded_shape()[3] / (num_q_heads + 2 * num_kv_heads_val);
     }
+    TT_FATAL(
+        head_dim % tt::constants::TILE_WIDTH == 0,
+        "nlp_create_qkv_heads requires head_dim to be a multiple of {}, got {}",
+        tt::constants::TILE_WIDTH,
+        head_dim);
 
     return ttnn::prim::nlp_create_qkv_heads(
         input_tensor_q,
