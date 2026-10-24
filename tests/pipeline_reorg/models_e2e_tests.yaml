@@ -824,13 +824,16 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     # Whole-model teacher-forced token-accuracy gate (top-1 / top-5 vs the
     # stored HF predictions, batch 1): ~8 min on the QB2 1x4 mesh including the
-    # checkpoint load. The full-depth vision gate runs in the 31B e2e job.
-    pytest -s --timeout 900 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+    # checkpoint load on a warm TT cache; a cold cache converts the 1188 tensors
+    # first (2026-10-24: the 11-minute job was killed ~10 min into that build,
+    # which also never let the cache warm). The budget covers one cold build.
+    # The full-depth vision gate runs in the 31B e2e job.
+    pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
   model: gemma-4-31b
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 11
+      timeout: 30
       tier: 1  # the tier-2 QB2 bucket is full (186/186); this fits the tier-1 headroom
       release_ready: false
   owner_id: U088413NP0Q # Ashai Reddy
