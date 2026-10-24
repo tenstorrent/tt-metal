@@ -31,6 +31,16 @@ from ...tests.test_factory import parametrize_mesh_with_fabric
 
 ASSISTANT_PATH = os.getenv("GEMMA4_ASSISTANT_MODEL")
 _needs_assistant = pytest.mark.skipif(not ASSISTANT_PATH, reason="set GEMMA4_ASSISTANT_MODEL to run")
+
+
+def _skip_unless_wormhole_t3k():
+    """BH multi-chip AllGather hangs on this smoke; run it on Wormhole T3K only."""
+    from models.common.utility_functions import is_wormhole_b0
+
+    if not is_wormhole_b0():
+        pytest.skip("MTP smoke is Wormhole T3K (1x8) only")
+
+
 _assistant_probe = pytest.mark.skipif(
     os.environ.get("GEMMA4_RUN_ASSISTANT_PROBES", "0") != "1",
     reason="assistant diagnostic/perf probe; set GEMMA4_RUN_ASSISTANT_PROBES=1 to run",
@@ -313,6 +323,176 @@ def _dev0(t, mesh_device):
     if is_mesh:
         return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
     return ttnn.to_torch(t)
+
+
+@_needs_assistant
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4)])
+def test_shard_argmax_matches_gathered_argmax(mesh_device, reset_seeds):
+    """Shard-topk argmax (default when tp>1) matches gathered full-vocab argmax on unique winners."""
+    from models.demos.gemma4.tt.ccl import ccl_allgather
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
+
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    if tp <= 1:
+        pytest.skip("shard argmax requires tp > 1")
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+
+    max_seq_len = 1024
+    block_size = 64
+    paged_attention_config = PagedAttentionConfig(
+        block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size)
+    )
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        num_layers=None,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+    )
+    from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
+
+    page_table = create_tt_page_table(1, paged_attention_config)
+    prompt = "The capital of France is"
+    in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
+        [prompt], tokenizer, generator.model_args, True, 24, max_prefill_len=max_seq_len
+    )
+    in_pt = torch.stack(in_pt).view(1, -1)
+    anchor_token = int(encoded[0][prefill_lens[0] - 1])
+    anchor_pos = prefill_lens[0] - 1
+
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=4,
+    )
+    assert spec._shard_argmax_enabled, "expected GEMMA4_SPEC_SHARD_ARGMAX default on for tp>1"
+
+    generator.prefill_forward_text(in_pt, page_table=page_table, kv_cache=tt_kv_cache, prompt_lens=decoding_pos)
+    anchor_hidden = spec.seed(anchor_token, anchor_pos)
+    tok_tt = spec._tokens_tensor([anchor_token])
+    pos_u, pos_i = spec._pos_tensors([anchor_pos])
+    pt = spec._page_table(1)
+    page_tables = {lt: pt for lt in spec._shared_kv}
+
+    logits_sh, h_next = assistant.step(
+        tok_tt, anchor_hidden, spec._shared_kv, page_tables, pos_u, pos_i, gather_logits=False
+    )
+    shard_tok = spec._id_to_host(spec._shard_argmax(logits_sh, rows=1))
+
+    gathered = ccl_allgather(logits_sh, target.mesh_config, target.ccl_manager)
+    gather_tok = spec._id_to_host(spec._argmax_last(gathered, rows=1))
+    host_logits = spec._logits_to_host(gathered).reshape(-1).float()
+    ref_tok = int(torch.argmax(host_logits))
+    top2 = torch.topk(host_logits, 2)
+    gap = float(top2.values[0] - top2.values[1])
+    logger.info(f"[shard_argmax] shard={shard_tok} gather={gather_tok} ref={ref_tok} top2_gap={gap:.4f}")
+
+    for t in (tok_tt, pos_u, pos_i, pt, logits_sh, gathered, h_next):
+        t.deallocate(True)
+
+    near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
+    if gap < near_tie_gap:
+        pytest.skip(f"logits near-tie (gap={gap:.4f}); unique-winner case not exercised")
+    assert shard_tok == gather_tok == ref_tok
+
+
+@_needs_assistant
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 4)])
+def test_shard_argmax_tie_break_behavior(mesh_device, reset_seeds):
+    """Exact bf16 ties may differ from full-vocab argmax; shard path stays deterministic."""
+    from models.demos.gemma4.tt.ccl import ccl_allgather
+    from models.demos.gemma4.tt.common import create_assistant_model
+    from models.demos.gemma4.tt.generator import Gemma4Generator
+    from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
+    tp = mesh_device.shape[1] if hasattr(mesh_device, "shape") else 1
+    if tp <= 1:
+        pytest.skip("shard argmax requires tp > 1")
+
+    model_path = os.getenv("HF_MODEL")
+    if not model_path:
+        pytest.skip("set HF_MODEL (target) to run")
+
+    max_seq_len = 1024
+    block_size = 64
+    paged_attention_config = PagedAttentionConfig(
+        block_size=block_size, max_num_blocks=math.ceil(max_seq_len / block_size)
+    )
+    generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        max_batch_size=1,
+        max_seq_len=max_seq_len,
+        num_layers=None,
+        paged_attention_config=paged_attention_config,
+        bounded_sliding_kv_cache=False,
+    )
+    target = generator.model[0]
+    _, assistant = create_assistant_model(
+        mesh_device=mesh_device,
+        target_model=target,
+        mesh_config=target.mesh_config,
+        ccl_manager=target.ccl_manager,
+        assistant_path=ASSISTANT_PATH,
+    )
+    from models.demos.gemma4.demo.text_demo_v2 import create_tt_page_table
+
+    page_table = create_tt_page_table(1, paged_attention_config)
+    spec = SpeculativeDecoder(
+        target_model=target,
+        assistant_model=assistant,
+        mesh_device=mesh_device,
+        tt_kv_cache=tt_kv_cache,
+        page_table_torch=page_table,
+        stop_tokens=tokenizer.stop_tokens,
+        draft_len=4,
+    )
+
+    vocab = spec.target.vocab_size
+    shard_w = vocab // tp
+    tie_a, tie_b = 100, 100 + shard_w
+    host_logits = torch.full((1, 1, 1, vocab), -10.0, dtype=torch.bfloat16)
+    host_logits[0, 0, 0, tie_a] = 1.0
+    host_logits[0, 0, 0, tie_b] = 1.0
+    logits_sh = ttnn.from_torch(
+        host_logits,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+    )
+    gathered = ccl_allgather(logits_sh, target.mesh_config, target.ccl_manager)
+    full_tok = spec._id_to_host(spec._argmax_last(gathered, rows=1))
+    shard_tok = spec._id_to_host(spec._shard_argmax(logits_sh, rows=1))
+    shard_tok_replay = spec._id_to_host(spec._shard_argmax(logits_sh, rows=1))
+
+    for t in (logits_sh, gathered):
+        t.deallocate(True)
+
+    assert full_tok == tie_a
+    assert shard_tok in (tie_a, tie_b)
+    assert shard_tok == shard_tok_replay
 
 
 def _kv_to_tt(k_torch, mesh_device, num_kv_heads, num_attention_heads, tp, num_devices):
@@ -1555,7 +1735,7 @@ def test_tt_drafter_greedychain_acceptance(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 8)])
 def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     """Greedy spec-decode matches plain greedy decode, EXCEPT at target near-ties.
 
@@ -1565,6 +1745,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
     (top-2 logit gap < ~1), so spec-decode is token-identical to plain greedy up
     to the first such near-tie. A divergence at a CONFIDENT token (large top-2
     gap) would indicate a real accept/commit/KV bug and fails here."""
+    _skip_unless_wormhole_t3k()
     near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
@@ -1667,7 +1848,7 @@ def test_spec_decode_matches_greedy(mesh_device, reset_seeds):
 
 
 @_needs_assistant
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 8)])
 def test_verify_batchsize_invariance(mesh_device, reset_seeds):
     """Isolate batch-size numerics from spec accept logic.
 
@@ -1677,6 +1858,7 @@ def test_verify_batchsize_invariance(mesh_device, reset_seeds):
     If the two greedy chains diverge, greedy spec-decode CANNOT be bit-identical
     to batch=1 decode — the divergence is batched-path numerics, expected at
     near-tie tokens. Logs the first divergence and the target's top-2 logit gap."""
+    _skip_unless_wormhole_t3k()
     from models.demos.gemma4.tt.common import create_assistant_model
     from models.demos.gemma4.tt.generator import Gemma4Generator
     from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder

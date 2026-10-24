@@ -1,9 +1,19 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 
-from .test_factory import skip_if_config_only_checkpoint
+from .test_factory import configure_spec_decode_smoke_env, resolve_assistant_model_path, skip_if_config_only_checkpoint
+
+_SPEC_DECODE_SMOKE_TESTS = frozenset(
+    {
+        "test_assistant_config_loads",
+        "test_spec_decode_matches_greedy",
+        "test_verify_batchsize_invariance",
+    }
+)
 
 _MARKERS_REQUIRING_REAL_CHECKPOINT = frozenset(
     {
@@ -35,8 +45,33 @@ def test_modules(request):
     return request.config.getoption("--test-modules")
 
 
+def pytest_sessionstart(session):
+    """Pre-resolve assistant weights in CI before collection (spec-decode smokes only)."""
+    if os.environ.get("CI") != "true":
+        return
+    args = getattr(session.config, "args", None) or []
+    # Positional args only. A `-k 'not test_spec_decode_'` deselect must not match.
+    arg_str = " ".join(str(a) for a in args)
+    if "test_spec_decode.py" not in arg_str:
+        return
+    configure_spec_decode_smoke_env()
+
+
+def _item_base_name(item):
+    """Unparametrized test name. ``item.name`` is ``foo[blackhole-1x4]``."""
+    return getattr(item, "originalname", None) or item.name.split("[", 1)[0]
+
+
 def pytest_runtest_setup(item):
     """Skip PR integration tests when CI uses config-only HF_MODEL (no weights/tokenizer)."""
+    if _item_base_name(item) in _SPEC_DECODE_SMOKE_TESTS:
+        # Do not call configure_spec_decode_smoke_env() here: it rewrites HF_MODEL
+        # for every later test in the process. The dedicated smoke pytest sets
+        # that env in sessionstart; everyone else only resolves an existing dir.
+        if os.environ.get("GEMMA4_SPEC_DECODE_ENV_READY") != "1":
+            if not resolve_assistant_model_path(allow_download=False):
+                pytest.skip("assistant weights not available (set GEMMA4_ASSISTANT_MODEL locally)")
+
     if _MARKERS_REQUIRING_REAL_CHECKPOINT.intersection(m.name for m in item.iter_markers()):
         skip_if_config_only_checkpoint()
 
