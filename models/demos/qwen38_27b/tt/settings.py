@@ -19,8 +19,38 @@ TABLE = {
         ("float32", "bfloat16"),
         "the (1 + w) gamma is pre-offset in fp32 at load; bf16 would round 1 + w to 8 mantissa bits (10 KB either way)",
     ),
+    "GDN_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi2", "LoFi"),
+        "ENGINEER rule 7: linear-attention projections and the fold combine at HiFi4",
+    ),
+    "GDN_FP32_ACC": Setting(True, None, "ENGINEER rule 7: fp32 accumulation by default"),
+    "GDN_CHAIN_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi2"),
+        "chain_affine_transforms (A @ S + B over the SP rows); the op's own default is HiFi2, rule 7 asks HiFi4",
+    ),
+    "GDN_DELTA_CHUNK": Setting(
+        64,
+        (64, 32),
+        "chunk_gated_delta_rule chunk. The op decays its fp32 state once per chunk with a (dl*I) @ S matmul whose "
+        "operands the FPU reads with a shortened mantissa (about -0.1% per chunk on slow-decay heads). 64 (rank-4 "
+        "path, q/k normalised in linear_attention.py) halves the decays: layer-0 post-chunk state vs golden rel 0.016 "
+        "(worst head 0.029), gate margin 1.56; 32 (flat path, as qwen36) 0.029 / 0.057, margin 1.21 (C.linear.attention)",
+    ),
+    "GDN_CONV_CHANNEL_CHUNK": Setting(
+        512, (512, 256, 128), "qkv_causal_conv1d_silu channel block (2560 per TP column = 5 blocks), as qwen36 measured"
+    ),
 }
 
-MAX_PRECISION = {"NORM_FIDELITY": "HiFi4", "NORM_FP32_ACC": True, "NORM_WEIGHT_DTYPE": "float32"}
+MAX_PRECISION = {
+    "NORM_FIDELITY": "HiFi4",
+    "NORM_FP32_ACC": True,
+    "NORM_WEIGHT_DTYPE": "float32",
+    "GDN_FIDELITY": "HiFi4",
+    "GDN_FP32_ACC": True,
+    "GDN_CHAIN_FIDELITY": "HiFi4",
+    "GDN_DELTA_CHUNK": 64,
+}
 
 settings = Settings("QWEN38_27B_", TABLE, max_precision=MAX_PRECISION)
