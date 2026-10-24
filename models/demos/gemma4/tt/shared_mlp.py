@@ -26,7 +26,7 @@ from models.demos.gemma4.tt.ccl import (
     ccl_lane_scatter_rows,
 )
 from models.demos.gemma4.tt.compute_config import gelu_variant
-from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag
+from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag, pipeline_row_for
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -203,6 +203,7 @@ class SharedMLP:
                 cache_file_name=get_cache_file_name(
                     tensor_cache_path, f"gate_up_proj.weight.ws{tp_suffix}{pad_suffix}{dtype_suffix}"
                 ),
+                pipeline_row=pipeline_row_for(mesh_device, self.hidden_size, "gate_up", tp),
             )
         else:
             gate_up_proj = ttnn.as_tensor(
@@ -237,6 +238,7 @@ class SharedMLP:
                 cache_file_name=get_cache_file_name(
                     tensor_cache_path, f"down_proj.weight.ws{tp_suffix}{pad_suffix}{dtype_suffix}"
                 ),
+                pipeline_row=pipeline_row_for(mesh_device, self.hidden_size, "down", tp),
             )
         else:
             down_proj = ttnn.as_tensor(

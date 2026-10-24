@@ -22,7 +22,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig
-from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag
+from models.demos.gemma4.tt.decode_matmul import DecodeLinear, flag, pipeline_row_for
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -66,8 +66,6 @@ def load_attention_weights(
     No Meta-format conversion needed — uses HF-style rotary_embedding.
     """
     is_global = config.use_kv_tying
-    q_size = config.num_attention_heads * config.head_dim
-    kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp
     fractured = bool(getattr(mesh_config, "weight_fracture", False))
     if fractured and tp != mesh_config.mesh_shape[0]:
@@ -188,7 +186,14 @@ def load_attention_weights(
 
     if dram_shard and can_dram_shard(hidden_size, qkv_n, dtype=weight_dtype):
         wqkv = DramShardedLinear(
-            qkv, mesh_device, col_mapper, k=hidden_size, n=qkv_n, dtype=weight_dtype, cache_file_name=qkv_cache_ws
+            qkv,
+            mesh_device,
+            col_mapper,
+            k=hidden_size,
+            n=qkv_n,
+            dtype=weight_dtype,
+            cache_file_name=qkv_cache_ws,
+            pipeline_row=pipeline_row_for(mesh_device, hidden_size, "qkv", tp),
         )
     else:
         wqkv = ttnn.as_tensor(
@@ -213,7 +218,14 @@ def load_attention_weights(
 
     if dram_shard and o_proj_pad_size == 0 and can_dram_shard(oproj_k, oproj_n, dtype=weight_dtype):
         o_proj = DramShardedLinear(
-            o_w, mesh_device, row_mapper, k=oproj_k, n=oproj_n, dtype=weight_dtype, cache_file_name=oproj_cache_ws
+            o_w,
+            mesh_device,
+            row_mapper,
+            k=oproj_k,
+            n=oproj_n,
+            dtype=weight_dtype,
+            cache_file_name=oproj_cache_ws,
+            pipeline_row=pipeline_row_for(mesh_device, hidden_size, "out_proj", tp),
         )
     else:
         o_proj = ttnn.as_tensor(

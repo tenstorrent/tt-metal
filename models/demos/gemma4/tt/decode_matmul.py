@@ -115,3 +115,64 @@ class DecodeLinear:
         elif compute_kernel_config is not None:
             kwargs["compute_kernel_config"] = compute_kernel_config
         return ttnn.linear(x, self.weight, **kwargs)
+
+
+# --- DRAM-sharded decode kernel: the multi-core pipeline rows ----------------------------------------------------
+#
+# The DRAM-sharded decode kernel (tt/dram_sharded.py) streams each weight shard with ONE reader core per DRAM bank;
+# its multi-core pipeline (``use_multicore_pipeline`` with ``num_workers_per_dram_bank`` >= 2) puts 2-4 readers on
+# every bank and reads the activation straight from its L1 shards. On the dense 31B / 12B per-chip shapes at the
+# shipped decode layouts it is the one program-config knob that moves every DRAM-sharded matmul (single-chip knob
+# lab, traced, PCC vs the fp32 golden >= the LoFi kernel of today; _logs/g7_matmul_knob_lab.md, 2026-10-24): 31B
+# tp4 wqkv 54.2 -> 53.2 us, o_proj 33.1 -> 29.1, gate_up 128.8 -> 124.4, down 69.3 -> 65.5; tp8 o_proj 21.5 -> 17.8,
+# gate_up 67.3 -> 63.4, down 40.1 -> 33.5 (wqkv tp8: no gain, no row). Rows are keyed by (model tag, op, tp);
+# Wormhole and any grid of <= 64 worker cores keep the single-reader kernel (the pipeline needs workers x 8 banks
+# worker cores and was measured on the 12x10 / 13x10 Blackhole grids only). ``GEMMA4_DRAM_SHARD_PIPELINE`` is the
+# switch: ``0`` = the single-reader kernel everywhere; the default is ``PIPELINE_DEFAULT`` (off until the
+# model-level traced A/B and the token-accuracy subset pass under the rows).
+
+PIPELINE_ENV = "GEMMA4_DRAM_SHARD_PIPELINE"
+PIPELINE_DEFAULT = "0"
+MODEL_TAG_BY_HIDDEN = {5376: "31B", 3840: "12B"}
+MIN_PIPELINE_GRID_CORES = 65
+# (model, op, tp) -> (workers per DRAM bank, in0_block_w)
+DRAM_SHARDED_PIPELINE_ROWS = {
+    ("31B", "qkv", 4): (3, 2),
+    ("31B", "out_proj", 4): (4, 4),
+    ("31B", "out_proj", 8): (4, 4),
+    ("31B", "gate_up", 4): (4, 1),
+    ("31B", "gate_up", 8): (4, 1),
+    ("31B", "down", 4): (4, 1),
+    ("31B", "down", 8): (4, 1),
+}
+
+
+def model_tag(hidden_size):
+    """The dense model a per-chip shape belongs to, from its hidden size (5376 = 31B, 3840 = 12B), else None."""
+    return MODEL_TAG_BY_HIDDEN.get(int(hidden_size))
+
+
+def dram_sharded_pipeline_row(hidden_size, op: str, tp: int, grid_xy, blackhole: bool, default=None):
+    """``(workers per bank, in0_block_w)`` for a DRAM-sharded decode matmul, or None for the single-reader kernel:
+    the switch, Wormhole, a grid of fewer than ``MIN_PIPELINE_GRID_CORES`` worker cores, a model / op / tp without a
+    row, or a row whose readers would not fit the grid."""
+    env = os.environ.get(PIPELINE_ENV, default if default is not None else PIPELINE_DEFAULT)
+    if env.strip().lower() in ("0", "false", "no", "off", ""):
+        return None
+    if not blackhole:
+        return None
+    gx, gy = int(grid_xy[0]), int(grid_xy[1])
+    if gx * gy < MIN_PIPELINE_GRID_CORES:
+        return None
+    row = DRAM_SHARDED_PIPELINE_ROWS.get((model_tag(hidden_size), op, int(tp)))
+    if row is None or row[0] * 8 > gx * gy:
+        return None
+    return row
+
+
+def pipeline_row_for(mesh_device, hidden_size, op: str, tp: int):
+    """The row for a model build on ``mesh_device`` (its arch and worker grid)."""
+    from models.common.utility_functions import is_blackhole
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    return dram_sharded_pipeline_row(hidden_size, op, tp, (grid.x, grid.y), is_blackhole())

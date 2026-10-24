@@ -325,7 +325,10 @@ class DramShardedLinear:
     an FPU-tuned 2D program config (auto-selection overflows L1 for these shapes).
     """
 
-    def __init__(self, weight_torch, mesh_device, mesh_mapper, k, n, dtype, cache_file_name):
+    def __init__(self, weight_torch, mesh_device, mesh_mapper, k, n, dtype, cache_file_name, pipeline_row=None):
+        """``pipeline_row``: ``(workers per DRAM bank, in0_block_w)`` from ``decode_matmul.pipeline_row_for`` puts the
+        decode kernel on its multi-core pipeline (readers per bank reading the activation from its L1 shards; both
+        decode entry points, the prefill config untouched); None = the single-reader kernel."""
         self.k = k
         self.n = n
         self._dtype = dtype
@@ -342,6 +345,19 @@ class DramShardedLinear:
         # Act shard grid must match decode_progcfg (K and N), not a K-only grid.
         self._act_memcfg = activation_memcfg(k, n)
         self._decode_pc = decode_progcfg(TILE_SIZE, k, n, dtype=dtype)
+        self.pipeline_row = None
+        if pipeline_row is not None:
+            workers, block_w = int(pipeline_row[0]), int(pipeline_row[1])
+            pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=block_w,
+                per_core_M=self._decode_pc.per_core_M,
+                per_core_N=self._decode_pc.per_core_N,
+                fused_activation=None,
+            )
+            pc.num_workers_per_dram_bank = workers
+            pc.use_multicore_pipeline = True
+            self._decode_pc = pc
+            self.pipeline_row = (workers, block_w)
         self._decode_1d = None
         if decode_flag("GEMMA4_DRAM_SHARD_DECODE_1D") == "1":
             from models.demos.gemma4.tt.decode_matmul import decode_1d_progcfg, decode_compute_kernel_config
