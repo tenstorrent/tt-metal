@@ -192,6 +192,19 @@ constexpr bool kPrefetchNextX = true;
 constexpr uint32_t P2_READ_TRID = 14;
 constexpr uint32_t NEXT_X_TRID = 15;
 
+// CROSS-EXPERT W_gate PREFETCH (moe-expert prototype). On an expert's LAST M-block the gate/up
+// matmuls have consumed every W_gate chunk by the time phase 2 starts (the reduce waited on
+// cb_up_acc), so the resident W_gate CB is empty while phase 2 (H rounds + down) leaves DRAM idle.
+// The next active expert's W_gate is read into it there, under its own transaction id, and that
+// expert's block 0 only waits and publishes. The writer does the same for W_up. Phase-2 reads are
+// tagged P2_READ_TRID whenever a prefetch is in flight, so their scoped barriers do not drain it.
+constexpr bool kPrefetchNextW = W_RESIDENT != 0;
+constexpr uint32_t PF_W_TRID = 13;
+constexpr uint32_t PF_NONE = 0xFFFFFFFFu;
+// Reader -> writer word of the per-expert mailbox: the next active local expert, whose W_up the
+// writer prefetches on this expert's last block (PF_NONE: none). Written before the magic.
+constexpr uint32_t MBOX_PF_NEXT = 7;
+
 // Runtime-arg layout: the 17-word scalar block, then the COLUMN as KGROUPS (vx, vy) pairs in ROW
 // order — the invite fan-out and up-gather destinations. Row r at index r on every core is what
 // makes the slice ownership agree grid-wide.
@@ -436,6 +449,19 @@ void kernel_main() {
     // reset and the writer derives the identical value from the same per-expert m_blocks.
     // `block_idx` stays expert-relative — it selects token rows and the residency gate.
     uint32_t gb = 0;
+    // Every local expert's banded count, captured from the first expert's idx/counts pages (the
+    // start-page read below reuses that scratch), so the next active expert is known ahead of time.
+    uint32_t banded_all[EXPERTS_PER_CHIP];
+    bool banded_ready = false;
+    uint32_t pf_expert = PF_NONE;  // the expert whose W_gate is already in flight into cb_w_gate
+    auto next_active = [&](uint32_t e) -> uint32_t {
+        for (uint32_t j = e + 1; j < EXPERTS_PER_CHIP; ++j) {
+            if (banded_all[j] != 0) {
+                return j;
+            }
+        }
+        return PF_NONE;
+    };
     for (uint32_t local_expert_id = 0; local_expert_id < EXPERTS_PER_CHIP; ++local_expert_id) {
         const auto wg_acc = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + local_expert_id), W_TILE);
         const auto wd_acc =
@@ -515,6 +541,19 @@ void kernel_main() {
         const uint32_t raw_count =
             expert_in_range ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[global_expert_id] : 0u;
         const uint32_t banded_count = (raw_count < MIN_ACTIVE_TOKENS || raw_count > MAX_ACTIVE_TOKENS) ? 0u : raw_count;
+        if (kPrefetchNextW && !banded_ready) {
+            for (uint32_t j = 0; j < EXPERTS_PER_CHIP; ++j) {
+                const uint32_t gid = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_idx)[j];
+                const uint32_t raw =
+                    gid < NUM_GLOBAL_EXPERTS ? reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_cnt)[gid] : 0u;
+                banded_all[j] = (raw < MIN_ACTIVE_TOKENS || raw > MAX_ACTIVE_TOKENS) ? 0u : raw;
+            }
+            banded_ready = true;
+        }
+        // The idx/counts barrier above drained every outstanding read, a prefetch included, so a
+        // prefetch for an expert that ends up not running can no longer land over later reads.
+        const bool pf_hit = kPrefetchNextW && (pf_expert == local_expert_id);
+        pf_expert = PF_NONE;
 
         uint32_t m_t = (banded_count + TILE_H - 1) / TILE_H;
         if (m_t > M_T_MAX) {
@@ -567,6 +606,7 @@ void kernel_main() {
         // words for this one's.
         cb_reserve_back(cb_mailbox_compute, 1);
         cb_reserve_back(cb_mailbox_writer, 1);
+        mailbox_words[MBOX_PF_NEXT] = (kPrefetchNextW && m_blocks != 0) ? next_active(local_expert_id) : PF_NONE;
         moe_fused_swiglu::mailbox_publish(
             mailbox_addr, MAILBOX_MAGIC + local_expert_id, count, m_t, m_blocks, start_row);
         cb_push_back(cb_mailbox_compute, 1);
@@ -655,7 +695,7 @@ void kernel_main() {
             // Resident weights read DRAM on M-block 0 only: `cb_pop_front` advances a read pointer
             // without touching bytes, and each weight CB has a single producer, so a later block's slot
             // still holds block 0's data. Reserve/push/barrier/trip counts are unchanged.
-            const bool read_wg = (block_idx == 0) || (W_RESIDENT == 0);
+            const bool read_wg = ((block_idx == 0) || (W_RESIDENT == 0)) && !(pf_hit && block_idx == 0);
             const bool read_wd = (block_idx == 0) || (WD_RESIDENT == 0);
 
             // ---- Phase 1a: stage x, then multicast it along the grid row ----
@@ -1028,13 +1068,42 @@ void kernel_main() {
             } else if (is_root) {
                 h_arrivals += slice_worker_count;
             }
-            if (prefetch_next_x) {
+            // Next expert's W_gate, on this expert's last block only (earlier blocks still re-publish
+            // the resident bytes). cb_up_acc was waited above, so compute has popped every chunk.
+            const uint32_t pf_target =
+                (kPrefetchNextW && block_idx + 1 == m_blocks) ? next_active(local_expert_id) : PF_NONE;
+            if (pf_target != PF_NONE) {
+                const auto wg_next = TensorAccessor(wg_args, get_arg_val<uint32_t>(RT_WEIGHTS + pf_target), W_TILE);
+                static_assert(GU_CHUNKS * WG_CHUNK_TILES == WG_BLOCK_TILES, "prefetch fills the whole W_gate CB");
+                cb_reserve_back(cb_w_gate, WG_BLOCK_TILES);
+                const uint32_t pf_wp = get_write_ptr(cb_w_gate);
+                noc_async_read_set_trid(PF_W_TRID);
+                for (uint32_t c = 0; c < GU_CHUNKS; ++c) {
+                    moe_fused_swiglu::read_weight_chunk<BRG>(
+                        wg_next,
+                        true,
+                        c,
+                        GU_CHUNK_W,
+                        kr_rows,
+                        kstart,
+                        hstart,
+                        hn_cols,
+                        HID_T,
+                        pf_wp + c * WG_CHUNK_TILES * W_TILE,
+                        W_TILE);
+                }
+                noc_async_read_set_trid(0);
+                pf_expert = pf_target;
+            }
+            const bool p2_tagged = prefetch_next_x || (pf_target != PF_NONE);
+            if (p2_tagged) {
                 // Every read issued from here to the end of phase 2 is either a W_down head or the
-                // sender's local h copy. Scoped barriers may drain these without touching NEXT_X_TRID.
+                // sender's local h copy. Scoped barriers may drain these without touching NEXT_X_TRID
+                // or the cross-expert W_gate prefetch.
                 noc_async_read_set_trid(P2_READ_TRID);
             }
             auto phase2_read_barrier = [&]() {
-                if (prefetch_next_x) {
+                if (p2_tagged) {
                     noc_async_read_barrier_with_trid(P2_READ_TRID);
                 } else {
                     noc.async_read_barrier();
@@ -1271,6 +1340,9 @@ void kernel_main() {
                     }
                 }
             }
+            if (p2_tagged && !prefetch_next_x) {
+                noc_async_read_set_trid(0);
+            }
             if (prefetch_next_x) {
                 noc_async_read_set_trid(0);
                 noc_async_read_barrier_with_trid(NEXT_X_TRID);
@@ -1290,6 +1362,9 @@ void kernel_main() {
             cb_push_back(cb_h, h_pad);
         }
     }
+    // A prefetch is only ever issued for an expert that follows, so none is outstanding here; drain
+    // anyway rather than exit with a read in flight.
+    noc.async_read_barrier();
 }
 
 #ifdef HYB_NS
