@@ -231,6 +231,8 @@ using namespace ckernel;
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #undef DST_SYNC_MODE
 #undef DST_ACCUM_MODE
+// Shared SFPU harness entry points (TOPK_HARNESS_INIT routes the topk init through them).
+#include "sfpu_operations.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -262,6 +264,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         "iterations strips the tags a fresh-from-L1 rebuild would need; the ttnn pipeline re-stamps inside the merge "
         "and moves value words through raw Float32 CBs instead)");
     static_assert(TOPK_RANK_STAMPED || TOPK_TAG_BITS == 16, "TOPK_TAG_BITS only applies to the rank-stamped mode");
+    static_assert(!(TOPK_HARNESS_INIT && TOPK_RANK_STAMPED), "the shared harness init has no rank-stamped topk variant");
     constexpr std::uint32_t dst_index = 0;             // base DEST index for the 4-tile group.
     const int end_phase               = TOPK_LOGK - 1; // same as other TopK call sites.
     constexpr int start_phase         = 0;
@@ -275,21 +278,48 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
 
     // After Datacopy, we do topk SFPU.
-    // These two calls are essentially the same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_init<APPROX>(); from metal.
-    _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
-    if constexpr (TOPK_FUSED_STABLE)
+    if constexpr (TOPK_HARNESS_INIT)
     {
-        // Fused keys carry the index inside the packed word: index tracking stays OFF.
-        ckernel::sfpu::_init_topk_fused_();
-    }
-    else if constexpr (TOPK_RANK_STAMPED)
-    {
-        // Rank tags ride the value words' low TOPK_TAG_BITS bits; the true indices keep riding index tracking.
-        ckernel::sfpu::_init_topk_rank_stamped_<TOPK_TAG_BITS>();
+        // The shared harness init is what the perf sweep (eltwise_unary_sfpu_perf.cpp) runs for its
+        // topk rows, after other unary ops on the same core; the Tensix config is not reset between
+        // ELF runs, so start from the DEST increment those ops' init leaves in ADDR_MOD_6 (dest += 2)
+        // and require the topk init to program its own (dest += 32) rather than inherit one.
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_6);
+        test_utils::call_unary_sfpu_operation_init<
+            SfpuType::topk_local_sort,
+            APPROX,
+            is_fp32_dest_acc_en,
+            32 /*ITERATIONS*/,
+            false /*FAST_MODE*/,
+            NETWORK_STABLE_SORT,
+            false /*CLAMP_NEGATIVE*/,
+            DataFormat::Invalid /*TYPECAST_IN*/,
+            DataFormat::Invalid /*TYPECAST_OUT*/,
+            TOPK_FUSED_STABLE>(formats.math);
     }
     else
     {
-        ckernel::sfpu::_init_topk();
+        // These two calls are essentially the same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_init<APPROX>(); from metal.
+        _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
+        if constexpr (TOPK_FUSED_STABLE)
+        {
+            // Fused keys carry the index inside the packed word: index tracking stays OFF.
+            ckernel::sfpu::_init_topk_fused_();
+        }
+        else if constexpr (TOPK_RANK_STAMPED)
+        {
+            // Rank tags ride the value words' low TOPK_TAG_BITS bits; the true indices keep riding index tracking.
+            ckernel::sfpu::_init_topk_rank_stamped_<TOPK_TAG_BITS>();
+        }
+        else
+        {
+            ckernel::sfpu::_init_topk();
+        }
     }
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
