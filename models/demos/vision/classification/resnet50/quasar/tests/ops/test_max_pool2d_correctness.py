@@ -149,20 +149,9 @@ def _run_pool(mesh_device, is_max, in_h, in_w, channels, kernel, stride, padding
     assert_with_pcc(golden_flat, got, pcc=0.99)
 
 
-# A 2x2 pooling window produces an input tile face geometry of {face_r_dim=4, num_faces=4} (y=4, z=4), which
-# Quasar's LLK validate_buffer_desc rejects: a 4-face tile (z=4) requires y_dim=16 (ckernel_trisc_common.h).
-# These 2x2 shapes are not used by resnet50 (stem is 3x3). xfail until the LLK adds tiny-tile (z=1) SrcA support
-# for the reduce-col strided tilize, at which point the op can describe the input as a single-face tiny-tile
-# and these pass (strict=False so the eventual XPASS is visible, not a failure).
-_QSR_2X2_XFAIL = pytest.mark.xfail(
-    reason="face_r_dim=4/num_faces=4 (2x2 window) unsupported on Quasar; awaiting LLK tiny-tile reduce support",
-    strict=False,
-)
-
-
 @pytest.mark.parametrize(
     "in_h,in_w,channels,kernel,stride,padding",
-    [pytest.param(*c[:6], id=c[6], marks=([_QSR_2X2_XFAIL] if c[3] == (2, 2) else [])) for c in POOL_CONFIGS],
+    [pytest.param(*c[:6], id=c[6]) for c in POOL_CONFIGS],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_quasar_max_pool2d(mesh_device, in_h, in_w, channels, kernel, stride, padding):
@@ -173,11 +162,10 @@ def test_quasar_max_pool2d(mesh_device, in_h, in_w, channels, kernel, stride, pa
     "in_h,in_w,channels,kernel,stride,padding",
     # AVG regression: unpadded windows only (avoids torch count_include_pad ambiguity). Guards that the
     # forced-MAX-clear change did not disturb the AVG clear-in-loop path.
-    # All 2x2 windows -> {face_r_dim=4, num_faces=4}, unsupported on Quasar (see _QSR_2X2_XFAIL).
     [
-        pytest.param(64, 64, 64, (2, 2), (2, 2), (0, 0), id="avg_64_2x2_64c", marks=_QSR_2X2_XFAIL),
-        pytest.param(56, 56, 32, (2, 2), (2, 2), (0, 0), id="avg_56_2x2_32c", marks=_QSR_2X2_XFAIL),
-        pytest.param(32, 32, 128, (2, 2), (2, 2), (0, 0), id="avg_32_2x2_128c", marks=_QSR_2X2_XFAIL),
+        pytest.param(64, 64, 64, (2, 2), (2, 2), (0, 0), id="avg_64_2x2_64c"),
+        pytest.param(56, 56, 32, (2, 2), (2, 2), (0, 0), id="avg_56_2x2_32c"),
+        pytest.param(32, 32, 128, (2, 2), (2, 2), (0, 0), id="avg_32_2x2_128c"),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)

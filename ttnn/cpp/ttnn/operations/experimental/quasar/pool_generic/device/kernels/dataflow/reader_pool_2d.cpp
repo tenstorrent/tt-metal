@@ -407,9 +407,42 @@ void kernel_main() {
     // (e.g. unwritten reader_indices config) or stride_w==0 makes while(num_segments--)/the inner stride
     // loop spin forever. Compare these against the host sliding-window config for this pool.
 
-    // Global output-stick index on this core, in segment order. Sticks are dealt whole to lanes:
-    // this thread gathers and writes only sticks where stick_idx % num_lanes == my_lane, and its
-    // in-order lane pushes deliver exactly those sticks to its paired NEO.
+    // Global output-stick index on this core, in segment order. Sticks are dealt to threads in units of
+    // deal_sticks: this thread gathers and writes only sticks where (stick_idx / deal_sticks) % num_lanes
+    // == my_lane, and its in-order pushes deliver exactly those sticks to its paired compute thread.
+#ifdef OUTPUT_TILED
+    constexpr uint32_t deal_sticks = TILE_HEIGHT;  // TILE output: threads own whole 32-stick tile rows
+    constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
+    // Compute tilizes each tile row into in_ntiles_c scratch tiles (stride_size apart: the threads'
+    // entries interleave); copy them into that tile row of the output shard, with the same CPU copy and cache
+    // maintenance as the row-major sticks below.
+    auto copy_tile_row = [&](uint32_t tile_row_idx) {
+        scratch_cb.wait_front(in_ntiles_c);
+        const uint32_t tile_bytes = scratch_cb.get_entry_size();
+        const uint32_t out_tile_row_addr = out_shard_cb.get_write_ptr() - my_lane * out_shard_cb.get_entry_size() +
+                                           tile_row_idx * in_ntiles_c * tile_bytes;
+        for (uint32_t t = 0; t < in_ntiles_c; ++t) {
+            const uint32_t src_addr = scratch_cb.get_read_ptr() + t * scratch_cb.get_stride_size();
+#ifdef ARCH_QUASAR
+            invalidate_l2_cache_range(src_addr, tile_bytes);
+#else
+            invalidate_l1_cache();
+#endif
+            volatile tt_l1_ptr uint32_t* src_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+            volatile tt_l1_ptr uint32_t* dst_w =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_tile_row_addr + t * tile_bytes);
+            for (uint32_t w = 0; w < tile_bytes >> 2; ++w) {
+                dst_w[w] = src_w[w];
+            }
+#ifdef ARCH_QUASAR
+            flush_l2_cache_range(reinterpret_cast<uintptr_t>(dst_w), static_cast<size_t>(tile_bytes));
+#endif
+        }
+        scratch_cb.pop_front(in_ntiles_c);
+    };
+#else
+    constexpr uint32_t deal_sticks = 1;
+#endif
     uint32_t stick_idx = 0;
 
     while (num_segments--) {
@@ -418,7 +451,7 @@ void kernel_main() {
         uint16_t end = start_end_segment >> 16;
 
         for (uint16_t ind = start; ind <= end; ind += stride_w) {
-            if (stick_idx % num_lanes != my_lane) {
+            if ((stick_idx / deal_sticks) % num_lanes != my_lane) {
                 stick_idx++;
                 continue;
             }
@@ -472,14 +505,11 @@ void kernel_main() {
             // wait_front blocks until that push (ordering for free via the SPSC credit). Then, from this DM
             // core (the only reliable L1 path on the sim), NoC-copy scratch row 0 -> the output tensor at
             // this stick's row, bypassing the broken narrow pack entirely. Then release the scratch page.
-            //
-            // OUTPUT_TILED (TILE output layout): compute packs straight into the real out_cb (borrowed
-            // from the output tensor, via pre_tilize_cb -> tilize_block -> out_cb) and never produces
-            // scratch_cb_0/1 in that mode (see compute_pool_2d.cpp's `if constexpr (is_output_tiled)`
-            // branch). This whole scratch-consume/NoC-copy workaround exists only to route around the
-            // ROW_MAJOR path's broken narrow pack, so it must be skipped here -- otherwise this wait_front
-            // blocks forever on a push that will never come (the actual bug behind this fix).
-#ifndef OUTPUT_TILED
+#ifdef OUTPUT_TILED
+            if (stick_idx % TILE_HEIGHT == TILE_HEIGHT - 1) {
+                copy_tile_row(stick_idx / TILE_HEIGHT);
+            }
+#else
             scratch_cb.wait_front(1);
             {
                 const uint32_t global_stick = stick_idx;
@@ -531,8 +561,14 @@ void kernel_main() {
                 }
             }
             scratch_cb.pop_front(1);
-#endif  // !OUTPUT_TILED
+#endif  // OUTPUT_TILED
             stick_idx++;
         }
     }
+#ifdef OUTPUT_TILED
+    // The core's last tile row is partial when its stick count is not a multiple of 32.
+    if (stick_idx % TILE_HEIGHT != 0 && (stick_idx / TILE_HEIGHT) % num_lanes == my_lane) {
+        copy_tile_row(stick_idx / TILE_HEIGHT);
+    }
+#endif
 }  // kernel_main()

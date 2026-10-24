@@ -17,15 +17,15 @@ Case constraints (asserted per case): N*H*W % 32 == 0; torch golden needs paddin
 (num_threads is always 4 on Quasar: sticks are dealt round-robin to lanes and each compute lane
 derives its own share, so any per-core count is legal — see the stick*/sticks* unit cases, which
 pin remainders and idle lanes); total volume is kept
-<= ~16KB to dodge the open craq-sim halo corruption class (large kernels run single-core: halo
-exchange scales with kernel size). Cases print their banner BEFORE running so a hang names the
+<= ~16KB to keep simulator runs short. Cases print their banner BEFORE running so a hang names the
 case in flight; OOM/ERROR are caught per-case.
 
 Cases tagged sim_skip=... are auto-skipped when TT_METAL_SIMULATOR is set (craq-sim AND the ZeBu
-emulator both set it); the tag text records the evidence. Three classes exist: craq-sim artifacts
-(fail/hang on the sim only, exact on RTL), craq-sim ISA gaps (UnimplementedFunctionality), and
-REAL Quasar bugs that pre-date this branch (the <= 8-row-window cases: identical mismatch on sim,
-RTL, T=1/T=4 and main). QPOOL_NO_SIM_SKIP=1 forces them all to run -- do that on the emulator.
+emulator both set it); the tag text records the evidence. QPOOL_NO_SIM_SKIP=1 forces them to run.
+
+Until #60848 is fixed, halo deadlocks on Quasar (sim and RTL) whenever a core's TILE-layout input
+shard spans more than one untilize block (every cores=1 case, the width-sharded cases): the
+kernel_lib untilize helper's DataflowBuffers drain mid-kernel. Multi-core cases are unaffected.
 
 Run via plain pytest. QPOOL_ONLY=name1,name2 runs a subset. The suite also passes on WH silicon
 (the quasar op runs there), which serves as the cross-check leg.
@@ -70,8 +70,9 @@ def _run_case(
     dilation=(1, 1),  # max pool only
     ceil_mode=False,
     count_include_pad=None,  # avg only; None = op default (True). False -> per-stick scalars (config DFB)
+    divisor_override=None,  # avg only; one scalar (1/divisor) for every window
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
-    out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
+    out_layout="rm",  # "rm" | "tile" output layout
 ):
     pattern = pattern or PATTERN
     kernel, stride, padding, dilation = list(kernel), list(stride), list(padding), list(dilation)
@@ -108,6 +109,7 @@ def _run_case(
             padding=padding,
             ceil_mode=ceil_mode,
             **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
+            divisor_override=divisor_override,
         )
     out_h, out_w = golden_nchw.shape[2], golden_nchw.shape[3]  # exact for ceil_mode/dilation
     golden = golden_nchw.permute(0, 2, 3, 1).reshape(batch * out_h * out_w, channels).contiguous()
@@ -143,6 +145,7 @@ def _run_case(
         + (f" d={dilation}" if dilation != [1, 1] else "")
         + (" ceil" if ceil_mode else "")
         + (" excl_pad" if count_include_pad is False else "")
+        + (f" div={divisor_override}" if divisor_override is not None else "")
         + (f" {dtype}" if dtype != "bf16" else "")
         + (" out=TILE" if out_layout == "tile" else ""),
     )
@@ -169,6 +172,7 @@ def _run_case(
             output_layout=ttnn.TILE_LAYOUT if out_layout == "tile" else ttnn.ROW_MAJOR_LAYOUT,
             **(dict(dilation=dilation) if pool == "max" else {}),  # avg_pool2d takes no dilation
             **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
+            **({} if divisor_override is None else dict(divisor_override=divisor_override)),
         )
         ttnn.synchronize_device(device)
         return out
@@ -179,7 +183,7 @@ def _run_case(
     out.deallocate()
 
     got_max = got.max().item()
-    if got_max > input_max + 1e-2:
+    if got_max > input_max + 1e-2 and divisor_override is None:  # sum / divisor can exceed the input max
         return f"LEAK out.max={got_max:.4f} > in.max={input_max:.4f}"
     max_diff = (got - golden).abs().max().item()
     close = torch.allclose(got, golden, rtol=0.01, atol=0.01)
@@ -224,32 +228,19 @@ def _run_cases(device, cases):
 def test_qpool_c_sweep(device):
     for c in C_VALUES:
         assert c % 8 == 0, f"C={c}: ROW_MAJOR sharding needs 16B-aligned rows (C % 8 == 0 for bf16)"
-    # C >= 128 drops to the 32-stick single-core base, and C >= 384 is skipped on the SIMULATOR:
-    # the open craq-sim halo bug corrupts/stalls above the ~24KB volume class (proven
-    # threading-independent — identical failure at num_threads=1; run those on silicon/emulator).
-    c_values = C_VALUES
-    if os.environ.get("TT_METAL_SIMULATOR"):
-        skipped = [c for c in c_values if c >= 384]
-        c_values = [c for c in c_values if c < 384]
-        if skipped:
-            logger.info(f"QPOOL-SWEEP: skipping {skipped} on the sim (craq-sim volume corruption class)")
-    cases = [(f"C{c}", dict(channels=c, in_h=16 if c < 128 else 8, in_w=8 if c < 128 else 4)) for c in c_values]
+    # C >= 128 drops to the 32-stick single-core base to keep the simulator run short.
+    cases = [(f"C{c}", dict(channels=c, in_h=16 if c < 128 else 8, in_w=8 if c < 128 else 4)) for c in C_VALUES]
     _run_cases(device, cases)
 
 
 MATRIX_CASES = [
     # kernel-size ladder @ C=64 (7/8/9 are chunked large kernels; single-core to bound halo volume).
-    # sim_skip cases fail identically at num_threads=1 on craq-sim but pass exact-PCC on WH
-    # silicon (verified 2026-09-01, full matrix) — same open sim bug class as the C>=384 sweep skips.
-    (
-        "k2x2_s2",
-        dict(
-            kernel=(2, 2),
-            stride=(2, 2),
-            padding=(0, 0),
-            sim_skip="Quasar pool bug, windows <= 8 rows: identical MISMATCH on craq-sim AND ZeBu RTL, at T=1 and T=4, and on main (merge-base bc294789ec3) -- pre-existing, not a sim artifact; WH silicon passes (different LLK path)",
-        ),
-    ),
+    # Windows of <= 8 rows (2x2, 2x3, 3x1, 1x2) cover the small-window input-tile geometry.
+    ("k2x2_s2", dict(kernel=(2, 2), stride=(2, 2), padding=(0, 0))),
+    ("avg_k2x2_s2", dict(pool="avg", kernel=(2, 2), stride=(2, 2), padding=(0, 0))),
+    ("k2x3_s1", dict(in_h=8, in_w=8, kernel=(2, 3), stride=(1, 1), padding=(1, 1))),
+    ("k3x1_s1", dict(kernel=(3, 1), stride=(1, 1), padding=(1, 0))),
+    ("k1x2_s2", dict(kernel=(1, 2), stride=(2, 2), padding=(0, 0))),
     ("k3x3_s1", dict(in_h=8, in_w=8, kernel=(3, 3), stride=(1, 1), padding=(1, 1))),
     ("k5x5_s2", dict(kernel=(5, 5), stride=(2, 2), padding=(2, 2))),
     ("k7x7_s2_large", dict(kernel=(7, 7), stride=(2, 2), padding=(3, 3), cores=1)),
@@ -279,9 +270,7 @@ MATRIX_CASES = [
 # Special-case axes from the regular WH/BH unit test (tests/.../pool/test_maxpool2d.py) at
 # craq-sim-feasible sizes: the unit test's shapes are model-scale (600x600, C=32768), far beyond
 # the functional sim, so each AXIS is kept and the geometry shrunk (single-core, NHW % 32 == 0).
-# All 12 cases pass exact-PCC on WH silicon (2026-09-01). sim_skip evidence: HANG/MISMATCH is
-# bit-identical at num_threads=1 (threading exonerated); bf8b is a Metal-2.0 runtime gap on the
-# quasar path (program_spec.cpp:1731 is_data_format_supported TT_FATAL), fine on WH.
+# bf8b is a Metal-2.0 runtime gap on the quasar path (DFB is_data_format_supported TT_FATAL), fine on WH.
 UNIT_CASES = [
     ("ceil_k3x3_s2_b4", dict(batch=4, in_h=8, in_w=4, stride=(2, 2), ceil_mode=True, cores=1)),
     (
@@ -299,7 +288,6 @@ UNIT_CASES = [
             dilation=(2, 1),
             ceil_mode=True,
             cores=1,
-            sim_skip="craq-sim HANG (T=1-identical)",
         ),
     ),
     ("asym_k3x5_s2x1", dict(kernel=(3, 5), stride=(2, 1), padding=(1, 2), cores=1)),
@@ -312,7 +300,6 @@ UNIT_CASES = [
             stride=(4, 4),
             padding=(3, 1),
             cores=1,
-            sim_skip="craq-sim HANG (T=1-identical)",
         ),
     ),
     (
@@ -324,7 +311,6 @@ UNIT_CASES = [
             stride=(2, 2),
             padding=(7, 7),
             cores=1,
-            sim_skip="craq-sim HANG (T=1-identical)",
         ),
     ),
     (
@@ -336,7 +322,6 @@ UNIT_CASES = [
             stride=(1, 1),
             padding=(0, 0),
             cores=1,
-            sim_skip="Quasar pool bug, windows <= 8 rows: identical MISMATCH on craq-sim AND ZeBu RTL, at T=1 and T=4, and on main (merge-base bc294789ec3) -- pre-existing, not a sim artifact; WH silicon passes (different LLK path)",
         ),
     ),
     (
@@ -348,7 +333,6 @@ UNIT_CASES = [
             stride=(1, 1),
             padding=(0, 0),
             cores=1,
-            sim_skip="Quasar pool bug, windows <= 8 rows: identical MISMATCH on craq-sim AND ZeBu RTL, at T=1 and T=4, and on main (merge-base bc294789ec3) -- pre-existing, not a sim artifact; WH silicon passes (different LLK path)",
         ),
     ),
     ("c24_k3x3", dict(channels=24, cores=1)),
@@ -372,7 +356,6 @@ UNIT_CASES = [
             padding=(0, 0),
             shard="width",
             grid_yx=(1, 2),
-            sim_skip="craq-sim HANG (whole-window max class; avg twin passes on sim, exact on WH)",
         ),
     ),
     ("stick1_1core", dict(in_h=8, in_w=4, kernel=(8, 4), stride=(1, 1), padding=(0, 0), cores=1)),
@@ -384,7 +367,6 @@ UNIT_CASES = [
             in_w=4,
             stride=(3, 4),
             cores=1,
-            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
         ),
     ),
     (
@@ -395,7 +377,6 @@ UNIT_CASES = [
             in_w=4,
             stride=(4, 4),
             cores=1,
-            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
         ),
     ),  # 6 sticks: 2,2,1,1
     (
@@ -406,7 +387,6 @@ UNIT_CASES = [
             in_w=4,
             stride=(4, 4),
             cores=1,
-            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
         ),
     ),
     # Output-DFB entry count = sticks x 16-wide faces; 2 sticks x 3 faces (48 channels per core) is
@@ -423,7 +403,6 @@ UNIT_CASES = [
             stride=(6, 4),
             shard="width",
             grid_yx=(1, 2),
-            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=1.0, 2026-09-04) and on WH -- sim artifact",
         ),
     ),
     # Per-stick scalars (avg with !one_scalar_per_core: count_include_pad=False with padding, or
@@ -437,7 +416,6 @@ UNIT_CASES = [
             padding=(1, 1),
             count_include_pad=False,
             cores=1,
-            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=0.99996, 2026-09-04) and on WH -- sim artifact",
         ),
     ),
     (
@@ -451,54 +429,93 @@ UNIT_CASES = [
             padding=(0, 0),
             ceil_mode=True,
             cores=1,
-            sim_skip="craq-sim HANG at T=4 (uneven lane split); exact on ZeBu RTL at T=4 (pcc=0.99995, 2026-09-04) and on WH -- sim artifact",
         ),
     ),
-    # TILE output layout runs single-lane by policy (the tiled-output path is not lane-aware: at
-    # num_threads=4 DFB_FAST_TILIZE has in_ntiles_c entries -> TT_FATAL for C<128, hang at C=128;
-    # found by resnet50/quasar/tests/ops/test_max_pool2d_correctness.py on the ZeBu emulator).
-    # NOTE: even at T=1 the tiled-output path is WRONG on Quasar RTL (pcc ~0 for C=64), identically
-    # on main -- a pre-existing Quasar bug; these cases are exact on WH silicon.
+    # Avg-pool options (the production avgpool test's axes at sim scale): divisor_override is one
+    # scalar (1/divisor) per core and wins over count_include_pad and the ceil overhang; without it,
+    # padding + count_include_pad=False or a ceil overhang need per-stick scalars.
+    ("avg_div5_k3x3_p1", dict(pool="avg", padding=(1, 1), divisor_override=5, cores=1)),
+    ("avg_div5_excl_k3x3_p1", dict(pool="avg", padding=(1, 1), count_include_pad=False, divisor_override=5, cores=1)),
     (
-        "tiled_out_max_k3x3_T1",
-        dict(
-            out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
-        ),
+        "avg_div5_ceil_k3x3_s2_b4",
+        dict(pool="avg", batch=4, in_h=8, in_w=4, padding=(0, 0), ceil_mode=True, divisor_override=5, cores=1),
+    ),
+    ("avg_ceil_p1_k3x3_s2_b4", dict(pool="avg", batch=4, in_h=8, in_w=4, padding=(1, 1), ceil_mode=True, cores=1)),
+    (
+        "avg_ceil_p1_excl_k3x3_s2_b4",
+        dict(pool="avg", batch=4, in_h=8, in_w=4, padding=(1, 1), ceil_mode=True, count_include_pad=False, cores=1),
     ),
     (
-        "tiled_out_max_k3x3_c128_T1",
+        "avg_excl_k9x9_p1_large",
+        dict(pool="avg", in_h=16, in_w=16, kernel=(9, 9), padding=(1, 1), count_include_pad=False, cores=1),
+    ),
+    (
+        "avg_div64_k9x9_p1_large",
+        dict(pool="avg", in_h=16, in_w=16, kernel=(9, 9), padding=(1, 1), divisor_override=64, cores=1),
+    ),
+    (
+        "avg_excl_c280_k3x3_p1",
+        dict(pool="avg", channels=280, in_h=8, in_w=4, padding=(1, 1), count_include_pad=False, cores=1),
+    ),
+    # TILE output: each thread owns whole 32-stick tile rows (dealt round-robin) and tilizes them itself;
+    # cores with fewer than 128 output sticks leave threads idle. Covers several rows per thread, a partial
+    # last row, wide C (3 c-blocks), per-stick scalars, a large kernel, and the resnet50 global avg pool.
+    ("tiled_out_max_k3x3", dict(out_layout="tile")),
+    ("tiled_out_max_k3x3_c128", dict(channels=128, in_h=8, in_w=4, out_layout="tile")),
+    ("tiled_out_avg_k3x3", dict(pool="avg", stride=(1, 1), padding=(0, 0), out_layout="tile")),
+    (
+        "tiled_out_avg_k7x7_large",
+        dict(pool="avg", kernel=(7, 7), stride=(2, 2), padding=(0, 0), cores=1, out_layout="tile"),
+    ),
+    # 256 sticks = 8 tile rows: 2 per thread
+    (
+        "tiled_out_max_k3x3_s1_8rows",
+        dict(in_h=16, in_w=16, stride=(1, 1), padding=(1, 1), cores=1, out_layout="tile"),
+    ),
+    # 112 sticks = 3 full tile rows + a 16-stick partial row on thread 3
+    (
+        "tiled_out_max_k3x3_s1_partial_row",
+        dict(in_h=16, in_w=10, stride=(1, 1), padding=(0, 0), cores=1, out_layout="tile"),
+    ),
+    (
+        "tiled_out_max_c280_3blocks",
+        dict(channels=280, in_h=8, in_w=8, stride=(1, 1), padding=(1, 1), cores=1, out_layout="tile"),
+    ),
+    (
+        "tiled_out_avg_excl_k3x3_p1",
         dict(
-            channels=128,
+            pool="avg",
             in_h=8,
-            in_w=4,
-            out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
-        ),
-    ),
-    (
-        "tiled_out_avg_k3x3_T1",
-        dict(
-            pool="avg",
+            in_w=8,
             stride=(1, 1),
-            padding=(0, 0),
-            out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
-        ),
-    ),
-    (
-        "tiled_out_avg_k7x7_large_T1",
-        dict(
-            pool="avg",
-            kernel=(7, 7),
-            stride=(2, 2),
-            padding=(0, 0),
+            padding=(1, 1),
+            count_include_pad=False,
             cores=1,
             out_layout="tile",
-            sim_skip="craq-sim UnimplementedFunctionality: tensix_execute_pacr_stride (tiled-output pack); on ZeBu RTL the tiled-output path MISMATCHES identically on main (merge-base bc294789ec3) and this branch at T=1 -- pre-existing Quasar bug; WH silicon exact",
         ),
     ),
-    ("bf8b_k3x3", dict(dtype="bf8b", cores=1, sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)")),
+    (
+        "tiled_out_gap_b1_width_avg_1stick",
+        dict(
+            pool="avg",
+            in_h=4,
+            in_w=8,
+            kernel=(4, 8),
+            stride=(1, 1),
+            padding=(0, 0),
+            shard="width",
+            grid_yx=(1, 2),
+            out_layout="tile",
+        ),
+    ),
+    (
+        "bf8b_k3x3",
+        dict(
+            dtype="bf8b",
+            cores=1,
+            sim_skip="Metal-2.0 DFB bfp8 unsupported on Quasar (dfb.cpp is_data_format_supported)",
+        ),
+    ),
     (
         "bf8b_k7x7_large",
         dict(
@@ -507,7 +524,7 @@ UNIT_CASES = [
             stride=(2, 2),
             padding=(3, 3),
             cores=1,
-            sim_skip="Metal-2.0 DFB bfp8 unsupported (program_spec.cpp:1731)",
+            sim_skip="Metal-2.0 DFB bfp8 unsupported on Quasar (dfb.cpp is_data_format_supported)",
         ),
     ),
 ]

@@ -139,13 +139,11 @@ FactoryParameters get_factory_parameters(
     TT_FATAL(!(is_quasar && split_reader), "split reader is not supported on Quasar");
     // SPMD threads per cluster: symmetric STRIDED pairs reader thread i with compute thread i into
     // private (DM, NEO) lanes; Gen1 stays 1. Any per-core stick count is legal — the reader deals
-    // sticks round-robin and each compute lane derives its own share, so remainders just shorten
-    // tail lanes. TILE output stays single-lane (deliberate gap): its 32-stick tilize accumulation
-    // and DFB_FAST_TILIZE entry count are not lane-aware.
-    const bool tiled_output = output_layout == Layout::TILE;
+    // sticks round-robin (whole 32-stick tile rows for TILE output) and each compute thread derives its
+    // own stick count, so remainders just shorten the last threads.
     // One SPMD thread per Tensix engine; a Quasar cluster has 4 NEOs.
     constexpr uint32_t kQuasarNeosPerCluster = 4;
-    const uint32_t num_threads_per_cluster = is_quasar && !return_indices && !tiled_output ? kQuasarNeosPerCluster : 1;
+    const uint32_t num_threads_per_cluster = is_quasar && !return_indices ? kQuasarNeosPerCluster : 1;
 
     // For block float formats (BFLOAT8_B, BFLOAT4_B), convert to BFLOAT16 for buffer size calculations
     // since block float formats don't have a fixed datum size per element (they use block compression)

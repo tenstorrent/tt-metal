@@ -345,7 +345,6 @@ const DFBSpecName DFB_INTRA_RIGHT{"intra_kernel_right_inc_cb"};
 const DFBSpecName DFB_INTRA_DOWN_LEFT{"intra_kernel_down_left_wrap_inc_cb"};
 const DFBSpecName DFB_COMPUTE_TMP_IDX{"compute_tmp_idx_cb"};
 const DFBSpecName DFB_PRE_TILIZE{"pre_tilize_cb"};
-const DFBSpecName DFB_FAST_TILIZE{"fast_tilize_cb"};
 const DFBSpecName DFB_OUT{"out_cb"};
 const DFBSpecName DFB_OUT_IDX{"out_idx_cb"};
 const DFBSpecName DFB_CONFIG{"config_cb"};
@@ -727,36 +726,10 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // documents as the expected srcB scaler layout, which validates with the assert enabled. (srcA keeps its
     // full 32x32 4-face geometry below -- that operand genuinely needs it.)
     const auto scalar_tile = tt::tt_metal::Tile::from_face_grid(1, 1, {1, tt::constants::FACE_WIDTH});
-    const uint32_t window_size_hw = kernel_h * kernel_w;
-    // WORKAROUND (Quasar): the input-CB tile's face_r_dim feeds both the reduce tensor-shape and the
-    // TDMA buffer-descriptor y_dim, and Quasar LLK restricts both to powers of 2 <= 16
-    // (validate_tensor_shape_tile_dependent_ops_ in common/tensor_shape.h, validate_buffer_desc in
-    // tt_llk_quasar/common/inc/ckernel_trisc_common.h). WH/BH accept the raw window size directly
-    // (e.g. 9 for a 3x3 window) since they don't run those validators; Quasar asserts. Round the
-    // packed face_r_dim up to the next power of 2 so the tile shape validates (9 -> 16, giving the
-    // valid 16x16 tile: x=16,y=16,z=1). The input CB page is already padded to a full tile
-    // (round_up(in_cb_sz, TILE_HW) in pool_utils.cpp) so the larger face_r_dim reads no OOB.
-    // NOTE: this is a bring-up workaround. For correct results the padded rows [window_size, pow2)
-    // must hold the pool identity (-inf max / 0 avg) via clear_value_cb; otherwise stale L1 leaks
-    // into the reduce. Remove once Quasar reduce/buffer-descriptor supports non-pow2 face_r_dim.
-    const uint32_t raw_face_r_unpadded = std::min(window_size_hw, 16u);
-    uint32_t raw_face_r_pow2 = 1;
-    while (raw_face_r_pow2 < raw_face_r_unpadded) {
-        raw_face_r_pow2 <<= 1;
-    }
-    const uint32_t raw_face_r = raw_face_r_pow2;
-    const std::array<uint32_t, 2> raw_face_shape = {raw_face_r, tt::constants::FACE_WIDTH};
-    // QSR: the reduce-col strided tilize (_llk_unpack_reduce_col_tilizeA_strided_) only supports a full
-    // 32x32 (4-face) SrcA tile (LLK_ASSERT total_row_dim()==32 && total_col_dim()==32 at
-    // llk_unpack_reduce_col_tilizeA_strided.h). The WH/BH 2-face small-window optimization feeds it a
-    // 16x32 (num_faces=2) tile, which (a) violates that requirement -> wrong tilized data, and (b) makes
-    // the always-4-face strided unpack over-produce SrcA vs the 2-GMPOOL reduce -> SrcA double-buffer
-    // overflow -> deadlock (unpacker spins UPTW, math stalls on SrcB). Always describe the (already
-    // full-tile-padded, round_up(in_cb_sz, TILE_HW)) in_cb page as 4 faces; the padding rows
-    // [window_size, 32) hold the pool identity (-inf max / 0 avg via force_max_clear + clear_value_cb,
-    // AVG scalar = 1/true_window), so reducing the extra rows is a no-op.
-    const auto input_tile =
-        return_indices ? std::nullopt : std::optional{tt::tt_metal::Tile::from_face_grid(2, 2, raw_face_shape)};
+    // Quasar's 4-face reduce-col strided tilize assumes 16-row faces (llk_unpack_reduce_col_tilizeA_strided.h),
+    // so the in_cb page is a full 32x32 tile for every window size; the reader fills rows [window, 32)
+    // with the pool identity, so reducing them is a no-op.
+    const auto input_tile = return_indices ? std::nullopt : std::optional{tt::tt_metal::Tile()};
 
     // Single-row faces: one 1x16 face, or two of them side by side (a 1x32 tile).
     const bool last_tile_is_partial = in_c % tt::constants::TILE_WIDTH != 0;
@@ -769,7 +742,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
     // mandatory: in_scalar_0, clear_value, in_shard, reader_indices, in_0, out
     constexpr uint32_t num_mandatory_dfbs = 6;
     dfbs.reserve(
-        num_mandatory_dfbs + (return_indices ? 9 : 0) + (cb_sizes.has_pre_tilize ? 2 : 0) +
+        num_mandatory_dfbs + (return_indices ? 9 : 0) + (cb_sizes.has_pre_tilize ? 1 : 0) +
         (cb_sizes.has_out_idx ? 1 : 0) + (one_scalar_per_core ? 0 : 1));
 
     dfbs.push_back(local_dfb(
@@ -833,43 +806,38 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         dfbs.push_back(local_dfb(DFB_INTRA_DOWN_LEFT, idx_pagesize, 1, params.index_format));
     }
 
-    // pre_tilize / fast_tilize: two aliased DFBs over one L1 region (TILED output).
+    // TILE output: each compute thread packs its 32-stick tile row as untilized full tiles into one entry, which
+    // compute then tilizes. Every stick's pack writes 32 rows starting at its own, so the entry has 32
+    // spare rows for the last stick's.
     if (cb_sizes.has_pre_tilize) {
-        const uint32_t pre_tilize_total = cb_sizes.pre_tilize_cb_pagesize * cb_sizes.pre_tilize_cb_npages;
-        const uint32_t fast_tilize_page_size = tt::tile_size(params.data_format);
         TT_FATAL(
-            pre_tilize_total % fast_tilize_page_size == 0,
-            "pre_tilize_cb total {} must be a multiple of fast_tilize tile {}",
-            pre_tilize_total,
-            fast_tilize_page_size);
-        DataflowBufferSpec pre = local_dfb(
+            output_shard_shape[1] == params.in_ntiles_c * tt::constants::TILE_WIDTH,
+            "TILE output shard width {} must be the input's {} channel tiles",
+            output_shard_shape[1],
+            params.in_ntiles_c);
+        const uint32_t pre_tilize_entry_size = 2 * params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        dfbs.push_back(local_dfb(
             DFB_PRE_TILIZE,
-            cb_sizes.pre_tilize_cb_pagesize,
-            cb_sizes.pre_tilize_cb_npages,
+            pre_tilize_entry_size,
+            params.num_threads_per_cluster,
             params.data_format,
-            pack_untilize_tile);
-        pre.advanced_options.alias_with = {DFB_FAST_TILIZE};
-        DataflowBufferSpec fast = local_dfb(
-            DFB_FAST_TILIZE, fast_tilize_page_size, pre_tilize_total / fast_tilize_page_size, params.data_format);
-        fast.advanced_options.alias_with = {DFB_PRE_TILIZE};
-        dfbs.push_back(std::move(pre));
-        dfbs.push_back(std::move(fast));
+            tt::tt_metal::Tile()));
     }
 
     // output CB (borrowed output) + optional output index CB (borrowed output_idx)
-    if (is_output_tiled || return_indices) {
-        // Compute packs into out_cb (tiles, or the mpwi row-major faces): keep the real page geometry.
+    if (return_indices) {
+        // Compute packs the mpwi row-major faces into out_cb: keep the real page geometry.
         dfbs.push_back(borrowed_dfb(
             DFB_OUT,
             cb_sizes.out_cb_pagesize,
             cb_sizes.out_cb_npages,
             params.output_data_format,
             OUTPUT_TENSOR,
-            is_output_tiled ? std::nullopt : std::optional{pack_untilize_tile}));
+            pack_untilize_tile));
     } else {
-        // Row-major output: compute packs into the scratch DFB and the reader writes the shard via
-        // DFB_OUT_SHARD, so out_cb is census-only -- no kernel touches its pages. Its natural page
-        // count need not divide the lane count, so reuse the lane-agnostic raw-view geometry.
+        // Compute packs into the scratch DFB and the reader writes the shard via DFB_OUT_SHARD, so
+        // out_cb is census-only -- no kernel touches its pages. Its natural page count need not divide
+        // the thread count, so reuse the raw-view geometry.
         const auto [out_view_entry_size, out_view_num_entries] =
             raw_view_geometry(cb_sizes.out_cb_pagesize * cb_sizes.out_cb_npages);
         dfbs.push_back(
@@ -881,8 +849,11 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         // [DEBUG scratch 32x32] FULL-TILE pack target: the default 32x32 tile (four 16x16 faces) so the
         // pack reads DEST as a full 32x32 tile (not the narrow face_r_dim=1 pool output). Sized for one full
         // 32-row write: output_shard_width * out_nbytes * TILE_HEIGHT (page = FACE_WIDTH*nbytes face unit).
-        const uint32_t scratch_npages = params.num_threads_per_cluster;
-        const uint32_t scratch_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        // TILE output: one tile per entry (the tilize pack addresses whole tiles), in_ntiles_c per thread.
+        const uint32_t scratch_npages =
+            is_output_tiled ? params.in_ntiles_c * params.num_threads_per_cluster : params.num_threads_per_cluster;
+        const uint32_t scratch_pagesize = is_output_tiled ? tt::tile_size(params.output_data_format)
+                                                          : params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
         dfbs.push_back(local_dfb(
             DFB_SCRATCH_0, scratch_pagesize, scratch_npages, params.output_data_format, tt::tt_metal::Tile()));
         // [DEBUG scratch->out] borrowed OUTPUT view (per-stick RM rows) that the DM readers write into
@@ -945,6 +916,7 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         {"pool_type_is_avg", static_cast<uint32_t>(params.is_avg_pool)},
         {"one_scalar_per_core", static_cast<uint32_t>(one_scalar_per_core)},
         {"in_nbytes_c", in_nbytes_c},
+        {"in_ntiles_c", params.in_ntiles_c},
         // [DEBUG scratch->out] output row stride (bytes) for the DM NoC copy of scratch row 0.
         {"out_row_bytes", output_shard_shape[1] * params.nbytes},
         // [DEBUG scratch->out] full page count of one scratch CB; the reader waits/pops the WHOLE CB per
@@ -1148,11 +1120,8 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
         reader0_defines.insert({"HAS_CONFIG", "1"});
         reader1_defines.insert({"HAS_CONFIG", "1"});
     }
-    // Mirror compute_defines' OUTPUT_TILED gate (below) onto the readers: for TILED output, compute
-    // packs straight into the real out_cb (borrowed from the output tensor) and never produces
-    // scratch_cb_0/1, so the reader's scratch-consume/NoC-copy-to-out_shard workaround (which only
-    // exists to route around the ROW_MAJOR path's broken narrow pack) must not run -- otherwise the
-    // reader deadlocks forever on scratch_cb.wait_front waiting for pushes that will never come.
+    // Mirror compute_defines' OUTPUT_TILED gate (below) onto the readers: for TILE output threads own
+    // whole 32-stick tile rows and the reader copies tilized tile rows (not sticks) from scratch.
     if (is_output_tiled) {
         reader0_defines.insert({"OUTPUT_TILED", "1"});
         reader1_defines.insert({"OUTPUT_TILED", "1"});
@@ -1287,16 +1256,6 @@ ttnn::device_operation::ProgramArtifacts pool2d_create_program_artifacts(
             compute_bindings.push_back(DFBBinding{
                 .dfb_spec_name = DFB_PRE_TILIZE,
                 .accessor_name = "pre_tilize_cb",
-                .endpoint_type = DFBEndpointType::CONSUMER,
-                .access_pattern = DFBAccessPattern::STRIDED});
-            compute_bindings.push_back(DFBBinding{
-                .dfb_spec_name = DFB_FAST_TILIZE,
-                .accessor_name = "fast_tilize_cb",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-                .access_pattern = DFBAccessPattern::STRIDED});
-            compute_bindings.push_back(DFBBinding{
-                .dfb_spec_name = DFB_FAST_TILIZE,
-                .accessor_name = "fast_tilize_cb",
                 .endpoint_type = DFBEndpointType::CONSUMER,
                 .access_pattern = DFBAccessPattern::STRIDED});
         }
