@@ -375,6 +375,16 @@ def test_moe_fused_swiglu_k3_situ(device, active_tokens: int, x_row_major: bool)
     )
 
 
+@pytest.mark.parametrize("active_tokens", [289, 512])
+@pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
+def test_moe_fused_swiglu_grid_height_not_dividing_block(device, active_tokens: int):
+    # 10 grid rows do not divide the 8 * HN_PAD hidden block, so each row gets an uneven h slice
+    available = device.compute_with_storage_grid_size()
+    if available.x < 11 or available.y < 10:
+        pytest.skip(f"needs an 11x10 grid, device has {available.x}x{available.y}")
+    run_moe_fused_swiglu(device, 512, 4096, 2048, active_tokens=active_tokens, core_grid=ttnn.CoreCoord(11, 10))
+
+
 def _bias_tensor(device, width: int, live: bool):
     """A bias row for one projection. bf16 TILE is the only layout the op accepts, and a zero row
     must reproduce the bias-free result exactly, which is what makes `live` a bisector."""
