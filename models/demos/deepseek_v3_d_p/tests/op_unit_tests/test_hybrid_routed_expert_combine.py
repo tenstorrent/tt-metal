@@ -508,10 +508,13 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     # joined to the routing: expert e lives on mesh (row (e % group) // epc, col e // group).
     _ids = list(mesh_device.get_device_ids())
     _cols = tuple(mesh_device.shape)[1]
-    _per_chip = counts.reshape(num_dispatch_groups, dispatch_group_size, experts_per_chip)
+    # expert_token_counts is (groups, rows, experts), replicated over rows; expert e of group g sits on chip
+    # (e % group_experts) // experts_per_chip.
+    _group_experts = num_routed_experts // num_dispatch_groups
     for _g in range(num_dispatch_groups):
         for _c in range(dispatch_group_size):
-            _ex = [int(v) for v in _per_chip[_g, _c]]
+            _base = _g * _group_experts + _c * experts_per_chip
+            _ex = [int(expert_token_counts[_g, 0, _base + _e]) for _e in range(experts_per_chip)]
             logger.warning(
                 f"HRE_LOAD dev={_ids[_c * _cols + _g]} row={_c} col={_g} load={sum(_ex)} "
                 f"max={max(_ex)} unified={sum(v > threshold for v in _ex)} experts={_ex}"
