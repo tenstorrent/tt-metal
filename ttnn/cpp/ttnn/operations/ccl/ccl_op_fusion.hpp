@@ -63,12 +63,16 @@ struct AllGatherFusedOpSignaler {
         const tt::tt_metal::CoreRangeSet& all_gather_workers,
         std::vector<tt::tt_metal::CoreCoord>& all_gather_worker_cores);
 
+    // pack_receiver_coords: 16 bits per fused-op core (x | y << 8), two cores per word, instead of two words, for a
+    // kernel that builds its OpSignaler with packed_signal_coords (the coordinates are most of the runtime args with
+    // many receivers).
     void push_all_gather_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args,
 
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index,
-        uint32_t all_gather_direction);
+        uint32_t all_gather_direction,
+        bool pack_receiver_coords = false);
 };
 
 struct StridedAllGatherFusedOpSignaler {

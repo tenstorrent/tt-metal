@@ -1257,11 +1257,14 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (fuse_op) {
             std::vector<uint32_t> signaler_args;
             auto& signaler = is_forward ? fused_op_signaler_forward : fused_op_signaler_backward;
+            // The fused op's cores go packed, two per word (the reader and writer build packed OpSignalers): they are
+            // most of these kernels' runtime args, which size the program's runtime-arg region.
             signaler->push_all_gather_fused_op_rt_args(
                 signaler_args,
                 static_cast<uint32_t>(direction_signaler_cores.size()),
                 worker_signaler_index,
-                is_forward ? 1 : 0);
+                is_forward ? 1 : 0,
+                /*pack_receiver_coords=*/true);
             reader_args.append(signaler_args);
         }
         auto& reader_kernel = is_forward ? sender_reader_forward_kernel : sender_reader_backward_kernel;
@@ -1305,10 +1308,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
         if (fuse_op) {
             if (is_forward) {
                 fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
-                    writer_extra_args, static_cast<uint32_t>(forward_signaler_cores.size()), worker_signaler_index, 1);
+                    writer_extra_args,
+                    static_cast<uint32_t>(forward_signaler_cores.size()),
+                    worker_signaler_index,
+                    1,
+                    /*pack_receiver_coords=*/true);
             } else {
                 // Backward writers never issue the local-slice signal, but retain the writer ABI.
-                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_extra_args, 1, 0, 0);
+                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+                    writer_extra_args, 1, 0, 0, /*pack_receiver_coords=*/true);
             }
         }
         writer_args.append(writer_extra_args);

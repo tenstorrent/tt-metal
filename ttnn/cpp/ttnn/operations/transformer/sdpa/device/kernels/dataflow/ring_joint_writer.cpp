@@ -617,6 +617,13 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
+    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them; this kernel is a floater's (it saves visits
+    // and has no K-split role).
+    constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
+    constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
+    constexpr bool floater_home = floaters && !floater_core;
+    // No core holds two Q chunks (see the ring loop).
+    constexpr bool single_q = get_named_compile_time_arg_val("single_q") == 1;
     static_assert(!ksplit_enabled || (!rotated_q_split_enabled && use_streaming_compute));
     static_assert(ksplit_count <= ring_joint::kKSplitMaxCount);
     const bool ksplit_active = ksplit_enabled && global_q_end - global_q_start == 1;
@@ -648,16 +655,16 @@ void kernel_main() {
     constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
     constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
     constexpr uint32_t ksplit_cb_sum_in = ksplit_enabled ? cb_sum_in : cb_out;
-#ifdef RJ_FLOATERS
-    // Floaters (ring_joint_floaters.hpp), after the K-split args: [scratch address], then a home's scratch slots
-    // and donated ring iterations (one per piece), or a floater's [visit count][visits: iteration, slot, home x, home
-    // y, home semaphore ordinal]. A slot holds the max, sum and out tiles of one partial, one float32-tile page each.
-    const uint32_t floater_args =
+    // Floaters, after the K-split args: [scratch address], then a floater's [visit count]
+    // [visits: iteration, slot, home x, home y, home semaphore ordinal], or a home's donated pieces [slot, ring
+    // iteration, floater x, floater y, floater semaphore ordinal]. A slot holds the max, sum and out tiles of one
+    // partial, one float32-tile page each.
+    [[maybe_unused]] const uint32_t floater_args =
         ksplit_peer_args + 2 * (ksplit_active ? (ksplit_band + 1 < ksplit_count ? 1 : ksplit_count - 1) : 0);
     constexpr uint32_t slot_out_tiles = Sq_chunk_t * vDHt;
     constexpr uint32_t slot_tiles = 2 * Sq_chunk_t + slot_out_tiles;
     const InterleavedAddrGenFast<true> floater_scratch = {
-        .bank_base_address = get_arg_val<uint32_t>(floater_args),
+        .bank_base_address = floaters ? get_arg_val<uint32_t>(floater_args) : 0,
         .page_size = ring_joint::kFloaterSlotPageBytes,
         .data_format = DataFormat::Float32};
     static_assert(
@@ -666,18 +673,18 @@ void kernel_main() {
             get_tile_size(cb_out_im_A) <= ring_joint::kFloaterSlotPageBytes,
         "a floater partial's tiles must fit the scratch pages");
     // Moves `tiles` tiles of `bytes` each between L1 at `l1` and the slot's pages from `first`.
-    auto move_slot_tiles =
-        [&](bool to_dram, uint32_t slot, uint32_t first, uint32_t tiles, uint32_t bytes, uint32_t l1) {
-            for (uint32_t t = 0; t < tiles; ++t) {
-                const uint64_t dram = floater_scratch.get_noc_addr(slot * slot_tiles + first + t);
-                if (to_dram) {
-                    noc_async_write(l1 + t * bytes, dram, bytes);
-                } else {
-                    noc_async_read(dram, l1 + t * bytes, bytes);
+    [[maybe_unused]] auto move_slot_tiles =
+        [&](bool to_dram, uint32_t slot, uint32_t first, uint32_t tiles, uint32_t bytes, uint32_t l1)
+            __attribute__((noinline)) {
+                for (uint32_t t = 0; t < tiles; ++t) {
+                    const uint64_t dram = floater_scratch.get_noc_addr(slot * slot_tiles + first + t);
+                    if (to_dram) {
+                        noc_async_write(l1 + t * bytes, dram, bytes);
+                    } else {
+                        noc_async_read(dram, l1 + t * bytes, bytes);
+                    }
                 }
-            }
-        };
-#endif
+            };
 
     Noc noc;
 
@@ -890,6 +897,38 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
+    if (floater_home && ksplit_active) {
+        // Land the floaters' partials of this core's donated pieces in ring order as each is saved (their bits follow
+        // the senders', ordinals ksplit_count + 1 + piece), and hand each slot back to its floater. Compute's merge of
+        // the first frees the restore CBs for the second. The ring loop below pushes nothing compute needs on a K-split
+        // core, so this waits here.
+        RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
+        for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
+            const uint32_t a = floater_args + 1 + piece * ring_joint::kFloaterHomePieceArgs;
+            // An inactive ring iteration runs on no core: no floater visits it, and compute expects no partial.
+            if (((active_ring_iter_mask >> get_arg_val<uint32_t>(a + 1)) & 1u) == 0) {
+                continue;
+            }
+            ready.wait(ksplit_count + 1 + piece);
+            const uint32_t slot = get_arg_val<uint32_t>(a);
+            CircularBuffer in_max(cb_max_in);
+            CircularBuffer in_sum(ksplit_cb_sum_in);
+            CircularBuffer in_out(cb_prev_out);
+            in_max.reserve_back(Sq_chunk_t);
+            in_sum.reserve_back(Sq_chunk_t);
+            in_out.reserve_back(slot_out_tiles);
+            move_slot_tiles(false, slot, 0, Sq_chunk_t, get_tile_size(cb_max_A), in_max.get_write_ptr());
+            move_slot_tiles(false, slot, Sq_chunk_t, Sq_chunk_t, get_tile_size(cb_sum_A), in_sum.get_write_ptr());
+            move_slot_tiles(
+                false, slot, 2 * Sq_chunk_t, slot_out_tiles, get_tile_size(cb_out_im_A), in_out.get_write_ptr());
+            noc_async_read_barrier();
+            ready.signal(noc, get_arg_val<uint32_t>(a + 2), get_arg_val<uint32_t>(a + 3), get_arg_val<uint32_t>(a + 4));
+            in_max.push_back(Sq_chunk_t);
+            in_sum.push_back(Sq_chunk_t);
+            in_out.push_back(slot_out_tiles);
+        }
+        noc.async_atomic_barrier();
+    }
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
         // A packed pass consumes every member's sequencer step; only the first member's ID is used.
@@ -919,37 +958,60 @@ void kernel_main() {
         }
         const bool is_first_active_iter = !seen_active_iter;
         seen_active_iter = true;
-#ifdef RJ_FLOATER_CORE
-        // Save each visit of this iteration from half A to its home's slot once compute stages it, then set the home's
-        // bit; freeing cb_signal tells compute the staging is free again.
-        const uint32_t visits = get_arg_val<uint32_t>(floater_args + 1);
-        for (uint32_t v = 0; v < visits; ++v) {
-            const uint32_t a = floater_args + 2 + v * ring_joint::kFloaterWriterVisitArgs;
-            if (get_arg_val<uint32_t>(a) != ring_iter) {
-                continue;
+        if constexpr (floater_core) {
+            // Save each visit of this iteration from half A to its ring slot once compute stages it, then set the
+            // home's bit; freeing cb_signal tells compute the staging is free again.
+            const uint32_t visits = get_arg_val<uint32_t>(floater_args + 1);
+            for (uint32_t v = 0; v < visits; ++v) {
+                const uint32_t a = floater_args + 2 + v * ring_joint::kFloaterWriterVisitArgs;
+                if (get_arg_val<uint32_t>(a) != ring_iter) {
+                    continue;
+                }
+                CircularBuffer staged(cb_signal);
+                staged.wait_front(1);
+                // The slot's last saved visit (one on an active iteration) must have been read by its home.
+                for (uint32_t previous = v; previous >= ring_joint::kFloaterRingSlots;) {
+                    previous -= ring_joint::kFloaterRingSlots;
+                    const uint32_t previous_iter =
+                        get_arg_val<uint32_t>(floater_args + 2 + previous * ring_joint::kFloaterWriterVisitArgs);
+                    if (((active_ring_iter_mask >> previous_iter) & 1u) != 0) {
+                        RotatedQHandoff(get_named_compile_time_arg_val("ksplit_sem_id")).wait(previous + 1);
+                        break;
+                    }
+                }
+                const uint32_t slot = get_arg_val<uint32_t>(a + 1);
+                move_slot_tiles(
+                    true, slot, 0, Sq_chunk_t, get_tile_size(cb_max_A), CircularBuffer(cb_max_A).get_read_ptr());
+                move_slot_tiles(
+                    true,
+                    slot,
+                    Sq_chunk_t,
+                    Sq_chunk_t,
+                    get_tile_size(cb_sum_A),
+                    CircularBuffer(cb_sum_A).get_read_ptr());
+                move_slot_tiles(
+                    true,
+                    slot,
+                    2 * Sq_chunk_t,
+                    slot_out_tiles,
+                    get_tile_size(cb_out_im_A),
+                    CircularBuffer(cb_out_im_A).get_read_ptr());
+                noc_async_write_barrier();
+                RotatedQHandoff(get_named_compile_time_arg_val("ksplit_sem_id"))
+                    .signal(
+                        noc, get_arg_val<uint32_t>(a + 2), get_arg_val<uint32_t>(a + 3), get_arg_val<uint32_t>(a + 4));
+                noc.async_atomic_barrier();
+                staged.pop_front(1);
             }
-            CircularBuffer staged(cb_signal);
-            staged.wait_front(1);
-            const uint32_t slot = get_arg_val<uint32_t>(a + 1);
-            move_slot_tiles(
-                true, slot, 0, Sq_chunk_t, get_tile_size(cb_max_A), CircularBuffer(cb_max_A).get_read_ptr());
-            move_slot_tiles(
-                true, slot, Sq_chunk_t, Sq_chunk_t, get_tile_size(cb_sum_A), CircularBuffer(cb_sum_A).get_read_ptr());
-            move_slot_tiles(
-                true,
-                slot,
-                2 * Sq_chunk_t,
-                slot_out_tiles,
-                get_tile_size(cb_out_im_A),
-                CircularBuffer(cb_out_im_A).get_read_ptr());
-            noc_async_write_barrier();
-            RotatedQHandoff(get_named_compile_time_arg_val("ksplit_sem_id"))
-                .signal(noc, get_arg_val<uint32_t>(a + 2), get_arg_val<uint32_t>(a + 3), get_arg_val<uint32_t>(a + 4));
-            noc.async_atomic_barrier();
-            staged.pop_front(1);
+            continue;
         }
-        continue;
-#endif
+        // With no core holding two Q chunks, a K-split core holds one unit, its state in L1 until the K-split epilogue,
+        // and an idle core none: nothing to save, restore or write in the ring. Leaving that path out keeps the binary
+        // well inside the kernel config buffer.
+        if constexpr (ksplit_enabled && single_q) {
+            ASSERT(ksplit_active || global_q_end == global_q_start);
+            continue;
+        }
 
         // When a ring iteration has one valid K chunk, compute saves to staging on K0,
         // reserving staging CBs immediately. The deferred flush must happen before any
@@ -961,7 +1023,7 @@ void kernel_main() {
             // Sliding compute consumes every local/halo source for a Q in one pass. There is
             // therefore no intermediate state to restore or save: wait for the final result,
             // write it once, and advance directly to the next assigned Q.
-            const bool single_q_chunk = (global_q_end - global_q_start == 1);
+            const bool single_q_chunk = single_q || (global_q_end - global_q_start == 1);
             for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
                 const auto decoded_q =
                     decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
@@ -1004,7 +1066,8 @@ void kernel_main() {
                                 : is_last_active_ring_iter(active_ring_iter_mask, ring_iter));
             // Rotated: rotated_max_slots >= 2, so accumulators always round-trip through DRAM.
             // Deriving it from the static range would disagree with compute's per-iteration count.
-            const bool single_q_chunk = !rotated_q_split_enabled && (global_q_end - global_q_start == 1);
+            // A single_q program's cores hold at most one chunk (an idle one runs no Q loop): fold the multi-Q paths.
+            const bool single_q_chunk = single_q || (!rotated_q_split_enabled && (global_q_end - global_q_start == 1));
             constexpr uint32_t sum_offset = q_local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * vDHt;
 
@@ -1417,46 +1480,24 @@ void kernel_main() {
             noc, out_generator, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
         noc.async_write_barrier();
     };
-#ifdef RJ_FLOATER_CORE
-    constexpr bool floater_core = true;  // runs no unit of its own: no K-split role
-#else
-    constexpr bool floater_core = false;
-#endif
-    if constexpr (ksplit_enabled && !floater_core) {
-        RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
-#ifdef RJ_FLOATERS
-        if (ksplit_active) {
-            // Land the floaters' partials of this core's donated pieces, in ring order, for compute to merge. Their
-            // bits follow the senders' (ordinals ksplit_count + 1 + piece).
-            for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
-                // An inactive ring iteration runs on no core: no floater visits it, and compute expects no partial.
-                const uint32_t donated_iter =
-                    get_arg_val<uint32_t>(floater_args + 1 + ring_joint::kDonatedPieces + piece);
-                if (((active_ring_iter_mask >> donated_iter) & 1u) == 0) {
-                    continue;
-                }
-                ready.wait(ksplit_count + 1 + piece);
-                const uint32_t slot = get_arg_val<uint32_t>(floater_args + 1 + piece);
-                CircularBuffer in_max(cb_max_in);
-                CircularBuffer in_sum(ksplit_cb_sum_in);
-                CircularBuffer in_out(cb_prev_out);
-                in_max.reserve_back(Sq_chunk_t);
-                in_sum.reserve_back(Sq_chunk_t);
-                in_out.reserve_back(slot_out_tiles);
-                move_slot_tiles(false, slot, 0, Sq_chunk_t, get_tile_size(cb_max_A), in_max.get_write_ptr());
-                move_slot_tiles(false, slot, Sq_chunk_t, Sq_chunk_t, get_tile_size(cb_sum_A), in_sum.get_write_ptr());
-                move_slot_tiles(
-                    false, slot, 2 * Sq_chunk_t, slot_out_tiles, get_tile_size(cb_out_im_A), in_out.get_write_ptr());
-                noc_async_read_barrier();
-                in_max.push_back(Sq_chunk_t);
-                in_sum.push_back(Sq_chunk_t);
-                in_out.push_back(slot_out_tiles);
-            }
-            if (ksplit_band + 1 < ksplit_count) {
-                ready.reset_after_run();  // a sender's semaphore carries only the floaters' bits
+    if constexpr (floater_core) {
+        // Every home has read its slot once all visits' bits are set: none can set one after the reset.
+        RotatedQHandoff read_back(get_named_compile_time_arg_val("ksplit_sem_id"));
+        const uint32_t visits = get_arg_val<uint32_t>(floater_args + 1);
+        for (uint32_t v = 0; v < visits; ++v) {
+            const uint32_t iter = get_arg_val<uint32_t>(floater_args + 2 + v * ring_joint::kFloaterWriterVisitArgs);
+            if (((active_ring_iter_mask >> iter) & 1u) != 0) {
+                read_back.wait(v + 1);
             }
         }
-#endif
+        read_back.reset_after_run();
+    }
+    if constexpr (ksplit_enabled && !floater_core) {
+        RotatedQHandoff ready(get_named_compile_time_arg_val("ksplit_sem_id"));
+        if (floaters && ksplit_active && ksplit_band + 1 < ksplit_count) {
+            // A sender's semaphore carries only the floaters' bits, all landed before the ring.
+            ready.reset_after_run();
+        }
         if (ksplit_active && ksplit_band + 1 < ksplit_count) {
             // Sender: compute signals once its state sits in half A, where it stays until the program ends.
             CircularBuffer staged(cb_signal);

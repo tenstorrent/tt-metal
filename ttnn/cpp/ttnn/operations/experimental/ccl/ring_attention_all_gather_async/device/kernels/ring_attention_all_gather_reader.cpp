@@ -197,20 +197,13 @@ struct ReadinessMarkerForwarder {
                 if (sig.mcast_signal_op_cores) {
                     for (uint32_t i = 0; i < sig.num_fused_op_cores_to_signal; i++) {
                         sig.signal_op_sem.up(
-                            sig.noc,
-                            sig.signal_op_cores_noc_coords[i * 2],
-                            sig.signal_op_cores_noc_coords[i * 2 + 1],
-                            ready - this->forwarded);
+                            sig.noc, sig.signal_core_x(i), sig.signal_core_y(i), ready - this->forwarded);
                     }
                     this->forwarded = ready;
                 } else {
                     for (; this->forwarded < ready; ++this->forwarded) {
                         const uint32_t core = sender_transport_rank(this->forwarded);
-                        sig.signal_op_sem.up(
-                            sig.noc,
-                            sig.signal_op_cores_noc_coords[core * 2],
-                            sig.signal_op_cores_noc_coords[core * 2 + 1],
-                            1);
+                        sig.signal_op_sem.up(sig.noc, sig.signal_core_x(core), sig.signal_core_y(core), 1);
                     }
                 }
             }
@@ -416,7 +409,7 @@ void kernel_main() {
 
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
-        op_signaler = OpSignaler(arg_idx);
+        op_signaler = OpSignaler(arg_idx, /*packed_signal_coords=*/true);
     }
 
     const uint32_t cb_fifo_limit = get_local_cb_interface(cb_output_id).fifo_limit;

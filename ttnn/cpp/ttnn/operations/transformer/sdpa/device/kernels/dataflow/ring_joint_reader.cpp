@@ -548,6 +548,13 @@ void kernel_main() {
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
+    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them; this kernel is a floater's (it runs visits
+    // instead of a unit of its own); the homes donate their bands' tails, else their heads.
+    constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
+    constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
+    constexpr bool donate_tail = get_named_compile_time_arg_val("donate_tail") == 1;
+    // Interleaved ring steps (ring_joint_ksplit.hpp).
+    constexpr bool ring_interleave = get_named_compile_time_arg_val("ring_interleave") == 1;
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     // Expanded K: [W_UK address, rank, peer physical x, peer physical y] are the last runtime args, after the K-split
@@ -852,18 +859,12 @@ void kernel_main() {
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
-#ifdef RJ_FLOATERS
-    // Floaters (ring_joint_floaters.hpp), after the expanded-K args: [donated fraction per ring iteration], then
-    // [visit count][visits: iteration, unit, band, frac]. A home cuts its donated pieces off its bands; a floater
-    // (RJ_FLOATER_CORE) runs its visits instead of a unit of its own.
-#ifdef RJ_DONATE_TAIL
-    constexpr bool donate_tail = true;
-#else
-    constexpr bool donate_tail = false;
-#endif
-    const uint32_t floater_args = wuk_arg_idx + 4;
-    const uint32_t visit_count = get_arg_val<uint32_t>(floater_args + ring_joint::kDonationIters);
-#endif
+    // Floaters, after the expanded-K args: [donated fraction per ring iteration], then [visit count][visits:
+    // iteration, unit, band, frac]. A home cuts its donated pieces off its bands; a floater runs its visits instead of
+    // a unit of its own.
+    [[maybe_unused]] const uint32_t floater_args = wuk_arg_idx + 4;
+    [[maybe_unused]] const uint32_t visit_count =
+        floater_core ? get_arg_val<uint32_t>(floater_args + ring_joint::kDonationIters) : 0;
 
     /**
      * Iterate over ring indices.
@@ -922,11 +923,6 @@ void kernel_main() {
     const uint32_t source_group_size = packed_schedule.source_group_size;
     const bool packed_sources = packed_kv_enabled && packed_schedule.packed();
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-#ifdef RING_INTERLEAVE
-    constexpr bool ring_interleave = true;
-#else
-    constexpr bool ring_interleave = false;
-#endif
     // Interleaved steps (ring_joint_ksplit.hpp) revisit a ring iteration: its ID and slice direction come from its
     // first step, the only one that advances the sequencer. A revisit is always within the iteration's pair, whose
     // members differ in parity.
@@ -1019,12 +1015,10 @@ void kernel_main() {
         }
 
         uint32_t KV_chunks_processed_in_iter = 0;
-#ifdef RJ_FLOATER_CORE
-        // This step's visits: a floater runs each whole in its iteration's first step.
-        ring_joint::KSplitRange visit_ranges[ring_joint::kFloaterMaxVisitsPerIter];
-        uint32_t visit_units[ring_joint::kFloaterMaxVisitsPerIter];
-        uint32_t step_visits = 0;
-#endif
+        // A floater's visits of this step: it runs each whole in its iteration's first step.
+        [[maybe_unused]] ring_joint::KSplitRange visit_ranges[floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1];
+        [[maybe_unused]] uint32_t visit_units[floater_core ? ring_joint::kFloaterMaxVisitsPerIter : 1];
+        [[maybe_unused]] uint32_t step_visits = 0;
         uint32_t iter_num_kv_chunks = packed_sources ? packed_kv.chunk_count() : num_kv_chunks;
 
         // K split: this core's slice of the iteration's local K chunks, as compute derives it. Idle cores in a split
@@ -1039,21 +1033,22 @@ void kernel_main() {
                 q_local_padded_Nt,
                 Sk_chunk_t>(num_local_k_chunks, ring_id, logical_nt, causal_end_nt);
             ring_joint::KSplitRange band_range = ring_joint::ksplit_range(num_valid, ksplit_idx, ksplit_count, ring_id);
-#ifdef RJ_FLOATER_CORE
-            for (uint32_t v = 0; istep.piece == 0 && v < visit_count; ++v) {
-                const uint32_t a = floater_args + ring_joint::kDonationIters + 1 + v * ring_joint::kFloaterVisitArgs;
-                if (get_arg_val<uint32_t>(a) == ring_iter) {
-                    visit_ranges[step_visits] = ring_joint::donated_piece(
-                        ring_joint::ksplit_range(num_valid, get_arg_val<uint32_t>(a + 2), ksplit_count, ring_id),
-                        get_arg_val<uint32_t>(a + 3),
-                        donate_tail);
-                    visit_units[step_visits++] = get_arg_val<uint32_t>(a + 1);
+            if constexpr (floater_core) {
+                for (uint32_t v = 0; istep.piece == 0 && v < visit_count; ++v) {
+                    const uint32_t a =
+                        floater_args + ring_joint::kDonationIters + 1 + v * ring_joint::kFloaterVisitArgs;
+                    if (get_arg_val<uint32_t>(a) == ring_iter) {
+                        visit_ranges[step_visits] = ring_joint::donated_piece(
+                            ring_joint::ksplit_range(num_valid, get_arg_val<uint32_t>(a + 2), ksplit_count, ring_id),
+                            get_arg_val<uint32_t>(a + 3),
+                            donate_tail);
+                        visit_units[step_visits++] = get_arg_val<uint32_t>(a + 1);
+                    }
                 }
+            } else if constexpr (floaters) {
+                band_range = ring_joint::kept_after_donation(
+                    band_range, get_arg_val<uint32_t>(floater_args + ring_iter), donate_tail);
             }
-#elif defined(RJ_FLOATERS)
-            band_range = ring_joint::kept_after_donation(
-                band_range, get_arg_val<uint32_t>(floater_args + ring_iter), donate_tail);
-#endif
             ksplit_k_range = ring_joint::interleaved_piece(band_range, istep.piece, istep.pieces);
         }
         // Progressive readiness (ring_attention_slice_readiness.hpp): a remote slice lands in parts. Which part holds a
@@ -1114,9 +1109,9 @@ void kernel_main() {
             }
         }
         uint32_t gqa_group_q_iter = 0;
-#ifdef RJ_FLOATER_CORE
-        loop_q_count = step_visits;
-#endif
+        if constexpr (floater_core) {
+            loop_q_count = step_visits;
+        }
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
             // Check if this is a real iteration or only padded chain/mcast synchronization.
@@ -1139,14 +1134,14 @@ void kernel_main() {
                 flat_q_index = padded_slot_flat_q<false>({}, global_q_start, q_per_core, q_iter, 1);
             }
 
-#ifdef RJ_FLOATER_CORE
-            // A visit is a fresh Q chunk of its own: its unit, its piece, its own Q and W_UK push.
-            const uint32_t visit_chunks_before = KV_chunks_processed_in_iter;
-            is_padded_iter = false;
-            flat_q_index = visit_units[q_iter];
-            ksplit_k_range = visit_ranges[q_iter];
-            q_pushed = false;
-#endif
+            [[maybe_unused]] const uint32_t visit_chunks_before = KV_chunks_processed_in_iter;
+            if constexpr (floater_core) {
+                // A visit is a fresh Q chunk of its own: its unit, its piece, its own Q and W_UK push.
+                is_padded_iter = false;
+                flat_q_index = visit_units[q_iter];
+                ksplit_k_range = visit_ranges[q_iter];
+                q_pushed = false;
+            }
             // Same-core GQA uses group-major (batch, Q chunk, head) scheduling so consecutive
             // iterations reuse one K/V window.  Every other specialization retains the ordinary
             // head-major flat order and optional causal zigzag remap.
@@ -1676,26 +1671,25 @@ void kernel_main() {
                     }
                 }
             }
-#ifdef RJ_FLOATER_CORE
-            // Compute runs one call per visit, which drains its own phase padding (none for an empty visit, which it
-            // skips), so a floater pads per visit instead of per step.
-            const uint32_t visit_chunks = KV_chunks_processed_in_iter - visit_chunks_before;
-            push_kv_dummies(
-                visit_chunks == 0 ? 0
-                                  : dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(visit_chunks));
-#endif
+            if constexpr (floater_core) {
+                // Compute runs one call per visit, which drains its own phase padding (none for an empty visit, which
+                // it skips), so a floater pads per visit instead of per step.
+                const uint32_t visit_chunks = KV_chunks_processed_in_iter - visit_chunks_before;
+                push_kv_dummies(
+                    visit_chunks == 0
+                        ? 0
+                        : dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(visit_chunks));
+            }
         }
         if (packed_sources) {
             // Cores without Q work still consume the group in sequencer order,
             // so the next group and subsequent dispatches start at the right source.
             packed_readiness.drain(source_group_size, wait_packed_source);
         }
-#ifndef RJ_FLOATER_CORE
-        if constexpr (!has_sliding_window) {
+        if constexpr (!has_sliding_window && !floater_core) {
             push_kv_dummies(
                 dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter));
         }
-#endif
     }
     synchronize_halo();
     if constexpr (k_expand) {

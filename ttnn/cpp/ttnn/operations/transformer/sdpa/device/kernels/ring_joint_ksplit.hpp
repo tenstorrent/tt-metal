@@ -80,7 +80,7 @@ inline KSplitRange sliding_ksplit_range(uint32_t num_items, uint32_t split_idx, 
     return ksplit_range(num_items, split_idx, split_count);
 }
 
-// Interleaved ring steps (RING_INTERLEAVE): a remote slice lands at one link's rate, while one ring iteration would use
+// Interleaved ring steps (ring_interleave): a remote slice lands at one link's rate, while one ring iteration would use
 // it faster, so each pair of consecutive remote iterations (1, 2), (3, 4), ... (one slice per direction) runs as
 // kInterleavePieces steps of each, alternating, every step one piece of the core's K-split slice. Both directions'
 // slices are then used at half rate. Iteration 0 (local) and an unpaired last iteration run whole. Reader and compute

@@ -1263,12 +1263,12 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
         tt::tt_metal::TensorSpec(
             stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
     if (ring_joint_floaters_may_run(args, tensor_args)) {
-        // Floater scratch: per home core (4 per home block) and donated piece, the partial's max, sum and out tiles,
-        // one float32 tile page each, in DRAM.
+        // Floater scratch: per floater core, a ring of slots holding a partial's max, sum and out tiles, one float32
+        // tile page each, in DRAM.
         namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
         const uint32_t sq_tiles = args.program_config->q_chunk_size / tt::constants::TILE_HEIGHT;
         const uint32_t slot_tiles = 2 * sq_tiles + sq_tiles * tt::div_up(v_head_dim, tt::constants::TILE_WIDTH);
-        const uint32_t slots = ring_joint::kFloaterHomeBlocks * 4 * ring_joint::kDonatedPieces;
+        const uint32_t slots = ring_joint::kFloaterCores * ring_joint::kFloaterRingSlots;
         specs.emplace_back(
             ttnn::Shape({1, 1, slots * slot_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
             TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{}));

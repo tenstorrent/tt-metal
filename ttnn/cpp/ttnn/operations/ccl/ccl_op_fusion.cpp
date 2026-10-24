@@ -78,7 +78,8 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
 
     uint32_t num_workers_to_sync,
     uint32_t curr_worker_index,
-    uint32_t all_gather_direction) {
+    uint32_t all_gather_direction,
+    bool pack_receiver_coords) {
     TT_FATAL(initialized_fused_op && initialized_all_gather, "AllGatherFusedOpSignaler not initialized fully.");
 
     out_rt_args.push_back(static_cast<uint32_t>(num_workers_to_sync));
@@ -95,9 +96,20 @@ void AllGatherFusedOpSignaler::push_all_gather_fused_op_rt_args(
     out_rt_args.push_back(static_cast<uint32_t>(this->num_fused_op_cores_to_signal));
 
     // Push the fused op receiver core noc coords
-    for (const auto& core : this->fused_op_receiver_cores_noc) {
-        out_rt_args.push_back(static_cast<uint32_t>(core.x));
-        out_rt_args.push_back(static_cast<uint32_t>(core.y));
+    for (size_t i = 0; i < this->fused_op_receiver_cores_noc.size(); ++i) {
+        const auto& core = this->fused_op_receiver_cores_noc[i];
+        if (pack_receiver_coords) {
+            TT_FATAL(core.x <= 0xFF && core.y <= 0xFF, "NOC coordinates ({}, {}) do not pack", core.x, core.y);
+            const uint32_t packed = static_cast<uint32_t>(core.x | core.y << 8);
+            if (i % 2 == 0) {
+                out_rt_args.push_back(packed);
+            } else {
+                out_rt_args.back() |= packed << 16;
+            }
+        } else {
+            out_rt_args.push_back(static_cast<uint32_t>(core.x));
+            out_rt_args.push_back(static_cast<uint32_t>(core.y));
+        }
     }
 
     // Push the fused op signal semaphore addrs. Direction 0: clockwise, Direction 1: counter-clockwise

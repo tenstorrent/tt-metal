@@ -24,7 +24,7 @@ struct RingSDPAOpReceiver {
 
     // Progressive readiness (ring_attention_slice_readiness.hpp): every full remote slice is signaled once per part;
     // get_next_ring_id_and_sync waits for part 0 only, and wait_part waits for later parts as the reader reaches them.
-    // Kept per direction: interleaved ring steps (RING_INTERLEAVE) read one slice from each direction at a time.
+    // Kept per direction: interleaved ring steps (ring_interleave) read one slice from each direction at a time.
     bool slice_readiness = false;
     uint32_t last_dir = 0;  // direction of the slice the last get_next_ring_id_and_sync returned
     bool slice_progressive[2] = {false, false};

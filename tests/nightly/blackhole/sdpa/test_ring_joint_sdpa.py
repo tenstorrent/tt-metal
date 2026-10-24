@@ -84,6 +84,12 @@ BATCH_SIZE = 1
 # Experimental LLK-assert override: shrink user-allocatable worker L1 by 16 KiB so the
 # kernel-config staging region grows from 69 KiB to 85 KiB on Blackhole.
 LLK_ASSERT_WORKER_L1_SIZE = 1_444_992
+# Kernel config buffer headroom guard: the tests open the mesh with this much more user-allocatable worker L1 than the
+# Blackhole default (LLK_ASSERT_WORKER_L1_SIZE + 16 KiB), so the kernel config buffer shrinks by as much (70,656 B ->
+# 62,464 B). A program that lands within KERNEL_CONFIG_HEADROOM_BYTES of the real limit then fails here, with its size
+# breakdown, instead of drifting onto the edge. RING_JOINT_NO_CONFIG_HEADROOM_GUARD=1 turns it off for debugging.
+KERNEL_CONFIG_HEADROOM_BYTES = 8 * 1024
+KERNEL_CONFIG_HEADROOM_GUARD_WORKER_L1_SIZE = LLK_ASSERT_WORKER_L1_SIZE + 16 * 1024 + KERNEL_CONFIG_HEADROOM_BYTES
 
 
 @dataclass(frozen=True)
@@ -661,6 +667,8 @@ def open_ring_joint_sdpa_runtime(
         mesh_device_kwargs = {"mesh_shape": mesh_shape, "trace_region_size": trace_region_size}
         if reserve_llk_kernel_config and os.getenv("TT_METAL_LLK_ASSERTS"):
             mesh_device_kwargs["worker_l1_size"] = LLK_ASSERT_WORKER_L1_SIZE
+        elif not os.getenv("RING_JOINT_NO_CONFIG_HEADROOM_GUARD"):
+            mesh_device_kwargs["worker_l1_size"] = KERNEL_CONFIG_HEADROOM_GUARD_WORKER_L1_SIZE
         mesh_device = ttnn.open_mesh_device(**mesh_device_kwargs)
 
         full_compute_grid = mesh_device.compute_with_storage_grid_size()
@@ -2570,7 +2578,9 @@ def run_ring_joint_sdpa_chunked(
             reuse_seq = (
                 compact_sliding_seq
                 if compact_sliding_seq is not None
-                else reuse_kv_stable_seq if reuse_kv_buffer else total_seq
+                else reuse_kv_stable_seq
+                if reuse_kv_buffer
+                else total_seq
             )
             shared_persistent_buffers = (
                 create_ring_mla_kv_buffer(reuse_seq, b) if use_ring_mla else create_persistent_buffers(reuse_seq, b)
@@ -2678,9 +2688,7 @@ def run_ring_joint_sdpa_chunked(
                         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
                     ttnn.synchronize_device(mesh_device)
                     try:
-                        trace_replay_measure(
-                            lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-                        )
+                        trace_replay_measure(lambda: ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False))
                     finally:
                         ttnn.release_trace(mesh_device, trace_id)
                         ttnn.deallocate(tt_out)

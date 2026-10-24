@@ -317,7 +317,7 @@ void kernel_main() {
 
     if constexpr (fuse_op) {
         arg_idx = arg_for_fab;
-        op_signaler_sender = OpSignaler(arg_idx);
+        op_signaler_sender = OpSignaler(arg_idx, /*packed_signal_coords=*/true);
     }
 
     Noc noc_obj;

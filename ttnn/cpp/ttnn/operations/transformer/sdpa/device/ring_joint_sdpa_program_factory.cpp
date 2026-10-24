@@ -1580,10 +1580,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                           floater_ag_attrs.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR &&
                           output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX;
     if (floaters) {
-        // Homes merge the partials in the order of their pieces' iterations; every piece donates something.
+        // Homes merge the partials in the order of their pieces' iterations; every piece donates something, and a
+        // home keeps part of every non-empty band (so a partial with state always has the home's own to merge into).
         for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
             TT_FATAL(
-                floater_schedule.fracs[piece] > 0 && floater_schedule.iters[piece] < ring_size &&
+                floater_schedule.fracs[piece] > 0 && floater_schedule.fracs[piece] < ring_joint::kDonationFracOne &&
+                    floater_schedule.iters[piece] < ring_size &&
                     (piece == 0 || floater_schedule.iters[piece - 1] < floater_schedule.iters[piece]),
                 "ring_joint floaters: invalid schedule for {} heads x {} bands",
                 NH,
@@ -2450,13 +2452,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     std::vector<uint32_t> home_band(num_cores_all, 0);
     std::vector<uint32_t> home_unit(num_cores_all, total_q_chunks);
     std::vector<uint32_t> unit_home(floaters ? ksplit_count * total_q_chunks : 0, 0);
-    // A home core's scratch slots: kDonatedPieces from (g * 4 + k) * kDonatedPieces.
-    std::vector<uint32_t> home_slot(num_cores_all, 0);
     if (floaters) {
         for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
             for (uint32_t k = 0; k < 4; ++k) {
                 const uint32_t core = block_core(g, k);
-                home_slot[core] = (g * 4 + k) * ring_joint::kDonatedPieces;
                 home_band[core] = g / (NH / 2);
                 home_unit[core] = (2 * (g % (NH / 2)) + k / 2) * 2 + k % 2;
                 unit_home[home_band[core] * total_q_chunks + home_unit[core]] = core;
@@ -2465,14 +2464,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     }
     // Floater groups: the 25th block, the last column's rows 0-3 and 4-7, the gather column's rows 4-7, and the 2x2 of
     // both columns' rows 8-9. Group core k mirrors home core k of the block it visits (its expansion pairs are (0, 1)
-    // and (2, 3)); the visits go round-robin over the groups in ring order, each home block's two pieces.
+    // and (2, 3)); the visits go round-robin over the groups in ring order, each home block's two pieces. Group core k
+    // is floater core 4 f + k, and saves its visit v in its ring slot v % kFloaterRingSlots.
     struct FloaterVisit {
         uint32_t iter, block, frac, piece;
     };
+    // A home core's donated piece: the scratch slot it lands, and the floater core whose semaphore ordinal it sets.
+    struct HomePiece {
+        uint32_t slot, floater, ordinal;
+    };
+    // A home's ring iteration after which it merges its first piece (FloaterSchedule::merge_after).
+    std::vector<uint32_t> home_merge_iter(num_cores_all, 0);
     std::vector<std::array<uint32_t, 4>> floater_groups;
     std::vector<std::vector<FloaterVisit>> floater_visits;
     std::vector<uint32_t> floater_group_of(num_cores_all, kNoGroup);
     std::vector<uint32_t> floater_k_of(num_cores_all, 0);
+    std::vector<std::array<HomePiece, ring_joint::kDonatedPieces>> home_pieces(num_cores_all);
+    auto floater_slot = [&](uint32_t f, uint32_t k, uint32_t v) {
+        return (f * 4 + k) * ring_joint::kFloaterRingSlots + v % ring_joint::kFloaterRingSlots;
+    };
     if (floaters) {
         const uint32_t x = grid_size.x - 1;
         auto at = [&](uint32_t cy) { return cy * grid_size.x + x; };
@@ -2503,11 +2513,38 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                     visits_in_iter,
                     floater_schedule.iters[piece]);
             }
+            // A visit's ordinal (v + 1) is a bit of the floater's semaphore.
+            TT_FATAL(
+                floater_visits[f].size() < 32,
+                "ring_joint floaters: group {} has {} visits",
+                f,
+                floater_visits[f].size());
             for (uint32_t k = 0; k < 4; ++k) {
                 floater_group_of[floater_groups[f][k]] = f;
                 floater_k_of[floater_groups[f][k]] = k;
+                for (uint32_t v = 0; v < floater_visits[f].size(); ++v) {
+                    const auto& visit = floater_visits[f][v];
+                    home_pieces[block_core(visit.block, k)][visit.piece] = {
+                        floater_slot(f, k, v), floater_groups[f][k], v + 1};
+                    if (visit.piece == 0) {
+                        // A group runs its first-piece visits first, so v is the visit's place in that queue.
+                        TT_FATAL(
+                            v < ring_joint::kFloaterFirstPieceVisits &&
+                                floater_schedule.merge_after[v] >= floater_schedule.iters[0] &&
+                                floater_schedule.merge_after[v] < ring_size,
+                            "ring_joint floaters: no merge iteration for group {}'s first-piece visit {}",
+                            f,
+                            v);
+                        home_merge_iter[block_core(visit.block, k)] = floater_schedule.merge_after[v];
+                    }
+                }
             }
         }
+        TT_FATAL(
+            floater_groups.size() * 4 == ring_joint::kFloaterCores,
+            "ring_joint floaters: {} groups for {} scratch cores",
+            floater_groups.size(),
+            ring_joint::kFloaterCores);
     }
     // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x (with
     // floaters: its home block's band and unit). Idle cores report band 0; they own no unit.
@@ -3417,16 +3454,17 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // K-split slice, so each direction's progressively signaled slice is used at half rate. Reader and compute walk the
     // steps; the writer keeps whole ring iterations, which it can only where it has no per-iteration exchange with
     // compute: single-Q K-split cores (and idle ones) on the streaming path.
-    if (slice_readiness && ksplit_count > 1 && max_q_per_core == 1 && !use_rotated_q_split && grouped_sources == 1 &&
-        !has_sliding_window && !seg_accum && use_streaming_compute) {
-        defines["RING_INTERLEAVE"] = "1";
-    }
-    if (floaters) {
-        defines["RJ_FLOATERS"] = "1";
-        if (floater_schedule.donate_tail) {
-            defines["RJ_DONATE_TAIL"] = "1";
+    const bool ring_interleave = slice_readiness && ksplit_count > 1 && max_q_per_core == 1 && !use_rotated_q_split &&
+                                 grouped_sources == 1 && !has_sliding_window && !seg_accum && use_streaming_compute;
+    // A home merges its first floater piece before the step after its merge iteration's last (in interleaved order).
+    TT_FATAL(!floaters || ring_interleave, "ring_joint floaters: need interleaved ring steps");
+    auto merge_step_after = [&](uint32_t iter) {
+        uint32_t last = 0;
+        for (uint32_t step = 0; step < ring_joint::interleaved_step_count(ring_size); ++step) {
+            last = ring_joint::interleaved_step(step, ring_size).ring_iter == iter ? step : last;
         }
-    }
+        return last + 1;
+    };
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
@@ -3528,6 +3566,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"ksplit_sem_id", ksplit_sem_id},
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
+        // Every core holds at most one Q chunk: its accumulators stay in L1 across ring iterations, so the kernels
+        // leave out the DRAM save / restore paths (code size).
+        {"single_q", max_q_per_core == 1 && !use_rotated_q_split ? 1u : 0u},
+        {"ring_interleave", ring_interleave ? 1u : 0u},
+        // Expanded-K floaters (kernels/ring_joint_floaters.hpp): the program runs them, and whether its homes donate
+        // their bands' tails. floater_core marks the floaters' own kernel group, set on those copies below.
+        {"floaters", floaters ? 1u : 0u},
+        {"floater_core", 0u},
+        {"donate_tail", floaters && floater_schedule.donate_tail ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
@@ -3559,8 +3606,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
 
-    // The floaters run their own kernel group (RJ_FLOATER_CORE) and the homes the main one, so each binary
-    // carries only its role's code (the program sits at the kernel config buffer limit). The floater kernels follow the
+    // The floaters run their own kernel group (floater_core) and the homes the main one, so each binary carries only
+    // its role's code (kernel config buffer). The floater kernels follow the
     // gather's, so the indices the cache-hit patching relies on stay put.
     KernelDescriptor floater_reader_kernel{};
     KernelDescriptor floater_writer_kernel{};
@@ -3576,7 +3623,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         floater_compute_kernel = compute_kernel;
         for (auto* kernel : {&floater_reader_kernel, &floater_writer_kernel, &floater_compute_kernel}) {
             kernel->core_ranges = CoreRangeSet(floater_ranges);
-            kernel->defines.emplace_back("RJ_FLOATER_CORE", "1");
+            for (auto& [name, value] : kernel->named_compile_time_args) {
+                value = name == "floater_core" ? 1u : value;
+            }
         }
         for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
             kernel->core_ranges = CoreRangeSet(home_ranges);
@@ -3587,7 +3636,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     for (uint32_t i = 0; i < num_cores_all; ++i) {
         const CoreCoord core = logical_core(i);
         // Floaters, for reader and compute: [donated fraction per ring iteration], then [visit count][visits:
-        // iteration, unit, band, frac]. Floater core k runs the unit of home core k of each visited block.
+        // iteration, unit, band, frac], then on a home its first piece's merge step. Floater core k runs the unit of
+        // home core k of each visited block.
         const bool floater = floaters && floater_group_of[i] != kNoGroup;
         auto append_floater_args = [&](CheckedRuntimeArgList& floater_args) {
             const bool home = floaters && home_unit[i] < total_q_chunks;
@@ -3600,6 +3650,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
             if (!floater) {
                 floater_args.push_back(0u);
+                floater_args.push_back(home ? merge_step_after(home_merge_iter[i]) : 0u);
                 return;
             }
             const auto& visits = floater_visits[floater_group_of[i]];
@@ -3783,27 +3834,30 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
         if (floaters) {
-            // Floaters: [scratch], then a home's slots and donated ring iterations (one per piece), or a floater's
-            // [visit count][visits: iteration, slot, home x, home y, home semaphore ordinal] (the floaters' bits follow
-            // the K-split senders').
+            // Floaters: [scratch], then a floater's [visit count][visits: iteration, slot, home x, home y, home
+            // semaphore ordinal] (the floaters' bits follow the K-split senders'), or a home's donated pieces [slot,
+            // ring iteration, floater x, floater y, floater semaphore ordinal].
             writer_args.push_back(output_tensors.at(RING_JOINT_SDPA_FLOATER_SCRATCH_IDX).buffer());
             if (floater) {
-                const auto& visits = floater_visits[floater_group_of[i]];
+                const uint32_t f = floater_group_of[i];
+                const auto& visits = floater_visits[f];
                 writer_args.push_back(static_cast<uint32_t>(visits.size()));
-                for (const auto& visit : visits) {
-                    const uint32_t h = block_core(visit.block, floater_k_of[i]);
-                    writer_args.push_back(visit.iter);
-                    writer_args.push_back(home_slot[h] + visit.piece);
+                for (uint32_t v = 0; v < visits.size(); ++v) {
+                    const uint32_t h = block_core(visits[v].block, floater_k_of[i]);
+                    writer_args.push_back(visits[v].iter);
+                    writer_args.push_back(floater_slot(f, floater_k_of[i], v));
                     writer_args.push_back(core_work[h].physical_core.x);
                     writer_args.push_back(core_work[h].physical_core.y);
-                    writer_args.push_back(ksplit_count + 1 + visit.piece);
+                    writer_args.push_back(ksplit_count + 1 + visits[v].piece);
                 }
             } else {
                 for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
-                    writer_args.push_back(home_slot[i] + piece);
-                }
-                for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
+                    const HomePiece& home_piece = home_pieces[i][piece];
+                    writer_args.push_back(home_piece.slot);
                     writer_args.push_back(floater_schedule.iters[piece]);
+                    writer_args.push_back(core_work[home_piece.floater].physical_core.x);
+                    writer_args.push_back(core_work[home_piece.floater].physical_core.y);
+                    writer_args.push_back(home_piece.ordinal);
                 }
             }
         }
