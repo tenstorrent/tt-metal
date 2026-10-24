@@ -26,6 +26,27 @@ from ...tests.test_factory import (
 )
 
 
+def _lane_mesh_params(extra):
+    """The lane engine's meshes with the fabric each can open: the (2,4) block as a FABRIC_1D line (its x8 mesh
+    descriptor has no wraparound, so FABRIC_1D_RING fails at mesh open) and the (8,4) Galaxy on the ring the decode MoE
+    kernel's 8-row dispatch uses; ids ``2x4`` / ``8x4`` as ``parametrize_mesh_with_fabric`` names them."""
+    try:
+        num_devices = ttnn.get_num_devices()
+    except RuntimeError:
+        num_devices = 0
+    fabrics = {(2, 4): ttnn.FabricConfig.FABRIC_1D, (8, 4): ttnn.FabricConfig.FABRIC_1D_RING}
+    params = [
+        pytest.param(shape, {"fabric_config": fabric, **extra}, id=f"{shape[0]}x{shape[1]}")
+        for shape, fabric in fabrics.items()
+        if shape[0] * shape[1] <= num_devices
+    ]
+    return params or [
+        pytest.param(
+            (2, 4), {"fabric_config": None, **extra}, id="2x4", marks=pytest.mark.skip(reason="Not enough devices")
+        )
+    ]
+
+
 @skip_if_not_moe
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 2), (1, 4), (1, 8), (2, 4), (8, 4)])
 @parametrize_batch_seq(configs=[(1, L) for L in PREFILL_BUCKETS])
@@ -113,10 +134,7 @@ def test_moe(batch_size, seq_len, mesh_device, reset_seeds, request):
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="the decode MoE kernel is Blackhole-only")
-@parametrize_mesh_with_fabric(
-    mesh_shapes=[(2, 4), (8, 4)],
-    device_params_extra={"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "l1_small_size": 65536},
-)
+@pytest.mark.parametrize("mesh_device, device_params", _lane_mesh_params({"l1_small_size": 65536}), indirect=True)
 @pytest.mark.parametrize(
     "lanes",
     [
@@ -147,6 +165,7 @@ def test_moe_sparse_routing_matches_dense(mesh_device, lanes, fused, rows, reset
         if rows == 128:
             pytest.skip("4 lanes x 128 rows exceed the block's frame (the 8x4 case covers the prefill-sized rows)")
         monkeypatch.setenv("GEMMA4_MOE_DECODE_FRAME", "128")  # 4 lanes x one row tile over 2 mesh rows
+        monkeypatch.setenv("GEMMA4_MOE_DECODE_TOPOLOGY", "linear")  # the block opens as a FABRIC_1D line
     hf_text_config = TestFactory.create_hf_text_config()  # real expert geometry: the kernel config is the 26B's
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0)
     with torch.no_grad():
