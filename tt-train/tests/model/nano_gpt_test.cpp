@@ -6,6 +6,8 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <limits>
+#include <stdexcept>
 #include <tt-metalium/distributed.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -91,6 +93,21 @@ protected:
 
 using ttml::autograd::TensorPtr;
 using namespace ttml;
+
+TEST(LlamaConfigTest, RopeCacheCoversFullPaddedDecodeWindow) {
+    EXPECT_EQ(models::llama::compute_rope_cache_sequence_length(32U, 1U), 63U);
+    EXPECT_EQ(models::llama::compute_rope_cache_sequence_length(64U, 8U), 96U);
+    EXPECT_EQ(models::llama::compute_rope_cache_sequence_length(64U, 64U), 128U);
+    EXPECT_EQ(models::llama::compute_rope_cache_sequence_length(256U, 16U), 288U);
+    EXPECT_THROW(static_cast<void>(models::llama::compute_rope_cache_sequence_length(32U, 0U)), std::invalid_argument);
+    EXPECT_THROW(
+        static_cast<void>(models::llama::compute_rope_cache_sequence_length(std::numeric_limits<uint32_t>::max(), 1U)),
+        std::overflow_error);
+    EXPECT_THROW(
+        static_cast<void>(models::llama::compute_rope_cache_sequence_length(
+            std::numeric_limits<uint32_t>::max() - (ttnn::TILE_SIZE - 1U), 2U)),
+        std::overflow_error);
+}
 
 struct TrainingConfig {
     uint32_t seed = 5489U;
