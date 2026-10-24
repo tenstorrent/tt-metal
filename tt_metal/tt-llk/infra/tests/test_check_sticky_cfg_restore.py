@@ -224,16 +224,21 @@ def test_unresolved_value_is_a_note_not_a_failure(tmp_path):
     assert "cannot be judged" in r.stdout
 
 
+def with_sites(table, sites):
+    """The table with its `sites:` list (the last key) replaced, whatever it ships with."""
+    head, sep, _ = table.partition("\nsites:")
+    assert sep, "sticky_cfg_fields.yaml has no top-level sites: key"
+    return head + "\n" + sites
+
+
 def site_table(tmp_path, path, function, field, restored_by="_llk_math_thing_done_"):
     rel = os.path.relpath(
         str(path), os.path.normpath(os.path.join(INFRA, "..", "..", ".."))
     )
     t = tmp_path / "t.yaml"
     t.write_text(
-        open(os.path.join(INFRA, "sticky_cfg_fields.yaml"))
-        .read()
-        .replace(
-            "sites: []",
+        with_sites(
+            open(os.path.join(INFRA, "sticky_cfg_fields.yaml")).read(),
             textwrap.dedent(
                 f"""\
                 sites:
@@ -427,7 +432,7 @@ def test_bad_table_is_a_hard_error(tmp_path):
         src.replace("    policy: tracked", "    policy: tracked\n    bogus_key: 1"),
         src.replace("    policy: restore", "    policy: sticky", 1),
         src.replace("ALU_ACC_CTRL_Fp32_enabled:", "ALU_ACC_CTRL_Not_A_Field:", 1),
-        src.replace("sites: []", "sites:\n  - path: x.h\n    function: f\n"),
+        with_sites(src, "sites:\n  - path: x.h\n    function: f\n"),
         src + "\nextra: 1\n",
         src + "\n  : [unbalanced\n",
     ]
@@ -443,11 +448,15 @@ def test_bad_table_is_a_hard_error(tmp_path):
 def test_shipped_tree_is_clean_and_scan_is_not_vacuous(tmp_path):
     r = run()
     assert r.returncode == 0, r.stdout
-    # A clean tree must not be a scan that saw nothing: a shipped header that clears Fp32_enabled
-    # and sets it back passes as is, and fails once every restoring write is dropped from a copy.
-    name = "llk_math_eltwise_unary_datacopy.h"
-    src = open(os.path.join(LLK, "tt_llk_blackhole", "llk_lib", name)).read()
+    # A clean tree must not be a scan that saw nothing: a shipped header whose _init_ clears Fp32_enabled
+    # and whose _uninit_ sets it back passes as is, and fails once every restoring write is dropped from a
+    # copy. The copy's functions are renamed so that the shipped _uninit_ does not cover them.
+    name = "llk_math_fast_tilize.h"
+    src = open(
+        os.path.join(LLK, "tt_llk_blackhole", "llk_lib", "experimental", name)
+    ).read()
     assert rmw(FP32, 0) in src and rmw(FP32, 1) in src
+    src = src.replace("_llk_math_fast_tilize_", "_llk_math_fast_tilize_copy_")
     assert run(hdr(tmp_path, src, name=name)).returncode == 0
     broken = run(hdr(tmp_path, src.replace(rmw(FP32, 1), ""), name=name))
     assert broken.returncode == 1 and "[restore]" in broken.stdout
