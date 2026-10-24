@@ -11,9 +11,7 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits,
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
-    bf16_bits_to_float,
     bf16_quantize_rne,
-    float_to_bf16_bits,
     SMALLEST_NORMAL_BF16,
     MAX_BF16,
 )
@@ -77,13 +75,8 @@ Golden-function quirks (see ttnn/ttnn/operations/unary.py):
 Real-hardware quirks. Every item below was observed running this file against
 a live wormhole_b0 chip -- each started as a failure whose exclusion band was
 read off the failing elements.
-  - hardtanh/clamp/clip bounds and threshold's `value` take the fp32->bf16
-    *truncation* path (same as `fill`), not round-to-nearest-even, so their
-    goldens are built from _to_device_bf16_scalar.
-  - the two scalars of one `threshold` call do not share a conversion:
-    `value` truncates, but `threshold`, which is compared against, rounds to
-    nearest even (_to_device_bf16_comparand). Truncating both leaves exactly
-    one element of the grid wrong.
+  - hardtanh/clamp/clip bounds and both `threshold` scalars are rounded to
+    nearest even (_to_device_bf16_comparand), as torch does.
   - a -0.0 scalar parameter comes back as +0.0: threshold(value=-0.0) and
     clamp(min=-0.0) canonicalize the sign away, consistent with the DAZ model
     elsewhere. torch keeps it, hence _canonicalize_negative_zero and the
@@ -135,20 +128,10 @@ def _exhaustive_bf16_4d():
     return generate_bfloat16_bits(include_spl_values=False).unsqueeze(0).unsqueeze(0)
 
 
-def _to_device_bf16_scalar(value):
-    """Round-trip a scalar the kernel *writes into the output* through the
-    device's fp32->bf16 truncation (0.66 -> 0.65625, where RNE gives
-    0.66015625). Ints and None pass through. Compare _to_device_bf16_comparand.
-    """
-    if value is None or isinstance(value, bool) or not isinstance(value, float):
-        return value
-    return bf16_bits_to_float(float_to_bf16_bits(value))
-
-
 def _to_device_bf16_comparand(value):
-    """Round-trip a scalar the kernel *compares against*, which is RNE rather
-    than truncating. The difference is one element of the exhaustive grid --
-    the single bf16 value falling between the two roundings.
+    """Round a scalar parameter to the nearest bf16, as the device does before
+    comparing against it or writing it into the output. Ints and None pass
+    through.
     """
     if value is None or isinstance(value, bool) or not isinstance(value, float):
         return value
@@ -257,14 +240,12 @@ def _assert_bitwise_equal(result, golden, label):
 def test_hardtanh_op(device, min_val, max_val):
     """output_i = clamp(x_i, min_val, max_val). Exhaustive normal bf16 sweep.
 
-    The golden is built from the truncated bf16 bounds, since the device
-    truncates rather than rounding them: min_val=0.66 would otherwise be
-    0.66015625 on the golden side against 0.65625 on the device, diverging on
-    every clamped element.
+    The golden is built from the bounds rounded to the nearest bf16, as the
+    device rounds them: min_val=0.66 is 0.66015625 on both sides.
     """
     input_tensor = _exhaustive_bf16_4d()
-    device_min_val = _to_device_bf16_scalar(min_val)
-    device_max_val = _to_device_bf16_scalar(max_val)
+    device_min_val = _to_device_bf16_comparand(min_val)
+    device_max_val = _to_device_bf16_comparand(max_val)
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.hardtanh)
@@ -341,7 +322,7 @@ def test_clamp_clip_scalar_ops(device, ttnn_op, min_val, max_val):
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn_op)
     golden = golden_function(
-        input_tensor, _to_device_bf16_scalar(min_val), _to_device_bf16_scalar(max_val), device=device
+        input_tensor, _to_device_bf16_comparand(min_val), _to_device_bf16_comparand(max_val), device=device
     )
 
     tt_result = ttnn_op(tt_in, min_val, max_val)
@@ -482,16 +463,15 @@ def test_threshold_op(device, threshold_val, value):
     and relaxes itself to ULP<=1, but feeding it the bf16 scalar the device
     actually uses makes that a no-op and recovers exactness.
 
-    The two scalars take different conversion paths (`value` truncates,
-    `threshold` rounds), and `value=-0.0` comes back as +0.0; both are quirks
-    only an exhaustive sweep and a bit-pattern compare can see.
+    `value=-0.0` comes back as +0.0, a quirk only an exhaustive sweep and a
+    bit-pattern compare can see.
     """
     input_tensor = _exhaustive_bf16_4d()
 
     tt_in = to_tt_tensor(input_tensor, device)
     golden_function = ttnn.get_golden_function(ttnn.threshold)
     golden = golden_function(
-        input_tensor, _to_device_bf16_comparand(threshold_val), _to_device_bf16_scalar(value), device=device
+        input_tensor, _to_device_bf16_comparand(threshold_val), _to_device_bf16_comparand(value), device=device
     )
 
     tt_result = ttnn.threshold(tt_in, threshold_val, value)
@@ -1080,12 +1060,12 @@ def test_scalar_param_ops_rank_coverage(device, shape):
 
     tt_in = to_tt_tensor(input_tensor, device)
 
-    min_val, max_val = _to_device_bf16_scalar(-1.0), _to_device_bf16_scalar(0.66)
+    min_val, max_val = _to_device_bf16_comparand(-1.0), _to_device_bf16_comparand(0.66)
     for ttnn_op, args, kwargs, golden_args, golden_kwargs in (
         (ttnn.hardtanh, (), {"min_val": -1.0, "max_val": 0.66}, (), {"min_val": min_val, "max_val": max_val}),
         (ttnn.clamp, (-1.0, 0.66), {}, (min_val, max_val), {}),
         (ttnn.clip, (-1.0, 0.66), {}, (min_val, max_val), {}),
-        (ttnn.threshold, (0.5, 0.66), {}, (_to_device_bf16_comparand(0.5), max_val), {}),
+        (ttnn.threshold, (0.5, 0.66), {}, (_to_device_bf16_comparand(0.5), _to_device_bf16_comparand(0.66)), {}),
     ):
         golden_function = ttnn.get_golden_function(ttnn_op)
         golden = golden_function(input_tensor, *golden_args, device=device, **golden_kwargs)
