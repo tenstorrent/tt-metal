@@ -56,6 +56,34 @@ def _arms(window, S, hd, nh):
         ("ours", prefill_sdpa_program_config(hd, S, sliding_window=window, num_heads=nh), window),
         ("opdefault", None, window),
     ]
+    if (
+        hd <= 256
+    ):  # the 31B's wide default ((12,10) / q 128) and the 12B's former fixed config ((8,8) / q 256), explicitly
+        kc = min(128, max(32, int(window) // 2)) if window else 128
+        arms.append(
+            (
+                "wide12x10_q128",
+                ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+                    q_chunk_size=128,
+                    k_chunk_size=kc,
+                    exp_approx_mode=False,
+                ),
+                window,
+            )
+        )
+        arms.append(
+            (
+                "fixed8x8_q256",
+                ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+                    q_chunk_size=256,
+                    k_chunk_size=kc,
+                    exp_approx_mode=False,
+                ),
+                window,
+            )
+        )
     if window and S <= window:
         arms.append(("nowindow", prefill_sdpa_program_config(hd, S, sliding_window=None, num_heads=nh), None))
         arms.append(("nowindow_opdefault", None, None))
@@ -123,6 +151,13 @@ def _run_one(mesh_device, q, k, v, S, window, hd, scale, ckc, label, inm):
             else "op-defaults"
         )
         print(f"RESULT sdpa_real {label} arm={name} cfg={cfg} window={win} {_cliff(outs[name], ref)}")
+        save_dir = os.environ.get("GEMMA4_SDPA_SAVE_OUT")  # per-arm outputs for an offline error-structure read
+        if save_dir:
+            os.makedirs(save_dir, exist_ok=True)
+            torch.save(
+                {"out": outs[name].to(torch.bfloat16), "ref": ref},
+                os.path.join(save_dir, f"{label.replace(' ', '_').replace('=', '')}_{name}.pt"),
+            )
         err = (outs[name] - ref)[0]
         rel = " ".join(
             f"[{b}:{min(b + 128, S)}) {float(err[:, b:b + 128].norm() / ref[0, :, b:b + 128].norm()):.5f}"
