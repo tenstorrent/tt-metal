@@ -12,6 +12,7 @@
 #include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_helpers.hpp"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/exp.h"
@@ -73,6 +74,9 @@ inline void POP(uint32_t cb, uint32_t n) { CircularBuffer(cb).pop_front(n); }
 #define GDN_DST_TILES 1  // the prep kernel keeps the per-tile form: its Ct=2 binary sits at the 70,656 B limit
 #endif
 inline constexpr uint32_t kDstTiles = GDN_DST_TILES;
+
+using compute_kernel_lib::for_each_row_run;
+using compute_kernel_lib::matmul_tiles_row;
 
 inline void mm(
     uint32_t a, uint32_t b, uint32_t o, uint32_t Mt, uint32_t Kt, uint32_t Nt, bool tr, bool skip_reconfig = false) {
@@ -1074,15 +1078,12 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
             const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
+            for_each_row_run(t0, nb, Vt, [&](uint32_t mi, uint32_t ni, uint32_t j, uint32_t n) {
                 for (uint32_t ki = 0; ki < Kt; ki++) {
-                    matmul_tiles(cb.nkd, cur_S, mi * Kt + ki, ki * Vt + ni, j);  // DST[j]  = nkd @ S
+                    matmul_tiles_row(cb.nkd, cur_S, mi * Kt + ki, ki * Vt + ni, j, n);  // DST[j..]  = nkd @ S
                 }
-                matmul_tiles(cb.eye, cb.vbeta, 0, t, j);  // DST[j] += I @ v_beta
-            }
+                matmul_tiles_row(cb.eye, cb.vbeta, 0, t0 + j, j, n);  // DST[j..] += I @ v_beta
+            });
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {
@@ -1118,17 +1119,14 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         for (uint32_t t0 = 0; t0 < cv; t0 += kDstTiles) {
             const uint32_t nb = (cv - t0 < kDstTiles) ? (cv - t0) : kDstTiles;
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
+            for_each_row_run(t0, nb, Vt, [&](uint32_t mi, uint32_t ni, uint32_t j, uint32_t n) {
                 for (uint32_t ki = 0; ki < Kt; ki++) {
-                    matmul_tiles(cb.qdecay, cur_S, mi * Kt + ki, ki * Vt + ni, j);
+                    matmul_tiles_row(cb.qdecay, cur_S, mi * Kt + ki, ki * Vt + ni, j, n);
                 }
                 for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
-                    matmul_tiles(cb.intra, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
+                    matmul_tiles_row(cb.intra, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j, n);
                 }
-            }
+            });
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {
@@ -1151,17 +1149,13 @@ inline void scan_step(const GdnScanCbs& cb, uint32_t cur_S, uint32_t dst) {
         for (uint32_t t0 = 0; t0 < kv; t0 += kDstTiles) {
             const uint32_t nb = (kv - t0 < kDstTiles) ? (kv - t0) : kDstTiles;
             tile_regs_acquire();
-            for (uint32_t j = 0; j < nb; j++) {
-                matmul_tiles(cb.dl, cur_S, 0, t0 + j, j);
-            }
-            for (uint32_t j = 0; j < nb; j++) {
-                const uint32_t t = t0 + j;
-                const uint32_t mi = t / Vt;
-                const uint32_t ni = t - mi * Vt;
+            // the one dl*I tile against the batch's consecutive state tiles
+            matmul_tiles_row(cb.dl, cur_S, 0, t0, 0, nb);
+            for_each_row_run(t0, nb, Vt, [&](uint32_t mi, uint32_t ni, uint32_t j, uint32_t n) {
                 for (uint32_t kc_ = 0; kc_ < Ct; kc_++) {
-                    matmul_tiles(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j);
+                    matmul_tiles_row(cb.kdec_t, cb.vnew, mi * Ct + kc_, kc_ * Vt + ni, j, n);
                 }
-            }
+            });
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t j = 0; j < nb; j++) {
