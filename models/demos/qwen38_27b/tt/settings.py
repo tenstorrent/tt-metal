@@ -41,9 +41,13 @@ TABLE = {
     "GDN_CONV_CHANNEL_CHUNK": Setting(
         512, (512, 256, 128), "qkv_causal_conv1d_silu channel block (2560 per TP column = 5 blocks), as qwen36 measured"
     ),
+    "MLP_FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2", "LoFi"), "ENGINEER rule 7: gate/up/down matmuls at HiFi4"),
+    "MLP_FP32_ACC": Setting(True, None, "ENGINEER rule 7: fp32 accumulation by default"),
 }
 
 MAX_PRECISION = {
+    "MLP_FIDELITY": "HiFi4",
+    "MLP_FP32_ACC": True,
     "NORM_FIDELITY": "HiFi4",
     "NORM_FP32_ACC": True,
     "NORM_WEIGHT_DTYPE": "float32",

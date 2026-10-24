@@ -54,6 +54,12 @@ def device_component(mesh, spec, layer, step):
 
         name = "input_layernorm.weight" if step == "attn_norm" else "post_attention_layernorm.weight"
         mod = TtRmsNorm(mesh, _layer_weights(spec, layer, [name])[name], cfg.eps)
+    elif step == "mlp":
+        from models.demos.qwen38_27b.reference.model import COMMON_NAMES
+        from models.demos.qwen38_27b.tt.mlp import TtMlp
+
+        names = [n for n in COMMON_NAMES if n.startswith("mlp.")]
+        mod = TtMlp(mesh, _layer_weights(spec, layer, names))
     elif step == "attention" and cfg.is_linear(layer):
         return _linear_attention_component(mesh, spec, cfg, layer)
     elif step in ("attn_residual", "mlp_residual"):

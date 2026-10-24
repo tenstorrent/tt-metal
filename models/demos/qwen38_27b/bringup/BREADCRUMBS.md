@@ -53,3 +53,17 @@
   `post_attention_layernorm.weight`; `device_component` serves `attn_norm` and `mlp_norm` from one branch.
 - Gate: PCC 0.999995, rel vs CPU 0.0019 (limit 0.0063), auto_margin_min 2.71, 1 device op, host flops 0,
   bit-identical determinism. Re-run: `bfw job check --task C.linear.mlp_norm --gate-only`.
+
+## C.linear.mlp (layer 0)
+
+- `tt/mlp.py:TtMlp`: gate / up `ttnn.linear` column-parallel (4352 of 17408 intermediate columns per TP column,
+  weights [H, I/4] bfp8, fp32 outputs) -> `silu(gate) * up` -> bf16 -> down `ttnn.linear` row-parallel (weight stored
+  [H, I/4] and read with `transpose_b`, so bfp8 blocks run along K as for out_proj) with an fp32 partial ->
+  `ttnn.all_reduce(cluster_axis=1)` in fp32 -> `ttnn.typecast` bf16. Token-local, no SP collective. Weights are
+  replicated over the 8 SP rows.
+- Settings `MLP_FIDELITY` (HiFi4) and `MLP_FP32_ACC` (True), both in MAX_PRECISION. Auto matmul program configs (no
+  tuning yet; known issue: ttnn.linear's auto config is slow, a perf task can add 2D program configs).
+- `device_component` serves `mlp` for any layer (the attn block's mlp is the same module).
+- Gate: PCC 0.999985, rel vs CPU 0.0054 (limit 0.0113), vs golden 0.0056, ratio [0.9959, 1.0033], worst column
+  0.010 (col 3812), auto_margin_min 2.11, 7 device ops, host flops 0. Re-run:
+  `bfw job check --task C.linear.mlp --gate-only`.
