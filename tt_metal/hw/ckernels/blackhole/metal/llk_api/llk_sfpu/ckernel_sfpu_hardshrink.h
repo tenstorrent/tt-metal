@@ -12,8 +12,30 @@ namespace ckernel::sfpu {
 
 inline void hardshrink_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+bool bf16_dest_hardshrink();
+template <int ITERATIONS>
+void calculate_hardshrink_bf16();
+void init_hardshrink_bf16();
+// The param0 the generated hardshrink kernel is fitted for, as FP32 bits; any other param0 runs the stock kernel.
+inline constexpr std::uint32_t hardshrink_bf16_param0_bits = 0x3f000000u;
+// Whether BF16 DEST runs the generated hardshrink kernel as one call over the whole tile.
+inline constexpr bool hardshrink_bf16_whole_tile = true;
+// Sets up the generated BF16 hardshrink kernel for the instance it serves.
+template <bool bf16_kernel>
+inline void hardshrink_bf16_tile_init() {
+    if constexpr (bf16_kernel) {
+        init_hardshrink_bf16();
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en = true>
 inline void calculate_hardshrink(uint32_t param0) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_hardshrink() && param0 == ckernel::sfpu::hardshrink_bf16_param0_bits) {
+            calculate_hardshrink_bf16<ITERATIONS>();
+            return;
+        }
+    }
     // Hardshrink(x, λ) = x if |x| > λ, else 0
     // Single comparison using abs: setsgn(v, 0) clears sign bit
     // param0 contains lambda as FP32 bits. For BF16 inputs, the host pre-rounds
@@ -33,3 +55,5 @@ inline void calculate_hardshrink(uint32_t param0) {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_hardshrink_bf16.h"
