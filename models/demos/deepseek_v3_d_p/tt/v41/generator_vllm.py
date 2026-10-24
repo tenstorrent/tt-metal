@@ -80,6 +80,26 @@ def _dram_bytes(mesh_device) -> int:
         return 0
 
 
+def _l1_probe(mesh_device, tag: str) -> None:
+    """``TT_V41_L1_PROBE=1``: log main L1's allocation (per bank) and its block table under ``tag``, at the warm-up's
+    stages. A program-cache entry first built inside a step (a collective's global semaphores: ``ttnn.all_gather``,
+    ``ttnn.reduce_scatter``) keeps its L1 blocks where the step's transients left room, and a program whose static
+    CBs reach past them is then rejected at compile or enqueue ("Statically allocated circular buffers ... clash
+    with L1 buffers ... allocated at N"): the owner is found by the stage its blocks first appear in. The table's
+    addresses are allocator-relative (absolute = address + the L1 unreserved base, 111,616 on Blackhole)."""
+    if os.environ.get("TT_V41_L1_PROBE", "0") != "1":
+        return
+    try:
+        v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+        rows = [str(r) for r in v.block_table]
+        logger.info(
+            f"L1 PROBE [{tag}] allocated/bank {v.total_bytes_allocated_per_bank} largest free "
+            f"{v.largest_contiguous_bytes_free_per_bank} blocks {len(rows)}: " + " | ".join(rows)
+        )
+    except Exception as e:  # a report, not a gate
+        logger.warning(f"L1 PROBE [{tag}] failed: {e}")
+
+
 def _layers(spec: str) -> list[int]:
     """``all`` or a layer list such as ``0,2-13,20-39`` (a harness knob: shallower models for checks)."""
     if spec.strip() == "all":
@@ -142,8 +162,10 @@ class DeepseekV41ForCausalLM:
             t0, dram0 = time.time(), _dram_bytes(mesh_device)
             # the state's context: the first score-width bucket, so a short prompt scores at the width the
             # full-chunk state would score it at (the same selection, up to the MoE's row split)
+            _l1_probe(mesh_device, f"before chunk {chunk} geometry")
             view = model.with_chunk(chunk, _round_up(V41ChunkTables.MIN_BUCKET, chunk))
             state = view.new_state(generic=self.generic)
+            _l1_probe(mesh_device, f"after chunk {chunk} geometry")
             self.models[id(state)] = view
             self.short.append((chunk, view, state))
             logger.info(
@@ -159,6 +181,7 @@ class DeepseekV41ForCausalLM:
         self.prefill_traces: dict[tuple[int, int], V41PrefillTrace] = {}
         self.prefill_buffers: dict[int, dict] = {id(m): {} for m in [model] + [v for _, v, _ in self.short]}
         self.prefill_traced = False
+        self.prefill_last: dict = {}  # the last prefill_forward row: tokens, start, mode, chunk (the tests read it)
         spec = os.environ.get(TRACE_PREFILL_LENGTHS, "").strip()
         listed = sorted({int(x) for x in spec.split(",") if x.strip()})
         # each listed length and its neighbours: the benchmark's synthetic prompts miss a registered length by a
@@ -369,6 +392,7 @@ class DeepseekV41ForCausalLM:
                 f"({mode}{'' if phases is None else ' ' + ' '.join(f'{k} {v:.3f}' for k, v in phases.last.items() if isinstance(v, float))}"
                 f"{'' if model is self.model else f' chunk {model.chunk}'})"
             )
+            self.prefill_last = {"tokens": n - start, "start": start, "mode": mode, "chunk": model.chunk}
             if logits is not None:
                 out[i, 0] = logits[-1]
         return out
@@ -558,15 +582,18 @@ class DeepseekV41ForCausalLM:
         for state in self.prefill_states + [state for _, _, state in self.short]:
             model = self.models[id(state)]
             t0 = time.time()
+            _l1_probe(self.mesh_device, f"before warm-up prefill (chunk {model.chunk})")
             model.prefill_into(prompt, state)
             logger.info(
                 f"DeepSeek-V4.1-Flash warm-up: prefill of {prompt.numel()} tokens (chunk {model.chunk}) in "
                 f"{time.time() - t0:.1f} s"
             )
+            _l1_probe(self.mesh_device, f"after warm-up prefill (chunk {model.chunk})")
         t0 = time.time()
         for slot in range(self.max_batch_size):
             self.decoder.join(slot, prompt, self.prefill_states[slot % len(self.prefill_states)])
         logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
+        _l1_probe(self.mesh_device, "after warm-up joins")
 
     def warmup_model_decode(self, enable_trace: bool, **kwargs) -> None:
         """Run the decode step on every slot until it is captured and replayed once (the first call compiles, the
@@ -581,13 +608,18 @@ class DeepseekV41ForCausalLM:
         replays = 0
         for step in range(WARMUP_DECODE_STEPS):
             t0 = time.time()
-            out = self.decoder.decode(tokens, sampling)
+            try:
+                out = self.decoder.decode(tokens, sampling)
+            except Exception:
+                _l1_probe(self.mesh_device, f"decode step {step} raised")
+                raise
             tokens = {slot: (int(out[slot]) if sampling else int(out[slot].argmax())) for slot in tokens}
             mode = self.decoder.last.get("mode")
             replays += mode == "replay"
             logger.info(
                 f"DeepSeek-V4.1-Flash warm-up: decode step {step} ({mode}) in {time.time() - t0:.2f} s {self.decoder.last}"
             )
+            _l1_probe(self.mesh_device, f"after decode step {step} ({mode})")
             if self.decoder.capture is not None and replays >= 1:
                 break
         assert self.decoder.capture is not None, "the decode step was not captured"

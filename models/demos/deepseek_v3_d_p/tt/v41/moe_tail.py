@@ -2,19 +2,25 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""DeepSeek-V4.1 decode MoE tail: the weighted sum over the top-k slots of the combine buffer for one tile of tokens.
+"""DeepSeek-V4.1 decode MoE tail: the weighted sum over the top-k slots of the combine buffer for one tile of
+tokens.
 
-``TtReduceModule`` runs ``post_combine_reduce`` on the combine buffer (``[1, 1, T, K, H]`` row-major, one row per
-(token, slot)): one core per 32-token chunk multiplies each slot's row by its scalar weight into an L1 accumulator,
-skipping the slots whose expert is not in the chip's dispatch group, then tilizes the chunk: ~158 us a layer on 2
+``TtReduceModule`` runs ``post_combine_reduce`` on the combine buffer (``[1, 1, T, K, H]`` row-major, one row
+per
+(token, slot)): one core per 32-token chunk multiplies each slot's row by its scalar weight into an L1
+accumulator,
+skipping the slots whose expert is not in the chip's dispatch group, then tilizes the chunk: ~158 us a layer
+on 2
 cores for the decode tile. :func:`moe_tail` does the same sum as one program on 80 cores,
-each owning two of the 160 column tiles of H = 5,120: its reader builds the K activation tiles of a column tile
+each owning two of the 160 column tiles of H = 5,120: its reader builds the K activation tiles of a column
+tile
 straight from the combine rows (the rows that are on, the rest zero) and K score tiles (column 0 = the slot's
 weight where on), the compute kernel MACs them with a column broadcast in fp32 and packs one tile. After
 ``ssinghal/dsv4p1``'s ``moe_tail``, with the mask from the expert dispatch table as
 ``post_combine_reduce`` takes it and the rows read as our combine lays them out.
 
-:class:`DecodeReduce` keeps ``TtReduceModule.forward``'s contract (the weighted sum, then the TP reduce-scatter) and
+:class:`DecodeReduce` keeps ``TtReduceModule.forward``'s contract (the weighted sum, then the TP
+reduce-scatter) and
 is installed on a decode MoE by :func:`install_decode_tail` (``V41_DECODE_TAIL=1``, with the decode routing's
 32-row tile).
 """
@@ -44,9 +50,12 @@ def _cb(index: int, size: int, cores, page: int, dtype=ttnn.bfloat16) -> ttnn.CB
 
 
 def moe_tail(combine, scores, indices, table, n_cores: int = 80):
-    """``combine``: row-major bf16 ``[..., T, K, H]`` DRAM (``T <= 32``, ``H % 32 == 0``), one page per (token,
-    slot) row. ``scores``: row-major bf16 ``[..., T, K]`` (one page per token); ``indices``: row-major uint16 of
-    the same shape; ``table``: this chip's row of the expert dispatch table, int32 row-major ``[1, E + 1]`` (``-1``
+    """``combine``: row-major bf16 ``[..., T, K, H]`` DRAM (``T <= 32``, ``H % 32 == 0``), one page per
+    (token,
+    slot) row. ``scores``: row-major bf16 ``[..., T, K]`` (one page per token); ``indices``: row-major uint16
+    of
+    the same shape; ``table``: this chip's row of the expert dispatch table, int32 row-major ``[1, E + 1]``
+    (``-1``
     for the experts not in the chip's dispatch group, and the pad rows' sentinel column). Returns
     ``out[t] = sum_k [table[idx[t, k]] >= 0] * scores[t, k] * combine[t, k, :]`` as bf16 TILE ``[1, 1, T, H]``
     DRAM, the K products accumulated in fp32."""
@@ -119,10 +128,17 @@ def moe_tail(combine, scores, indices, table, n_cores: int = 80):
     return out
 
 
-# the tail's TP reduce-scatter: ``legacy`` is ``ttnn.reduce_scatter`` (which leaves a 512-byte L1 block that a routed
-# expert FFN program compiled after it trips over); ``minimal`` is ``V41Collectives``'
-# ``reduce_scatter_minimal_async``, the step's other TP reduce-scatters
-_TAIL_RS = os.environ.get("V41_DECODE_TAIL_RS", "legacy")
+# the tail's TP reduce-scatter: ``minimal`` (the default) is ``V41Collectives``'
+# ``reduce_scatter_minimal_async`` on
+# the model's resident semaphores, the step's other TP reduce-scatters; ``legacy`` is ``ttnn.reduce_scatter``,
+# whose
+# program-cache entry is first built inside the first decode step and keeps its global semaphores (8 x 64 B)
+# where
+# the step's transients left room, far under the top-of-L1 stack of the warm-up's entries: the routed expert
+# FFN's
+# static CBs (to 1,197,376) then clash with them at the next block ("L1 buffer allocated at 911104"; a
+# decode-only test met the same block at 914,176 in a decode-only unit test)
+_TAIL_RS = os.environ.get("V41_DECODE_TAIL_RS", "minimal")
 assert _TAIL_RS in ("legacy", "minimal"), _TAIL_RS
 
 
@@ -162,7 +178,8 @@ class DecodeReduce:
 
 
 def install_decode_tail(v41_moe, ccl=None) -> None:
-    """Swap ``v41_moe.moe``'s reduce module for :class:`DecodeReduce` (``ccl``: the model's ``V41Collectives``, for
+    """Swap ``v41_moe.moe``'s reduce module for :class:`DecodeReduce` (``ccl``: the model's
+    ``V41Collectives``, for
     ``V41_DECODE_TAIL_RS=minimal``)."""
     moe = v41_moe.moe
     if not isinstance(moe.reduce_module, DecodeReduce):

@@ -3,14 +3,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The short-chunk prefill geometry (``TT_V41_SHORT_CHUNK``) against the full-chunk path,
-through ``DeepseekV41ForCausalLM`` as the generator test: a prompt of ``V41_SC_PROMPT`` tokens (1,028: the served
-isl 1,024 plus the template's 4) that fits the short chunk is prefilled by ``prefill_forward`` (the short state's
-capture), eagerly through the full-chunk model into a full-chunk state, and by a capture on that state; the three
+through ``DeepseekV41ForCausalLM`` as the generator test: a prompt of ``V41_SC_PROMPT`` tokens (1,028: the
+served
+isl 1,024 plus the template's 4) that fits the short chunk is prefilled by ``prefill_forward`` (the short
+state's
+capture), eagerly through the full-chunk model into a full-chunk state, and by a capture on that state; the
+three
 are compared on the logits and on every cache row the prompt wrote (KV, index-K, window carries, compressor
-carries), and the first prefill's device time is recorded for each. Then ``V41_SC_STEPS`` decode steps follow the
+carries), and the first prefill's device time is recorded for each. Then ``V41_SC_STEPS`` decode steps follow
+the
 short-state join and the full-state join and their tokens are compared. A prompt of ``V41_SC_LONG`` tokens
-(2,052) that does not fit the short chunk must take the full-chunk path. Results: ``V41_SC_RESULT {json}``,
-``V41_SC_OUT``."""
+(2,052) that does not fit the short chunk must take the full-chunk path. The warm-up runs in the served order
+and,
+after its decode steps, main L1's resident blocks must still be one contiguous region at the top (the decode
+L1 allocation clash). ``V41_SC_MAX_SEQ`` (16,384) is the context: the served 1,053,696 makes
+the test the server's warm-up (the trace region then defaults to the catalog's 2 GiB,
+``V41_SC_TRACE_REGION``).
+Results: ``V41_SC_RESULT {json}``, ``V41_SC_OUT``."""
 
 import json
 import os
@@ -44,8 +53,10 @@ def _rows(mesh_device, t: ttnn.Tensor, first: int, count: int) -> torch.Tensor:
 
 
 def _snapshot(mesh_device, logits: torch.Tensor, state: V41PrefillState, total: int) -> dict:
-    """What a ``total``-token prompt wrote, in geometry-independent coordinates: per source the window slot and
-    the prompt's window scratch rows, the compressed rows and the index-K rows it completed; every layer's window
+    """What a ``total``-token prompt wrote, in geometry-independent coordinates: per source the window slot
+    and
+    the prompt's window scratch rows, the compressed rows and the index-K rows it completed; every layer's
+    window
     carry; the compressor carries."""
     g, cfg = state.geometry, state.config
     out = {"logits": logits}
@@ -94,10 +105,30 @@ def _differences(name: str, expected: dict, actual: dict) -> list[str]:
     return out
 
 
+def _trace_region() -> int:
+    """The decode test's region, or the served 2 GiB when ``V41_SC_MAX_SEQ`` is past the first score bucket
+    (the
+    generic captures of every bucket up to it: 33 at the 1M catalog)."""
+    return TRACE_REGION if int(os.environ.get("V41_SC_MAX_SEQ", 16384)) <= 16384 else 2 * 1024**3
+
+
+def _l1_resident(mesh_device) -> dict:
+    """Main L1's allocated blocks (allocator-relative addresses): their count, bytes, lowest address and end,
+    and
+    whether they form one contiguous region at the top of L1 (``contiguous``: no free gap between them)."""
+    v = ttnn.get_memory_view(mesh_device, ttnn.BufferType.L1)
+    blocks = [(int(r["address"]), int(r["size"])) for r in v.block_table if r.get("allocated") == "yes"]
+    if not blocks:
+        return {"blocks": 0, "bytes": 0, "lowest": None, "end": None, "contiguous": True}
+    lowest, end = min(a for a, _ in blocks), max(a + n for a, n in blocks)
+    total = sum(n for _, n in blocks)
+    return {"blocks": len(blocks), "bytes": total, "lowest": lowest, "end": end, "contiguous": lowest + total == end}
+
+
 @pytest.mark.timeout(int(os.environ.get("V41_SC_TIMEOUT", 2 * 3600)))
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    galaxy_meshes(trace_region_size=int(os.environ.get("V41_SC_TRACE_REGION", TRACE_REGION))),
+    galaxy_meshes(trace_region_size=int(os.environ.get("V41_SC_TRACE_REGION", _trace_region()))),
     indirect=True,
 )
 def test_v41_short_chunk(mesh_device, device_params, monkeypatch):
@@ -143,8 +174,24 @@ def test_v41_short_chunk(mesh_device, device_params, monkeypatch):
     kv = model.allocate_kv_cache((16, 1, 64, 512), torch.bfloat16, len(layers))
     t0 = time.time()
     model.warmup_model_prefill(enable_trace=False, kv_cache=kv, can_sample_on_device=False)
+    # the served order: the warm-up's program-cache entries (the collectives' global
+    # semaphores) are resident 64-byte L1 blocks, stacked from the top of L1 while nothing else holds it. An
+    # entry
+    # first built inside a decode step (the legacy ttnn.reduce_scatter of the decode tail) lands under the
+    # step's
+    # transients instead, far below the stack, and the routed expert FFN's static CBs then clash with it at
+    # the next
+    # block ("L1 buffer allocated at 911104"): after the decode warm-up the resident blocks must still be one
+    # contiguous region at the top
+    result["l1_before_decode"] = _l1_resident(mesh_device)
     model.warmup_model_decode(
         enable_trace=False, kv_cache=kv, max_batch_size=batch, num_blocks=16, can_sample_on_device=False
+    )
+    result["l1_after_decode"] = _l1_resident(mesh_device)
+    logger.info(f"L1 resident before decode {result['l1_before_decode']} after {result['l1_after_decode']}")
+    assert result["l1_after_decode"]["contiguous"], (
+        f"the decode warm-up left an L1 block under the step's transients: {result['l1_after_decode']} "
+        f"(before the decode: {result['l1_before_decode']})"
     )
     model.warmup_model_prefill(enable_trace=True, kv_cache=kv, can_sample_on_device=False)
     model.warmup_model_decode(

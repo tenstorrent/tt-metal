@@ -2,18 +2,30 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The vllm-tt-plugin contract of ``DeepseekV41ForCausalLM`` on the Galaxy, driven as the plugin's model runner
-would, without vLLM: build (``initialize_vllm_model``), ``allocate_kv_cache``, the two-phase warm-up, a two-request
+"""The vllm-tt-plugin contract of ``DeepseekV41ForCausalLM`` on the Galaxy, driven as the plugin's model
+runner
+would, without vLLM: build (``initialize_vllm_model``), ``allocate_kv_cache``, the two-phase warm-up, a
+two-request
 prefill batch, decode steps on the batch, then a third request that takes a slot a finished request held (the
-captures made on the slot serve the new request, an odd prompt whose compressor carry must reach the odd capture).
+captures made on the slot serve the new request, an odd prompt whose compressor carry must reach the odd
+capture).
 
-Request 0 is the text the model knows by heart (A Tale of Two Cities), teacher-forced on its next tokens and judged
-by ``book_top1`` as the decode test; request 1 is a different stretch of the same text, free-running, present so the
-batch has two rows. ``V41_GEN_STEPS`` decode steps (default 16), ``V41_GEN_PROMPT`` tokens (255), ``V41_GEN_LAYERS``
+Request 0 is the text the model knows by heart (A Tale of Two Cities), teacher-forced on its next tokens and
+judged
+by ``book_top1`` as the decode test; request 1 is a different stretch of the same text, free-running, present
+so the
+batch has two rows. ``V41_GEN_STEPS`` decode steps (default 16), ``V41_GEN_PROMPT`` tokens (255),
+``V41_GEN_LAYERS``
 (``all``; the generator reads it as ``TT_V41_LAYERS``). ``V41_GEN_TRACE_PREFILL=1`` lists the prompt length in
-``TT_V41_TRACE_PREFILL_LENGTHS`` so every request's prefill is a replay of a capture made at warm-up (the odd prompt's
-compressor carry then comes out of the replay); the trace region's bytes are recorded. Results go to the log as
-``V41_GENERATOR_RESULT {json}`` and to ``V41_GEN_OUT``.
+``TT_V41_TRACE_PREFILL_LENGTHS`` so every request's prefill is a replay of a capture made at warm-up (the odd
+prompt's
+compressor carry then comes out of the replay); the trace region's bytes are recorded. ``V41_GEN_MAX_SEQ``
+raises the
+context to a served value (the 1M catalog's 1,053,696; the trace region then defaults to 2 GiB) and
+``V41_GEN_SHORT_PROMPT`` (e.g. 1,028) adds a fourth request of that length, listed with the prompt, which must
+replay
+on the short chunk's state when ``TT_V41_SHORT_CHUNK`` is set (``book_top1_short``). Results go
+to the log as ``V41_GENERATOR_RESULT {json}`` and to ``V41_GEN_OUT``.
 """
 
 import json
@@ -51,10 +63,15 @@ def _page_table(first_blocks: list[int], width: int = 8) -> torch.Tensor:
     return table
 
 
+def _trace_region() -> int:
+    """The decode test's region, or the served 2 GiB when ``V41_GEN_MAX_SEQ`` is past the first score bucket."""
+    return TRACE_REGION if int(os.environ.get("V41_GEN_MAX_SEQ", 0)) <= 16384 else 2 * 1024**3
+
+
 @pytest.mark.timeout(int(os.environ.get("V41_GEN_TIMEOUT", 2 * 3600)))
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    galaxy_meshes(trace_region_size=int(os.environ.get("V41_GEN_TRACE_REGION", TRACE_REGION))),
+    galaxy_meshes(trace_region_size=int(os.environ.get("V41_GEN_TRACE_REGION", _trace_region()))),
     indirect=True,
 )
 def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
@@ -65,13 +82,20 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     monkeypatch.setenv("TT_V41_CHUNK", str(chunk))
     monkeypatch.setenv("TT_V41_LAYERS", ",".join(str(l) for l in layers))
     trace_prefill = os.environ.get("V41_GEN_TRACE_PREFILL", "0") == "1"
+    # a fourth request of this length (0: none), listed with the prompt: with TT_V41_SHORT_CHUNK set it must
+    # replay
+    # on the short chunk's state
+    short_prompt = int(os.environ.get("V41_GEN_SHORT_PROMPT", 0))
     if trace_prefill:
-        monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", str(prompt))
+        monkeypatch.setenv(
+            "TT_V41_TRACE_PREFILL_LENGTHS", str(prompt) if not short_prompt else f"{prompt},{short_prompt}"
+        )
     elif "TT_V41_TRACE_PREFILL_LENGTHS" not in os.environ:  # an explicit list in the environment is kept
         monkeypatch.setenv("TT_V41_TRACE_PREFILL_LENGTHS", "")
     if resolve_checkpoint() is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
-    max_seq_len = prompt + steps + 64
+    # the context: what the prompts need, or the served value (V41_GEN_MAX_SEQ, e.g. the 1M catalog's 1053696)
+    max_seq_len = max(prompt + steps + 64, int(os.environ.get("V41_GEN_MAX_SEQ", 0)))
     result = {
         "layers": layers,
         "n_layers": len(layers),
@@ -148,7 +172,8 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
         if not chunked:
             out = prefill_call(rows, [0] * len(rows))
         else:
-            # the plugin's chunked prefill with aligned chunks: one request at a time, each chunk a call with the
+            # the plugin's chunked prefill with aligned chunks: one request at a time, each chunk a call with
+            # the
             # prefix so far (the scheduler admits one prefill a step and advances a partial prefill alone)
             out = torch.zeros(len(rows), 1, C.VOCAB_SIZE)
             for i, (block, t) in enumerate(rows):
@@ -210,7 +235,8 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
     result["book_text"] = tokenizer.decode(book_a[prompt + 1 : prompt + steps + 1].tolist())
     result["other_text"] = tokenizer.decode(text_b)
 
-    # --- a third request (a free slot, or the least recently used one when V41_GEN_BATCH is 2 per 1 mesh row):
+    # --- a third request (a free slot, or the least recently used one when V41_GEN_BATCH is 2 per 1 mesh
+    # row):
     # the same book prompt, from the start ---
     logits = prefill([(11, book_a[:prompt])])
     fed, hits2, preds = int(book_a[prompt]), 0, []
@@ -223,6 +249,31 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
         fed = int(book_a[p + 1])
     result["book_top1_reused_slot"] = round(hits2 / min(steps, 8), 4)
     result["text_reused_slot"] = tokenizer.decode(preds)
+
+    # --- a fourth request of V41_GEN_SHORT_PROMPT tokens (the book from the start), on the short chunk's
+    # state when
+    # one is configured: the prefill must be a replay on that chunk, and the teacher-forced decode is judged
+    # as above ---
+    if short_prompt:
+        assert short_prompt + 9 <= book_a.numel(), (short_prompt, book_a.numel())
+        logits = prefill([(13, book_a[:short_prompt])])
+        result["short_prefill_last"] = dict(model.prefill_last)
+        if model.short:
+            assert model.prefill_last["chunk"] == model.short[0][0], model.prefill_last
+            assert model.prefill_last["mode"] == "replay", model.prefill_last
+        fed, hits3, preds = int(book_a[short_prompt]), 0, []
+        for s in range(min(steps, 8)):
+            p = short_prompt + s
+            out = decode([(13, fed, p), (0, 0, 0)])
+            pred = int(out[0, 0].argmax())
+            preds.append(pred)
+            hits3 += pred == int(book_a[p + 1])
+            fed = int(book_a[p + 1])
+        result["book_top1_short"] = round(hits3 / min(steps, 8), 4)
+        result["text_short"] = tokenizer.decode(preds)
+        result["book_text_short"] = tokenizer.decode(
+            book_a[short_prompt + 1 : short_prompt + min(steps, 8) + 1].tolist()
+        )
     result["slots"] = sorted(model.slots.keys())
     result["dram_after_requests_bytes"] = _dram_bytes(mesh_device)
     logger.info("V41_GENERATOR_RESULT " + json.dumps(result))
