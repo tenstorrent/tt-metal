@@ -72,7 +72,13 @@ def _nd_shard_n_tiles(w: ttnn.Tensor) -> int:
 
 class GegluRoutedExpert:
     """``GegluRoutedExpert(mesh_device, gate_projs, up_projs, down_projs, idx_table, max_tokens)(x, counts,
-    region_offsets)``: see the module docstring for the contract."""
+    region_offsets)``: see the module docstring for the contract.
+
+    Capacity contract: ``max_tokens`` is the per-expert row capacity (M_tiles_full tiles) every program of the op
+    is sized for; the caller guarantees no expert's count exceeds it (the dispatch plan passes the chunk's row
+    count, the maximum when each row names an expert at most once -- distinct top-k ids, sentinel pad rows). The
+    kernels clamp a larger count to the capacity (adaptive_chunk::clamp_count_tiles) so Release builds stay in
+    bounds, and ASSERT on it under the watcher: a clamp is a caller bug, never a silent mode of operation."""
 
     # The worker rectangle the program always runs on (the shared op's kCoreGridX x kCoreGridY): the K-axis split,
     # the activated L1 multicast and the padded per_core_N all assume it. The kernel family is Blackhole-only; the

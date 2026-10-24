@@ -39,6 +39,11 @@ from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 
 # tokens per dispatch chunk across the whole mesh (rows * seq_len_per_chip); every chip holds the chunk
 CHUNK_TOKENS = int(os.environ.get("GEMMA4_MOE_DISPATCH_CHUNK", "4096"))
+# GEMMA4_DISPATCH_LOG_COUNTS=1: log each chunk's per-expert row counts against the GeGLU op's capacity (diagnostics).
+LOG_COUNTS = os.environ.get("GEMMA4_DISPATCH_LOG_COUNTS", "0") == "1"
+# GEMMA4_SPARSE_PAD_SENTINEL=0: the pre-2026-10-24 zero pad of the sparse ids (every pad row on expert 0 in all K
+# slots, over the capacity when the real rows fill less than ~7/8 of the chunk); diagnostics only, never the default.
+SPARSE_PAD_SENTINEL = os.environ.get("GEMMA4_SPARSE_PAD_SENTINEL", "1") != "0"
 # GEMMA4_MOE_DISPATCH_FIT_CHUNK=1: a call (or its last chunk) shorter than CHUNK_TOKENS runs on a dispatch chunk of
 # its own tile-aligned length instead of padding to CHUNK_TOKENS, so a 128-token prompt no longer pays for 4096
 # rows (the top-k, histogram, dispatch, combine and reduce run on 32 rows per chip instead of 1024). Every distinct
@@ -253,6 +258,11 @@ class _DispatchChunkPlan:
             )
         # The Gemma 4 model-local GeGLU routed-expert op (custom_ops/geglu_routed_expert) on TtRoutedExpert's
         # ND-sharded bf4 weights and index table, bound to this chunk's token budget.
+        # Capacity contract: max_tok = the chunk's rows (compute_constants: dispatch_group_size x seq_per_chip),
+        # the provable per-expert maximum when every row's top-k slots are distinct experts (the router's top-k)
+        # or the num_experts sentinel (pad rows, _pad_ids_with_sentinel): a row then counts at most once per
+        # expert. The GeGLU kernels clamp a larger count to this capacity as the last line of defense (and ASSERT
+        # under the watcher); see chunk_expert_counts and test_dispatch_chunk_capacity_host.py.
         self.geglu_op = GegluRoutedExpert(
             owner.mesh_device,
             owner.routed_expert.gate_projs,
@@ -319,6 +329,7 @@ class Gemma4DispatchExperts:
         self.dgs, self.ndg = dgs, ndg
         self._padding_cache: dict = {}  # n_tokens -> per-device [real, pad_side] (see _padding_config)
         self._row_masks: dict = {}  # indices shape -> (row index, sentinel) TILE tensors
+        self._sentinel_blocks: dict = {}  # (pad rows, k) -> ROW_MAJOR uint16 block of the num_experts sentinel
         assert dgs > 1, "the dispatch stack needs a dispatch group of more than one chip"
         # The stack's routing table is sharded with the groups over the mesh columns and its offset cumsum runs
         # along the rows; _RoutingSetupOnAxis carries the single-row mesh (one group over the columns).
@@ -537,6 +548,21 @@ class Gemma4DispatchExperts:
             num_routed_experts=self.num_experts,
             num_experts_per_tok=self.top_k,
         )
+        if LOG_COUNTS:
+            # GEMMA4_DISPATCH_LOG_COUNTS=1: the per-expert row counts the GeGLU op clamps to its capacity (a host
+            # readback per chunk; diagnostics only)
+            host_counts = ttnn.to_torch(ttnn.get_device_tensors(counts)[0]).reshape(-1)[: self.num_experts].long()
+            logger.info(
+                "[gemma4-dispatch] chunk {} rows ({} real, {}): counts max {} at expert {}, sum {}, capacity {} rows/expert{}",
+                plan.chunk_tokens,
+                n_tokens,
+                "sparse ids" if isinstance(routing, tuple) else "dense routing",
+                int(host_counts.max()),
+                int(host_counts.argmax()),
+                int(host_counts.sum()),
+                plan.max_tok,
+                " -- OVER CAPACITY (clamped on device)" if int(host_counts.max()) > plan.max_tok else "",
+            )
         indices_rm = ttnn.to_layout(ttnn.reshape(indices, (1, S, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
         weights_rm = ttnn.to_layout(ttnn.reshape(weights, (1, S, self.top_k)), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(indices)
@@ -615,6 +641,50 @@ class Gemma4DispatchExperts:
     def _pad_rows(t, pad):
         return ttnn.pad(t, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
 
+    def _pad_ids_with_sentinel(self, ids, pad):
+        """``ids`` [1, 1, n, K] uint16 TILE -> [1, 1, n + pad, K] TILE whose last ``pad`` rows hold the
+        ``num_experts`` sentinel in every slot (a cached ROW_MAJOR block concatenated in ROW_MAJOR, then re-tiled:
+        exact bits, no pad-value cast). The blocks are built on first use of a (pad, K): outside any trace capture,
+        as the served traced buckets have no pad rows."""
+        k = int(ids.shape[-1])
+        key = (int(pad), k)
+        block = self._sentinel_blocks.get(key)
+        if block is None:
+            block = self._sentinel_blocks[key] = ttnn.from_torch(
+                torch.full((1, 1, int(pad), k), self.num_experts, dtype=torch.int16),
+                device=self.mesh_device,
+                dtype=ids.dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        ids_rm = ttnn.to_layout(ids, ttnn.ROW_MAJOR_LAYOUT)
+        out_rm = ttnn.concat([ids_rm, block], dim=2)
+        out = ttnn.to_layout(out_rm, ttnn.TILE_LAYOUT)
+        for t in (ids_rm, out_rm):
+            if t is not ids:
+                ttnn.deallocate(t)
+        return out
+
+    @staticmethod
+    def chunk_expert_counts(ids, pad: int, num_experts: int, pad_form: str):
+        """Host model of the per-expert row counts the routing setup produces for one chunk (the counts the
+        GeGLU op clamps to its capacity): ``ids`` [n, K] real rows (long), ``pad`` padded rows of ``pad_form``:
+        ``sentinel`` (this path: the num_experts id, counted by nobody), ``dense`` (a zero routing row's top-k:
+        K distinct ids 0..K-1 with zero weights) or ``zero`` (the old sparse pad: expert 0 in all K slots).
+        Returns a [num_experts] long tensor."""
+        n, k = ids.shape
+        counts = torch.bincount(ids.reshape(-1).long(), minlength=num_experts)[:num_experts]
+        if pad_form == "sentinel" or pad == 0:
+            return counts
+        if pad_form == "dense":
+            counts[:k] += pad
+        elif pad_form == "zero":
+            counts[0] += pad * k
+        else:
+            raise ValueError(pad_form)
+        return counts
+
     def _small_rows_call(self, rows: int, sparse: bool) -> bool:
         """Whether a call of ``rows`` tokens takes the small-row expert path (GEMMA4_SMALL_ROW_EXPERTS=1, dense
         routing, no ring, ``small_row_min_tokens() <= rows <= small_row_max_tokens()``)."""
@@ -652,8 +722,17 @@ class Gemma4DispatchExperts:
             if end - start < T:
                 pad = T - (end - start)
                 h = self._pad_rows(h, pad)
-                # padded rows: zero weights, ids the sentinel mask overwrites (_sentinel_padded_rows)
-                r = tuple(self._pad_rows(t, pad) for t in r) if sparse else self._pad_rows(r, pad)
+                if sparse and SPARSE_PAD_SENTINEL:
+                    # padded rows: zero weights and the num_experts sentinel in every top-k slot, so the routing
+                    # setup counts nothing for them and dispatch sends nothing (a zero id would name expert 0 in
+                    # all K slots: up to K x pad duplicate rows on expert 0, past the chunk-row capacity the GeGLU
+                    # op is sized for -- the CI watcher's ASSERT(count_tiles == count_tiles_raw), 2026-10-24).
+                    r = (self._pad_rows(r[0], pad), self._pad_ids_with_sentinel(r[1], pad))
+                elif sparse:
+                    r = tuple(self._pad_rows(t, pad) for t in r)  # GEMMA4_SPARSE_PAD_SENTINEL=0: the old zero pad
+                else:
+                    # a zero routing row's top-k is K distinct ids with zero weights: at most +pad rows per expert
+                    r = self._pad_rows(r, pad)
             o = self._chunk(h, r, end - start, plan)
             if end - start < T:
                 o = ttnn.slice(o, [0, 0, 0, 0], [1, 1, end - start, self.hidden])
