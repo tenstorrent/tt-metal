@@ -664,6 +664,11 @@ class ttMLA:
         self._shared_q_overlap_mode = os.getenv("TT_GLM_SHARED_KV_OVERLAP", "off").lower()
         if self._shared_q_overlap_mode not in ("off", "a2a", "a2a_untilize"):
             raise ValueError(f"TT_GLM_SHARED_KV_OVERLAP={self._shared_q_overlap_mode!r}: expected off|a2a|a2a_untilize")
+        # Full layers (prototype, env TT_GLM_FULL_A2A_OVERLAP = a2a | a2a_untilize | off): append the
+        # heads->seq all-to-all (+untilize) to the top-k sub-device inside the existing top-k || gather region.
+        self._full_a2a_overlap_mode = os.getenv("TT_GLM_FULL_A2A_OVERLAP", "off").lower()
+        if self._full_a2a_overlap_mode not in ("off", "a2a", "a2a_untilize"):
+            raise ValueError(f"TT_GLM_FULL_A2A_OVERLAP={self._full_a2a_overlap_mode!r}: expected off|a2a|a2a_untilize")
         if (
             self._shared_q_overlap_mode != "off"
             and requested_overlap_profile is not None
@@ -1981,20 +1986,7 @@ class ttMLA:
                 overlap_resources=resources,
                 metadata=metadata,
             )
-            q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
-                tt_q,
-                in_dim=1,
-                out_dim=2,
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cluster_axis=self.tp_axis,
-                subdevice_id=resources.topk_subdevice_id,
-            )
-            if self._shared_q_overlap_mode == "a2a_untilize":
-                q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT, sub_core_grids=resources.topk_core_grid)
-                ttnn.deallocate(q_seq_sharded)
-            else:
-                q_rm = q_seq_sharded  # still TILE; _sparse_mla untilizes it on the full grid
+            q_rm = self._a2a_on_subdevice(tt_q, resources, untilize=self._shared_q_overlap_mode == "a2a_untilize")
         except Exception:
             failed = True
             raise
@@ -2092,6 +2084,7 @@ class ttMLA:
         populated_global,
         seq_len_local,
         metadata=None,
+        tt_q=None,
     ):
         """Run the closed two-program overlap region and return joined branch outputs.
 
@@ -2125,6 +2118,11 @@ class ttMLA:
                 overlap_resources=resources,
                 metadata=metadata,
             )
+            q_rm = None
+            if tt_q is not None:
+                # Issued after the gather so its go signal (which waits for top-k on the same sub-device)
+                # never delays the gather's.
+                q_rm = self._a2a_on_subdevice(tt_q, resources, untilize=self._full_a2a_overlap_mode == "a2a_untilize")
         except Exception:
             failed = True
             raise
@@ -2140,7 +2138,26 @@ class ttMLA:
 
         ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_INDEX_REDISTRIBUTION`")
         indices = self._indexer.finalize_distribution(local_indices, selection_state)
+        if tt_q is not None:
+            return indices, kvpe_dev, q_rm
         return indices, kvpe_dev
+
+    def _a2a_on_subdevice(self, tt_q, resources, *, untilize):
+        """heads->seq all-to-all on the overlap manager's top-k sub-device (+ optional untilize there)."""
+        q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
+            tt_q,
+            in_dim=1,
+            out_dim=2,
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=self.tp_axis,
+            subdevice_id=resources.topk_subdevice_id,
+        )
+        if not untilize:
+            return q_seq_sharded  # still TILE; _sparse_mla untilizes it on the full grid
+        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT, sub_core_grids=resources.topk_core_grid)
+        ttnn.deallocate(q_seq_sharded)
+        return q_rm
 
     def _sparse_chunked_attn_overlapped(
         self,
@@ -2168,14 +2185,26 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
-        indices, kvpe_dev = self._select_and_gather_overlapped(
-            selection_state=selection_state,
-            kvpe_cache=kvpe_cache,
-            cache_batch_idx=cache_batch_idx,
-            populated_global=populated_global,
-            seq_len_local=seq_len_local,
-            metadata=metadata,
-        )
+        q_rm = None
+        if self._full_a2a_overlap_mode != "off" and self._needs_head_to_seq_reshard:
+            indices, kvpe_dev, q_rm = self._select_and_gather_overlapped(
+                selection_state=selection_state,
+                kvpe_cache=kvpe_cache,
+                cache_batch_idx=cache_batch_idx,
+                populated_global=populated_global,
+                seq_len_local=seq_len_local,
+                metadata=metadata,
+                tt_q=tt_q,
+            )
+        else:
+            indices, kvpe_dev = self._select_and_gather_overlapped(
+                selection_state=selection_state,
+                kvpe_cache=kvpe_cache,
+                cache_batch_idx=cache_batch_idx,
+                populated_global=populated_global,
+                seq_len_local=seq_len_local,
+                metadata=metadata,
+            )
         output = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             tt_kvpe=tt_kvpe,
@@ -2183,6 +2212,7 @@ class ttMLA:
             indices=indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
+            q_resharded=q_rm,
         )
         return output, indices
 
