@@ -4208,6 +4208,7 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuCopyDest: self._copy_dest,
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
+                MathOperation.SfpuIscloseEqualNan: self._isclose_equal_nan,
                 # Integer / format-typed binary SFPU ops.
                 MathOperation.SfpuEqInt: self._eq_int,
                 MathOperation.SfpuNeInt: self._ne_int,
@@ -4540,9 +4541,10 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     # Operation methods are covered by Eltwise Binary Golden
     def _xlogy(self, x, y):
-        # xlogy(x, y) = x * log(y), computed in fp32 to mirror the SFPU log path. Non-finite
-        # edge cases are not consistently modelled across formats, so xlogy is exercised with
-        # strictly-positive stimuli where the result is always finite.
+        # xlogy(x, y) = x * log(y), computed in fp32 to mirror the SFPU log path. The random
+        # sweeps drive strictly-positive y, where the result is always finite; the y = +0 and
+        # y = denormal lanes, where ln is -inf, are driven by test_eltwise_binary_sfpu_edges
+        # and test_eltwise_binary_sfpu_xlogy_denormal.
         xf = (
             x.to(torch.float32)
             if isinstance(x, torch.Tensor)
@@ -4553,6 +4555,13 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
             if isinstance(y, torch.Tensor)
             else torch.tensor(float(y))
         )
+        # The kernel's log operand is flushed to zero when it is a positive denormal
+        # (Blackhole: by the SFPSTORE of the Dest round trip, or by the biased-exponent == 0
+        # test of _calculate_log_body_on_reg_), so log(denormal) = -inf. A negative denormal
+        # is not flushed here: the kernel's NaN guard (`in1 < 0.0f`) reads the sign bit of the
+        # unflushed register, so that lane is NaN, which is also log of a negative.
+        denormal = yf.abs() < torch.finfo(torch.float32).tiny
+        yf = torch.where(denormal & ~torch.signbit(yf), 0.0, yf)
         res = xf * torch.log(yf)
         return res.to(x.dtype) if isinstance(x, torch.Tensor) else res.item()
 
@@ -4777,18 +4786,28 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
         # Widen to int64 for the multiply so the intermediate can't overflow.
         return (t1.to(torch.int64) * t2.to(torch.int64)).to(torch.int32)
 
-    def _isclose(self, t1, t2):
-        # isclose(a, b) = |a - b| <= atol + rtol * |b|, returned as 1.0 / 0.0. Uses torch's
-        # default tolerances, which match the fp32 bit patterns hard-coded in the ISCLOSE
-        # dispatch, and is evaluated in fp32.
+    # torch.isclose defaults; the same two values the ISCLOSE / ISCLOSE_EQNAN dispatch in
+    # sfpu_operations.h hard-codes as fp32 bit patterns (ISCLOSE_RTOL_BITS / ISCLOSE_ATOL_BITS).
+    _ISCLOSE_RTOL = 1e-5
+    _ISCLOSE_ATOL = 1e-8
+
+    def _isclose_impl(self, t1, t2, equal_nan):
+        # isclose(a, b) = |a - b| <= atol + rtol * |b|, returned as 1.0 / 0.0 and evaluated in
+        # fp32. equal_nan=True makes two NaN operands compare close.
         close = torch.isclose(
             t1.to(torch.float32),
             t2.to(torch.float32),
-            rtol=1e-5,
-            atol=1e-8,
-            equal_nan=False,
+            rtol=self._ISCLOSE_RTOL,
+            atol=self._ISCLOSE_ATOL,
+            equal_nan=equal_nan,
         )
         return 1.0 if bool(close) else 0.0
+
+    def _isclose(self, t1, t2):
+        return self._isclose_impl(t1, t2, equal_nan=False)
+
+    def _isclose_equal_nan(self, t1, t2):
+        return self._isclose_impl(t1, t2, equal_nan=True)
 
     def _reshuffle_rows(self, tensor, src_idx, dst_idx, data_format):
         """reshuffle_rows on a tilized Dest image; every row's SFPSTORE truncates to the Dest width."""
