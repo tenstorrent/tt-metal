@@ -549,7 +549,8 @@ KDA_PREP_HELPER void normalize_l2_rows(
     DFB3& inverse_norms) {
     const uint32_t matrix_tiles = row_tiles * ColumnTiles;
 
-    square_tiles(input, squared, matrix_tiles);
+    // The squares on the FPU: the HiFi4 product of a BF16 value with itself is exact in FP32, as the SFPU square was.
+    binary_items(ElementwiseBinaryOp::Multiply, input, 0, false, input, 0, false, squared, matrix_tiles);
 
     reduce_squared_rows_to_inverse_norms<SquaredDfb, InverseNormsDfb>(
         row_tiles, ColumnTiles, eps_bits, scale, scale_bits);
