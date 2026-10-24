@@ -28,7 +28,7 @@ echo "Running fabric unit tests now...";
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphValidation*"
 
 # Host-only: KV chunk address table serialization (disaggregated prefill chunk map wire format)
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="KvChunkAddressTableProtobuf*"
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="CacheAddressTableProtobuf*"
 
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"

@@ -74,7 +74,7 @@ if(TARGET all_generated_files)
     add_dependencies(all_generated_files capnp_generated_files)
 endif()
 
-# Generate protobuf files for KvChunkAddressTable serialization
+# Generate protobuf files for CacheAddressTable serialization
 include(protobuf)
 GENERATE_PROTO_FILES(
     ${CMAKE_CURRENT_SOURCE_DIR}/internal/disaggregation/protobuf/kv_chunk_address_table.proto

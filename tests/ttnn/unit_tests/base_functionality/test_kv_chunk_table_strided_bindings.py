@@ -12,7 +12,7 @@ D = ttnn.experimental.disaggregation
 
 
 def _cfg(num_layers=2, max_seq=1024, num_slots=1):
-    c = D.KvChunkAddressTableConfig()
+    c = D.CacheAddressTableConfig()
     c.num_layers = num_layers
     c.max_sequence_length = max_seq
     c.num_slots = num_slots
@@ -22,7 +22,7 @@ def _cfg(num_layers=2, max_seq=1024, num_slots=1):
 
 
 def _strided_table(names=("a", "b"), strided=("a",)):
-    return D.KvChunkAddressTable({n: _cfg() for n in names}, {n: D.ChunkCompression.STRIDED_ROWS for n in strided})
+    return D.CacheAddressTable({n: _cfg() for n in names}, {n: D.ChunkCompression.STRIDED_ROWS for n in strided})
 
 
 def _group(table, chip=0):
@@ -56,7 +56,7 @@ def test_set_strided_row_rejects_bad_input(expect_error):
     with expect_error(RuntimeError, "on an UNROLLED config"):
         t.set_strided_row(0, 0, 64, [0x1000], [0x100], [g], t.config_id_of("b"))  # UNROLLED config
     with expect_error(RuntimeError, "compression given for unknown config"):
-        D.KvChunkAddressTable({"a": _cfg()}, {"nope": D.ChunkCompression.STRIDED_ROWS})  # unknown config name
+        D.CacheAddressTable({"a": _cfg()}, {"nope": D.ChunkCompression.STRIDED_ROWS})  # unknown config name
 
 
 def test_strided_tables_round_trip_including_an_empty_strided_config(tmp_path):
@@ -75,3 +75,11 @@ def test_strided_tables_round_trip_including_an_empty_strided_config(tmp_path):
             y.size_bytes,
             int(y.device_group_index),
         )
+
+
+def test_pre_rename_names_alias_the_new_bindings():
+    assert D.KvChunkAddressTable is D.CacheAddressTable
+    assert D.KvChunkAddressTableConfig is D.CacheAddressTableConfig
+    assert D.KvCacheLocation is D.CacheLocation
+    assert D.KvChunkTensorType is D.CacheTensorType
+    assert D.get_or_build_kv_chunk_table is D.get_or_build_cache_address_table

@@ -54,7 +54,7 @@ uint64_t dual_write_max_bytes() {
     return kDefaultDualWriteMaxBytes;
 }
 
-bool is_unset(const KvCacheLocation& loc) {
+bool is_unset(const CacheLocation& loc) {
     return loc.noc_addr == 0 && loc.size_bytes == 0 && *loc.device_group_index == 0;
 }
 
@@ -88,7 +88,7 @@ uint64_t min_period(const std::vector<T>& seq) {
 // period -> the config cannot be STRIDED_ROWS.
 //
 // Cost: O(n) per row, once per export per UNROLLED config (never on the transfer hot path).
-uint32_t row_period(std::span<const KvCacheLocation> row) {
+uint32_t row_period(std::span<const CacheLocation> row) {
     const size_t n = row.size();
     if (n <= 1) {
         return 1;
@@ -117,7 +117,7 @@ ChunkCompression from_wire(::tt::disaggregation::proto::ChunkCompression c) {
         case ::tt::disaggregation::proto::STRIDED_ROWS: return ChunkCompression::kStridedRows;
         default:
             throw std::runtime_error(
-                "KvChunkAddressTable proto declares unknown compression=" +
+                "CacheAddressTable proto declares unknown compression=" +
                 std::to_string(static_cast<int>(c)) + " — written by a newer format; upgrade the reader");
     }
 }
@@ -127,33 +127,33 @@ ChunkCompression from_wire(::tt::disaggregation::proto::ChunkCompression c) {
                                                : ::tt::disaggregation::proto::UNROLLED;
 }
 
-KvChunkTensorType from_wire(::tt::disaggregation::proto::KvChunkTensorType t) {
+CacheTensorType from_wire(::tt::disaggregation::proto::CacheTensorType t) {
     switch (t) {
-        case ::tt::disaggregation::proto::KV: return KvChunkTensorType::Kv;
-        case ::tt::disaggregation::proto::SNAPSHOT: return KvChunkTensorType::Snapshot;
+        case ::tt::disaggregation::proto::KV: return CacheTensorType::Kv;
+        case ::tt::disaggregation::proto::SNAPSHOT: return CacheTensorType::Snapshot;
         default:
             throw std::runtime_error(
-                "KvChunkAddressTable proto declares unknown tensor_type=" + std::to_string(static_cast<int>(t)) +
+                "CacheAddressTable proto declares unknown tensor_type=" + std::to_string(static_cast<int>(t)) +
                 " — written by a newer format; upgrade the reader");
     }
 }
 
-::tt::disaggregation::proto::KvChunkTensorType to_wire(KvChunkTensorType t) {
+::tt::disaggregation::proto::CacheTensorType to_wire(CacheTensorType t) {
     switch (t) {
-        case KvChunkTensorType::Kv: return ::tt::disaggregation::proto::KV;
-        case KvChunkTensorType::Snapshot: return ::tt::disaggregation::proto::SNAPSHOT;
+        case CacheTensorType::Kv: return ::tt::disaggregation::proto::KV;
+        case CacheTensorType::Snapshot: return ::tt::disaggregation::proto::SNAPSHOT;
     }
-    throw std::runtime_error("unhandled KvChunkTensorType=" + std::to_string(static_cast<int>(t)));
+    throw std::runtime_error("unhandled CacheTensorType=" + std::to_string(static_cast<int>(t)));
 }
 
 void emit_entry(
-    ::tt::disaggregation::proto::KvChunkAddressTable& pb,
+    ::tt::disaggregation::proto::CacheAddressTable& pb,
     uint32_t c,
     uint32_t slot,
     uint32_t layer,
     uint32_t chunk,
     uint32_t chunk_n_tokens,
-    const KvCacheLocation& loc) {
+    const CacheLocation& loc) {
     auto* entry = pb.add_entries();
     entry->set_slot(slot);
     entry->set_layer(layer);
@@ -165,7 +165,7 @@ void emit_entry(
 }
 
 void emit_run(
-    ::tt::disaggregation::proto::KvChunkAddressTable& pb,
+    ::tt::disaggregation::proto::CacheAddressTable& pb,
     uint32_t c,
     uint32_t slot,
     uint32_t layer,
@@ -195,7 +195,7 @@ void emit_run(
 // but at least one must exist — an all-unset config would emit zero runs, which import
 // rejects as malformed, so it stays UNROLLED.
 bool config_compressible(
-    const KvChunkAddressTable::UnrolledGrid& map, uint32_t num_slots, uint32_t num_layers, uint32_t npc) {
+    const CacheAddressTable::UnrolledGrid& map, uint32_t num_slots, uint32_t num_layers, uint32_t npc) {
     if (npc == 0) {
         return false;
     }
@@ -212,7 +212,7 @@ bool config_compressible(
             }
             const auto& first = row.front();
             const bool uniform = std::all_of(
-                row.begin(), row.end(), [&](const KvCacheLocation& l) { return l.size_bytes == first.size_bytes; });
+                row.begin(), row.end(), [&](const CacheLocation& l) { return l.size_bytes == first.size_bytes; });
             if (!uniform || row_period(row) == 0) {
                 return false;
             }
@@ -221,12 +221,12 @@ bool config_compressible(
     return any_populated;
 }
 
-using Row = KvChunkAddressTable::StridedRowMap::Row;
+using Row = CacheAddressTable::StridedRowMap::Row;
 
 // Emit one run per residue class of one populated row (count geometry is shared by both
 // provenance paths: detected rows from an UnrolledGrid, stored rows from a StridedRowMap).
 void emit_row_runs(
-    ::tt::disaggregation::proto::KvChunkAddressTable& pb,
+    ::tt::disaggregation::proto::CacheAddressTable& pb,
     uint32_t c,
     uint32_t slot,
     uint32_t layer,
@@ -242,7 +242,7 @@ void emit_row_runs(
 
 // Detect a populated unrolled row's strided structure as a Row. Call only when
 // config_compressible() returned true — then row_period() is guaranteed nonzero.
-Row detect_row(std::span<const KvCacheLocation> row) {
+Row detect_row(std::span<const CacheLocation> row) {
     Row out;
     out.step = row_period(row);
     out.size_bytes = row.front().size_bytes;
@@ -261,8 +261,8 @@ Row detect_row(std::span<const KvCacheLocation> row) {
 // Emit one run per residue class for every populated row of a config. Call only when
 // config_compressible() returned true — rows are then hole-free, uniform, and periodic.
 void emit_config_runs(
-    ::tt::disaggregation::proto::KvChunkAddressTable& pb,
-    const KvChunkAddressTable::UnrolledGrid& map,
+    ::tt::disaggregation::proto::CacheAddressTable& pb,
+    const CacheAddressTable::UnrolledGrid& map,
     uint32_t c,
     uint32_t num_slots,
     uint32_t num_layers,
@@ -286,11 +286,11 @@ void emit_config_runs(
 // without it, a small dual-written table re-exported through a NEW reader would come back
 // runs-only, silently dropping the mirror for any OLD reader downstream of the re-export.
 void emit_config_payload(
-    ::tt::disaggregation::proto::KvChunkAddressTable& pb,
-    ::tt::disaggregation::proto::KvChunkConfig& pb_cfg,
-    const KvChunkAddressTable::StridedRowMap& map,
+    ::tt::disaggregation::proto::CacheAddressTable& pb,
+    ::tt::disaggregation::proto::CacheConfig& pb_cfg,
+    const CacheAddressTable::StridedRowMap& map,
     uint32_t c,
-    const KvChunkAddressTableConfig& cfg,
+    const CacheAddressTableConfig& cfg,
     uint32_t npc,
     bool dual_write) {
     // A strided config with no populated row would emit zero runs, which the importer rejects as
@@ -329,11 +329,11 @@ void emit_config_payload(
 // populated row compresses (per-config tag granularity), otherwise it stays UNROLLED. Entries
 // are the sole payload for UNROLLED configs, or the old-reader mirror under dual-write.
 void emit_config_payload(
-    ::tt::disaggregation::proto::KvChunkAddressTable& pb,
-    ::tt::disaggregation::proto::KvChunkConfig& pb_cfg,
-    const KvChunkAddressTable::UnrolledGrid& map,
+    ::tt::disaggregation::proto::CacheAddressTable& pb,
+    ::tt::disaggregation::proto::CacheConfig& pb_cfg,
+    const CacheAddressTable::UnrolledGrid& map,
     uint32_t c,
-    const KvChunkAddressTableConfig& cfg,
+    const CacheAddressTableConfig& cfg,
     uint32_t npc,
     bool dual_write) {
     const bool convertible = config_compressible(map, cfg.num_slots, cfg.num_layers, npc);
@@ -359,8 +359,8 @@ void emit_config_payload(
 
 }  // namespace
 
-::tt::disaggregation::proto::KvChunkAddressTable to_proto_message(const KvChunkAddressTable& table) {
-    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+::tt::disaggregation::proto::CacheAddressTable to_proto_message(const CacheAddressTable& table) {
+    ::tt::disaggregation::proto::CacheAddressTable pb;
     pb.set_format_version(kMaxKnownFormatVersion);
     char hostname[256];
     if (::gethostname(hostname, sizeof(hostname)) == 0) {
@@ -435,13 +435,13 @@ void emit_config_payload(
     return pb;
 }
 
-KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChunkAddressTable& pb) {
+CacheAddressTable from_proto_message(const ::tt::disaggregation::proto::CacheAddressTable& pb) {
     // Fail closed on newer formats. Pre-compression readers predate this field and ignore it,
     // so a runs-only file — the default output now — yields an empty-but-valid legacy table
     // there rather than an error; that is why rollout upgrades readers first.
     if (pb.format_version() > kMaxKnownFormatVersion) {
         throw std::runtime_error(
-            "KvChunkAddressTable format_version=" + std::to_string(pb.format_version()) +
+            "CacheAddressTable format_version=" + std::to_string(pb.format_version()) +
             " is newer than this reader supports (max " + std::to_string(kMaxKnownFormatVersion) +
             ") — upgrade the reader");
     }
@@ -449,15 +449,15 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
     // otherwise fall back to the legacy single-config scalar fields. Entries are
     // placed by config NAME (idx_to_name) so they land correctly even if the map
     // constructor reassigns ids by sorted-key order.
-    std::map<std::string, KvChunkAddressTable::NamedConfigInit> configs;
+    std::map<std::string, CacheAddressTable::NamedConfigInit> configs;
     std::vector<std::string> idx_to_name;
     std::vector<ChunkCompression> idx_to_compression;
     if (pb.configs_size() > 0) {
         idx_to_name.reserve(pb.configs_size());
         for (const auto& pb_cfg : pb.configs()) {
-            KvChunkAddressTable::NamedConfigInit init{
+            CacheAddressTable::NamedConfigInit init{
                 .config =
-                    KvChunkAddressTableConfig{
+                    CacheAddressTableConfig{
                         .num_layers = pb_cfg.num_layers(),
                         .max_sequence_length = pb_cfg.max_sequence_length(),
                         .num_slots = pb_cfg.num_slots(),
@@ -468,7 +468,7 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
                 .compression = from_wire(pb_cfg.compression()),  // throws on unknown tag
             };
             if (!configs.emplace(pb_cfg.name(), init).second) {
-                throw std::runtime_error("duplicate config name '" + pb_cfg.name() + "' in KvChunkAddressTable proto");
+                throw std::runtime_error("duplicate config name '" + pb_cfg.name() + "' in CacheAddressTable proto");
             }
             idx_to_name.push_back(pb_cfg.name());
             idx_to_compression.push_back(init.compression);
@@ -476,9 +476,9 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
     } else {
         configs.emplace(
             "0",
-            KvChunkAddressTable::NamedConfigInit{
+            CacheAddressTable::NamedConfigInit{
                 .config =
-                    KvChunkAddressTableConfig{
+                    CacheAddressTableConfig{
                         .num_layers = pb.num_layers(),
                         .max_sequence_length = pb.max_sequence_length(),
                         .num_slots = pb.num_slots(),
@@ -492,7 +492,7 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
     }
     // Strided configs start as empty StridedRowMaps (no unrolled grid is allocated — the
     // point of compression is that a runs-only import never pays the grid's memory).
-    KvChunkAddressTable table(configs);
+    CacheAddressTable table(configs);
 
     for (const auto& pb_group : pb.device_groups()) {
         std::vector<tt::tt_fabric::FabricNodeId> fnids;
@@ -512,12 +512,12 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
     // mirror and runs are authoritative.
     for (const auto& entry : pb.entries()) {
         if (entry.config_idx() >= idx_to_name.size()) {
-            throw std::runtime_error("entry config_idx out of range in KvChunkAddressTable proto");
+            throw std::runtime_error("entry config_idx out of range in CacheAddressTable proto");
         }
         if (idx_to_compression[entry.config_idx()] != ChunkCompression::kUnrolled) {
             continue;
         }
-        KvCacheLocation loc{
+        CacheLocation loc{
             .noc_addr = entry.noc_addr(),
             .size_bytes = entry.size_bytes(),
             .device_group_index = DeviceGroupIndex{entry.device_group_index()},
@@ -540,29 +540,29 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
         std::map<std::tuple<uint32_t, uint32_t, uint32_t>, RowAccum> rows;
         for (const auto& run : pb.runs()) {
             if (run.config_idx() >= idx_to_name.size()) {
-                throw std::runtime_error("run config_idx out of range in KvChunkAddressTable proto");
+                throw std::runtime_error("run config_idx out of range in CacheAddressTable proto");
             }
             const uint32_t cid = table.config_id_of(idx_to_name[run.config_idx()]);
             if (idx_to_compression[run.config_idx()] != ChunkCompression::kStridedRows) {
-                throw std::runtime_error("run targets an UNROLLED config in KvChunkAddressTable proto");
+                throw std::runtime_error("run targets an UNROLLED config in CacheAddressTable proto");
             }
             if (run.chunk_step() == 0 || run.chunk_step() > table.num_position_chunks(cid)) {
-                throw std::runtime_error("run chunk_step out of range in KvChunkAddressTable proto");
+                throw std::runtime_error("run chunk_step out of range in CacheAddressTable proto");
             }
             if (run.count() == 0) {
-                throw std::runtime_error("run count must be >= 1 in KvChunkAddressTable proto");
+                throw std::runtime_error("run count must be >= 1 in CacheAddressTable proto");
             }
             const auto& cfg = table.config(cid);
             if (run.layer() >= cfg.num_layers || run.slot() >= cfg.num_slots) {
-                throw std::runtime_error("run layer/slot out of range in KvChunkAddressTable proto");
+                throw std::runtime_error("run layer/slot out of range in CacheAddressTable proto");
             }
             if (run.start_chunk() >= run.chunk_step()) {
-                throw std::runtime_error("run start_chunk must be < chunk_step in KvChunkAddressTable proto");
+                throw std::runtime_error("run start_chunk must be < chunk_step in CacheAddressTable proto");
             }
             const uint32_t npc = table.num_position_chunks(cid);
             const uint32_t expect = (npc - run.start_chunk() + run.chunk_step() - 1) / run.chunk_step();
             if (run.count() != expect) {
-                throw std::runtime_error("run count does not tile the row in KvChunkAddressTable proto");
+                throw std::runtime_error("run count does not tile the row in CacheAddressTable proto");
             }
             auto& acc = rows[{run.config_idx(), run.slot(), run.layer()}];
             if (acc.bases.empty()) {
@@ -573,10 +573,10 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
                 acc.strides.resize(run.chunk_step());
                 acc.seen.resize(run.chunk_step());
             } else if (acc.step != run.chunk_step() || acc.size_bytes != run.size_bytes()) {
-                throw std::runtime_error("inconsistent runs for one row in KvChunkAddressTable proto");
+                throw std::runtime_error("inconsistent runs for one row in CacheAddressTable proto");
             }
             if (acc.seen[run.start_chunk()]) {
-                throw std::runtime_error("duplicate run residue in KvChunkAddressTable proto");
+                throw std::runtime_error("duplicate run residue in CacheAddressTable proto");
             }
             acc.seen[run.start_chunk()] = true;
             acc.groups[run.start_chunk()] = DeviceGroupIndex{run.device_group_index()};
@@ -585,10 +585,10 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
         }
         for (const auto& [key, acc] : rows) {
             if (std::any_of(acc.seen.begin(), acc.seen.end(), [](bool s) { return !s; })) {
-                throw std::runtime_error("row runs do not cover all residues in KvChunkAddressTable proto");
+                throw std::runtime_error("row runs do not cover all residues in CacheAddressTable proto");
             }
         }
-        std::map<uint32_t, KvChunkAddressTable::StridedRowMap> strided_maps;
+        std::map<uint32_t, CacheAddressTable::StridedRowMap> strided_maps;
         for (const auto& [key, acc] : rows) {
             const auto [cidx, slot, layer] = key;
             const uint32_t cid = table.config_id_of(idx_to_name[cidx]);
@@ -632,16 +632,16 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
 
 // --- Binary wire format ---
 
-std::string export_to_protobuf(const KvChunkAddressTable& table) {
+std::string export_to_protobuf(const CacheAddressTable& table) {
     auto pb = detail::to_proto_message(table);
     std::string out;
     if (!pb.SerializeToString(&out)) {
-        throw std::runtime_error("Failed to serialize KvChunkAddressTable to protobuf");
+        throw std::runtime_error("Failed to serialize CacheAddressTable to protobuf");
     }
     return out;
 }
 
-void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path) {
+void export_to_protobuf_file(const CacheAddressTable& table, const std::string& path) {
     std::string data = export_to_protobuf(table);
     std::ofstream out(path, std::ios::binary);
     if (!out.is_open()) {
@@ -650,15 +650,15 @@ void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string
     out.write(data.data(), static_cast<std::streamsize>(data.size()));
 }
 
-KvChunkAddressTable import_from_protobuf(const std::string& data) {
-    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+CacheAddressTable import_from_protobuf(const std::string& data) {
+    ::tt::disaggregation::proto::CacheAddressTable pb;
     if (!pb.ParseFromString(data)) {
-        throw std::runtime_error("Failed to parse protobuf data as KvChunkAddressTable");
+        throw std::runtime_error("Failed to parse protobuf data as CacheAddressTable");
     }
     return detail::from_proto_message(pb);
 }
 
-KvChunkAddressTable import_from_protobuf_file(const std::string& path) {
+CacheAddressTable import_from_protobuf_file(const std::string& path) {
     std::ifstream in(path, std::ios::binary);
     if (!in.is_open()) {
         throw std::runtime_error("Failed to open file for reading: " + path);
@@ -669,16 +669,16 @@ KvChunkAddressTable import_from_protobuf_file(const std::string& path) {
 
 // --- Text format (debug only) ---
 
-std::string export_to_protobuf_text(const KvChunkAddressTable& table) {
+std::string export_to_protobuf_text(const CacheAddressTable& table) {
     auto pb = detail::to_proto_message(table);
     std::string out;
     if (!google::protobuf::TextFormat::PrintToString(pb, &out)) {
-        throw std::runtime_error("Failed to serialize KvChunkAddressTable to protobuf text format");
+        throw std::runtime_error("Failed to serialize CacheAddressTable to protobuf text format");
     }
     return out;
 }
 
-void export_to_protobuf_text_file(const KvChunkAddressTable& table, const std::string& path) {
+void export_to_protobuf_text_file(const CacheAddressTable& table, const std::string& path) {
     std::string text = export_to_protobuf_text(table);
     std::ofstream out(path);
     if (!out.is_open()) {
@@ -687,15 +687,15 @@ void export_to_protobuf_text_file(const KvChunkAddressTable& table, const std::s
     out << text;
 }
 
-KvChunkAddressTable import_from_protobuf_text(const std::string& text) {
-    ::tt::disaggregation::proto::KvChunkAddressTable pb;
+CacheAddressTable import_from_protobuf_text(const std::string& text) {
+    ::tt::disaggregation::proto::CacheAddressTable pb;
     if (!google::protobuf::TextFormat::ParseFromString(text, &pb)) {
-        throw std::runtime_error("Failed to parse protobuf text format as KvChunkAddressTable");
+        throw std::runtime_error("Failed to parse protobuf text format as CacheAddressTable");
     }
     return detail::from_proto_message(pb);
 }
 
-KvChunkAddressTable import_from_protobuf_text_file(const std::string& path) {
+CacheAddressTable import_from_protobuf_text_file(const std::string& path) {
     std::ifstream in(path);
     if (!in.is_open()) {
         throw std::runtime_error("Failed to open file for reading: " + path);

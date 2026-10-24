@@ -8,7 +8,7 @@
 
 // noc_addr decode helpers shared by the KV chunk readers.
 //
-// A KvCacheLocation.noc_addr is encoded by kv_cache_utils.py as
+// A CacheLocation.noc_addr is encoded by kv_cache_utils.py as
 // (dram_view/bank_id << 32) | local_addr. Both the in-process reader
 // (kv_chunk_address_table.cpp::read_device_chunk) and the device-less UMD
 // reader (umd_dram_reader.cpp::read_dram_umd) split it the same way, so the

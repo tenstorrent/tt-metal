@@ -26,16 +26,16 @@ enum ChunkCompression {
 }
 
 // What kind of cached tensor a config's chunks belong to (values must match
-// KvChunkTensorType in kv_chunk_address_table.hpp). Absent = KV, so legacy files read
+// CacheTensorType in cache_address_table.hpp). Absent = KV, so legacy files read
 // as KV. Unknown values must be rejected loudly by readers (fail-closed versioning).
-enum KvChunkTensorType {
+enum CacheTensorType {
     KV = 0;        // temporal::Dense — positional KV over [0, prefix_len)
     SNAPSHOT = 1;  // temporal::None — fixed-size state keyed by snapshot prefix_len
 }
 
 // One config ("group") — a distinct attention implementation / tensor
 // representation a layer may use. A table holds one or more.
-message KvChunkConfig {
+message CacheConfig {
     string name = 1;
     uint32 num_layers = 2;
     uint32 max_sequence_length = 3;
@@ -43,10 +43,10 @@ message KvChunkConfig {
     uint32 chunk_n_tokens = 5;
     uint32 chunk_size_bytes = 6;
     ChunkCompression compression = 7;  // payload form for this config's chunks (default UNROLLED)
-    KvChunkTensorType tensor_type = 8;  // cached tensor kind (default KV)
+    CacheTensorType tensor_type = 8;  // cached tensor kind (default KV)
 }
 
-message KvCacheEntry {
+message CacheEntry {
     uint32 slot = 1;
     uint32 layer = 2;
     uint32 position = 3;
@@ -61,7 +61,7 @@ message KvCacheEntry {
 // at noc_addr = base_noc_addr + k*addr_stride, all sharing size_bytes/device_group_index.
 // Chunk indices are in units of the config's chunk_n_tokens. chunk_step > 1 captures
 // block-cyclic layouts (chunks round-robin across DRAM banks = one affine stream per bank).
-message KvChunkRun {
+message CacheChunkRun {
     uint32 config_idx = 1;
     uint32 slot = 2;
     uint32 layer = 3;
@@ -74,7 +74,7 @@ message KvChunkRun {
     uint32 device_group_index = 10;
 }
 
-message KvChunkAddressTable {
+message CacheAddressTable {
     // Legacy single-config scalar fields (1-5): mirror config 0's dims so old
     // single-config readers keep working. `configs` (field 9) is authoritative
     // when present; readers should prefer it and fall back to these otherwise.
@@ -85,13 +85,13 @@ message KvChunkAddressTable {
     uint32 chunk_size_bytes = 5;
     repeated DeviceGroup device_groups = 6;
     repeated FabricNodeHost fabric_node_hosts = 7;
-    repeated KvCacheEntry entries = 8;
-    repeated KvChunkConfig configs = 9;  // all configs ("groups"); index == config_idx
+    repeated CacheEntry entries = 8;
+    repeated CacheConfig configs = 9;  // all configs ("groups"); index == config_idx
     // Compressed chunk addressing (strided runs) — the payload for configs tagged
-    // STRIDED_ROWS in KvChunkConfig.compression, and by default their ONLY payload: the
+    // STRIDED_ROWS in CacheConfig.compression, and by default their ONLY payload: the
     // `entries` mirror is opt-in (KV_CHUNK_TABLE_DUAL_WRITE_MAX_BYTES). An entries-only
     // reader ignores this field and the tag, so it reads such a table as empty.
-    repeated KvChunkRun runs = 11;
+    repeated CacheChunkRun runs = 11;
     // Format version of this message. Absent (0) = the legacy pre-compression format.
     // Readers must reject values newer than they know (fail-closed). Pre-compression readers
     // predate the field and ignore it; only the opt-in `entries` mirror protects them.
