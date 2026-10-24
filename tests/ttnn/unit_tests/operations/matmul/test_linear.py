@@ -1929,3 +1929,127 @@ def test_linear_packer_l1_acc_partials(device, program):
         to_device(activation), to_device(weight), program_config=config, compute_kernel_config=compute_config
     )
     assert_with_pcc(activation.float() @ weight.float(), ttnn.to_torch(actual).float(), 0.9999)
+
+
+# Per core: (per_core_M, per_core_N, Kt, in0_block_w, out_block_h, out_block_w, out_subblock_h, out_subblock_w).
+_BIAS_IN_DEST_GEOMETRIES = {
+    # The Kimi-K3 decay projection's per-core shape: one K block, one 2 x 9 output block of 1 x 3 subblocks.
+    "one-k-block": (2, 9, 4, 4, 2, 9, 1, 3),
+    # Four K blocks: the last one reloads the partials before the in-DEST bias add.
+    "four-k-blocks": (2, 8, 8, 2, 2, 8, 1, 4),
+    # Two K blocks and 2 x 2 output blocks per core: the reader re-pushes the bias for every block column.
+    "output-blocks": (4, 8, 4, 2, 2, 4, 2, 2),
+}
+
+
+def _bias_in_dest_inputs(geometry):
+    """BF16 operands for a 3 x 4 core grid of the geometry, and their FP64 reference before the activation."""
+    per_core_M, per_core_N, Kt, *_ = geometry
+    torch.manual_seed(0)
+    m, k, n = 4 * per_core_M * ttnn.TILE_SIZE, Kt * ttnn.TILE_SIZE, 3 * per_core_N * ttnn.TILE_SIZE
+    torch_a = torch.randn((1, m, k), dtype=torch.bfloat16)
+    torch_b = (torch.randn((k, n)) / k**0.5).to(torch.bfloat16)
+    torch_bias = torch.randn((1, n), dtype=torch.bfloat16)
+    reference = torch_a.double() @ torch_b.double() + torch_bias.double()
+    return torch_a, torch_b, torch_bias, reference
+
+
+def _bias_in_dest_linear(
+    device, torch_a, torch_b, torch_bias, geometry, *, bias_in_dest, activation, packer_l1_acc, dtype
+):
+    per_core_M, per_core_N, _, in0_block_w, out_block_h, out_block_w, out_subblock_h, out_subblock_w = geometry
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(
+            torch_b.shape[-1] // (per_core_N * ttnn.TILE_SIZE), torch_a.shape[-2] // (per_core_M * ttnn.TILE_SIZE)
+        ),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=activation,
+        fuse_batch=True,
+        bias_in_dest=bias_in_dest,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=packer_l1_acc,
+    )
+
+    def to_device(tensor):
+        return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.linear(
+        to_device(torch_a),
+        to_device(torch_b),
+        bias=to_device(torch_bias),
+        program_config=program_config,
+        compute_kernel_config=compute_config,
+        dtype=dtype,
+    )
+    return ttnn.to_torch(output).double()
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="bias_in_dest is Blackhole only")
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["l1acc", "no-l1acc"])
+@pytest.mark.parametrize("geometry", _BIAS_IN_DEST_GEOMETRIES.values(), ids=_BIAS_IN_DEST_GEOMETRIES.keys())
+@pytest.mark.parametrize("activation", [None, "relu", "sigmoid"])
+def test_linear_bias_in_dest(device, geometry, activation, packer_l1_acc):
+    """The bias added to each output subblock in DEST matches the reference, with and without a fused activation."""
+    torch_a, torch_b, torch_bias, reference = _bias_in_dest_inputs(geometry)
+    fused_activation = {
+        None: None,
+        "relu": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        "sigmoid": ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID),
+    }[activation]
+    golden = {None: lambda x: x, "relu": torch.relu, "sigmoid": torch.sigmoid}[activation](reference)
+
+    actual = _bias_in_dest_linear(
+        device,
+        torch_a,
+        torch_b,
+        torch_bias,
+        geometry,
+        bias_in_dest=True,
+        activation=fused_activation,
+        packer_l1_acc=packer_l1_acc,
+        dtype=ttnn.bfloat16,
+    )
+    assert_with_pcc(golden, actual, 0.9999)
+    # FP32 accumulation, then one BF16 rounding of the output.
+    torch.testing.assert_close(actual, golden, atol=1e-2, rtol=2**-7)
+
+
+@pytest.mark.skipif(not is_blackhole(), reason="bias_in_dest is Blackhole only")
+@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["l1acc", "no-l1acc"])
+@pytest.mark.parametrize("geometry", _BIAS_IN_DEST_GEOMETRIES.values(), ids=_BIAS_IN_DEST_GEOMETRIES.keys())
+def test_linear_bias_in_dest_precision(device, geometry, packer_l1_acc):
+    """With FP32 DEST and an FP32 output, the bias added in DEST is at least as accurate as the bias added to the
+    reloaded partials, which pass through the 19-bit SrcA register."""
+    torch_a, torch_b, torch_bias, reference = _bias_in_dest_inputs(geometry)
+    errors = {}
+    for bias_in_dest in (False, True):
+        actual = _bias_in_dest_linear(
+            device,
+            torch_a,
+            torch_b,
+            torch_bias,
+            geometry,
+            bias_in_dest=bias_in_dest,
+            activation=None,
+            packer_l1_acc=packer_l1_acc,
+            dtype=ttnn.float32,
+        )
+        errors[bias_in_dest] = (actual - reference).abs()
+    logger.info(
+        f"max/mean abs error: partials {errors[False].max():.3e}/{errors[False].mean():.3e}, "
+        f"in DEST {errors[True].max():.3e}/{errors[True].mean():.3e}"
+    )
+    assert errors[True].max() <= errors[False].max()
+    assert errors[True].mean() <= errors[False].mean()

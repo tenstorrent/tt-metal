@@ -1795,6 +1795,35 @@ void validate_matmul_batched_dram_sharded_config(
         input_tensor_b.memory_config().memory_layout());
 }
 
+// Mcast2D bias_in_dest: the in-DEST bias add broadcasts row 0 of one bias tile per output column
+// through the Blackhole row-broadcast accumulate unpack, on full 32x32 tiles.
+void validate_matmul_mcast2d_bias_in_dest(
+    const Tensor& input_tensor_a,
+    const std::optional<const Tensor>& optional_bias,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig& program_config) {
+    if (!program_config.bias_in_dest || !optional_bias.has_value()) {
+        return;
+    }
+    const auto config_name = ttsl::get_type_name(program_config);
+    TT_FATAL(
+        input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+        "{}: bias_in_dest is supported on Blackhole only",
+        config_name);
+    TT_FATAL(
+        operations::matmul::utilities::fused_matmul_bias_row_broadcastable(optional_bias),
+        "{}: bias_in_dest requires a bias with a single row ([..., 1, N]), got logical shape {}",
+        config_name,
+        optional_bias->logical_shape());
+    TT_FATAL(
+        in0_tile.get_height() == TILE_HEIGHT && in1_tile.get_width() == TILE_WIDTH,
+        "{}: bias_in_dest requires 32x32 output tiles, got in0 tile height {} and in1 tile width {}",
+        config_name,
+        in0_tile.get_height(),
+        in1_tile.get_width());
+}
+
 // Mcast2D config: block-sharded 2D multicast. Validates that sharded input A, input B,
 // and the output have layouts, grids, and orientations consistent with a 2D multicast.
 void validate_matmul_mcast2d_config(
@@ -2769,6 +2798,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     in0_tile,
                     in1_tile,
                     program_config);
+                validate_matmul_mcast2d_bias_in_dest(input_tensor_a, optional_bias, in0_tile, in1_tile, program_config);
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseProgramConfig>) {

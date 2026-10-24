@@ -35,6 +35,12 @@ struct MatmulMultiCoreReuseMultiCastProgramConfig {
     std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation;
     bool fuse_batch = true;
     std::optional<tt::tt_metal::CoreRangeSet> allowed_worker_cores = std::nullopt;
+    // Add a fused row-broadcast bias to each output subblock in DEST right after its last K block's
+    // matmul, instead of in a pass over the packed partials once every subblock is done. Each subblock
+    // then packs, through the fused activation, while the next one multiplies, and with
+    // fp32_dest_acc_en the bias is added to the FP32 sum rather than to its TF32-rounded reload.
+    // Blackhole only; without a bias it has no effect.
+    bool bias_in_dest = false;
 };
 
 // 1D mcast matmul program config.
