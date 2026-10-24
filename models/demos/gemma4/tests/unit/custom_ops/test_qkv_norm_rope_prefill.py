@@ -109,3 +109,31 @@ def test_qkv_norm_rope_prefill_matches_composite(
     assert torch.equal(ttnn.to_torch(oq), ttnn.to_torch(oq2)), "cache-hit q differs"
     if not shared_kv:
         assert torch.equal(ttnn.to_torch(ov), ttnn.to_torch(ov2)), "cache-hit v differs"
+
+
+@pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
+def test_two_lengths_in_one_session(mesh_device, device_params):
+    """1024 then 2048 then 1024 rows on the same device and core set: the second call needs more units per core than
+    the cached first program carried (generic_op's structural hash ignores per-core runtime-arg counts), which
+    without the layout in the cache key overrode arguments the program never had ("Index 14 is larger than runtime
+    args size 14") and produced garbage (0540: the 12B prose at 2048 collapsed to top-1 0.001 after a 512 run)."""
+    torch.manual_seed(0)
+    B, Hq, Hkv, D = 1, 4, 2, 256
+    s_max = 2048
+    cos, sin = _cos_sin(s_max, D, None)
+    gq_rm, gk_rm = (torch.rand(D) + 0.5).to(torch.bfloat16), (torch.rand(D) + 0.5).to(torch.bfloat16)
+    dev = lambda x: ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tgq, tgk = dev(gq_rm.reshape(1, 1, 1, D)), dev(gk_rm.reshape(1, 1, 1, D))
+    tcos, tsin = dev(cos), dev(sin)
+    for S in (1024, 2048, 1024):
+        q = (torch.randn(B, Hq, S, D) * 2).to(torch.bfloat16)
+        k = (torch.randn(B, Hkv, S, D) * 2).to(torch.bfloat16)
+        v = (torch.randn(B, Hkv, S, D) * 2).to(torch.bfloat16)
+        gold_q = QkvNormRopePrefill.golden(q, gq_rm, EPS, cos[:, :, :S], sin[:, :, :S])
+        gold_k = QkvNormRopePrefill.golden(k, gk_rm, EPS, cos[:, :, :S], sin[:, :, :S])
+        gold_v = QkvNormRopePrefill.golden(v, None, EPS)
+        oq, ok, ov = QkvNormRopePrefill.op(dev(q), dev(k), dev(v), tgq, tgk, tcos, tsin, EPS)
+        for name, g, o in (("q", gold_q, oq), ("k", gold_k, ok), ("v", gold_v, ov)):
+            p = _pcc(g, ttnn.to_torch(o).float())
+            print(f"[two lengths S{S} {name}] pcc vs golden {p:.6f}")
+            assert p > 0.9999, (S, name, p)

@@ -19,6 +19,7 @@ normed only. Numerics: HiFi4 + fp32 accumulation like the composite prefill norm
 Outputs are fresh tensors in the inputs' memory configs (``q_out, k_out, v_out``).
 """
 
+import hashlib
 import os
 import struct
 from pathlib import Path
@@ -30,6 +31,18 @@ from models.demos.gemma4.custom_ops.grid import compute_grid
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
+
+
+def program_cache_key(structural_hash: int, units_per_core) -> int:
+    """A 64-bit program-cache key: generic_op's structural hash combined with each core's unit count (the per-core
+    runtime-arg layout). Same structure and layout -> same key (cache hit, runtime args overridden in place); any
+    core with a different unit count -> a different program."""
+    h = hashlib.blake2b(digest_size=8)
+    h.update(int(structural_hash).to_bytes(8, "little", signed=False))
+    h.update(len(units_per_core).to_bytes(4, "little"))
+    for n in units_per_core:
+        h.update(int(n).to_bytes(4, "little"))
+    return int.from_bytes(h.digest(), "little")
 
 
 class QkvNormRopePrefill:
@@ -177,6 +190,14 @@ class QkvNormRopePrefill:
             ),
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+        # generic_op's structural hash covers kernel sources, compile-time args, core ranges and CBs but not the
+        # per-core runtime-arg counts, and here every core carries a length-dependent number of units (3 / 2 / 1
+        # args each for the reader / writer / compute). A later call on the same core set with more units per core
+        # (a 2048-row prefill after a 1024-row one) would hit the cached program and override arguments it never
+        # had ("Index 14 is larger than runtime args size 14"), so the cache key carries the unit layout too.
+        program.custom_program_hash = program_cache_key(
+            int(ttnn.compute_program_descriptor_hash(program)), [len(cu) for cu in per_core]
+        )
         io = [q, tk, tv, gq, gk, cos, sin, kq, ok, ov]
         ttnn.generic_op(io, program)
         return kq, outs.get(cls.KIND_K), outs.get(cls.KIND_V)
