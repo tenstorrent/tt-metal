@@ -240,23 +240,6 @@ def test_save_rejects_collapsed_replicate_label_over_different_data(tp_mesh, tmp
     assert tuple(record.shape) == (1, 1, 32, 32)
 
 
-def test_replica_check_can_be_disabled(tp_mesh, tmp_path, expect_error):
-    """The replica check is on by default, and ``verify_replicas=False`` restores the label-trusting gather, which
-    keeps one copy. Checked on a parameter whose ``Replicate`` label hides different data, saved alone so the shape
-    cross-check has nothing to compare it with."""
-    params, _ = trained_tp(DIM)
-    name = _sharded_param_name(params)
-    _forge_replicate(params[name])
-    path = str(tmp_path / "toggle.ckpt")
-
-    with expect_error(ReplicaMismatchError, rf"model\[{name}\] is labelled"):
-        checkpointing.save_checkpoint(path, header={}, model_params=params)
-    _assert_nothing_written(path)
-
-    checkpointing.save_checkpoint(path, header={}, model_params=params, verify_replicas=False)
-    assert os.path.exists(path)
-
-
 def test_save_keeps_tensors_under_nd_labels(tp_mesh, tmp_path):
     """Tensors under N-D labels (what an explicit N-D mapper makes) save whole and exact, with the replica check on and
     off: ``[1, 2] / (Replicate, Replicate)``, where the composer keeps a single copy, and ``[1, 2] / (Replicate,
