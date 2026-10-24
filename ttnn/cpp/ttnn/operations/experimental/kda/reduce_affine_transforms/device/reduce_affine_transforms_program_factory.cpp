@@ -5,6 +5,7 @@
 
 #include "ttnn/operations/experimental/kda/reduce_affine_transforms/device/reduce_affine_transforms_program_factory.hpp"
 
+#include <algorithm>
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
@@ -28,8 +29,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     const auto& a = in.a.mesh_tensor();
     const auto& b = in.b.mesh_tensor();
-    const auto& output_a = outputs[0].mesh_tensor();
-    const auto& output_b = outputs[1].mesh_tensor();
+    const auto& output = outputs[0].mesh_tensor();
     const auto& device = a.device();
 
     const uint32_t Kt = attrs.key_dim / tt::constants::TILE_WIDTH;
@@ -55,6 +55,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     const tt::tt_metal::experimental::DFBSpecName remote_a_dfb_name{"remote_a"};
     const tt::tt_metal::experimental::DFBSpecName remote_b_dfb_name{"remote_b"};
     const tt::tt_metal::experimental::DFBSpecName scratch_dfb_name{"scratch"};
+    const tt::tt_metal::experimental::DFBSpecName identity_dfb_name{"identity"};
+    const tt::tt_metal::experimental::DFBSpecName output_dfb_name{"output"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -62,8 +64,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
 
     const tt::tt_metal::experimental::TensorParamName a_tensor_name{"a"};
     const tt::tt_metal::experimental::TensorParamName b_tensor_name{"b"};
-    const tt::tt_metal::experimental::TensorParamName output_a_tensor_name{"output_a"};
-    const tt::tt_metal::experimental::TensorParamName output_b_tensor_name{"output_b"};
+    const tt::tt_metal::experimental::TensorParamName output_tensor_name{"output"};
 
     auto make_dfb = [](const tt::tt_metal::experimental::DFBSpecName& name, uint32_t tiles, tt::DataFormat format) {
         return tt::tt_metal::experimental::DataflowBufferSpec{
@@ -75,10 +76,11 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     };
     const auto summary_format = tt::tt_metal::datatype_to_dataformat_converter(in.a.dtype());
     constexpr auto internal_format = tt::DataFormat::Float32;
-    // Per-core DFB storage is 6*Kt^2 + 7*Kt*Vt tiles. Production uses K=V=128 (Kt=Vt=4); supporting larger shapes
-    // may require a separately designed chunked protocol rather than silently assuming this footprint fits every
-    // architecture's usable L1.
-    // Stage and send buffers are double-buffered so compute can produce the next prefix while the current one is used.
+    const auto output_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    // Per-core DFB storage is 6*Kt^2 + 7*Kt*Vt + 1 internal tiles plus 2*max(Kt, Vt) output tiles. Production uses
+    // K=V=128 (Kt=Vt=4); supporting larger shapes may require a separately designed chunked protocol rather than
+    // silently assuming this footprint fits every architecture's usable L1. Stage and send buffers are double-buffered
+    // so compute can produce the next prefix while the current one is used.
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(initial_a_dfb_name, a_tiles, summary_format),
         make_dfb(initial_b_dfb_name, b_tiles, summary_format),
@@ -89,6 +91,10 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         make_dfb(remote_a_dfb_name, a_tiles, internal_format),
         make_dfb(remote_b_dfb_name, b_tiles, internal_format),
         make_dfb(scratch_dfb_name, b_tiles, internal_format),
+        // The FP32 identity tile the publishing group subtracts to form E = A - I, seeded by the dataflow kernel.
+        make_dfb(identity_dfb_name, 1, internal_format),
+        // Published [E | B] tile rows (Kt or Vt tiles each), double-buffered toward the packed output.
+        make_dfb(output_dfb_name, 2 * std::max(Kt, Vt), output_format),
     };
     // The sender addresses a peer's inbound mailbox with its own local write pointer, which is only
     // valid while these buffers hold one phase-independent slot. Any additional depth lets sender and
@@ -121,6 +127,10 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
                     remote_a_dfb_name, "remote_a", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     remote_b_dfb_name, "remote_b", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    identity_dfb_name, "identity", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
+                tt::tt_metal::experimental::DFBBinding{
+                    output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
             },
         .semaphore_bindings =
             {
@@ -132,8 +142,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
             {
                 tt::tt_metal::experimental::TensorBinding{a_tensor_name, "a"},
                 tt::tt_metal::experimental::TensorBinding{b_tensor_name, "b"},
-                tt::tt_metal::experimental::TensorBinding{output_a_tensor_name, "output_a"},
-                tt::tt_metal::experimental::TensorBinding{output_b_tensor_name, "output_b"},
+                tt::tt_metal::experimental::TensorBinding{output_tensor_name, "output"},
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"G", G}},
         .runtime_arg_schema = {.runtime_arg_names = {"worker_index", "group"}},
@@ -147,6 +156,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
          {stage_a_dfb_name, stage_b_dfb_name, remote_a_dfb_name, remote_b_dfb_name, scratch_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
+    // The identity enters DST losslessly for the FP32 subtraction.
+    unpack_modes[identity_dfb_name] = tt::tt_metal::UnpackMode::UnpackToDest;
     if (summary_format == tt::DataFormat::Float32) {
         unpack_modes[initial_a_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
         unpack_modes[initial_b_dfb_name] = tt::tt_metal::UnpackMode::UnpackToSrc;
@@ -184,6 +195,10 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
                     scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
                 tt::tt_metal::experimental::DFBBinding{
                     scratch_dfb_name, "scratch", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    identity_dfb_name, "identity", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
+                tt::tt_metal::experimental::DFBBinding{
+                    output_dfb_name, "output", tt::tt_metal::experimental::DFBEndpointType::PRODUCER},
             },
         .compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"G", G}},
         .runtime_arg_schema = {.runtime_arg_names = {"group"}},
@@ -222,9 +237,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
                 tt::tt_metal::experimental::TensorParameter{.unique_id = a_tensor_name, .spec = a.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{.unique_id = b_tensor_name, .spec = b.tensor_spec()},
                 tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = output_a_tensor_name, .spec = output_a.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = output_b_tensor_name, .spec = output_b.tensor_spec()},
+                    .unique_id = output_tensor_name, .spec = output.tensor_spec()},
             },
         .work_units =
             {
@@ -241,8 +254,7 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
     run_args.tensor_args = {
         {a_tensor_name, a},
         {b_tensor_name, b},
-        {output_a_tensor_name, output_a},
-        {output_b_tensor_name, output_b},
+        {output_tensor_name, output},
     };
 
     kda_factory_detail::bind_chronology(spec, run_args, in.actual_start, dataflow, compute);

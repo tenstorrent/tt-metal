@@ -17,6 +17,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     LayerNrmseThresholds,
     assert_matches_reference,
@@ -29,19 +30,17 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
-pytestmark = [
-    run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize(
-        "device_params",
-        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-        indirect=True,
-    ),
-]
+pytestmark = run_for_blackhole()
+_SP_MESH_2X4 = pytest.mark.parametrize(
+    "mesh_device,device_params",
+    [pytest.param((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D})],
+    indirect=True,
+)
 
 SEQUENCE = 1280
 
 
+@_SP_MESH_2X4
 @pytest.mark.parametrize(
     "tensor_parallel_axis,sequence,actual_starts,summary_group_chunks,state_peak",
     [
@@ -122,6 +121,7 @@ def test_actual_start_matches_natural_order(
                     ttnn.deallocate(tensor)
 
 
+@_SP_MESH_2X4
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
 @pytest.mark.parametrize("split", [False, True], ids=["baseline", "midpoint-rank1"])
 def test_actual_start_is_deterministic_and_matches_reference(
@@ -165,14 +165,32 @@ def test_actual_start_is_deterministic_and_matches_reference(
     )
 
 
-def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice) -> None:
-    """Two replays of the complete split layer must produce identical outputs and carries."""
+@pytest.mark.parametrize(
+    "mesh_device,device_params,sequence",
+    [
+        pytest.param((2, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, SEQUENCE, id="SP2xTP4"),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            5120,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="SP8xTP4-torus-xy",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice, sequence: int) -> None:
+    """Two replays of the complete split layer must produce identical outputs and carries.
+
+    Both layouts run 640 rows per rank in four summary groups per head, the path whose prefix packs the reduced
+    group transforms on device inside the captured trace.
+    """
     tensor_parallel_axis = 1
     sp_axis = 0
-    sp_size = 2
-    local_rows = SEQUENCE // sp_size
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    local_rows = sequence // sp_size
     actual_start = local_rows + local_rows // 2
-    config, weights, hidden, expected_output, expected_state = reference_case()
+    config, weights, hidden, expected_output, expected_state = reference_case(sequence)
     layer = build_layer(mesh_device, config, weights, sp_axis, tensor_parallel_axis, active_seq_len=hidden.shape[1])
     permutation = mla_row_permutation(actual_start, sp_size, local_rows)
     hidden_tt = to_sp_input(hidden[:, permutation, :], mesh_device, sp_axis)
@@ -237,6 +255,7 @@ def test_split_trace_replay_is_bit_identical(mesh_device: ttnn.MeshDevice) -> No
             ttnn.deallocate(hidden_tt)
 
 
+@_SP_MESH_2X4
 def test_split_offset_continuation_preserves_nonzero_caller_carries(mesh_device: ttnn.MeshDevice) -> None:
     config, weights, _, _, _ = reference_case()
     layer = build_layer(mesh_device, config, weights, 0, 1, active_seq_len=SEQUENCE)

@@ -15,11 +15,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
-    KDA_AFFINE_SUMMARY_DTYPE,
     KDA_CHUNK_SIZE,
     KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
-    KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
     KDA_HIGH_BW_PREFIX_GATHER_LINKS,
     KDA_LOCAL_PREFIX_MEMORY_CONFIG,
     KDA_OUTPUT_MEMORY_CONFIG,
@@ -219,24 +217,6 @@ def _scan_chunks(
     return RecurrenceResult(output=output, final_state=final_states)
 
 
-def pack_transform(transform: AffineTransform) -> ttnn.Tensor:
-    """Pack a FP32 transform into the BF16 [1, BH, K, K+V] rows of [A | B] that the prefix gathers."""
-    transform_a, transform_b = transform.a, transform.b
-    batch_heads, key_dim = tuple(transform_a.shape)[0], tuple(transform_a.shape)[1]
-    value_dim = transform_b.shape[-1]
-    # Precision boundary: FP32 composition is transported as BF16. Rounding is elementwise, so
-    # packing in FP32 (in L1) and narrowing once matches narrowing each half before packing.
-    packed = ttnn.concat(
-        [
-            ttnn.reshape(transform_a, (1, batch_heads, key_dim, key_dim)),
-            ttnn.reshape(transform_b, (1, batch_heads, key_dim, value_dim)),
-        ],
-        dim=3,
-        memory_config=KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
-    )
-    return ttnn.typecast(packed, KDA_AFFINE_SUMMARY_DTYPE, memory_config=KDA_OUTPUT_MEMORY_CONFIG)
-
-
 def _sp_links(device: ttnn.MeshDevice, sequence_parallel_axis: int) -> int:
     """Ethernet links between neighbours on the SP axis; 0 for a system the link table does not know."""
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_num_links
@@ -412,7 +392,8 @@ def _partition_prefix(
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    a, b = ttnn.experimental.kda.reduce_affine_transforms(
+    # The reduction publishes the packed complement form [E | B] that the prefix gathers.
+    packed = ttnn.experimental.kda.reduce_affine_transforms(
         summary.a,
         summary.b,
         groups_per_head,
@@ -424,7 +405,7 @@ def _partition_prefix(
         compute_kernel_config=compute_config.affine_prefix,
     )
     return distributed_prefix(
-        pack_transform(AffineTransform(a, b)),
+        packed,
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
         compute_config=compute_config.affine_prefix,

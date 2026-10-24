@@ -14,7 +14,6 @@ KDA_CHUNK_SIZE = ttnn.TILE_SIZE
 KDA_QKV_DTYPE = ttnn.bfloat16
 KDA_GATE_DTYPE = ttnn.bfloat16
 KDA_RECURRENT_STATE_DTYPE = ttnn.float32
-KDA_AFFINE_SUMMARY_DTYPE = ttnn.bfloat16
 KDA_SCAN_OUTPUT_DTYPE = ttnn.bfloat16
 KDA_PREP_OUTPUT_BF16_MASK = (1 << 1) | (1 << 2) | (1 << 5)
 # The L1 budgets below are static: they are sized on Galaxy SP8xTP4 against what is live next to these tensors
@@ -50,9 +49,18 @@ KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
 KDA_DISTRIBUTED_PREFIX_L1_BYTES_PER_CORE = 160 * 1024
 # Links high_bw_all_gather spreads the SP prefix summaries over; meshes with fewer on the SP axis keep ttnn.all_gather.
 KDA_HIGH_BW_PREFIX_GATHER_LINKS = 2
+# The bounded gate's FP32 logits stay in interleaved L1 between the decay projection and the FP32 offset add when their
+# share of each worker core fits this budget (64 KiB for Kimi-K3 on Galaxy SP8xTP4: 640 rows x 3072 x 4 B over the
+# 12x10 grid); larger geometries keep them in DRAM, which costs about 30-40 us per K3 call. The budget is separate from
+# and larger than the gate's because the logits live only for those two ops and are freed before the recurrence: next
+# to them are the input projection's L1 output (2 x 33 BF16 tiles, 132 KiB per core, with the tuned schedule), the BF16
+# gate the add writes (32 KiB) and the two ops' circular buffers, about 230 KiB of the core's L1 plus circular buffers,
+# against the 320 KiB chunk-term budget the recurrence uses later. Freeing them leaves a 64 KiB hole above the gate
+# while the recurrence runs; validated by the 1M-token layer-0 run on Galaxy SP8xTP4 (kxn.9.9), which completed with
+# no circular-buffer/L1 clash.
+KDA_DECAY_LOGITS_L1_BYTES_PER_CORE = 64 * 1024
 KDA_LOCAL_PREFIX_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
-KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG = ttnn.L1_MEMORY_CONFIG
 KDA_OUTPUT_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 
 
@@ -195,17 +203,24 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
+        # Scan and affine prefix at HiFi3: HiFi2 truncates the SrcB operand to 6 explicit bits. On the 1M fp64 golden
+        # (layers.0, SP8xTP4) scan HiFi3 cut output NRMSE 1.21% -> 0.97% (+0.2% latency) and prefix HiFi3 cut head 6
+        # state error 0.60% -> 0.42% at no measurable cost (tt_metal_tracker-kxn.9.8/9.13).
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped",
             summary_group_chunks=group_chunks[active_seq_len_local],
             # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
             high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+            scan_math_fidelity=ttnn.MathFidelity.HiFi3,
+            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # Output projection at HiFi3: on the 1M fp64 golden (layers.0, SP8xTP4) it cut output NRMSE 0.89% -> 0.68% for
+        # +0.015 ms per call; the state path is unaffected (tt_metal_tracker-kxn.9.8/9.13).
+        output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
@@ -216,7 +231,7 @@ _DECAY_OUT_BLOCK_TILES = 32
 
 
 def decay_projection_program_config(
-    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int, fused_activation: ttnn.UnaryWithParam | None
+    grid: ttnn.CoreCoord, rows: int, key_dim: int, width: int
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
     """Spread the decay projection's [rows, key_dim] x [key_dim, width] output over the whole worker grid.
 
@@ -242,6 +257,6 @@ def decay_projection_program_config(
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
-        fused_activation=fused_activation,
+        fused_activation=None,
         fuse_batch=True,
     )

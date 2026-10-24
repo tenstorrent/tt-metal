@@ -59,6 +59,7 @@ TT_KERNEL void dataflow(
     const auto entry_state_accessor = TensorAccessor(tensor::entry_state);
     const auto final_state_accessor = TensorAccessor(tensor::final_state);
     DataflowBuffer initial(dfb::initial);
+    DataflowBuffer initial_exact(dfb::initial_exact);
     DataflowBuffer a(dfb::a);
     DataflowBuffer b(dfb::b);
     DataflowBuffer out(dfb::out);
@@ -90,6 +91,9 @@ TT_KERNEL void dataflow(
     // The initial state does not depend on the chronology, so its reads share one barrier with actual_start.
     initial.reserve_back(state_tiles);
     issue_value_slice_read<Kt, Vt>(noc, initial_state_accessor, initial, state_page, Vt_full);
+    // The same state again for the complement-form add, which reads it losslessly into DST.
+    initial_exact.reserve_back(state_tiles);
+    issue_value_slice_read<Kt, Vt>(noc, initial_state_accessor, initial_exact, state_page, Vt_full);
     kda_chronology::Topology topology{};
     {
         DataflowBuffer chronology(dfb::chronology_compute);
@@ -111,6 +115,7 @@ TT_KERNEL void dataflow(
         write_state(initial, entry_state_accessor);
     }
     initial.push_back(state_tiles);
+    initial_exact.push_back(state_tiles);
 
     for (uint32_t step = 0; step < sp_size; ++step) {
         const uint32_t rank = (topology.first_rank + step) % sp_size;
