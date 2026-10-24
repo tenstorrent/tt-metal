@@ -16,7 +16,11 @@ namespace ttnn::operations::pool {
 // For the maxpool it is 1, for the avg pool it is 1/kernel_size or the divisor override used to initialize compile
 // time argument sent to kernels. If there are multiple scalars needed call get_bf16_avg_pool_config_scalars
 uint32_t get_bf16_pool_scalar(
-    Pool2DType pool_type, uint32_t kernel_h, uint32_t kernel_w, std::optional<int32_t> divisor_override) {
+    Pool2DType pool_type,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    std::optional<int32_t> divisor_override,
+    bool round_to_nearest) {
     float value;
 
     switch (pool_type) {
@@ -30,8 +34,8 @@ uint32_t get_bf16_pool_scalar(
             break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return std::bit_cast<uint16_t>(bfloat16::truncate(value)) << 16;
+    const bfloat16 scalar = round_to_nearest ? bfloat16(value) : bfloat16::truncate(value);
+    return std::bit_cast<uint16_t>(scalar) << 16;
 }
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
@@ -42,8 +46,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
         case Pool2DType::AVG_POOL2D: value = 0.; break;
         default: TT_FATAL(false, "Unsupported pool operation type");
     }
-    // TODO: #27672: Truncation should be removed once we figure a root cause of regression without it
-    return std::bit_cast<uint16_t>(bfloat16::truncate(value));
+    return std::bit_cast<uint16_t>(bfloat16(value));
 }
 
 bool is_pool_op_one_scalar_per_core(

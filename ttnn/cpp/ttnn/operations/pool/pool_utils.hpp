@@ -39,6 +39,7 @@ struct AvgPoolConfig {
     uint32_t pad_r{};
     uint32_t max_out_nhw_per_core{};
     std::optional<int32_t> divisor_override;
+    bool round_scalar_to_nearest{};
 };
 
 struct FactoryParameters {
@@ -129,7 +130,11 @@ struct pool_op_l1_usage {
 };
 
 uint32_t get_bf16_pool_scalar(
-    Pool2DType pool_type, uint32_t kernel_h, uint32_t kernel_w, std::optional<int32_t> divisor_override);
+    Pool2DType pool_type,
+    uint32_t kernel_h,
+    uint32_t kernel_w,
+    std::optional<int32_t> divisor_override,
+    bool round_to_nearest = false);
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
