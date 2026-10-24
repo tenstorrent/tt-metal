@@ -159,6 +159,18 @@ def test_multirow_ragged_k_and_split_k(device, block, fp32):
     _run(device, 96, 7168, 256, 56, block, 4, fp32=fp32)
 
 
+@pytest.mark.parametrize("m", [32, 64])
+@pytest.mark.parametrize("k", [32, 64])
+@pytest.mark.parametrize("fp32", [True, False])
+def test_multicore_short_k_omits_empty_partitions(device, m, k, fp32):
+    n = device.dram_grid_size().x * 32
+    for seed in range(2):
+        # Populate every worker's partial buffer before requesting more K groups
+        # than K tiles. An empty group must not contribute stale L1 contents.
+        _run(device, m, 128, n, 4, 1, 4, fp32=fp32, seed=seed)
+        _run(device, m, k, n, k // 32, 1, 4, fp32=fp32, seed=seed + 2)
+
+
 @pytest.mark.parametrize("xd", ["bf16", "bfp8"])
 @pytest.mark.parametrize("tile_h", [16, 32])
 @pytest.mark.parametrize("block", [2, 8])
