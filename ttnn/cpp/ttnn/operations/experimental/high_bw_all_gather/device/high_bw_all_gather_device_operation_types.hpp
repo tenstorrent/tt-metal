@@ -33,12 +33,9 @@ struct HighBwAllGatherParams {
     std::array<uint32_t, 2> axis_num_devices{};
     uint32_t num_devices = 0;           // number of devices participating in the collective
     std::optional<uint32_t> num_links;  // Requested count; nullopt discovers available links on a miss.
-    uint32_t mesh_rows = 0;
-    uint32_t mesh_cols = 0;
     size_t packet_size = 0;
     // Worker-core selection.
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-    std::optional<CoreRangeSet> sub_core_grid;
     tt::tt_metal::SubDeviceManagerId subdevice_manager_id;
     CoreRangeSet resolved_worker_core_grid;
 
@@ -82,6 +79,11 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+
+    // Sparse KV push (HighBwSparsePushFactory): the plan table's geometry and which rows to push. Structural.
+    uint32_t push_stripe_chunk = 0;
+    uint32_t push_max_rows = 0;
+    uint32_t push_part = 0;  // 0 every needed row, 2 only the rows from the chunk start on
 };
 
 struct HighBwAllGatherInputs {
@@ -96,6 +98,16 @@ struct HighBwAllGatherInputs {
     // start position in the gathered dim.
     std::optional<Tensor> gathered_prefix_tensor{std::nullopt};
     bool has_gathered_prefix_metadata() const { return gathered_prefix_tensor.has_value(); }
+    // Sparse KV push: the all-gathered sparse_push_plan tables (uint32 [1, 1, pages * devices, 1024]).
+    // Selects HighBwSparsePushFactory.
+    std::optional<Tensor> push_table{std::nullopt};
+    bool has_push_table() const { return push_table.has_value(); }
+    // Optional DRAM spill of the push's output: the output then holds only its first rows (an L1 front) and the rest
+    // land in push_spill, whose pages hold one packet (pages_per_packet rows) each: row r at page r / P.
+    std::optional<Tensor> push_spill{std::nullopt};
+    // Optional sparse_push_hot table of this chip (uint32 [1, 1, pages, 1024]): the plan's hot rows go out as one
+    // multicast to every chip, into the hot region at the front of every compact buffer.
+    std::optional<Tensor> push_hot_table{std::nullopt};
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

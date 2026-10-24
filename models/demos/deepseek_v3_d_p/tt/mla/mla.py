@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import sparse_kv_push_supported
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
@@ -304,6 +305,7 @@ class ttMLA:
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
         tp_shard_kv: Optional[bool] = None,
+        sparse_kv_push: Optional[bool] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -466,6 +468,17 @@ class ttMLA:
         self.active_seq_len_local = self.active_seq_len // self.sp_factor
 
         self.ccl_num_links = 2 if self._is_blackhole else 1  # Blackhole trains 2 fabric routing planes, others 1
+        # Sparse layers fed another layer's top-k indices (GLM shared layers) receive only the KV rows those indices
+        # reference, pushed by their owners, instead of gathering the whole prefix (see sparse_kv_push.py). The push
+        # routes over all four torus links of every chip, so other fabrics keep the dense gather; False forces the
+        # dense gather (a reference for tests).
+        if sparse_kv_push is None:
+            sparse_kv_push = self._has_indexer and sparse_kv_push_supported(mesh_device)
+        assert not sparse_kv_push or sparse_kv_push_supported(mesh_device), (
+            f"the sparse KV push needs FABRIC_2D_TORUS_XY on a mesh of at least 3x3, got {ttnn.get_fabric_config()} "
+            f"on {tuple(mesh_device.shape)}"
+        )
+        self._sparse_kv_push = sparse_kv_push
 
         # The TP high-bandwidth all-gathers operate on the fixed prefill chunk, never on the full
         # growing KV-cache. Allocate their worst-case outputs once at construction and share them
@@ -646,6 +659,30 @@ class ttMLA:
             requested_overlap_profile = None
 
         self._sparse_mla_overlap = None
+        # With the sparse KV push, a layer whose successor reuses the same top-k pushes that successor's prefix rows
+        # during its own sparse_sdpa (attention and push on disjoint core grids of one program); the successor then
+        # pushes only its remainder. The core grids and semaphores are the overlap profile's.
+        self._push_prefetch = None
+        if (
+            self._sparse_kv_push
+            and requested_overlap_profile is not None
+            and self._has_indexer
+            and not self.kv_only
+            # layer_num counts this stage's cache slots, so compare the successor's LOCAL index: a pipeline
+            # stage starting past layer 0 would otherwise never prefetch.
+            and layer_idx - (first_layer_idx or 0) + 1 < self.layer_num
+            and indexer_layer_is_reused(config, layer_idx + 1)
+        ):
+            self._push_prefetch = self.tt_ccl.get_sparse_mla_overlap_resources(requested_overlap_profile)
+        # sparse_sdpa is bound by DRAM bandwidth (indexed KV row reads), so cores beyond what its query rows need only
+        # add contention: on the 12x10 Galaxy grid a 5k chunk (160 rows per chip) runs 8% faster on the overlap
+        # profile's 96-core top-k grid than on all 120 cores. Used whenever it holds as few rows per core as the full
+        # grid (see _sparse_sdpa_grid).
+        self._sparse_sdpa_cores = None
+        if requested_overlap_profile is not None and self._has_indexer and not self.kv_only and self.sp_factor > 1:
+            self._sparse_sdpa_cores = self.tt_ccl.get_sparse_mla_overlap_resources(
+                requested_overlap_profile
+            ).topk_core_grid
         if requested_overlap_profile is not None:
             if not self._has_indexer or self.kv_only or self._indexer_reuse:
                 # Only a non-kv-only full indexer layer can launch the two independent branches. Shared
@@ -1731,6 +1768,8 @@ class ttMLA:
         # GLM-5.3 reuse: a shared layer receives a prior full layer's top-k indices and skips its own
         # indexer (its ReuseIndexer.forward would raise). Absent injection -> compute as usual.
         selection_state = None
+        if indexer_indices is None and self.tt_ccl.sparse_kv_push is not None:
+            self.tt_ccl.sparse_kv_push[0].invalidate()  # this layer refills the shared indices buffer
         if indexer_indices is not None:
             indices = indexer_indices
         elif self._sparse_mla_overlap is not None:
@@ -1785,6 +1824,7 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
+            injected=indexer_indices is not None,
         )
         if selection_state is not None:
             attn_out, indices = self._sparse_chunked_attn_overlapped(
@@ -1889,9 +1929,23 @@ class ttMLA:
         seq_len_local,
         actual_end=None,
         metadata=None,
+        injected=False,
         **_,
     ):
         assert indices is not None, "sparse MLA forward requires indexer top-k indices"
+        if injected and self._sparse_kv_push:
+            return self._sparse_pushed_attn(
+                tt_q=tt_q,
+                tt_kvpe=tt_kvpe,
+                indices=indices,
+                kvpe_cache=kvpe_cache,
+                kv_actual_isl=kv_actual_isl,
+                cache_layer_idx=cache_layer_idx,
+                cache_user_id=cache_user_id,
+                seq_len_local=seq_len_local,
+                actual_end=actual_end,
+                metadata=metadata,
+            )
         cache_batch_idx, populated_global = self._prepare_sparse_kv_prefix(
             tt_kvpe=tt_kvpe,
             kvpe_cache=kvpe_cache,
@@ -1916,6 +1970,145 @@ class ttMLA:
             indices=indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
+        )
+
+    def _sparse_pushed_attn(
+        self,
+        *,
+        tt_q,
+        tt_kvpe,
+        indices,
+        kvpe_cache,
+        kv_actual_isl,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        actual_end=None,
+        metadata=None,
+    ):
+        """Sparse attention over only the KV rows `indices` reference, pushed by their owners into a compact buffer.
+
+        Trace-safe on the metadata path: the KV write, the plan's chunk start and the pushed cache slot are all read
+        on device from the metadata tensors, so a captured replay serves any chunk start and any user slot."""
+        cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
+            tt_kvpe=tt_kvpe,
+            kvpe_cache=kvpe_cache,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            kv_actual_isl=kv_actual_isl,
+            seq_len_local=seq_len_local,
+            actual_end=actual_end,
+            # Without it a captured replay writes every chunk at the captured kv_actual_isl.
+            metadata=metadata,
+        )
+        planner, ready_sem, done_sem = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)
+        storage = kvpe_cache.storage
+        plan, push_buffer = self._sparse_push_plan(
+            indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx, metadata=metadata
+        )
+        # When the previous layer's sparse_sdpa already pushed this plan's prefix rows (rows of earlier chunks), push
+        # only the remainder: this chunk's own rows, just written above.
+        prefetched = planner.prefetched.pop(self.layer_idx, None) is plan
+        front, spill = push_buffer
+        compact = ttnn.experimental.high_bw_all_gather(
+            storage,
+            dim=2,
+            output_tensor=front,
+            push_spill=spill,
+            cluster_axis=None,
+            num_links=self.ccl_num_links,
+            **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
+            push_table=plan.table,
+            push_stripe_chunk=plan.stripe_chunk,
+            push_max_rows=plan.max_rows,
+            push_part=2 if prefetched else 0,
+            ready_semaphore=ready_sem,
+            data_valid_semaphore=done_sem,
+            push_hot_table=plan.hot_table,
+        )
+        kvpe_dev = MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry)
+        return self._finish_sparse_chunked_attn(
+            tt_q=tt_q,
+            tt_kvpe=tt_kvpe,
+            kvpe_dev=kvpe_dev,
+            indices=plan.compact_indices,
+            kvpe_cache=kvpe_cache,
+            seq_len_local=seq_len_local,
+            overlap=self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx, metadata=metadata),
+            compact=True,
+            kv_spill=spill,
+        )
+
+    def _sparse_push_slot_kwargs(self, storage, cache_batch_idx, metadata, prefix=""):
+        """Cache-slot arguments of a push. On the metadata path the slot is the USER id tensor (metadata[0]),
+        recomposed on device as user * layer_num + layer: a host scalar would be frozen at capture time, so every
+        replay would push the captured slot while the metadata-driven KV write lands in the live one."""
+        if storage.shape[0] <= 1:
+            return {f"{prefix}batch_index": 0} if prefix else {"input_batch_index": None}
+        if metadata is not None:
+            names = (
+                ("push_batch_index_tensor", "push_batch_slot_num_layers", "push_batch_slot_layer_idx")
+                if prefix
+                else ("input_batch_index_tensor", "batch_slot_num_layers", "batch_slot_layer_idx")
+            )
+            return dict(zip(names, (metadata[0], self.layer_num, cache_batch_idx % self.layer_num)))
+        return {f"{prefix}batch_index": cache_batch_idx} if prefix else {"input_batch_index": cache_batch_idx}
+
+    def _sparse_push_buffer(self, planner, kvpe_cache, layer_idx):
+        """The compact buffer of `layer_idx`'s parity as (front, spill), and its DRAM-aligned row page size. With an
+        L1 front, `front` holds the first compact rows and `spill` (DRAM) the rest; without one, front is the DRAM
+        buffer and spill is None."""
+        storage = kvpe_cache.storage
+        row_bytes = storage.shape[-1] * (1 if storage.dtype == ttnn.fp8_e4m3 else 2)
+        page_bytes = -(-row_bytes // 64) * 64
+        dense = self._sparse_kv_gather_buffer
+        rows = planner.buffer_rows(dense.shape[2], page_bytes)
+        front = planner.front_buffer(layer_idx % 2, dense, page_bytes)
+        if front is None:
+            return (planner.push_buffer(layer_idx % 2, rows, dense), None), page_bytes
+        return (front, planner.spill_buffer(layer_idx % 2, rows, dense, page_bytes)), page_bytes
+
+    def _sparse_push_plan(self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx, metadata=None):
+        """The (cached) push plan for `indices` and the compact buffer of `layer_idx`'s parity."""
+        planner = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)[0]
+        push_buffer, page_bytes = self._sparse_push_buffer(planner, kvpe_cache, layer_idx)
+        plan = planner.plan(
+            indices,
+            stripe_chunk=seq_len_local // self.tp_factor,
+            page_bytes=page_bytes,
+            max_rows=self._sparse_kv_gather_buffer.shape[2],
+            chunk_start=kv_actual_isl or 0,
+            # Metadata path: the chunk start (global, = kv_actual_global) is read on device, not frozen at capture.
+            chunk_start_tensor=metadata[1] if metadata is not None else None,
+        )
+        return plan, push_buffer
+
+    def _next_layer_prefetch(self, plan, kvpe_cache, cache_batch_idx, metadata=None):
+        """sparse_sdpa arguments that fuse the next layer's prefix push into this layer's attention, or None."""
+        resources = self._push_prefetch
+        if resources is None or not self._sparse_kv_push:
+            return None
+        planner = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)[0]
+        nxt = self.layer_idx + 1
+        (front, spill), _ = self._sparse_push_buffer(planner, kvpe_cache, nxt)
+        planner.prefetched[nxt] = plan
+        storage = kvpe_cache.storage
+        # Attention runs on the overlap profile's top-k grid; the push senders and fabric muxes on its gather grid.
+        return dict(
+            sub_core_grids=resources.topk_core_grid,
+            push_input=storage,
+            push_table=plan.table,
+            push_output=front,
+            push_output_spill=spill,
+            push_stripe_chunk=plan.stripe_chunk,
+            push_max_rows=plan.max_rows,
+            # The next layer's slot: cache slots are user-major, so it is this slot + 1.
+            **self._sparse_push_slot_kwargs(storage, cache_batch_idx + 1, metadata, prefix="push_"),
+            push_num_links=self.ccl_num_links,
+            push_ready_semaphore=resources.ready_semaphore,
+            push_data_valid_semaphore=resources.data_valid_semaphore,
+            push_core_grid=resources.gather_core_grid,
+            push_hot_table=plan.hot_table,
         )
 
     def _prepare_sparse_kv_prefix(
@@ -1968,6 +2161,10 @@ class ttMLA:
         indices,
         kvpe_cache,
         seq_len_local,
+        compact=False,
+        overlap=None,
+        q_seq=None,
+        kv_spill=None,
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
@@ -1976,7 +2173,15 @@ class ttMLA:
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
         # sliced to this slot (batch-1), so no cache_batch_idx.
         attn_out = self._sparse_mla(
-            tt_q, kvpe_dev, indices, block_cyclic_chunk_local=seq_len_local, cache_batch_idx=None
+            tt_q,
+            kvpe_dev,
+            indices,
+            block_cyclic_chunk_local=seq_len_local,
+            cache_batch_idx=None,
+            compact=compact,
+            overlap=overlap,
+            q_seq=q_seq,
+            kv_spill=kv_spill,
         )
         # NOT deallocated: the full-mesh gather writes the model-owned persistent scratch, and freeing
         # that would take the buffer away from every later chunk and layer. (high_bw_all_gather returns a
@@ -1995,8 +2200,11 @@ class ttMLA:
         populated_global,
         seq_len_local,
         metadata=None,
+        q=None,
     ):
-        """Run the closed two-program overlap region and return joined branch outputs.
+        """Run the closed two-program overlap region and return joined branch outputs: (indices, gathered KVPE,
+        q resharded for sparse_sdpa or None). With `q`, its head-to-sequence reshard runs on the gather branch after
+        the KV gather, hidden behind the longer top-k branch.
 
         Manager clear is the device-side join. Any exception restores the default manager and resets
         caller-owned semaphores only after draining, so an unknown residue is never reused.
@@ -2028,6 +2236,10 @@ class ttMLA:
                 overlap_resources=resources,
                 metadata=metadata,
             )
+            q_seq = None
+            if q is not None and self._needs_head_to_seq_reshard:
+                ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_Q_RESHARD`")
+                q_seq = self._sparse_q_seq(q, subdevice_id=resources.gather_subdevice_id)
         except Exception:
             failed = True
             raise
@@ -2043,7 +2255,7 @@ class ttMLA:
 
         ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_INDEX_REDISTRIBUTION`")
         indices = self._indexer.finalize_distribution(local_indices, selection_state)
-        return indices, kvpe_dev
+        return indices, kvpe_dev, q_seq
 
     def _sparse_chunked_attn_overlapped(
         self,
@@ -2071,14 +2283,23 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
-        indices, kvpe_dev = self._select_and_gather_overlapped(
+        indices, kvpe_dev, q_seq = self._select_and_gather_overlapped(
             selection_state=selection_state,
             kvpe_cache=kvpe_cache,
             cache_batch_idx=cache_batch_idx,
             populated_global=populated_global,
             seq_len_local=seq_len_local,
             metadata=metadata,
+            q=tt_q,
         )
+        # The first shared layer after this one reuses these indices: plan its push now and prefetch its prefix
+        # rows during this layer's sparse_sdpa.
+        overlap = None
+        if self._push_prefetch is not None and self._sparse_kv_push:
+            plan, _ = self._sparse_push_plan(
+                indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx + 1, metadata=metadata
+            )
+            overlap = self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx, metadata=metadata)
         output = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             tt_kvpe=tt_kvpe,
@@ -2086,6 +2307,8 @@ class ttMLA:
             indices=indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
+            overlap=overlap,
+            q_seq=q_seq,
         )
         return output, indices
 
@@ -2255,6 +2478,10 @@ class ttMLA:
         indices: ttnn.Tensor,
         block_cyclic_chunk_local: int,
         cache_batch_idx: Optional[int] = None,
+        compact: bool = False,
+        overlap=None,
+        q_seq: Optional[ttnn.Tensor] = None,
+        kv_spill: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """Absorbed MQA over the top-k selected latents (FlashMLA sparse contract: no causal mask —
         ``indices`` already encode it via the 0xFFFFFFFF sentinel). Invoked SPMD on the SP×TP mesh:
@@ -2288,18 +2515,8 @@ class ttMLA:
         # The indexer emits matching TP sequence shards directly. The partition fallback below also
         # accepts SP-only or globally replicated indices from callers using the older output contract.
         transpose_head_to_seq = self._needs_head_to_seq_reshard
-
-        q_seq_sharded = q
-        if transpose_head_to_seq:
-            q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
-                q,
-                in_dim=1,
-                out_dim=2,
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cluster_axis=self.tp_axis,
-            )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
-
+        # A full layer reshards q inside its overlap region (see _select_and_gather_overlapped).
+        q_seq_sharded = self._sparse_q_seq(q) if q_seq is None else q_seq
         q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
@@ -2324,7 +2541,7 @@ class ttMLA:
         )
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
-        out = ttnn.transformer.sparse_sdpa(
+        sdpa = lambda **grid: ttnn.transformer.sparse_sdpa(
             q_rm,
             kvpe.storage,
             idx,
@@ -2332,11 +2549,22 @@ class ttMLA:
             kv_format=kvpe.format.sparse_sdpa_format,
             scale=self.scale,
             k_chunk_size=k_chunk,
-            block_cyclic_sp_axis=self.sp_axis,
-            block_cyclic_chunk_local=block_cyclic_chunk_local,
-            block_cyclic_cache_tp_sharded=True,
+            # A compact (pushed) buffer is addressed by rewritten slot indices directly: no block-cyclic remap.
+            **(
+                {}
+                if compact
+                else dict(
+                    block_cyclic_sp_axis=self.sp_axis,
+                    block_cyclic_chunk_local=block_cyclic_chunk_local,
+                    block_cyclic_cache_tp_sharded=True,
+                )
+            ),
             cache_batch_idx=cache_batch_idx,
+            kv_spill=kv_spill,
+            **grid,
         )
+        # `overlap`: the next layer's prefix push, fused into this sparse_sdpa program (see _next_layer_prefetch).
+        out = sdpa(**(overlap or self._sparse_sdpa_grid(q_rm.shape[2])))
         ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)
@@ -2357,6 +2585,32 @@ class ttMLA:
             ttnn.deallocate(ret)
             ret = head_sharded
         return ret
+
+    def _sparse_q_seq(self, q, subdevice_id=None):
+        """q sequence-sharded over TP for sparse_sdpa when the per-chip head shard is too thin (else q itself).
+        Optionally on one sub-device."""
+        if not self._needs_head_to_seq_reshard:
+            return q
+        return ttnn.experimental.all_to_all_async_generic(
+            q,
+            in_dim=1,
+            out_dim=2,
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=self.tp_axis,
+            subdevice_id=subdevice_id,
+        )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
+
+    def _sparse_sdpa_grid(self, rows: int) -> dict:
+        """sparse_sdpa's core grid for `rows` query rows per chip: the top-k grid when it needs no more rows per core
+        than the full grid, else the full grid."""
+        if self._sparse_sdpa_cores is None:
+            return {}
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        per_core = lambda cores: -(-rows // cores)
+        if per_core(self._sparse_sdpa_cores.num_cores()) > per_core(grid.x * grid.y):
+            return {}
+        return {"sub_core_grids": self._sparse_sdpa_cores}
 
     def _gather_kvpe_prefix(
         self,
