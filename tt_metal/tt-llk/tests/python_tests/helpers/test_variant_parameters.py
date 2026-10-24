@@ -310,9 +310,18 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
         Measured: the GPR form beats the context poll where one call is a few tiles at LoFi and loses from kt 32 and on 2x2."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
-        if math_fidelity != MathFidelity.LoFi or rt_dim != 1 or ct_dim > 2 or kt_dim > 4:
-            return []
         if MATMUL_K_LOOP.for_block(formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim):
+            return []
+        if dest_sync == DestSync.Half and kt_dim <= 4:
+            # the poll form is bound by the RISC's per-call stores here; the GPR form lets the unpack thread run them
+            if math_fidelity == MathFidelity.HiFi2 and rt_dim == 1 and ct_dim == 1:
+                # these two input and accumulate pairs measure 0.6 to 2.3 percent slower with the GPR form
+                if (formats.input_format, dest_acc) in ((DataFormat.Bfp8_b, DestAccumulation.Yes), (DataFormat.Float32, DestAccumulation.No)):
+                    return []
+                return [MATMUL_UNPACK_TTSYNC()]
+            if math_fidelity == MathFidelity.LoFi and rt_dim == 2 and ct_dim <= 2 and kt_dim >= 2:
+                return [MATMUL_UNPACK_TTSYNC()]
+        if math_fidelity != MathFidelity.LoFi or rt_dim != 1 or ct_dim > 2 or kt_dim > 4:
             return []
         # 32-bit input at half sync with one k step is hand-off bound and loses about 1 percent
         if formats.input_format == DataFormat.Float32 and dest_sync == DestSync.Half and kt_dim == 1:
