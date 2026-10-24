@@ -1614,15 +1614,24 @@ class ChunkedPrefillPageTableGuardMixin:
             out[i, 0] = host[slot].to(out.dtype)
 
     def prefill_forward_lanes(self, tokens, page_tables, kv_cache, prompt_lens, slot_ids=None):
-        """Lane-parallel prefill, one user per lane column; returns host logits [lanes, vocab].
+        """Lane-parallel prefill; returns host logits ``[lanes * k, vocab]`` (lane-major: row ``lane * k + r``).
 
-        ``tokens`` is [lanes, S], ``page_tables`` is [lanes, 1, blocks]; ``prompt_lens`` must be equal across
-        lanes because the KV fill and the last-token slice are shared by every column.
+        One user per lane (``k == 1``): ``tokens`` is [lanes, S], ``page_tables`` [lanes, 1, blocks] and
+        ``prompt_lens`` has one entry per lane; the lengths must be equal because the KV fill and the last-token
+        slice are shared by every column. ``k`` users per lane: ``tokens`` [lanes, k, S], ``page_tables``
+        [lanes, k, blocks], ``prompt_lens`` lanes * k entries (lane-major); each column prefills its k users as one
+        batched stream of ``k * S`` tokens within the prefill chunk, and the lengths must agree across lanes for
+        each ``r`` (round ``r`` shares one valid length). ``slot_ids`` (same order as ``prompt_lens``) gives the
+        bounded sliding rings each user's ring-local rows; the vLLM router installs its own per-layer tables.
         """
         model = self.model[0]
         mesh_cfg = model.mesh_config
         assert mesh_cfg is not None and getattr(mesh_cfg, "lane_sharded", False), "lanes gate is off"
         lanes = mesh_cfg.lanes
+        if tokens.dim() == 3:
+            if int(tokens.shape[1]) > 1:
+                return self._prefill_forward_lanes_batched(tokens, page_tables, kv_cache, prompt_lens, slot_ids)
+            tokens = tokens[:, 0]
         assert tokens.dim() == 2 and tokens.shape[0] == lanes, f"tokens must be [lanes={lanes}, seq]"
         seq_len = int(tokens.shape[-1])
         last_idx = [int(p) - 1 for p in prompt_lens]
@@ -1636,41 +1645,18 @@ class ChunkedPrefillPageTableGuardMixin:
         # takes); lanes always run the single model.
         model_kv = kv_cache[0] if isinstance(kv_cache, (list, tuple)) else kv_cache
 
-        # Trim table width to this prefill's block grid (wider tables TT_FATAL
-        # the fill); vLLM null block 0 pads a narrower one.
         block_size = self._effective_paged_block_size(model_kv)
-        needed_blocks = num_blocks_in_seq(seq_len, block_size)
-        if page_tables.shape[-1] > needed_blocks:
-            page_tables = page_tables[..., :needed_blocks]
-        elif page_tables.shape[-1] < needed_blocks:
-            pad = torch.zeros(
-                page_tables.shape[0],
-                page_tables.shape[1],
-                needed_blocks - page_tables.shape[-1],
-                dtype=page_tables.dtype,
-            )
-            page_tables = torch.cat([page_tables, pad], dim=-1)
+        page_tables = self._lane_prefill_table_width(page_tables, seq_len, block_size)
 
         # Bounded sliding pools are per-layer rings addressed by ring-local block ids (slot s owns rows
         # [s*rb, (s+1)*rb)), so feed sliding layers ring-local tables and full-attention layers the global one.
         if slot_ids is not None:
             slots_l = [int(slot_ids)] * lanes if isinstance(slot_ids, int) else [int(x) for x in slot_ids]
             g_host = page_tables.reshape(lanes, -1).to(torch.int32)
-            per_layer, ring_cache = [], {}
-            for layer in getattr(model, "layers", []):
-                cfg = getattr(getattr(layer, "self_attn", None), "config", None)
-                m = getattr(cfg, "cache_position_modulo", None) if cfg is not None else None
-                if not m:
-                    per_layer.append(g_host)
-                    continue
-                rb = int(m) // block_size
-                if rb not in ring_cache:
-                    ring_cache[rb] = torch.stack(
-                        [torch.arange(s * rb, (s + 1) * rb, dtype=torch.int32) for s in slots_l]
-                    )
-                per_layer.append(ring_cache[rb])
-            if any(t is not g_host for t in per_layer):
+            per_layer = self._lane_prefill_ring_tables(model, g_host, slots_l, block_size)
+            if per_layer is not None:
                 model._active_page_tables_per_layer = per_layer
+                self._install_per_layer_page_tables(model, per_layer, writer="prefill")
 
         max_chunk = int(self.model_args[0].max_prefill_chunk_size)
         if seq_len <= max_chunk:
@@ -1748,6 +1734,136 @@ class ChunkedPrefillPageTableGuardMixin:
             host = ttnn.to_torch(shards[dev]).float()
             out[lane] = host[0, 0, last_in_chunk[lane] % 32, : model.vocab_size]
         tt_logits.deallocate(True)
+        return out
+
+    @staticmethod
+    def _lane_prefill_table_width(page_tables, seq_len, block_size):
+        """Trim a lane page table to this prefill's block grid (wider tables TT_FATAL the fill); vLLM null block 0
+        pads a narrower one."""
+        needed_blocks = num_blocks_in_seq(seq_len, block_size)
+        if page_tables.shape[-1] > needed_blocks:
+            return page_tables[..., :needed_blocks]
+        if page_tables.shape[-1] < needed_blocks:
+            pad = torch.zeros(*page_tables.shape[:-1], needed_blocks - page_tables.shape[-1], dtype=page_tables.dtype)
+            return torch.cat([page_tables, pad], dim=-1)
+        return page_tables
+
+    @staticmethod
+    def _lane_prefill_ring_tables(model, global_rows, slots, block_size):
+        """Per-layer host tables for a lane prefill whose users sit at ``slots``: bounded sliding layers get each
+        slot's ring-local rows, the other layers the global rows. ``global_rows`` is [users, blocks] in the lane
+        layout the caller installs (one row per lane, or the lanes' decode frame rows ``lane * lane_slots + r``);
+        ``slots`` names the slot of each user row in that layout. None when no layer is a bounded ring."""
+        per_layer, ring_cache = [], {}
+        for layer in getattr(model, "layers", []):
+            cfg = getattr(getattr(layer, "self_attn", None), "config", None)
+            m = getattr(cfg, "cache_position_modulo", None) if cfg is not None else None
+            if not m:
+                per_layer.append(global_rows)
+                continue
+            rb = int(m) // block_size
+            if rb not in ring_cache:
+                ring_cache[rb] = torch.stack([torch.arange(s * rb, (s + 1) * rb, dtype=torch.int32) for s in slots])
+            per_layer.append(ring_cache[rb])
+        if not any(t is not global_rows for t in per_layer):
+            return None
+        return per_layer
+
+    def _prefill_forward_lanes_batched(self, tokens, page_tables, kv_cache, prompt_lens, slot_ids=None):
+        """``k`` users per lane in one eager walk (see ``prefill_forward_lanes``).
+
+        Each column runs the batched prefill form the serial engine uses for a true batch: its ``k`` users as one
+        stream of ``k * S`` tokens (``batch_size=k``, rows ``0..k-1`` of the column's page table, per-user valid
+        lengths capping the KV fill, lm_head deferred), then every user's last-token tile is projected on its own
+        and read from the lane's first chip. The tables ``[lanes, k, blocks]`` lane-shard to ``[k, blocks]`` per
+        column; per-layer tables, when this call installs them (``slot_ids``), use the lanes' decode frame.
+        """
+        model = self.model[0]
+        mesh_cfg = model.mesh_config
+        lanes = int(mesh_cfg.lanes)
+        assert tokens.dim() == 3 and int(tokens.shape[0]) == lanes, f"tokens must be [lanes={lanes}, k, seq]"
+        k, seq_len = int(tokens.shape[1]), int(tokens.shape[2])
+        assert page_tables.dim() == 3 and tuple(int(x) for x in page_tables.shape[:2]) == (
+            lanes,
+            k,
+        ), f"page_tables must be [lanes={lanes}, k={k}, blocks], got {tuple(page_tables.shape)}"
+        plens = [int(p) for p in prompt_lens]
+        if len(plens) != lanes * k:
+            raise ValueError(f"lane-batched prefill needs {lanes * k} prompt lengths (lane-major), got {len(plens)}")
+        last_r = []
+        for r in range(k):
+            row = [plens[ln * k + r] - 1 for ln in range(lanes)]
+            if len(set(row)) != 1:
+                raise ValueError(
+                    f"lane prefill round {r} needs equal prompt lengths across lanes, got {[i + 1 for i in row]}"
+                )
+            if not 0 <= row[0] < seq_len:
+                raise ValueError(f"lane prefill round {r}: prompt length {row[0] + 1} outside [1, {seq_len}]")
+            last_r.append(row[0])
+        max_chunk = int(self.model_args[0].max_prefill_chunk_size)
+        if k * seq_len > max_chunk:
+            raise ValueError(
+                f"lane-batched prefill stream {k} x {seq_len} = {k * seq_len} tokens exceeds the prefill chunk {max_chunk}"
+            )
+        lane_slots = int(getattr(model, "lane_slots", 0) or 32)
+        if k > lane_slots:
+            raise ValueError(f"lane-batched prefill of {k} users per lane exceeds the lane's {lane_slots} slots")
+
+        model_kv = kv_cache[0] if isinstance(kv_cache, (list, tuple)) else kv_cache
+        block_size = self._effective_paged_block_size(model_kv)
+        page_tables = self._lane_prefill_table_width(page_tables.to(torch.int32), seq_len, block_size)
+
+        if slot_ids is not None:
+            slots_l = [int(x) for x in slot_ids]
+            if len(slots_l) != lanes * k:
+                raise ValueError(f"lane-batched prefill needs {lanes * k} slot ids (lane-major), got {len(slots_l)}")
+            # The lanes' decode frame: lane ln's user r at row ln * lane_slots + r (the batched walk fills per-column
+            # rows 0..k-1); the other rows are null and never filled.
+            frame_slots = [0] * (lanes * lane_slots)
+            g_frame = torch.zeros(lanes * lane_slots, int(page_tables.shape[-1]), dtype=torch.int32)
+            for ln in range(lanes):
+                for r in range(k):
+                    g_frame[ln * lane_slots + r] = page_tables[ln, r]
+                    frame_slots[ln * lane_slots + r] = slots_l[ln * k + r]
+            per_layer = self._lane_prefill_ring_tables(model, g_frame, frame_slots, block_size)
+            if per_layer is None:
+                per_layer = [g_frame] * len(getattr(model, "layers", []))
+            model._active_page_tables_per_layer = per_layer
+            self._install_per_layer_page_tables(model, per_layer, writer="prefill")
+
+        inputs = model.prepare_inputs_prefill(
+            tokens.reshape(lanes, k * seq_len),
+            page_table=page_tables,
+            batch_size=k,
+            user_id=0,
+            lane_parallel=True,
+        )
+        prefill_input, rot_mats_global, rot_mats_local, page_table_tt, *_ = inputs
+        hidden = model.ttnn_prefill_forward(
+            prefill_input,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
+            user_id=0,
+            page_table=page_table_tt,
+            get_last_token=-1,
+            kv_cache=model_kv,
+            batch_size=k,
+            valid_seq_lens=[i + 1 for i in last_r],
+        )
+        # The batched form returns post-norm hidden states [1, 1, k * S, hidden] per column (lm_head deferred):
+        # project each user's last-token tile and read the lane's row from its first chip.
+        out = torch.zeros(lanes * k, model.vocab_size, dtype=torch.float32)
+        lane_devs = model.lane_device_indices()
+        for r in range(k):
+            tile_start = r * seq_len + (last_r[r] // 32) * 32
+            sliced = ttnn.slice(hidden, (0, 0, tile_start, 0), (1, 1, tile_start + 32, int(hidden.shape[-1])))
+            logits = model._apply_lm_head(sliced, is_decode=False)
+            shards = ttnn.get_device_tensors(logits)
+            for ln, dev in enumerate(lane_devs):
+                host = ttnn.to_torch(shards[dev]).float()
+                out[ln * k + r] = host[0, 0, last_r[r] % 32, : model.vocab_size]
+            logits.deallocate(True)
+        hidden.deallocate(True)
         return out
 
     def _prefill_single_user_with_embeds(

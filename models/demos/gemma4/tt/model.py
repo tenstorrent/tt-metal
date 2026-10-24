@@ -2025,16 +2025,18 @@ class Gemma4Model:
         if lane_parallel:
             # Lane-parallel prefill: row i of ``tokens`` is lane i's user; sharding rows over the lane
             # axis lets each column prefill its own user with batch_size=1 semantics; nothing downstream changes.
+            # ``batch_size=k`` > 1: row i is lane i's k users as one stream of k * seq tokens, the batched
+            # prefill form per column (its [k, blocks] page table rows, per-user valid lengths, deferred lm_head).
             assert getattr(self.mesh_config, "lane_sharded", False), "lane_parallel requires GEMMA4_GALAXY_LANES"
-            assert batch_size == 1, "lane_parallel runs single-user semantics per column"
+            assert batch_size >= 1, "lane_parallel runs one user or a batched stream per column"
             assert not trace_enabled, "lane_parallel prefill is eager-only"
             if self.hidden_size_per_layer_input:
                 raise NotImplementedError("lane_parallel prefill does not support PLI models")
             lanes = self.mesh_config.lanes
             assert (
-                tokens_torch.dim() == 2 and tokens_torch.shape[0] == lanes
-            ), f"lane_parallel tokens must be [lanes={lanes}, seq], got {tuple(tokens_torch.shape)}"
-            per_user_seq_len = tokens_torch.shape[-1]
+                tokens_torch.dim() == 2 and tokens_torch.shape[0] == lanes and tokens_torch.shape[-1] % batch_size == 0
+            ), f"lane_parallel tokens must be [lanes={lanes}, k * seq] (k={batch_size}), got {tuple(tokens_torch.shape)}"
+            per_user_seq_len = tokens_torch.shape[-1] // batch_size
             tokens_for_embed = tokens_torch
             tok_mapper = self.mesh_config.lane_shard_mapper(self.mesh_device, 0)
         elif batch_size > 1:

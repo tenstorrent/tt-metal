@@ -30,13 +30,15 @@ from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
 LANES, LANE_SLOTS, CHUNK, BLOCKS = 4, 32, 4096, 32
 
 
-def _instance(monkeypatch, *, lane_router: bool, lane_sharded: bool = True, multimodal: bool = True):
+def _instance(monkeypatch, *, lane_router: bool, lane_sharded: bool = True, multimodal: bool = True, prompts: int = 1):
     """A bridge instance with everything ``warmup_model_prefill`` touches stubbed on the host."""
     calls = {"lanes": [], "vision": 0, "sweep": 0}
     monkeypatch.setattr(
         generator_vllm, "warmup_gemma4_model_prefill", lambda *a, **k: calls.__setitem__("sweep", calls["sweep"] + 1)
     )
     monkeypatch.setattr(Gemma4ForCausalLM, "_lane_prefill_group", classmethod(lambda cls: lane_router))
+    monkeypatch.setattr(Gemma4ForCausalLM, "_lane_prefill_prompts", classmethod(lambda cls: int(lane_router) * prompts))
+    monkeypatch.setenv("GEMMA4_LANE_PREFILL_BATCHED", "1")
     monkeypatch.setattr(
         Gemma4ForCausalLM, "warmup_vision", lambda self: calls.__setitem__("vision", calls["vision"] + 1)
     )
@@ -44,7 +46,11 @@ def _instance(monkeypatch, *, lane_router: bool, lane_sharded: bool = True, mult
     inst._bounded_sliding_kv_cache = True  # eager prefill warmup (no capture decision to make)
     inst._decode_warmup_complete = True  # the plugin's trace pass: the eager decode warmup has run
     inst.is_multimodal = multimodal
-    model = SimpleNamespace(mesh_config=SimpleNamespace(lane_sharded=lane_sharded, lanes=LANES), lane_slots=LANE_SLOTS)
+    model = SimpleNamespace(
+        mesh_config=SimpleNamespace(lane_sharded=lane_sharded, lanes=LANES),
+        lane_slots=LANE_SLOTS,
+        mesh_device=SimpleNamespace(shape=(8, 4)),
+    )
     inst.model = [model]
     inst.model_args = [SimpleNamespace(max_prefill_chunk_size=CHUNK)]
     inst._mock_tokens = lambda b, s, kv, m: {
@@ -55,7 +61,7 @@ def _instance(monkeypatch, *, lane_router: bool, lane_sharded: bool = True, mult
     def _lanes(tokens, page_tables, kv_cache, prompt_lens, slot_ids=None):
         model._active_page_tables_per_layer = ["set by the lane path"]
         calls["lanes"].append((tuple(tokens.shape), tuple(page_tables.shape), list(prompt_lens), list(slot_ids)))
-        return torch.zeros(LANES, 8)
+        return torch.zeros(tokens.shape[0] * (tokens.shape[1] if tokens.dim() == 3 else 1), 8)
 
     inst.prefill_forward_lanes = _lanes
     return inst, model, calls
@@ -83,6 +89,27 @@ def test_lane_group_warmup_waits_for_the_eager_decode_warmup(monkeypatch):
     inst._decode_warmup_complete = True
     Gemma4ForCausalLM.warmup_model_prefill(inst, kv, enable_trace=True, can_sample_on_device=False)
     assert len(calls["lanes"]) == 1
+
+
+def test_lane_batched_warmup_adds_the_k_users_per_lane_frame(monkeypatch):
+    """k prompts per lane: the batched walk's programs and its page-table frame (the lanes' decode frame) must
+    exist before the decode traces are captured, so the warmup adds one lane-batched call."""
+    inst, model, calls = _instance(monkeypatch, lane_router=True, multimodal=False, prompts=8)
+    Gemma4ForCausalLM.warmup_model_prefill(inst, [object()], enable_trace=True, can_sample_on_device=False)
+    assert calls["lanes"] == [
+        ((LANES, CHUNK), (LANES, 1, BLOCKS), [CHUNK] * LANES, [0, 32, 64, 96]),
+        (
+            (LANES, 8, CHUNK // 8),
+            (LANES, 8, BLOCKS),
+            [CHUNK // 8] * (LANES * 8),
+            [ln * 32 + r for ln in range(LANES) for r in range(8)],
+        ),
+    ]
+    assert not hasattr(model, "_active_page_tables_per_layer")
+    inst, _model, calls = _instance(monkeypatch, lane_router=True, multimodal=False, prompts=8)
+    monkeypatch.setenv("GEMMA4_LANE_PREFILL_BATCHED", "0")
+    Gemma4ForCausalLM.warmup_model_prefill(inst, [object()], enable_trace=True, can_sample_on_device=False)
+    assert len(calls["lanes"]) == 1, "without the batched walk there is no frame to warm"
 
 
 @pytest.mark.parametrize("why", ["router_off", "not_lane_sharded", "no_kv_cache"])

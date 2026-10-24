@@ -435,11 +435,132 @@ def galaxy_lane_prefill_group():
     return galaxy_lanes_fold() and gemma4_env_flag("GEMMA4_LANE_PREFILL_ROUTER")
 
 
+def galaxy_lane_prefill_prompts():
+    """Prompts per lane per gathered prefill step under the lane router: ``GEMMA4_LANE_PREFILL_PROMPTS`` (default
+    1), 0 when the router is off. Declared through ``model_capabilities["lane_prefill_group"]``: the vllm-tt-plugin
+    caps each lane's new prefill admissions per step at this count (a plugin that reads the declaration as a
+    Boolean admits one per lane, as before), and the router prefills the gathered step as ``[lanes, k, seq]``
+    lane-batched walks (see ``_try_lane_parallel_prefill``). A malformed value fails the launch."""
+    if not galaxy_lane_prefill_group():
+        return 0
+    raw = os.environ.get("GEMMA4_LANE_PREFILL_PROMPTS", "1").strip() or "1"
+    try:
+        prompts = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"GEMMA4_LANE_PREFILL_PROMPTS={raw!r} is not an integer") from exc
+    if prompts < 1:
+        raise ValueError(f"GEMMA4_LANE_PREFILL_PROMPTS={prompts} must be >= 1")
+    return prompts
+
+
+def lane_prefill_batched_enabled():
+    """The rounds of a gathered step prefill as one lane-batched walk (GEMMA4_LANE_PREFILL_BATCHED, default 1): k
+    users per lane as one batched stream per column. Off, every round walks on its own in the one-user-per-lane
+    layout, which isolates the plugin's admission change from the model's batched walk on the device."""
+    return gemma4_env_flag("GEMMA4_LANE_PREFILL_BATCHED", "1")
+
+
+def lane_batched_warmup_shape(prompts, lane_slots, max_chunk):
+    """``(k, seq)`` of the boot warmup's lane-batched call: up to ``prompts`` users per lane whose power-of-two
+    per-user length keeps the stream ``k * seq`` within the prefill chunk (``k == 1`` when there is nothing to
+    warm). Serving calls then vary ``k`` and ``seq`` under the same page-table frame and chunk bound."""
+    k = max(1, min(int(prompts or 0), int(lane_slots or 1)))
+    if k <= 1 or int(max_chunk) < 2 * 128:
+        return 1, int(max_chunk)
+    seq = 128
+    while seq * 2 * k <= int(max_chunk):
+        seq *= 2
+    k = max(1, min(k, int(max_chunk) // seq))
+    return k, seq
+
+
 def _capability_flag(capabilities, key):
     """A Boolean ``model_capabilities`` entry or a zero-argument callable one (the plugin resolves the lane fold the
     same way; ``lane_prefill_group`` is read only by this class)."""
     value = (capabilities or {}).get(key, False)
     return bool(value() if callable(value) else value)
+
+
+def _capability_count(capabilities, key):
+    """An integer ``model_capabilities`` entry (a Boolean counts 0 / 1) or a zero-argument callable one."""
+    value = (capabilities or {}).get(key, False)
+    if callable(value):
+        value = value()
+    if isinstance(value, bool):
+        return int(value)
+    return max(0, int(value))
+
+
+def lane_prefill_rounds(buckets, plens, *, allow_scratch):
+    """Rounds of a merged prefill step: one request per lane, equal prompt lengths within a round.
+
+    ``buckets[lane]`` lists the step's request indices on that lane in admission order; ``plens[q]`` is request
+    ``q``'s prompt length. A round is one entry per lane: a request index, or None for a lane that computes on
+    scratch rows that round. Without scratch rows only rounds covering every lane form, in bucket order, stopping
+    at the first round whose lengths differ (the one-prompt-per-lane layout; the step's other requests prefill
+    serially). With them every request is routed: for each prompt length in order of first appearance, the lanes'
+    requests of that length pair up round by round and short lanes get scratch rows.
+    """
+    if not allow_scratch:
+        rounds = []
+        r = 0
+        while all(len(b) > r for b in buckets):
+            group = [b[r] for b in buckets]
+            if len({plens[q] for q in group}) != 1:
+                break
+            rounds.append(group)
+            r += 1
+        return rounds
+    all_q = sorted(q for b in buckets for q in b)
+    lengths = []
+    for q in all_q:
+        if plens[q] not in lengths:
+            lengths.append(plens[q])
+    rounds = []
+    for length in lengths:
+        per_lane = [[q for q in b if plens[q] == length] for b in buckets]
+        for r in range(max(len(x) for x in per_lane)):
+            rounds.append([x[r] if r < len(x) else None for x in per_lane])
+    return rounds
+
+
+def lane_prefill_frame_tables(per_layer_tables, rounds, lane_slots, scratch_block_for):
+    """Per-layer host page tables for one lane-parallel call of ``k = len(rounds)`` rounds.
+
+    ``k == 1``: the one-row-per-lane layout (row ``lane``; its own persistent key, one device row per column).
+    ``k > 1``: the lanes' decode frame (``lanes * lane_slots`` rows, lane ``ln``'s user ``r`` at row
+    ``ln * lane_slots + r``), which lane-shards to ``[lane_slots, blocks]`` per column with the call's users at
+    rows ``0..k-1`` (the rows a batched walk fills) and keys the frame's persistent buffers, so no call size
+    allocates a new key under the live decode traces. Request rows copy the step's table row ``q``; a lane's
+    scratch round holds the layer's scratch block (``scratch_block_for(layer)``, what the single-user lane prefill
+    gives its non-owner lanes); every other frame row is null.
+    """
+    k = len(rounds)
+    lanes = len(rounds[0])
+    out = []
+    for i, pt in enumerate(per_layer_tables):
+        if pt is None or not isinstance(pt, torch.Tensor):
+            out.append(pt)
+            continue
+        pt2 = pt if pt.dim() > 1 else pt.unsqueeze(0)
+        width = int(pt2.shape[-1])
+        scratch = int(scratch_block_for(i))
+        if k == 1:
+            rows = torch.full((lanes, width), scratch, dtype=torch.int32)
+            for ln, q in enumerate(rounds[0]):
+                if q is not None:
+                    rows[ln] = pt2[q].to(torch.int32)
+        else:
+            rows = torch.zeros((lanes * int(lane_slots), width), dtype=torch.int32)
+            for r, rnd in enumerate(rounds):
+                for ln, q in enumerate(rnd):
+                    row = ln * int(lane_slots) + r
+                    if q is None:
+                        rows[row] = scratch
+                    else:
+                        rows[row] = pt2[q].to(torch.int32)
+        out.append(rows)
+    return out
 
 
 class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCausalLM):
@@ -537,10 +658,11 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         # Lane serving (vllm-tt-plugin ``_convert_dp_to_lanes``): an env-gated rail,
         # so the plugin evaluates this zero-argument callable at config time.
         "folds_dp_into_lanes": galaxy_lanes_fold,
-        # This class's own switch for the lane-parallel prefill router (not a plugin
-        # contract): the plugin side of lane-group prefill is the catalog's
-        # ``lane_prefill_admissions_per_step`` / ``lane_prefill_gather_ms`` tt config.
-        "lane_prefill_group": galaxy_lane_prefill_group,
+        # The lane-parallel prefill router's switch and its prompts per lane per gathered
+        # step (an int: 0 off, k = up to k new prefills per lane per step). The plugin
+        # caps each lane's admissions at this count (a Boolean reading admits one) and
+        # gathers lanes briefly (``TT_PREFILL_GROUP_GATHER_MS``).
+        "lane_prefill_group": galaxy_lane_prefill_prompts,
     }
 
     # vLLM pads decode to the nearest of these (not always max_num_seqs) so B=1
@@ -886,6 +1008,34 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         finally:
             if hasattr(model, "_active_page_tables_per_layer"):
                 del model._active_page_tables_per_layer
+        # k prompts per lane: the lane-batched walk's programs and its page-table frame (the lanes' decode frame,
+        # the key every batched call uses) must exist before the decode traces are captured too.
+        kw, seq_w = lane_batched_warmup_shape(self._lane_prefill_prompts(), lane_slots, seq_len)
+        if kw > 1 and lane_prefill_batched_enabled():
+            mock_b = self._mock_tokens(lanes * kw, seq_w, kv_cache, 0)
+            page_table_b = mock_b.get("page_table")
+            if page_table_b is not None:
+                logger.info(
+                    "Gemma4 vLLM: warming up the lane-batched prefill path ({} lanes x {} users x {} tokens)",
+                    lanes,
+                    kw,
+                    seq_w,
+                )
+                try:
+                    self.prefill_forward_lanes(
+                        mock_b["tokens"].reshape(lanes, kw, seq_w),
+                        page_table_b.reshape(lanes, kw, -1).to(torch.int32),
+                        kv_cache,
+                        [seq_w] * (lanes * kw),
+                        slot_ids=[ln * lane_slots + r for ln in range(lanes) for r in range(kw)],
+                    )
+                except Exception as e:  # noqa: BLE001 - best-effort, as above
+                    logger.warning(
+                        "Gemma4 vLLM: lane-batched prefill warmup failed ({}); the first call compiles live", e
+                    )
+                finally:
+                    if hasattr(model, "_active_page_tables_per_layer"):
+                        del model._active_page_tables_per_layer
         logger.info("Gemma4 vLLM: lane-group prefill warmup done in {:.1f} s", time.perf_counter() - t0)
 
     # ── Multimodal (vision) path ───────────────────────────────────────────
@@ -1585,9 +1735,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     @classmethod
     def _lane_prefill_group(cls):
         """Lane-parallel prefill router switch (``model_capabilities["lane_prefill_group"]``). The plugin's
-        admission cap / gather window (``lane_prefill_admissions_per_step``, ``lane_prefill_gather_ms`` in the
-        tt config) make merged prefill steps pure lane groups for it."""
+        admission cap (the declared prompts per lane) and gather window (``TT_PREFILL_GROUP_GATHER_MS``) make
+        merged prefill steps pure lane groups for it."""
         return _capability_flag(cls.model_capabilities, "lane_prefill_group")
+
+    @classmethod
+    def _lane_prefill_prompts(cls):
+        """Prompts per lane per gathered step the class declares (``model_capabilities["lane_prefill_group"]``
+        as a count: 0 off, 1 one per lane, k up to k per lane in one lane-batched walk)."""
+        return _capability_count(cls.model_capabilities, "lane_prefill_group")
 
     @classmethod
     def initialize_vllm_model(
@@ -2009,57 +2165,73 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         plens = [int(p) for p in torch.as_tensor(prompt_lens).reshape(-1)][:B]
         lane_of = [int(s) // lane_slots for s in slots]
         buckets = [[q for q in range(B) if lane_of[q] == ln] for ln in range(lanes)]
-        groups = []
-        r = 0
-        while all(len(b) > r for b in buckets):
-            group = [buckets[ln][r] for ln in range(lanes)]
-            if len({plens[q] for q in group}) != 1:
-                break
-            groups.append(group)
-            r += 1
-        if not groups:
-            return self._g4_router_reject(
-                f"no full round: B={B} slots={[int(x) for x in slots][:8]} lane_slots={lane_slots} "
-                f"buckets={[len(b) for b in buckets]} lens={[plens[b[0]] for b in buckets if b]}"
-            )
-        routed = {q for g in groups for q in g}
-        remainder = [q for q in range(B) if q not in routed]
-
         # The group walk gets raw-width tokens (the serial path pads inside prepare);
         # pad here or the sliding fill hands SDPA a sub-tile V.
         S = int(tokens.shape[-1])
         S_pad = int(get_padded_prefill_len(S))
+        # k prompts per lane per gathered step (``lane_prefill_group`` as a count): every request of the step is
+        # routed, lanes short of a round compute on scratch rows, and as many rounds as fit the prefill chunk
+        # (and the lane's slots) prefill as one lane-batched walk: the rounds' users as one stream per column.
+        # k == 1 keeps the one-prompt-per-lane groups: full rounds only, the rest serial.
+        k = max(1, int(self._lane_prefill_prompts()))
+        rounds_per_call = 1
+        if k > 1 and lane_prefill_batched_enabled():
+            max_chunk = int(getattr(self.model_args[0], "max_prefill_chunk_size", 0) or 0)
+            if max_chunk >= S_pad:
+                rounds_per_call = max(1, min(lane_slots, max_chunk // S_pad))
+        rounds = lane_prefill_rounds(buckets, plens, allow_scratch=k > 1)
+        if not rounds:
+            return self._g4_router_reject(
+                f"no full round: B={B} slots={[int(x) for x in slots][:8]} lane_slots={lane_slots} "
+                f"buckets={[len(b) for b in buckets]} lens={[plens[b[0]] for b in buckets if b]}"
+            )
+        routed = {q for rnd in rounds for q in rnd if q is not None}
+        remainder = [q for q in range(B) if q not in routed]
+        calls = [rounds[i : i + rounds_per_call] for i in range(0, len(rounds), rounds_per_call)]
+
         gpt = full_page_tables[g_idxs[0]]
         gpt = gpt if gpt.dim() > 1 else gpt.unsqueeze(0)
         out = torch.zeros(B, 1, model.vocab_size)
         logger.debug(
-            "Gemma4 vLLM: lane-parallel prefill router -- {} requests, {} full group(s), {} serial, seq {}",
+            "Gemma4 vLLM: lane-parallel prefill router -- {} requests, {} round(s) in {} call(s) (k={}), {} serial, seq {}",
             B,
-            len(groups),
+            len(rounds),
+            len(calls),
+            k,
             len(remainder),
             S_pad,
         )
-        for group in groups:
-            toks4 = torch.zeros(lanes, S_pad, dtype=tokens.dtype)
-            plens4 = [1] * lanes
-            tables4 = torch.zeros(lanes, 1, int(gpt.shape[-1]), dtype=torch.int32)
-            for ln, q in enumerate(group):
-                toks4[ln, :S] = tokens[q]
-                plens4[ln] = plens[q]
-                # Plugin per-layer tables arrive in local prefill order (row
-                # i = request i), not slot-indexed.
-                tables4[ln, 0] = gpt[q].to(torch.int32)
-            per_layer = []
-            for pt in full_page_tables:
-                pt2 = pt if pt.dim() > 1 else pt.unsqueeze(0)
-                rows = torch.zeros(lanes, int(pt2.shape[-1]), dtype=torch.int32)
-                for ln, q in enumerate(group):
-                    rows[ln] = pt2[q].to(torch.int32)
-                per_layer.append(rows)
+        for call in calls:
+            kc = len(call)
+            toks = torch.zeros(lanes, kc, S_pad, dtype=tokens.dtype)
+            plens_call = [1] * (lanes * kc)
+            tables = torch.zeros(lanes, kc, int(gpt.shape[-1]), dtype=torch.int32)
+            for r, rnd in enumerate(call):
+                # Scratch rows carry the round's length: the round shares one valid length across lanes.
+                length = next(plens[q] for q in rnd if q is not None)
+                for ln, q in enumerate(rnd):
+                    plens_call[ln * kc + r] = length
+                    if q is None:
+                        continue
+                    toks[ln, r, :S] = tokens[q]
+                    # Plugin per-layer tables arrive in local prefill order (row
+                    # i = request i), not slot-indexed.
+                    tables[ln, r] = gpt[q].to(torch.int32)
+            per_layer = lane_prefill_frame_tables(full_page_tables, call, lane_slots, model._lane_scratch_block_for)
             model._active_page_tables_per_layer = per_layer
-            out_rows = self.prefill_forward_lanes(toks4, tables4, kwargs.get("kv_cache"), plens4, slot_ids=None)
-            for ln, q in enumerate(group):
-                out[q] = out_rows[ln].reshape(1, -1)[:, : model.vocab_size]
+            # Upload the call's tables: ``ttnn_prefill_forward`` resolves the stash through
+            # ``_page_tables_to_ttnn``, which hands back a key's existing device buffers without refreshing
+            # them, so without this copy every call after a key's first would prefill through that first
+            # call's block ids.
+            self._install_per_layer_page_tables(model, per_layer, writer="prefill")
+            out_rows = self.prefill_forward_lanes(
+                toks if kc > 1 else toks[:, 0], tables, kwargs.get("kv_cache"), plens_call, slot_ids=None
+            )
+            out_rows = out_rows.reshape(lanes, kc, -1)
+            for r, rnd in enumerate(call):
+                for ln, q in enumerate(rnd):
+                    if q is not None:
+                        out[q] = out_rows[ln, r, : model.vocab_size].reshape(1, -1)
         if hasattr(model, "_active_page_tables_per_layer"):
             del model._active_page_tables_per_layer
 
