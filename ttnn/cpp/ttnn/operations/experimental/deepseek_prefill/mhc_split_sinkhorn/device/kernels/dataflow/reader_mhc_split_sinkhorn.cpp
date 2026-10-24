@@ -6,9 +6,12 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "mhc_sinkhorn_permute.h"
 
 // Loads the 8 host-prepared constant tiles once (persistent), then streams the mixes
-// token-tiles. See the program factory for the CB layout.
+// token-tiles. See the program factory for the CB layout. With SFPU_SINKHORN (compile-time arg 2)
+// it also permutes each token-tile's comb logits into the SFPU layout and the Sinkhorn result back
+// into token rows (mhc_sinkhorn_permute.h), between the compute kernel's two dst sections.
 void kernel_main() {
     const uint32_t mixes_addr = get_arg_val<uint32_t>(0);
     const uint32_t consts_addr = get_arg_val<uint32_t>(1);
@@ -17,7 +20,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_mixes = get_compile_time_arg_val(0);
     constexpr uint32_t cb_consts = get_compile_time_arg_val(1);
-    constexpr auto mixes_args = TensorAccessorArgs<2>();
+    constexpr bool sfpu_sinkhorn = get_compile_time_arg_val(2) != 0;
+    constexpr auto mixes_args = TensorAccessorArgs<3>();
     constexpr auto consts_args = TensorAccessorArgs<mixes_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t num_const_tiles = 8;
@@ -32,18 +36,22 @@ void kernel_main() {
     CircularBuffer cb_c(cb_consts);
     CircularBuffer cb_m(cb_mixes);
 
-    // Constants: load once, never popped by compute -> resident for every token-tile.
+    // Constants: load once (the 8 reads in flight together), never popped by compute -> resident for every token-tile.
+    cb_c.reserve_back(num_const_tiles);
     for (uint32_t i = 0; i < num_const_tiles; ++i) {
-        cb_c.reserve_back(1);
-        noc.async_read(s_consts, cb_c, consts_page, {.page_id = i}, {.offset_bytes = 0});
-        noc.async_read_barrier();
-        cb_c.push_back(1);
+        noc.async_read(s_consts, cb_c, consts_page, {.page_id = i}, {.offset_bytes = i * consts_page});
     }
+    noc.async_read_barrier();
+    cb_c.push_back(num_const_tiles);
 
     for (uint32_t t = 0; t < num_token_tiles; ++t) {
         cb_m.reserve_back(1);
         noc.async_read(s_mixes, cb_m, mixes_page, {.page_id = start_tile + t}, {.offset_bytes = 0});
         noc.async_read_barrier();
         cb_m.push_back(1);
+        if constexpr (sfpu_sinkhorn) {
+            mhc_sinkhorn_permute_in(noc);
+            mhc_sinkhorn_permute_out(noc);
+        }
     }
 }

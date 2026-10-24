@@ -115,7 +115,13 @@ std::array<Tensor, 3> mhc_split_sinkhorn(
     if (const char* mc = std::getenv("MHC_MAX_CORES"); mc != nullptr) {
         max_cores = static_cast<uint32_t>(std::atoi(mc));
     }
-    auto operation_attributes = OperationType::operation_attributes_t{n, sinkhorn_iters, eps, max_cores};
+    // V41_MHC_SINKHORN_SFPU=1 runs the Sinkhorn lane-wise on the SFPU (see the program factory);
+    // hashed for the same reason.
+    uint32_t sfpu_sinkhorn = 0;
+    if (const char* sk = std::getenv("V41_MHC_SINKHORN_SFPU"); sk != nullptr) {
+        sfpu_sinkhorn = static_cast<uint32_t>(std::atoi(sk)) != 0 ? 1u : 0u;
+    }
+    auto operation_attributes = OperationType::operation_attributes_t{n, sinkhorn_iters, eps, max_cores, sfpu_sinkhorn};
     auto tensor_args = OperationType::tensor_args_t{mixes, consts};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

@@ -9,6 +9,11 @@
 // SEL_* extract+left-align each group from the 24-wide mixes and fold in the scalar a; the
 // Sinkhorn normalizations are same-shape `m / (m @ K)` divides (K = RB row-sum / CB col-sum),
 // so the whole op is matmul + SFPU tiles. Validated bit-for-bit against the torch reference.
+// With compile-time arg 2 (SFPU_SINKHORN) set, the Sinkhorn runs lane-wise on the SFPU instead
+// (mhc_sinkhorn_sfpu.h): the logits tile goes out through CB_LOG, the reader permutes it into the
+// SFPU layout (CB_SKIN), this kernel exps it and iterates in dst, packs the result to CB_SKOUT and
+// the reader permutes it back into token rows (CB_COMB). 41 matmul + 82 SFPU tile passes through
+// L1 become one dst section per token-tile.
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -23,6 +28,7 @@
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
+#include "mhc_sinkhorn_sfpu.h"
 
 namespace {
 
@@ -31,6 +37,9 @@ constexpr uint32_t CB_CONSTS = 1;  // c_1  (8 resident tiles)
 constexpr uint32_t CB_PRE = 2;     // c_2  out
 constexpr uint32_t CB_POST = 3;    // c_3  out
 constexpr uint32_t CB_COMB = 4;    // c_4  out
+constexpr uint32_t CB_LOG = 5;     // c_5  comb logits, token rows (SFPU_SINKHORN; compute -> reader)
+constexpr uint32_t CB_SKIN = 6;    // c_6  comb logits in the SFPU layout (reader -> compute)
+constexpr uint32_t CB_SKOUT = 7;   // c_7  the Sinkhorn result in the SFPU layout (compute -> reader)
 constexpr uint32_t CB_MA = 16;     // m ping
 constexpr uint32_t CB_MB = 17;     // m pong
 constexpr uint32_t CB_RS = 18;     // row/col-sum broadcast
@@ -164,6 +173,7 @@ void kernel_main() {
     const uint32_t num_token_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t iters = get_compile_time_arg_val(0);
     constexpr uint32_t eps_bits = get_compile_time_arg_val(1);
+    constexpr bool sfpu_sinkhorn = get_compile_time_arg_val(2) != 0;
 
     CircularBuffer cb_consts(CB_CONSTS), cb_mixes(CB_MIXES);
     cb_consts.wait_front(8);  // constants resident for the whole op
@@ -171,18 +181,24 @@ void kernel_main() {
     for (uint32_t t = 0; t < num_token_tiles; ++t) {
         cb_mixes.wait_front(1);  // reused by comb/pre/post; popped at the end
 
-        // ---- comb = Sinkhorn(exp(mixes @ SEL_comb + base_comb)) ----
-        mm(CB_MIXES, SEL_COMB, CB_TMP);
-        add_bias(CB_TMP, BASE_COMB, CB_MA);
-        unary(CB_MA, OP_EXP, 0, CB_MB);                   // m = exp(logits)  -> MB
-        normalize(CB_MB, RB, false, 0, CB_MA);            // row softmax (no eps) -> MA
-        unary(CB_MA, OP_ADD_EPS, eps_bits, CB_MB);        // m = softmax + eps -> MB
-        normalize(CB_MB, CB_COL, true, eps_bits, CB_MA);  // first column norm -> MA
-        for (uint32_t i = 1; i < iters; ++i) {
-            normalize(CB_MA, RB, true, eps_bits, CB_MB);      // row -> MB
-            normalize(CB_MB, CB_COL, true, eps_bits, CB_MA);  // col -> MA
+        if constexpr (sfpu_sinkhorn) {
+            // ---- comb logits = mixes @ SEL_comb + base_comb, token rows, to the reader for the permutation ----
+            mm(CB_MIXES, SEL_COMB, CB_TMP);
+            add_bias(CB_TMP, BASE_COMB, CB_LOG);
+        } else {
+            // ---- comb = Sinkhorn(exp(mixes @ SEL_comb + base_comb)) ----
+            mm(CB_MIXES, SEL_COMB, CB_TMP);
+            add_bias(CB_TMP, BASE_COMB, CB_MA);
+            unary(CB_MA, OP_EXP, 0, CB_MB);                   // m = exp(logits)  -> MB
+            normalize(CB_MB, RB, false, 0, CB_MA);            // row softmax (no eps) -> MA
+            unary(CB_MA, OP_ADD_EPS, eps_bits, CB_MB);        // m = softmax + eps -> MB
+            normalize(CB_MB, CB_COL, true, eps_bits, CB_MA);  // first column norm -> MA
+            for (uint32_t i = 1; i < iters; ++i) {
+                normalize(CB_MA, RB, true, eps_bits, CB_MB);      // row -> MB
+                normalize(CB_MB, CB_COL, true, eps_bits, CB_MA);  // col -> MA
+            }
+            unary(CB_MA, OP_COPY, 0, CB_COMB);  // comb out = m
         }
-        unary(CB_MA, OP_COPY, 0, CB_COMB);  // comb out = m
 
         // ---- pre = sigmoid(mixes @ SEL_pre + base_pre) + eps ----
         mm(CB_MIXES, SEL_PRE, CB_TMP);
@@ -197,5 +213,29 @@ void kernel_main() {
         unary(CB_MB, OP_MUL2, TWO_BITS, CB_POST);
 
         cb_mixes.pop_front(1);
+
+        if constexpr (sfpu_sinkhorn) {
+            // ---- comb = Sinkhorn(exp(min(logits, 80))) lane-wise in dst, on the reader's permuted tile ----
+            CircularBuffer cb_skin(CB_SKIN), cb_skout(CB_SKOUT);
+            cb_skin.wait_front(1);
+            reconfig_data_format_srca(CB_SKIN);
+            copy_tile_to_dst_init_short(CB_SKIN);
+            tile_regs_acquire();
+            copy_tile(CB_SKIN, 0, 0);
+            unary_min_tile_init();
+            unary_min_tile(0, 0x42a00000u);  // min(x, 80.0f), as the matmul form
+            exp_tile_init();
+            exp_tile(0);
+            recip_tile_init();  // vConstFloatPrgm0 = 2.0 for sfpu_reciprocal_iter
+            MATH((_llk_math_eltwise_unary_sfpu_params_(
+                ckernel::sfpu::mhc_sinkhorn_sfpu, 0, VectorMode::None, iters, eps_bits)));
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_skout.reserve_back(1);
+            pack_tile(0, CB_SKOUT);
+            cb_skout.push_back(1);
+            tile_regs_release();
+            cb_skin.pop_front(1);
+        }
     }
 }

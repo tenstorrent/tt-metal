@@ -25,6 +25,9 @@ constexpr uint32_t CB_CONSTS = tt::CBIndex::c_1;  // 8 tiles
 constexpr uint32_t CB_PRE = tt::CBIndex::c_2;
 constexpr uint32_t CB_POST = tt::CBIndex::c_3;
 constexpr uint32_t CB_COMB = tt::CBIndex::c_4;
+constexpr uint32_t CB_LOG = tt::CBIndex::c_5;    // SFPU Sinkhorn: comb logits, token rows (compute -> reader)
+constexpr uint32_t CB_SKIN = tt::CBIndex::c_6;   // SFPU Sinkhorn: the logits in the SFPU layout (reader -> compute)
+constexpr uint32_t CB_SKOUT = tt::CBIndex::c_7;  // SFPU Sinkhorn: the result in the SFPU layout (compute -> reader)
 constexpr uint32_t CB_M = tt::CBIndex::c_16;
 constexpr uint32_t CB_MM = tt::CBIndex::c_17;
 constexpr uint32_t CB_RECIP = tt::CBIndex::c_18;
@@ -59,6 +62,11 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
 
     const tt::DataFormat df = datatype_to_dataformat_converter(tt::tt_metal::DataType::FLOAT32);
     const uint32_t tile_size = tt::tile_size(df);
+    // The Sinkhorn lane-wise on the SFPU (V41_MHC_SINKHORN_SFPU=1): the compute kernel hands the
+    // comb logits to the reader through CB_LOG, the reader permutes them into the SFPU layout
+    // (CB_SKIN), the compute kernel iterates in dst and packs to CB_SKOUT, the reader permutes
+    // the result into CB_COMB. Three one-tile CBs; the matmul-form loop's CBs stay (pre/post).
+    const uint32_t sfpu = operation_attributes.sfpu_sinkhorn ? 1u : 0u;
 
     auto* mixes_buffer = tensor_args.mixes.buffer();
     auto* consts_buffer = tensor_args.consts.buffer();
@@ -95,8 +103,13 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
         add_cb(desc, cores, CB_RECIP, 2, tile_size, df);
         add_cb(desc, cores, CB_PRE_W, 2, tile_size, df);
         add_cb(desc, cores, CB_POST_W, 2, tile_size, df);
+        if (sfpu) {
+            add_cb(desc, cores, CB_LOG, 1, tile_size, df);
+            add_cb(desc, cores, CB_SKIN, 1, tile_size, df);
+            add_cb(desc, cores, CB_SKOUT, 1, tile_size, df);
+        }
 
-        std::vector<uint32_t> reader_ct = {CB_MIXES, CB_CONSTS};
+        std::vector<uint32_t> reader_ct = {CB_MIXES, CB_CONSTS, sfpu};
         TensorAccessorArgs(consts_buffer).append_to(reader_ct);
         KernelDescriptor reader;
         reader.kernel_source = kdir + "dataflow/reader_mhc_split_sinkhorn_sharded.cpp";
@@ -106,7 +119,7 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
         reader.config = ReaderConfigDescriptor{};
 
         std::vector<uint32_t> compute_ct = {
-            operation_attributes.sinkhorn_iters, std::bit_cast<uint32_t>(operation_attributes.eps)};
+            operation_attributes.sinkhorn_iters, std::bit_cast<uint32_t>(operation_attributes.eps), sfpu};
         KernelDescriptor compute;
         compute.kernel_source = kdir + "compute/mhc_split_sinkhorn_compute.cpp";
         compute.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -151,8 +164,13 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
     add_cb(desc, all_cores, CB_RECIP, 2, tile_size, df);
     add_cb(desc, all_cores, CB_PRE_W, 2, tile_size, df);
     add_cb(desc, all_cores, CB_POST_W, 2, tile_size, df);
+    if (sfpu) {
+        add_cb(desc, all_cores, CB_LOG, 1, tile_size, df);
+        add_cb(desc, all_cores, CB_SKIN, 1, tile_size, df);
+        add_cb(desc, all_cores, CB_SKOUT, 1, tile_size, df);
+    }
 
-    std::vector<uint32_t> reader_ct = {CB_MIXES, CB_CONSTS};
+    std::vector<uint32_t> reader_ct = {CB_MIXES, CB_CONSTS, sfpu};
     TensorAccessorArgs(mixes_buffer).append_to(reader_ct);
     TensorAccessorArgs(consts_buffer).append_to(reader_ct);
     KernelDescriptor reader;
@@ -180,6 +198,7 @@ ProgramDescriptor MhcSplitSinkhornProgramFactory::create_descriptor(
     std::vector<uint32_t> compute_ct = {
         operation_attributes.sinkhorn_iters,
         std::bit_cast<uint32_t>(operation_attributes.eps),
+        sfpu,
     };
     KernelDescriptor compute;
     compute.kernel_source =

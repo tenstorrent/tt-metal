@@ -33,20 +33,18 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cbp(cb_pre), cbq(cb_post), cbc(cb_comb);
 
+    // the three writes of a token-tile in flight together, one barrier (each output CB has two slots,
+    // so the compute kernel is never held by a write)
     for (uint32_t t = 0; t < num_token_tiles; ++t) {
         cbp.wait_front(1);
         noc.async_write(cbp, s_pre, pre_page, {}, {.page_id = start_tile + t});
-        noc.async_write_barrier();
-        cbp.pop_front(1);
-
         cbq.wait_front(1);
         noc.async_write(cbq, s_post, post_page, {}, {.page_id = start_tile + t});
-        noc.async_write_barrier();
-        cbq.pop_front(1);
-
         cbc.wait_front(1);
         noc.async_write(cbc, s_comb, comb_page, {}, {.page_id = start_tile + t});
         noc.async_write_barrier();
+        cbp.pop_front(1);
+        cbq.pop_front(1);
         cbc.pop_front(1);
     }
 }
