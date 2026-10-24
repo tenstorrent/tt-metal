@@ -371,6 +371,7 @@ class ttMLA:
                 "wkv_b2",
                 "o_proj",
                 "g_proj",  # Kimi-K3; listed unconditionally, _resolve_mm_cfg indexes with a bare []
+                "qkv_a_proj",  # merged [q_a | kv_a | pad] stem (_merge_qkv_a)
             ]
         }
         self.sdpa_configs = MLA_SDPA_CONFIG
@@ -474,11 +475,14 @@ class ttMLA:
         self._kv_stem_gather_output = None
         self._output_gate_gather_output = None
         # q_a and kv_a as one matmul + one all-reduce over [q_a_proj | kv_a_proj_with_mqa | pad].
+        # GLUE_MERGE_QKV_A=1 (glue track) also opts DSA/indexer models (GLM-5.3) in: the indexer only
+        # reads the normed q_a latent (qr), which the merged path still produces before the indexer runs.
+        _glue_merge = os.environ.get("GLUE_MERGE_QKV_A", "0") == "1"
         self._merge_qkv_a = (
-            bool(getattr(config, "mla_merge_qkv_a", False))
+            (bool(getattr(config, "mla_merge_qkv_a", False)) or _glue_merge)
             and self.tp_factor > 1
             and not self.kv_only
-            and not self._has_indexer
+            and (_glue_merge or not self._has_indexer)
             and not self._use_gate
         )
         if self._merge_qkv_a:
@@ -789,6 +793,7 @@ class ttMLA:
         "wkv_b2": ttnn.bfloat8_b,
         "o_proj": ttnn.bfloat16,
         "g_proj": ttnn.bfloat16,  # Kimi-K3; this dict is a KeyError not a fallback (see _get_mm_kwargs)
+        "qkv_a_proj": ttnn.bfloat16,
     }
 
     # Matmul dimensions for batched matmuls (wkv_b1 / wkv_b2) keyed by weight name.
@@ -1218,11 +1223,11 @@ class ttMLA:
         self, hidden_states: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
     ) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]:
         """Merged _q_a_latent + the kv_a projection: returns (qr, (kv_nope, kv_rope))."""
+        # Tuned config where one exists (GLM-5.3: L1 out, 2D mcast); otherwise the TTNN default to DRAM.
         x = ttnn.linear(
             hidden_states,
             self.qkv_a_proj_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._get_mm_kwargs("qkv_a_proj", seq_len_local),
         )
         x = self._tp_all_reduce(x, self._qkv_a_gather_output, seq_len_local)
         nope_start = self.q_lora_rank
