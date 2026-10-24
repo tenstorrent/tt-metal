@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -119,7 +120,11 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     }
 
     if (!num_links.has_value()) {
-        log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+        // This runs on every op invocation, so warn once per process to keep serving logs readable.
+        static std::once_flag warned;
+        std::call_once(warned, [] {
+            log_warning(tt::LogOp, "Failed to discover available ethernet links; falling back to 1 link");
+        });
         return 1;
     }
     log_debug(tt::LogOp, "num_links: {}", *num_links);

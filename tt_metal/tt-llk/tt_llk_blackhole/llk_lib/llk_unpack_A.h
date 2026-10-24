@@ -381,6 +381,8 @@ inline void _llk_unpack_A_uninit_()
  * @param unpack_dst_format: Destination data format the operand is converted to.
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
  *       @ref _llk_unpack_A_uninit_ after it as the matching teardown (currently a no-op).
+ * @note With unpack_to_dest, a 32-bit input and BType != NONE, this also hands the math thread one SrcB bank
+ *       per tile; only @ref _llk_math_eltwise_unary_datacopy_ with the same BType releases it.
  * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
  */
 template <
@@ -430,6 +432,16 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
 
     // Run MOP
     ckernel::ckernel_template::run();
+
+    if constexpr (unpack_to_dest && (BType != BroadcastType::NONE))
+    {
+        if (is_32bit_input(unpack_src_format, unpack_dst_format))
+        {
+            // The math side broadcasts the tile in DEST through SrcB (MOVD2B/MOVB2D), so hand it a SrcB bank.
+            // SETDVALID from the math thread is unsupported on Blackhole.
+            TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+        }
+    }
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
