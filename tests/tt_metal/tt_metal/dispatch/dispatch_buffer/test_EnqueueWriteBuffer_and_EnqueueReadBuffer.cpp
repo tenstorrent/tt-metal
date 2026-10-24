@@ -1171,7 +1171,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
 
 TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBuffer) {
     const uint32_t page_size = 256;
-    const uint32_t buffer_size = 64 * page_size;
+    const uint32_t buffer_size = 6 * page_size;
     const BufferRegion region(256, 512);
     for (const auto& mesh_device : devices_) {
         CoreCoord start(0, 0);
@@ -1182,7 +1182,7 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadWriteShardedSubBuffer) {
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             ShardOrientation::ROW_MAJOR,
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {8, 8});
+            {1, 6});
 
         distributed::DeviceLocalBufferConfig dram_config{
             .page_size = page_size,

@@ -1243,11 +1243,11 @@ TEST_F(CrossNodeDFBFixture, CreateCrossNodeDFB_BorrowedMismatch_Size) {
     const CoreRangeSet receiver_cores(CoreRange({1, 0}, {1, 0}));
     CoreRangeSet all_cores = CoreRangeSet(CoreRange({0, 0}, {0, 0})).merge(receiver_cores);
 
-    // page_size and grid match, but size is larger than page_size * num_all_cores.
+    // page_size and grid match, but size is smaller than page_size * num_all_cores.
     const uint32_t ring_size = 256 * 4;
     auto bad = BufferImpl::create(
         &device,
-        ring_size * 4,
+        ring_size,
         ring_size,
         BufferType::L1,
         BufferShardingArgs(
