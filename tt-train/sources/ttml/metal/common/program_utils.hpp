@@ -170,4 +170,9 @@ inline void for_each_core(uint32_t num_cores, uint32_t num_cores_y, Fn&& fn) {
     }
 }
 
+// L1 bytes per core left for a program's buffers: the core's L1 below what the allocator reserves.
+inline uint64_t available_l1_bytes(const ttnn::distributed::MeshDevice& device) {
+    return device.l1_size_per_core() - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
+
 }  // namespace ttml::metal
