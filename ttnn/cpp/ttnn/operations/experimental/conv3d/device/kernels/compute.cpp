@@ -37,11 +37,6 @@ void matmul_blocks(
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-    // Restore matmul formats before init validates them; the fp32 tail may have changed them.
-    // Matmul maps input 0 to SrcB and input 1 to SrcA.
-    reconfig_data_format(in1_cb, in0_cb);
-    matmul_block_init(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
@@ -98,7 +93,6 @@ void add_bias_inplace(uint32_t inout_cb, uint32_t bias_cb) {
     CircularBuffer inout_cb_obj(inout_cb);
     CircularBuffer bias_cb_obj(bias_cb);
 
-    add_bcast_rows_init(inout_cb, bias_cb);
     inout_cb_obj.wait_front(num_tiles);
     bias_cb_obj.wait_front(cols);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -126,7 +120,6 @@ void add_block_inplace_math(uint32_t inout_cb, uint32_t add_cb) {
     CircularBuffer inout_cb_obj(inout_cb);
     CircularBuffer add_cb_obj(add_cb);
 
-    add_init(inout_cb, add_cb);
     for (uint32_t i = 0; i < num_tiles; i += add_dst_tiles) {
         const uint32_t tiles_cur = std::min(add_dst_tiles, num_tiles - i);
         tile_regs_acquire();
@@ -173,11 +166,8 @@ void reduce_block_fp32_sfpu(uint32_t local_cb, uint32_t remote_cb, uint32_t acc_
         }
         for (uint32_t i = 0; i < num_tiles; ++i) {
             tile_regs_acquire();
-            copy_init(src_cb);
             copy_tile(src_cb, 0, DST_ACC);
-            copy_init(remote_cb);
             copy_tile(remote_cb, 0, DST_OPERAND);
-            add_binary_tile_init();
             add_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
             tile_regs_commit();
             tile_regs_wait();
@@ -208,11 +198,9 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
-            copy_init(inout_cb);
             copy_tile(inout_cb, 0, DST_ACC);
             unary_bcast_init<BroadcastType::ROW>(bias_cb);
             unary_bcast<BroadcastType::ROW>(bias_cb, j, DST_OPERAND);
-            add_binary_tile_init();
             add_binary_tile(DST_ACC, DST_OPERAND, DST_ACC);
             tile_regs_commit();
             tile_regs_wait();
@@ -259,9 +247,6 @@ void bias_untilize_fullblock_math() {
             reconfig_data_format(inout_cb, bias_cb);
             add_bias_inplace_sfpu<rows, cols>(inout_cb, bias_cb);
         } else {
-            if constexpr (use_fp32_partials) {
-                reconfig_data_format(inout_cb, bias_cb);
-            }
             add_bias_inplace<rows, cols, compute_kernel_lib::DEST_AUTO_LIMIT>(inout_cb, bias_cb);
         }
     }
@@ -285,16 +270,8 @@ void reduce_fullblock_inplace_math(uint32_t num_workers) {
     local_cb_obj.wait_front(num_tiles);
 
     if constexpr (use_fp32_exact) {
-        reconfig_data_format(local_cb, remote_cb);
-        pack_reconfig_data_format(local_cb);
         reduce_block_fp32_sfpu<num_tiles>(local_cb, remote_cb, acc_cb, num_workers);
     } else {
-        if constexpr (use_fp32_partials) {
-            // fp32-FORMAT partial CBs under a non-fp32 output: the FPU adds are fine (the CBs are
-            // not UnpackToDestFp32 here) but unpack/pack must be reconfigured for the wider format.
-            reconfig_data_format(local_cb, remote_cb);
-            pack_reconfig_data_format(local_cb);
-        }
         for (uint32_t i = 0; i < num_workers; i++) {
             remote_cb_obj.wait_front(num_tiles);
             add_block_inplace_math<num_tiles, compute_kernel_lib::DEST_AUTO_LIMIT>(local_cb, remote_cb);
@@ -354,9 +331,7 @@ void kernel_main() {
     constexpr uint32_t subblock_w = get_compile_time_arg_val(25);
 
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(26);
-    // fp32-FORMAT partial CBs (multi-C_in-block with fp32 dest): format reconfigs required around
-    // the interm reads even when the data dtype is bf16.
-    constexpr bool use_fp32_partials = get_compile_time_arg_val(27) == 1;
+    constexpr bool use_fp32_partials [[maybe_unused]] = get_compile_time_arg_val(27) == 1;
     // Stream final single-tile C_out rows through bias/untilize when the writer can overlap the compute tail.
     constexpr bool enable_streaming_output = get_compile_time_arg_val(28) == 1;
     // fp32 running-partial accumulator for the exact reduction; 32 (invalid) when unused.
@@ -379,7 +354,6 @@ void kernel_main() {
     CircularBuffer cb_worker_ack_back_cb(cb_worker_ack_back);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
-    matmul_init(cb_vol2col_tiled, cb_weight_tiled);
     MATH((llk_math_reconfig_remap(true)));
 
     // Load range parameters
@@ -426,10 +400,6 @@ void kernel_main() {
                                         const uint32_t patches_this_row = (patches_left >= tt::constants::TILE_HEIGHT)
                                                                               ? tt::constants::TILE_HEIGHT
                                                                               : patches_left;
-                                        if constexpr (use_fp32_partials || use_fp32_exact) {
-                                            pack_reconfig_data_format(cb_vol2col_tiled);
-                                            reconfig_data_format_srca(cb_vol2col_rm);
-                                        }
                                         compute_kernel_lib::tilize<
                                             matmul_K_t,
                                             cb_vol2col_rm,
@@ -442,10 +412,6 @@ void kernel_main() {
                                             compute_kernel_lib::tilize_config::RemapMode::AssumeConfigured>(
                                             1, patches_this_row);
                                         patches_left -= patches_this_row;
-                                    }
-
-                                    if constexpr (use_fp32_partials || use_fp32_exact) {
-                                        pack_reconfig_data_format(cb_matmul_interm_tiled);
                                     }
 
                                     // Wait for weights — deferred so tilize overlaps with BRISC's DRAM read.
@@ -479,9 +445,6 @@ void kernel_main() {
                                                 add_bias_inplace_sfpu<subblock_h, matmul_N_t>(
                                                     cb_matmul_interm_tiled, cb_bias_tiled);
                                             } else {
-                                                if constexpr (use_fp32_partials) {
-                                                    reconfig_data_format(cb_matmul_interm_tiled, cb_bias_tiled);
-                                                }
                                                 add_bias_inplace<
                                                     subblock_h,
                                                     matmul_N_t,
