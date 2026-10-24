@@ -233,13 +233,22 @@ TT_KERNEL void reader(
                     inputs[count++] = {&buffer, tiles, slot};
                 });
                 if (value_block == 0) {
-                    kda::multicast_shared(noc, inputs, ready, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
+                    // The previous chunk's multicast drained while this chunk's reads were issued.
+                    if (chunk != 0) {
+                        kda::multicast_shared_validate(noc, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
+                    }
+                    kda::multicast_shared_send(noc, inputs, ready, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
                 } else {
                     kda::receive_shared(noc, inputs, ready, valid, peer_x0, peer_y0);
                     noc.async_read_barrier();
                 }
                 // The sender's multicast waited for every read it issued, v_beta's included.
                 v_beta.push_back(Ct * Vt);
+            }
+        }
+        if constexpr (mcast_shared) {
+            if (value_block == 0) {
+                kda::multicast_shared_validate(noc, valid, peer_x0, peer_y0, peer_x1, peer_y1, receivers);
             }
         }
     };

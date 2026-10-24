@@ -79,6 +79,51 @@ FORCE_INLINE void multicast_shared(
     }
 }
 
+// multicast_shared split in two, so a sender streaming a sequence of payloads overlaps one payload's multicast with
+// the next payload's reads: multicast_shared_send waits for this payload's reads and every receiver, issues the data
+// multicast and publishes the sender's own copy; multicast_shared_validate, called once the next payload's reads are
+// issued (or after the last payload), waits for the data to leave and raises VALID. The source slots stay intact
+// until then: the sender only reuses a slot after a later payload's reserve, which follows this validation.
+template <uint32_t N, typename ReadySem, typename DFB>
+FORCE_INLINE void multicast_shared_send(
+    Noc& noc,
+    SharedInput<DFB> (&inputs)[N],
+    ReadySem& ready,
+    uint32_t x0,
+    uint32_t y0,
+    uint32_t x1,
+    uint32_t y1,
+    uint32_t receivers) {
+    noc.async_read_barrier();
+    ready.wait(receivers);
+    ready.set(0);
+    MulticastEndpoint destination;
+    for (uint32_t index = 0; index < N; ++index) {
+        auto& input = inputs[index];
+        // The last write closes the linked chain, so no route stays reserved while the next payload is read.
+        noc.async_write_multicast(
+            CoreLocalMem<uint32_t>(input.slot),
+            destination,
+            input.tiles * input.buffer->get_entry_size(),
+            receivers,
+            {},
+            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = input.slot},
+            /*linked=*/index + 1 < N);
+    }
+    for (auto& input : inputs) {
+        input.buffer->push_back(input.tiles);
+    }
+}
+
+template <typename ValidSem>
+FORCE_INLINE void multicast_shared_validate(
+    Noc& noc, ValidSem& valid, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, uint32_t receivers) {
+    // The flag multicast issues from a different command buffer than the data, so only this flush orders the data
+    // before the flag.
+    noc.async_writes_flushed();
+    valid.set_multicast(noc, x0, y0, x1, y1, receivers);
+}
+
 template <uint32_t N, typename ReadySem, typename ValidSem, typename DFB>
 FORCE_INLINE void receive_shared(
     Noc& noc, SharedInput<DFB> (&inputs)[N], ReadySem& ready, ValidSem& valid, uint32_t sender_x, uint32_t sender_y) {
