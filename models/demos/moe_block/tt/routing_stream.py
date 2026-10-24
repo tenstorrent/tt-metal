@@ -397,13 +397,26 @@ class RoutingStream:
         # planner instances: every router core's BRISC, then NCRISCs while there are experts (an instance needs one)
         # (at most 14: a packet header's words 14 / 15 carry the call's parity and the source (RASend) - words 0 .. M - 1
         # are the slices' counts; 15 or 16 instances (K3 at 1024 rows: 8 router cores) overwrote them - a hang)
-        self.M = min(2 * len(router.cores), EPC, A, 14)
-        M = self.M
-        assert self.N * EPC <= 1024 and S <= 2048 and EPC <= 64 and S % 32 == 0 and 1 <= M <= min(EPC, A, 14)
-        sz = routing_a2a_sizes(N=self.N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M)
-        assert sz["fits"], sz["why"]
         # (worst-case capacity: the plan tensors (DRAM) hold every row a chip can get, an instance's L1 every entry it
-        # can get - packed routing never drops a row)
+        # can get - packed routing never drops a row. An instance's L1 grows as M falls (its share of T): the most
+        # instances whose regions fit the router cores - one a core under the router's overlay or past its buffers,
+        # or two (the NCRISCs too) - K3 at 1024 rows on the 8x4: 8 of 14, its worst case did not fit twice a core)
+        al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+        base, abytes, off0 = arena
+        nc = len(router.cores)
+        assert self.N * EPC <= 1024 and S <= 2048 and EPC <= 64 and S % 32 == 0
+        for M in range(min(2 * nc, EPC, A, 14), 0, -1):
+            sz = routing_a2a_sizes(N=self.N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M)
+            step, per = al(sz["plan_l1"]), -(-M // nc)
+            pl0 = 0 if per * step <= router.off["bias"] else al(router.bytes)
+            if sz["fits"] and pl0 + per * step <= abytes:
+                break
+        assert sz["fits"], sz["why"]
+        assert pl0 + per * step <= abytes, (
+            f"router cores: no room for the planner regions ({step} B each, {per} a core past {pl0} B; the arena "
+            f"{abytes} B)"
+        )
+        self.M = M
         assert rows_cap >= worst_rows(self.N, S, K, EPC), f"rows_cap {rows_cap} < {worst_rows(self.N, S, K, EPC)}"
         self.inst_cap = sz["inst_cap"]
         self.plan_l1 = sz["plan_l1"]
@@ -430,18 +443,11 @@ class RoutingStream:
         cfg = ttnn.get_fabric_config()
         if cfg in (ttnn.FabricConfig.FABRIC_2D_TORUS_XY, ttnn.FabricConfig.FABRIC_2D_TORUS_Y) and R > 2:
             self.wrap_y = True
-        base, abytes, off0 = arena
         # the planner instances' regions overlay the router's matmul / partial / zone buffers (dead once its top-K ran:
-        # the planner starts after the joint rows)
-        al = lambda v: (v + 63) // 64 * 64  # noqa: E731
-        self.pl_step = al(self.plan_l1)
-        # (where two don't fit under the bias - K3 E 896 at 1280 rows on a 4x4 - they go past the router's buffers, in
-        # the rest of the arena's range on the router cores: nothing else there)
-        pl0 = 0 if 2 * self.pl_step <= router.off["bias"] else al(router.bytes)
-        assert (
-            pl0 + 2 * self.pl_step <= abytes
-        ), f"router cores: no room for two planner regions ({self.pl_step} B each past {pl0} B; the arena {abytes} B)"
-        self.pbases = [router.base + pl0 + (q // len(router.cores)) * self.pl_step for q in range(M)]
+        # the planner starts after the joint rows), or (where they don't fit under the bias - K3 E 896 at 1280 rows on a
+        # 4x4) go past the router's buffers, in the rest of the arena's range on the router cores: nothing else there
+        self.pl_step = step
+        self.pbases = [router.base + pl0 + (q // nc) * self.pl_step for q in range(M)]
         self.pbase = self.pbases[0]
         # the senders' packet buffers (the arena's range on their cores): the gather's ports after their logits buffer,
         # each Y sender on the watcher core from the arena's start (the second Y direction after the first); the

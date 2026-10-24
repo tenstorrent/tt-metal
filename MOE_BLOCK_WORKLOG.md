@@ -1643,3 +1643,29 @@ Structural (not fixed here):
   alone. The last K3 1024 first fell back to the ops head: words the earlier blocks' ops left mid-L1 split the free L1,
   the arena cap's probe landed above them and the arena below (into the movers' CBs). The free-L1 estimate is now also
   capped by the largest free block - fused again. K3 switching chunks (128 - 2048): clean.
+
+### Overflow policy (b): worst-case capacity in both planners (user decision)
+- Plan tensors (token_index, table; DRAM) at every row a chip can get: worst_rows = N S min(K, EPC) + 32 EPC (the fused
+  head's default was 2 S K + 32 EPC - twice the average: zipf packed overflowed it, the dropped rows left zero table
+  entries the combine waited on forever).
+- Fused head (routing_a2a's planner, run by RoutingStream): an instance now reads only its experts' runs of each
+  source's packet (per slice: [base + pre[e0], base + pre[e1]) - a slice is sorted by expert; each read keeps its
+  source's 64 B alignment, run pointers in L1), after the headers' totals set its expert range. Its L1 holds its
+  entries / rows only: inst_cap = ceil(N S min(K, EPC) / M) + N S (an instance's share of T plus one expert's - the
+  boundaries are the expert edges nearest j T / M; an expert takes a token once), rows + 32 EPC. plan_l1 from those;
+  build-time asserts (rows_cap >= worst_rows). Guards stay for a broken bound (drop + P_OVER, never an L1 overrun).
+- Ops head (combine_plan's multi-core planner): rows_cap was already the worst case; each core's token_index / table
+  L1 is now its share (rows_cap / 32 / M tiles) instead of all of rows_cap (12 B a row x the worst case did not fit
+  Galaxy's planner cores).
+- test_planner_caps.py: host model of both planners' splits over uniform / packed / hot-first / hot-last / alternate
+  routings at LoudBox and Galaxy shapes - no instance past its cap; the old cap shown short of packed (not vacuous).
+  zz_scratch_plan_k: the ops planner bit-exact at packed routing (K 4 / 6 / 8).
+- Device, 2x4, fused head, 640 rows: K3 zipf packed PCC .9961 (experts 3779 us - the hot chip), ties .9961; GLM-5.3-
+  Flash .9871 / .9880; uniform unchanged (head 640.6 us = before: the planner's time did not move).
+- Ring of 4: K3 zipf packed / ties .9961; GLM-5.3-Flash .9870 / .9879. 2x4 regression at K3 / GLM-5.3 128 - 2048 rows:
+  unchanged PCC, heads unchanged (K3 768 / 1024 / 1280: 903 / 1080 / 1910 us). Soak K3 640 zipf packed: 10k replays
+  clean, PCC .9961 (experts 3.8 ms: the hot chip).
+- Galaxy mock: at worst-case capacity two planner regions a router core no longer fit at K3 1024 / 1280 and
+  GLM-5.3-Flash 1024 / 1280 on the 8x4 (428 / 506 KB an instance) - the block fell back to the ops head. RoutingStream
+  now takes the most instances (M) whose regions fit: one a core (BRISC only) where two don't - those four fused again.
+  The planner is slower at the lower M (not measurable here: Galaxy).
