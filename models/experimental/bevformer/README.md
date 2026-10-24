@@ -42,10 +42,10 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/
 ```
 - `BEVFORMER_VARIANT=tiny|small|base` (default `base`) selects upstream's configuration, read once
   when `model_config.py` is first imported. The backbone and FPN tests (`test_resnet.py`,
-  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py`
-  and `tests/perf/test_bevformer_perf.py` run the selected variant; `test_perception_transformer.py`
-  and the perf harness keep fixed BEV grids, and the other tests' `*_base` and `*_tiny` presets are
-  fixed sizes.
+  `test_fpn.py`, `test_backbone_fpn.py`), `test_perception_transformer.py`, `test_bevformer.py` and
+  the backbone and detector harnesses in `tests/perf/` run the selected variant;
+  `test_perception_transformer.py` keeps fixed BEV grids, and the other tests' `*_base` and `*_tiny`
+  presets are fixed sizes.
 - `test_resnet.py`: the backbone's bottlenecks and layers against the reference.
 - `test_fpn.py`: the FPN neck on random backbone outputs in the dtypes the backbone emits.
 - `test_backbone_fpn.py`: camera images through the backbone and the FPN end to end.
