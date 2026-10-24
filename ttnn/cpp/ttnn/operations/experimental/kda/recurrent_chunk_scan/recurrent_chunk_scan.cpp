@@ -96,7 +96,7 @@ std::vector<ttnn::Tensor> recurrent_chunk_scan(
         actual_end);
 }
 
-std::vector<ttnn::Tensor> summarize_chunk_recurrence(
+ttnn::Tensor summarize_chunk_recurrence(
     const ttnn::Tensor& v_beta,
     const ttnn::Tensor& kd,
     const ttnn::Tensor& q_decay,
@@ -110,10 +110,12 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end,
-    bool packed_head) {
+    bool tail,
+    bool init) {
     constexpr std::string_view operation_name = "summarize_chunk_recurrence";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
+    // The summary has exactly one output: the packed [S, N, K, K+V] transforms.
     return ttnn::experimental::prim::recurrent_chunk_scan(
         v_beta,
         kd,
@@ -132,7 +134,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
         actual_start,
         sequence_parallel_axis,
         actual_end,
-        packed_head);
+        tail,
+        init)[0];
 }
 
 }  // namespace ttnn::experimental::kda
