@@ -259,7 +259,10 @@ class Attention(Module):
             return ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
 
     def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
-        if per_device_seq_len not in self.ring_sdpa_program_config:
+        # keyed by the length AND the worker grid: the grid is per length since 2026-10-21, and a config cached under
+        # another grid must not be reused
+        cache_key = (per_device_seq_len, tuple(self.ring_sdpa_worker_grid))
+        if cache_key not in self.ring_sdpa_program_config:
             device_parallel_key = (
                 is_blackhole(),
                 self.parallel_config.sequence_parallel.factor,
@@ -274,13 +277,15 @@ class Attention(Module):
                 )
                 ring_chunk_size = ring_chunk_size[-1]
 
-            self.ring_sdpa_program_config[per_device_seq_len] = ttnn.SDPAProgramConfig(
+            self.ring_sdpa_program_config[cache_key] = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
                 q_chunk_size=ring_chunk_size[0],
                 k_chunk_size=ring_chunk_size[1],
-                exp_approx_mode=False,  # NOTE: False is more correct
+                # False (the precise SFPU exp) is the default for every model; a model may opt into the approximate
+                # exp per instance (``ring_sdpa_exp_approx``; FLUX.2 Klein does: 2.6x faster at 4K, measured).
+                exp_approx_mode=bool(getattr(self, "ring_sdpa_exp_approx", False)),
             )
-        return self.ring_sdpa_program_config[per_device_seq_len]
+        return self.ring_sdpa_program_config[cache_key]
 
     def get_ring_sdpa_core_grid(self, resolved_seq_len: int) -> ttnn.CoreCoord:
         full_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -609,8 +614,11 @@ class Attention(Module):
                 persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
 
-        if self.ring_sdpa_worker_grid is None:
-            self.ring_sdpa_worker_grid = self.get_ring_sdpa_core_grid(sequence_1_length)
+        # The worker grid follows the sequence length (the 1K entries leave five rows free, 2K and 4K keep all but
+        # one). It used to be pinned by the FIRST forward, so a process that rendered 1024x1024 first ran every later
+        # canvas on the 1K grid: Klein 4096x4096 step 2.07 s that way vs 1.88 s on its own grid, 2048x2048 0.197 vs
+        # 0.180 s (2026-10-21, 4x8 Galaxy). A captured trace keeps the grid of its own length either way.
+        self.ring_sdpa_worker_grid = self.get_ring_sdpa_core_grid(sequence_1_length)
 
         if self.parallel_config.sequence_parallel.factor > 1:
             spatial, sequence_2, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(

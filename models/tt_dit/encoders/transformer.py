@@ -76,6 +76,12 @@ class TransformerEncoderConfig:
     final_norm: bool = True
     final_linear: bool = True
     attn_qkv_dtype: ttnn.DataType = LINEAR_DTYPE
+    linear_dtype: ttnn.DataType = (
+        LINEAR_DTYPE  # o_proj, feed-forward and final linear weights (bf16 for an exact profile)
+    )
+    # Matmul fidelity of every linear (qkv / o_proj / feed-forward / final linear): None keeps the layers' per-dtype
+    # default (HiFi2 for bf16 and bfp8 weights, fp32 accumulation); an exact profile raises it to HiFi4.
+    linear_math_fidelity: ttnn.MathFidelity | None = None
 
 
 class TransformerEncoder(Module):
@@ -140,6 +146,18 @@ class TransformerEncoder(Module):
 
         self.pos_embedding = RotaryEmbedding(head_size=config.head_size, config=config.rope_config)
 
+        linear_compute_kernel_config = (
+            None
+            if config.linear_math_fidelity is None
+            else ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=config.linear_math_fidelity,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+        )
+
         self.token_embedding = Embedding(config.vocab_size, config.embed_size, device=ctx.device, mesh_axis=ctx.tp_axis)
         self.layers = ModuleList(
             TransformerEncoderLayer(
@@ -153,6 +171,8 @@ class TransformerEncoder(Module):
                 attn_out_bias=config.attn_out_bias,
                 attn_qk_norm=config.attn_qk_norm,
                 attn_qkv_dtype=config.attn_qkv_dtype,
+                linear_dtype=config.linear_dtype,
+                linear_compute_kernel_config=linear_compute_kernel_config,
                 cache_id=i,
                 ctx=ctx,
             )
@@ -171,7 +191,8 @@ class TransformerEncoder(Module):
                 bias=False,
                 mesh_device=ctx.device,
                 mesh_axis=ctx.tp_axis,
-                dtype=LINEAR_DTYPE,
+                dtype=config.linear_dtype,
+                compute_kernel_config=linear_compute_kernel_config,
             )
             if config.final_linear
             else None
@@ -197,6 +218,7 @@ class TransformerEncoder(Module):
         tokens: ttnn.Tensor,
         *,
         mask: ttnn.Tensor | None = None,
+        attn_bias: ttnn.Tensor | None = None,
         positions: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
         vision_embeds: ttnn.Tensor | None = None,
@@ -211,6 +233,10 @@ class TransformerEncoder(Module):
         Args:
             tokens: Token ids of shape (batch, sequence).
             mask: Attention mask of shape (batch, sequence), 1 where a token may be attended to.
+            attn_bias: The additive attention bias in place of `mask`, for a caller that keeps it on
+                the device across calls (see `attention_bias`): shape (1 or batch, 1, padded
+                sequence, padded sequence x SP) in the embedding dtype, 0 where a query may attend
+                to a key and MASK_VALUE elsewhere, already padded to the tile size. It is not freed.
             positions: float32 rope positions of shape (batch, sequence), or (axes, batch,
                 sequence) with one row per multimodal rope axis.
             pos_embeds: The cos and sin of the rope for every token, in place of `positions`.
@@ -261,10 +287,14 @@ class TransformerEncoder(Module):
 
         device = tokens.device()
 
+        if attn_bias is not None and mask is not None:
+            msg = "mask and attn_bias are mutually exclusive"
+            raise ValueError(msg)
+
         # There should be no need for a mask when SP is off, but
         # `ttnn.transformer.scaled_dot_product_attention` produces incorrect results when the
         # sequence length is not a multiple of the tile size.
-        if mask is None and (seq_len % 32 != 0 or self._sp_axis is not None):
+        if mask is None and attn_bias is None and (seq_len % 32 != 0 or self._sp_axis is not None):
             mask = ttnn.ones(
                 [batch_size, seq_len * self._sp_factor],
                 dtype=ttnn.bfloat16,
@@ -276,10 +306,11 @@ class TransformerEncoder(Module):
 
         # padding is only required by `ttnn.transformer.scaled_dot_product_attention` when
         # using an attention mask
-        padded_seq_len = seq_len if mask is None else _padded_sequence_length(seq_len)
+        padded_seq_len = seq_len if mask is None and attn_bias is None else _padded_sequence_length(seq_len)
 
-        tokens = ttnn.pad(tokens, [(0, padded_seq_len - seq_len)], value=0)
-        pos_embeds = tuple(ttnn.pad(x, [(0, padded_seq_len - seq_len), (0, 0)], value=0) for x in pos_embeds)
+        if padded_seq_len != seq_len:
+            tokens = ttnn.pad(tokens, [(0, padded_seq_len - seq_len)], value=0)
+            pos_embeds = tuple(ttnn.pad(x, [(0, padded_seq_len - seq_len), (0, 0)], value=0) for x in pos_embeds)
 
         if mask is not None:
             assert mask.shape == (batch_size, seq_len * self._sp_factor)
@@ -294,8 +325,12 @@ class TransformerEncoder(Module):
 
             bias_padding = padded_seq_len - seq_len
             attn_bias = ttnn.pad(attn_bias, [(0, bias_padding), (0, bias_padding)], value=MASK_VALUE)
-        else:
-            attn_bias = None
+        elif attn_bias is not None:
+            kv_len = padded_seq_len * self._sp_factor
+            expected_shapes = ((1, 1, padded_seq_len, kv_len), (batch_size, 1, padded_seq_len, kv_len))
+            if tuple(attn_bias.shape) not in expected_shapes:
+                msg = f"attn_bias must have shape {expected_shapes[0]} or {expected_shapes[1]}, got {tuple(attn_bias.shape)}"
+                raise ValueError(msg)
 
         del mask
 
@@ -831,6 +866,8 @@ class TransformerEncoderLayer(Module):
         attn_out_bias: bool,
         attn_qk_norm: bool,
         attn_qkv_dtype: ttnn.DataType,
+        linear_dtype: ttnn.DataType = LINEAR_DTYPE,
+        linear_compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
         cache_id: Hashable,
         ctx: TransformerContext,
     ) -> None:
@@ -845,11 +882,19 @@ class TransformerEncoderLayer(Module):
             out_bias=attn_out_bias,
             qk_norm=attn_qk_norm,
             qkv_dtype=attn_qkv_dtype,
+            out_dtype=linear_dtype,
+            compute_kernel_config=linear_compute_kernel_config,
             norm_eps=norm_eps,
             cache_id=cache_id,
             ctx=ctx,
         )
-        self.ff = FeedForward(embed_size=embed_size, hidden_size=ff_size, ctx=ctx)
+        self.ff = FeedForward(
+            embed_size=embed_size,
+            hidden_size=ff_size,
+            ctx=ctx,
+            dtype=linear_dtype,
+            compute_kernel_config=linear_compute_kernel_config,
+        )
         self.attn_norm = TransformerRmsNorm(embed_size, eps=norm_eps, ctx=ctx)
         self.ff_norm = TransformerRmsNorm(embed_size, eps=norm_eps, ctx=ctx)
 
@@ -893,6 +938,8 @@ class Attention(Module):
         out_bias: bool,
         qk_norm: bool,
         qkv_dtype: ttnn.DataType,
+        out_dtype: ttnn.DataType = LINEAR_DTYPE,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
         norm_eps: float,
         cache_id: Hashable,
         ctx: TransformerContext,
@@ -919,6 +966,7 @@ class Attention(Module):
             fsdp_mesh_axis=ctx.fsdp_axis,
             ccl_manager=ctx.ccl_manager,
             dtype=qkv_dtype,
+            compute_kernel_config=compute_kernel_config,
         )
         self.o_proj = ColParallelLinear(
             padded_heads * head_size,
@@ -928,7 +976,8 @@ class Attention(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_axis,
             ccl_manager=ctx.ccl_manager,
-            dtype=LINEAR_DTYPE,
+            dtype=out_dtype,
+            compute_kernel_config=compute_kernel_config,
         )
 
         self._hifi_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -1218,7 +1267,14 @@ class Attention(Module):
 
 
 class FeedForward(Module):
-    def __init__(self, embed_size: int, hidden_size: int, ctx: TransformerContext) -> None:
+    def __init__(
+        self,
+        embed_size: int,
+        hidden_size: int,
+        ctx: TransformerContext,
+        dtype: ttnn.DataType = LINEAR_DTYPE,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    ) -> None:
         super().__init__()
 
         if ctx.tp_axis is not None:
@@ -1233,7 +1289,8 @@ class FeedForward(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_axis,
             ccl_manager=ctx.ccl_manager,
-            dtype=LINEAR_DTYPE,
+            dtype=dtype,
+            compute_kernel_config=compute_kernel_config,
         )
         self.linear_in = ColParallelLinear(
             embed_size,
@@ -1243,7 +1300,8 @@ class FeedForward(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_axis,
             ccl_manager=ctx.ccl_manager,
-            dtype=LINEAR_DTYPE,
+            dtype=dtype,
+            compute_kernel_config=compute_kernel_config,
         )
         self.linear_out = RowParallelLinear(
             hidden_size,
@@ -1253,7 +1311,8 @@ class FeedForward(Module):
             mesh_axis=ctx.tp_axis,
             fsdp_mesh_axis=ctx.fsdp_axis,
             ccl_manager=ctx.ccl_manager,
-            dtype=LINEAR_DTYPE,
+            dtype=dtype,
+            compute_kernel_config=compute_kernel_config,
         )
 
         self._act_fn = ttnn.silu
@@ -1627,6 +1686,22 @@ class StateConversion:
             warnings.warn(f"unprocessed keys remain: {', '.join(in_.keys())}", stacklevel=2)
 
         return {**in_, **out}
+
+
+def attention_bias(mask: torch.Tensor, *, dtype: torch.dtype = torch.bfloat16) -> torch.Tensor:
+    """The additive attention bias `TransformerEncoder.forward` builds on the device from a padding
+    `mask` of shape (batch, sequence), computed on the host: shape (batch, 1, padded, padded) with 0
+    where key j <= query i and `mask[b, j]` is set, MASK_VALUE elsewhere, the padding rows and
+    columns up to the tile size included. A caller that keeps it on the device across calls passes
+    it as `attn_bias` in place of `mask`. Sequence parallelism is not covered: there each device
+    holds its own query rows.
+    """
+    batch_size, seq_len = mask.shape
+    padded = _padded_sequence_length(seq_len)
+    keep = torch.zeros([batch_size, 1, padded, padded], dtype=torch.bool)
+    causal = torch.ones([seq_len, seq_len], dtype=torch.bool).tril()
+    keep[:, 0, :seq_len, :seq_len] = causal & mask.bool()[:, None, :]
+    return torch.where(keep, 0.0, MASK_VALUE).to(dtype)
 
 
 def _padded_sequence_length(sequence_length: int) -> int:

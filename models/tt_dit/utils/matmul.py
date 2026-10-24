@@ -802,6 +802,93 @@ def _ring_safe_k_block(config, M, K, N, cluster_size):
 
 _logged_agmm_v3_signatures = set()
 
+# Blackhole worker L1 is 1572864 B. The minimal_matmul program factory allocates its circular buffers
+# statically on every core (see agmm_cb_bytes); what is left must hold the all-gather's own
+# buffers and the kernels, so a blocking is only accepted below this budget. The largest blocking
+# proven on device is the Klein 4K SP4xTP8 fused-SwiGLU (16, 6, 8) at 1392640 B; the first one
+# proven to throw is the SP8xTP4 (16, 8, 8) QKV at 1851392 B.
+AGMM_CB_BUDGET_BYTES = 1_400_000
+_logged_l1_shrink_signatures = set()
+
+
+def agmm_cb_bytes(m_blk, k_blk, n_blk, fuse_swiglu=False, use_addcmul=False, use_bias=True, fp32_dest=True):
+    """Bytes of circular buffers one core of ``minimal_matmul`` allocates for a blocking (bf16 operands).
+
+    Mirrors minimal_matmul_program_factory.cpp: in0 and in1 double-buffered, the output double-buffered
+    (half a block under fused SwiGLU, which writes one tile per gate/up pair), the intermediate a single
+    block in the DST format (fp32 under fp32 accumulation), one row of bias tiles, and under fused
+    addcmul one more output block plus a row. ``agmm_rules.estimate_l1_kb`` is the same sum rounded up
+    for the rules' pre-filter; this is the exact count, used to refuse a blocking the factory would
+    throw on ("Statically allocated circular buffers ... beyond max L1 size").
+    """
+    t16 = 2048
+    t_dst = 4096 if fp32_dest else 2048
+    out_tiles = (m_blk * n_blk) // 2 if fuse_swiglu else m_blk * n_blk
+    total = 2 * m_blk * k_blk * t16 + 2 * k_blk * n_blk * t16 + 2 * out_tiles * t16 + m_blk * n_blk * t_dst
+    if use_bias:
+        total += n_blk * t16
+    if use_addcmul:
+        total += m_blk * n_blk * t16 + n_blk * t16
+    return total
+
+
+def _balanced_blocks(per_core_tiles, start, even_only=False):
+    """Block sizes <= ``start`` that split ``per_core_tiles`` into equal parts, largest first."""
+    out = []
+    for parts in range(1, per_core_tiles + 1):
+        blk = math.ceil(per_core_tiles / parts)
+        if blk > start or blk < 1:
+            continue
+        if even_only and blk % 2 and blk > 1:
+            blk += 1
+            if blk > start:
+                continue
+        if blk not in out:
+            out.append(blk)
+    return out or [1]
+
+
+def _fit_blocking_to_l1(config, M, N, m_cores, n_cores, fuse_swiglu, use_addcmul, budget=AGMM_CB_BUDGET_BYTES):
+    """Shrink a heuristic blocking until its circular buffers fit L1; same grid, same orientation.
+
+    The heuristic in ``_compute_heuristic_blocking`` picks M and N blocks from the per-core tile counts
+    with no L1 check, and at a tall M on a wide per-device N (the Klein DiT under SP8xTP4: 8192 x 3072
+    x 4608 packed SwiGLU) it hands the op a blocking the factory throws on. Rather than let the model
+    fail at trace capture, keep the op's grid and K block and take the M block down through the
+    balanced splits of the per-core M tiles (then the N block likewise) to the first that fits. The
+    subblock is kept where it still divides the blocks. A blocking that already fits is returned
+    unchanged, so every swept or proven configuration keeps its bytes.
+    """
+    m_blk, k_blk, n_blk = config.M_block_size, config.K_block_size, config.N_block_size
+    sub_h, sub_w = config.subblock_h, config.subblock_w
+    if agmm_cb_bytes(m_blk, k_blk, n_blk, fuse_swiglu, use_addcmul) <= budget:
+        return config
+    per_core_m = max(1, math.ceil(math.ceil(M / 32) / max(m_cores, 1)))
+    per_core_n = max(1, math.ceil(math.ceil(N / 32) / max(n_cores, 1)))
+    found = None
+    for n_try in [n_blk] + _balanced_blocks(per_core_n, n_blk, even_only=fuse_swiglu)[1:]:
+        for m_try in _balanced_blocks(per_core_m, m_blk):
+            if agmm_cb_bytes(m_try, k_blk, n_try, fuse_swiglu, use_addcmul) <= budget:
+                found = (m_try, n_try)
+                break
+        if found:
+            break
+    if found is None:
+        return config  # nothing fits: let the op raise its own error with the original numbers
+    m_blk, n_blk = found
+    if m_blk % sub_h:
+        sub_h = 1
+    if n_blk % sub_w:
+        sub_w = max(d for d in range(1, sub_w + 1) if n_blk % d == 0)
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=m_blk,
+        K_block_size=k_blk,
+        N_block_size=n_blk,
+        subblock_h=sub_h,
+        subblock_w=sub_w,
+        compute_with_storage_grid_size=config.compute_with_storage_grid_size,
+    )
+
 
 def get_agmm_config(
     M,
@@ -852,6 +939,28 @@ def get_agmm_config(
     table_hit = (M, K, N) in _legacy_table or _same_m_per_core_match(_legacy_table, M, K, N, m_cores) is not None
     if core_grid is not None or default_block_size is not None or use_heuristic or table_hit:
         config = get_matmul_config(M, K, N, legacy_grid, default_block_size, use_heuristic)
+        # A heuristic (or generic) blocking on this branch was derived from the global K and can pick a
+        # K_block the ring op rejects (K_tiles_per_device % K_block != 0); snap it like the fallback below
+        # does. Swept table hits and a caller-supplied default_block_size are left bit-identical.
+        if default_block_size is None and not table_hit:
+            config = _ring_safe_k_block(config, M, K, N, cluster_size)
+            # The heuristic has no L1 check; refuse a blocking the program factory would throw on.
+            n_cores = legacy_grid.y if transpose_core_grid else legacy_grid.x
+            fitted = _fit_blocking_to_l1(config, M, N, m_cores, n_cores, fuse_swiglu, use_addcmul)
+            if fitted is not config:
+                signature = (M, K, N, legacy_grid.x, legacy_grid.y)
+                if signature not in _logged_l1_shrink_signatures:
+                    log_warning(
+                        f"Heuristic blocking {config.M_block_size}x{config.K_block_size}x{config.N_block_size} for "
+                        f"(M, K, N) = ({M}, {K}, {N}) on {legacy_grid.x}x{legacy_grid.y} needs "
+                        f"{agmm_cb_bytes(config.M_block_size, config.K_block_size, config.N_block_size, fuse_swiglu, use_addcmul)} B "
+                        f"of circular buffers (budget {AGMM_CB_BUDGET_BYTES}); using "
+                        f"{fitted.M_block_size}x{fitted.K_block_size}x{fitted.N_block_size} "
+                        f"sub({fitted.subblock_h}, {fitted.subblock_w}). Sweep the shape with sweep_mm_block_sizes.py "
+                        f"and add a table entry to replace this."
+                    )
+                    _logged_l1_shrink_signatures.add(signature)
+                config = fitted
         return legacy_grid, config, legacy_workers
 
     v3 = None

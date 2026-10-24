@@ -457,6 +457,16 @@ class VaeAttention(Module):
         }
     )
     default_sdpa_chunk_size: tuple[int, int] = (128, 128)
+    # Attend for the LOCAL query rows only. Under spatial (H/W) and channel (TP) parallelism every chip holds the
+    # full-spatial K and V after the gathers above the SDPA, and used to run the whole [HW x HW] attention
+    # replicated, then partition the result back (1.45 s of a 3.1 s decode at 4096x4096 on a 4x8 Galaxy, per-op
+    # profile 2026-10-21). Each query row's softmax and P@V depend on that row and the full K/V only, so a chip
+    # can compute just the rows it keeps: its spatial shard, split again across the TP group, with the TP group's
+    # rows all-gathered before ``to_out`` (which needs them replicated). Bit-identical to the replicated path
+    # (same K/V, same k chunking, per-row math; test_decode_local_query_attention_bit_identical: max |d| 0 at
+    # 1024x1024, 1344x768 and 2048x2048 on the TP4 x H8 decoder, 2026-10-21); 32x less attention work on a 4x8 mesh
+    # (2048x2048 decode 0.39 -> 0.31 s). Set False for the replicated path.
+    local_queries: bool = True
 
     def __init__(
         self,
@@ -587,8 +597,22 @@ class VaeAttention(Module):
 
         n, h, w, c = q.shape  # h, w are full-spatial after AG
 
+        # Keep only this chip's query rows (see ``local_queries``): the spatial shard, then a slice of it per TP
+        # rank. Rows are attention-order independent (one head, no mask, full K/V), so any subset is valid.
+        q, local_rows, tp_rows_split = self._local_query_rows(q)
+        program_config = self._sdpa_program_config
+        if local_rows != h * w and local_rows % program_config.q_chunk_size != 0:
+            # a q chunk that divides the local row count (performance only; the per-row math is unchanged)
+            q_chunk = max(d for d in range(32, program_config.q_chunk_size + 1, 32) if local_rows % d == 0)
+            program_config = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=program_config.compute_with_storage_grid_size,
+                q_chunk_size=q_chunk,
+                k_chunk_size=program_config.k_chunk_size,
+                exp_approx_mode=program_config.exp_approx_mode,
+            )
+
         # convert to 1d sequence and insert head dimension; there is only one head
-        q = q.reshape([n, 1, h * w, c])
+        q = q.reshape([n, 1, local_rows, c])
         k = k.reshape([n, 1, h * w, c])
         v = v.reshape([n, 1, h * w, c])
 
@@ -597,9 +621,22 @@ class VaeAttention(Module):
             k,
             v,
             is_causal=False,
-            program_config=self._sdpa_program_config,
+            program_config=program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
         )
+
+        if local_rows != h * w:
+            # back to the local 2-D block; the TP group's row slices are re-gathered so to_out sees every row
+            h_local = h // max(self._ctx.h_factor, 1)
+            w_local = w // max(self._ctx.w_factor, 1)
+            if tp_rows_split:
+                x = x.reshape([n, h_local // self._tp_factor, w_local, c])
+                x = self._ccl_manager.all_gather(x, dim=1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            else:
+                x = x.reshape([n, h_local, w_local, c])
+            x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
+            x = x.reshape([n, h_local, w_local, -1])
+            return x + identity
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)
 
@@ -610,6 +647,44 @@ class VaeAttention(Module):
         x = _partition_hw(self._ctx, x)
 
         return x + identity
+
+    def _local_query_rows(self, q: ttnn.Tensor) -> tuple[ttnn.Tensor, int, bool]:
+        """``q`` [N, H, W, C] full-spatial -> (this chip's rows [N, H', W', C], H' * W', split over TP?).
+
+        The spatial shard follows ``_partition_hw``; the TP slice takes ``H' / tp`` rows per rank when that divides
+        and the slice stays tile-aligned, else the TP group keeps the whole shard (replicated SDPA within the group).
+        Returns ``q`` untouched when nothing is to split.
+        """
+        ctx = self._ctx
+        n, h, w, c = q.shape
+        spatial = ctx.h_factor > 1 or ctx.w_factor > 1
+        if not self.local_queries or not (spatial or self._tp_factor > 1):
+            return q, h * w, False
+        h_local = h // max(ctx.h_factor, 1)
+        w_local = w // max(ctx.w_factor, 1)
+        tp_split = (
+            self._tp_factor > 1
+            and self._tp_axis is not None
+            and h_local % self._tp_factor == 0
+            and ((h_local // self._tp_factor) * w_local) % 32 == 0
+        )
+        if not spatial and not tp_split:
+            return q, h * w, False
+        if (h_local * w_local) % 32 != 0 and not tp_split:
+            return q, h * w, False
+        original_layout = q.layout
+        if q.layout != ttnn.ROW_MAJOR_LAYOUT:
+            q = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+        if ctx.h_factor > 1:
+            q = ttnn.mesh_partition(q, dim=1, cluster_axis=ctx.h_mesh_axis, memory_config=q.memory_config())
+        if ctx.w_factor > 1:
+            q = ttnn.mesh_partition(q, dim=2, cluster_axis=ctx.w_mesh_axis, memory_config=q.memory_config())
+        if tp_split:
+            q = ttnn.mesh_partition(q, dim=1, cluster_axis=self._tp_axis, memory_config=q.memory_config())
+            h_local //= self._tp_factor
+        if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+            q = ttnn.to_layout(q, original_layout)
+        return q, h_local * w_local, tp_split
 
 
 class VaeMidBlock(Module):
