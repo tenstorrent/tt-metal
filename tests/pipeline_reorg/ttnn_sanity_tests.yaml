@@ -302,11 +302,18 @@
   owner_id: U0BCCPS862F # Milan Alimpic
 
 - name: "core ttnn unit test group"
-  # The allocator suites run as their own pytest process: TT_METAL_ALLOCATOR_MODE_HYBRID is read
-  # once when MetalContext is first constructed, so it must be set before this process opens a
-  # device. Exporting it here rather than relying on the directory conftest's fixture also makes
-  # the requirement visible, and satisfies the requires_hybrid_allocator marker on those tests.
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode" && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/per_core_allocation -xv && TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 tests/ttnn/unit_tests/range_lockstep_allocation -xv'
+  # The allocator suites need HYBRID mode. TT_METAL_ALLOCATOR_MODE_HYBRID is read
+  # once when MetalContext is first constructed, so exporting it here satisfies the
+  # requires_hybrid_allocator marker and ensures it is set before device open.
+  # Merged into a single pytest invocation to eliminate && chaining (fixes #44788).
+  cmd: |
+    TT_METAL_ALLOCATOR_MODE_HYBRID=1 pytest --timeout 300 \
+      tests/ttnn/unit_tests/base_functionality \
+      tests/ttnn/unit_tests/benchmarks \
+      tests/ttnn/unit_tests/tensor \
+      tests/ttnn/unit_tests/per_core_allocation \
+      tests/ttnn/unit_tests/range_lockstep_allocation \
+      -xv -m "not disable_fast_runtime_mode"
   ai_summary:
     authoritative_job_status: true
   skus:
