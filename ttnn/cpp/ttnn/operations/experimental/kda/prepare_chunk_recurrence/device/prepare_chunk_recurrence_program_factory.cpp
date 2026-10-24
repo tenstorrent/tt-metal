@@ -188,12 +188,6 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{g_dfb, "g", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::PRODUCER},
-                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -209,8 +203,6 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
              {"Vt", Vt},
              {"beta_width_tiles", static_cast<uint32_t>(in.beta.padded_shape()[-1]) / tt::constants::TILE_WIDTH},
              {"beta_offset_tiles", attrs.beta_logits_column_offset / tt::constants::TILE_WIDTH},
-             {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)},
-             {"GATE_HALF_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale * 0.5F)},
              {"batch_items", batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks", "num_heads"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -230,6 +222,13 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{intra_dfb, "intra", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{final_decay_dfb, "final_decay", m2::DFBEndpointType::CONSUMER},
+                // The writer generates compute's constants while the reader reads the first batch.
+                m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{tril_dfb, "tril", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{ones_dfb, "ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_tril_dfb, "gate_tril", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{gate_ones_dfb, "gate_ones", m2::DFBEndpointType::PRODUCER},
+                m2::DFBBinding{block_masks_dfb, "block_masks", m2::DFBEndpointType::PRODUCER},
             },
         .tensor_bindings =
             {
@@ -241,7 +240,14 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::TensorBinding{FINAL_DECAY_OUTPUT, "final_decay_output"},
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
-        .compile_time_args = {{"Ct", Ct}, {"Kt", Kt}, {"Vt", Vt}, {"max_items", max_items}, {"batch_items", batch}},
+        .compile_time_args =
+            {{"Ct", Ct},
+             {"Kt", Kt},
+             {"Vt", Vt},
+             {"max_items", max_items},
+             {"batch_items", batch},
+             {"GATE_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale)},
+             {"GATE_HALF_SCALE_BITS", std::bit_cast<uint32_t>(attrs.gate_scale * 0.5F)}},
         .runtime_arg_schema = {.runtime_arg_names = {"work_item_start", "work_item_count", "num_chunks"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
