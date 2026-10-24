@@ -88,30 +88,13 @@ std::unique_ptr<ControlPlane> make_control_plane(
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    auto config = fabric_router_tests::make_control_plane_config(fabric_config, fabric_reliability_mode);
+    config.router_config = fabric_router_config;
 
     if (graph_desc.empty()) {
-        return std::make_unique<ControlPlane>(
-            cluster,
-            rtoptions,
-            hal,
-            distributed_context,
-            fabric_config,
-            fabric_reliability_mode,
-            FabricTensixConfig::DISABLED,
-            FabricUDMMode::DISABLED,
-            fabric_router_config);
+        return std::make_unique<ControlPlane>(cluster, rtoptions, hal, distributed_context, config);
     }
-    return std::make_unique<ControlPlane>(
-        cluster,
-        rtoptions,
-        hal,
-        distributed_context,
-        graph_desc.string(),
-        fabric_config,
-        fabric_reliability_mode,
-        FabricTensixConfig::DISABLED,
-        FabricUDMMode::DISABLED,
-        fabric_router_config);
+    return std::make_unique<ControlPlane>(cluster, rtoptions, hal, distributed_context, graph_desc.string(), config);
 }
 
 // Deterministic, rank-independent list of requested inter-mesh boundaries. requested_intermesh_connections
@@ -426,9 +409,7 @@ TEST(MultiHost, DualT3kInterMeshFabricConfigCompatibility) {
     });
 
     ASSERT_NE(control_plane, nullptr);
-    const auto& mesh_graph = control_plane->get_mesh_graph();
-    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{0}), tt::tt_fabric::FabricConfig::FABRIC_2D);
-    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{1}), tt::tt_fabric::FabricConfig::FABRIC_2D);
+    EXPECT_EQ(control_plane->get_fabric_config(), tt::tt_fabric::FabricConfig::FABRIC_2D);
 }
 
 // Same logical dual-T3K (2x4) mapping as TestDual2x4ControlPlaneInit, but exercised against the

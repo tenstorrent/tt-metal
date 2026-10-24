@@ -1,10 +1,10 @@
 # --- Meshes ---------------------------------------------------------------
-# Single-galaxy 3-mesh ring exercising PER-MESH fabric configs declared in the MGD, with meshes on
+# Single-galaxy 3-mesh ring exercising PER-MESH fabric configs from each mesh's dim_types, with meshes on
 # DIFFERENT 2D torus axes AND different shapes:
 #   - M_Y: 2x2 RING,LINE -> FABRIC_2D_TORUS_Y (ring on dim 0)      [mesh 0 and mesh 2]
 #   - M_X: 2x4 LINE,RING -> FABRIC_2D_TORUS_X (genuine ring on the size-4 dim 1)  [mesh 1]
 # The three meshes (16 ASICs) sit on one 32-ASIC galaxy and are ring-connected (0 -> 1 -> 2 -> 0). Reuses
-# the generic multi-mesh sanity config (topology-agnostic; the MGD fixes the per-mesh configs). Checks that
+# the generic multi-mesh sanity config (topology-agnostic; dim_types fix the per-mesh configs). Checks that
 # meshes running different torus configs coexist and route inter-mesh without hanging/starving (rel. #56515).
 mesh_descriptors {
   name: "M_Y"
@@ -15,7 +15,6 @@ mesh_descriptors {
     count: 2
     policy: RELAXED
   }
-  fabric_config: FABRIC_2D_TORUS_Y
 }
 mesh_descriptors {
   name: "M_X"
@@ -26,7 +25,6 @@ mesh_descriptors {
     count: 2
     policy: RELAXED
   }
-  fabric_config: FABRIC_2D_TORUS_X
 }
 graph_descriptors {
   name: "G0"

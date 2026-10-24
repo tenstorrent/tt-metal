@@ -16,7 +16,7 @@ namespace tt::tt_metal {
 
 // Describes the fabric topology and routing configuration for the devices in the environment.
 // These parameters determine how devices are interconnected and how data is routed between them.
-struct FabricConfigDescriptor {
+struct ControlPlaneConfig {
     tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
     tt_fabric::FabricReliabilityMode reliability_mode =
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
@@ -25,6 +25,8 @@ struct FabricConfigDescriptor {
     tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
     tt_fabric::FabricManagerMode fabric_manager = tt_fabric::FabricManagerMode::DEFAULT;
     tt_fabric::FabricRouterConfig router_config = {};
+    tt_fabric::MeshId mesh_id = tt_fabric::MeshId{0};
+    tt_fabric::MeshHostRankId host_rank = tt_fabric::MeshHostRankId{0};
 };
 
 // Configuration for a MetalEnv. The default targets the physical cluster.
@@ -116,11 +118,11 @@ public:
     // materialized by get_system_mesh() or a MeshDevice factory call bound to this environment; afterwards it throws.
     // Never calling it leaves fabric disabled. num_routing_planes must be greater than 0 when set; leaving it unset
     // uses every available plane.
-    void configure_fabric(const FabricConfigDescriptor& fabric);
+    void configure_fabric(const ControlPlaneConfig& fabric);
 
     /// @return The fabric configuration requested via configure_fabric. Disabled by default. This is the requested
     /// configuration: the runtime may still enable fabric for dispatch on remote devices without changing it.
-    const FabricConfigDescriptor& get_fabric_config_descriptor() const;
+    const ControlPlaneConfig& get_fabric_config_descriptor() const;
 
     /// @return Total number of PCIe devices in this environment.
     uint32_t get_num_pcie_devices() const;

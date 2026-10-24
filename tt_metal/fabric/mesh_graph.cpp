@@ -456,56 +456,33 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        // Resolve this mesh's FabricConfig (MeshGraphDescriptor owns the precedence: MGD fabric_config >
-        // process-wide override > dim_types-derived default), so meshes in one MGD may run different configs.
-        // Only an explicitly-requested config drives connectivity; a derived default leaves the mesh on its
-        // declared dim_types topology.
+        // Build intra-mesh connectivity based on FabricConfig override (if provided) or the config derived from
+        // the MGD's dim_types
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
-        const auto resolved = MeshGraphDescriptor::resolve_fabric_config(mesh_desc, fabric_config);
-        const std::optional<FabricConfig> mesh_fabric_config =
-            resolved.is_explicit ? std::make_optional(resolved.config) : std::nullopt;
-
-        FabricType effective_fabric_type;
-        if (mesh_fabric_config.has_value()) {
-            FabricType requested_fabric_type = get_fabric_type(*mesh_fabric_config, is_ubb_galaxy);
-            // Validate that FabricConfig doesn't try to create connections that don't exist
-            if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
-                TT_THROW(
-                    "FabricConfig {} requests topology {} which requires more connectivity than mesh M{} provides "
-                    "{}. FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
-                    enchantum::to_string(*mesh_fabric_config),
-                    enchantum::to_string(requested_fabric_type),
-                    *mesh_id,
-                    enchantum::to_string(mgd_fabric_type));
-            }
-            effective_fabric_type = requested_fabric_type;
-        } else {
-            effective_fabric_type = mgd_fabric_type;
+        const FabricConfig mesh_fabric_config =
+            fabric_config.value_or(mgd.default_fabric_config_from_dim_types(mesh_id));
+        FabricType effective_fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy);
+        // Validate that FabricConfig doesn't try to create connections that don't exist
+        if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
+            TT_THROW(
+                "FabricConfig {} requests topology {} which requires more connectivity than MGD provides {}. "
+                "FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
+                enchantum::to_string(mesh_fabric_config),
+                enchantum::to_string(effective_fabric_type),
+                enchantum::to_string(mgd_fabric_type));
         }
 
-        // Record the resolved per-mesh config so the control plane and tests can see each mesh's routing config.
-        this->mesh_fabric_config_[mesh_id] = resolved.config;
-        // Separately record only explicitly-requested configs so consumers can distinguish a declared/overridden
-        // config from a derived default and avoid forcing fabric on. See MeshGraph::get_explicit_fabric_config.
-        if (mesh_fabric_config.has_value()) {
-            this->explicit_mesh_fabric_config_[mesh_id] = *mesh_fabric_config;
-        }
-
-        // A 1D fabric config is single-mesh only (1D routing has no inter-mesh story): reject an
-        // explicitly-requested 1D config on an MGD with more than one compute mesh. A mesh whose dim_types
-        // merely *derive* to 1D is left alone -- it can still be a sub-mesh of a larger fabric.
-        if (mesh_fabric_config.has_value() && all_meshes.size() > 1) {
-            const auto requested = *mesh_fabric_config;
-            const bool is_1d = requested == FabricConfig::FABRIC_1D || requested == FabricConfig::FABRIC_1D_RING ||
-                               requested == FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
-            TT_FATAL(
-                !is_1d,
-                "A 1D FabricConfig ({}) cannot be used with more than one mesh ({} compute meshes present): mesh M{} "
-                "requested a 1D config. 1D fabric is single-mesh only.",
-                enchantum::to_string(requested),
-                all_meshes.size(),
-                *mesh_id);
-        }
+        // A 1D fabric config is single-mesh only (1D routing has no inter-mesh story).
+        const bool is_1d = mesh_fabric_config == FabricConfig::FABRIC_1D ||
+                           mesh_fabric_config == FabricConfig::FABRIC_1D_RING ||
+                           mesh_fabric_config == FabricConfig::FABRIC_1D_NEIGHBOR_EXCHANGE;
+        TT_FATAL(
+            !is_1d || all_meshes.size() <= 1,
+            "A 1D FabricConfig ({}) cannot be used with more than one mesh ({} compute meshes present): mesh M{} "
+            "requested a 1D config. 1D fabric is single-mesh only.",
+            enchantum::to_string(mesh_fabric_config),
+            all_meshes.size(),
+            *mesh_id);
 
         // Build connectivity using effective_fabric_type
         MeshCoordinateRange mesh_coord_range(mesh_shape);
@@ -520,10 +497,9 @@ void MeshGraph::initialize_from_mgd(
         // A FabricConfig override selects the routing family as well as the base-grid shape. Patterned
         // express links belong to the 2D torus configurations; explicit plain FABRIC_2D (and non-2D
         // configurations) deliberately downgrades an express-capable MGD to its N/S/E/W mesh.
-        const bool enable_patterned_express_links = !mesh_fabric_config.has_value() ||
-                                                    *mesh_fabric_config == FabricConfig::FABRIC_2D_TORUS_X ||
-                                                    *mesh_fabric_config == FabricConfig::FABRIC_2D_TORUS_Y ||
-                                                    *mesh_fabric_config == FabricConfig::FABRIC_2D_TORUS_XY;
+        const bool enable_patterned_express_links =
+            !fabric_config.has_value() || *fabric_config == FabricConfig::FABRIC_2D_TORUS_X ||
+            *fabric_config == FabricConfig::FABRIC_2D_TORUS_Y || *fabric_config == FabricConfig::FABRIC_2D_TORUS_XY;
         if (enable_patterned_express_links) {
             // Layer declared express links on top of the fully-populated base grid. Each pattern expands to
             // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
@@ -601,7 +577,7 @@ void MeshGraph::initialize_from_mgd(
         // (see axis_ports_reserved_for_torus, issue #54650).
         std::uint32_t chan_id = 0;
         if (!axis_ports_reserved_for_torus(
-                effective_fabric_type, mgd_fabric_type, mesh_fabric_config, mesh_shape, *mesh_id, "mesh", 0)) {
+                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 0)) {
             // North, start from NW corner
             for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
                 for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
@@ -619,7 +595,7 @@ void MeshGraph::initialize_from_mgd(
             }
         }
         if (!axis_ports_reserved_for_torus(
-                effective_fabric_type, mgd_fabric_type, mesh_fabric_config, mesh_shape, *mesh_id, "mesh", 1)) {
+                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 1)) {
             // East, start from NE corner
             chan_id = 0;
             for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
@@ -943,20 +919,6 @@ std::vector<MeshId> MeshGraph::get_mesh_ids() const {
         }
     }
     return mesh_ids;
-}
-
-FabricConfig MeshGraph::get_fabric_config(MeshId mesh_id) const {
-    const auto it = this->mesh_fabric_config_.find(mesh_id);
-    TT_FATAL(it != this->mesh_fabric_config_.end(), "MeshGraph: no resolved FabricConfig for mesh {}", *mesh_id);
-    return it->second;
-}
-
-std::optional<FabricConfig> MeshGraph::get_explicit_fabric_config(MeshId mesh_id) const {
-    const auto it = this->explicit_mesh_fabric_config_.find(mesh_id);
-    if (it == this->explicit_mesh_fabric_config_.end()) {
-        return std::nullopt;
-    }
-    return it->second;
 }
 
 bool MeshGraph::is_switch_mesh(MeshId mesh_id) const {

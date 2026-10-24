@@ -780,13 +780,9 @@ public:
     // ======================================================================================
     uint32_t get_num_mesh_dims() const override { return mesh_shape_.dims(); }
 
-    // Fabric type of THIS process's own mesh (MGD-resolved), not the process-wide yaml config.
-    // In a heterogeneous run the local mesh may be e.g. TORUS_Y while the yaml config is TORUS_XY;
-    // geometry/wrap decisions must match get_full_mcast_hops (which keys off the per-mesh config)
-    // or the hop generator and path walker disagree and throw "Boundary exceeded".
+    // Fabric type of THIS process's own mesh: the config this process opened the fabric with.
     tt::tt_fabric::FabricType get_local_mesh_fabric_type() const {
-        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
-        return tt::tt_fabric::get_fabric_type(mesh_graph.get_fabric_config(local_mesh_id_), is_ubb_galaxy());
+        return tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
     }
 
     bool is_degenerate_torus_axis(uint32_t dim) const override {

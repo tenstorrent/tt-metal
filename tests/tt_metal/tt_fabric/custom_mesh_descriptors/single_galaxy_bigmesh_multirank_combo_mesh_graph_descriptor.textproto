@@ -2,15 +2,14 @@
 # 1x2 -> each process owns a 4x2 half of the one mesh, and the X-ring wraps across the host boundary),
 # inter-connected to a 2x2 TORUS_Y mesh and a 2x2 FABRIC_2D mesh. Exercises multi-rank (one mesh over 2
 # processes) + multi-mesh + heterogeneous per-mesh configs (TORUS_X / TORUS_Y / FABRIC_2D, incl.
-# mesh<->torus inter-mesh links) all at once. Each process adopts its own mesh's config
-# (ControlPlane::adopt_local_mesh_fabric_config); both ranks of M_BIG adopt the same TORUS_X.
+# mesh<->torus inter-mesh links) all at once. Each mesh's config is its dim_types default; both ranks
+# of M_BIG run the same TORUS_X.
 mesh_descriptors {
   name: "M_BIG"
   arch: BLACKHOLE
   device_topology { dims: [ 4, 4 ] dim_types: [ LINE, RING ] }
   host_topology   { dims: [ 1, 2 ] }
   channels { count: 2 policy: RELAXED }
-  fabric_config: FABRIC_2D_TORUS_X
 }
 mesh_descriptors {
   name: "M_Y"
@@ -18,7 +17,6 @@ mesh_descriptors {
   device_topology { dims: [ 2, 2 ] dim_types: [ RING, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: RELAXED }
-  fabric_config: FABRIC_2D_TORUS_Y
 }
 mesh_descriptors {
   name: "M_2D"
@@ -26,7 +24,6 @@ mesh_descriptors {
   device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
   channels { count: 2 policy: RELAXED }
-  fabric_config: FABRIC_2D
 }
 graph_descriptors {
   name: "G0"
