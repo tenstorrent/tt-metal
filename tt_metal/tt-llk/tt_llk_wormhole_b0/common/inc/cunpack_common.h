@@ -171,14 +171,15 @@ inline void wait_for_next_context(const std::uint32_t num_contexts)
 inline void switch_config_context(std::uint32_t &unp_cfg_context)
 {
     // Switch config context
-    unp_cfg_context = 1 - unp_cfg_context;
     if (unp_cfg_context == 0)
     {
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
+        unp_cfg_context = 1;
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
     }
     else
     {
-        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0101);
+        unp_cfg_context = 0;
+        TTI_SETC16(UNPACK_MISC_CFG_CfgContextOffset_0_ADDR32, 0x0000);
     }
 }
 
