@@ -47,6 +47,27 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/matmul
         COMPONENT ttnn-runtime
 )
+# The matmul config model blob (device/config/model/README.md) is an OCI artifact on ghcr, fetched at configure time
+# into runtime/ like the SFPI toolchain, and installed at the same path under the runtime root
+option(TT_MATMUL_MODEL_FETCH "Download the matmul config model blob (ttnn.CONFIG.matmul_model_config)" ON)
+set(TT_MATMUL_MODEL_FILE "${PROJECT_SOURCE_DIR}/runtime/matmul_model/matmul_model.blob")
+if(TT_MATMUL_MODEL_FETCH)
+    include(device/config/model/fetch_matmul_model.cmake)
+    file(MAKE_DIRECTORY "${PROJECT_SOURCE_DIR}/runtime/matmul_model")
+    tt_fetch_matmul_model(
+        "tenstorrent/tt-metal/matmul-model"
+        "7dc37af22b6ae0d2ecb4f415a14cdc7e9b6e0208ee2ac2c2aacd049576ee9ae2"
+        "${TT_MATMUL_MODEL_FILE}"
+    )
+endif()
+if(EXISTS "${TT_MATMUL_MODEL_FILE}")
+    install(
+        FILES
+            "${TT_MATMUL_MODEL_FILE}"
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime/matmul_model
+        COMPONENT ttnn-runtime
+    )
+endif()
 install(TARGETS ttnn_op_matmul LIBRARY COMPONENT tar)
 
 # Python bindings for this op are registered directly on the shared `ttnn`

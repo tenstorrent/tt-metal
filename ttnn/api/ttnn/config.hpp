@@ -46,6 +46,13 @@ struct Config {
         // as a follow-up. Appended last: the positional constructor and the index accessors below embed the member
         // order, so a new member goes at the end.
         bool strict_ccl_topology = false;
+        // Experimental, opt-in (#57884): when matmul chooses its own program config (no program_config, no
+        // core_grid), let the learned matmul config model pick among enumerated candidates instead of the legacy
+        // heuristics, for the inputs it covers (ttnn/cpp/ttnn/operations/matmul/device/config/model/README.md).
+        // matmul_model_path names the model blob (ttnn's Python package defaults it to the blob it ships); anything
+        // the model can't handle keeps the legacy default.
+        bool matmul_model_config = false;
+        std::filesystem::path matmul_model_path;
     };
 
 private:

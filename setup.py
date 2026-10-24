@@ -305,6 +305,8 @@ class CMakeBuild(build_ext):
         lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libtt-umd.so*", "libtt_stl.so", "libtracy.so*"]
         runtime_patterns = [
             "hw/**/*",
+            # The matmul config model (ttnn.CONFIG.matmul_model_config), fetched by the build
+            "matmul_model/matmul_model.blob",
         ]
         runtime_exclude_files = []
         if BUNDLE_SFPI:
