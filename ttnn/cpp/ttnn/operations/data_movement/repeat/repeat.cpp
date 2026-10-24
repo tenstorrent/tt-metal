@@ -23,6 +23,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "device/repeat_device_operation.hpp"
 #include "device/repeat_utils.hpp"
@@ -40,6 +41,36 @@ struct UpperRepeatDims {
     static constexpr uint32_t page_size = 3;
 };
 
+// Preserve the row padding of a row-major view. Adding leading unit dimensions also preserves height padding
+// from untilize, so the next batch still starts after its padded rows.
+ttnn::Tensor view_keeping_row_padding(const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape) {
+    const auto& input_shape = tensor.logical_shape();
+    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || tensor.padded_shape() == input_shape ||
+        input_shape == logical_shape) {
+        return ttnn::view(tensor, logical_shape);
+    }
+    TT_FATAL(
+        logical_shape.volume() == tensor.logical_volume(),
+        "Invalid view, logical volumes are changing from {} to {}",
+        tensor.logical_volume(),
+        logical_shape.volume());
+    TT_FATAL(input_shape[-1] == logical_shape[-1], "The last dimension cannot change in a row-padded view");
+    auto padded_shape = logical_shape;
+    const bool adds_leading_ones =
+        logical_shape.rank() > input_shape.rank() &&
+        std::equal(input_shape.cbegin(), input_shape.cend(), logical_shape.cend() - input_shape.rank()) &&
+        std::all_of(
+            logical_shape.cbegin(), logical_shape.cend() - input_shape.rank(), [](auto dim) { return dim == 1; });
+    if (adds_leading_ones) {
+        for (uint32_t i = 0; i < input_shape.rank(); ++i) {
+            padded_shape[logical_shape.rank() - input_shape.rank() + i] = tensor.padded_shape()[i];
+        }
+    } else {
+        padded_shape[-1] = tensor.padded_shape()[-1];
+    }
+    return tt::tt_metal::view(tensor, logical_shape, padded_shape);
+}
+
 ttnn::Tensor repeat_upper_dims_rm(
     const ttnn::Tensor& tensor,
     const uint32_t dim,
@@ -56,13 +87,13 @@ ttnn::Tensor repeat_upper_dims_rm(
         std::accumulate(input_shape.cbegin() + dim + 1, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
     collapsed_shape_vector[UpperRepeatDims::page_size] = input_shape[-1];
 
-    auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
+    auto input_tensor = view_keeping_row_padding(tensor, ttnn::Shape(collapsed_shape_vector));
 
     std::optional<Tensor> prim_output = std::nullopt;
     if (optional_output_tensor.has_value()) {
         auto collapsed_out = collapsed_shape_vector;
         collapsed_out[UpperRepeatDims::repeat] *= repetitions;
-        prim_output = ttnn::view(optional_output_tensor.value(), ttnn::Shape(collapsed_out));
+        prim_output = view_keeping_row_padding(optional_output_tensor.value(), ttnn::Shape(collapsed_out));
     }
 
     constexpr bool is_final_dim = false;
@@ -71,7 +102,7 @@ ttnn::Tensor repeat_upper_dims_rm(
     auto expected_shape = input_shape;
     expected_shape[dim] *= repetitions;
 
-    return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
+    return view_keeping_row_padding(out_tensor, ttnn::Shape(expected_shape));
 }
 
 ttnn::Tensor repeat_last_dim_rm(
@@ -105,8 +136,32 @@ ttnn::Tensor repeat_last_dim_rm(
     return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
 }
 
+void check_row_major_batch_padding(const ttnn::Tensor& tensor) {
+    if (tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || tensor.logical_volume() == 0) {
+        return;
+    }
+    const auto& logical = tensor.logical_shape();
+    const auto& padded = tensor.padded_shape();
+    uint64_t outer_volume = 1;
+    for (uint32_t i = 0; i + 1 < logical.rank(); ++i) {
+        // Padding after the final logical batch is trailing storage, not a gap in the row map.
+        TT_FATAL(
+            outer_volume <= 1 || logical[i] == padded[i],
+            "repeat does not support row-major tensors with padding between logical batches");
+        outer_volume *= logical[i];
+    }
+}
+
 std::tuple<ttnn::Tensor, ttsl::SmallVector<uint32_t>> match_input_rank(
     const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& repetition_vector) {
+    // Repeat kernels count logical rows; padding between batches is not part of that row map.
+    // Reject before rank conversion or routing can reinterpret those padding rows as tensor values.
+    const bool repeats_values =
+        std::any_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto r) { return r > 1; }) &&
+        std::none_of(repetition_vector.cbegin(), repetition_vector.cend(), [](auto r) { return r == 0; });
+    if (repeats_values) {
+        check_row_major_batch_padding(tensor);
+    }
     auto working_tensor = tensor;
     const auto& input_shape = working_tensor.logical_shape();
     ttsl::SmallVector<uint32_t> working_repetition_vector;
@@ -117,7 +172,7 @@ std::tuple<ttnn::Tensor, ttsl::SmallVector<uint32_t>> match_input_rank(
     if (input_shape.rank() < repetition_vector.size()) {
         ttsl::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
         std::copy_backward(input_shape.cbegin(), input_shape.cend(), new_shape_vec.end());
-        working_tensor = ttnn::view(working_tensor, ttnn::Shape(new_shape_vec));
+        working_tensor = view_keeping_row_padding(working_tensor, ttnn::Shape(new_shape_vec));
         working_repetition_vector = repetition_vector;
     }
     // Pad repetition vector when shorter than tensor rank (torch errors; we allow it).
@@ -434,6 +489,8 @@ void validate_optional_output(
     TT_FATAL(out.dtype() == input_tensor.dtype(), "repeat optional output dtype mismatch");
     TT_FATAL(out.layout() == input_tensor.layout(), "repeat optional output layout mismatch");
     TT_FATAL(out.logical_shape() == expected_logical_shape, "repeat optional output shape mismatch");
+    // Every preallocated result is written, including an identity repeat finalized by copy.
+    check_row_major_batch_padding(out);
     // Direct-write kernels read the input while writing the output, so a shared buffer corrupts both.
     TT_FATAL(out.buffer() != input_tensor.buffer(), "repeat: optional_output_tensor must not alias the input buffer");
 }
@@ -522,8 +579,8 @@ ttnn::Tensor repeat_native(
     }
 
     // Direct prim write only when no later layout/reshard hop will reallocate.
-    const bool needs_rm_tilize_roundtrip = input_tensor.layout() == ttnn::TILE_LAYOUT &&
-                                           !is_tile_repeat_eligible(working_tensor);
+    const bool needs_rm_tilize_roundtrip =
+        input_tensor.layout() == ttnn::TILE_LAYOUT && !is_tile_repeat_eligible(working_tensor);
     const bool needs_final_i2s = output_mem_config.is_sharded();  // refined after native_sharded below
 
     // Native path: sharded input, single-axis repeat, predicate accepts. Else composite.
@@ -541,8 +598,17 @@ ttnn::Tensor repeat_native(
                     break;
                 }
             }
+            // The native predicate may accept unaligned output pages that interleaved_to_sharded rejects.
+            // It still checks partial last shards, placement and whether replica groups fit within a shard.
+            const bool unaligned_rows_native =
+                working_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT &&
+                repeat::is_unaligned_row_major_shard_page(output_mem_config, working_tensor.element_size());
             native_sharded = repeat::is_native_repeat_sharding(
-                working_tensor.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, native_dim, native_reps);
+                working_tensor.tensor_spec(),
+                std::optional<MemoryConfig>{output_mem_config},
+                native_dim,
+                native_reps,
+                unaligned_rows_native);
         }
     }
 
@@ -579,8 +645,7 @@ ttnn::Tensor repeat_native(
             const bool is_last =
                 std::none_of(std::next(it), working_repetition_vector.crend(), [](uint32_t r) { return r != 1; });
             auto step_out = (prim_can_land && is_last) ? optional_output_tensor : std::nullopt;
-            working_tensor = repeat_dim_tile(
-                working_tensor, dim, *it, working_output_mem_config, std::move(step_out));
+            working_tensor = repeat_dim_tile(working_tensor, dim, *it, working_output_mem_config, std::move(step_out));
         }
     } else {
         // RM path: TILE->RM, repeat, RM->TILE.
@@ -597,12 +662,12 @@ ttnn::Tensor repeat_native(
             // RM prim lands only when final layout already matches (no later tilize).
             auto step_out = (prim_can_land && is_last) ? optional_output_tensor : std::nullopt;
             if (it == working_repetition_vector.crbegin()) {
-                working_tensor = repeat_last_dim_rm(
-                    working_tensor, *it, working_output_mem_config, std::move(step_out));
+                working_tensor =
+                    repeat_last_dim_rm(working_tensor, *it, working_output_mem_config, std::move(step_out));
             } else {
                 auto i = working_repetition_vector.crend() - it - 1;
-                working_tensor = repeat_upper_dims_rm(
-                    working_tensor, i, *it, working_output_mem_config, std::move(step_out));
+                working_tensor =
+                    repeat_upper_dims_rm(working_tensor, i, *it, working_output_mem_config, std::move(step_out));
             }
         }
 
