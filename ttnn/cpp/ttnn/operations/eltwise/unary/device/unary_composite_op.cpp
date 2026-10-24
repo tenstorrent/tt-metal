@@ -37,10 +37,10 @@ Tensor _variance_impl(
     const std::optional<MemoryConfig>& output_mem_config) {
     ttsl::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
-    auto shape_wh = y.padded_shape();
-    float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
+    auto shape_wh = y.logical_shape();
+    float scale = 1.0f / ((float)(shape_wh[-1] * shape_wh[-2]) - correction);
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
-    return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
+    return ttnn::sum(sqr_y_minus_mean_y, dims, true, output_mem_config, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
     Tensor y_minus_mean_y = ttnn::bcast(y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
@@ -85,11 +85,13 @@ std::vector<Tensor> split_tensor_for_glu(
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
 Tensor _make_global_from_hw_impl(
     const HWFunctionT& fn, const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(y.padded_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
+    TT_FATAL(y.logical_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
 
     // format to HW
     Tensor y_hw = ttnn::reshape_on_device(
-        y, ttnn::Shape{1, 1, y.padded_shape()[2], y.padded_shape()[3] * y.padded_shape()[1] * y.padded_shape()[0]});
+        y,
+        ttnn::Shape{1, 1, y.logical_shape()[2], y.logical_shape()[3] * y.logical_shape()[1] * y.logical_shape()[0]},
+        ttnn::Shape{1, 1, y.padded_shape()[2], y.padded_shape()[3] * y.padded_shape()[1] * y.padded_shape()[0]});
 
     // compute @fn
     Tensor z_0 = fn(y_hw, output_mem_config);
@@ -98,7 +100,7 @@ Tensor _make_global_from_hw_impl(
 
     // reformat
     Tensor z_1 = ttnn::reshape_on_device(
-        z_0, ttnn::Shape{y.padded_shape()[0], y.padded_shape()[1], y.padded_shape()[2], y.padded_shape()[3]});
+        z_0, y.logical_shape(), y.padded_shape());
     z_0.deallocate();
 
     return z_1;
@@ -383,7 +385,14 @@ Tensor logical_not_(const Tensor& x, const std::optional<MemoryConfig>& output_m
 
 // Global Norm
 Tensor normalize_global(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    return detail::_make_global_from_hw_impl(normalize_hw, y, output_mem_config);
+    auto output_memory_config = output_mem_config.value_or(y.memory_config());
+    ttsl::SmallVector<int> dims = {0, 1, 2, 3};
+    Tensor mean_y = ttnn::mean(y, dims, true, output_memory_config);
+    Tensor y_minus_mean_y = ttnn::subtract(y, mean_y, std::nullopt, output_memory_config);
+    Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_memory_config);
+    Tensor var_y = ttnn::mean(sqr_y_minus_mean_y, dims, true, output_memory_config);
+    const std::array rsqrt_of_var = {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSQRT}};
+    return ttnn::multiply(y_minus_mean_y, var_y, std::nullopt, output_memory_config, std::nullopt, {}, {}, rsqrt_of_var);
 }
 
 }  // namespace ttnn
