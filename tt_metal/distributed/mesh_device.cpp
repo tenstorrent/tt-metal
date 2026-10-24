@@ -883,6 +883,20 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         }
     }
 
+    // Share the family's real-time profiler with the submesh, and select its chips. Both are set here, before the
+    // submesh is handed out, and never change. When this mesh has no profiler yet (the hidden root of
+    // create_unit_meshes), the submesh copies none and gets its own from init_realtime_profiler_socket().
+    if (realtime_profiler_) {
+        std::unordered_set<uint32_t> chips;
+        if (!submesh->pimpl_->get_device_ids().empty()) {
+            for (auto* device : submesh->pimpl_->get_devices()) {
+                chips.insert(static_cast<uint32_t>(device->id()));
+            }
+        }
+        submesh->pimpl_->realtime_profiler_ = realtime_profiler_;
+        submesh->pimpl_->realtime_profiler_chip_filter_ = std::move(chips);
+    }
+
     submeshes_.push_back(submesh);
     log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->pimpl_->id(), submesh_shape, offset);
     if (!submesh->pimpl_->get_device_ids().empty()) {
@@ -1199,11 +1213,21 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         host_region_->release();
     }
 
-    // Tear down RT profiler after the CQ has shut down (so dispatch_s has already issued
-    // the final TERMINATE) but before the rest of the device teardown.
-    if (realtime_profiler_) {
-        realtime_profiler_->shutdown();
-        realtime_profiler_.reset();
+    // Tear down the RT profiler after the CQ has shut down but before the rest of the device teardown. dispatch_s's
+    // TERMINATE is not yet sent at this point: it goes out later, when ~ScopedDevices closes the devices.
+    // Only the owner does this; a submesh leaves the shared holder alone, so a closed submesh still reaches the
+    // profiler until the owner closes. The manager is moved out under the exclusive lock, which waits for callers
+    // inside with_realtime_profiler() or the sync check, and is shut down after the lock is released: its callbacks
+    // may call with_realtime_profiler() themselves.
+    if (owns_realtime_profiler_ && realtime_profiler_) {
+        std::unique_ptr<RealtimeProfilerManager> manager;
+        {
+            std::unique_lock lock(realtime_profiler_->mutex);
+            manager = std::move(realtime_profiler_->manager);
+        }
+        if (manager) {
+            manager->shutdown();
+        }
     }
     streaming_profiler_.reset();
 
@@ -1902,10 +1926,15 @@ bool MeshDeviceImpl::initialize_impl(
 }
 
 void MeshDeviceImpl::init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device) {
-    if (realtime_profiler_) {
+    if (owns_realtime_profiler_) {
         return;
     }
-    realtime_profiler_ = std::make_unique<RealtimeProfilerManager>(mesh_device);
+    // A mesh that copied a holder from its parent in create_submesh() must not get a second one.
+    TT_ASSERT(!realtime_profiler_ && !realtime_profiler_chip_filter_);
+    auto holder = std::make_shared<RealtimeProfilerHolder>();
+    holder->manager = std::make_unique<RealtimeProfilerManager>(mesh_device);
+    realtime_profiler_ = std::move(holder);
+    owns_realtime_profiler_ = true;
 }
 
 void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& mesh_device) {
@@ -1926,12 +1955,30 @@ void MeshDeviceImpl::init_streaming_profiler(const std::shared_ptr<MeshDevice>& 
 }
 
 void MeshDeviceImpl::trigger_realtime_profiler_sync_check() {
-    if (realtime_profiler_) {
-        realtime_profiler_->trigger_sync_check();
+    if (owns_realtime_profiler_ && realtime_profiler_) {
+        std::shared_lock lock(realtime_profiler_->mutex);
+        if (realtime_profiler_->manager) {
+            realtime_profiler_->manager->trigger_sync_check();
+        }
     }
 }
 
-RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const { return realtime_profiler_.get(); }
+RealtimeProfilerManager* MeshDeviceImpl::get_realtime_profiler() const {
+    return (owns_realtime_profiler_ && realtime_profiler_) ? realtime_profiler_->manager.get() : nullptr;
+}
+
+bool MeshDeviceImpl::with_realtime_profiler(
+    const std::function<void(RealtimeProfilerManager&, const std::optional<std::unordered_set<uint32_t>>&)>& f) const {
+    if (!realtime_profiler_) {
+        return false;
+    }
+    std::shared_lock lock(realtime_profiler_->mutex);
+    if (!realtime_profiler_->manager) {
+        return false;
+    }
+    f(*realtime_profiler_->manager, realtime_profiler_chip_filter_);
+    return true;
+}
 
 ::tt::tt_metal::DriscL1Arena& MeshDeviceImpl::drisc_l1_arena() const {
     TT_FATAL(
