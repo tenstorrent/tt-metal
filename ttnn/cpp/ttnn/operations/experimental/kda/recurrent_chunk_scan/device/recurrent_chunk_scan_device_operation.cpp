@@ -3,6 +3,7 @@
 
 #include "recurrent_chunk_scan_device_operation.hpp"
 
+#include <algorithm>
 #include <array>
 
 #include <tt-metalium/constants.hpp>
@@ -100,6 +101,10 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_shape(in.final_decay, Shape({BH, NC, K, 1}), "final_decay", operation_name);
     check_shape(in.t_inv, Shape({BH, NC, chunk_size, chunk_size}), "t_inv", operation_name);
 
+    const auto distribution = kda_factory_detail::distribute_value_blocks(
+        in.v_beta.device()->compute_with_storage_grid_size(), BH, V / tt::constants::TILE_WIDTH);
+    const uint32_t value_tiles = distribution.value_tiles_per_core;
+    const uint32_t dest_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
     if (attrs.mode == RecurrentChunkScanMode::RECURRENT) {
         TT_FATAL(in.group_entry_states.has_value(), "{}: group_entry_states is required", operation_name);
         check_protocol_tensor(*in.group_entry_states, "group_entry_states", false, operation_name);
@@ -117,20 +122,36 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         TT_FATAL(!in.group_entry_states.has_value(), "{}: group_entry_states is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
         // The summary publishes one tile row of a core's value block per destination-register packet.
-        const auto distribution = kda_factory_detail::distribute_value_blocks(
-            in.v_beta.device()->compute_with_storage_grid_size(), BH, V / tt::constants::TILE_WIDTH);
-        const uint32_t dest_tiles = ttnn::get_dest_reg_count(attrs.compute_kernel_config);
         TT_FATAL(
-            distribution.value_tiles_per_core <= dest_tiles,
+            value_tiles <= dest_tiles,
             "{}: a summary core's {} value tiles exceed the {} destination-register tiles of this compute config",
             operation_name,
-            distribution.value_tiles_per_core,
+            value_tiles,
             dest_tiles);
     }
+    // The compute kernel subtracts kd S from v_beta and adds the decayed state to the state update while the product
+    // is still in DST, in groups of whole state rows when a row fits DST, else in column groups of one row; both must
+    // tile the [Kt, columns] state update exactly (the summary's state is two paths wide).
+    const uint32_t Kt = K / tt::constants::TILE_WIDTH;
+    const uint32_t state_columns = (attrs.mode == RecurrentChunkScanMode::SUMMARY ? 2 : 1) * value_tiles;
+    const uint32_t group_columns = std::min(state_columns, dest_tiles);
+    const uint32_t group_rows = state_columns <= dest_tiles ? std::min(dest_tiles / state_columns, Kt) : 1;
+    TT_FATAL(
+        state_columns % group_columns == 0 && Kt % group_rows == 0,
+        "{}: a core's {} value tiles ({} state columns) and {} key tiles do not group into the {} destination-register "
+        "tiles of this compute config: a state row must fit them or be a multiple of them, and the {} rows per group "
+        "must divide the key tiles",
+        operation_name,
+        value_tiles,
+        state_columns,
+        Kt,
+        dest_tiles,
+        group_rows);
     TT_FATAL(
         !attrs.packed_head || (attrs.mode == RecurrentChunkScanMode::SUMMARY && attrs.groups_per_head == 1),
         "{}: packed_head requires a summary with one group per head",
         operation_name);
+    TT_FATAL(!attrs.emit_outputs || attrs.packed_head, "{}: emit_outputs requires packed_head", operation_name);
     TT_FATAL(
         !attrs.packed_head || attrs.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
         "{}: packed_head requires an interleaved output",
@@ -145,8 +166,21 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto state_layout = TensorLayout(
         summary ? DataType::BFLOAT16 : DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
     if (attrs.packed_head) {
-        return {
+        spec_return_value_t specs = {
             TensorSpec(Shape({1, attrs.batch_heads, attrs.key_dim, attrs.key_dim + attrs.value_dim}), output_layout)};
+        if (attrs.emit_outputs) {
+            const auto fp32_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+            const auto emit_layout = TensorLayout(
+                DataType::FLOAT32, PageConfig(Layout::TILE), attrs.emit_mem_config.value_or(attrs.output_mem_config));
+            specs.push_back(TensorSpec(
+                Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim}),
+                emit_layout));
+            specs.push_back(TensorSpec(
+                Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.key_dim}), emit_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+        }
+        return specs;
     }
     // Summary precision and structure are independent of actual_start. Only live
     // head/tail slots are defined; unsplit execution defines the head pair.
@@ -230,7 +264,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end,
-    bool packed_head) {
+    bool packed_head,
+    bool emit_outputs,
+    const std::optional<MemoryConfig>& emit_mem_config) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -245,6 +281,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .groups_per_head = groups_per_head,
             .mode = mode,
             .packed_head = packed_head,
+            .emit_outputs = emit_outputs,
+            .emit_mem_config = emit_mem_config,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},

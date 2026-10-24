@@ -315,6 +315,14 @@ void kernel_main() {
 #endif
 
     constexpr bool spill = num_blocks_inner_dim > 1;
+    // With packer L1 accumulation (and nothing else packing into the partials), the partials are reserved once per
+    // output block and each subblock is packed in place at its slot, where the next K block accumulates onto it; they
+    // are pushed once, for the last K block's reload. The unpacker then never waits on the packer between K blocks.
+#if defined PACKER_L1_ACC and not defined FUSE_BIAS and not defined ARCH_QUASAR
+    constexpr bool l1_acc_in_place = !untilize_out && !in0_transpose_tile && num_blocks_inner_dim > 2;
+#else
+    constexpr bool l1_acc_in_place = false;
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
     matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
@@ -368,6 +376,9 @@ void kernel_main() {
 #endif
                 }
 
+                if constexpr (l1_acc_in_place) {
+                    mm_partials_dfb.reserve_back(out_block_num_tiles);
+                }
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     bool last_out = block == (num_blocks_inner_dim - 1);
 
@@ -511,7 +522,9 @@ void kernel_main() {
 
                             } else {
                                 tile_regs_commit();
-                                mm_partials_dfb.reserve_back(out_subblock_num_tiles);
+                                if constexpr (!l1_acc_in_place) {
+                                    mm_partials_dfb.reserve_back(out_subblock_num_tiles);
+                                }
                                 tile_regs_wait();
 
 #ifdef PACKER_L1_ACC
@@ -526,11 +539,20 @@ void kernel_main() {
                                 }
 #endif
 
-                                uint32_t start_dst_index = 0;
-                                pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
+                                if constexpr (l1_acc_in_place) {
+                                    const uint32_t slot =
+                                        (in0_subblock * in1_num_subblocks + in1_subblock) * out_subblock_num_tiles;
+                                    for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                                        pack_tile<true>(i, mm_partials_dfb_id, slot + i);
+                                    }
+                                    tile_regs_release();
+                                } else {
+                                    uint32_t start_dst_index = 0;
+                                    pack_block(start_dst_index, mm_partials_dfb_id, out_subblock_num_tiles);
 
-                                tile_regs_release();
-                                mm_partials_dfb.push_back(out_subblock_num_tiles);
+                                    tile_regs_release();
+                                    mm_partials_dfb.push_back(out_subblock_num_tiles);
+                                }
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
@@ -562,10 +584,16 @@ void kernel_main() {
                     // never reload when with bias, bias uses intermediate buffer
                     enable_reload = false;
 #else
-                    // Last iteration does spill and reload to output buffer
-                    if (block < num_blocks_inner_dim - 2) {
-                        for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
-                            mm_partials_dfb.wait_front(out_subblock_num_tiles);
+                    if constexpr (l1_acc_in_place) {
+                        if (block == num_blocks_inner_dim - 2) {
+                            mm_partials_dfb.push_back(out_block_num_tiles);
+                            enable_reload = true;
+                        }
+                    } else {
+                        // Last iteration does spill and reload to output buffer
+                        if (block < num_blocks_inner_dim - 2) {
+                            for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                                mm_partials_dfb.wait_front(out_subblock_num_tiles);
 #ifdef ARCH_QUASAR
                             // TEN-4746 (#48552): bare wait_front->pop_front drain -- see the FUSE_BIAS drain
                             // above. dummy_unpack orders the POP after the WAIT on Quasar (UNPACR_NOP, reads
@@ -573,11 +601,12 @@ void kernel_main() {
                             dummy_unpack(mm_partials_dfb_id);
 #endif
                             mm_partials_dfb.pop_front(out_subblock_num_tiles);
+                            }
                         }
-                    }
                     if (block == num_blocks_inner_dim - 2) {
                         enable_reload = true;
                     }  // reload when last iteration
+                    }
 #endif
 #else
                     if constexpr (spill) {
