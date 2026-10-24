@@ -94,6 +94,12 @@ class Model:
     - Compatible with tt_transformers generator interface
     """
 
+    # Generator: re-capture the decode trace at the start of a request when programs were compiled since its capture.
+    # The prefill's stock CCL ops (ttnn.all_reduce) create global semaphores held by their program-cache entries; the
+    # first prefill of a new length after the capture could place them in the decode trace's scratch region, where
+    # every decode replay overwrites them (the next prefill of that length then hangs or decodes garbage).
+    _tt_recapture_decode_trace_on_new_programs = True
+
     def __init__(
         self,
         mesh_device,
@@ -176,9 +182,11 @@ class Model:
         self.cos_matrix = self.rope_setup.cos_matrix
         self.sin_matrix = self.rope_setup.sin_matrix
         self.transformation_mats = self.rope_setup.get_both_trans_mats()
-        # Prefill rope slices, keyed by sequence length. See prepare_inputs_prefill: the slice is a device
-        # op, so recomputing it per call allocates -- and on a traced prefill it allocates with the trace
-        # live, then throws the result away (the replay uses the matrices bound at capture time).
+        # Prefill rope slices, keyed by sequence length. None may be created lazily: a device tensor allocated after
+        # a trace was captured can sit in that trace's scratch region and is overwritten by every replay of it (a
+        # slice cached by the first prefill of a new length after the decode trace capture corrupted every later
+        # prefill of that length). The traced prefill's slice (max_seq_len, bound at capture) is made with the model
+        # (create_transformer_compatible); an eager prefill slices per call, a temporary that does not outlive it.
         self._prefill_rope_slices = {}
 
         if state_dict:
@@ -382,6 +390,8 @@ class Model:
         instance.vocab_size = args.vocab_size
         instance.n_layers = args.n_layers
         instance.dtype = dtype
+        # The traced prefill's rope slice, made before any trace exists (see __init__).
+        instance._prefill_rope_slices[args.max_seq_len] = instance._prefill_rope_slice(args.max_seq_len)
 
         return instance
 
@@ -1204,6 +1214,12 @@ class Model:
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
         return tokens_embd, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
 
+    def _prefill_rope_slice(self, seq_len):
+        return [
+            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
+        ]
+
     def prepare_inputs_prefill(
         self,
         tokens,
@@ -1254,18 +1270,17 @@ class Model:
             if len(tokens_embd.shape) == 3:
                 tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
-        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159).
-        # Cached per sequence length: the slice runs on device, so recomputing it allocates. On a traced
-        # prefill that allocation happens with the trace live -- and is then discarded, since the replay
-        # uses the matrices that were bound when the trace was captured.
-        seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
-        rot_mats_global = self._prefill_rope_slices.get(seq_len)
-        if rot_mats_global is None:
-            rot_mats_global = [
-                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-            ]
-            self._prefill_rope_slices[seq_len] = rot_mats_global
+        # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159). A traced
+        # prefill uses the max_seq_len slice made with the model (bound at capture, reused by every replay, so a
+        # replay's host call allocates nothing); an eager prefill slices per call. Caching the eager slice would
+        # create a long-lived tensor while a decode trace may already be live (see __init__).
+        if trace_enabled:
+            rot_mats_global = self._prefill_rope_slices.get(self.args.max_seq_len)
+            if rot_mats_global is None:  # a Model built without create_transformer_compatible
+                rot_mats_global = self._prefill_rope_slice(self.args.max_seq_len)
+                self._prefill_rope_slices[self.args.max_seq_len] = rot_mats_global
+        else:
+            rot_mats_global = self._prefill_rope_slice(tokens_embd.shape[-2])
         rot_mats_local = None
 
         # Prepare page tables if provided
