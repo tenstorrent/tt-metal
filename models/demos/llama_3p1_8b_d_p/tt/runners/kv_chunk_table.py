@@ -3,8 +3,15 @@
 """Build the native/legacy shared KvChunkAddressTable for Llama prefill."""
 
 import socket
+import zlib
 
 from .kv_layout import PrefillKVLayout
+
+
+def _stable_config_name(config_id: int, num_configs: int) -> str:
+    """Zero-padded decimal name so std::map lexicographic order matches numeric config_id."""
+    width = max(2, len(str(max(num_configs - 1, 0))))
+    return f"{config_id:0{width}d}"
 
 
 def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
@@ -47,9 +54,13 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
     }
     api = ttnn.experimental.disaggregation
     base_addresses = tuple(int(t.buffer_address()) for t in (kv_cache.k, kv_cache.v))
-    host_name = socket.gethostname()
+    # Match the shared Blaze exporter and native KVM host identity.
+    host_name = f"host-{zlib.crc32(socket.gethostname().encode()) & 0x7FFFFFFF:08x}"
+    # Config ids are positional: K heads occupy the first half, V heads the second.
+    num_configs = len(layout.config_names)
+    config_names = tuple(_stable_config_name(config, num_configs) for config in range(num_configs))
     configs = {}
-    for name in layout.config_names:
+    for name in config_names:
         cfg = api.KvChunkAddressTableConfig()
         cfg.num_layers = layout.num_layers
         cfg.max_sequence_length = layout.max_seq_len
@@ -58,7 +69,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
         cfg.chunk_size_bytes = layout.chunk_size_bytes
         configs[name] = cfg
     table = api.KvChunkAddressTable(configs)
-    if tuple(table.config_name(i) for i in range(table.num_configs())) != layout.config_names:
+    if tuple(table.config_name(i) for i in range(table.num_configs())) != config_names:
         raise RuntimeError("shared table changed the K/V config order")
     groups = {}
     for coord, node in nodes.items():
