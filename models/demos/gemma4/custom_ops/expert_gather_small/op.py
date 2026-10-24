@@ -54,6 +54,14 @@ class ExpertGatherSmall:
     def capacity(T: int, K: int, E_loc: int) -> int:
         return T * K + TILE * (E_loc - 1)
 
+    @classmethod
+    def supports(cls, E: int, E_loc: int, K: int, H: int) -> bool:
+        """Whether the gather kernel takes this expert layout: a tile multiple of experts, a local share of them,
+        1 <= K <= E, and a hidden row that fits the kernel's L1 staging. The plan declines (shared dispatch path)
+        instead of the constructor asserting on a reduced-expert configuration."""
+        E, E_loc, K, H = int(E), int(E_loc), int(K), int(H)
+        return E > 0 and E % TILE == 0 and 0 < E_loc <= E and 1 <= K <= E and H % TILE == 0 and 2 * H <= 8192
+
     def __init__(self, T: int, E: int, E_loc: int, K: int, H: int):
         assert T % TILE == 0 and 0 < T <= self.MAX_TOKENS, f"T {T}: a multiple of 32 up to {self.MAX_TOKENS}"
         assert E % TILE == 0 and E_loc <= E and 1 <= K <= E_loc * 0 + E, (E, E_loc, K)

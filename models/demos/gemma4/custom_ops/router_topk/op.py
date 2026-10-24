@@ -46,6 +46,18 @@ class RouterTopk:
     CB_SCRATCH = 1  # pes, base, the send buffer, the output staging
     CB_GATHER = 2  # core 0: one 64-byte slot per user (the user's local weight vector)
     SEM = 0
+    MAX_EXPERTS = 256
+
+    @classmethod
+    def supports(cls, num_experts: int, top_k: int, packed: bool = False) -> bool:
+        """Whether the router programs can take ``num_experts`` logits columns and a top-``top_k``: the expert
+        count is a tile multiple up to MAX_EXPERTS (the row tile's columns) and k <= 32; the PACKED form also
+        needs 32-byte rows of 2k bf16 (k a multiple of 8). A model outside this (the CI's reduced-expert
+        configurations) keeps the shared ttnn chain; callers decide with this, the programs assert."""
+        e, k = int(num_experts), int(top_k)
+        if e <= 0 or e % TILE or e > cls.MAX_EXPERTS or not 1 <= k <= TILE:
+            return False
+        return not packed or (4 * k) % TILE == 0
 
     @staticmethod
     def golden(logits: torch.Tensor, pes: torch.Tensor, base: int, e_loc: int, k: int):
@@ -133,7 +145,7 @@ class RouterTopk:
         assert logits.layout == ttnn.TILE_LAYOUT and logits.dtype == ttnn.bfloat16, "logits must be bf16 TILE"
         _, _, S, E = (int(v) for v in logits.shape)
         assert S % TILE == 0 and logits.padded_shape[-2] == S, f"rows {S} must be tile-aligned"
-        assert E % TILE == 0 and E <= 256, f"experts {E} must be a multiple of 32 (<= 256)"
+        assert cls.supports(E, 1), f"experts {E} must be a multiple of 32 (<= {cls.MAX_EXPERTS})"
         assert pes.layout == ttnn.ROW_MAJOR_LAYOUT and tuple(int(v) for v in pes.shape) == (1, 1, 1, E), "pes RM"
         assert 1 <= k <= 32, k
         device = logits.device()
@@ -182,7 +194,7 @@ class RouterTopk:
         assert logits.layout == ttnn.TILE_LAYOUT and logits.dtype == ttnn.bfloat16, "logits must be bf16 TILE"
         _, _, B, E = (int(v) for v in logits.shape)
         assert B <= TILE and logits.padded_shape[-2] == TILE, f"one row tile of users expected, got {logits.shape}"
-        assert E % TILE == 0 and E <= 256, f"experts {E} must be a multiple of 32 (<= 256)"
+        assert cls.supports(E, 1), f"experts {E} must be a multiple of 32 (<= {cls.MAX_EXPERTS})"
         assert pes.layout == ttnn.ROW_MAJOR_LAYOUT and tuple(int(v) for v in pes.shape) == (
             1,
             1,

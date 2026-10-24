@@ -89,6 +89,25 @@ def small_row_min_tokens() -> int:
     return max(1, int(os.environ.get("GEMMA4_SMALL_ROW_MIN_TOKENS", "32")))
 
 
+def combine_fwd_reduction() -> int:
+    """GEMMA4_MOE_COMBINE_FWD_REDUCTION (default 1 = no reduction): the divisor on combine_fabric2d's forwarding
+    region (tt-metal #61858, "no value can deadlock the ring"; it trades DRAM against throughput)."""
+    return max(1, int(os.environ.get("GEMMA4_MOE_COMBINE_FWD_REDUCTION", "1")))
+
+
+def combine2d_extra_kwargs(module_cls) -> dict:
+    """The keyword arguments the shared ``TtCombine2dModule`` constructor takes beyond the common ones: main's
+    ``fwd_reduction`` (required since #61858) when the signature has it, nothing on a tree without it -- one call
+    site that works on both bases."""
+    import inspect
+
+    try:
+        params = inspect.signature(module_cls.__init__).parameters
+    except (TypeError, ValueError):
+        return {}
+    return {"fwd_reduction": combine_fwd_reduction()} if "fwd_reduction" in params else {}
+
+
 def small_rows_admit(rows: int, lo: int, hi: int) -> bool:
     """Pure bounds rule of the small-row path: ``lo <= rows <= hi`` tokens (unit-tested)."""
     return int(lo) <= int(rows) <= int(hi)
@@ -202,6 +221,7 @@ class _DispatchChunkPlan:
                 cluster_axis=owner.dispatch_axis,
                 num_links=owner.num_links,
                 topology=ttnn.Topology.Ring,
+                **combine2d_extra_kwargs(TtCombine2dModule),
             )
         else:
             self.dispatch = TtDispatchModule(
@@ -246,7 +266,12 @@ class _DispatchChunkPlan:
         # custom_ops/expert_gather_small + the GeGLU op on a persistent zero-initialized output + W @ expert_out +
         # one all-reduce). Built here, outside any trace capture, with the drop-free buffer contract asserted.
         self.gather = None
-        if ExpertGatherSmall.enabled() and self.chunk_tokens <= small_row_max_tokens() and not owner.ring:
+        if (
+            ExpertGatherSmall.enabled()
+            and self.chunk_tokens <= small_row_max_tokens()
+            and not owner.ring
+            and ExpertGatherSmall.supports(owner.num_experts, experts_per_chip, owner.top_k, owner.hidden)
+        ):
             self.gather = ExpertGatherSmall(
                 self.chunk_tokens, owner.num_experts, experts_per_chip, owner.top_k, owner.hidden
             )

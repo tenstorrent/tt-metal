@@ -230,13 +230,8 @@ class Gemma4DecoderLayer:
         if not self.enable_moe_block:
             return False
         moe = self.moe
-        lane_sharded = bool(moe.mesh_config is not None and getattr(moe.mesh_config, "lane_sharded", False))
         return (
-            flag("GEMMA4_MOE_FUSED")
-            and not lane_sharded
-            and moe.experts.ep == 1
-            and moe.experts.moe_decode is None
-            and moe.router.per_expert_scale is not None
+            moe.fused_decode_ok()
             and self.post_attention_layernorm.tt_weight_full is not None
             and self._router_scale_full is not None
             and not self.hidden_size_per_layer_input
