@@ -167,11 +167,15 @@ _CONV_ON_DEVICE = {"stem": True, "conv1": True, "conv2": True, "conv3": True, "d
 # addr and also tripped the z_dim=4/y_dim!=16 assert). Fixed: operandB BD reprogram re-added + line-146
 # assert disabled. Verified by test_max_pool2d.py::test_max_pool2d_resnet50_stem. Set False to host-fallback.
 _MAXPOOL_ON_DEVICE = True
-# Keep each conv's prepared (device) weights/bias resident for later runs. Off by default: the model's bf16 conv
-# weights total ~47 MB (+4 MB fc), which does not fit the emulator's single 43 MB DRAM bank, so caching them all
-# OOMs partway through layer4 (layer4_module2.conv2's 4.5 MB weights). With this off, each conv uploads its weights,
-# runs, and frees them, so DRAM only ever holds one conv's weights. Costs a weight re-prepare on every forward.
-_CACHE_DEVICE_CONV_WEIGHTS = os.environ.get("TT_METAL_QSR_RESNET_CACHE_CONV_WEIGHTS", "0") == "1"
+
+
+# Free each conv's prepared (device) weights/bias right after the conv. Opt-in for eager runs only: the model's bf16
+# conv weights total ~47 MB (+4 MB fc), which does not fit the emulator's single 43 MB DRAM bank, so keeping them all
+# resident OOMs partway through layer4 (layer4_module2.conv2's 4.5 MB weights). With it on, each conv uploads its
+# weights, runs, and frees them, at the cost of a weight re-prepare on every forward. Leave it off for traced runs:
+# trace capture cannot upload the host weights again. Read per call so a test can set it after import.
+def _free_device_conv_weights():
+    return os.environ.get("TT_METAL_QSR_RESNET_FREE_CONV_WEIGHTS", "0") == "1"
 
 
 def _host_conv2d(
@@ -247,7 +251,7 @@ def _conv2d_or_host(
             return_weights_and_bias=True,
             **conv2d_kwargs,
         )
-        if _CACHE_DEVICE_CONV_WEIGHTS:
+        if not _free_device_conv_weights():
             return out, out_dims, [dev_weight, dev_bias]
         # Free the prepared device copies and hand back the caller's tensors, so the next forward prepares again.
         for dev_t, orig_t in ((dev_weight, weight_tensor), (dev_bias, bias_tensor)):

@@ -287,10 +287,10 @@ void kernel_main() {
     dfb_mask_scratch.wait_front(num_tiles_per_block);
     reconfig_data_format_srcb(dfb_col_mask_packed_id, dfb_scaler_id);
     constexpr uint32_t dfb_ex_reduce_input = dfb_mask_scratch_id;
-    DataflowBuffer& dfb_ex_reduce_input_buf = dfb_mask_scratch;
+    auto& dfb_ex_reduce_input_buf = dfb_mask_scratch;
 #else
     constexpr uint32_t dfb_ex_reduce_input = dfb_in_id;
-    DataflowBuffer& dfb_ex_reduce_input_buf = dfb_in;
+    auto& dfb_ex_reduce_input_buf = dfb_in;
 #endif
     // E[x],
     // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
