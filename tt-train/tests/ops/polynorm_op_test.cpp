@@ -398,6 +398,23 @@ TEST_F(PolyNormOpTest, PolyNorm_FusedForwardRejectsNonTileAlignedChannels) {
     autograd::ctx().reset_graph();
 }
 
+TEST_F(PolyNormOpTest, PolyNorm_FusedBackwardRejectsNonTileAlignedChannels) {
+    using namespace ttml;
+    const auto data = make_case_data({1, 1, 2, 100});
+    auto* device = &autograd::ctx().get_device();
+
+    auto x = autograd::create_tensor(core::from_xtensor(data.input, device), /*requires_grad=*/true);
+    auto w = autograd::create_tensor(core::from_xtensor(data.weight, device), /*requires_grad=*/true);
+    auto b = autograd::create_tensor(core::from_xtensor(data.bias, device), /*requires_grad=*/true);
+
+    auto out = ops::polynorm3(
+        x, w, b, 1e-5F, ops::PolyNorm3ForwardVariant::CompositeComparisonOnly, ops::PolyNorm3BackwardVariant::Fused);
+    out->set_grad(core::ones_like(out->get_value()));
+
+    EXPECT_THROW(out->backward(), std::runtime_error);
+    autograd::ctx().reset_graph();
+}
+
 TEST_F(PolyNormOpTest, NIGHTLY_PolyNorm_Compare_NanoLlama3LikeChannelShape) {
     // NanoLlama3 embedding_dim is 384 with max_sequence_length 256.
     CompareKernelVsReferenceWithShape({1, 1, 256, 384}, 1e-5F);
