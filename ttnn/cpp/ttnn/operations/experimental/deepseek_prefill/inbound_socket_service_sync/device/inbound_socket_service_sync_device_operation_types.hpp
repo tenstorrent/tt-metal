@@ -21,6 +21,10 @@ struct InboundSocketServiceSyncParams {
     tt::tt_metal::DeviceAddr data_ready_sem_addr = 0;
     uint32_t page_size = 0;
     uint32_t num_pages = 0;
+    // Page size / count of each extra D2D segment, in segment order (empty for H2D and
+    // single-tensor D2D).
+    std::vector<uint32_t> extra_page_sizes;
+    std::vector<uint32_t> extra_num_pages;
     uint32_t scratch_cb_index = 0;
     uint32_t metadata_size_bytes = 0;  // 0 disables the metadata path
     tt::tt_metal::DeviceAddr metadata_l1_addr = 0;
@@ -40,6 +44,8 @@ struct InboundSocketServiceSyncInputs {
     // The service's persistent backing tensor (read by the kernel). Supplies the
     // mesh device + per-shard spec; the output tensors mirror its spec.
     const Tensor& backing;
+    // Extra D2D segment backings; each drains into its own output, after tokens/overhang.
+    std::vector<Tensor> extra_backings;
 
     // Caller-owned destinations, one per output: when set, the op writes into
     // them instead of allocating.
