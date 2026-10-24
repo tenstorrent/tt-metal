@@ -112,6 +112,24 @@ def test_evaluate_scores_every_clip_with_the_manifest_scorer(bundle, monkeypatch
     assert all(dimensions == list(PROMPTS[i]["thresholds"]) for i, _, dimensions in calls)
 
 
+def test_shared_models_are_fetched_once_before_the_workers_start(tmp_path, monkeypatch):
+    bundle = vbench_bundle.create_bundle(tmp_path / "vbench")
+    prompts = [{"text": "cats", "thresholds": {"background_consistency": 0.8}}]
+    vbench_bundle.clip_path(bundle, 0, 42).touch()
+    vbench_bundle.write_manifest(bundle, prompts=prompts, seeds=[42])
+    events = []
+
+    class Pool(InlinePool):
+        def submit(self, fn, *args):
+            events.append("worker")
+            return SimpleNamespace(result=lambda: {"background_consistency": 0.9})
+
+    monkeypatch.setattr(vbench_bundle, "ProcessPoolExecutor", Pool)
+    monkeypatch.setattr(vbench_bundle, "prefetch_models", lambda manifest: events.append("prefetch"))
+    vbench_bundle.evaluate(bundle)
+    assert events == ["prefetch", "worker"]
+
+
 def test_worker_failure_fails_the_gate(bundle, monkeypatch, expect_error):
     def score(path, **kwargs):
         raise RuntimeError("scoring worker failed")

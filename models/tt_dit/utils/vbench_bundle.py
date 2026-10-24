@@ -126,6 +126,19 @@ def aggregate(manifest, scores):
     return means
 
 
+def prefetch_models(manifest):
+    """Download, in this process, the models the workers would otherwise all fetch at once.
+
+    VBench (local=False) loads background_consistency's CLIP "ViT-B/32" through the clip package, which
+    downloads it on first use into ~/.cache/clip, empty in a fresh CI container. Parallel workers all
+    start that 338 MB download into the same file, and the overlapping writes fail its SHA256 check.
+    """
+    if any("background_consistency" in prompt["thresholds"] for prompt in manifest["prompts"]):
+        import clip
+
+        clip.load("ViT-B/32", device="cpu")
+
+
 def evaluate(bundle, *, workers=None):
     """Score every clip in parallel CPU processes, then enforce each prompt's mean."""
     bundle = Path(bundle).resolve()
@@ -139,6 +152,7 @@ def evaluate(bundle, *, workers=None):
         f"{manifest['host']}, {workers} CPU workers, scorer {manifest['scorer']} {manifest['scorer_kwargs']}",
         flush=True,
     )
+    prefetch_models(manifest)
     with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
         futures = {clip: pool.submit(score_clip, bundle, *clip) for clip in clips}
         scores = {clip: future.result() for clip, future in futures.items()}
