@@ -375,6 +375,7 @@ def test_multimodal_demo_text(
     sampler = None if can_sample_on_device else get_batch_sampler(temperature, top_p, model_args[0].tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
+    _decode_time_s = 0.0
 
     prompt_encoder = hf_multimodal_encode
 
@@ -478,6 +479,9 @@ def test_multimodal_demo_text(
                 _num_decode_tokens += (
                     gen_idx * max_batch_size
                 )  # gen_idx is (num_tokens - 1) to avoid counting compile iter
+                # decode_times[0] holds the decode compile pass, the sampling pre-compile and the trace
+                # capture; time only the tokens that are counted.
+                _decode_time_s += sum(decode_times[1:])
 
             next_texts = [tokenizer.decode([next_tokens[i].item()]) for i in range(next_tokens.shape[0])]
 
@@ -506,7 +510,7 @@ def test_multimodal_demo_text(
 
     # Calculate measurements
     total_inference_prefill_time = profiler.get_duration_sum("inference_prefill")
-    total_inference_decode_time = profiler.get_duration_sum("inference_decode", start_iteration=0)
+    total_inference_decode_time = _decode_time_s
     avg_ttft = total_inference_prefill_time / num_batches  # One first token per batch
     avg_prefill_t_s = _num_prefill_tokens / total_inference_prefill_time
     avg_decode_t_s = _num_decode_tokens / total_inference_decode_time
