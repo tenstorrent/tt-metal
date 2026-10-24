@@ -518,10 +518,6 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         *local_vc0_fast_path_info = resolution.info;
 
         const bool speedy = resolution.speedy;
-        const bool changed_by_peer =
-            local_vc0_fast_path_info->terminal_or_source_only != row_only_info.terminal_or_source_only ||
-            local_vc0_fast_path_info->worker_only_nonforwarding != row_only_info.worker_only_nonforwarding;
-        // Info only where the peer changed the row's own answer; the full per-router table is debug.
         const std::string decision = fmt::format(
             "Channel trimming fast path: chip {} eth {} {} peer {}: sender_mask {:#x} rx0 {} -> "
             "terminal_or_source_only {} (row alone {}), worker_only_nonforwarding {} (row alone {}), "
@@ -538,11 +534,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
             row_only_info.worker_only_nonforwarding,
             local_vc0_fast_path_info->enable_terminal_speedy_rx,
             speedy);
-        if (changed_by_peer) {
-            log_debug(tt::LogFabric, "{}", decision);
-        } else {
-            log_debug(tt::LogFabric, "{}", decision);
-        }
+        log_debug(tt::LogFabric, "{}", decision);
     }
 
     // The stream-register assignment is fabric-scoped (shared per mesh) and lives in
@@ -891,10 +883,9 @@ void ComputeMeshRouterBuilder::compile_ancillary_kernels(tt::tt_metal::Program& 
     }
 }
 
-void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) {
-    // Build defines
+std::map<std::string, std::string> ComputeMeshRouterBuilder::kernel_defines(bool is_2D_routing) const {
     std::map<std::string, std::string> defines = {};
-    if (ctx.is_2D_routing) {
+    if (is_2D_routing) {
         defines["FABRIC_2D"] = "";
 
         // FABRIC_2D_VC1_ACTIVE: Set when router actually has VC1 channels
@@ -934,6 +925,11 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         // configuration-wide when any local mesh uses express routing; router behavior does not
         // otherwise specialize on FABRIC_EXPRESS_ENABLED.
     }
+    return defines;
+}
+
+void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) {
+    const auto defines = kernel_defines(ctx.is_2D_routing);
 
     // Get SOC descriptor for eth core lookup
     const auto& control_plane = fabric_context_.get_control_plane();
