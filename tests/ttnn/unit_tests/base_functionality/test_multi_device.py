@@ -766,3 +766,22 @@ def test_multihost_sanity(mesh_device):
     torch_loop_back_tensor = ttnn.to_torch(ttnn_loop_back_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
 
     assert_with_pcc(torch_gelu, torch_loop_back_tensor, pcc=0.9999)
+
+
+def test_mesh_coordinate_range_value_equality():
+    a = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(1, 1))
+    b = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(1, 1))
+    c = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(0, 1))
+    assert a is not b
+    assert a == b and not (a != b)
+    assert a != c
+    assert hash(a) == hash(b)
+    assert {a: 1}[b] == 1
+
+
+def test_mesh_coordinate_range_set_value_equality():
+    r = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 0), ttnn.MeshCoordinate(1, 1))
+    a = ttnn.MeshCoordinateRangeSet(r)
+    b = ttnn.MeshCoordinateRangeSet(r)
+    assert a == b
+    assert a != ttnn.MeshCoordinateRangeSet()
