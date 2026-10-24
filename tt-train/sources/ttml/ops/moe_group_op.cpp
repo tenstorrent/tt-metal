@@ -113,7 +113,8 @@ MoEGroupOutputs moe_group_op(
     // grouped_scores_out. Attach it to grouped_out as the primary node,
     // and add a sync-only node on grouped_scores_out depending on the
     // primary so that d(grouped_scores) is accumulated before grad runs.
-    auto primary_node = autograd::add_backward_node(std::move(grad), grouped_out, dispatched, scores);
+    auto primary_node =
+        autograd::add_backward_node_for_outputs(std::move(grad), {grouped_out, grouped_scores_out}, dispatched, scores);
     grouped_out->set_node(primary_node);
     if (primary_node.has_value()) {
         grouped_scores_out->set_node(

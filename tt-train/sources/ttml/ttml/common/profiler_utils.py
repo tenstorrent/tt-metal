@@ -119,7 +119,7 @@ def profiler_marker(x, name, dump_results=False):
     if input_node is not None:
         links.append(input_node)
 
-    node_id = autograd_ctx.add_backward_node(backward_fn, links)
+    node_id = autograd_ctx.add_backward_node(backward_fn, links, [output])
     if node_id is not None:
         output.set_node(node_id)
 
