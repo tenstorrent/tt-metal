@@ -751,7 +751,26 @@ class DSV41PrefillIndexer:
         nvalid = ctx.sg.nvalid[r]
         tk = PS.Ticker(self.md, f"select_single r{r}")
         w = ttnn.to_layout(ttnn.linear(h, d.wproj, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
-        q = ttnn.to_layout(ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc), ttnn.ROW_MAJOR_LAYOUT)
+        _qb_pc = (
+            ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(12, 10),
+                in0_block_w=8,
+                out_subblock_h=2,
+                out_subblock_w=1,
+                out_block_h=2,
+                out_block_w=11,
+                per_core_M=2,
+                per_core_N=11,
+                transpose_mcast=False,
+                fused_activation=None,
+                fuse_batch=True,
+            )
+            if (int(qr.shape[-2]) == 512 and int(qr.shape[-1]) == 1280 and int(d.wq_b.shape[-1]) == 4096)
+            else None
+        )
+        q = ttnn.to_layout(
+            ttnn.linear(qr, d.wq_b, compute_kernel_config=self.ckc, program_config=_qb_pc), ttnn.ROW_MAJOR_LAYOUT
+        )
         qh = ttnn.to_layout(ttnn.permute(ttnn.reshape(q, [U, C, IHEADS, IDIM]), (0, 2, 1, 3)), ttnn.TILE_LAYOUT)
         c = ttnn.slice(tab[0], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
         s_ = ttnn.slice(tab[1], [0, 0, 0, HEAD_DIM - IDIM], [1, 1, C, HEAD_DIM])
