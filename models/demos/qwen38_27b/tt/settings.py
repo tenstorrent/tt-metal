@@ -11,8 +11,16 @@ cache are bfloat8_b from the start (the prefill spec's dataformats), not switche
 
 from ._settings_base import Setting, Settings  # noqa: F401  (Setting: the entries agents add to TABLE)
 
-TABLE = {}
+TABLE = {
+    "NORM_FIDELITY": Setting("HiFi4", ("HiFi4", "HiFi2", "LoFi"), "ENGINEER rule 7: HiFi4 by default"),
+    "NORM_FP32_ACC": Setting(True, None, "ENGINEER rule 7: fp32 accumulation by default"),
+    "NORM_WEIGHT_DTYPE": Setting(
+        "float32",
+        ("float32", "bfloat16"),
+        "the (1 + w) gamma is pre-offset in fp32 at load; bf16 would round 1 + w to 8 mantissa bits (10 KB either way)",
+    ),
+}
 
-MAX_PRECISION = {}
+MAX_PRECISION = {"NORM_FIDELITY": "HiFi4", "NORM_FP32_ACC": True, "NORM_WEIGHT_DTYPE": "float32"}
 
 settings = Settings("QWEN38_27B_", TABLE, max_precision=MAX_PRECISION)
