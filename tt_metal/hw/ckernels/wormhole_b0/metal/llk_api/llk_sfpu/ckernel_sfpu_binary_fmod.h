@@ -57,6 +57,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
     // Compute fmod = a - trunc(a/b) * b
     sfpi::vFloat result = a - trunc_div * b;
 
+    constexpr int32_t kInfBits = 0x7F800000;
+    v_if(sfpi::as<sfpi::vInt>(b_abs) == kInfBits) { result = a - (a - a); }
+    v_endif;
+
     // Post-correction - fmod result must satisfy |result| < |b|
     // If |result| >= |b|, the truncation was wrong by 1
     sfpi::vFloat result_abs = sfpi::abs(result);
@@ -96,7 +100,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_fmod_(sfpi::vFloat in0, sfpi::vFloat in1) 
 
     // Handle special cases using conditional assignment (NOT early return!)
     // When a == b, fmod(a, b) = 0
-    v_if(a == b) { result = sfpi::vFloat(0.0f); }
+    v_if(a == b) { result = a - b; }
     v_endif;
 
     // Handle division by zero - return NaN
