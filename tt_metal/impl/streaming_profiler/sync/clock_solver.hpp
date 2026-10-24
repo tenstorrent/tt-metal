@@ -139,9 +139,10 @@ private:
     static constexpr int64_t kAiclkSpanTicks = 64;
     static constexpr size_t kAiclkKeptInstants = 8;
     // One clock point from the chip's wall-clock core, or from a host read of its wall clock on a chip with no Ethernet
-    // cores (p100a). It holds a refclk tick, the wall clock there and, while AICLK is steady, the wall clock's rate.
+    // cores (p100a). It holds a refclk time in ticks, which a host read's falls between, the wall clock then and,
+    // while AICLK is steady, the wall clock's rate.
     struct Instant {
-        int64_t refclk = 0;
+        double refclk = 0.0;
         int64_t wall_eighths = 0;
         uint32_t wall_per_refclk_eighths = 0;
         double wall() const { return eighths_as_ticks(wall_eighths); }
@@ -184,7 +185,7 @@ private:
     void on_stamp(uint32_t dev, uint32_t core, const kernel_profiler::SyncLinkRecord& record);
     // Adds a clock point of chip `device`, with `refclk` counted from its refclk base, unless the point doesn't advance
     // both clocks past the chip's newest instant.
-    void add_instant(uint32_t device, int64_t refclk, int64_t wall_eighths, uint32_t wall_per_refclk_eighths);
+    void add_instant(uint32_t device, double refclk, int64_t wall_eighths, uint32_t wall_per_refclk_eighths);
     void solve(LinkState& state, Window window);
     // Logs the worst link's median round scatter over the capture, and the worst single window's fit error.
     void report_precision() const;

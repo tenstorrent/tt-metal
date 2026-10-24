@@ -216,12 +216,12 @@ void ClockSolver::on_record(uint32_t dev, uint32_t core, const kernel_profiler::
                  .wall_eighths = wall_eighths + kWallEighths * ctx_.devices[dev].check_offset,
                  .weight = meta.dense ? 1.0f : kernel_profiler::kSyncCheckKeepEvery});
         } else {
-            add_instant(dev, refclk, wall_eighths, clock.wall_per_refclk_eighths[i]);
+            add_instant(dev, static_cast<double>(refclk), wall_eighths, clock.wall_per_refclk_eighths[i]);
         }
     }
 }
 
-void ClockSolver::add_instant(uint32_t device, int64_t refclk, int64_t wall_eighths, uint32_t wall_per_refclk_eighths) {
+void ClockSolver::add_instant(uint32_t device, double refclk, int64_t wall_eighths, uint32_t wall_per_refclk_eighths) {
     Chip& chip = chips_[device];
     const Instant instant{
         .refclk = refclk,
@@ -238,10 +238,10 @@ bool ClockSolver::on_fallback_wall_clock(uint32_t device, int64_t tsc, uint64_t 
         return false;
     }
     // This only runs on a chip with no Ethernet cores (p100a), which is always the root. The newest host node maps the
-    // root chip's refclk to host time, so inverting it gives the refclk tick at the read.
+    // root chip's refclk to host time, so inverting it gives the refclk time of the read.
     const double refclk =
         host_node_->at + (static_cast<double>(tsc - bases_.tsc) - host_node_->value) / host_node_->tangent;
-    add_instant(device, std::llround(refclk), static_cast<int64_t>(wall) * kWallEighths, 0);
+    add_instant(device, refclk, static_cast<int64_t>(wall) * kWallEighths, 0);
     return true;
 }
 
@@ -413,7 +413,7 @@ bool ClockSolver::publish_dev(uint32_t dev) {
     const size_t before = chip.published;
     aiclk_.clear();
     aiclk_estimates_.clear();
-    const auto root_of = [&](const Instant& instant) { return (*to_root)(static_cast<double>(instant.refclk)); };
+    const auto root_of = [&](const Instant& instant) { return (*to_root)(instant.refclk); };
     for (; chip.published < instants.size(); chip.published++) {
         const Instant& instant = instants[chip.published];
         const double root = root_of(instant);
@@ -447,7 +447,7 @@ bool ClockSolver::publish_dev(uint32_t dev) {
             if (instant.refclk - start.refclk >= kAiclkSpanTicks) {
                 aiclk_estimates_.push_back(
                     {.root = (root_of(start) + root) / 2,
-                     .value = (instant.wall() - start.wall()) / static_cast<double>(instant.refclk - start.refclk) *
+                     .value = (instant.wall() - start.wall()) / (instant.refclk - start.refclk) *
                               kernel_profiler::kEthRefclkHz * 1e-9});
             }
         }
@@ -458,7 +458,7 @@ bool ClockSolver::publish_dev(uint32_t dev) {
     if (check_) {
         const Instant& last = instants[chip.published - 1];
         SyncCheck::ChipBatch& batch = check_->batch().chips[dev];
-        batch.root_minus_refclk = root_of(last) - static_cast<double>(last.refclk);
+        batch.root_minus_refclk = root_of(last) - last.refclk;
         batch.aiclk.insert(batch.aiclk.end(), aiclk_.begin(), aiclk_.end());
         plot(chip.aiclk_plot, aiclk_);
     }
