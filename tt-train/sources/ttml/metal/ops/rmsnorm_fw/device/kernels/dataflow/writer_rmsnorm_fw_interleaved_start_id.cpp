@@ -17,11 +17,15 @@ void kernel_main() {
 
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t block_size = get_compile_time_arg_val(1);
+    // The output is head-merged: input row (b*H + h)*Ht + t is output row (b*Ht + t)*H + h, in rows of Wt tiles.
+    // Ungated, Ht = H = 1 makes this the identity.
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t num_heads = get_compile_time_arg_val(3);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
-    constexpr auto output_args = TensorAccessorArgs<2>();
+    constexpr auto output_args = TensorAccessorArgs<4>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_RMS
@@ -36,6 +40,10 @@ void kernel_main() {
         write_tiles_by_row(cb_rms_output_idx, rms_output_addr_generator, r, onetile, tile_bytes, onetile);
 #endif
 
-        write_full_row_tiles(cb_output_idx, output_addr_generator, Wt, block_size, tile_bytes, r * Wt);
+        const uint32_t t = r % Ht;
+        const uint32_t h = (r / Ht) % num_heads;
+        const uint32_t b = r / (Ht * num_heads);
+        const uint32_t output_row = (b * Ht + t) * num_heads + h;
+        write_full_row_tiles(cb_output_idx, output_addr_generator, Wt, block_size, tile_bytes, output_row * Wt);
     }
 }

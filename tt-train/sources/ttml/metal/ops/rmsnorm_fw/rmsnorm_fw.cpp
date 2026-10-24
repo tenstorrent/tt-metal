@@ -9,8 +9,19 @@
 namespace ttml::metal {
 
 std::vector<std::optional<ttnn::Tensor>> rmsnorm_fw(
-    const ttnn::Tensor& input_tensor, const ttnn::Tensor& gamma_tensor, bool return_intermediates, float epsilon) {
-    auto result = ttnn::prim::ttml_rmsnorm_fw(input_tensor, gamma_tensor, return_intermediates, epsilon);
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& gamma_tensor,
+    bool return_intermediates,
+    float epsilon,
+    const std::optional<ttnn::Tensor>& gate_tensor) {
+    auto result = ttnn::prim::ttml_rmsnorm_fw(
+        input_tensor,
+        gamma_tensor,
+        return_intermediates,
+        epsilon,
+        /* preallocated_rms */ std::nullopt,
+        /* preallocated_output */ std::nullopt,
+        gate_tensor);
 
     if (result.size() == 1U) {
         return {result[0], std::nullopt};

@@ -39,6 +39,7 @@ ttml::metal::ops::rmsnorm_fw::device::RMSNormForwardDeviceOperation::tensor_retu
     bool return_intermediates,
     float epsilon = 1e-6F,
     const std::optional<ttnn::Tensor>& preallocated_rms = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt,
+    const std::optional<ttnn::Tensor>& gate = std::nullopt);
 
 }  // namespace ttnn::prim

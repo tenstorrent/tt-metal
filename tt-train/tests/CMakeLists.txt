@@ -65,6 +65,7 @@ set(SOURCES
     ops/cross_entropy_bw_op_test.cpp
     ops/rope_test.cpp
     ops/rmsnorm_op_test.cpp
+    ops/gated_rmsnorm_op_test.cpp
     ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
     ops/embedding_op_test.cpp
@@ -202,6 +203,7 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
+        benchmark/gated_rmsnorm_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
         benchmark/mla_kv_assemble_benchmark.cpp
