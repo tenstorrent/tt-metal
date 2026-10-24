@@ -293,7 +293,8 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
         # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
         overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),
-        fused_output_reduce_scatter=os.environ.get("KDA_FUSED_MMRS") == "1",
+        # Galaxy SP8xTP4 T=5120: 1.159 -> 1.099 ms; KDA_FUSED_MMRS=0 keeps the separate projection and reduce-scatter.
+        fused_output_reduce_scatter=os.environ.get("KDA_FUSED_MMRS", "1") == "1",
     )
 
 
