@@ -12,14 +12,19 @@ from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.tt.mesh_orientation import decode_flag
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
+# Widest shard (column tiles per core) the norm runs on a consumer's grid: the 8-core wqkv grids (31B 21 tiles,
+# 12B 15) are still cheaper than the S2I + I2S pair they remove (layer lab: -5..-14 us per layer over the pre-FF
+# norm alone); GEMMA4_NORM_SHARDED_OUT_MAX_W overrides.
+SHARDED_OUT_DEFAULT_MAX_W = 24
+
 
 def sharded_layout_program_config(mem, max_block_w=None):
     """The width-sharded LayerNorm program config running on the grid of ``mem``, a consumer's L1 width-sharded
     one-row-tile activation layout (a DRAM-sharded decode matmul's ``act_memory_config``): the norm's output is
     left in that layout and the matmul reads it without its own reshard (GEMMA4_NORM_SHARDED_OUT=1 on the native
     norm path). None when the layout is not one rectangular grid from (0, 0) of whole column tiles, or when a
-    shard is wider than ``max_block_w`` tiles (GEMMA4_NORM_SHARDED_OUT_MAX_W, default 4): a matmul grid of few wide
-    shards (the 12B wqkv: 8 cores x 15 tiles) keeps the norm on its own grid and the matmul's reshard."""
+    shard is wider than ``max_block_w`` tiles (GEMMA4_NORM_SHARDED_OUT_MAX_W, default ``SHARDED_OUT_DEFAULT_MAX_W``):
+    then the norm keeps its own grid and the matmul its reshard."""
     if not mem.is_sharded() or mem.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
         return None
     spec = mem.shard_spec
@@ -30,7 +35,11 @@ def sharded_layout_program_config(mem, max_block_w=None):
         return None
     gx, gy = ranges[0].end.x + 1, ranges[0].end.y + 1
     block_w = int(spec.shape[1]) // ttnn.TILE_SIZE
-    cap = int(os.environ.get("GEMMA4_NORM_SHARDED_OUT_MAX_W", "4")) if max_block_w is None else int(max_block_w)
+    cap = (
+        int(os.environ.get("GEMMA4_NORM_SHARDED_OUT_MAX_W", str(SHARDED_OUT_DEFAULT_MAX_W)))
+        if max_block_w is None
+        else int(max_block_w)
+    )
     if block_w > cap:
         return None
     subblock_w = 4

@@ -4,7 +4,7 @@
 left in that layout (RMSNorm.forward(out_memory_config=...), GEMMA4_NORM_SHARDED_OUT=1 on the native norm path):
 the norm equals the module's own-grid path up to the reduction order, the matmul fed from it equals the matmul fed
 from the interleaved output, and a layout of wide shards (the 8-core wqkv grids) is declined unless the cap allows
-it; single chip, the dense shard shapes (31B / 12B at TP=4)."""
+it (the 8-core wqkv grids are within the default cap of 24); single chip, the dense shard shapes (31B / 12B at TP=4)."""
 
 from types import SimpleNamespace
 
@@ -13,7 +13,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.dram_sharded import DramShardedLinear, can_dram_shard
-from models.demos.gemma4.tt.rms_norm import RMSNorm, sharded_layout_program_config
+from models.demos.gemma4.tt.rms_norm import SHARDED_OUT_DEFAULT_MAX_W, RMSNorm, sharded_layout_program_config
 
 SINGLE_CHIP = [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")]
 EPS = 1e-6
@@ -30,18 +30,18 @@ def _pcc(a, b):
         (1, 5376, 10752, None),
         (32, 3840, 7680, None),
         (1, 3840, 7680, None),
+        (32, 5376, 4096, 16),
         (32, 5376, 4096, None),
-        (32, 5376, 4096, 24),
-        (32, 3840, 2048, 24),
+        (32, 3840, 2048, None),
     ],
     ids=[
         "31b_gateup_b32",
         "31b_gateup_b1",
         "12b_gateup_b32",
         "12b_gateup_b1",
-        "31b_wqkv_declined",
-        "31b_wqkv_w24",
-        "12b_wqkv_w24",
+        "31b_wqkv_declined_w16",
+        "31b_wqkv",
+        "12b_wqkv",
     ],
 )
 @pytest.mark.parametrize("mesh_device, device_params", SINGLE_CHIP, indirect=True)
@@ -71,7 +71,7 @@ def test_rms_norm_sharded_out(mesh_device, device_params, R, W, N, max_w, monkey
     block_w = int(mem.shard_spec.shape[1]) // ttnn.TILE_SIZE
     if sharded_layout_program_config(mem) is None:
         # the layout was declined (shards wider than the cap): the native own-grid path ran, interleaved output
-        assert block_w > (4 if max_w is None else max_w) and not out.is_sharded()
+        assert block_w > (SHARDED_OUT_DEFAULT_MAX_W if max_w is None else max_w) and not out.is_sharded()
         assert torch.equal(out_t, ref_t)
         return
     assert out.is_sharded() and out.memory_config() == mem
