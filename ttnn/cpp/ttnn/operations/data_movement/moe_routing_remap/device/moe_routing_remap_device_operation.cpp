@@ -86,8 +86,9 @@ MoeRoutingRemapDeviceOperation::tensor_return_value_t MoeRoutingRemapDeviceOpera
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
 
-    return tensor_args.optional_output_routing_weights.value_or(
-        create_device_tensor(output_spec, tensor_args.input_routing_weights.device()));
+    return tensor_args.optional_output_routing_weights.has_value()
+               ? *tensor_args.optional_output_routing_weights
+               : create_device_tensor(output_spec, tensor_args.input_routing_weights.device());
 }
 }  // namespace ttnn::operations::data_movement
 
