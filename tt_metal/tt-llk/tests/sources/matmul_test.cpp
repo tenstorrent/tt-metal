@@ -276,7 +276,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(/* dest_index */ 0, CT_DIM, RT_DIM);
                 }
                 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                #ifdef MATMUL_UNFUSED_POST
+                constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                #else
                 constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
+                #endif
                 #else
                 constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
                 #endif

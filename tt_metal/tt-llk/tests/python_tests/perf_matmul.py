@@ -181,7 +181,7 @@ def test_perf_matmul(
             ),
             *MATMUL_FORM_KEYS.for_block(
                 formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc,
+                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True,
             ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(

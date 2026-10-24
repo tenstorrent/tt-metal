@@ -262,14 +262,15 @@ class MATMUL_FORM_KEYS(TemplateParameter):
     still holds them, as the variant hash reads it."""
 
     def __init__(
-        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False
+        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False, unfused_post: bool = False
     ):
         self.kt_per_section = kt_per_section
         self.output_format = output_format
         self.row_le_8 = row_le_8
+        self.unfused_post = unfused_post
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -277,10 +278,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             f"constexpr std::uint32_t MATMUL_KT_PER_SECTION = {self.kt_per_section};\n"
             f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
             + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
+            + ("\n#define MATMUL_UNFUSED_POST" if self.unfused_post else "")
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None) -> list:
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
@@ -312,6 +314,13 @@ class MATMUL_FORM_KEYS(TemplateParameter):
                 1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
                 formats.output_format,
                 0 < max(ct_dim, rt_dim) <= 8,
+                # one Bfp8_b tile to a Float32 output at HiFi2 and half sync reads slower with the fused post and DEST flip: main's separate stalls
+                unfuse_one_tile
+                and (kt_dim, ct_dim, rt_dim) == (1, 1, 1)
+                and math_fidelity == MathFidelity.HiFi2
+                and dest_sync == DestSync.Half
+                and formats.input_format == DataFormat.Bfp8_b
+                and formats.output_format == DataFormat.Float32,
             )
         ]
 
