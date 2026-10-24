@@ -18,8 +18,8 @@
 //
 // Active images are submitted with X280Runtime::enqueue, which accepts only a
 // healthy runtime-owned tile from that runtime, and restored with
-// X280Runtime::cleanup. The health latch below is what a failed restoration
-// leaves behind.
+// X280Runtime::cleanup, or taken back with X280Runtime::revive. The health
+// latch below is what a failed restoration leaves behind.
 
 #pragma once
 
@@ -287,8 +287,9 @@ public:
     // either of two causes: a bounded restoration that did not return all four
     // harts, or a submission that failed after clearing the per-hart records,
     // which only resident idle's entry path republishes. Enqueue on an
-    // unhealthy tile returns EnqueueOutcome::Unhealthy, and nothing in
-    // software clears the latch.
+    // unhealthy tile returns EnqueueOutcome::Unhealthy. X280Runtime::revive is
+    // the one path that clears the latch, and only when it confirms all four
+    // harts back in resident idle.
     bool healthy() const;
 
     // The four-hart snapshot saved when health was lost. Outlives the session

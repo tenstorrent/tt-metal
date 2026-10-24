@@ -179,6 +179,16 @@ struct ImageCheck {
 // marker or the stack can wedge the tile until an ASIC reset.
 ImageCheck validate_idle_image(uint64_t load_addr, size_t size);
 
+// Whether a resident-idle image carries the RNMI revive entry: its marker
+// dword at X280_IDLE_RNMI_MAGIC_OFFSET, which entry.S places just before the
+// fixed handler addresses. Boot writes the RNMI handler registers only for an
+// image that does, so a stray RNMI never jumps into code that is not the
+// handler.
+bool idle_image_has_rnmi_entry(const uint8_t* image, size_t size);
+
+// The marker dword as read back from a live tile's LIM.
+bool idle_rnmi_marker_matches(uint64_t marker);
+
 // Bound an active image against its reserved region before writing LIM.
 //
 // Two upper bounds, whichever is lower: the selected layout's image boundary

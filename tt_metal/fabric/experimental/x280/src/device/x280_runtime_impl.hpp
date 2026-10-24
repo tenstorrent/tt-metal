@@ -67,6 +67,10 @@ public:
     bool session_live(SessionId id) const;
     CleanupResult cleanup(SessionId id, std::chrono::milliseconds timeout);
 
+    // Claims the tile's live session (if any) the way cleanup does, revives
+    // the requested harts, and reaps that session.
+    ReviveResult revive(X280Tile& tile, const ReviveRequest& request);
+
 private:
     // Takes sessions_mutex_, which is what keeps two callers minting on
     // different tiles from drawing the same value.
