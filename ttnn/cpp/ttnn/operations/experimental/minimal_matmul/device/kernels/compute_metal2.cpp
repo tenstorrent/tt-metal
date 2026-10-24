@@ -87,7 +87,6 @@ ALWI void swiglu_block(
             copy_tile(in_dfb, up_tile_id, UP_DST);
 #endif
             silu_tile(GATE_DST);
-            mul_binary_tile_init();
             mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
             tile_regs_commit();
 
@@ -237,7 +236,6 @@ ALWI void add_bias_and_addcmul_block(
 
                 copy_tile(intermediate_dfb, tile_id, DST_ID);
 
-                mul_binary_tile_init();
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
@@ -267,7 +265,6 @@ ALWI void add_bias_and_addcmul_block(
                 copy_tile(ternary_b_dfb, n, TERNARY_B_DST_ID);
                 copy_tile(intermediate_dfb, tile_id, DST_ID);
 
-                mul_binary_tile_init();
                 mul_binary_tile(DST_ID, TERNARY_B_DST_ID, DST_ID);
 #endif  // TERNARY_B_IS_FLOAT32
 
