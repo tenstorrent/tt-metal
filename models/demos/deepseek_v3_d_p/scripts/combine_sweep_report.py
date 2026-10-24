@@ -98,11 +98,17 @@ def main():
             return ""
         if outcome.get(name) != "pass":
             return outcome.get(name, "?") if which == "dev" else ""
+        span = device.get(name)
         if which == "dev":
-            span = device.get(name)
             return f"{span[0]:.0f} - {span[1]:.0f}" if span else "-"
         value = measured.get(name, {}).get("traced_us" if which == "ht" else "untraced_us")
-        return f"{float(value):.0f}" if value else "-"
+        if not value:
+            return "-"
+        if not span:
+            return f"{float(value):.0f}"
+        # Not a bare "|": that is the table's own column separator, and a cell holding one splits into
+        # two, leaving the row wider than its header.
+        return f"{float(value):.0f} ({float(value) / span[1] - 1:+.0%})"
 
     def alloc_mb(model):
         mb = sorted(
@@ -126,7 +132,7 @@ def main():
         f"target reduction factor {', '.join(sorted(f + 'x' for f in factors)) if factors else 'unknown'}",
         "",
         "dev is the device op time per chip, min - max over the 32 chips. ht and hu are the host wall",
-        "clock per launch, traced and untraced. All in us.",
+        "clock per launch, traced and untraced, in us, each with what it adds over the slowest chip.",
         "",
     ]
     head = ["model", ""] + [f"{t} {label}" for t, _, label in cases] + ["op alloc MB"]
