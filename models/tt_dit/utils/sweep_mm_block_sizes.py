@@ -520,7 +520,8 @@ USE_CASE_CONFIGS = {
         "math_approx_mode": True,
     },
     "ff1_gelu": {
-        "fused_activation": (ttnn.UnaryOpType.GELU, True),
+        # Wan2.2 FFN runs activation_fn="gelu_tanh"
+        "fused_activation": ttnn.UnaryOpType.GELU_TANH,
     },
     # Like "plain" but with exact (non-approx) GELU fused — matches the
     # activation="gelu" config in test_all_gather_minimal_matmul_async.py.

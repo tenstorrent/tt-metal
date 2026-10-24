@@ -331,9 +331,13 @@ class LoRAMixin:
         ttnn.deallocate(delta)
 
         if saved_fused is not None:
-            # Only gelu is currently hoisted into fused_activation_fn.
-            if saved_fused[0] == ttnn.UnaryOpType.GELU:
-                out = ttnn.gelu(out)
+            # Only gelu variants are currently hoisted into fused_activation_fn, either as a bare
+            # UnaryOpType or a (UnaryOpType, param0) tuple; see _FUSED_GELU_VARIANTS in linear.py.
+            op, param = saved_fused if isinstance(saved_fused, tuple) else (saved_fused, False)
+            if op == ttnn.UnaryOpType.GELU:
+                out = ttnn.gelu(out, fast_and_approximate_mode=bool(param))
+            elif op == ttnn.UnaryOpType.GELU_TANH:
+                out = ttnn.gelu(out, variant=ttnn.GeluVariant.Tanh)
             else:
                 raise NotImplementedError(f"runtime LoRA cannot replay fused activation {saved_fused}")
         if saved_activation is not None:
