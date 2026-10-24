@@ -1653,7 +1653,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     device_id,
                     worker_core.x,
                     worker_core.y,
-                    enchantum::to_string(static_cast<tracy::RiscType>(riscEndIndex)),
+                    enchantum::to_string(riscType),
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
