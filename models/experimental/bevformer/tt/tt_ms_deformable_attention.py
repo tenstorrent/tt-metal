@@ -271,7 +271,8 @@ class TTMSDeformableAttention:
             query = ttnn.add(query, query_pos)
 
         if use_signpost:
-            signpost(header=f"TT MS Deformable Attn Module Start, {query.shape[1]} - {self.total_keys}")
+            deformable_attn_region = f"TT MS Deformable Attn Module {query.shape[1]} - {self.total_keys}"
+            signpost(header=f"{deformable_attn_region} Start")
 
         # Handle batch_first format
         if not self.batch_first:
@@ -372,7 +373,7 @@ class TTMSDeformableAttention:
             output = ttnn.permute(output, (1, 0, 2))
 
         if use_signpost:
-            signpost(header="TT MS Deformable Attn Module End")
+            signpost(header=f"{deformable_attn_region} End")
 
         return output
 

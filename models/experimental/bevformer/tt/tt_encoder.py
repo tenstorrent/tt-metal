@@ -467,7 +467,7 @@ class TTBEVFormerEncoder:
             )
 
         if use_signpost:
-            signpost(header="BEVEncoder Reference Points Generation Start")
+            signpost(header="BEVEncoder Reference Points Start")
 
         # Project the cached 3D reference points to camera coordinates.
         # These reference points define where each BEV query will sample features from camera views

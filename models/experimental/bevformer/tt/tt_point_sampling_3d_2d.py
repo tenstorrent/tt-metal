@@ -102,6 +102,8 @@ def point_sampling_3d_to_2d_ttnn(
     """
     if use_signpost:
         signpost(header="TTNN Point Sampling 3D to 2D Start")
+    if use_signpost:
+        signpost(header="Point Sampling Tensor Setup Start")
 
     # Convert inputs to TTNN tensors if needed. float32 throughout: in bfloat16 the projection
     # moves the points by several pixels on average and by hundreds at worst.
@@ -140,13 +142,15 @@ def point_sampling_3d_to_2d_ttnn(
     ]
 
     if use_signpost:
+        signpost(header="Point Sampling Coordinate Scaling End")
+    if use_signpost:
         signpost(header="Point Sampling Camera Loop Start")
 
     reference_points_cam_list = []
 
     for cam_idx in range(num_cams):
         if use_signpost:
-            signpost(header=f"Point Sampling Camera {cam_idx}")
+            signpost(header=f"Point Sampling Camera {cam_idx} Start")
 
         # The camera's matrix as multiply-adds with per-sample [B, 1, 1, 1] coefficients: a matmul
         # truncates float32 to tf32 and moves the points by about a pixel.
@@ -165,11 +169,15 @@ def point_sampling_3d_to_2d_ttnn(
         points_cam = ttnn.reshape(points_cam_flat, (batch_size, num_points, 1, num_queries, 3))  # [B, D, 1, Q, 3]
         points_cam = ttnn.permute(points_cam, (1, 0, 2, 3, 4))  # [D, B, 1, Q, 3]
         reference_points_cam_list.append(points_cam)
+        if use_signpost:
+            signpost(header=f"Point Sampling Camera {cam_idx} End")
 
     reference_points_cam = ttnn.concat(reference_points_cam_list, dim=2)  # [D, B, num_cam, Q, 3]
 
     if use_signpost:
-        signpost(header="Point Sampling Depth Calculation")
+        signpost(header="Point Sampling Camera Loop End")
+    if use_signpost:
+        signpost(header="Point Sampling Depth Calculation Start")
 
     depth = reference_points_cam[..., 2:3]  # [D, B, num_cams, Q, 1]
     bev_mask = depth > eps
@@ -197,7 +205,9 @@ def point_sampling_3d_to_2d_ttnn(
     )  # [D, B, num_cams, Q, 2]
 
     if use_signpost:
-        signpost(header="Point Sampling Boundary Validation")
+        signpost(header="Point Sampling Depth Calculation End")
+    if use_signpost:
+        signpost(header="Point Sampling Boundary Validation Start")
     # Clamp to [-10, 10] and create validity masks: inside the image, open bounds as upstream.
     reference_points_cam_clamped = ttnn.clamp(reference_points_cam, -10.0, 10.0)
     valid_x = ttnn.logical_and(
@@ -218,6 +228,8 @@ def point_sampling_3d_to_2d_ttnn(
     reference_points_cam = ttnn.permute(reference_points_cam, (2, 1, 3, 0, 4))  # [num_cams, B, Q, D, 2]
     bev_mask = ttnn.squeeze(ttnn.permute(bev_mask, (2, 1, 3, 0, 4)), -1)  # [num_cams, B, Q, D]
 
+    if use_signpost:
+        signpost(header="Point Sampling Boundary Validation End")
     if use_signpost:
         signpost(header="TTNN Point Sampling 3D to 2D End")
 
