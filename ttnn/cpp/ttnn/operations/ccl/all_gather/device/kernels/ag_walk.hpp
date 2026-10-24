@@ -21,8 +21,8 @@
 #include <cstdint>
 
 // The walk and the packet builder are always inlined into the reader, so the compile-time geometry (named CT args)
-// folds into their arithmetic: divisions by S, Uo, lambda become shifts and multiplies. Out of line each run paid
-// 6-10 hardware divides (BH, 26 MB: reader cost per packet 1142 -> 935 cycles at k = 2).
+// folds into their arithmetic: divisions by S, Uo, lambda become shifts and multiplies instead of 6-10 hardware
+// divides per run (BH, 26 MB, k = 2: 18% fewer reader cycles per packet).
 #define AG_INLINE inline __attribute__((always_inline))
 
 namespace ag {
@@ -47,9 +47,11 @@ struct WalkShape {
 // L: the output's contiguous_page_stride(). Shared by the kernel walk and the host cost model.
 //
 // If N * (S / Uo) divides L, lambda = L / N steps whole rows onto the next page of the same bank, so a run is not
-// clipped at the row end (cross_row: 6-74% faster on BH where it applies). Otherwise lambda = L (or 1 for unit
-// elements) and a run stops at the row end, where the other devices' stripes start; the column is then capped at
-// one row of its lane so that most columns are a single run. A column is at most a packet (but at least one element).
+// clipped at the row end (cross_row; BH, one bf16 tile per device per row, 2-26 MB: 5% faster on geomean over line /
+// ring and algorithms, up to 25% for ring multicast, but up to 9% slower for line unicast at n = 3). Otherwise
+// lambda = L (or 1 for unit elements) and a run stops at the row end, where the other devices' stripes start; the
+// column is then capped at one row of its lane so that most columns are a single run. A column is at most a packet
+// (but at least one element).
 constexpr WalkShape walk_shape(const WalkGeo& g, uint32_t L) {
     const bool pages = g.E == g.Uo;
     const bool cross_row = pages && L % (g.N * (g.S / g.Uo)) == 0;
@@ -98,8 +100,7 @@ inline constexpr uint32_t kLocalAddrBytes = kSegmentsPerPacket * sizeof(uint64_t
 // [SlotInfo][k records][k local-address sets | pad to A][k headers, each padded to A][k payloads of `cap`]. Every
 // offset from the headers on is a multiple of A and so is slot_bytes, so payload L1 addresses are congruent with their
 // A-aligned sources (CB bases are DRAM-aligned, a multiple of A). The records and local addresses belong to the reader
-// while it holds the slot (the local addresses never leave it, so they are not on its stack); the header region
-// belongs to the writer, and the reader never writes it.
+// while it holds the slot; the header region belongs to the writer for the whole op, and the reader never writes it.
 struct SlotLayout {
     uint32_t rec_off, loc_off, hdr_off, hdr_stride, pay_off, pay_stride, slot_bytes;
 
@@ -246,7 +247,8 @@ public:
     // Walk positions [skip, skip + take) of elements [e0, e0 + ne), for `stripe`. The order depends only on
     // (e0, ne), never on the stripe, so a relay's positions match its upstream's.
     // When runs stop at the row end, a slice that starts mid-row walks that partial row first (head), then tiles
-    // anchored at row starts: tiles anchored mid-row would straddle every row end and split every column in two.
+    // anchored at row starts: tiles anchored mid-row would straddle every row end and split every column in two
+    // (BH: bfp8 9 MB 20-25% slower without the head, bf16 4-26 MB up to 5%).
     AG_INLINE void init(uint32_t stripe, uint32_t e0, uint32_t ne, uint32_t skip, uint32_t take) {
         stripe_units_ = stripe * S_;
         left_ = take;
@@ -351,7 +353,8 @@ public:
             span_n_ = 0;
             k_ = 0;
         }
-        // Elements lambda apart continue in the input only as whole input pages at the input's own stride.
+        // Elements lambda apart continue in the input only as whole input pages at the input's own stride; then one
+        // read covers the run (BH, interleaved tiles: 3-6% faster at 8-26 MB bf16, 13-18% on a bfp8 ring).
         pages_ = src_cross_ && E_ == Ui_ && r.lambda == L_;
     }
 

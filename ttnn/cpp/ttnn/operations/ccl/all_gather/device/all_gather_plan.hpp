@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "all_gather_device_operation_types.hpp"
@@ -28,24 +29,61 @@ class MeshDevice;
 // already made) -> WorkerSched per worker (schedule).
 namespace ttnn::operations::ccl::all_gather_plan {
 
-// ---- structural constants (decided, not swept) ----
+// ---- structural constants ----
 
-// CB slots per worker. A third slot measured within 3% on BH; reads in flight per slot (k) are the lever instead.
+// CB slots per worker: one filling while the other drains. Reads in flight per slot (k) are the throughput lever.
 inline constexpr uint32_t kCbSlots = 2;
-// Read bytes one slot aims to have in flight: two full packets at P = 15168 (k = 2 cut worker time 24% vs k = 1).
-// Packets shorter than that (a smaller payload, or a packet cap from short runs) get more per slot.
-inline constexpr uint32_t kSlotReadBytes = 2 * 15168;
-// Packets per slot at most. Nothing in the kernels grows with k but the slot (records and local addresses live in it,
-// not on a stack), so this only bounds the L1 search; slot_bytes is still checked against L1.
+// Packets per slot at most: bounds the L1 search (slot_bytes is still checked against L1) and fits AgChoice::k.
 inline constexpr uint32_t kMaxPacketsPerSlot = 32;
 
-// Mux V2 buffers per channel. n = 1 needs 4 (2 costs 12-14% on BH); at n >= 2, 2 is within 3% of 4 and keeps the
-// mux's L1 map smallest.
-constexpr uint32_t mux_buffers(uint32_t n) { return n == 1 ? 4 : 2; }
+// Index of the per-algorithm arrays below.
+inline constexpr uint32_t kUc = 0;
+inline constexpr uint32_t kMc = 1;
+
+// ---- per-arch tuning ----
+
+// Every value the op takes from measurement rather than from a hardware fact, for one arch at the fabric payload and
+// link count it was measured at. Arrays indexed [algo][topology] are [kUc, kMc][line, ring]. Any other arch, payload
+// or link count runs on the Blackhole entry and is logged once as uncalibrated; calibrating an arch means adding its
+// entry to kTunings in all_gather_plan.cpp.
+struct Tuning {
+    tt::ARCH arch = tt::ARCH::Invalid;
+    uint32_t payload = 0;  // fabric max payload the entry was measured at, bytes
+    uint32_t links = 0;    // links per axis it was measured at
+
+    // Choice model T = fixed_us + max(B / bw_gbps, unicast bank time), B = bytes on the busiest link-direction.
+    std::array<std::array<double, 2>, 2> fixed_us{};  // microseconds
+    std::array<std::array<double, 2>, 2> bw_gbps{};   // GB/s of payload on the busiest link-direction
+    double bank_gbps = 0;                             // GB/s one output bank sustains, reads and writes together
+
+    // Unicast workers per link-direction: a ring always 3 if ring_n3, a line 3 from n3_min_packets packets on the
+    // busiest link-direction, else 2.
+    bool ring_n3 = false;
+    uint64_t n3_min_packets = 0;
+
+    // Slot reads: about slot_read_bytes of payload per read barrier (k = ceil(slot_read_bytes / packet cap)).
+    uint32_t slot_read_bytes = 0;
+    // Unicast data_valid cadence: about signals_per_iter signals per worker iteration, clamped to
+    // [cadence_min_packets, cadence_max_packets] packets.
+    uint32_t signals_per_iter = 0, cadence_min_packets = 0, cadence_max_packets = 0;
+
+    std::array<uint32_t, kAgMaxWorkers> mux_buffers{};  // Mux V2 buffers per channel, [n - 1]
+    tt::tt_metal::NOC mux_forwarder_noc = tt::tt_metal::NOC::NOC_0;
+    // The writer's NOC; the reader takes the other one (two RISCs of a core use different NOCs).
+    std::array<std::array<tt::tt_metal::NOC, 2>, 2> writer_noc{};
+};
+
+// The entry for `arch`, or Blackhole's when it has none.
+const Tuning& tuning(tt::ARCH arch);
+
+// Mux V2 buffers per channel for n channels.
+inline uint32_t mux_buffers(tt::ARCH arch, uint32_t n) { return tuning(arch).mux_buffers.at(n - 1); }
+
+// ---- test override ----
 
 // Test-only override: "<algo>[:key=value,...]", algo one of auto|unicast|multicast|composite, keys n (unicast workers
-// per link-direction, 1-3), links, k (packets per slot, 1-kMaxPacketsPerSlot; more than fit in L1 is a fatal), rdelay
-// and wdelay (spin cycles per slot, 0-65535). all_gather() reads it; nothing else in the op reads the environment.
+// per link-direction, 1-3), links, rdelay and wdelay (spin cycles per slot, 0-65535). all_gather() reads it; nothing
+// else in the op reads the environment.
 inline constexpr const char* kForceEnvVar = "TTNN_ALL_GATHER_FORCE";
 
 // Strict: any malformed spec is a TT_FATAL naming the problem.
@@ -69,10 +107,6 @@ enum Dir : uint32_t { kEast = 0, kWest = 1, kNorth = 2, kSouth = 3 };
 // A unicast link-direction: forward sends to the next device on the axis.
 inline constexpr uint32_t kFwd = 0;
 inline constexpr uint32_t kBwd = 1;
-
-// Index of the per-algorithm arrays below.
-inline constexpr uint32_t kUc = 0;
-inline constexpr uint32_t kMc = 1;
 
 // The input's and output's pages, from their specs. Page content c*, aligned page (bank pitch) a* and read alignment
 // r*, in bytes; i input, o output. pages_per_stripe_row: input pages this device contributes to one output row.
@@ -114,19 +148,12 @@ PlanIn make_plan_in(
 
 // A: the cut quantum in bytes; a unit is A bytes. Ui/Uo: input/output page footprint in units. S: units per
 // stripe-row, R: rows. E: units per walk element (Uo when a stripe-row holds whole output pages, else 1). P_A: packet
-// payload cap, a multiple of A. dst_cross/src_cross: runs may continue across output/input pages. lambda, h,
-// cross_row: the walk shape (ag::walk_shape, shared with the kernel). run_bytes: modelled mean bytes per packet
-// segment (a destination run, split evenly when longer than P_A); fill: modelled payload per packet (at most 4
-// segments). cap: the packet builder's payload cap and slot payload stride (ag::packet_cap). stripe_banks:
-// Pages::stripe_banks.
+// payload limit, a multiple of A. dst_cross/src_cross: runs may continue across output/input pages. cap: the packet
+// builder's payload cap and the slot's payload stride, at most 4 of the longest segments the walk can make.
 struct Geometry {
     uint32_t A = 0, Ui = 0, Uo = 0, S = 0, R = 0, E = 0, elements = 0, P_A = 0;
     bool dst_cross = false, src_cross = false;
-    uint32_t lambda = 1, h = 1;
-    bool cross_row = false;
     uint32_t cap = 0;
-    uint32_t run_bytes = 0, fill = 0;
-    uint32_t stripe_banks = 0;
     bool operator==(const Geometry&) const = default;
 };
 
@@ -136,15 +163,9 @@ std::optional<Geometry> make_geometry(const PlanIn& in, bool unicast);
 
 // ---- legality ----
 
-struct Verdict {
-    bool ok = false;
-    std::string reason;  // why not, when !ok
-    bool operator==(const Verdict&) const = default;
-};
-
-// [kUc], [kMc] at the least resources (1 worker, 1 link). A legal input never fatals later; the per-n mux-map and
-// placement checks run again for the n and links actually used.
-std::array<Verdict, 2> legality(const PlanIn& in);
+// Why algorithm kUc / kMc cannot run `in` at the least resources (1 worker, 1 link); empty when it can. A legal input
+// never fatals later; the per-n mux-map and placement checks run again for the n and links actually used.
+std::string verdict(const PlanIn& in, uint32_t algo);
 
 // ---- slices and placement ----
 
@@ -180,9 +201,9 @@ struct AgPlan {
     Geometry geo;  // the chosen algorithm's (empty for composite)
     uint32_t N = 0;
     bool ring = false;
+    tt::ARCH arch = tt::ARCH::Invalid;   // selects the Tuning entry
     std::string composite_reason;        // why composite (empty otherwise)
     uint32_t slot_bytes = 0;             // CB page = one slot (ag::slot_offsets); kCbSlots of them per worker
-    uint32_t variants = 1;               // multicast route variants: 2 when an active axis is an even ring
     std::vector<Slice> slices;           // unicast: links * n, (link, w) -> link * n + w; multicast: links
     std::vector<Group> groups;           // unicast
     std::vector<CoreCoord> mcast_cores;  // multicast, one per link
@@ -195,7 +216,7 @@ struct AgPlan {
 AgPlan make_plan(const PlanIn& in);
 
 // The plan for a native choice already made (no decisions, no logging); the factories call this on a program-cache
-// miss. TT_FATAL if the choice does not fit `in`.
+// miss. TT_FATAL if the algorithm is illegal for `in` or its cores do not fit.
 AgPlan expand(const PlanIn& in, const AgChoice& choice);
 AgPlan expand(const AllGatherParams& params, const tt::tt_metal::TensorSpec& in, const tt::tt_metal::TensorSpec& out);
 
@@ -229,21 +250,18 @@ WorkerSched schedule(const AgPlan& plan, uint32_t dev, uint32_t link, uint32_t d
 
 // ---- multicast routes ----
 
-// dir: the logical neighbor (a Dir). Range bytes sit at physical slots: range = e | w << 8 | n << 16 | s << 24.
+// One multicast connection: dir is the logical neighbor (a Dir); range holds hop counts at physical slots,
+// range = e | w << 8 | n << 16 | s << 24.
 struct McastConn {
     uint32_t dir;
-    uint32_t range_v0, range_v1;
-};
-struct McastRoutes {
-    std::vector<McastConn> conns;
-    bool alternates;
+    uint32_t range;
 };
 
 // mesh_shape: devices per axis; axis selects the active axis of a 1D collective (nullopt: every axis with more than
 // one device). axis_ring: the axis wraps (false for 2 devices). phys_dir maps each logical direction to its physical
-// eth_chan_directions slot; identity when the axes run E/W and N/S. Each route variant reaches every other device of
-// the collective exactly once.
-McastRoutes mcast_routes(
+// eth_chan_directions slot; identity when the axes run E/W and N/S. Together the connections reach every other device
+// of the collective exactly once.
+std::vector<McastConn> mcast_routes(
     uint32_t N,
     std::array<uint32_t, 2> mesh_shape,
     std::array<uint32_t, 2> my_coord,
@@ -253,15 +271,15 @@ McastRoutes mcast_routes(
 
 // ---- choice model (exposed for tests and logs) ----
 
-// Bytes and packets on the busiest link-direction: B = stripe bytes * (N - 1) / (ring ? 2 : 1) / links, ceil(B / fill).
+// Bytes and packets on the busiest link-direction: B = stripe bytes * (N - 1) / (ring ? 2 : 1) / links, ceil(B / cap).
 uint64_t busiest_link_bytes(const Geometry& geo, uint32_t N, bool ring, uint32_t links);
 uint64_t busiest_link_packets(const Geometry& geo, uint32_t N, bool ring, uint32_t links);
 
-// Modelled time in microseconds for algorithm kUc / kMc: F + B / BW, and for unicast at least F + the time the
-// stripe's banks need for its writes and relay reads.
-double model_us(uint32_t algo, const Geometry& geo, uint32_t N, bool ring, uint32_t links);
+// Modelled time in microseconds for algorithm kUc / kMc on `in` at in.links: fixed + B / BW, and for unicast at least
+// fixed + the time the stripe's banks (in.pages.stripe_banks) need for its writes and relay reads.
+double model_us(const PlanIn& in, uint32_t algo, const Geometry& geo);
 
 // Unicast workers per link-direction the model wants (before placement shrinks it).
-uint32_t model_workers(bool ring, uint64_t busiest_packets);
+uint32_t model_workers(const Tuning& t, bool ring, uint64_t busiest_packets);
 
 }  // namespace ttnn::operations::ccl::all_gather_plan

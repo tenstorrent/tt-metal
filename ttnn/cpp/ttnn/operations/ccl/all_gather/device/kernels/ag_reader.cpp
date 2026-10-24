@@ -112,7 +112,10 @@ void kernel_main() {
                 }
                 units += bytes / A;
             }
-            ASSERT(units != 0);  // the walk ended before the schedule's units: a plan / walk mismatch
+            // The walk ending before the schedule's units (a plan / walk mismatch) would push empty slots forever. A
+            // kernel has no release-mode way to fail the op, so this is a watcher assert; the host sim checks that the
+            // walk and the schedule agree.
+            ASSERT(units != 0);
             noc.async_read_barrier();
             if (copy) {
                 // Our own stripe into our own output, on a second VC so the writes do not queue behind the fabric

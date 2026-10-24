@@ -24,9 +24,9 @@ namespace prog = all_gather_program;
 // Multicast all_gather (1D line/ring or true 2D).
 //
 // One core per link: its reader reads this device's slice once, writes it into the local output and fills slots;
-// its writer multicasts each packet on every connection (one per direction with a neighbor), alternating two route
-// variants on an even ring. Init and done ride every (connection, variant), so each device receives V * (N - 1) of
-// each, separately counted.
+// its writer multicasts each packet on every connection (one per direction with a neighbor), which together reach
+// every other device once. Init and done ride every connection, so each device receives N - 1 of each, separately
+// counted.
 ////////////////////////////////////////////////////////////////
 
 tt::tt_metal::ProgramDescriptor build_multicast_program(
@@ -77,15 +77,9 @@ tt::tt_metal::ProgramDescriptor build_multicast_program(
         params.cluster_axis,
         axis_ring,
         phys_dir);
-    TT_FATAL(!routes.conns.empty(), "all_gather multicast: device {} has no neighbor", dev);
-    // A parity check of two derivations: the plan's variant count (hashed) and this device's routes.
-    TT_FATAL(
-        routes.alternates == (plan.variants == 2),
-        "all_gather multicast: route variants disagree with the plan ({} vs {})",
-        routes.alternates,
-        plan.variants);
+    TT_FATAL(!routes.empty(), "all_gather multicast: device {} has no neighbor", dev);
     std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
-    for (const auto& conn : routes.conns) {
+    for (const auto& conn : routes) {
         TT_FATAL(neighbor[conn.dir].has_value(), "all_gather multicast: no neighbor in direction {}", conn.dir);
         dst_nodes.push_back(mesh_device->get_fabric_node_id(*neighbor[conn.dir]));
     }
@@ -94,8 +88,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_program(
     const CoreRangeSet cores = prog::worker_cores(plan);
     desc.cbs.push_back(prog::slot_cb(plan, cores));
     desc.kernels.push_back(prog::reader_kernel(plan, params.force, input, output, cores));
-    desc.kernels.push_back(
-        prog::writer_kernel(plan, params.force, prog::kMulticastWriterKernel, cores, {{"VARIANTS", plan.variants}}));
+    desc.kernels.push_back(prog::writer_kernel(plan, params.force, prog::kMulticastWriterKernel, cores, {}));
     tt::tt_metal::KernelHandle writer_handle = prog::kWriterIdx;  // the connection helper takes it by reference
 
     for (uint32_t link = 0; link < plan.mcast_cores.size(); ++link) {
@@ -113,11 +106,10 @@ tt::tt_metal::ProgramDescriptor build_multicast_program(
             done_sem,  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
             static_cast<uint32_t>(mirror.x),
             static_cast<uint32_t>(mirror.y),
-            static_cast<uint32_t>(routes.conns.size()),
+            static_cast<uint32_t>(routes.size()),
         };
-        for (const auto& conn : routes.conns) {
-            writer_rt.push_back(conn.range_v0);
-            writer_rt.push_back(conn.range_v1);
+        for (const auto& conn : routes) {
+            writer_rt.push_back(conn.range);
         }
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
             src_node,
@@ -143,12 +135,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherMulticastFactory::create_workload_desc
     const auto& input = tensor_args.input_tensor;
     auto [plan, workload, init_sem, done_sem] = prog::start_workload(operation_attributes, input, output_tensor);
     log_debug(
-        tt::LogOp,
-        "all_gather multicast: links={} k={} slot={} B variants={}",
-        plan.choice.links,
-        plan.choice.k,
-        plan.slot_bytes,
-        plan.variants);
+        tt::LogOp, "all_gather multicast: links={} k={} slot={} B", plan.choice.links, plan.choice.k, plan.slot_bytes);
 
     workload.programs.reserve(tensor_coords.coords().size());
     for (const auto& coord : tensor_coords.coords()) {

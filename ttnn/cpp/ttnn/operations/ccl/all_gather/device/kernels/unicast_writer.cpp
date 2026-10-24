@@ -87,7 +87,7 @@ void kernel_main() {
             signal, kHops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
         set_route(signal, dst_chip, dst_mesh);
         if (init_send) {
-            // Tell the neighbor's opposite-direction reader we are alive (our output exists).
+            // Tell the neighbor's opposite-direction worker we are alive (our output exists).
             fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
                 UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
                 &sender,
@@ -96,15 +96,21 @@ void kernel_main() {
                     ag::fabric_frame_addr(partner_x, partner_y, init_sem), 1});
             noc.async_writes_flushed();
         }
+        // The header region of every slot is ours for the whole op (the reader never writes it), so each header gets
+        // its route once. The CB starts at its base, and its CB_SLOTS slots follow one another.
+        for (uint32_t s = 0, slot = cb.get_read_ptr(); s < CB_SLOTS; ++s, slot += SLOT_BYTES) {
+            for (uint32_t j = 0; j < K; ++j) {
+                auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.header(slot, j));
+                fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(hdr, kHops);
+                set_route(hdr, dst_chip, dst_mesh);
+            }
+        }
         // Our data goes into the neighbor's output: wait until it is alive (it sent its init the same way). Our reader
         // fills the slots meanwhile.
         ag::wait_and_consume(init_sem, init_wait);
         const uint64_t data_valid = ag::fabric_frame_addr(mirror_x, mirror_y, data_sem);
 
         ag::SignalCadence cadence(cadence_slots);
-        // The header region is ours for the whole op: route each slot's headers the first time we see that slot.
-        uint32_t routed[CB_SLOTS] = {};
-        uint32_t num_routed = 0;
         for (uint32_t i = 0; i < iters; ++i) {
             const uint32_t take = (i + 1 == iters) ? last_take : ne;
             // An empty pass (empty slice, or an even-ring half of nothing) pushes no slot.
@@ -112,20 +118,6 @@ void kernel_main() {
                 cb.wait_front(1);
                 const uint32_t slot = cb.get_read_ptr();
                 ag::slot_acquire();
-                bool seen = false;
-                for (uint32_t r = 0; r < num_routed; ++r) {
-                    seen = seen || routed[r] == slot;
-                }
-                ASSERT(seen || num_routed < CB_SLOTS);  // a CB of CB_SLOTS pages has CB_SLOTS slot addresses
-                if (!seen && num_routed < CB_SLOTS) {
-                    for (uint32_t j = 0; j < K; ++j) {
-                        auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.header(slot, j));
-                        fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
-                            hdr, kHops);
-                        set_route(hdr, dst_chip, dst_mesh);
-                    }
-                    routed[num_routed++] = slot;
-                }
                 const ag::SlotInfo info = *reinterpret_cast<const ag::SlotInfo*>(slot);
                 for (uint32_t j = 0; j < info.packets; ++j) {
                     const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));

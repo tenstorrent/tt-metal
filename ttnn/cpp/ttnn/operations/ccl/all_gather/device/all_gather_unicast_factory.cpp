@@ -56,7 +56,12 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
     desc.cbs.push_back(prog::slot_cb(plan, cores));
     desc.kernels.push_back(prog::reader_kernel(plan, params.force, input, output, cores));
     desc.kernels.push_back(prog::writer_kernel(
-        plan, params.force, prog::kUnicastWriterKernel, cores, {{"MUX_BUFS", plan_ns::mux_buffers(plan.choice.n)}}));
+        plan,
+        params.force,
+        prog::kUnicastWriterKernel,
+        cores,
+        {{"CB_SLOTS", plan_ns::kCbSlots}, {"MUX_BUFS", plan_ns::mux_buffers(plan.arch, plan.choice.n)}}));
+    const auto forwarder_noc = plan_ns::tuning(plan.arch).mux_forwarder_noc;
 
     for (const auto& group : plan.groups) {
         // A mux exists only for a direction with a neighbor; its writers skip their whole body otherwise, so every
@@ -68,10 +73,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_program(
         CoreCoord mux_virtual{0, 0};
         if (active) {
             tt::tt_fabric::add_fabric_mux_v2_to_program(
-                desc, mux_config, group.mux, src_node, dst_node, group.link, prog::kMuxForwarderNoc);
+                desc, mux_config, group.mux, src_node, dst_node, group.link, forwarder_noc);
             mux_virtual = mesh_device->worker_core_from_logical_core(group.mux);
-            // The mux map is raw L1 from the allocator base, outside the allocator. A CB over the same bytes makes
-            // Metal's CB / L1-buffer clash check refuse a launch whose L1 tensors reach down into it.
+            // The mux map is raw L1 from the allocator base, outside the allocator, so an L1 tensor allocated
+            // top-down can reach into it (open Fabric issues #56769 / #56784). A CB over the same bytes makes Metal's
+            // CB / L1-buffer clash check refuse such a launch instead of corrupting the mux.
             const auto map_bytes = static_cast<uint32_t>(mux_config.get_memory_map_end_address()) - facts.l1_base;
             desc.cbs.push_back(tt::tt_metal::CBDescriptor{
                 .total_size = map_bytes,
@@ -146,7 +152,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherUnicastFactory::create_workload_descri
     const tt::tt_fabric::FabricMuxV2Config mux_config(
         *input.device(),
         static_cast<uint8_t>(n),
-        static_cast<uint8_t>(plan_ns::mux_buffers(n)),
+        static_cast<uint8_t>(plan_ns::mux_buffers(plan.arch, n)),
         facts.channel_bytes,
         facts.l1_base,
         facts.l1_small_floor);
