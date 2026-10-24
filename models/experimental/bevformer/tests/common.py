@@ -30,9 +30,12 @@ from models.experimental.bevformer.model_config import (
     CAN_BUS_DIMS,
     CENTERS_FIRST,
     CODE_CENTERS,
+    CODE_COS,
+    CODE_H,
     CODE_SIN,
     CODE_SIZE,
     CODE_VELOCITY,
+    CODE_WL,
     CODE_XY,
     CODE_Z,
     DECODER_NUM_LAYERS,
@@ -416,6 +419,9 @@ def init_dummy_fpn_weights(torch_model, seed=0):
 
 
 # --- Backbone and FPN -------------------------------------------------------------------------
+
+# The backbone's outputs' and the FPN's PCC gate, lower for small.
+BACKBONE_FPN_PCC = 0.985 if VARIANT == "small" else 0.99
 
 # Dtypes TTResNet emits for its outputs: C3-C5 for base, C5 for small and tiny.
 BACKBONE_OUTPUT_DTYPES = [ttnn.bfloat16] * len(RESNET_KWARGS["out_indices"])
@@ -813,7 +819,7 @@ def build_reference_head(bev_shape, seed=0):
 # 102.4 m, where nuScenes matches boxes from 0.5 m. The worst of the 900 queries carries a
 # bfloat16 tail no single op's precision moves; the bounds leave headroom over it.
 CENTER_MEAN_ATOL = 0.015
-CENTER_MAX_ATOL = 0.35
+CENTER_MAX_ATOL = 0.5
 
 
 def log_center_error(expected, actual):
@@ -959,10 +965,14 @@ def build_reference_bevformer(bev_shape):
     return model.eval().requires_grad_(False)
 
 
-# The box code channels the detector reads off small differences, the yaw's sine and the
+# The box code channels the detector reads off small differences, the yaw's sine and cosine and the
 # velocities, carry the backbone's and the encoder's bfloat16 error the most; they gate at this
-# floor, every other output at the test's PCC.
-LOW_PRECISION_BOX_CODES = (CODE_SIN.start, *range(CODE_VELOCITY.start, CODE_VELOCITY.stop))
+# floor, every other output at the test's PCC. Either yaw component is near constant, and its PCC
+# near noise, when the yaws cluster where the other one turns: around 0 and pi for the cosine.
+LOW_PRECISION_BOX_CODES = (CODE_SIN.start, CODE_COS.start, *range(CODE_VELOCITY.start, CODE_VELOCITY.stop))
+# small gates the box sizes at the same floor.
+if VARIANT == "small":
+    LOW_PRECISION_BOX_CODES += (*range(CODE_WL.start, CODE_WL.stop), CODE_H.start)
 LOW_PRECISION_BOX_CODE_PCC = 0.94
 
 

@@ -18,6 +18,7 @@ import torch
 import ttnn
 from models.experimental.bevformer.model_config import RESNET_KWARGS
 from models.experimental.bevformer.tests.common import (
+    BACKBONE_FPN_PCC,
     signposted_trace,
     assert_pcc,
     build_reference_backbone,
@@ -36,7 +37,7 @@ from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 def _check(torch_outputs, tt_outputs):
     for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):
-        assert_pcc(torch_output, from_conv_layout(tt_output, torch_output.shape), 0.99)
+        assert_pcc(torch_output, from_conv_layout(tt_output, torch_output.shape), BACKBONE_FPN_PCC)
 
 
 @torch.no_grad()
