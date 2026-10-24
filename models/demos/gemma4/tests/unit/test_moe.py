@@ -193,6 +193,10 @@ def test_moe_sparse_routing_matches_dense(mesh_device, lanes, fused, rows, reset
         monkeypatch.setenv("GEMMA4_MOE_FUSED", "1" if (sparse and fused) else "0")
         assert moe.experts.wants_sparse_routing(x_tt) == sparse
         out = moe(x_tt, x_tt)
+        # The block's input is the caller's (the decoder layer frees expert_input after the MoE call): a lane gather
+        # that consumed it freed this very tensor on the (2,4) at frame 128 and the second pass segfaulted in the
+        # router's rms_norm.
+        assert x_tt.is_allocated(), "the MoE block freed its input tensor"
         return ttnn.to_torch(ttnn.get_device_tensors(out)[0]).reshape(-1, hf_config.hidden_size).float()[:rows]
 
     # A device hang here is bounded by TT_METAL_OPERATION_TIMEOUT_SECONDS (also the per-device teardown wait);

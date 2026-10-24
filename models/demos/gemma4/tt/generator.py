@@ -12,7 +12,6 @@ from transformers import AutoTokenizer
 
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
-from models.demos.gemma4.tt.attention.operations import effective_block_size
 from models.demos.gemma4.tt.common import GEMMA4_CP_PREFILL_CHUNK, create_tt_model, gemma4_cp_prefill_engaged
 from models.demos.gemma4.tt.generator_trace import (
     apply_gemma4_prefill_trace_policy,
@@ -414,6 +413,36 @@ def mask_page_table_columns_past_allocation(page_tables, prompt_lens, block_size
     return out, zeroed
 
 
+def paged_block_size_for_view(cache_shape, head_dim, num_local_kv_heads):
+    """Tokens per page-table column the paged ops address a ``[blocks, cache_heads, block, cache_hd]`` K/V buffer
+    with from a layer whose per-chip view is ``(num_local_kv_heads, head_dim)``: the per-block element count is the
+    invariant (``attention/operations.effective_block_size``), so this is the declared block size exactly when the
+    two views agree and the page-table width must follow it when they do not."""
+    _, cache_heads, block, cache_hd = (int(v) for v in list(cache_shape)[-4:])
+    numerator = cache_heads * block * cache_hd
+    denominator = max(1, int(num_local_kv_heads)) * int(head_dim)
+    if numerator % denominator:
+        raise ValueError(
+            f"KV-cache view ({cache_heads} heads x {block} x {cache_hd}) is not addressable as "
+            f"({num_local_kv_heads} heads x {head_dim})"
+        )
+    return numerator // denominator
+
+
+def layer_local_kv_heads(attn, cfg):
+    """KV heads an attention layer holds per chip, as ``attention/prefill.py`` derives them for its paged ops."""
+    tp = max(1, int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1))
+    if getattr(getattr(attn, "weights", None), "kv_replicated", False):
+        return 1
+    return max(1, int(cfg.num_key_value_heads) // tp)
+
+
+def layer_paged_block_size(attn, cfg, cache):
+    """The block size ``attn`` addresses ``cache`` with (``paged_block_size_for_view`` on the cache's padded shape)."""
+    shape = getattr(cache, "padded_shape", None) or cache.shape
+    return paged_block_size_for_view(shape, int(cfg.head_dim), layer_local_kv_heads(attn, cfg))
+
+
 def _load_text_tokenizer(model_path):
     # The 12B tokenizer config can advertise multimodal extra_special_tokens as
     # a list (for example ["<|video|>"]), while this transformers version expects
@@ -728,23 +757,16 @@ class ChunkedPrefillPageTableGuardMixin:
         # Groups can end up with different effective block sizes (e.g. 31B at TP=4: sliding 64,
         # full 128). Tables trimmed with the smallest one stay wide enough for every layer; the
         # paged ops only require ``seq_len <= cols * block_size``.
+        # Every layer's size comes from the same per-block invariant the attention's paged ops use (an HMA-shared
+        # buffer allocated at another layer's view, or a cache holding more or fewer heads per chip than the layer
+        # writes), so the page-table width always matches what the fill addresses.
         sizes = []
         for i, layer in enumerate(getattr(self.model[0], "layers", [])):
             attn = getattr(layer, "self_attn", None)
             cfg = getattr(attn, "config", None)
             if cfg is None or i >= len(kv_cache) or kv_cache[i] is None:
                 continue
-            cache = kv_cache[i][0]
-            cache_hd = int(cache.shape[-1])
-            if cache_hd != int(cfg.head_dim) and cache_hd > 0:
-                # HMA-shared buffer allocated at another layer's view: derive this layer's tokens per block
-                # from the per-block byte invariant, kv-head factor included.
-                tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
-                weights = getattr(attn, "weights", None)
-                kv_local = 1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
-                sizes.append(int(effective_block_size(cache, int(cfg.head_dim), kv_local)))
-            else:
-                sizes.append(int(cache.shape[2]))
+            sizes.append(int(layer_paged_block_size(attn, cfg, kv_cache[i][0])))
         return min(sizes) if sizes else block_size
 
     def _paged_prefill_block_size(self, kv_cache):

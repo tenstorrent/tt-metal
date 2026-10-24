@@ -2094,9 +2094,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
         return out
 
     def _prefill_page_table_block_sizes(self, kv_cache):
-        """Per-layer tokens per page-table column: the effective block size for a layer
-        viewing an HMA-shared buffer, the declared one otherwise."""
-        from models.demos.gemma4.tt.attention.operations import effective_block_size
+        """Per-layer tokens per page-table column, from the per-block invariant the attention's paged ops use
+        (the declared block size when the layer's view matches its buffer, the effective one for an HMA-shared
+        buffer or a cache with a different per-chip head count)."""
+        from models.demos.gemma4.tt.generator import layer_paged_block_size
         from models.tt_transformers.tt.common import get_block_size
 
         layers = getattr(self.model[0], "layers", [])
@@ -2119,18 +2120,10 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             attn = getattr(layer, "self_attn", None)
             cfg = getattr(attn, "config", None)
             if cfg is not None and i < len(kv_cache) and kv_cache[i] is not None:
-                cache = kv_cache[i][0]
                 try:
-                    cache_hd = int(cache.shape[-1])
-                except Exception:
-                    cache_hd = 0
-                if cache_hd and cache_hd != int(cfg.head_dim):
-                    tp = int(getattr(getattr(attn, "mesh_config", None), "tp", 1) or 1)
-                    weights = getattr(attn, "weights", None)
-                    kv_local = (
-                        1 if getattr(weights, "kv_replicated", False) else max(1, int(cfg.num_key_value_heads) // tp)
-                    )
-                    bs = int(effective_block_size(cache, int(cfg.head_dim), kv_local))
+                    bs = int(layer_paged_block_size(attn, cfg, kv_cache[i][0]))
+                except Exception:  # noqa: BLE001 - a cache object without a shape: keep the declared size
+                    bs = default
             sizes.append(bs)
         return sizes
 

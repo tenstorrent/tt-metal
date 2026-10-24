@@ -425,13 +425,18 @@ def ccl_allreduce_fractured(tensor, mesh_config, ccl_manager, memory_config=None
     return out
 
 
-def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None):
-    """All-gather the row dim across lanes so each chip's fractured weight chunk sees every lane's rows."""
+def ccl_lane_gather_rows(tensor, mesh_config, memory_config=None, consume=True):
+    """All-gather the row dim across lanes so each chip's fractured weight chunk sees every lane's rows.
+
+    ``consume`` frees ``tensor`` after the gather; pass False for a tensor the caller still owns (the decoder layer
+    frees ``expert_input`` itself after the MoE call, and a pad within the tile padding is only a view of it).
+    """
     if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
         return tensor
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
     gathered = ttnn.all_gather(tensor, dim=2, cluster_axis=mesh_config.sp_axis, memory_config=memory_config)
-    tensor.deallocate(True)
+    if consume:
+        tensor.deallocate(True)
     return gathered
 
 

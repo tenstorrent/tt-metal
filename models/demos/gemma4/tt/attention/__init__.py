@@ -176,6 +176,7 @@ class Gemma4Attention:
                 max_batch_size=max_batch_size,
                 max_seq_len=max_seq_len,
                 tensor_cache_path=tensor_cache_path,
+                mesh_config=mesh_config,
             )
         else:
             self.kv_cache = None

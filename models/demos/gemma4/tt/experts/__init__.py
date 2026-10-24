@@ -159,6 +159,20 @@ class Gemma4Experts:
         """(values, indices) for sparse routing, (dense, None) for the dense matrix."""
         return (routing[0], routing[1]) if isinstance(routing, tuple) else (routing, None)
 
+    @staticmethod
+    def _owned_copy(tensor, source):
+        """True when ``tensor`` is a new buffer this module made from the caller's ``source`` (a pad that grew the
+        padded shape) and may be freed after the lane gather; False when it is ``source`` itself or a pad within the
+        tile padding, which ``ttnn.pad`` returns as a view of the caller's buffer (only the logical shape changes).
+        The caller owns ``source``: the decoder layer frees ``expert_input`` after the MoE call, and the MoE unit
+        tests run the same input through the block twice."""
+        if tensor is source:
+            return False
+        try:
+            return tuple(tensor.padded_shape) != tuple(source.padded_shape)
+        except Exception:  # noqa: BLE001 - no padded shape on this storage: keep the caller's tensor alive
+            return False
+
     def _forward_packed(self, hidden_states, routing, lane_sharded):
         """GEMMA4_MOE_FUSED=1 on the decode MoE kernel rows: the router's packed (weights | ids) rows travel as ONE
         tensor (one lane gather instead of values + indices + their typecasts), and ``moe_decode.forward`` builds the
@@ -169,11 +183,14 @@ class Gemma4Experts:
         packed = routing.packed
         if lane_sharded and self.ep > 1:
             assert getattr(self.mesh_config, "_g4_single_lane_prefill_owner", None) is None, "owner prefill is dense"
+            x_in = hidden_states  # the caller's tensor: never freed here
             if pad_rows:
                 hidden_states = ttnn.pad(hidden_states, [(0, 0), (0, 0), (0, pad_rows), (0, 0)], value=0.0)
             if int(packed.shape[2]) != rows + pad_rows:  # the router op always writes one row tile (32 rows)
                 packed = ttnn.slice(packed, [0, 0, 0, 0], [1, 1, rows + pad_rows, int(packed.shape[3])])
-            hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
+            hidden_states = ccl_lane_gather_rows(
+                hidden_states, self.mesh_config, consume=self._owned_copy(hidden_states, x_in)
+            )
             if os.environ.get("GEMMA4_PACKED_GATHER_TILE", "0") == "1":
                 # fallback if the lane all_gather refuses the 32-byte ROW_MAJOR pages: gather one tile per lane
                 packed = ttnn.to_layout(packed, ttnn.TILE_LAYOUT)
@@ -222,6 +239,7 @@ class Gemma4Experts:
             # them out of the expert sums.
             rows = hidden_states.shape[2]
             pad_rows = (-rows) % 32
+            x_in = hidden_states  # the caller's tensor: never freed here
             dense_routing, sparse_idx = self._routing_parts(dense_routing)
             if sparse_idx is not None:
                 sparse_idx = ttnn.typecast(sparse_idx, ttnn.bfloat16)  # exact for expert ids; the gather wants bf16
@@ -241,7 +259,9 @@ class Gemma4Experts:
                     )
                     sparse_idx = ttnn.concat([ttnn.to_layout(sparse_idx, ttnn.ROW_MAJOR_LAYOUT), pad_ids], dim=2)
                     sparse_idx = ttnn.to_layout(sparse_idx, ttnn.TILE_LAYOUT)
-            hidden_states = ccl_lane_gather_rows(hidden_states, self.mesh_config)
+            hidden_states = ccl_lane_gather_rows(
+                hidden_states, self.mesh_config, consume=self._owned_copy(hidden_states, x_in)
+            )
             dense_routing = ccl_lane_gather_rows(dense_routing, self.mesh_config)
             if sparse_idx is not None:
                 sparse_idx = ccl_lane_gather_rows(sparse_idx, self.mesh_config)

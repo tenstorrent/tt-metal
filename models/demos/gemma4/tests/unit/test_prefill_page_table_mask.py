@@ -4,10 +4,17 @@
 """Prefill zeroes page-table columns past each request's allocation: vLLM leaves stale block ids there,
 and the traced single-chunk prefill cannot cap its K/V fill on the host, so pad rows would write into them."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 
-from models.demos.gemma4.tt.generator import mask_page_table_columns_past_allocation
+from models.demos.gemma4.tt.generator import (
+    layer_local_kv_heads,
+    mask_page_table_columns_past_allocation,
+    paged_block_size_for_view,
+)
+from models.tt_transformers.tt.common import num_blocks_in_seq
 
 
 def _table(rows, cols, base=1):
@@ -67,17 +74,79 @@ def test_non_tensor_entries_and_missing_inputs_are_left_alone():
 
 def test_block_sizes_resolve_from_the_plugins_nested_kv_cache_list():
     """The plugin passes ``kv_caches`` as [submesh][layer][k, v]; both nestings must resolve block sizes."""
-    from types import SimpleNamespace
-
     pytest.importorskip("vllm")
     from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
 
     class _Cache:
         shape = [100, 2, 64, 256]
 
-    cfg = SimpleNamespace(head_dim=256, num_key_value_heads=16)
+    cfg = SimpleNamespace(head_dim=256, num_key_value_heads=2)  # two heads per chip, as the cache holds
     layers = [SimpleNamespace(self_attn=SimpleNamespace(config=cfg, mesh_config=None, weights=None)) for _ in range(3)]
     fake = SimpleNamespace(model=[SimpleNamespace(layers=layers)])
     per_layer = [[_Cache(), _Cache()] for _ in layers]
     assert Gemma4ForCausalLM._prefill_page_table_block_sizes(fake, per_layer) == [64, 64, 64]
     assert Gemma4ForCausalLM._prefill_page_table_block_sizes(fake, [per_layer]) == [64, 64, 64]
+
+
+# 26B-A4B geometry: sliding layers 8 kv heads x 256, full-attention layers 2 kv heads x 512; the lane engine runs its
+# TP over the mesh rows (2 on the (2,4) block, 8 on the (8,4) Galaxy) while the plain TP axis is the 4 columns.
+_LAYERS = ((8, 256), (2, 512))
+
+
+def _lane_views(mesh_shape, block_size, cache_tp):
+    """Per layer (cache shape, head_dim, attention kv heads per chip) when the cache is allocated at ``cache_tp``."""
+    attn_tp = mesh_shape[0]
+    out = []
+    for kv, hd in _LAYERS:
+        attn = SimpleNamespace(
+            mesh_config=SimpleNamespace(tp=attn_tp), weights=SimpleNamespace(kv_replicated=kv < attn_tp)
+        )
+        cfg = SimpleNamespace(head_dim=hd, num_key_value_heads=kv)
+        cache_heads = 1 if kv < cache_tp else kv // cache_tp
+        out.append(([256, cache_heads, block_size, hd], hd, layer_local_kv_heads(attn, cfg)))
+    return out
+
+
+@pytest.mark.parametrize("block_size", [32, 64])
+@pytest.mark.parametrize("mesh_shape", [(2, 4), (8, 4)], ids=["2x4", "8x4"])
+def test_lane_engine_cache_from_its_tp_keeps_declared_block_size(block_size, mesh_shape):
+    """Caches allocated with the attention's own TP (init_kv_cache from mesh_config.tp) are addressed at the
+    declared block size on every layer, so a 128-token prompt needs exactly 128 / block_size columns."""
+    sizes = [
+        paged_block_size_for_view(shape, hd, kv_local)
+        for shape, hd, kv_local in _lane_views(mesh_shape, block_size, mesh_shape[0])
+    ]
+    assert sizes == [block_size, block_size]
+    cols = num_blocks_in_seq(128, min(sizes))
+    assert cols == 128 // block_size
+    pt = _table(1, 8)
+    (out,), _ = mask_page_table_columns_past_allocation([pt], prompt_lens=[128], block_sizes=[min(sizes)])
+    assert int((out[0] != 0).sum()) == cols
+
+
+@pytest.mark.parametrize("block_size", [32, 64])
+@pytest.mark.parametrize("mesh_shape, sliding_factor", [((2, 4), 0.5), ((8, 4), 2.0)], ids=["2x4_half", "8x4_double"])
+def test_lane_engine_cache_from_the_mesh_columns_shifts_the_effective_block_size(
+    block_size, mesh_shape, sliding_factor
+):
+    """The former allocation (heads from the 4 mesh columns) holds 2 sliding heads per chip on both shapes while the
+    attention writes 4 on the (2,4) and 1 on the (8,4): the sliding layers' effective block size is half the declared
+    one on the block (a 128-token prompt overran its 2 columns) and double it on the Galaxy (benign: wider is fine).
+    The page-table math must follow the effective size on every layer."""
+    views = _lane_views(mesh_shape, block_size, cache_tp=mesh_shape[1])
+    sliding, full = (paged_block_size_for_view(shape, hd, kv_local) for shape, hd, kv_local in views)
+    assert sliding == int(block_size * sliding_factor)
+    assert full == block_size  # 2 full heads over 4 columns and over the rows both give one head per chip
+    eff = min(sliding, full)
+    cols = num_blocks_in_seq(128, eff)
+    assert cols == -(-128 // eff)
+    if sliding_factor < 1:
+        assert cols == 2 * (128 // block_size), "the block needs twice the columns the declared size suggests"
+    pt = _table(1, 16)
+    (out,), _ = mask_page_table_columns_past_allocation([pt], prompt_lens=[128], block_sizes=[eff])
+    assert int((out[0] != 0).sum()) == cols
+
+
+def test_paged_block_size_for_view_rejects_an_unaddressable_cache(expect_error):
+    with expect_error(ValueError, "not addressable"):
+        paged_block_size_for_view([4, 1, 64, 256], head_dim=512, num_local_kv_heads=3)
