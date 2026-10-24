@@ -1564,6 +1564,7 @@ class Model:
             apc is not None and async_win and apc.defer()
         )  # (deferred snapshots need the asynchronous windows: their reads are ordered by the queue, not by a host wait)
         t_apc_ovl = [0.0]  # seconds of snapshot completions run while the device replays a window
+        early_bk = os.environ.get("DSV41_PF_EARLY_BK", "1") == "1"
         t_first = 0.0  # host seconds of window builds that were not overlapped with a replay
         t_pre = time.perf_counter() - t_start
         per_row = (
@@ -1656,6 +1657,50 @@ class Model:
                     prepped = pm.prep_inputs(tok, hs, active.nonzero().reshape(-1), vis=vw)
                     return part, active, lens, tok, slot_b, vw, hs, prepped, th_h, s0v
 
+                def _bookkeep(part, k):
+                    """host bookkeeping of a replayed window: the key hand-off record (or the eager export), ``resume``, prefix snapshot starts. Needs no result of the window: with deferred snapshots it
+                    runs from ``_overlap`` (while the device still replays the window: the snapshot reads queue right behind its trace, and at the last window of a call the host work does not
+                    wait for the device to go idle first)."""
+                    nonlocal t_exp, t_apc
+                    done = [(it[0], s0_of(it, k) + C) for it in part if it[3] <= s0_of(it, k) + C]
+                    te0 = time.perf_counter()
+                    if lazy_kx:
+                        pend = self.__dict__.setdefault("_kx_pending", {})
+                        for b, x in done:
+                            pend[b] = (x, ends[b], slot_of[b] % Up if general else b % U)
+                    else:
+                        for s_end in sorted({x for _, x in done}):
+                            self._export_keys_users(
+                                [b for b, x in done if x == s_end],
+                                ends,
+                                s_end,
+                                (lambda b: slot_of[b] % Up) if general else (lambda b: b % U),
+                            )
+                    t_exp += time.perf_counter() - te0
+                    for it in part:
+                        b, _, _, e = it
+                        s_end = s0_of(it, k) + C
+                        if e <= s_end:
+                            resume.pop(b, None)
+                            if e % C == 0:
+                                resume[b] = e
+                        else:
+                            resume[b] = s_end
+                    if (
+                        apc is not None
+                    ):  # prefix snapshots of the users that just crossed a boundary the policy wants (the state of a user is complete and resumable here)
+                        for it in part:
+                            b, t, st, e = it
+                            if s0_of(it, k) + C <= e and not (vis and b in vis):
+                                t_apc0 = time.perf_counter()
+                                if apc_defer:
+                                    apc.begin_snapshot(b, s0_of(it, k) + C, t)
+                                else:
+                                    apc.maybe_snapshot(b, s0_of(it, k) + C, t)
+                                t_apc += time.perf_counter() - t_apc0
+
+                bk_done = set()
+
                 ahead = {}
                 if (
                     pm.__dict__.get("build_prof") is not None
@@ -1689,11 +1734,16 @@ class Model:
                         torch.tensor([-1 if b is None else int(lens[b]) - 1 for b in slot_b]) if general else lens - 1
                     )
 
-                    def _overlap(k_s0=k_s0, lens=lens, slot_b=slot_b):
+                    def _overlap(k_s0=k_s0, lens=lens, slot_b=slot_b, part=part, k=k):
                         if (
                             apc_defer
                         ):  # (the reads of a snapshot started after the previous window precede this window's replay: finish them while it runs)
                             t_apc_ovl[0] += apc.finish_pending()
+                            if early_bk:
+                                bk_done.add(k_s0)
+                                _bookkeep(
+                                    part, k
+                                )  # (this window's own bookkeeping and snapshot starts: queued behind its trace)
                         if os.environ.get("DSV41_PF_OVERLAP", "1") != "1":
                             return
                         if k_s0 + 1 >= len(win_keys) and prebuild_next:
@@ -1733,42 +1783,8 @@ class Model:
                     )
                     n_replays, t_host, t_rep = n_replays + 1, t_host + th, t_rep + td
                     t_ret = time.perf_counter()
-                    done = [(it[0], s0_of(it, k) + C) for it in part if it[3] <= s0_of(it, k) + C]
-                    te0 = time.perf_counter()
-                    if lazy_kx:
-                        pend = self.__dict__.setdefault("_kx_pending", {})
-                        for b, x in done:
-                            pend[b] = (x, ends[b], slot_of[b] % Up if general else b % U)
-                    else:
-                        for s_end in sorted({x for _, x in done}):
-                            self._export_keys_users(
-                                [b for b, x in done if x == s_end],
-                                ends,
-                                s_end,
-                                (lambda b: slot_of[b] % Up) if general else (lambda b: b % U),
-                            )
-                    t_exp += time.perf_counter() - te0
-                    for it in part:
-                        b, _, _, e = it
-                        s_end = s0_of(it, k) + C
-                        if e <= s_end:
-                            resume.pop(b, None)
-                            if e % C == 0:
-                                resume[b] = e
-                        else:
-                            resume[b] = s_end
-                    if (
-                        apc is not None
-                    ):  # prefix snapshots of the users that just crossed a boundary the policy wants (the state of a user is complete and resumable here)
-                        for it in part:
-                            b, t, st, e = it
-                            if s0_of(it, k) + C <= e and not (vis and b in vis):
-                                t_apc0 = time.perf_counter()
-                                if apc_defer:
-                                    apc.begin_snapshot(b, s0_of(it, k) + C, t)
-                                else:
-                                    apc.maybe_snapshot(b, s0_of(it, k) + C, t)
-                                t_apc += time.perf_counter() - t_apc0
+                    if k_s0 not in bk_done:
+                        _bookkeep(part, k)
                     if pm.__dict__.get("winlog") is not None and pm.winlog["windows"]:
                         pm.winlog["windows"][-1]["t_ret"] = t_ret  # (replay_window returned: post hooks included)
                         pm.winlog["windows"][-1][
@@ -1778,8 +1794,14 @@ class Model:
                         for b in [b for b in resume if b not in {p[0] for p in part}]:
                             resume.pop(b)
         t_loop_end = time.perf_counter()
-        if apc is not None:
-            t_apc += apc.finish_pending()  # (snapshots started in the last windows of the call)
+        if apc is not None and not (
+            apc_defer
+            and os.environ.get("DSV41_PF_OVERLAP", "1") == "1"
+            and os.environ.get("DSV41_APC_FINISH_NEXT", "1") == "1"
+        ):
+            # (snapshots started in the last windows of the call. With deferred snapshots they stay pending: the first replay of the NEXT call finishes them while the device works, or the
+            # lookup of a new prompt / clear() does, whichever comes first; nothing reads the store in between)
+            t_apc += apc.finish_pending()
         t_apc_end = time.perf_counter()
         wl_call = pm.__dict__.get("winlog")
         if wl_call is not None:

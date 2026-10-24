@@ -319,6 +319,8 @@ def test_chunk_probe(mesh_device):
                     keys_[L_] = (
                         _PC.read_shard(d_.k_cache, 0).reshape(m.U, d_.k_cache.shape[2], -1)[0, : E // rr_].clone()
                     )
+                if getattr(m, "apc", None) is not None:
+                    m.apc.finish_pending()  # (snapshots of the last windows stay pending until the next call / lookup)
                 cmp_snaps[rep] = (
                     {k_[2:]: (v_.carried, v_.pool) for k_, v_ in m.apc.store.snaps.items()}
                     if getattr(m, "apc", None) is not None
