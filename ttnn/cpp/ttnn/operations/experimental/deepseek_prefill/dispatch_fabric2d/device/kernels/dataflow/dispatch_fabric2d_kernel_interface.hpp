@@ -141,6 +141,15 @@ constexpr uint32_t record_words() { return 3u; }
 // NoC write alignment.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
 
+// End-of-stream marker on a stream's fwd_arrived counter. A stream's sender adds it to the downstream chip's
+// counter as its very last packet (flush=true: the receiving router commits every earlier write of the stream
+// first), and the downstream reader waits for consumed + STREAM_DONE_MARK before it exits. Without it the
+// downstream chip's program could finish -- and the next op on it read the dispatch outputs -- while this
+// stream's last-hop writes (CMD_FINAL_WRITE into its payload/metadata pages) are still in flight: nothing else on
+// that chip waits for them. combine_fabric2d closes the same gap with its final_arrived count. Far above any page
+// count a stream signals (fwd_pages_per_stream), so the two never mix.
+constexpr uint32_t STREAM_DONE_MARK = 1u << 24;
+
 // [real_token_count, pad_side]. Read from DRAM, so it gets a whole 64-byte L1 block for two words.
 constexpr uint32_t PADDING_CONFIG_BYTES = 64;
 

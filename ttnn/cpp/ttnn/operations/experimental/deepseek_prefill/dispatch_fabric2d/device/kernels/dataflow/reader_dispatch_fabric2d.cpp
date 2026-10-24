@@ -527,6 +527,19 @@ void kernel_main() {
         queue.flush_publish();
 
         noc_async_atomic_barrier();
+        // Wait for the upstream stream's end marker: every page and every last-hop write it sent this launch
+        // (into this chip's fwd_section AND straight into this chip's dispatch outputs) has landed.
+        {
+            DeviceZoneScopedN("dspf2d_wait_upstream_done");
+            volatile tt_l1_ptr uint32_t* arrived = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.fwd_sem_addr);
+            while (true) {
+                invalidate_l1_cache();
+                if (*arrived - consumed >= dspf2d::STREAM_DONE_MARK) {
+                    break;
+                }
+            }
+        }
+        consumed += dspf2d::STREAM_DONE_MARK;
         // Subtract what this launch consumed rather than zeroing. The upstream sender's launch credit
         // (sender_dispatch_fabric2d.cpp) keeps its next launch's signals out until this chip has started that
         // launch; subtracting stays right without relying on it. The NoC only has an atomic add, so this adds the
