@@ -1,0 +1,296 @@
+{
+  "model_id": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16",
+  "model_type": "nemotron_h",
+  "architecture": "NemotronHForCausalLM",
+  "generated_by": "emit-e2e planner (Command 1)",
+
+  "source_a_facts": {
+    "auto_registry": "AutoModelForCausalLM  (config.architectures == ['NemotronHForCausalLM'])",
+    "is_encoder_decoder": false,
+    "task": "text -> text (causal language modelling / autoregressive generation)",
+    "input_construction": "AutoTokenizer(HF_MODEL_ID, trust_remote_code=True) -> input_ids",
+    "output": "generated token ids -> tokenizer.decode(...) -> text",
+    "reference": "AutoModelForCausalLM(...).generate(input_ids, do_sample=False) == the golden",
+    "config": {
+      "hidden_size": 2688,
+      "num_hidden_layers": 52,
+      "vocab_size": 131072,
+      "num_attention_heads": 32,
+      "num_key_value_heads": 2,
+      "head_dim": 128,
+      "n_routed_experts": 128,
+      "num_experts_per_tok": 6,
+      "moe_intermediate_size": 1856,
+      "moe_shared_expert_intermediate_size": 3712,
+      "routed_scaling_factor": 2.5,
+      "norm_topk_prob": true,
+      "mamba_num_heads": 64,
+      "mamba_head_dim": 64,
+      "ssm_state_size": 128,
+      "n_groups": 8,
+      "conv_kernel": 4,
+      "chunk_size": 128,
+      "mlp_hidden_act": "relu2",
+      "max_position_embeddings": 262144,
+      "tie_word_embeddings": false,
+      "eos_token_id_config": 2,
+      "eos_token_id_generation_config": [2, 11],
+      "pad_token_id": 0,
+      "total_parameters": 31577937344,
+      "layers_block_type_prefix_7": ["mamba", "moe", "mamba", "moe", "mamba", "attention", "moe"]
+    },
+    "positional_encoding_note": "NemotronHAttention in this checkpoint applies NO rotary embedding in its forward (verified against _captured/nemotron_h_attention golden by the graduated stub). The model is therefore position-id independent; only causality matters."
+  },
+
+  "task_heads": [
+    {
+      "call": 1,
+      "name": "text_generation",
+      "hf_head": "NemotronHForCausalLM",
+      "demo_entrypoint": "models.demos.nvidia_nemotron_3_5_lightning_30b_a3b_bf16.demo.demo_text_generation",
+      "input": "32 distinct natural-language prompts -> AutoTokenizer -> left-padded input_ids [32, T0] (+ attention_mask of ones, so HF and TT see byte-identical inputs)",
+      "output": "32 independently generated continuations (token ids -> tokenizer.batch_decode -> text)",
+      "reference": "_hf_reference_text_generation(): the SAME 32 padded prompts through model.generate(..., do_sample=False, num_beams=1, max_new_tokens=N, return_dict_in_generate=True, output_scores=True)",
+      "pass_definition": "Gate1 AND Gate2 AND Gate3 all hold in one on-device run of tt/pipeline.py::run_text_generation",
+      "validation_metric": "PCC of the TT per-step next-token logits vs HF gen.scores, computed over ALL 32 batch rows x all N steps (flattened); ALSO per-step PCC and per-sample PCC reported. Gate = min over the 32 samples of that sample's own PCC vs its OWN golden row.",
+      "behavioral_proof": "greedy token-id agreement rate between the TT sequence and gen.sequences over the first N new tokens, per sample; plus the decoded text of both sides printed side by side in the demo.",
+      "gate3_threshold": 0.95
+    }
+  ],
+  "note_single_call": "SOURCE A registers exactly ONE task head for this checkpoint (NemotronHForCausalLM). There is no second Call. Per the orchestration rule ('if two calls share a graduated module, use only ONE agent'), all ten graduated modules belong to Call 1, so Call 1 is built by a single agent against a single shared pipeline.",
+
+  "graduated_modules": {
+    "verification_method": "A module is GRADUATED iff _stubs/<name>.py has a sibling <name>.py.last_good_native OR <name>.py.last_good_sharded snapshot. Enumerated by `ls _stubs/*.last_good_native _stubs/*.last_good_sharded`. Cross-checked against RUN_REPORT.md 'ON_DEVICE (10)' -- the two lists are identical, so none is missed and none is invented.",
+    "count": 10,
+    "list": [
+      "nemotron_h_attention",
+      "nemotron_h_block",
+      "nemotron_h_experts",
+      "nemotron_h_m_l_p",
+      "nemotron_h_mamba2_mixer",
+      "nemotron_h_mo_e",
+      "nemotron_h_r_m_s_norm",
+      "nemotron_h_topk_router",
+      "re_l_u_squared_activation",
+      "zamba2_r_m_s_norm_gated"
+    ],
+    "explicitly_NOT_graduated": [
+      {"file": "_stubs/nemotron_h_model.py", "why": "no .last_good_* snapshot (3.9MB scaffold monolith)"},
+      {"file": "_stubs/nemotron_h_m_o_e.py", "why": "superseded by nemotron_h_mo_e.py; no .last_good_* snapshot of its own"},
+      {"file": "_stubs/mamba_r_m_s_norm_gated.py", "why": "superseded by zamba2_r_m_s_norm_gated.py; no .last_good_* snapshot"},
+      {"file": "_stubs/_cpp_kernels.py, _stubs/_ttl_kernels.py, _stubs/square_compute.cpp", "why": "helper kernels, not components"}
+    ]
+  },
+
+  "routing_where_each_graduated_stub_goes": {
+    "principle": "The pipeline drives the NemotronH layer loop itself. Each of the 52 (capped: 7) layers is dispatched by config.layers_block_type. Where two graduated stubs cover overlapping math (a whole-block stub AND its constituent sub-stubs), DIFFERENT layers use DIFFERENT variants, so every stub sits on a real, load-bearing edge of the forward pass and its output feeds the next layer. No coverage sweep, no stub called just to tick a counter.",
+    "layer_variants": [
+      {
+        "layer_index": 0,
+        "block_type": "mamba",
+        "variant": "MAMBA_A / whole-block",
+        "stubs": ["nemotron_h_block"],
+        "wiring": "x -> nemotron_h_block(x) -> x   (the stub owns pre-norm + Mamba2 SSD mixer + inline gated norm + out_proj all_reduce + residual add)"
+      },
+      {
+        "layer_index": 2,
+        "block_type": "mamba",
+        "variant": "MAMBA_B / decomposed + injected gated norm",
+        "stubs": ["nemotron_h_r_m_s_norm", "nemotron_h_mamba2_mixer", "zamba2_r_m_s_norm_gated"],
+        "wiring": "h = nemotron_h_r_m_s_norm(x); y = nemotron_h_mamba2_mixer(h)  where the mixer's step-12 gated grouped RMSNorm is supplied by the zamba2_r_m_s_norm_gated stub via the mixer's `gated_norm` hook (y_pre_norm, gate) -> normed; x = x + y"
+      },
+      {
+        "layer_index": 4,
+        "block_type": "mamba",
+        "variant": "MAMBA_C / decomposed, mixer-internal gated norm",
+        "stubs": ["nemotron_h_r_m_s_norm", "nemotron_h_mamba2_mixer"],
+        "wiring": "h = nemotron_h_r_m_s_norm(x); x = x + nemotron_h_mamba2_mixer(h)"
+      },
+      {
+        "layer_index": 5,
+        "block_type": "attention",
+        "variant": "ATTN",
+        "stubs": ["nemotron_h_r_m_s_norm", "nemotron_h_attention"],
+        "wiring": "h = nemotron_h_r_m_s_norm(x); x = x + nemotron_h_attention(h)   (stub applies its own causal mask, matching sdpa is_causal)"
+      },
+      {
+        "layer_index": 1,
+        "block_type": "moe",
+        "variant": "MOE_A / whole-mixer",
+        "stubs": ["nemotron_h_mo_e"],
+        "wiring": "h = nemotron_h_r_m_s_norm(x); x = x + nemotron_h_mo_e(h)   (stub owns router + 128-expert EP mixture + all_reduce + shared expert)"
+      },
+      {
+        "layer_index": 3,
+        "block_type": "moe",
+        "variant": "MOE_B / decomposed, shared expert via the MLP stub",
+        "stubs": ["nemotron_h_r_m_s_norm", "nemotron_h_topk_router", "nemotron_h_experts", "nemotron_h_m_l_p"],
+        "wiring": "h = nemotron_h_r_m_s_norm(x); logits = nemotron_h_topk_router(h); (idx,w) = on-device route(logits) [sigmoid + e_score_correction_bias + fp32 all-pairs-rank top-6 + norm + routed_scaling_factor]; routed = nemotron_h_experts(h_flat, routing_dense=W); shared = nemotron_h_m_l_p(h); x = x + routed + shared"
+      },
+      {
+        "layer_index": 6,
+        "block_type": "moe",
+        "variant": "MOE_C / decomposed, shared expert built from the relu2 stub",
+        "stubs": ["nemotron_h_r_m_s_norm", "nemotron_h_topk_router", "nemotron_h_experts", "re_l_u_squared_activation"],
+        "wiring": "h = nemotron_h_r_m_s_norm(x); logits = nemotron_h_topk_router(h); routed = nemotron_h_experts(h_flat, routing_dense=W); u = ttnn.matmul(h, W_shared_up); a = re_l_u_squared_activation(u); shared = ttnn.matmul(a, W_shared_down); x = x + routed + shared"
+      }
+    ],
+    "outside_the_layer_loop": {
+      "embedding": "pipeline-owned ttnn.embedding over the HF embed_tokens weight (on device, no host lookup)",
+      "final_norm": "nemotron_h_r_m_s_norm stub built from model.model.norm_f / model.model.norm",
+      "lm_head": "pipeline-owned ttnn.matmul against the untied lm_head weight (replicated)",
+      "sampling": "ttnn.argmax on device over the last position's logits"
+    },
+    "coverage_check": {
+      "nemotron_h_attention": "layer 5",
+      "nemotron_h_block": "layer 0",
+      "nemotron_h_experts": "layers 3, 6",
+      "nemotron_h_m_l_p": "layer 3 (shared expert)",
+      "nemotron_h_mamba2_mixer": "layers 2, 4",
+      "nemotron_h_mo_e": "layer 1",
+      "nemotron_h_r_m_s_norm": "layers 1,2,3,4,5,6 pre-norm + final norm",
+      "nemotron_h_topk_router": "layers 3, 6",
+      "re_l_u_squared_activation": "layer 6 (shared-expert activation)",
+      "zamba2_r_m_s_norm_gated": "layer 2 (mamba mixer gated grouped norm)",
+      "all_10_covered": true
+    }
+  },
+
+  "sanctioned_stub_extensions": [
+    {
+      "stub": "nemotron_h_experts",
+      "change": "accept an OPTIONAL `routing_dense` ttnn tensor (tokens x n_experts) in place of the host-built torch scatter_add_ routing matrix",
+      "why": "the graduated body builds its dense routing matrix on the HOST from torch top_k_index/top_k_weights. In a real chained pipeline the routing comes from the on-device router, and a host round-trip would (a) break the fully-on-device host_op_selftest of Command 3 and (b) inject host compute into the hot path. The change is purely ADDITIVE: the existing torch path is untouched, the ttnn expert loop, the ShardTensor2dMesh expert-parallel split and the all_reduce are unchanged. Gate 1 is preserved (still native ttnn, still sharded)."
+    },
+    {
+      "stub": "zamba2_r_m_s_norm_gated",
+      "change": "accept an OPTIONAL tp_shard flag that uploads its per-feature `weight` with ShardTensor2dMesh(dims=(None,-1)) instead of ReplicateTensorToMesh",
+      "why": "to sit inside the head-sharded nemotron_h_mamba2_mixer its weight must be split on the same TP axis as the mixer's local intermediate width (4096 -> 2048 at TP=2). group_size (512) divides the local width evenly, so the grouped RMS is unchanged. Additive: default stays replicated, which is what its own PCC test uses."
+    }
+  ],
+
+  "parallelism": {
+    "chips": 4,
+    "mesh": "ttnn.MeshShape(2, 2)  (rows = DP=2, cols = TP=2)",
+    "fabric": "ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D) BEFORE open_mesh_device",
+    "tp_axis": "cluster_axis = 1 (the last / cols axis) -- every sharded stub already computes _tp_axis = len(mesh_shape)-1 = 1 and all_reduces on it. They agree.",
+    "shard_enable": "the graduated stubs gate their sharded path on env TT_HW_PLANNER_SHARD_RUN; the pipeline sets it before building so the .last_good_sharded bodies take their sharded branch.",
+    "scheme_evaluation": [
+      {"component": "nemotron_h_attention", "scheme": "TP column/row-parallel MHA (q/k_exp/v_exp column-parallel, o_proj row-parallel + all_reduce on axis 1)", "requirement": "num_attention_heads % TP == 0 AND num_key_value_heads % TP == 0", "check": "32 % 2 == 0 and 2 % 2 == 0", "verdict": "COMPATIBLE. Note kernel_findings.json flags TP=4/8/32 as blockers for exactly this reason (n_kv_heads=2); TP=2 is the largest viable degree, which is what the tool selected."},
+      {"component": "nemotron_h_mamba2_mixer", "scheme": "head-parallel SSD (in_proj column-parallel with a permuted [gate|x|B|C|dt] column order, out_proj row-parallel + all_reduce on axis 1)", "requirement": "mamba_num_heads % TP == 0 AND n_groups % TP == 0", "check": "64 % 2 == 0 and 8 % 2 == 0; reps = H/G = 8 preserved", "verdict": "COMPATIBLE"},
+      {"component": "nemotron_h_block", "scheme": "same head-parallel SSD as the mixer (it embeds one)", "requirement": "64 % 2 == 0 and 8 % 2 == 0", "check": "ok", "verdict": "COMPATIBLE"},
+      {"component": "nemotron_h_mo_e", "scheme": "EXPERT-parallel (disjoint expert subsets per chip; replicated router; per-chip one-hot selector; all_reduce of the partial mixture on axis 1; shared expert replicated and added AFTER the reduce)", "requirement": "n_routed_experts % TP == 0", "check": "128 % 2 == 0 -> 64 experts/chip", "verdict": "COMPATIBLE"},
+      {"component": "nemotron_h_experts", "scheme": "EXPERT-parallel, same expert axis and same ShardTensor2dMesh(dims=(None,0)) split as nemotron_h_mo_e", "requirement": "n_routed_experts % TP == 0", "check": "128 % 2 == 0", "verdict": "COMPATIBLE"},
+      {"component": "nemotron_h_m_l_p", "scheme": "TP column/row-parallel un-gated MLP (up_proj column-parallel, down_proj row-parallel + all_reduce on axis 1)", "requirement": "shared-expert intermediate % TP == 0", "check": "3712 % 2 == 0 -> 1856 per chip (58 tiles)", "verdict": "COMPATIBLE"},
+      {"component": "nemotron_h_topk_router", "scheme": "REPLICATED by design (tiny 2688x128 weight, full-width logits feed every chip's expert selection; no collective needed)", "requirement": "none", "check": "n/a", "verdict": "COMPATIBLE -- replication here is the stub's documented TP scheme, not a fallback"},
+      {"component": "nemotron_h_r_m_s_norm", "scheme": "REPLICATED (normalizes the full 2688 hidden dim, which is never split)", "requirement": "none", "check": "n/a", "verdict": "COMPATIBLE"},
+      {"component": "re_l_u_squared_activation", "scheme": "elementwise, layout-agnostic; runs on whatever shard it is handed", "requirement": "none", "check": "n/a", "verdict": "COMPATIBLE"},
+      {"component": "zamba2_r_m_s_norm_gated", "scheme": "grouped RMS over group_size=512; replicated by default, TP-sharded on the last dim when injected into the head-sharded mamba mixer", "requirement": "(intermediate/TP) % group_size == 0", "check": "(4096/2) % 512 == 0 -> 4 groups per chip", "verdict": "COMPATIBLE"}
+    ],
+    "sharded_pipeline_proof": "The composed pipeline necessarily contains ShardTensor2dMesh uploads (mamba in/out_proj, attention qkvo, MoE/experts expert axis, MLP up/down) AND ttnn.all_reduce(cluster_axis=1) collectives (mamba, attention, MoE, experts, MLP). It is NOT a pure-replication pipeline.",
+    "dp_axis": "rows (axis 0). Weights are replicated across the 2 DP rows by every stub's ShardTensor2dMesh(dims=(None, d)) / ReplicateTensorToMesh. The gate reads back row 0; DP is a throughput axis and must not change the numerics."
+  },
+
+  "batch": {
+    "B": 32,
+    "how": "32 DISTINCT prompts tokenized together, left-padded to a common T0, threaded as a leading batch dim through embedding -> every layer -> final norm -> lm_head -> argmax. ONE program per step for all 32 rows; no python loop over samples.",
+    "stub_batch_audit": [
+      {"stub": "nemotron_h_mamba2_mixer", "status": "B is read from hidden_states.shape[0]; _get_consts builds (1,H,T,T) constants that broadcast over B -- verify broadcast actually holds at B=32, else expand to B."},
+      {"stub": "nemotron_h_attention", "status": "B read from shape[0]; causal mask is (1,1,T,T) -> broadcasts."},
+      {"stub": "nemotron_h_mo_e", "status": "B,T read from shape; slices use [B,T,e+1] -- batch-safe."},
+      {"stub": "nemotron_h_experts", "status": "2-D (tokens, hidden) contract -- the pipeline flattens [B,T,H] -> [B*T,H] and reshapes back. Batch-safe by construction."},
+      {"stub": "nemotron_h_block", "status": "HARDCODES a leading 1 in every ttnn.slice bound and in _to_heads/_from_heads reshapes. MUST be taken from x.shape[0] and re-verified -- a hardcoded 1 silently drops samples 2..32."},
+      {"stub": "nemotron_h_m_l_p / nemotron_h_r_m_s_norm / re_l_u_squared_activation / zamba2_r_m_s_norm_gated", "status": "shape-generic elementwise/matmul; zamba2 reads B,L,C from the tensor. Batch-safe."}
+    ],
+    "pcc_requirement": "all 32 rows compared each to its OWN golden row; the gate is the MINIMUM per-sample PCC. 32 identical outputs is a FAIL by construction (the 32 prompts differ)."
+  },
+
+  "depth_cap": {
+    "reason": "HARDWARE CEILING, measured not assumed. The checkpoint is 31.58e9 parameters (65.8 GB bf16). Expert weights alone are 128 experts x 2 x 2688 x 1856 = 1.28e9 params per MoE layer x 23 MoE layers = 29.4e9 params = 58.8 GB bf16; expert-parallel at TP=2 halves that to 29.4 GB PER CHIP against ~12 GB of Wormhole DRAM per chip. A full 52-layer resident build cannot fit on 4 chips at any TP degree this model permits (TP>2 is blocked by num_key_value_heads=2 -- see kernel_findings.json).",
+    "gate_depth": 7,
+    "why_7": "layers_block_type[:7] == [mamba, moe, mamba, moe, mamba, attention, moe] -- the shortest prefix that contains all three block types AND enough of each to host all seven layer variants above, hence all 10 graduated stubs. Estimated resident footprint ~5.5 GB/chip (3 MoE x ~1.3 GB EP-halved + mamba/attn ~0.35 GB + embedding 0.7 GB + lm_head 0.7 GB).",
+    "golden_is_capped_identically": "The HF reference is the SAME checkpoint with model.model.layers truncated to the same 7 blocks (config.num_hidden_layers and layers_block_type truncated to match), embedding / final norm / lm_head intact. TT and HF therefore compute the SAME function; PCC parity is exact-in-scope, not approximated. The generated TEXT from a 7-layer truncation is not meaningful English -- that is a property of the truncation, not of the port, and is stated in the README.",
+    "layers_knob": "build_pipeline(device, model=None, layers=None, prefill_layers=None, decode_layers=None, ...). layers=None means EVERY layer (all 52) -- honoured, and will exceed DRAM on this box by design. The gate and the demo pass layers=7."
+  },
+
+  "decode_horizon": {
+    "rule": "STOP-TOKEN (priority 1). Stop ids read from generation_config.eos_token_id == [2, 11] (config.eos_token_id == 2 is a subset). Decode halts when EVERY one of the 32 rows has emitted a stop id, or at the safety cap.",
+    "safety_cap": "N = min(TT_E2E_MAX_NEW_TOKENS (default 16), config.max_position_embeddings - T0). The default of 16 is a HARDWARE-forced bound, not a magic number: the graduated stubs are stateless full-sequence bodies (no KV / SSM cache), so step k recomputes the whole prefix -- decode is O(N^2) in tokens. Measured on this mesh: 64 local experts over 1024 tokens = 0.30 s, so a 3-MoE-layer forward at B=32 costs ~1 s and 16 steps is ~1 min per side.",
+    "applied_to_both_sides": "The SAME N and the SAME stop-id set are passed to model.generate(max_new_tokens=N, eos_token_id=[2,11], do_sample=False) and to the TT loop, so the two sequences always have the same length -- no false mismatch, and the golden is never forced to a count the TT side invented."
+  },
+
+  "gates": {
+    "gate1_native_ttnn": {
+      "what": "every routed graduated stub is still real ttnn, and every sharded (.last_good_sharded) body keeps its ShardTensor2dMesh + all_reduce",
+      "how_proved": "(a) the pipeline imports the LIVE _stubs/<name>.py and asserts each file is byte-identical to its .last_good_sharded (or .last_good_native where that is the only snapshot) apart from the two sanctioned additive extensions listed above; (b) a static scan of the routed stub sources asserts NO torch compute op (torch.matmul/softmax/layer_norm/F.*/sdpa/argmax/topk...) and no HF submodule call appears in any __call__/_apply_* body; (c) a runtime assert that at least one ShardTensor2dMesh upload and at least one ttnn.all_reduce executed."
+    },
+    "gate2_all_invoked": {
+      "what": "all 10 graduated modules actually execute inside the real forward path",
+      "how_proved": "tt/_invocation.py registry. Each graduated stub's __call__ calls _invocation.record('<name>') on entry (the pipeline wraps each built stub in a thin recording proxy so the stub sources need not be edited). The e2e test calls _invocation.reset(), runs run_text_generation(), then asserts snapshot() >= set(GRADUATED_MODULES) and prints the set. NO coverage_step / sweep function exists anywhere in the package -- every recorded invocation happened because a real layer needed its output."
+    },
+    "gate3_pcc": {
+      "what": "final-output PCC vs the HF golden >= 0.95",
+      "primary_metric": "min over the 32 samples of PCC(TT per-step next-token logits[sample], HF gen.scores[sample]) across all N steps",
+      "secondary": "per-step PCC (all 32 rows) and greedy token-id agreement rate vs gen.sequences",
+      "print_contract": "print(f\"e2e PCC={achieved_pcc}\") on its own line IMMEDIATELY BEFORE the final assert, on pass AND fail."
+    }
+  },
+
+  "no_shortcut_contract": {
+    "forbidden_and_absent": [
+      "model.generate / hf_model.<submodule>(...) anywhere in run_text_generation or anything it calls",
+      "monkey-patching any HF module .forward",
+      "torch compute wrappers (matmul/softmax/layer_norm/embedding/conv/sdpa/relu/gelu/silu/argmax/topk/multinomial/F.*) in the hot path",
+      "coverage_step / coverage_sweep / invoke_all_stubs / _touch_all_graduated"
+    ],
+    "allowed_hf_use": [
+      "config / generation_config attribute reads",
+      "weight extraction at build time (model.model.layers[i].<...>.weight)",
+      "HF calls inside _hf_reference_text_generation() (the golden only)",
+      "HF calls inside <stage>_trace_setup() to seed persistent buffers before capture"
+    ],
+    "joint_rule": "every stage is fed the previous TT stage's real ttnn output. No reference tensor is ever injected at a joint."
+  },
+
+  "trace_contract_command3": {
+    "PIPELINE_STAGES": ["prefill", "decode"],
+    "derivation": "config.architectures == ['NemotronHForCausalLM'] and is_encoder_decoder == False -> [prefill, decode]. No speech/vocoder stage.",
+    "per_stage": {
+      "prefill_trace_setup(inputs)": "pin the sequence axis to a fixed capacity C (default 64, bound = max_position_embeddings); pre-upload the padded input_ids, the causal mask and the mamba shift/tril/neg constants at length C into persistent device buffers OUTSIDE the trace; mask padded positions so [0:T0] is unchanged.",
+      "prefill_trace_step()": "one host-op-free forward at [B=32, C] reading only those buffers.",
+      "prefill_trace_inputs()": "ZERO-ARG; assembles the same tokenized batch the e2e test/demo uses from _captured/_e2e_golden/input_ids.pt (created by tests/e2e/make_golden.py).",
+      "prefill_trace_items()": "returns B * C  (the repeated blocks process every one of the 32 x C prefill positions).",
+      "decode_trace_setup(inputs)": "seed the resident per-stream state at capacity C from the prefill result.",
+      "decode_trace_step()": "one token for all 32 rows at the pinned capacity.",
+      "decode_trace_inputs()": "ZERO-ARG; same source as prefill.",
+      "decode_trace_items()": "returns B (32) -- one token retired per row per step."
+    },
+    "factory": "build_pipeline(device, model=None, layers=None, prefill_layers=None, decode_layers=None, **kwargs) -> the resident pipeline OBJECT (never runs it). Accepts and ignores demo kwargs (prompt/text/...).",
+    "stack_discoverability": "the object holds self.layers as a plain python list of same-typed NemotronHLayer wrappers (one common base class, one element per built block) plus self.hf (the HF reference) for ground-truth section structure.",
+    "trace_capture_selftest(device)": "per stage: begin_trace_capture -> one step -> end_trace_capture -> execute_trace -> PCC vs the eager reference -> RELEASE before the next stage. trace_region_size sized from the largest stage; on overflow shrink C and PRINT the fallback.",
+    "host_op_selftest()": "runs the encoded-inputs->logits forward (incl. the ttnn embedding) under scripts.tt_hw_planner.host_op_observer.observe_host_ops(); tokenization and the one-time weight build happen OUTSIDE the observed region. Returns host_op_observer.verdict(ops). This is why nemotron_h_experts needs the device-side routing_dense path."
+  },
+
+  "self_validation_plan": [
+    "S1  enumerate graduated stubs from the .last_good_* snapshots and assert the set equals RUN_REPORT.md's ON_DEVICE list (10). FAIL LOUD on any drift.",
+    "S2  assert every graduated stub appears in the pipeline's layer-variant routing table, and that the table's union == the graduated set (no stub unrouted, no phantom name).",
+    "S3  static no-shortcut scan of tt/pipeline.py + every routed stub: no generate(), no hf_model.<submodule>() call, no forbidden torch compute op, no coverage sweep function.",
+    "S4  build at layers=7 on the 2x2 mesh with TT_HW_PLANNER_SHARD_RUN set; assert >=1 ShardTensor2dMesh upload and >=1 ttnn.all_reduce executed (sharded pipeline proof).",
+    "S5  per-layer sanity before the full chain: PCC each of the 7 built layers' TT output against the corresponding truncated-HF layer output, fed the SAME input. Catches wiring bugs at the joint that a green end-to-end PCC could mask.",
+    "S6  run the chained prefill at B=32 and PCC the final logits vs truncated-HF logits for the SAME padded ids. Assert the 32 rows are NOT all identical.",
+    "S7  run the N-step decode; compare to model.generate(max_new_tokens=N, do_sample=False) on the truncated model; print e2e PCC then assert >= 0.95.",
+    "S8  Gate 2: assert _invocation.snapshot() >= the 10 graduated names; print the set and any missing name.",
+    "S9  batch audit: re-run S6 with B=1 vs B=32 and assert row 0 of the B=32 result matches the B=1 result (proves no sample is silently dropped by a hardcoded leading 1).",
+    "S10 demo/test share-one-pipeline check: assert demo_text_generation imports run_text_generation from tt.pipeline and defines no second wiring (grep for a duplicated layer loop).",
+    "S11 Command 3: trace_capture_selftest(device) True for both stages; host_op_selftest() verdict clean.",
+    "S12 re-test every recorded ceiling (the depth cap and any per-stage batch ceiling) at the END, after all fixes, and keep it only if it still reproduces."
+  ],
+
+  "deliverables": {
+    "tt/pipeline.py": "PIPELINE_STAGES, GRADUATED_MODULES, LAYER_VARIANTS, build_pipeline(), NemotronHPipeline (run_text_generation, prefill/decode trace contract, trace_capture_selftest, host_op_selftest), _hf_reference_text_generation()",
+    "demo/demo_text_generation.py": "__main__ + argparse; imports and calls tt.pipeline.build_pipeline + run_text_generation; prints TT text and HF text",
+    "tests/e2e/test_e2e_pipeline.py": "Gate 1/2/3 over the SAME run_text_generation",
+    "tests/e2e/make_golden.py": "caches the 32-prompt HF golden (truncated-depth) under _captured/_e2e_golden/",
+    "README.md": "what Call 1 does, how to run it, the achieved PCC numbers, and the depth-cap ceiling with its measurement"
+  }
+}

@@ -1,0 +1,156 @@
+{
+  "new_model_id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+  "new_model_type": "nemotron_h",
+  "sibling_hf_id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+  "sibling_model_type": "nemotron_h",
+  "backend": {
+    "name": "NemotronH (nemotron_h hybrid Mamba2/MoE)",
+    "demo_path": "models/demos/nvidia_nemotron_3_nano_30b_a3b_bf16"
+  },
+  "counts": {
+    "REUSE": 3,
+    "ADAPT": 2,
+    "NEW": 5
+  },
+  "common_reuse": [
+    {
+      "purpose": "LayerNorm / RMSNorm",
+      "path": "models/common/rmsnorm.py"
+    },
+    {
+      "purpose": "LightweightModule base",
+      "path": "models/common/lightweightmodule.py"
+    },
+    {
+      "purpose": "Tensor helpers",
+      "path": "models/common/tensor_utils.py"
+    },
+    {
+      "purpose": "Generic utility funcs",
+      "path": "models/common/utility_functions.py"
+    }
+  ],
+  "components": [
+    {
+      "name": "nemotron_h_model",
+      "kind": "NemotronHModel",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/nemotron_h/modeling_nemotron_h.py",
+      "notes": "module-tree: occ=1 leaves=9117 sample_paths=['backbone']",
+      "submodule_path": "backbone",
+      "class_name": "NemotronHModel"
+    },
+    {
+      "name": "nemotron_h_block",
+      "kind": "NemotronHBlock",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/nemotron_h/modeling_nemotron_h.py",
+      "notes": "module-tree: occ=52 leaves=9115 sample_paths=['backbone.layers.0', 'backbone.layers.1']",
+      "submodule_path": "backbone.layers.0",
+      "class_name": "NemotronHBlock"
+    },
+    {
+      "name": "nemotron_h_m_o_e",
+      "kind": "NemotronHMOE",
+      "status": "ADAPT",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/mixtral_moe.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: moe_routing_mixtral_style -> models/tt_transformers/tt/mixtral_moe.py::TtMoeLayer (ADAPT). derived from compatibility.py BUILDING_BLOCKS 'MoE routing (Mixtral-style)'. Generic MoE block currently hard-codes num_devices=8 and top-2. Adapting to other top-k or device counts needs a small refactor. Larger-scale MoE (DeepSeek/GPT-OSS) has standalone demos. | module-tree: occ=23 leaves=8924 sample_paths=['backbone.layers.1.mixer', 'backbone.layers.3.mixer']",
+      "submodule_path": "backbone.layers.1.mixer",
+      "class_name": "NemotronHMOE"
+    },
+    {
+      "name": "nemotron_h_m_l_p",
+      "kind": "NemotronHMLP",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/mlp.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: swiglu_mlp -> models/tt_transformers/tt/mlp.py::MLP (REUSE). derived from compatibility.py BUILDING_BLOCKS 'SwiGLU MLP'. hidden_act dispatched via activation_map; supports silu/gelu/relu/quick_gelu/gelu_pytorch_tanh. | module-tree: occ=2967 leaves=8901 sample_paths=['backbone.layers.1.mixer.experts.0', 'backbone.layers.1.mixer.experts.1']",
+      "submodule_path": "backbone.layers.1.mixer.experts.0",
+      "class_name": "NemotronHMLP"
+    },
+    {
+      "name": "re_l_u_squared_activation",
+      "kind": "ReLUSquaredActivation",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/nemotron_h/modeling_nemotron_h.py",
+      "notes": "module-tree: occ=2967 leaves=2967 sample_paths=['backbone.layers.1.mixer.experts.0.act_fn', 'backbone.layers.1.mixer.experts.1.act_fn']",
+      "submodule_path": "backbone.layers.1.mixer.experts.0.act_fn",
+      "class_name": "ReLUSquaredActivation"
+    },
+    {
+      "name": "nemotron_h_mamba2_mixer",
+      "kind": "NemotronHMamba2Mixer",
+      "status": "ADAPT",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/demos/wormhole/mamba/tt/mamba_ssm.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: ssm_mamba_blocks -> models/demos/wormhole/mamba/tt/mamba_ssm.py::TtMambaSSM (ADAPT). derived from compatibility.py BUILDING_BLOCKS 'SSM / Mamba blocks'. Separate stack from tt_transformers; covers state-spaces/mamba-2.8b-slimpj. Other Mamba variants would need adaptation. | module-tree: occ=23 leaves=115 sample_paths=['backbone.layers.0.mixer', 'backbone.layers.2.mixer']",
+      "submodule_path": "backbone.layers.0.mixer",
+      "class_name": "NemotronHMamba2Mixer"
+    },
+    {
+      "name": "nemotron_h_r_m_s_norm",
+      "kind": "NemotronHRMSNorm",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/common/rmsnorm.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: rmsnorm_text -> models/common/rmsnorm.py::RMSNorm (REUSE). derived from compatibility.py BUILDING_BLOCKS 'RMSNorm (text)'. ttnn.rms_norm requires TILE layout; distributed RMSNorm handles multi-chip. | module-tree: occ=53 leaves=53 sample_paths=['backbone.layers.0.norm', 'backbone.layers.1.norm']",
+      "submodule_path": "backbone.layers.0.norm",
+      "class_name": "NemotronHRMSNorm"
+    },
+    {
+      "name": "nemotron_h_attention",
+      "kind": "NemotronHAttention",
+      "status": "REUSE",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": "models/tt_transformers/tt/attention.py",
+      "hf_reference": null,
+      "notes": "reuse_registry: gqa_attention -> models/tt_transformers/tt/attention.py::Attention (REUSE). derived from compatibility.py BUILDING_BLOCKS 'GQA attention'. Requires num_attention_heads % num_key_value_heads == 0. | module-tree: occ=6 leaves=24 sample_paths=['backbone.layers.5.mixer', 'backbone.layers.12.mixer']",
+      "submodule_path": "backbone.layers.5.mixer",
+      "class_name": "NemotronHAttention"
+    },
+    {
+      "name": "mamba_r_m_s_norm_gated",
+      "kind": "MambaRMSNormGated",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/nemotron_h/modeling_nemotron_h.py",
+      "notes": "module-tree: occ=23 leaves=23 sample_paths=['backbone.layers.0.mixer.norm', 'backbone.layers.2.mixer.norm']",
+      "submodule_path": "backbone.layers.0.mixer.norm",
+      "class_name": "MambaRMSNormGated"
+    },
+    {
+      "name": "nemotron_h_topk_router",
+      "kind": "NemotronHTopkRouter",
+      "status": "NEW",
+      "new_shape": {},
+      "sibling_shape": {},
+      "tt_reuse_target": null,
+      "hf_reference": "transformers/src/transformers/models/nemotron_h/modeling_nemotron_h.py",
+      "notes": "module-tree: occ=23 leaves=23 sample_paths=['backbone.layers.1.mixer.gate', 'backbone.layers.3.mixer.gate']",
+      "submodule_path": "backbone.layers.1.mixer.gate",
+      "class_name": "NemotronHTopkRouter"
+    }
+  ],
+  "notes": []
+}
