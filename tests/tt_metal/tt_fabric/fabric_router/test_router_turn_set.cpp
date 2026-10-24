@@ -81,7 +81,8 @@ TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
     for (const auto& [topology, facing, z_capability] :
          {Case{Topology::Linear, RoutingDirection::N, std::nullopt},
           Case{Topology::Ring, RoutingDirection::E, EdgeCapability::INTRAMESH_EXPRESS}}) {
-        const auto turn_set = turn_set_for_router(topology, facing, chip_with_z(z_capability), false, nullptr);
+        const auto turn_set =
+            turn_set_for_router(topology, facing, chip_with_z(z_capability), ExpressAxis::NONE, nullptr);
         ASSERT_EQ(turn_set[0].size(), 1);
         EXPECT_EQ(*turn_set[0][0].target_direction, get_opposite_direction(facing));
         EXPECT_EQ(turn_set[0][0].target_vc, 0);
@@ -95,7 +96,8 @@ TEST_F(RouterTurnSetTest, Linear1D_WiresOnlyTheOpposite) {
 
 TEST_F(RouterTurnSetTest, NonExpress2D_WiresEveryNonSelfCardinal) {
     for (auto facing : k_all_cardinals) {
-        const auto turn_set = turn_set_for_router(Topology::Mesh, facing, chip_with_z(std::nullopt), false, nullptr);
+        const auto turn_set =
+            turn_set_for_router(Topology::Mesh, facing, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
 
         EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(facing))
             << "facing " << enchantum::to_string(facing);
@@ -110,11 +112,7 @@ TEST_F(RouterTurnSetTest, NonExpress2D_BoundaryChipAddsBoundaryTargetOnVC0) {
     // non-self cardinals plus the boundary turn, which stays on VC0.
     for (auto facing : k_all_cardinals) {
         const auto turn_set = turn_set_for_router(
-            Topology::Mesh,
-            facing,
-            chip_with_z(EdgeCapability::INTERMESH),
-            /*express_routing_enabled=*/false,
-            nullptr);
+            Topology::Mesh, facing, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, nullptr);
 
         auto expected = non_self_cardinals(facing);
         expected.insert(RoutingDirection::Z);
@@ -127,11 +125,7 @@ TEST_F(RouterTurnSetTest, NonExpress2D_VC1MirrorsCardinalsOnly) {
     // VC1 forwards the same cardinal set, but the boundary target stays off VC1: feeding the
     // boundary's VC1 sender while it does not service VC1 would create an undrained channel.
     const auto turn_set = turn_set_for_router(
-        Topology::Mesh,
-        RoutingDirection::N,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        &k_full_mesh);
+        Topology::Mesh, RoutingDirection::N, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &k_full_mesh);
 
     EXPECT_EQ(target_directions(turn_set, 1), non_self_cardinals(RoutingDirection::N));
     expect_all_targets_on_vc(turn_set, 1, 1);
@@ -144,7 +138,11 @@ TEST_F(RouterTurnSetTest, NonExpress2D_VC1MirrorsCardinalsOnly) {
 TEST_F(RouterTurnSetTest, PassThrough_AddsBoundaryTargetOnVC1) {
     // EXPERIMENTAL pass-through (A->B->C) forwards VC1 traffic to the local boundary as well.
     const auto turn_set = turn_set_for_router(
-        Topology::Mesh, RoutingDirection::E, chip_with_z(EdgeCapability::INTERMESH), false, &k_full_mesh_pass_through);
+        Topology::Mesh,
+        RoutingDirection::E,
+        chip_with_z(EdgeCapability::INTERMESH),
+        ExpressAxis::NONE,
+        &k_full_mesh_pass_through);
 
     auto expected_vc1 = non_self_cardinals(RoutingDirection::E);
     expected_vc1.insert(RoutingDirection::Z);
@@ -157,11 +155,7 @@ TEST_F(RouterTurnSetTest, PassThrough_NoEffectWithoutBoundaryPort) {
     // Pass-through requested on a chip whose extra port is absent or is a chord: there is no
     // boundary to forward to, so no Z target appears on either VC.
     const auto turn_set = turn_set_for_router(
-        Topology::Mesh,
-        RoutingDirection::E,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/false,
-        &k_full_mesh_pass_through);
+        Topology::Mesh, RoutingDirection::E, chip_with_z(std::nullopt), ExpressAxis::NONE, &k_full_mesh_pass_through);
 
     EXPECT_EQ(target_directions(turn_set, 0), non_self_cardinals(RoutingDirection::E));
     EXPECT_EQ(target_directions(turn_set, 1), non_self_cardinals(RoutingDirection::E));
@@ -175,11 +169,7 @@ TEST_F(RouterTurnSetTest, BoundaryTemplate_FansOutToEveryMeshDirectionOnVC1) {
     // The boundary's whole shape is its from-boundary VC1 fanout: nothing forwards off its VC0
     // receiver (traffic arriving there crosses over onto these same VC1 downstream senders).
     const auto turn_set = turn_set_for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        &k_full_mesh);
+        Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &k_full_mesh);
 
     EXPECT_TRUE(turn_set[0].empty());
 
@@ -199,17 +189,13 @@ TEST_F(RouterTurnSetTest, BoundaryTemplate_Requires2DAndVC1) {
     // Its entire shape is the from-boundary VC1 fanout, so without VC1 or on 1D the boundary
     // router cannot be constructed.
     EXPECT_ANY_THROW(turn_set_for_router(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        nullptr));
+        Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, nullptr));
 
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Linear,
         RoutingDirection::Z,
         chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
+        ExpressAxis::NONE,
         &k_full_mesh));
 }
 
@@ -218,13 +204,13 @@ TEST_F(RouterTurnSetTest, BoundaryTemplate_Requires2DAndVC1) {
 // ============================================================================
 
 TEST_F(RouterTurnSetTest, ExpressChord_IsWiredAsAnOrdinaryRoutingDirection) {
-    // A chord is a Y-axis resource like N/S: it fans out to all four cardinals as ordinary
+    // A chord along Y is a Y resource like N/S: it fans out to all four cardinals as ordinary
     // same-VC turns, on VC0 and VC1 alike (a landed carrier can still decode a Z action).
     const auto turn_set = turn_set_for_router(
         Topology::Torus,
         RoutingDirection::Z,
         chip_with_z(EdgeCapability::INTRAMESH_EXPRESS),
-        /*express_routing_enabled=*/true,
+        ExpressAxis::Y,
         &k_full_mesh);
 
     for (uint32_t vc : {0u, 1u}) {
@@ -234,19 +220,55 @@ TEST_F(RouterTurnSetTest, ExpressChord_IsWiredAsAnOrdinaryRoutingDirection) {
     }
 }
 
+TEST_F(RouterTurnSetTest, ExpressChordOnX_IsWiredAsAnXResource) {
+    // A chord along X is mid-X-phase like E/W: dimension order lets it continue only on X, so it
+    // feeds E and W and never turns back into N/S.
+    const auto turn_set = turn_set_for_router(
+        Topology::Torus,
+        RoutingDirection::Z,
+        chip_with_z(EdgeCapability::INTRAMESH_EXPRESS),
+        ExpressAxis::X,
+        &k_full_mesh);
+
+    const std::set<RoutingDirection> x_cardinals = {RoutingDirection::E, RoutingDirection::W};
+    for (uint32_t vc : {0u, 1u}) {
+        EXPECT_EQ(target_directions(turn_set, vc), x_cardinals) << "VC" << vc;
+        expect_all_targets_on_vc(turn_set, vc, vc);
+    }
+}
+
+TEST_F(RouterTurnSetTest, ExpressOnX_CardinalTurnSets) {
+    // E/W may continue onto the chord but not into Y; N/S keep every turn, Z included.
+    const auto chip = chip_with_z(EdgeCapability::INTRAMESH_EXPRESS);
+    for (const auto facing : k_all_cardinals) {
+        const auto turn_set = turn_set_for_router(Topology::Torus, facing, chip, ExpressAxis::X, &k_full_mesh);
+        std::set<RoutingDirection> expected;
+        if (facing == RoutingDirection::E || facing == RoutingDirection::W) {
+            expected = {get_opposite_direction(facing), RoutingDirection::Z};
+        } else {
+            expected = non_self_cardinals(facing);
+            expected.insert(RoutingDirection::Z);
+        }
+        for (uint32_t vc : {0u, 1u}) {
+            EXPECT_EQ(target_directions(turn_set, vc), expected)
+                << "facing " << enchantum::to_string(facing) << ", VC" << vc;
+        }
+    }
+}
+
 TEST_F(RouterTurnSetTest, ExpressChord_RequiresExpressEnabledAnd2D) {
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Torus,
         RoutingDirection::Z,
         chip_with_z(EdgeCapability::INTRAMESH_EXPRESS),
-        /*express_routing_enabled=*/false,
+        ExpressAxis::NONE,
         nullptr));
 
     EXPECT_ANY_THROW(turn_set_for_router(
         Topology::Linear,
         RoutingDirection::Z,
         chip_with_z(EdgeCapability::INTRAMESH_EXPRESS),
-        /*express_routing_enabled=*/true,
+        ExpressAxis::Y,
         nullptr));
 }
 
@@ -257,13 +279,13 @@ TEST_F(RouterTurnSetTest, CardinalCapabilityOnZFacingIsAConfigurationError) {
         Topology::Mesh,
         RoutingDirection::Z,
         chip_with_z(EdgeCapability::INTRAMESH_CARDINAL),
-        /*express_routing_enabled=*/false,
+        ExpressAxis::NONE,
         &k_full_mesh));
     EXPECT_ANY_THROW(router_vc_shape(
         Topology::Mesh,
         RoutingDirection::Z,
         chip_with_z(EdgeCapability::INTRAMESH_CARDINAL),
-        /*express_routing_enabled=*/false,
+        ExpressAxis::NONE,
         nullptr));
 }
 
@@ -299,10 +321,8 @@ TEST_F(RouterTurnSetTest, CardinalFacingRejectsExpressCapability) {
     auto caps = chip_with_z(EdgeCapability::INTRAMESH_EXPRESS);
     caps.at(RoutingDirection::N) = EdgeCapability::INTRAMESH_EXPRESS;
 
-    EXPECT_ANY_THROW(
-        turn_set_for_router(Topology::Torus, RoutingDirection::N, caps, /*express_routing_enabled=*/true, nullptr));
-    EXPECT_ANY_THROW(
-        router_vc_shape(Topology::Torus, RoutingDirection::N, caps, /*express_routing_enabled=*/true, nullptr));
+    EXPECT_ANY_THROW(turn_set_for_router(Topology::Torus, RoutingDirection::N, caps, ExpressAxis::Y, nullptr));
+    EXPECT_ANY_THROW(router_vc_shape(Topology::Torus, RoutingDirection::N, caps, ExpressAxis::Y, nullptr));
 }
 
 // Express routing with an intermesh seam on a cardinal port.
@@ -319,22 +339,15 @@ PerDirectionCapabilities express_chip_with_seam(std::optional<RoutingDirection> 
     return caps;
 }
 
-RouterVcShape express_shape_of(RoutingDirection facing, std::optional<RoutingDirection> seam_facing) {
-    return router_vc_shape(
-        Topology::Torus,
-        facing,
-        express_chip_with_seam(seam_facing),
-        /*express_routing_enabled=*/true,
-        &k_full_mesh);
+RouterVcShape express_shape_of(
+    RoutingDirection facing, std::optional<RoutingDirection> seam_facing, ExpressAxis express_axis = ExpressAxis::Y) {
+    return router_vc_shape(Topology::Torus, facing, express_chip_with_seam(seam_facing), express_axis, &k_full_mesh);
 }
 
-RouterTurnSet express_turns_of(RoutingDirection facing, std::optional<RoutingDirection> seam_facing) {
+RouterTurnSet express_turns_of(
+    RoutingDirection facing, std::optional<RoutingDirection> seam_facing, ExpressAxis express_axis = ExpressAxis::Y) {
     return turn_set_for_router(
-        Topology::Torus,
-        facing,
-        express_chip_with_seam(seam_facing),
-        /*express_routing_enabled=*/true,
-        &k_full_mesh);
+        Topology::Torus, facing, express_chip_with_seam(seam_facing), express_axis, &k_full_mesh);
 }
 
 }  // namespace
@@ -370,42 +383,45 @@ TEST_F(RouterTurnSetTest, ExpressCardinalSeam_XRouterKeepsTheSeamAsATarget) {
 }
 
 TEST_F(RouterTurnSetTest, ExpressCardinalSeam_EveryWiredVc1TurnIsPlaceableDownstream) {
-    // Every wired VC1 turn must map to a sender slot owned by the downstream shape.
-    for (const auto seam_facing : {std::optional<RoutingDirection>{}, std::optional{RoutingDirection::S}}) {
-        for (const auto producer :
-             {RoutingDirection::N,
-              RoutingDirection::E,
-              RoutingDirection::S,
-              RoutingDirection::W,
-              RoutingDirection::Z}) {
-            SCOPED_TRACE(
-                "seam " + std::string(seam_facing ? enchantum::to_string(*seam_facing) : "none") + ", producer " +
-                std::string(enchantum::to_string(producer)));
+    // Every wired VC1 turn must map to a sender slot owned by the downstream shape, on either axis.
+    for (const auto express_axis : {ExpressAxis::Y, ExpressAxis::X}) {
+        for (const auto seam_facing : {std::optional<RoutingDirection>{}, std::optional{RoutingDirection::S}}) {
+            for (const auto producer :
+                 {RoutingDirection::N,
+                  RoutingDirection::E,
+                  RoutingDirection::S,
+                  RoutingDirection::W,
+                  RoutingDirection::Z}) {
+                SCOPED_TRACE(
+                    "axis " + std::string(enchantum::to_string(express_axis)) + ", seam " +
+                    std::string(seam_facing ? enchantum::to_string(*seam_facing) : "none") + ", producer " +
+                    std::string(enchantum::to_string(producer)));
 
-            const auto turns = express_turns_of(producer, seam_facing);
-            for (const auto& target : turns[1]) {
-                ASSERT_TRUE(target.target_direction.has_value());
-                const auto egress = *target.target_direction;
-                const auto egress_shape = express_shape_of(egress, seam_facing);
+                const auto turns = express_turns_of(producer, seam_facing, express_axis);
+                for (const auto& target : turns[1]) {
+                    ASSERT_TRUE(target.target_direction.has_value());
+                    const auto egress = *target.target_direction;
+                    const auto egress_shape = express_shape_of(egress, seam_facing, express_axis);
 
-                const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
-                    true,
-                    target.target_vc,
-                    builder::routing_direction_to_eth_direction(producer),
-                    builder::routing_direction_to_eth_direction(egress));
+                    const uint32_t slot = builder::get_downstream_sender_channel_for_vc(
+                        true,
+                        target.target_vc,
+                        builder::routing_direction_to_eth_direction(producer),
+                        builder::routing_direction_to_eth_direction(egress));
 
-                EXPECT_LT(slot, egress_shape.sender_counts[target.target_vc])
-                    << "VC" << target.target_vc << " turn " << enchantum::to_string(producer) << " -> "
-                    << enchantum::to_string(egress) << " is wired but lands on slot " << slot
-                    << ", outside the downstream's " << egress_shape.sender_counts[target.target_vc]
-                    << " sender channel(s)";
+                    EXPECT_LT(slot, egress_shape.sender_counts[target.target_vc])
+                        << "VC" << target.target_vc << " turn " << enchantum::to_string(producer) << " -> "
+                        << enchantum::to_string(egress) << " is wired but lands on slot " << slot
+                        << ", outside the downstream's " << egress_shape.sender_counts[target.target_vc]
+                        << " sender channel(s)";
 
-                const builder::RouterProducerSlots slots(
-                    builder::routing_direction_to_eth_direction(egress), egress_shape.sender_counts);
-                const auto by_slots =
-                    slots.channel_for(target.target_vc, builder::routing_direction_to_eth_direction(producer));
-                ASSERT_TRUE(by_slots.has_value()) << "RouterProducerSlots has no channel for a wired producer";
-                EXPECT_EQ(*by_slots, slot) << "producer-slot mapping disagrees with the bijection";
+                    const builder::RouterProducerSlots slots(
+                        builder::routing_direction_to_eth_direction(egress), egress_shape.sender_counts);
+                    const auto by_slots =
+                        slots.channel_for(target.target_vc, builder::routing_direction_to_eth_direction(producer));
+                    ASSERT_TRUE(by_slots.has_value()) << "RouterProducerSlots has no channel for a wired producer";
+                    EXPECT_EQ(*by_slots, slot) << "producer-slot mapping disagrees with the bijection";
+                }
             }
         }
     }

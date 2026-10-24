@@ -35,7 +35,8 @@ PerDirectionCapabilities chip_with_z(std::optional<EdgeCapability> z_capability)
 // ============ Non-express mesh / 1D ============
 
 TEST_F(RouterWiringRulesTest, NonExpress2D_VC0OnlyLayout) {
-    const auto shape = router_vc_shape(Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), false, nullptr);
+    const auto shape =
+        router_vc_shape(Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
     EXPECT_EQ(shape.num_vcs, 1);
     EXPECT_EQ(shape.sender_counts[0], 4);
     EXPECT_EQ(shape.sender_counts[1], 0);
@@ -43,12 +44,8 @@ TEST_F(RouterWiringRulesTest, NonExpress2D_VC0OnlyLayout) {
 }
 
 TEST_F(RouterWiringRulesTest, Linear_VC0OnlyLayout) {
-    const auto shape = router_vc_shape(
-        Topology::Linear,
-        RoutingDirection::N,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/false,
-        nullptr);
+    const auto shape =
+        router_vc_shape(Topology::Linear, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
 
     EXPECT_EQ(shape.num_vcs, 1);
     EXPECT_EQ(shape.sender_counts[0], 2);
@@ -71,12 +68,8 @@ TEST_F(RouterWiringRulesTest, MeshRouter_IntermeshVC1Layout) {
          {IntermeshVCConfig::edge_only(),
           IntermeshVCConfig::full_mesh(),
           IntermeshVCConfig::full_mesh_with_pass_through()}) {
-        const auto shape = router_vc_shape(
-            Topology::Mesh,
-            RoutingDirection::N,
-            chip_with_z(std::nullopt),
-            /*express_routing_enabled=*/false,
-            &config);
+        const auto shape =
+            router_vc_shape(Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, &config);
 
         EXPECT_EQ(shape.num_vcs, 2);
         EXPECT_EQ(shape.sender_counts[1], 3) << "3 cardinal producers, no extra-port slot";
@@ -90,11 +83,7 @@ TEST_F(RouterWiringRulesTest, BoundaryChipMeshRouter_VC1HasExtraFromBoundarySlot
     // On a chip whose extra port is an intermesh boundary, VC1 widens by the from-boundary slot.
     auto config = IntermeshVCConfig::full_mesh();
     const auto shape = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::N,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        &config);
+        Topology::Mesh, RoutingDirection::N, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &config);
 
     EXPECT_EQ(shape.num_vcs, 2);
     EXPECT_EQ(shape.sender_counts[1], 4) << "3 cardinals + the from-boundary producer";
@@ -107,11 +96,7 @@ TEST_F(RouterWiringRulesTest, BoundaryChipMeshRouter_VC1HasExtraFromBoundarySlot
 TEST_F(RouterWiringRulesTest, IntermeshBoundaryRouter_CompleteLayout) {
     auto config = IntermeshVCConfig::full_mesh();
     const auto shape = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        &config);
+        Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &config);
 
     EXPECT_EQ(shape.num_vcs, 2);
 
@@ -147,19 +132,18 @@ TEST_F(RouterWiringRulesTest, ExpressMesh_WidenedVC0AndVC1Base) {
     // Express widens VC0 to the family max (worker + 3 cardinals + the chord slot) and VC1 to
     // the four wired producers; VC1 senders are laid out after the five-wide VC0, not the 2D
     // mesh constant -- otherwise VC1 sender 0 would alias VC0's express channel at flat index 4.
+    // The family is the same width whichever axis the chords run along.
     auto config = IntermeshVCConfig::full_mesh();
-    const auto shape = router_vc_shape(
-        Topology::Torus,
-        RoutingDirection::N,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/true,
-        &config);
+    for (const auto express_axis : {ExpressAxis::Y, ExpressAxis::X}) {
+        const auto shape =
+            router_vc_shape(Topology::Torus, RoutingDirection::N, chip_with_z(std::nullopt), express_axis, &config);
 
-    EXPECT_EQ(shape.num_vcs, 2);
-    EXPECT_EQ(shape.sender_counts[0], 5);
-    EXPECT_EQ(shape.sender_counts[1], 4);
-    EXPECT_EQ(shape.flat_sender_id(1, 0), 5);
-    EXPECT_EQ(shape.flat_sender_id(1, 3), 8);
+        EXPECT_EQ(shape.num_vcs, 2) << enchantum::to_string(express_axis);
+        EXPECT_EQ(shape.sender_counts[0], 5) << enchantum::to_string(express_axis);
+        EXPECT_EQ(shape.sender_counts[1], 4) << enchantum::to_string(express_axis);
+        EXPECT_EQ(shape.flat_sender_id(1, 0), 5) << enchantum::to_string(express_axis);
+        EXPECT_EQ(shape.flat_sender_id(1, 3), 8) << enchantum::to_string(express_axis);
+    }
 }
 
 TEST_F(RouterWiringRulesTest, VC2FlatLayoutByRouterFamily) {
@@ -167,22 +151,23 @@ TEST_F(RouterWiringRulesTest, VC2FlatLayoutByRouterFamily) {
         Topology topology;
         RoutingDirection facing;
         std::optional<EdgeCapability> z_capability;
-        bool express;
+        ExpressAxis express_axis;
         uint32_t expected_sender;
         bool has_receiver;
     };
     const std::vector<Case> cases = {
-        {Topology::Torus, RoutingDirection::N, std::nullopt, true, 9, true},
-        {Topology::Mesh, RoutingDirection::N, std::nullopt, false, 7, true},
-        {Topology::Mesh, RoutingDirection::N, EdgeCapability::INTERMESH, false, 8, true},
-        {Topology::Mesh, RoutingDirection::Z, EdgeCapability::INTERMESH, false, 9, false},
+        {Topology::Torus, RoutingDirection::N, std::nullopt, ExpressAxis::Y, 9, true},
+        {Topology::Torus, RoutingDirection::N, std::nullopt, ExpressAxis::X, 9, true},
+        {Topology::Mesh, RoutingDirection::N, std::nullopt, ExpressAxis::NONE, 7, true},
+        {Topology::Mesh, RoutingDirection::N, EdgeCapability::INTERMESH, ExpressAxis::NONE, 8, true},
+        {Topology::Mesh, RoutingDirection::Z, EdgeCapability::INTERMESH, ExpressAxis::NONE, 9, false},
     };
 
     auto config = IntermeshVCConfig::full_mesh();
     config.requires_vc2 = true;
     for (const auto& test : cases) {
         const auto shape =
-            router_vc_shape(test.topology, test.facing, chip_with_z(test.z_capability), test.express, &config);
+            router_vc_shape(test.topology, test.facing, chip_with_z(test.z_capability), test.express_axis, &config);
         EXPECT_EQ(shape.num_vcs, 3);
         EXPECT_EQ(shape.sender_counts[2], 1);
         EXPECT_EQ(shape.flat_sender_id(2, 0), test.expected_sender);
@@ -220,22 +205,14 @@ TEST_F(RouterWiringRulesTest, IntermeshVCConfig_FactoryFlags) {
 // ============ Invalid queries ============
 
 TEST_F(RouterWiringRulesTest, InvalidQueries_Throw) {
-    const auto mesh = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::N,
-        chip_with_z(std::nullopt),
-        /*express_routing_enabled=*/false,
-        nullptr);
+    const auto mesh =
+        router_vc_shape(Topology::Mesh, RoutingDirection::N, chip_with_z(std::nullopt), ExpressAxis::NONE, nullptr);
     EXPECT_THROW((void)mesh.flat_sender_id(5, 0), std::exception);
     EXPECT_THROW((void)mesh.flat_sender_id(0, 10), std::exception);
 
     auto config = IntermeshVCConfig::full_mesh();
     const auto boundary = router_vc_shape(
-        Topology::Mesh,
-        RoutingDirection::Z,
-        chip_with_z(EdgeCapability::INTERMESH),
-        /*express_routing_enabled=*/false,
-        &config);
+        Topology::Mesh, RoutingDirection::Z, chip_with_z(EdgeCapability::INTERMESH), ExpressAxis::NONE, &config);
     EXPECT_THROW((void)boundary.flat_receiver_id(1, 5), std::exception);
 }
 

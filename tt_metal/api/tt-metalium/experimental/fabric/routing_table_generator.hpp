@@ -38,11 +38,12 @@ public:
     // The type stays incomplete here; only tt_metal/fabric consumers include its definition.
     const AxisRouteTopology* get_express_rings(MeshId mesh_id) const;
 
-    // The ordinary X ring, or nullptr when the mesh has no express rings or that dimension does not close.
-    const AxisRouteTopology* get_x_rings(MeshId mesh_id) const;
+    // The ordinary ring on the axis orthogonal to the express axis, or nullptr when the mesh has no
+    // express rings or that dimension does not close.
+    const AxisRouteTopology* get_orthogonal_rings(MeshId mesh_id) const;
 
     // The topology governing `axis` of this mesh: express chords where declared for that axis, the
-    // ordinary ring where the axis closes, else the plain line. Unlike get_express_rings/get_x_rings
+    // ordinary ring where the axis closes, else the plain line. Unlike get_express_rings/get_orthogonal_rings
     // this is NEVER null for a 2D mesh -- the line fallback guarantees an answer. Prefer it: a null
     // axis topology silently disables multicast, because the encoder needs a per-axis tree on both
     // dimensions.
@@ -68,8 +69,8 @@ private:
     RoutingTable inter_mesh_table_;
     // Per mesh, null when the mesh declares no express links.
     std::vector<std::unique_ptr<AxisRouteTopology>> express_rings_;
-    // Per mesh, null when the X dimension does not close.
-    std::vector<std::unique_ptr<AxisRouteTopology>> x_rings_;
+    // Per mesh, null when the mesh declares no express links or the orthogonal dimension does not close.
+    std::vector<std::unique_ptr<AxisRouteTopology>> orthogonal_rings_;
     // Per mesh, per axis (0 = Y, 1 = X). Always populated for a 2D mesh: express chords, else the
     // ordinary ring, else the plain line. This is the one that must never be null.
     std::vector<std::array<std::unique_ptr<AxisRouteTopology>, 2>> axis_topologies_;
