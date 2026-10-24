@@ -27,13 +27,7 @@ def run_tilize_matmul_test(M, K, N, device):
     A_padded = pad_activation(A)
     B = torch.randn(b_shape) - 0.95
 
-    a = ttnn.Tensor(
-        A.flatten().tolist(),
-        a_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(A.reshape(a_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     a_t = ttnn.tilize_with_zero_padding(a)
     print("Shape of A_t - " + str(a_t.padded_shape))
     b_t = ttnn.Tensor(

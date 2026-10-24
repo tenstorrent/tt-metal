@@ -1151,21 +1151,9 @@ def test_binary_subcoregrid(dtype_pt, dtype_tt, nb, nc, nh, nw, device):
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     out_tt = ttnn.gt(
@@ -4402,21 +4390,9 @@ def test_binary_inplace_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, n
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_tt = ttnn_fn(
         a,
@@ -4462,21 +4438,9 @@ def test_div_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, nh, nw
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_tt = ttnn.div(
         a,
@@ -4531,21 +4495,9 @@ def test_remainder_composite_ops_with_subcore_grids(dtype_pt, dtype_tt, nb, nc, 
     inp_a = torch.rand(*shape).to(dtype_pt)
     inp_b = torch.rand(*shape).to(dtype_pt)
 
-    a = ttnn.Tensor(
-        inp_a.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(inp_a.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
-    b = ttnn.Tensor(
-        inp_b.flatten().tolist(),
-        shape,
-        dtype_tt,
-        ttnn.TILE_LAYOUT,
-        device,
-    )
+    b = ttnn.from_torch(inp_b.reshape(shape), dtype=dtype_tt, layout=ttnn.TILE_LAYOUT, device=device)
 
     out_tt = ttnn.remainder(
         a,

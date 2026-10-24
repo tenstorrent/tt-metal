@@ -16,13 +16,7 @@ if __name__ == "__main__":
     py_tensor_exp = torch.randint(0, 10, (1, 1, 32, 32))
 
     # Create TT tensor from PyTorch Tensor and send it to TT accelerator device
-    tt_tensor = ttnn.Tensor(
-        py_tensor.reshape(-1).tolist(),
-        py_tensor.size(),
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        tt_device,
-    )
+    tt_tensor = ttnn.from_torch(py_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
 
     # Run relu on TT accelerator device
     tt_relu_out = ttnn.relu(tt_tensor)
@@ -35,13 +29,7 @@ if __name__ == "__main__":
     py_pow_out = torch.pow(py_relu_out, py_tensor_exp)
 
     # Create TT Tensor from py_pow_out and move it to TT accelerator device
-    tt_pow_out = ttnn.Tensor(
-        py_pow_out.reshape(-1).tolist(),
-        py_pow_out.size(),
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        tt_device,
-    )
+    tt_pow_out = ttnn.from_torch(py_pow_out, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=tt_device)
 
     # Run silu on TT Tensor tt_pow_out
     # This is a fallback op and it will behave like regular ops on TT accelerator device,

@@ -19,13 +19,7 @@ def run_tilize_matmul_test(M, K, N, device):
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
-    a = ttnn.Tensor(
-        A.flatten().tolist(),
-        a_shape,
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
-        device,
-    )
+    a = ttnn.from_torch(A.reshape(a_shape), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     a_t = ttnn.tilize(a)
     b_t = ttnn.Tensor(
         tilize_to_list(B),
