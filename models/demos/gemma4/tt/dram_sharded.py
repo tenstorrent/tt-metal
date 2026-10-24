@@ -16,6 +16,8 @@ helpers are adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 import math
 import os
 
+from loguru import logger
+
 import ttnn
 from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import is_blackhole
@@ -142,6 +144,54 @@ def prefill_max_cols_default(mesh_device=None):
 _PREFILL_CUTOFF = int(
     os.environ.get("GEMMA4_PREFILL_CUTOFF") or (prefill_grid_default()[1] * 8 * TILE_SIZE if is_blackhole() else 1024)
 )
+# Leftover rows after the full slabs are processed in chunks of this size (default 1024: the pre-slab configs).
+_PREFILL_REMAINDER_CHUNK = int(os.environ.get("GEMMA4_PREFILL_REMAINDER_CHUNK") or min(1024, _PREFILL_CUTOFF))
+# The 2D matmul's static CB region must leave this much L1 free (serving interleaves prefills with decode-time L1
+# residents; the unit tests keep a 33 KB buffer at the top of L1): the slab shrinks per weight until it fits. 0 = no cap.
+# 64 KB (measured 2026-10-24): the 4096-token unit tests pass on both models, the 31B keeps its 2560-row slab (bfp8 MLP
+# weights) and the 12B's 2240-row slab still takes a 2K prompt as one matmul; 128 KB cost the 31B +1.0 % at 2K.
+_PREFILL_L1_HEADROOM = int(os.environ.get("GEMMA4_PREFILL_L1_HEADROOM_KB", "64")) * 1024
+# CB region start + the kernel's small CBs, measured on Blackhole: program 1650 (M 8, N 48, k-block 4, bf16 weights)
+# reported 1815936 B = 112000 + in0 + in1 + out below.
+_PREFILL_CB_BASE = 112000
+_L1_BYTES = 1572864 if is_blackhole() else 1499136
+
+
+def prefill_cb_bytes(per_core_M, per_core_N, in0_block_w, weight_tile_bytes):
+    """Static CB bytes per core of the 2D prefill matmul: in0 and in1 double-buffered, one bf16 output block."""
+    return (
+        _PREFILL_CB_BASE
+        + 2 * per_core_M * in0_block_w * 2048
+        + 2 * in0_block_w * per_core_N * weight_tile_bytes
+        + per_core_M * per_core_N * 2048
+    )
+
+
+def weight_tile_bytes(dtype) -> int:
+    return {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}.get(dtype, 2048)
+
+
+def prefill_slab_rows(k, n, dtype, max_cols=None, grid=None, headroom=None, l1_bytes=None):
+    """Rows of one prefill slab for a weight of this shape / dtype: the largest per_core_M <= 8 (x grid rows x 32)
+    whose static CBs leave ``headroom`` bytes of L1 (GEMMA4_PREFILL_L1_HEADROOM_KB; 0 = the full 8-tile slab).
+    Calibrated examples (Blackhole): at 128 KB 31B gate_up bfp8 2240 rows, the same weight in bf16 (the unit tests)
+    1280, 12B gate_up bf16 1920; at the 64 KB default the 31B keeps 2560 and the 12B takes 2240; narrow weights 2560."""
+    grid = grid or prefill_grid_default()
+    headroom = _PREFILL_L1_HEADROOM if headroom is None else headroom
+    rows = grid[1] * TILE_SIZE
+    if headroom <= 0:
+        return 8 * rows
+    cols = _best_prefill_cols(n, max_cols if max_cols is not None else grid[0])
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / cols))
+    k_tiles = math.ceil(k / TILE_SIZE)
+    in0_block_w = _find_largest_divisor(k_tiles, max_div=min(4, max(1, k_tiles // max(1, cols))))
+    budget = (l1_bytes or _L1_BYTES) - headroom
+    for m in range(8, 0, -1):
+        if prefill_cb_bytes(m, per_core_N, in0_block_w, weight_tile_bytes(dtype)) <= budget:
+            return m * rows
+    return rows
+
+
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
 _PREFILL_M_CHUNK = prefill_grid_default()[1] * 8 * TILE_SIZE
 
@@ -327,6 +377,19 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     )
 
 
+def prefill_row_chunks(m, slab=None, remainder=None):
+    """Row ranges of a prefill matmul whose M is not a multiple of the slab: full slabs first, then the leftover in
+    chunks of at most ``remainder`` rows (the pre-slab configs; see ``__call__``)."""
+    slab = slab or _PREFILL_M_CHUNK
+    remainder = remainder or _PREFILL_REMAINDER_CHUNK
+    bounds, start = [], 0
+    while start < m:
+        step = slab if m - start >= slab else remainder
+        bounds.append((start, min(start + step, m)))
+        start += step
+    return bounds
+
+
 class DramShardedLinear:
     """A single DRAM-width-sharded weight served for both decode and prefill.
 
@@ -343,6 +406,16 @@ class DramShardedLinear:
         self.n = n
         self._dtype = dtype
         self._prefill_max_cols = prefill_max_cols_default(mesh_device)
+        # the slab this weight's CBs allow (GEMMA4_PREFILL_CUTOFF still pins it)
+        self._slab_rows = (
+            _PREFILL_CUTOFF
+            if os.environ.get("GEMMA4_PREFILL_CUTOFF")
+            else min(_PREFILL_CUTOFF, prefill_slab_rows(k, n, dtype, max_cols=self._prefill_max_cols))
+        )
+        if self._slab_rows < _PREFILL_CUTOFF:  # the rule's decision, once per weight (the knob arms grep this)
+            logger.info(
+                f"prefill slab {self._slab_rows} rows for k={k} n={n} dtype={dtype} (headroom {_PREFILL_L1_HEADROOM // 1024} KB)"
+            )
         self.weight = ttnn.as_tensor(
             weight_torch,
             device=mesh_device,
@@ -526,7 +599,11 @@ class DramShardedLinear:
             return _restore(out)
 
         # Prefill on the width-sharded weight via the 2D matmul kernel.
-        if M <= _PREFILL_CUTOFF:
+        if os.environ.get("GEMMA4_DEBUG_L1_DUMP") == "1" and not getattr(self, "_l1_dumped", False):
+            self._l1_dumped = True  # diagnostics: the L1 residents a program's CBs must stay below
+            ttnn.dump_device_memory_state(x_work.device(), f"prefill_matmul_k{self.k}_n{self.n}_M{M}")
+        slab = self._slab_rows
+        if M <= slab:
             pc = self._prefill_pc(M)
             out = ttnn.linear(
                 x_work,
@@ -537,26 +614,28 @@ class DramShardedLinear:
             )
             return _restore(out)
 
-        if M % _PREFILL_CUTOFF == 0:
-            # Reshape M into (batch, cutoff) so per_core_M is sized to the cutoff
+        if M % slab == 0:
+            # Reshape M into (batch, slab) so per_core_M is sized to the slab
             # (tiny CBs) and the batch dim is iterated by the kernel. Both
-            # reshapes are metadata-only (cutoff is tile-aligned). Single matmul,
+            # reshapes are metadata-only (the slab is tile-aligned). Single matmul,
             # single-size output — no concat, no memory doubling.
-            batch = M // _PREFILL_CUTOFF
-            x_r = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
-            pc = self._prefill_pc(_PREFILL_CUTOFF)
+            batch = M // slab
+            x_r = ttnn.reshape(x_work, (1, batch, slab, n_in))
+            pc = self._prefill_pc(slab)
             out_r = ttnn.linear(
                 x_r, self.weight, program_config=pc, compute_kernel_config=compute_kernel_config, memory_config=out_mc
             )
             out = ttnn.reshape(out_r, (1, 1, M, out_r.shape[-1]))
             return _restore(out)
 
-        # Fallback for M not divisible by the cutoff (rare; small M in practice):
-        # chunk + concat. Only reached for shapes that don't hit the long-context
-        # memory pressure, so the concat's transient extra buffer is affordable.
+        # M not divisible by the slab: full slabs first, then the leftover in chunks of at most
+        # _PREFILL_REMAINDER_CHUNK rows (the pre-slab 1024-row configs, per_core_M <= 4): an odd leftover such as
+        # 4096 = 2560 + 1536 sized its own 1536-row config (per_core_M 5) whose CBs overflow L1 on the 31B's gate_up
+        # (7x10 grid, 1815936 B) and clash with live L1 buffers on the 12B (CI 2026-10-24, test_layer_forward /
+        # test_shared_mlp at 4096); 8192 = 3 x 2560 + 512 is unchanged. chunk + concat; only reached for shapes
+        # that don't hit the long-context memory pressure, so the concat's transient extra buffer is affordable.
         outs = []
-        for start in range(0, M, _PREFILL_M_CHUNK):
-            end = min(start + _PREFILL_M_CHUNK, M)
+        for start, end in prefill_row_chunks(M, slab=slab, remainder=min(_PREFILL_REMAINDER_CHUNK, slab)):
             # a slice over the whole extent is a view of x_work (freeing it would free the caller's activation)
             whole = start == 0 and end == M
             x_c = x_work if whole else ttnn.slice(x_work, [0, 0, start, 0], [1, 1, end, self.k])
