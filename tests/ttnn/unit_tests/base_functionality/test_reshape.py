@@ -1078,3 +1078,13 @@ def test_quasar_reshape_rm_unit_last_dim(device):
     tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
     ttnn.synchronize_device(device)
     assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
+
+
+def test_reshape_row_major_padded_shape_is_in_program_cache_key(device):
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 1, 30, 32), dtype=torch.bfloat16)
+    expected = torch_input.reshape(1, 1, 32, 30)
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    for padded_shape in ([1, 1, 32, 32], [1, 1, 32, 64], [1, 1, 32, 32]):
+        output = ttnn.reshape(input_tensor, [1, 1, 32, 30], padded_shape)
+        assert torch.equal(ttnn.to_torch(output), expected), padded_shape
