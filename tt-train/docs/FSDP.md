@@ -155,7 +155,7 @@ ttml.fsdp.fully_shard(model, replicate=replicate)
 
 Or set them in `device_config` for the
 [training example](/tt-train/sources/examples/train/train.py) and the
-[GRPO Qwen3 completer](/tt-train/sources/examples/grpo/utils/qwen3_completer.py):
+[GRPO trainer's Qwen3 setup](/tt-train/sources/ttml/ttml/trainers/grpo_trainer/grpo_ttml_model.py):
 
 ```yaml
 device_config:
