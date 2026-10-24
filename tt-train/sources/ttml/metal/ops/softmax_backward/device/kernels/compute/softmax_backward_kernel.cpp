@@ -4,10 +4,14 @@
 
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
+#include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/sfpu_binary_bcast.h"
+#include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
 
 namespace ckernel {
@@ -27,6 +31,79 @@ ALWI void sub_bcast_cols_init_with_dt(uint32_t icb0, uint32_t icb1) {
 
 constexpr uint32_t DST_REG_ID = 0;
 constexpr uint32_t ONE_TILE = 1;
+
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+
+// Accumulate y * grad for a complete tile-row in FP32 DEST, then reduce its 32
+// columns in-place. The resulting per-row scalar remains in column 0 and is
+// packed once to the Float32 sum CB. This avoids the old partial-CB FPU reload.
+template <bool RetainInputs>
+ALWI void mul_reduce_row_to_scalar(
+    uint32_t y_cb_id, uint32_t grad_cb_id, uint32_t sum_cb_id, uint32_t num_tiles_per_row, uint32_t tiles_per_block) {
+    constexpr uint32_t accum_reg = 0;
+    constexpr uint32_t y_reg = 1;
+    constexpr uint32_t grad_reg = 2;
+    constexpr uint32_t product_reg = 3;
+
+    reconfig_data_format_srca(y_cb_id);
+    tile_regs_acquire();
+    bool first_tile = true;
+    for (uint32_t block_start = 0; block_start < num_tiles_per_row; block_start += tiles_per_block) {
+        cb_wait_front(y_cb_id, tiles_per_block);
+        cb_wait_front(grad_cb_id, tiles_per_block);
+        for (uint32_t i = 0; i < tiles_per_block; ++i) {
+            copy_init(y_cb_id);
+            copy_tile(y_cb_id, i, y_reg);
+            copy_init(grad_cb_id);
+            copy_tile(grad_cb_id, i, grad_reg);
+
+            mul_binary_tile_init();
+            if (first_tile) {
+                mul_binary_tile(y_reg, grad_reg, accum_reg);
+                first_tile = false;
+            } else {
+                mul_binary_tile(y_reg, grad_reg, product_reg);
+                add_binary_tile_init();
+                add_binary_tile(accum_reg, product_reg, accum_reg);
+            }
+        }
+        if constexpr (!RetainInputs) {
+            cb_pop_front(y_cb_id, tiles_per_block);
+            cb_pop_front(grad_cb_id, tiles_per_block);
+        }
+    }
+
+    sfpu_reduce_init<PoolType::SUM, DataFormat::Float32>();
+    sfpu_reduce<PoolType::SUM, DataFormat::Float32, ReduceDim::REDUCE_ROW>(accum_reg);
+    tile_regs_commit();
+    pack_and_push(accum_reg, sum_cb_id);
+}
+
+ALWI void compute_output_tile(
+    uint32_t y_cb_id, uint32_t grad_cb_id, uint32_t sum_cb_id, uint32_t out_cb_id, uint32_t tile_idx) {
+    constexpr uint32_t sum_reg = 0;
+    constexpr uint32_t grad_reg = 1;
+    constexpr uint32_t y_reg = 2;
+
+    reconfig_data_format_srca(sum_cb_id);
+    tile_regs_acquire();
+    copy_init(sum_cb_id);
+    copy_tile(sum_cb_id, 0, sum_reg);
+    reconfig_data_format_srca(grad_cb_id);
+    copy_init(grad_cb_id);
+    copy_tile(grad_cb_id, tile_idx, grad_reg);
+    copy_init(y_cb_id);
+    copy_tile(y_cb_id, tile_idx, y_reg);
+
+    sfpu_sub_bcast_col(grad_reg, sum_reg);
+    mul_binary_tile_init();
+    mul_binary_tile(y_reg, grad_reg, grad_reg);
+
+    tile_regs_commit();
+    pack_and_push(grad_reg, out_cb_id);
+}
+
+#else
 
 // Stream y * grad through the row, mul-accumulating elementwise into DST[0].
 // `mul_init` programs ELWMUL with acc_to_dest=true, so within a single
@@ -105,6 +182,8 @@ ALWI void fused_sub_mul(
     pack_and_push(DST_REG_ID, out_cb_id);
 }
 
+#endif
+
 void kernel_main() {
     // Compile time args
     constexpr uint32_t y_cb_id = get_compile_time_arg_val(0);            // softmax_output (y)
@@ -120,21 +199,26 @@ void kernel_main() {
     // Runtime args
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // Number of rows to process
 
-    // Initialize compute operations
+    // Initialize compute operations.
     compute_kernel_hw_startup(y_cb_id, grad_cb_id, out_cb_id);
+#if !defined(ARCH_WORMHOLE) && !defined(ARCH_BLACKHOLE)
     cb_wait_front(ones_cb_id, ONE_TILE);
+#endif
 
     // Two-pass streaming algorithm for minimal L1 memory
     for (uint32_t row = 0; row < num_rows; ++row) {
-        // === PASS 1: sum(y * grad) per row ===
-        // Reorder accumulation as (a_0 + a_32 + ...) + (a_1 + a_33 + ...) + ... :
-        // mul-accumulate elementwise into DST[0] across all tiles in the row, then a single
-        // matmul-with-ones collapses the 32 column partials into a per-row scalar.
-        // Avoids the per-block reduce/pack/unpack/add round trips
-        // and keeps the running accumulator in FP32 DST throughout the row.
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+        // === PASS 1: sum(y * grad) per row entirely in FP32 DEST ===
+        mul_reduce_row_to_scalar<full_row_in_l1>(
+            y_cb_id, grad_cb_id, sum_reduce_cb_id, num_tiles_per_row, tiles_per_block);
+        // sfpu_reduce_init changes SFPU state, so configure the pass-2 column broadcast afterward.
+        sfpu_sub_bcast_col_init();
+#else
+        // === PASS 1: Quasar fallback through the existing FPU reduction ===
         mul_accumulate_row_to_dst<full_row_in_l1>(
             y_cb_id, grad_cb_id, partial_cb_id, num_tiles_per_row, tiles_per_block);
         reduce_partial_to_scalar(partial_cb_id, ones_cb_id, sum_reduce_cb_id);
+#endif
 
         // === PASS 2: Compute final output (reuse data when full row in L1, else fresh read) ===
         cb_wait_front(sum_reduce_cb_id, ONE_TILE);
@@ -145,8 +229,11 @@ void kernel_main() {
                 cb_wait_front(grad_cb_id, tiles_per_block);
             }
 
-            // Process each tile: compute y * (grad - sum)
+            // Process each tile: compute y * (grad - sum).
             for (uint32_t i = 0; i < tiles_per_block; ++i) {
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
+                compute_output_tile(y_cb_id, grad_cb_id, sum_reduce_cb_id, out_cb_id, i);
+#else
                 fused_sub_mul(
                     y_cb_id,           // y
                     grad_cb_id,        // grad
@@ -154,6 +241,7 @@ void kernel_main() {
                     out_cb_id,         // output
                     i,                 // y tile index (relative to block)
                     i);                // grad tile index (relative to block)
+#endif
             }
 
             cb_pop_front(y_cb_id, tiles_per_block);
