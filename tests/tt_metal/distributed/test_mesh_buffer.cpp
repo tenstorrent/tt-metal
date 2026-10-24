@@ -34,6 +34,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
@@ -264,6 +265,37 @@ TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
 
         mesh_device->close();
     }
+}
+
+// Regression test for https://github.com/tenstorrent/tt-metal/issues/57798: a MeshBuffer can
+// outlive its MeshDevice's MetalEnv/MetalContext when the mesh device is closed and
+// detail::ReleaseOwnership() is called while a MeshBuffer (or MeshDevice) handle is still held --
+// e.g. a Python reference cycle collected after test teardown. deallocate() used to read
+// mesh_device->impl().metal_env() unconditionally once mesh_device_.lock() succeeded, which
+// segfaulted on the now-dangling MetalEnvImpl*. Both close() and ReleaseOwnership() are called
+// with the buffer still alive to exercise exactly that failure mode.
+TEST(MeshBufferTest, DeallocationAfterMeshDeviceClosedAndOwnershipReleased) {
+    MeshDeviceConfig config(MeshShape(1, 1));
+    auto mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 2048};
+    auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+
+    // mesh_device is intentionally kept alive (not reset) across close() + ReleaseOwnership() so
+    // that buffer's mesh_device_.lock() below still succeeds, matching the issue's repro.
+    mesh_device->close();
+    detail::ReleaseOwnership();
+
+    EXPECT_NO_FATAL_FAILURE(buffer.reset());
+
+    // Re-create a context/device so later tests in this binary are unaffected.
+    mesh_device.reset();
+    mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    mesh_device->close();
 }
 
 TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
