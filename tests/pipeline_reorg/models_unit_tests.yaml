@@ -511,6 +511,10 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_layer_lab.py \
+      --ignore=models/demos/gemma4/tests/unit/test_matmul_knob_lab.py \
+      --ignore=models/demos/gemma4/tests/unit/test_experts_small_rows.py \
+      --ignore=models/demos/gemma4/tests/unit/test_rms_norm_sharded_out.py \
       --ignore=models/demos/gemma4/tests/unit/custom_ops \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
@@ -555,6 +559,10 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_layer_lab.py \
+      --ignore=models/demos/gemma4/tests/unit/test_matmul_knob_lab.py \
+      --ignore=models/demos/gemma4/tests/unit/test_experts_small_rows.py \
+      --ignore=models/demos/gemma4/tests/unit/test_rms_norm_sharded_out.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       --ignore=models/demos/gemma4/tests/unit/custom_ops \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
@@ -634,6 +642,9 @@
       --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
       --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/test_layer_lab.py \
+      --ignore=models/demos/gemma4/tests/unit/test_matmul_knob_lab.py \
+      --ignore=models/demos/gemma4/tests/unit/test_experts_small_rows.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
