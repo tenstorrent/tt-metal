@@ -19,6 +19,7 @@ target_sources(
             tt_stl/concepts.hpp
             tt_stl/fmt.hpp
             tt_stl/indestructible.hpp
+            tt_stl/joined_tasks.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
