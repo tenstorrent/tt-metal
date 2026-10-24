@@ -148,6 +148,14 @@ def test_last_hidden_state(config, reference_model, tt_model, batch, seqlen):
     assert_with_pcc(ref, got, MODEL_PCC)
 
 
+def test_a_small_input_still_returns_dram(config, tt_model):
+    """At 4 tile rows every block passes its output to the next in L1 (activation_memory_config),
+    but the model's output outlives the forward, and in L1 it would sit under ops that plan L1 as
+    free."""
+    out = tt_model(*random_input_ids(1, 128, config))
+    assert out.memory_config().buffer_type == ttnn.BufferType.DRAM
+
+
 # B*S past MAX_TOKENS_PER_PASS, 4096, makes the expert bank split the token axis; see
 # tt/experts.py. 9x512 ends in a 512-token pass, 6x704 in a 128-token one, so its forward runs
 # both pass layouts. Kept out of MODEL_SHAPES, which several tests multiply over.
@@ -160,7 +168,7 @@ def test_a_batch_that_chunks_the_expert_token_axis(config, reference_model, tt_m
 
     Same gates as the single-pass shapes. The split changes the arithmetic, since each pass
     picks its own layout and K blocks: 4096 + 512 transposed at 9x512, 4096 transposed + 128
-    token-major at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
+    stacked at 6x704. test_chunking_the_token_axis_does_not_change_the_answer bounds that at
     module level; this one exists for the shape, so a regression in the pass limit is caught end
     to end.
     """

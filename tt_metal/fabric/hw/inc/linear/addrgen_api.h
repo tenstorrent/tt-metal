@@ -6,7 +6,7 @@
 
 #include "internal/dataflow/dataflow_api_addrgen.h"
 #include "api/tensor/tensor_accessor.h"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_config.h"

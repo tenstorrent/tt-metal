@@ -181,7 +181,8 @@ def main():
     parser.add_option(
         "--profiler-capture-perf-counters",
         type="string",
-        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, all",
+        help="Comma-separated list of performance counter groups to capture: fpu, pack, unpack, l1_0..l1_5, instrn, "
+        "all; on Quasar also l1_client=<subport*8 + event> for the l1_client event counter",
         action="callback",
         callback=split_comma_list,
         dest="perf_counter_groups",
@@ -284,6 +285,13 @@ def main():
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = str(
             generate_logs_folder(os.path.abspath(outputFolder))
         )
+
+    # Only --profiler-capture-perf-counters sets the mask, since it also selects the post-processor that reports it.
+    if not options.perf_counter_groups and "TT_METAL_PROFILE_PERF_COUNTERS" in os.environ:
+        logger.warning(
+            "Ignoring TT_METAL_PROFILE_PERF_COUNTERS from the environment; pass --profiler-capture-perf-counters to capture counters."
+        )
+        del os.environ["TT_METAL_PROFILE_PERF_COUNTERS"]
 
     # Schedule and validate once, in the outer capture process; the inner --no-capture-tool run
     # only honors the TT_METAL_PROFILE_PERF_COUNTERS mask it inherits via env.

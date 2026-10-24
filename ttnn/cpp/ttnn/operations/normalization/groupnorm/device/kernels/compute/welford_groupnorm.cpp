@@ -528,9 +528,11 @@ void kernel_main() {
                             constexpr uint32_t inv_std_dst = 2;
                             tile_regs_acquire();
 #ifdef TILIZE_IN
+                            reconfig_data_format_srca(dfb_normalize_in_fp32_id);
                             copy_init(dfb_normalize_in_fp32_id);
                             copy_tile(dfb_normalize_in_fp32_id, nt, data_dst);
 #else
+                            reconfig_data_format_srca(dfb_normalize_in_fp32_id);
                             copy_init(dfb_normalize_in_fp32_id);
                             copy_tile(dfb_normalize_in_fp32_id, 0, data_dst);
 #endif

@@ -4,6 +4,7 @@
 set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_reflect.cpp
     sdpa/test_ring_joint_ksplit.cpp
+    sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
@@ -34,6 +35,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_graph_query_op_runtime.cpp
     test_launch_operation.cpp
     test_layernorm_stats_selector.cpp
+    test_moreh_mean_backward.cpp
     test_matmul.cpp
     test_sparse_matmul_fp32.cpp
     test_normalization.cpp
@@ -48,6 +50,16 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_tanh_fw_ulp.cpp
     test_work_split_tilize.cpp
     test_unary_program_hash.cpp
+    test_unary_dram_read_plan.cpp
+)
+
+set(UNIT_TESTS_TTNN_KERNEL_LIB_SOURCES
+    test_mcast_descriptor.cpp
+    test_mcast_host_api.cpp
+    test_mcast_program.cpp
+    test_mcast_program_spec.cpp
+    test_mcast_validation_lifecycle.cpp
+    test_mcast_wire_topology.cpp
 )
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
@@ -55,6 +67,7 @@ set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_helpers.cpp
     ccl/test_ccl_llama_rs_signaler.cpp
     ccl/test_ccl_reduce_scatter_host_helpers.cpp
+    ccl/test_moe_compute_host_helpers.cpp
     ccl/test_ccl_tensor_slicers.cpp
     ccl/test_erisc_data_mover_with_workers.cpp
     ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp

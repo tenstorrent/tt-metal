@@ -19,8 +19,8 @@
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "impl/context/metal_env_impl.hpp"
-#include <umd/device/chip_helpers/sysmem_manager.hpp>
-#include <umd/device/chip_helpers/sysmem_buffer.hpp>
+#include <tt-umd/chip_helpers/sysmem_manager.hpp>
+#include <tt-umd/chip_helpers/sysmem_buffer.hpp>
 #include "impl/dispatch/system_memory_manager.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <distributed/mesh_device_impl.hpp>
@@ -205,7 +205,7 @@ void* PinnedMemoryImpl::get_host_ptr() {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
     // Return the original (unaligned) host pointer by adjusting from aligned base
-    auto* base = static_cast<std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
+    auto* base = static_cast<std::uint8_t*>(device_buffers_.begin()->second->get_va());
     return static_cast<void*>(base + host_offset_);
 }
 
@@ -217,7 +217,7 @@ const void* PinnedMemoryImpl::get_host_ptr() const {
         throw std::runtime_error("No buffers available in PinnedMemory");
     }
     // Return the original (unaligned) host pointer by adjusting from aligned base
-    const auto* base = static_cast<const std::uint8_t*>(device_buffers_.begin()->second->get_buffer_va());
+    const auto* base = static_cast<const std::uint8_t*>(device_buffers_.begin()->second->get_va());
     return static_cast<const void*>(base + host_offset_);
 }
 
@@ -225,7 +225,7 @@ uint64_t PinnedMemoryImpl::get_device_addr(ChipId device_id) const {
     if (is_mock_) {
         return 0;
     }
-    return get_buffer(device_id).get_device_io_addr() + static_cast<uint64_t>(host_offset_);
+    return get_buffer(device_id).get_iova() + static_cast<uint64_t>(host_offset_);
 }
 
 std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId device_id) const {
@@ -254,11 +254,11 @@ std::optional<PinnedMemory::NocAddr> PinnedMemoryImpl::get_noc_addr(ChipId devic
     if (use_64bit_address_space_) {
         return PinnedMemory::NocAddr{
             .pcie_xy_enc = pcie_xy_enc,
-            .addr = buffer_it->second->get_device_io_addr(host_offset_),
+            .addr = buffer_it->second->get_iova(host_offset_),
             .device_id = mmio_device_id};
     }
 
-    auto noc_addr_opt = buffer_it->second->get_noc_addr();
+    auto noc_addr_opt = buffer_it->second->get_noc_address();
     if (!noc_addr_opt.has_value()) {
         return std::nullopt;
     }

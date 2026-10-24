@@ -29,8 +29,8 @@
 #include <tt_stl/span.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include "system_memory_manager.hpp"
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include "dispatch_mem_map.hpp"
 #include "impl/context/metal_context.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -421,14 +421,12 @@ DispatchTopology::DispatchTopology(
     DeviceManager* device_manager,
     const GetControlPlaneFn& get_control_plane,
     const GetDispatchQueryManagerFn& get_dispatch_query_manager,
-    const GetMaxNumEthCoresFn& get_max_num_eth_cores,
     const GetReadsDispatchCoresFn& get_reads_dispatch_cores) :
     descriptor_(descriptor),
     dispatch_core_manager_(dispatch_core_manager),
     device_manager_(device_manager),
     get_control_plane_(get_control_plane),
     get_dispatch_query_manager_(get_dispatch_query_manager),
-    get_max_num_eth_cores_(get_max_num_eth_cores),
     get_reads_dispatch_cores_(get_reads_dispatch_cores) {
     command_queue_compile_group_ = std::make_unique<detail::ProgramCompileGroup>();
 }
@@ -633,7 +631,6 @@ void DispatchTopology::populate_fd_kernels(const std::vector<DispatchKernelNode>
             node.tunnel_index,
             get_control_plane_,
             get_dispatch_query_manager_,
-            get_max_num_eth_cores_,
             get_reads_dispatch_cores_));
         if (descriptor_.cluster().get_associated_mmio_device(node.device_id) == node.device_id) {
             mmio_device_ids.insert(node.device_id);

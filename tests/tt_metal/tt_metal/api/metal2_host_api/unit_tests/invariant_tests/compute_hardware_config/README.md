@@ -9,7 +9,7 @@ This is to be filled in as the header grows.
 
 ```cpp
 struct ComputeHardwareConfig {
-    MathFidelity fpu_math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
     Precision sfpu_precision_mode = Precision::Precise;
 

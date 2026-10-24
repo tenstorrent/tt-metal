@@ -450,8 +450,7 @@ def quasar_mx_smoke(
     product because those two suites are already the bulk of the Quasar compile.
 
     Every other test keeps exactly one pair, so the MX-conditional plumbing it does
-    own stays covered: format-inference bypass, the ImpliedMathFormat.Yes requirement,
-    MX stimulus clamping and the sub-byte L1 tile-size constraints.
+    own stays covered: MX stimulus clamping and the sub-byte L1 tile-size constraints.
 
     MxFp4_2x_A / MxFp4_2x_B are not covered by this rule. They are real SrcA/SrcB
     register formats that change the math format and the per-tile MVMUL sequence, so

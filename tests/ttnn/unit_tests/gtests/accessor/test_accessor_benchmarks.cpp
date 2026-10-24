@@ -106,9 +106,9 @@ void benchmark_args_combinations_single_core(
     auto* const input_device_buffer = input_mesh_buffer->get_device_buffer(mesh_coordinate);
 
     auto profiler_dir = res_path + "/" + params.test_name;
-    tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
+    tt::tt_metal::detail::SetDeviceProfilerDir(*mesh_device_, profiler_dir);
     log_info(tt::LogTest, "Setting profiler dir to: {}", profiler_dir);
-    tt::tt_metal::detail::FreshProfilerDeviceLog();
+    tt::tt_metal::detail::FreshProfilerDeviceLog(*mesh_device_);
     for (const auto& arg_config : args_combinations) {
         auto args_bitmask = arg_config.raw();
 
@@ -326,6 +326,22 @@ INSTANTIATE_TEST_SUITE_P(
             .input_shard_spec =
                 InputBufferParams::DistributionSpecParams{
                     .physical_shard_shape = tt::tt_metal::Shape{2, 2, 2, 2, 2, 96, 96},
+                    .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
+                    .shard_orientation = ShardOrientation::ROW_MAJOR,
+                    .buffer_type = BufferType::L1,
+                },
+        },
+        // One-page-wide shard, so contiguous_page_stride() > 1. Not covered by the rank sweep.
+        InputBufferParams{
+            .test_name = "one_page_wide_shard",
+            .physical_tensor_shape = tt::tt_metal::Shape{320, 320},
+            .page_shape = tt::tt_metal::Shape2D{32, 32},
+            .bytes_per_element = 2,
+            .data_format = tt::DataFormat::Float16,
+
+            .input_shard_spec =
+                InputBufferParams::DistributionSpecParams{
+                    .physical_shard_shape = tt::tt_metal::Shape{320, 32},
                     .grid = CoreRangeSet(CoreRange({0, 0}, {3, 3})),
                     .shard_orientation = ShardOrientation::ROW_MAJOR,
                     .buffer_type = BufferType::L1,

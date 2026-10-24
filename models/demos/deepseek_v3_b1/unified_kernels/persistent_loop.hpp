@@ -11,8 +11,10 @@ namespace deepseek_b1_ops {
 // PersistentLoop — reusable loop controller for persistent-mode fused ops.
 //
 // Persistent mode: checks a host-written termination semaphore each iteration.
-// On TRISC, drains the PACK coprocessor (tensix_sync) before checking so the
-// coprocessor pipeline is clean if the kernel exits.
+// No coprocessor drain is needed around the check: the semaphore is host-written,
+// so nothing in the Tensix pipeline orders that read, and the TRISC firmware
+// drains the pipeline itself (tensix_sync) after the kernel returns, before it
+// signals completion, so an exit with packs in flight is already clean.
 //
 // Non-persistent mode: runs up to max_iterations then exits.
 //
@@ -32,9 +34,6 @@ public:
 
     bool next() {
         if constexpr (persistent_mode) {
-#if defined(COMPILE_FOR_TRISC)
-            tensix_sync();
-#endif
             invalidate_l1_cache();
             if (termination_semaphore_[0] == 1) {
                 return false;

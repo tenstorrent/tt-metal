@@ -107,7 +107,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         false /* STABLE_SORT */,
         false /* CLAMP_NEGATIVE */,
         TYPECAST_IN_FORMAT,
-        TYPECAST_OUT_FORMAT>();
+        TYPECAST_OUT_FORMAT>(formats.math);
 
     LLK_ASSERT(
         (params.NUM_TILES_IN_BLOCK <= get_dest_max_tiles<DST_SYNC, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),

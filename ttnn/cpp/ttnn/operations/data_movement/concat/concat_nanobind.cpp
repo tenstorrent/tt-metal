@@ -32,6 +32,9 @@ void bind_concat(nb::module_& mod) {
         Keyword Args:
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grid to use for interleaved (L1 or DRAM) output tensors. If provided, the concatenation will run on the specified sub-core grid instead of the full compute grid. Defaults to `None`.
 
+        Note:
+            Block-sharded width concat (`dim` = -1) requires each input to start on an L1 alignment boundary: the sum of the widths before it, times the element size, must be a multiple of the NOC alignment (16 bytes on Wormhole and Blackhole). A ragged width that breaks this is rejected, since the concat boundary falls inside a shard where the NOC cannot write. Pad each width to a multiple of `l1_alignment / element_size` elements, or concat before sharding.
+
         Returns:
             ttnn.Tensor: the output tensor.
     )doc";
