@@ -703,6 +703,49 @@ def test_concat_sub_core_grids(device, layout, dim, input_shapes, sub_core_grids
     assert_equal(torch_output_tensor, output)
 
 
+ONE_CORE = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+ROW_OF_3 = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(2, 1))})
+
+
+@pytest.mark.parametrize(
+    "input_shapes, dim",
+    [
+        (((1, 1, 33, 129), (1, 1, 33, 129)), 2),
+        (((1, 2, 50, 70), (1, 2, 50, 70)), 2),
+        (((5, 20, 4), (5, 20, 4)), 1),
+        (((20, 4), (20, 4)), 0),
+        (((1, 1, 1, 2048), (1, 1, 1, 2048)), 2),
+        (((1, 1, 7, 64), (1, 1, 40, 64)), 2),
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    [ONE_CORE, ROW_OF_3, ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})],
+    ids=["one_core", "row_of_3", "8x8"],
+)
+def test_concat_sub_core_grids_tile_padding_on_concat_dim(device, input_shapes, dim, dtype, sub_core_grids):
+    """A tiled concat along dim -2 places whole tiles, so the padding rows of an input whose height is not a
+    multiple of 32 would land inside the output; with sub_core_grids they must be dropped as on the default path."""
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_inputs = [torch.randn(shape, dtype=torch_dtype) for shape in input_shapes]
+    tt_inputs = [ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device) for t in torch_inputs]
+
+    output = ttnn.concat(tt_inputs, dim=dim, sub_core_grids=sub_core_grids)
+
+    assert_equal(torch.concat(torch_inputs, dim=dim), ttnn.to_torch(output))
+
+
+def test_concat_sub_core_grids_replicated_rows(device):
+    """32 copies of one row stacked along dim -2 on a sub-grid, the way a batch is built from a single row."""
+    row = torch.randn(1, 1, 1, 4096, dtype=torch.bfloat16)
+    tt_row = ttnn.from_torch(row, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.concat([tt_row] * 32, dim=2, sub_core_grids=ROW_OF_3)
+
+    assert_equal(row.repeat(1, 1, 32, 1), ttnn.to_torch(output))
+
+
 @pytest.mark.parametrize(
     "shapes, dim",
     [
