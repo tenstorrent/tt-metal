@@ -15,12 +15,13 @@ void kernel_main() {
     constexpr uint32_t tiles = get_compile_time_arg_val(2);
     constexpr uint32_t compact_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t row_blocks = get_compile_time_arg_val(4);
+    constexpr uint32_t rows = get_compile_time_arg_val(5);  // user rows per block: 4 or 8
     constexpr uint32_t tile_bytes = 2048;
     constexpr uint32_t face_bytes = mimo_moe::kBf16FaceBytes;
-    constexpr uint32_t rows_bytes = 4 * mimo_moe::kFaceDim * 2;  // rows 0-3 of one face: 128 B
+    constexpr uint32_t rows_bytes = rows * mimo_moe::kFaceDim * 2;  // the user rows of one face
     constexpr uint32_t blocks_per_face = face_bytes / rows_bytes;
-    constexpr uint32_t gap_bytes = face_bytes - rows_bytes;                // rows 4-15 of face 0
-    constexpr uint32_t tail_bytes = tile_bytes - face_bytes - rows_bytes;  // rows 4-15 of face 1, faces 2-3
+    constexpr uint32_t gap_bytes = face_bytes - rows_bytes;                // the other rows of face 0
+    constexpr uint32_t tail_bytes = tile_bytes - face_bytes - rows_bytes;  // the other rows of face 1, faces 2-3
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t first = get_arg_val<uint32_t>(1);

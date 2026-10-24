@@ -20,6 +20,14 @@ replayed from one capture: the draft's packed upload they write and the result p
 every accepted count, around the ring's wrap and at the context limit, an idle chain row, and a host-written upload
 (the result page now carries the pass's positions).
 
+test_spec_chain_dflash_tp8: the same chain and drafts steps with DFlash drafting (tt/dflash.py): the DFlash draft's
+packed upload the chain step writes (reference.spec_chain.dflash_chain_step) and the drafts step's section from the
+drafter's GreedyHead row, bit for bit, eager and replayed, and a host-written upload (dflash_inputs).
+
+test_greedy_verify_tp8: GreedyVerify (tt/verify_sampler.py, kernels/greedy_verify.cpp), the accept step of a verify the
+device sampler does not serve, against reference.sample_verify.verify_pass on all-greedy control pages bit for bit,
+eager and replayed: every pass shape plan_verify_passes makes of 1-4 requests, every accepted count.
+
 test_spec_relay_tp8: the relay step (a chained verify's tokens and positions into ``verify_packed`` and its drafts into
 the accept step's control page, from the lane's last result page) against its mirror (reference.spec_chain.relay_step)
 bit for bit, eager and traced: every count of the step chained onto (its page written by the one-layer or the
@@ -54,14 +62,19 @@ from models.experimental.mimo_v2_6_flash.reference.sample_verify import (
     OUT_WORDS,
     control_words,
     pass_inputs,
+    verify_pass,
 )
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import (
     ACCEPT_WORDS,
     DRAFTS_AT,
     RESULT_WORDS,
     STATUS_AT,
+    DFlashLayout,
     chain_row,
     chain_step,
+    dflash_chain_step,
+    dflash_drafts_step,
+    dflash_inputs,
     drafts_step,
     relay_step,
     plan_step,
@@ -104,6 +117,7 @@ from models.experimental.mimo_v2_6_flash.tt.mtp_backfill import MtpHistory
 from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
 from models.experimental.mimo_v2_6_flash.tt.spec_chain import SpecChain
 from models.experimental.mimo_v2_6_flash.tt.spec_inputs import SpecInputs
+from models.experimental.mimo_v2_6_flash.tt.verify_sampler import GreedyVerify
 
 MAX_SEQ_LEN = 4096
 DEVICE_PARAMS = {**GALAXY_DEVICE_PARAMS, "trace_region_size": 20_000_000}
@@ -340,6 +354,119 @@ def test_spec_chain_tp8(mesh_device):
     chain.drafts()
     got = words_of(chain.result)[0]
     assert got[DRAFTS_AT : DRAFTS_AT + 1 + MAX_DRAFTS] == [2] + [r[2] for r in head_rows]
+
+
+def u32_buffer(plan, n):
+    """A persistent replicated uint32 [1, n] row-major DRAM buffer of zeros."""
+    return ttnn.from_torch(
+        torch.zeros(1, n, dtype=torch.int32),
+        device=plan.mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=plan.replicate(),
+    )
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_spec_chain_dflash_tp8(mesh_device):
+    plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    mesh = plan.mesh_device
+    spec = SpecInputs(plan, B, REP)
+    layout = DFlashLayout(ring=1024, block=8, heads=8, last=MAX_SEQ_LEN - 1)
+    accept, argmax, head = u32_buffer(plan, ACCEPT_WORDS), u32_buffer(plan, B), u32_buffer(plan, B)
+    packed = u32_buffer(plan, layout.words)
+    chain = SpecChain(plan, spec, accept, argmax, [head], dflash=(packed, layout))
+
+    def run():
+        chain.chain()
+        chain.drafts()
+
+    replay = replayed(mesh, run)
+    rng = random.Random(1)
+    cases = []  # (verify pass, chain row or None, accept words)
+    for bonus in (1, 600, 1023, 1024, 1025, 2047, MAX_SEQ_LEN - 1 - MAX_DRAFTS, MAX_SEQ_LEN - 2):
+        for n in range(MAX_DRAFTS + 1):
+            for m in range(1, n + 2):
+                if bonus - m < 0:
+                    continue
+                toks = [rng.randrange(152576) for _ in range(n + 1)]
+                (vp,) = plan_verify_passes([(3, toks, list(range(bonus - m, bonus - m + n + 1)), n)])
+                committed = [rng.randrange(152576) for _ in range(m)]
+                row = chain_row(B, draft_source([vp]), MAX_SEQ_LEN - MAX_DRAFTS)
+                cases.append((vp, row, accept_page(m, committed)))
+    (two,) = plan_verify_passes([(0, [1, 2], [40, 41], 1), (1, [3], [90], 0)])
+    cases.append((two, None, accept_page(2, [5, 6])))
+    for k, (vp, row, acc) in enumerate(cases):
+        tok = torch.zeros(B, dtype=torch.int32)
+        pos = torch.full((B,), -1, dtype=torch.int32)
+        tok[:SPEC_SLOTS] = torch.tensor(vp.tokens, dtype=torch.int32)
+        pos[:SPEC_SLOTS] = torch.tensor(vp.positions, dtype=torch.int32)
+        chain_t = None if row is None else torch.tensor(row, dtype=torch.int32)
+        ids = [rng.randrange(152576) for _ in range(B)]
+        head_row = [rng.randrange(152576) for _ in range(B)]
+        verify_upload = (spec.verify_host(tok, pos, chain_t), spec.verify_packed)
+        want_packed, header = dflash_chain_step(pack_verify(tok, pos, chain_t).tolist(), acc, ids, layout)
+        want_result = header + dflash_drafts_step(want_packed, head_row, layout)
+        assert len(want_packed) == layout.words and len(want_result) == RESULT_WORDS
+        for runner in (run, replay):
+            ttnn.copy_host_to_device_tensor(*verify_upload)
+            upload_words(plan, acc, accept)
+            upload_words(plan, ids, argmax)
+            upload_words(plan, head_row, head)
+            runner()
+            for c, got in enumerate(words_of(packed)):
+                assert got == want_packed, f"case {k} chip {c}: DFlash upload\n{got}\n{want_packed}"
+            for c, got in enumerate(words_of(chain.result)):
+                assert got == want_result, f"case {k} chip {c}: result page\n{got}\n{want_result}"
+
+    # A host-written upload (a host-planned draft): the drafts step reports the anchor slot it names.
+    upload_words(plan, dflash_inputs(layout, [(0, [(0, 700), (1, 701)], 1234, 702, 1)]), packed)
+    head_row = [rng.randrange(152576) for _ in range(B)]
+    upload_words(plan, head_row, head)
+    chain.drafts()
+    got = words_of(chain.result)[0]
+    assert got[DRAFTS_AT : DRAFTS_AT + 1 + MAX_DRAFTS] == [1] + head_row[:MAX_DRAFTS]
+
+
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
+def test_greedy_verify_tp8(mesh_device):
+    plan = MeshPlan(dp_submeshes(mesh_device)[0])
+    mesh = plan.mesh_device
+    gv = GreedyVerify(plan, B)
+    argmax = u32_buffer(plan, B)
+
+    def run():
+        gv(None, argmax)
+
+    replay = replayed(mesh, run)
+    rng = random.Random(2)
+    cases = []
+    for requests in range(1, min(4, SPEC_SLOTS) + 1):
+        for _ in range(12):
+            active = []
+            for r in range(requests):
+                n = rng.randrange(0, MAX_DRAFTS + 1)
+                start = rng.randrange(0, 2000)
+                active.append((r, [rng.randrange(1000) for _ in range(n + 1)], list(range(start, start + n + 1)), n))
+            cases += plan_verify_passes(active)
+    for k, vp in enumerate(cases):
+        slots, groups = pass_inputs(vp, None)
+        ctrl = control_words(groups)
+        # Each slot's argmax takes the next slot's token (an accepted draft) or another, at random.
+        ids = [rng.randrange(1000) for _ in range(B)]
+        for s in range(SPEC_SLOTS - 1):
+            if rng.random() < 0.7:
+                ids[s] = vp.tokens[s + 1]
+        want = verify_pass(None, None, ids, ctrl, 0)
+        for runner in (run, replay):
+            gv.stage(slots, groups)
+            upload_words(plan, ids, argmax)
+            runner()
+            for c, got in enumerate(words_of(gv.out)):
+                assert got == [w & 0xFFFFFFFF for w in want], f"case {k} chip {c}\n{got}\n{want}"
 
 
 def int_words(t):

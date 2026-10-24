@@ -12,6 +12,11 @@ one request write K / V into the same cache tiles, so a verify pass writes one s
 attention then reads every slot's own prefix. Slot j's greedy token is the target's choice after column j: the
 row's argmax_ids column j.
 
+Draft groups (DRAFT_GROUPS = 2, MIMO_SPEC_GROUPS): a pass of SPEC_SLOTS = 8 slots holds two requests, each in its own
+group of GROUP_SLOTS = 4 slots (its last committed token and 3 drafts), and the drafter drafts for both in one program,
+each request with its group's state (MTP rings and stash, DFlash context ring). A request keeps its group while it
+runs (the adapter assigns it at the prompt), so its state stays its own. Everything below describes one group.
+
 Propose. After a lane step that ran one row in one pass, MTP drafts for it from the device: the step's greedy tokens
 and the target's final normed hidden rows are still resident. The fill pass runs the MTP layer over the m committed
 tokens, row c taking the hidden at the position before committed token c and that token's embedding, and writes the
@@ -41,10 +46,20 @@ that draft's rows so that a draft planned again from the same commit (the adapte
 plan after the device chained a draft from a different commit) finds the same ones: re-planning is idempotent.
 """
 
+import os
 from dataclasses import dataclass, field
 
-SPEC_SLOTS = 4  # decode slots of a verify pass
-MAX_DRAFTS = SPEC_SLOTS - 1  # drafts per verify: the last committed token and its drafts fill one pass
+# Decode slots of a verify pass: 4, or 8 (MIMO_SPEC_SLOTS=8: DFlash's block of 7 drafts, or two requests of 3; the
+# verify then runs the pass in 8 decode slots, so the lane decodes 8 users). Fixed per process: every layout below
+# derives from it.
+SPEC_SLOTS = int(os.environ.get("MIMO_SPEC_SLOTS", "4"))
+assert SPEC_SLOTS in (4, 8), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4 or 8"
+# Requests a pass drafts for: 1, or 2 (MIMO_SPEC_GROUPS=2 with MIMO_SPEC_SLOTS=8: a lane's two requests, each in a
+# draft group of GROUP_SLOTS consecutive slots with its own drafter state; c=8 over 4 lanes).
+DRAFT_GROUPS = int(os.environ.get("MIMO_SPEC_GROUPS", "1"))
+assert DRAFT_GROUPS in (1, 2) and SPEC_SLOTS // DRAFT_GROUPS >= 4, f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}"
+GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
+MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and drafts fill one draft group
 
 
 @dataclass
@@ -62,21 +77,37 @@ class VerifyPass:
         return sum(p >= 0 for p in self.positions)
 
 
-def plan_verify_passes(rows, slots=SPEC_SLOTS):
+def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SLOTS):
     """rows: (row, tokens [1 + K], positions [1 + K], num_valid_drafts) of a lane's active rows, in batch order.
-    Returns the lane's passes. A row takes columns 0 .. num_valid_drafts, in consecutive slots of one pass."""
+    Returns the lane's passes. A row takes columns 0 .. num_valid_drafts, in consecutive slots of one pass. With draft
+    groups (``group_slots`` < ``slots``) each row starts a group: its own (``groups`` {row: group}, the request's
+    sticky group) in the first pass where that group is free, or the first free group."""
     passes = []
+    multi = group_slots < slots
+
+    def free(p, g):
+        return all(p.positions[s] < 0 for s in range(g * group_slots, (g + 1) * group_slots))
+
     for row, tokens, positions, n in rows:
         width = int(n) + 1
-        if width > slots:
-            raise ValueError(f"row {row}: {n} drafts need {width} slots, a pass has {slots}")
+        if width > (group_slots if multi else slots):
+            raise ValueError(f"row {row}: {n} drafts need {width} slots, a pass has {slots} in groups of {group_slots}")
         for c in range(width):
             if int(positions[c]) < 0:
                 raise ValueError(f"row {row}: column {c} of {width} has no position")
-        if not passes or passes[-1].used + width > slots:
-            passes.append(VerifyPass())
-        p = passes[-1]
-        first = p.used
+        if multi:
+            want = (groups or {}).get(row)
+            options = range(slots // group_slots) if want is None else [want]
+            p, g = next(((p, g) for p in passes for g in options if free(p, g)), (None, None))
+            if p is None:
+                p, g = VerifyPass(), options[0]
+                passes.append(p)
+            first = g * group_slots
+        else:
+            if not passes or passes[-1].used + width > slots:
+                passes.append(VerifyPass())
+            p = passes[-1]
+            first = p.used
         for c in range(width):
             s = first + c
             p.tokens[s], p.positions[s], p.table_rows[s] = int(tokens[c]), int(positions[c]), row
@@ -96,23 +127,36 @@ def serial_positions(positions, slots=SPEC_SLOTS):
 
 @dataclass
 class DraftSource:
-    """Where a lane's single row of the last step left its committed tokens on the device: ``slots[c]`` holds the
-    greedy token committed at column c (and the target hidden that chose it)."""
+    """Where a row of the last step left its committed tokens on the device: ``slots[c]`` holds the greedy token
+    committed at column c (and the target hidden that chose it). ``group``: its draft group (DRAFT_GROUPS > 1), whose
+    drafter state (rings, stash) it drafts with; a verify row's is the group its slots are in."""
 
     row: int
     slots: list
+    group: int = 0
+
+
+def draft_sources(passes, group_slots=GROUP_SLOTS):
+    """The DraftSources of a lane step: every row of a step that ran one pass, at most DRAFT_GROUPS of them (one per
+    draft group, plan_verify_passes); none otherwise."""
+    if len(passes) != 1:
+        return []
+    by_row = {}
+    for s, row, c in passes[0].answers:
+        by_row.setdefault(row, []).append((c, s))
+    if len(by_row) > DRAFT_GROUPS:
+        return []
+    out = []
+    for row, cells in by_row.items():
+        slots = [s for _, s in sorted(cells)]
+        out.append(DraftSource(row=row, slots=slots, group=slots[0] // group_slots))
+    return out
 
 
 def draft_source(passes):
-    """The DraftSource of a lane step, or None unless it ran one row in one pass (MTP drafts for one request per
-    lane)."""
-    if len(passes) != 1:
-        return None
-    rows = {row for _, row, _ in passes[0].answers}
-    if len(rows) != 1:
-        return None
-    by_column = sorted((c, s) for s, _, c in passes[0].answers)
-    return DraftSource(row=rows.pop(), slots=[s for _, s in by_column])
+    """The DraftSource of a lane step that ran one row in one pass, or None."""
+    sources = draft_sources(passes)
+    return sources[0] if len(sources) == 1 else None
 
 
 @dataclass
@@ -181,12 +225,16 @@ class MtpLayersInputs:
         return [s for s, p in enumerate(self.positions) if p >= 0]
 
 
-def plan_mtp_layers(source, committed_positions, accepted, stash, layers=MAX_DRAFTS, slots=SPEC_SLOTS):
-    """source: the lane's DraftSource; committed_positions: that row's [1 + K] committed positions; accepted: its
-    committed count m; stash: the MtpStash of the lane's last draft. The committed token c sits at
-    committed_positions[c] (consecutive, from A + 1); the row taking it is at committed_positions[c] - 1. The stash
-    rows re-run are the max(0, layers - m) positions before A, as far as the stash holds them consecutively from
-    A - 1 down (it holds nothing after a step that did not follow a draft; then nothing is stale either)."""
+def plan_mtp_layers(
+    source, committed_positions, accepted, stash, layers=MAX_DRAFTS, slots=SPEC_SLOTS, group_slots=GROUP_SLOTS
+):
+    """source: a DraftSource; committed_positions: that row's [1 + K] committed positions; accepted: its committed
+    count m; stash: the MtpStash of the lane's last draft. The committed token c sits at committed_positions[c]
+    (consecutive, from A + 1); the row taking it is at committed_positions[c] - 1. The stash rows re-run are the
+    max(0, layers - m) positions before A, as far as the stash holds them consecutively from A - 1 down (it holds
+    nothing after a step that did not follow a draft; then nothing is stale either). The rows fill the source's draft
+    group (slots g * group_slots .. (g + 1) * group_slots - 1 of the pass), right-aligned, and re-run that group's
+    stash rows only."""
     m = int(accepted)
     if not 1 <= m <= len(source.slots):
         raise ValueError(f"row {source.row}: {m} committed tokens, the step answered {len(source.slots)} columns")
@@ -196,19 +244,21 @@ def plan_mtp_layers(source, committed_positions, accepted, stash, layers=MAX_DRA
             raise ValueError(f"row {source.row}: committed positions {list(committed_positions[:m])} not consecutive")
     if len(stash.positions) != slots:
         raise ValueError(f"a stash of {len(stash.positions)} rows for passes of {slots} slots")
+    lo, end = source.group * group_slots, (source.group + 1) * group_slots
+    group = MtpStash(positions=[p if lo <= k < end else -1 for k, p in enumerate(stash.positions)])
     want, found = max(0, layers - m), []  # found[k]: the stash slot of position a - 1 - k
-    while len(found) < want and stash.row(a - 1 - len(found)) is not None:
-        found.append(stash.row(a - 1 - len(found)))
+    while len(found) < want and group.row(a - 1 - len(found)) is not None:
+        found.append(group.row(a - 1 - len(found)))
     r = len(found)
     rows = r + m
-    if rows > slots:
-        raise ValueError(f"row {source.row}: {rows} MTP rows, a pass has {slots} slots")
+    if rows > group_slots:
+        raise ValueError(f"row {source.row}: {rows} MTP rows, a draft group has {group_slots} slots")
     positions, sources = [-1] * slots, [None] * slots
-    first = slots - rows
+    first = end - rows
     for j in range(rows):
         positions[first + j] = a - r + j
         sources[first + j] = ("stash", found[r - 1 - j]) if j < r else ("step", source.slots[j - r])
-    return MtpLayersInputs(positions=positions, sources=sources, reprefill=r, anchor=slots - 1)
+    return MtpLayersInputs(positions=positions, sources=sources, reprefill=r, anchor=end - 1)
 
 
 def mtp_layer_tokens(tokens0, drafts, layer):
@@ -224,8 +274,8 @@ def mtp_stash(plan):
     return MtpStash(positions=list(plan.positions))
 
 
-# The MTP layer's own KV cache: one request per lane drafts, and its attention reads its 128-token window, so a ring of
-# MTP_RING_TOKENS positions holds everything it reads. The layer addresses the cache at mtp_cache_position(t) and
+# The MTP layer's own KV cache: one ring per draft group (one request), and its attention reads its 128-token window, so
+# a ring of MTP_RING_TOKENS positions holds everything it reads. The layer addresses the cache at mtp_cache_position(t) and
 # takes its RoPE at the true position t (host cos / sin): the window of a cache position >= MTP_RING_TOKENS stays at
 # cache positions >= MTP_RING_TOKENS - 127, inside the table's 2 * MTP_RING_TOKENS positions, and logical block b
 # maps to physical block b % ring blocks, so a write at t and every later read of t meet in one row.
@@ -236,12 +286,13 @@ def mtp_cache_position(t, ring=MTP_RING_TOKENS):
     return ring + t % ring if t >= 0 else -1
 
 
-def mtp_table_row(block_size, ring=MTP_RING_TOKENS):
-    """The MTP cache's page table row (2 * ring positions) and its physical block count (paged_update_cache needs at
-    least as many blocks as the table is wide)."""
+def mtp_table_row(block_size, ring=MTP_RING_TOKENS, group=0):
+    """The MTP cache's page table row (2 * ring positions) of draft group ``group`` and the physical blocks one group
+    takes (paged_update_cache needs at least as many blocks as the table is wide): group g's ring is blocks
+    g * 2 * (ring / block_size) onward."""
     assert ring % block_size == 0
     blocks = ring // block_size
-    return [b % blocks for b in range(2 * blocks)], 2 * blocks
+    return [2 * blocks * group + b % blocks for b in range(2 * blocks)], 2 * blocks
 
 
 def accept_greedy(argmax_ids, drafts, num_valid):

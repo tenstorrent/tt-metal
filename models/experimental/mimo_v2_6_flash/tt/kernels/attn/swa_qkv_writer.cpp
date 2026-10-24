@@ -3,9 +3,11 @@
 
 // BRISC of the SWA decode qkv split + RoPE + KV-cache update. Q cores (one per query head): row u of each RoPE'd
 // tile goes to row `head` of the same tile of user u's slice of the height-sharded SDPA query input (one shard of
-// [32 heads, head_dim] per user, on that user's shard core). K and V cores (one per user): row `user` of the new key
-// (RoPE'd, cb_rot) or value (cb_x) replaces row `row` of the bf16 copies of the user's cache tiles in place; compute
-// packs them back to BFP8 and they are written to the cache pages they came from.
+// [32 heads, head_dim] per user, on that user's shard core). K and V cores (one per user): for each member of the
+// user's cache tile row (the reader's list: the users whose positions share those cache tiles, this user's alone
+// when it is the lowest of them, none otherwise), row `member` of the new key (RoPE'd, cb_rot) or value (cb_x)
+// replaces row `row` of the bf16 copies of the cache tiles in place; compute packs them back to BFP8 and they are
+// written to the cache pages they came from (by the cores with members).
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 
@@ -49,32 +51,35 @@ void kernel_main() {
         return;
     }
 
-    const uint32_t user = head;
     constexpr uint32_t cb_new = role == kRoleK ? cb_rot : cb_x;
     cb_wait_front(cb_meta, 1);
     volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_meta));
     const uint32_t first_page = meta[0];
-    const uint32_t row = meta[1];
-    const bool active = meta[2] == 1;
-    cb_pop_front(cb_meta, 1);
+    const uint32_t members = meta[1];
+    const bool active = members > 0;
 
-    // Row `user` of the new key / value tiles into row `row` of the cache tiles (bf16, 32 x 32 in four 16 x 16
-    // faces: row r's left half is face (r / 16) * 2, its right half the next face).
+    // Row `member` of the new key / value tiles into row `row` of the cache tiles (bf16, 32 x 32 in four 16 x 16
+    // faces: row r's left half is face (r / 16) * 2, its right half the next face), for every member.
     cb_wait_front(cb_new, d_tiles);
     cb_wait_front(cb_c16, d_tiles);
     const uint32_t src_l1 = get_read_ptr(cb_new);
     const uint32_t dst_l1 = get_read_ptr(cb_c16);
-    const uint32_t dst_row = (row / 16) * 2 * face_bytes + (row % 16) * row_bytes;
-    for (uint32_t j = 0; j < d_tiles; j++) {
-        volatile tt_l1_ptr uint32_t* src =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1 + j * tile_bytes + user * row_bytes);
-        volatile tt_l1_ptr uint32_t* dst =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1 + j * tile_bytes + dst_row);
-        for (uint32_t w = 0; w < row_bytes / 4; w++) {
-            dst[w] = src[w];
-            dst[face_bytes / 4 + w] = src[face_bytes / 4 + w];
+    for (uint32_t m = 0; m < members; m++) {
+        const uint32_t row = meta[2 + 2 * m];
+        const uint32_t member = meta[3 + 2 * m];
+        const uint32_t dst_row = (row / 16) * 2 * face_bytes + (row % 16) * row_bytes;
+        for (uint32_t j = 0; j < d_tiles; j++) {
+            volatile tt_l1_ptr uint32_t* src =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_l1 + j * tile_bytes + member * row_bytes);
+            volatile tt_l1_ptr uint32_t* dst =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_l1 + j * tile_bytes + dst_row);
+            for (uint32_t w = 0; w < row_bytes / 4; w++) {
+                dst[w] = src[w];
+                dst[face_bytes / 4 + w] = src[face_bytes / 4 + w];
+            }
         }
     }
+    cb_pop_front(cb_meta, 1);
     cb_pop_front(cb_new, d_tiles);
     cb_reserve_back(cb_sig, 1);
     cb_push_back(cb_sig, 1);

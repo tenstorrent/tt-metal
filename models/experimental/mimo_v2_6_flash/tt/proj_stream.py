@@ -176,14 +176,15 @@ class BankStreamMatmul:
         ttnn.generic_op([w, out], program)
         return out
 
-    def __call__(self, x, w, compact_out=None):
-        """``compact_out``: write rows 0-3 straight into this compact rows tensor ([1, 1, 32, n / 8] bf16 DRAM tiles:
-        rows 4c..4c+3 of compact tile t % (n / 256) hold rows 0-3 of tile column t, c = t / (n / 256)) and return it."""
+    def __call__(self, x, w, compact_out=None, rows=4):
+        """``rows``: the user rows of x (4 or 8). ``compact_out``: write them straight into this compact rows tensor
+        ([1, 1, 32, n * rows / 32] bf16 DRAM tiles: rows rows * c .. of compact tile t % compact_tiles hold the user
+        rows of tile column t, c = t / compact_tiles) and return it."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT
-        assert _is_interleaved(x)
+        assert _is_interleaved(x) and rows in (4, 8)
         compact_tiles = 0
         if compact_out is not None:
-            compact_tiles = self.n // TILE // (TILE // 4)
+            compact_tiles = self.n // TILE // (TILE // rows)
             assert (
                 compact_out.shape[-1] == compact_tiles * TILE
                 and compact_out.memory_config().buffer_type == ttnn.BufferType.DRAM
@@ -260,6 +261,7 @@ class BankStreamMatmul:
                 self.banks,
                 self.SEM_X,
                 compact_tiles,
+                rows,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -292,10 +294,11 @@ class RouterScoreStream:
     CB_X, CB_W, CB_OUT, CB_BIAS, CB_PART, CB_GATHER = 0, 1, 2, 3, 4, 5
     SEM = 0
 
-    def __init__(self, plan, k, n, bias):
-        """``bias``: the experts' score-correction bias, torch [n]."""
+    def __init__(self, plan, k, n, bias, rows=4):
+        """``bias``: the experts' score-correction bias, torch [n]. ``rows``: the user rows (4 or 8)."""
         device = plan.mesh_device
-        self.plan, self.k, self.n = plan, k, n
+        assert rows in (4, 8), rows
+        self.plan, self.k, self.n, self.rows = plan, k, n, rows
         self.banks = device.dram_grid_size().x
         self.kt = k // TILE
         self.kq = self.kt // self.GROUP
@@ -397,6 +400,7 @@ class RouterScoreStream:
                 self.CB_GATHER,
                 self.GROUP,
                 self.SEM,
+                self.rows,
             ],
             writer_rt,
             ttnn.WriterConfigDescriptor(),
@@ -414,6 +418,7 @@ class RouterScoreStream:
                 self.CB_PART,
                 self.CB_GATHER,
                 self.GROUP,
+                self.rows,
             ],
             [[1 if q == 0 else 0] for _, q in self.slots],
             self.compute_config,

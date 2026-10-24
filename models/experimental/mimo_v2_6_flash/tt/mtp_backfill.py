@@ -42,7 +42,7 @@ from ..reference.mtp_backfill import (
     prefill_writes,
 )
 from ..reference.spec_chain import CHAIN_HSLOTS, CHAIN_ROW
-from ..reference.spec_decode import SPEC_SLOTS
+from ..reference.spec_decode import GROUP_SLOTS, SPEC_SLOTS
 from .device_sampler import CB_SCRATCH, _cb, _kernel, _ranges
 
 DECODE, VERIFY, LIST, PLAN = 0, 1, 2, 3  # the kernel's modes
@@ -117,6 +117,7 @@ class MtpHistory:
             TABLE_WORDS,
             CB_SCRATCH,
             MTP_WINDOW,
+            GROUP_SLOTS,
         ]
         scratch = _align64(HIST_WORDS * 4) + _align64(self.row_bytes) + extra
         kernel = _kernel("mtp_history.cpp", cores, _ranges(cores), compile_args, [args], ttnn.ReaderConfigDescriptor())
@@ -252,10 +253,11 @@ class MtpHistory:
             t.deallocate(True)
 
     # ------------------------------------------------------------------ host
-    def upload_backfill(self, slot=None, a=None):
-        """Copy the backfill upload (the request in lane slot ``slot``, the draft's first row ``a``; None: idle)."""
+    def upload_backfill(self, slot=None, a=None, group=0):
+        """Copy the backfill upload (the request in lane slot ``slot``, the draft's first row ``a``, into draft group
+        ``group``'s ring and stash slots; None: idle)."""
         host = ttnn.from_torch(
-            torch.tensor(backfill_row(self.max_batch, slot, a), dtype=torch.int32),
+            torch.tensor(backfill_row(self.max_batch, slot, a, group), dtype=torch.int32),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=self.plan.replicate(),
