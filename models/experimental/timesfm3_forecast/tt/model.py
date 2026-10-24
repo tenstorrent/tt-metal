@@ -142,24 +142,26 @@ class TtTimesFM3:
     def __init__(self, device, weights: Weights, precision: TtPrecision | None = None):
         self.device = device
         self.precision = TtPrecision.accuracy() if precision is None else precision
-        wdt = self.precision.weight_dtype()
-        up = lambda t: upload_linear(device, t, wdt)  # noqa: E731
-        self.tok_hidden, self.tok_out, self.tok_res = up(weights.tok_hidden), up(weights.tok_out), up(weights.tok_res)
-        self.head_w, self.head_b = up(weights.head_w), upload_vector(device, weights.head_b)
+        p = self.precision
+        up = lambda t, role: upload_linear(device, t, p.weight_dtype(role))  # noqa: E731
+        self.tok_hidden, self.tok_out, self.tok_res = (
+            up(t, "tokenizer") for t in (weights.tok_hidden, weights.tok_out, weights.tok_res)
+        )
+        self.head_w, self.head_b = up(weights.head_w, "head"), upload_vector(device, weights.head_b)
         self.rope_trans = upload(device, pair_rotation(TILE).reshape(1, 1, TILE, TILE))
         self.layers = []
         for lw in weights.layers:
             layer = {}
             for kind, aw in (("seq", lw.seq), ("var", lw.var)):
                 layer[kind] = {
-                    "wqkv": up(aw.wqkv),
+                    "wqkv": up(aw.wqkv, f"{kind}_qkv"),
                     "q_gain": upload_vector(device, aw.q_gain),
                     "k_gain": upload_vector(device, aw.k_gain),
-                    "wo": up(aw.wo),
+                    "wo": up(aw.wo, f"{kind}_wo"),
                     "post": upload_vector(device, aw.post_gain),
                 }
-            layer["var"]["w_ov"] = up(lw.var.w_ov)
-            layer["ff0"], layer["ff1"] = up(lw.ff0), up(lw.ff1)
+            layer["var"]["w_ov"] = up(lw.var.w_ov, "w_ov")
+            layer["ff0"], layer["ff1"] = up(lw.ff0, "ffn"), up(lw.ff1, "ffn")
             layer["post_ff"] = upload_vector(device, lw.post_ff_gain)
             self.layers.append(layer)
 

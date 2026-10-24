@@ -20,34 +20,83 @@ def pad_to_tile(n: int) -> int:
     return -(-n // TILE) * TILE
 
 
+WEIGHT_ROLES = ("tokenizer", "seq_qkv", "seq_wo", "var_qkv", "var_wo", "w_ov", "ffn", "head")
+
+
 @dataclass(frozen=True)
 class TtPrecision:
-    """``accuracy``: bf16 weights, HiFi2 matmuls. ``performance``: bfloat8_b weights, LoFi matmuls.
-    Both keep bf16 activations, and HiFi4 with fp32 accumulation for the norms and RoPE."""
+    """Per-role precision policy. Activations are bf16 everywhere; norms and RoPE run HiFi4 with fp32 dest
+    accumulation in every policy.
+
+    - ``matmul_fidelity`` / ``matmul_fp32_acc``: every linear (tokenizer, projections, FFN, head);
+    - ``sdpa_fidelity`` / ``sdpa_fp32_acc``: both attentions;
+    - ``bf8_weights``: bfloat8_b for every weight role except those in ``bf16_roles`` (``WEIGHT_ROLES``);
+    - ``embed_fidelity``: an override for the tokenizer matmuls (None = as ``matmul_*``).
+
+    ``accuracy`` and ``performance`` are the contract's named policies; variants come from
+    ``dataclasses.replace``.
+    """
 
     name: str = "accuracy"
     bf8_weights: bool = False
-    lofi: bool = False
-    # Tokenizer (patch encoder) matmuls: None = as the other matmuls, else "hifi4" or "hifi4_fp32"
-    # (PLAN section 9: check the patch encoder alone at HiFi4 on the long context).
-    embed_fidelity: str | None = None
+    bf16_roles: tuple = ()
+    matmul_fidelity: str = "hifi2"
+    matmul_fp32_acc: bool = False
+    sdpa_fidelity: str = "hifi2"
+    sdpa_fp32_acc: bool = False
+    embed_fidelity: str | None = None  # None | "hifi4" | "hifi4_fp32"
 
     @classmethod
     def accuracy(cls) -> "TtPrecision":
-        return cls()
+        """bf16 weights, HiFi2 with fp32 dest accumulation on every matmul and both SDPAs (G1 re-raise:
+        ``doc/optimize/iter_00/accumulation_sweep.md``, variant A1; without the fp32 accumulation the forecast
+        band of narrow intermittent rows shrank to 0.40 of the reference)."""
+        return cls(matmul_fp32_acc=True, sdpa_fp32_acc=True)
 
     @classmethod
     def performance(cls) -> "TtPrecision":
-        return cls(name="performance", bf8_weights=True, lofi=True)
+        """bfloat8_b weights except the FFN (bf16: a documented per-role exception; bf8 FFN weights put a
+        systematic error on every row), LoFi with fp32 dest accumulation (sweep variant P2a). Interim: R1-7 picks
+        the cheapest passing policy after the matmul configs change."""
+        return cls(
+            name="performance",
+            bf8_weights=True,
+            bf16_roles=("ffn",),
+            matmul_fidelity="lofi",
+            matmul_fp32_acc=True,
+            sdpa_fidelity="lofi",
+            sdpa_fp32_acc=True,
+        )
 
     @classmethod
     def by_name(cls, name: str) -> "TtPrecision":
         return {"accuracy": cls.accuracy, "performance": cls.performance}[name]()
 
-    def weight_dtype(self):
+    def describe(self) -> dict:
+        """The per-role settings, as recorded in bench records and the GATE."""
+        return {
+            "weights": "bfloat8_b" if self.bf8_weights else "bf16",
+            "bf16_roles": list(self.bf16_roles),
+            "matmul": f"{self.matmul_fidelity}, fp32_acc={self.matmul_fp32_acc}",
+            "sdpa": f"{self.sdpa_fidelity}, fp32_acc={self.sdpa_fp32_acc}",
+            "embed": self.embed_fidelity or "as matmul",
+            "norms_rope": "hifi4, fp32_acc=True",
+        }
+
+    def weight_dtype(self, role: str | None = None):
         import ttnn
 
-        return ttnn.bfloat8_b if self.bf8_weights else ttnn.bfloat16
+        if role is not None and role not in WEIGHT_ROLES:
+            raise ValueError(f"unknown weight role {role}")
+        return ttnn.bfloat8_b if self.bf8_weights and role not in self.bf16_roles else ttnn.bfloat16
+
+    @staticmethod
+    def _fidelity(name: str):
+        import ttnn
+
+        return {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2, "hifi4": ttnn.MathFidelity.HiFi4}[
+            name
+        ]
 
     @staticmethod
     def _config(math_fidelity, fp32_dest_acc_en: bool):
@@ -61,9 +110,7 @@ class TtPrecision:
         )
 
     def matmul_config(self):
-        import ttnn
-
-        return self._config(ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi2, False)
+        return self._config(self._fidelity(self.matmul_fidelity), self.matmul_fp32_acc)
 
     def embed_config(self):
         import ttnn
@@ -73,9 +120,7 @@ class TtPrecision:
         return self._config(ttnn.MathFidelity.HiFi4, self.embed_fidelity == "hifi4_fp32")
 
     def sdpa_config(self):
-        import ttnn
-
-        return self._config(ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi2, False)
+        return self._config(self._fidelity(self.sdpa_fidelity), self.sdpa_fp32_acc)
 
     def norm_config(self):
         import ttnn

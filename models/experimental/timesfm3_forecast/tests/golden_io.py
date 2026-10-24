@@ -64,27 +64,53 @@ NUM_QUANTILES = 9
 # series forecast flat at zero, std ~0.002 vs 1.19) have an ill-conditioned per-row PCC: their absolute error is
 # smaller than a typical row's, yet it is comparable to their own variation. ``*_active`` skips those rows.
 ACTIVE_ROW_STD = 0.05
-# Floors proposed at G1 from round 0 (None = reported, not enforced); the orchestrator sets them.
-METRIC_FLOORS = {
+# The gate table: metric -> (">=" or "<=", bound) per precision, used by the PCC suite and the bench records
+# (``floor_ok``) and by ``tests/perf/check_gates.py``. Proposed at the G1 re-raise; they change only through an
+# orchestrator decision (PLAN section 9).
+GATES = {
     "accuracy": {
-        "pcc_normalized": 0.999,
-        "pcc_spread": 0.998,
-        "pcc_row_p01": 0.5,
-        "pcc_row_min": 0.2,
-        "pcc_row_p01_active": 0.98,
-        "pcc_row_min_active": 0.9,
+        "pcc_normalized": (">=", 0.999),
+        "pcc_spread": (">=", 0.999),
+        "pcc_row_p01": (">=", 0.7),
+        "pcc_row_min": (">=", 0.5),
+        "pcc_row_p01_active": (">=", 0.99),
+        "pcc_row_min_active": (">=", 0.95),
+        "spread_ratio_p01": (">=", 0.9),
+        "spread_ratio_p99": ("<=", 1.1),
+        "spread_ratio_min": (">=", 0.6),
+        "spread_ratio_max": ("<=", 1.25),
+        "pcc_final": (">=", 0.99),
+        "pcc_final_spread": (">=", 0.999),
     },
-    # bfloat8_b FFN weights put a systematic error pattern on every row (round 0, PLAN section 9 metrics): the
-    # per-row metrics go negative on flat rows. Reported, not enforced, until a per-role exception is chosen.
     "performance": {
-        "pcc_normalized": 0.995,
-        "pcc_spread": 0.99,
-        "pcc_row_p01": None,
-        "pcc_row_min": None,
-        "pcc_row_p01_active": None,
-        "pcc_row_min_active": None,
+        "pcc_normalized": (">=", 0.995),
+        "pcc_spread": (">=", 0.998),
+        "pcc_row_p01": (">=", 0.1),
+        "pcc_row_min": (">=", 0.05),
+        "pcc_row_p01_active": (">=", 0.95),
+        "pcc_row_min_active": (">=", 0.75),
+        "spread_ratio_p01": (">=", 0.85),
+        "spread_ratio_p99": ("<=", 1.15),
+        "spread_ratio_min": (">=", 0.25),
+        "spread_ratio_max": ("<=", 1.3),
+        "pcc_final": (">=", 0.98),
+        "pcc_final_spread": (">=", 0.998),
     },
 }
+# Allowed drift from round 0 for an accepted candidate (``check_gates.py``): PCC metrics may fall at most this far.
+DRIFT = {"pcc_normalized": 0.0005, "pcc_spread": 0.0005, "pcc_final_spread": 0.0005, "default": 0.01}
+
+
+def gate_failures(metrics: dict, precision: str) -> dict:
+    """The metrics outside their gate: {metric: (value, op, bound)}."""
+    out = {}
+    for k, (op, bound) in GATES[precision].items():
+        if k not in metrics:
+            continue
+        v = metrics[k]
+        if (op == ">=" and not v >= bound) or (op == "<=" and not v <= bound):
+            out[k] = (v, op, bound)
+    return out
 
 
 def _pcc_rows(e: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
@@ -98,7 +124,14 @@ def _pcc_rows(e: torch.Tensor, g: torch.Tensor) -> torch.Tensor:
     return torch.where(same, torch.ones_like(out), out)
 
 
-def head_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
+def active_rows(golden_head: torch.Tensor) -> torch.Tensor:
+    """(rows,) bool: the golden head's rows whose std is >= ACTIVE_ROW_STD of the whole golden head's std. Taken
+    from the full golden only, so the set (and the excluded count) is fixed per golden; slice it for subsets."""
+    e = torch.as_tensor(golden_head).double().reshape(golden_head.shape[0], -1)
+    return e.std(-1) >= ACTIVE_ROW_STD * e.std()
+
+
+def head_metrics(expected: torch.Tensor, got: torch.Tensor, active: torch.Tensor | None = None) -> dict:
     """``pcc_normalized`` (all values), ``pcc_spread`` (the head minus its mean over the 9 quantiles),
     ``pcc_row_p01`` / ``pcc_row_min`` (per-row PCC, 1st percentile and minimum) of (rows, F, 576) heads."""
     e = torch.as_tensor(expected).double().reshape(expected.shape[0], -1, NUM_QUANTILES)
@@ -107,9 +140,17 @@ def head_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     spread = lambda t: t - t.mean(-1, keepdim=True)  # noqa: E731
     er, gr = e.reshape(e.shape[0], -1), g.reshape(g.shape[0], -1)
     rows = _pcc_rows(er, gr)
-    active = er.std(-1) >= ACTIVE_ROW_STD * er.std()
+    active = active_rows(expected) if active is None else torch.as_tensor(active)
     act = rows[active] if active.any() else rows
+    # Per-row forecast band amplitude: |h - mean_q h| of the device over the reference's (active rows).
+    es, gs = spread(e).reshape(e.shape[0], -1), spread(g).reshape(g.shape[0], -1)
+    ratio = gs.norm(dim=-1) / es.norm(dim=-1).clamp_min(1e-30)
+    ratio = ratio[active] if active.any() else ratio
     return {
+        "spread_ratio_p01": float(torch.quantile(ratio, 0.01)),
+        "spread_ratio_p99": float(torch.quantile(ratio, 0.99)),
+        "spread_ratio_min": float(ratio.min()),
+        "spread_ratio_max": float(ratio.max()),
         "pcc_normalized": float(_pcc_rows(flat(e), flat(g))[0]),
         "pcc_spread": float(_pcc_rows(flat(spread(e)), flat(spread(g)))[0]),
         "pcc_row_p01": float(torch.quantile(rows, 0.01)),
@@ -120,21 +161,36 @@ def head_metrics(expected: torch.Tensor, got: torch.Tensor) -> dict:
     }
 
 
+def inflate_quantiles(head: torch.Tensor, factor: float = 2.0) -> torch.Tensor:
+    """The complementary broken output: every quantile's distance from the quantile mean scaled by ``factor``."""
+    h = torch.as_tensor(head).reshape(head.shape[0], -1, NUM_QUANTILES)
+    m = h.mean(-1, keepdim=True)
+    return (m + factor * (h - m)).reshape(head.shape).contiguous()
+
+
 def collapse_quantiles(head: torch.Tensor) -> torch.Tensor:
     """The deliberately broken output: every quantile replaced by the mean over the 9 quantiles."""
     h = torch.as_tensor(head).reshape(head.shape[0], -1, NUM_QUANTILES)
     return h.mean(-1, keepdim=True).expand_as(h).reshape(head.shape).contiguous()
 
 
-def check_head_metrics(name: str, expected, got, precision: str = "accuracy") -> dict:
-    """Every gate metric of a head output against its floor (finite output required)."""
-    got = torch.as_tensor(got)
-    assert torch.isfinite(got).all(), f"{name}: non-finite head output"
-    m = head_metrics(expected, got)
-    floors = METRIC_FLOORS[precision]
-    print(f"[METRICS] {name}: " + ", ".join(f"{k} {v:.6f} (floor {floors.get(k)})" for k, v in m.items()), flush=True)
-    low = {k: v for k, v in m.items() if floors.get(k) is not None and v < floors[k]}
-    assert not low, f"{name}: below floor: {low}"
+def check_gates(
+    name: str, expected_head, got_head, expected_q=None, got_q=None, precision: str = "accuracy", active=None
+) -> dict:
+    """Every gate metric of a head output (and of the final quantiles when given) asserted against ``GATES``."""
+    got_head = torch.as_tensor(got_head)
+    assert torch.isfinite(got_head).all(), f"{name}: non-finite head output"
+    m = head_metrics(expected_head, got_head, active)
+    if expected_q is not None:
+        m.update(final_metrics(expected_q, got_q))
+    gates = GATES[precision]
+    print(
+        f"[METRICS] {name} ({precision}): "
+        + ", ".join(f"{k} {v:.6f}" + (f" ({gates[k][0]} {gates[k][1]})" if k in gates else "") for k, v in m.items()),
+        flush=True,
+    )
+    failures = gate_failures(m, precision)
+    assert not failures, f"{name}: outside the gates: {failures}"
     return m
 
 

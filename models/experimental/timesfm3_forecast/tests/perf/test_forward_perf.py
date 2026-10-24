@@ -28,12 +28,19 @@ from pathlib import Path
 import pytest
 import torch
 
-from models.experimental.timesfm3_forecast.tests.golden_io import final_metrics, head_metrics, load_golden
+from models.experimental.timesfm3_forecast.tests.golden_io import (
+    final_metrics,
+    gate_failures,
+    head_metrics,
+    load_golden,
+)
 
 STEADY_ITERS = 5
 DEVICE_SETTLE_S = 0.3
 SHAPES = {"paper": "bench_paper", "long_context": "bench_long_context", "multivariate": "bench_multivariate"}
-FLOORS = {"accuracy": 0.999, "performance": 0.995}
+# Sanity only (a catastrophic failure stops the run); the gates are judged from the record (``floor_ok``,
+# ``tests/perf/check_gates.py``).
+SANITY_PCC = 0.99
 CASES = [(s, p) for s in SHAPES for p in ("accuracy", "performance")]
 
 
@@ -97,12 +104,15 @@ def test_forward_perf(device, shape, precision):
 
     metrics = {**head_metrics(g["head_readout"], head), **final_metrics(g["quantiles"], torch.from_numpy(quantiles))}
     pcc_normalized = metrics["pcc_normalized"]
+    failures = gate_failures(metrics, precision)
     rows, tokens = prepared.rows, prepared.num_patches
     print(
         f"\n[PERF] forward {shape} / {precision}: {rows} rows x {tokens} tokens"
         f"\n  cold {cold_s:.3f} s, steady {statistics.median(steady):.4f} s ({', '.join(f'{s:.4f}' for s in steady)})"
         f"\n  split: prepare {prepare_s:.4f} upload {upload_s:.4f} device {device_s:.4f} postprocess {postprocess_s:.4f}"
-        f"\n  cpu {g['cpu_s']:.2f} s ({g['threads']} threads); " + ", ".join(f"{k} {v:.6f}" for k, v in metrics.items())
+        f"\n  cpu {g['cpu_s']:.2f} s ({g['threads']} threads); "
+        + ", ".join(f"{k} {v:.6f}" for k, v in metrics.items())
+        + f"\n  gates: {'ok' if not failures else failures}"
     )
     _record(
         {
@@ -120,8 +130,11 @@ def test_forward_perf(device, shape, precision):
             "postprocess_s": postprocess_s,
             "split_runs": [dict(zip(("prepare_s", "upload_s", "device_s", "postprocess_s"), s)) for s in splits],
             **metrics,
+            "floor_ok": not failures,
+            "gate_failures": {k: v[0] for k, v in failures.items()},
+            "policy": tt.precision.describe(),
             "cpu_s": g["cpu_s"],
             "chip": os.environ.get("TTQ_CHIP_SERIAL"),
         }
     )
-    assert pcc_normalized >= FLOORS[precision], f"{shape}/{precision}: pcc_normalized {pcc_normalized}"
+    assert pcc_normalized >= SANITY_PCC, f"{shape}/{precision}: pcc_normalized {pcc_normalized}"

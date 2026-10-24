@@ -96,14 +96,19 @@ def test_postprocessing(name):
 
 
 @pytest.mark.parametrize("name", ALL)
-def test_collapsed_quantiles_fail_the_gate_metrics(name):
-    """PLAN section 9: every head gate metric must score a forecast with all 9 quantiles collapsed to their
-    mean below its floor. ``pcc_final`` is printed only: data-space levels keep it near 1 for such output."""
+def test_broken_bands_fail_the_gates(name):
+    """PLAN section 9: a forecast with all 9 quantiles collapsed to their mean must fail every lower-bound gate
+    (accuracy), and one with the band doubled around the quantile mean must fail every upper-bound gate
+    (``spread_ratio_p99`` / ``max``). ``pcc_final`` is the exception and is only printed: data-space levels keep it
+    near 1 for a collapsed forecast, which is why ``pcc_final_spread`` exists. On goldens with few rows the per-row
+    metrics degenerate (one row: row PCC = pcc_normalized), so there only the global metrics must fail."""
     from models.experimental.timesfm3_forecast.tests.golden_io import (
-        METRIC_FLOORS,
+        GATES,
         collapse_quantiles,
         final_metrics,
+        gate_failures,
         head_metrics,
+        inflate_quantiles,
     )
 
     g = load_golden(name)
@@ -113,16 +118,22 @@ def test_collapsed_quantiles_fail_the_gate_metrics(name):
         if "head_readout" in g
         else g["head_raw"].reshape(hi.rows, hi.num_patches, -1)[:, hi.readout_tokens.start : hi.readout_tokens.stop]
     )
-    broken = collapse_quantiles(head)
-    m = head_metrics(head, broken)
     ref = g["quantiles"]
     ref = ref[None] if ref.dim() == 2 else ref
-    f = final_metrics(ref, torch.from_numpy(host.postprocess(broken, hi)))
-    print(f"[COLLAPSED] {name}: " + ", ".join(f"{k} {v:.5f}" for k, v in {**m, **f}.items()))
-    floors = METRIC_FLOORS["accuracy"]
-    # The bench shapes are where the gate metrics are recorded: there every metric must fail. On a goldens
-    # with few rows the per-row metrics degenerate (one row: row PCC = pcc_normalized), so only the global
-    # metrics must fail there.
-    gated = [k for k in floors if floors[k] is not None and (name.startswith("bench_") or not k.startswith("pcc_row"))]
-    passing = {k: m[k] for k in gated if m[k] >= floors[k]}
-    assert not passing, f"{name}: the collapsed output passes {passing}"
+    per_row = name.startswith("bench_")
+    for label, broken, op in (
+        ("COLLAPSED", collapse_quantiles(head), ">="),
+        ("INFLATED x2", inflate_quantiles(head), "<="),
+    ):
+        m = {**head_metrics(head, broken), **final_metrics(ref, torch.from_numpy(host.postprocess(broken, hi)))}
+        print(f"[{label}] {name}: " + ", ".join(f"{k} {v:.5f}" for k, v in m.items()))
+        failing = gate_failures(m, "accuracy")
+        must_fail = [
+            k
+            for k, (o, _) in GATES["accuracy"].items()
+            if o == op
+            and k != "pcc_final"
+            and (per_row or not (k.startswith("pcc_row") or k.startswith("spread_ratio")))
+        ]
+        passing = [k for k in must_fail if k not in failing]
+        assert not passing, f"{name}: the {label.lower()} output passes {passing}"
