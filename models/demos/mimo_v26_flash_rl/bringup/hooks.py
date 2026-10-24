@@ -120,6 +120,25 @@ def _attention_component(mesh, spec, layer):
     return fn
 
 
+def _mlp_component(mesh, spec, layer):
+    from models.demos.mimo_v26_flash_rl.tt.mesh_io import residual_to_host, residual_to_mesh
+    from models.demos.mimo_v26_flash_rl.tt.mlp import DenseMLP
+
+    mlp = DenseMLP(mesh, Checkpoint(spec.hf_dir, torch.float32), layer)
+
+    def fn(ctx, x):
+        with _op_hooks():
+            tx = residual_to_mesh(mesh, x)
+            ty = mlp(tx)
+            tx.deallocate(True)
+            out = residual_to_host(mesh, ty).to(x.dtype)
+            ty.deallocate(True)
+        return out
+
+    fn.module = mlp
+    return fn
+
+
 def device_component(mesh, spec, layer, step):
     if step == "attn_norm":
         return _norm_component(mesh, spec, layer, "input_layernorm.weight")
@@ -129,6 +148,8 @@ def device_component(mesh, spec, layer, step):
         return _residual_component(mesh)
     if step == "ffn_norm":
         return _norm_component(mesh, spec, layer, "post_attention_layernorm.weight")
+    if step == "mlp":
+        return _mlp_component(mesh, spec, layer)
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 

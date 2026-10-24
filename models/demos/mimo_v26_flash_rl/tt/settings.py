@@ -57,6 +57,20 @@ TABLE = {
         "ring SDPA segmented_accumulation (per-ring-iteration accumulators; needs one Q chunk per core). Layer-0 gate "
         "margin at k 320: on 0.989, off 1.003, so off (C.attn_dense.attention)",
     ),
+    "MLP_FIDELITY": Setting(
+        "HiFi4",
+        ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
+        "rule 7 default: HiFi4 for the dense MLP matmuls (C.attn_dense.mlp)",
+    ),
+    "MLP_FP32_ACC": Setting(True, (True, False), "fp32 dest for the dense MLP matmuls (C.attn_dense.mlp)"),
+    "MLP_INTER_FP32": Setting(
+        True, (True, False), "gate, up and silu(gate) * up in fp32 instead of bf16 (C.attn_dense.mlp)"
+    ),
+    "MLP_OUT_FP32": Setting(
+        True,
+        (True, False),
+        "down_proj partials in fp32 through the TP reduce_scatter, rounded to bf16 once (C.attn_dense.mlp)",
+    ),
     "RING_NUM_LINKS": Setting(2, (1, 2), "fabric links of the ring SDPA gather over SP (gemma4_d_p: 2 on Blackhole)"),
 }
 
@@ -68,6 +82,10 @@ MAX_PRECISION = {
     "ATTN_OUT_FP32": True,
     "SDPA_FIDELITY": "HiFi4",
     "SDPA_EXACT_EXP": True,
+    "MLP_FIDELITY": "HiFi4",
+    "MLP_FP32_ACC": True,
+    "MLP_INTER_FP32": True,
+    "MLP_OUT_FP32": True,
 }
 
 settings = Settings("MIMO_V26_FLASH_RL_", TABLE, max_precision=MAX_PRECISION)

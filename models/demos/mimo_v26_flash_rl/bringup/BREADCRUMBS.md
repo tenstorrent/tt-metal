@@ -83,3 +83,19 @@
   TP all_gather the MLP needs belongs to the MLP module.
 - Gate: PCC 0.999996, auto_margin_min 2.49, 1 ttnn op, host FLOPs 0.
 - Re-run: `bfw job check --task C.attn_dense.ffn_norm --gate-only`.
+
+## C.attn_dense.mlp (layer 0): PASS
+
+- `tt/mlp.py` `DenseMLP`: all_gather over TP (`ccl.gather_rows`) -> gate / up `ttnn.linear` with this rank's 4096
+  intermediate rows (fp32 out) -> `ttnn.multiply(g, u, input_tensor_a_activations=[SILU])` (fp32) -> down
+  `ttnn.linear` on this rank's 4096 input columns (fp32 partials) -> `reduce_scatter` over TP -> typecast bf16.
+  7 ttnn ops. Weights [out, in] with `transpose_b=True` (bfp8 blocks along K, as attention learned).
+- Settings: `MLP_FIDELITY` HiFi4, `MLP_FP32_ACC` True, `MLP_INTER_FP32` True, `MLP_OUT_FP32` True (all in MAX_PRECISION).
+- `ttnn.multiply` on this tt-metal takes no `compute_kernel_config` (TypeError); activations need
+  `ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)`.
+- First run (fp32 dequantized weights -> bfloat8_b): PCC 0.999995 but auto_margin_min 0.77, output column 525 rel 0.0288
+  vs limit 0.0223. Host emulation with ttnn's own converter: fp32 -> bfp8 gives column 525 0.029, bf16 -> bfp8 gives
+  0.009 (= the precision model). Fix: round the dequantized weights to bf16 first (`rank_weights`).
+- Gate: PCC 0.999995, rel vs CPU 0.0029 (limit 0.0056), worst column 2415 at 0.0149 vs 0.0279, auto_margin_min 1.87,
+  host FLOPs 0.
+- Re-run: `bfw job check --task C.attn_dense.mlp --gate-only`.
