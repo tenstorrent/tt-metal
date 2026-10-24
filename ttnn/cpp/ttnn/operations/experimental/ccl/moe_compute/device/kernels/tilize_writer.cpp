@@ -10,6 +10,7 @@
 #include "api/core_local_mem.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "moe_ring_common.h"
 
 using namespace ttnn::operations::ccl::common;
 
@@ -185,6 +186,10 @@ void kernel_main() {
         get_named_compile_time_arg_val("previous_chunk_sent_semaphore_id");
     constexpr uint32_t initial_gather_semaphore_id = get_named_compile_time_arg_val("initial_gather_semaphore_id");
 
+    // When local_output=1 (moe_compute SingleCluster) no combine reads the routing: BRISC keeps its (token, expert,
+    // k slot) hits as a pair list (moe_ring::token_list) for the drain's packed lists and builds no activation rows.
+    constexpr bool local_output = get_named_compile_time_arg_val("local_output") == 1;
+
     Semaphore<> matmul_chunk_available_sem(matmul_chunk_available_semaphore_id);
     Semaphore<> tilize_chunk_ready_sem(tilize_chunk_ready_semaphore_id);
     Semaphore<> matmul_chunk_ready_sem(matmul_chunk_ready_semaphore_id);
@@ -220,19 +225,19 @@ void kernel_main() {
     [[maybe_unused]] uint32_t per_expert_total_tokens_output_tensor_address =
         get_arg_val<uint32_t>(rt_args_idx++);  // 4 not used by writer
     [[maybe_unused]] uint32_t expert_activation_output_address =
-        get_arg_val<uint32_t>(rt_args_idx++);                                                 // 5 - not used by writer
-    [[maybe_unused]] uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);      // 6 - not used by writer
-    bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);                   // 7
-    bool is_secondary_mcaster = (bool)get_arg_val<uint32_t>(rt_args_idx++);                   // 8
-    uint32_t initial_mcast_gather_core_nox_x = get_arg_val<uint32_t>(rt_args_idx++);          // 9
-    uint32_t initial_mcast_gather_core_nox_y = get_arg_val<uint32_t>(rt_args_idx++);          // 10
-    uint32_t global_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);                   // 11
-    uint32_t mcast_group_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);              // 12
-    uint32_t mcast_group_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                // 13
-    uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                            // 14
-    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                         // 15
-    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                           // 16
-    [[maybe_unused]] uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);         // 17 - not used by writer
+        get_arg_val<uint32_t>(rt_args_idx++);                                             // 5 - not used by writer
+    [[maybe_unused]] uint32_t e_t_output_address = get_arg_val<uint32_t>(rt_args_idx++);  // 6 - not used by writer
+    bool is_drain_tilize_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);               // 7
+    bool is_secondary_mcaster = (bool)get_arg_val<uint32_t>(rt_args_idx++);               // 8
+    uint32_t initial_mcast_gather_core_nox_x = get_arg_val<uint32_t>(rt_args_idx++);      // 9
+    uint32_t initial_mcast_gather_core_nox_y = get_arg_val<uint32_t>(rt_args_idx++);      // 10
+    uint32_t global_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);               // 11
+    uint32_t mcast_group_subtoken_offset = get_arg_val<uint32_t>(rt_args_idx++);          // 12
+    uint32_t mcast_group_subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);            // 13
+    uint32_t subtoken_size = get_arg_val<uint32_t>(rt_args_idx++);                        // 14
+    uint32_t core_token_start = get_arg_val<uint32_t>(rt_args_idx++);                     // 15
+    uint32_t core_token_end = get_arg_val<uint32_t>(rt_args_idx++);                       // 16
+    [[maybe_unused]] uint32_t tilize_core_idx = get_arg_val<uint32_t>(rt_args_idx++);     // 17 - not used by writer
 
     // Constants
     constexpr uint32_t one_page = 1;
@@ -292,22 +297,26 @@ void kernel_main() {
         }
     }
 
-    // Reserve BRISC's e_t buffer (single page contains all experts' token lists)
+    // Reserve BRISC's e_t buffer (single page contains all experts' token lists; under local_output its pair list)
     cb_brisc_e_t.reserve_back(one_page);
     const uint32_t brisc_e_t_buffer_base = cb_brisc_e_t.get_write_ptr();
+    [[maybe_unused]] uint32_t brisc_num_pairs = 0;
 
-    // Reserve BRISC's expert_activation buffer (single page contains all activation rows)
-    cb_brisc_expert_activation.reserve_back(one_page);
-    const uint32_t brisc_expert_activation_base = cb_brisc_expert_activation.get_write_ptr();
+    [[maybe_unused]] uint32_t brisc_expert_activation_base = 0;
+    if constexpr (!local_output) {
+        // Reserve BRISC's expert_activation buffer (single page contains all activation rows)
+        cb_brisc_expert_activation.reserve_back(one_page);
+        brisc_expert_activation_base = cb_brisc_expert_activation.get_write_ptr();
 
-    // Initialize BRISC's expert_activation buffer with sentinel values (selected_experts_k)
-    for (uint32_t row = 0; row < brisc_tokens_capacity; row++) {
-        uint32_t* row_ptr =
-            reinterpret_cast<uint32_t*>(brisc_expert_activation_base + row * aligned_activation_row_bytes);
-        row_ptr[0] = 0;  // token_id placeholder
-        for (uint32_t e = 0; e < experts_per_device; e++) {
-            row_ptr[1 + e] = selected_experts_k;      // sentinel for k-index
-            row_ptr[1 + experts_per_device + e] = 0;  // score placeholder
+        // Initialize BRISC's expert_activation buffer with sentinel values (selected_experts_k)
+        for (uint32_t row = 0; row < brisc_tokens_capacity; row++) {
+            uint32_t* row_ptr =
+                reinterpret_cast<uint32_t*>(brisc_expert_activation_base + row * aligned_activation_row_bytes);
+            row_ptr[0] = 0;  // token_id placeholder
+            for (uint32_t e = 0; e < experts_per_device; e++) {
+                row_ptr[1 + e] = selected_experts_k;      // sentinel for k-index
+                row_ptr[1 + experts_per_device + e] = 0;  // score placeholder
+            }
         }
     }
 
@@ -344,7 +353,7 @@ void kernel_main() {
         const uint16_t* token_scores = reinterpret_cast<const uint16_t*>(scores_base + t * aligned_scores_page_size);
 
         // Track if this token is activated for any local expert
-        uint32_t* brisc_activation_l1_ptr = nullptr;
+        [[maybe_unused]] uint32_t* brisc_activation_l1_ptr = nullptr;
         bool activated = false;
 
         for (uint32_t k = 0; k < selected_experts_k; k++) {
@@ -358,26 +367,37 @@ void kernel_main() {
             // Check if it's one of our local experts
             for (uint32_t e = 0; e < local_expert_count; e++) {
                 if (selected_expert == local_expert_ids[e]) {
-                    // First activation for this token - set up pointer and write token id
-                    if (!activated) {
-                        brisc_activation_l1_ptr = reinterpret_cast<uint32_t*>(
-                            brisc_expert_activation_base + brisc_num_activated_tokens * aligned_activation_row_bytes);
-                        brisc_activation_l1_ptr[0] = t;
-                        activated = true;
+                    if constexpr (local_output) {
+                        // Pair list in arrival order (the drain scatters it into expert e's packed segment).
+                        uint32_t* pair = reinterpret_cast<uint32_t*>(
+                            brisc_e_t_buffer_base + brisc_num_pairs * moe_ring::token_list::PAIR_BYTES);
+                        pair[0] = t;
+                        pair[1] = (e << moe_ring::token_list::PAIR_EXPERT_SHIFT) | k;
+                        brisc_num_pairs++;
+                    } else {
+                        // First activation for this token - set up pointer and write token id
+                        if (!activated) {
+                            brisc_activation_l1_ptr = reinterpret_cast<uint32_t*>(
+                                brisc_expert_activation_base +
+                                brisc_num_activated_tokens * aligned_activation_row_bytes);
+                            brisc_activation_l1_ptr[0] = t;
+                        }
+
+                        // Write k-index and score for this expert
+                        brisc_activation_l1_ptr[1 + e] = k;
+                        brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
+
+                        // Write to BRISC's e_t buffer (16B aligned entries): word 0 token id, word 1 the
+                        // token's k slot for this expert (same entry format as the NCRISC buffer; the
+                        // merge copies whole entries).
+                        const uint32_t brisc_e_t_offset =
+                            (e * brisc_tokens_capacity + brisc_num_tokens_per_expert[e]) * e_t_entry_size;
+                        uint32_t* brisc_e_t_entry =
+                            reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset);
+                        brisc_e_t_entry[0] = t;
+                        brisc_e_t_entry[1] = k;
                     }
-
-                    // Write k-index and score for this expert
-                    brisc_activation_l1_ptr[1 + e] = k;
-                    brisc_activation_l1_ptr[1 + experts_per_device + e] = static_cast<uint32_t>(token_scores[k]);
-
-                    // Write to BRISC's e_t buffer (16B aligned entries): word 0 token id, word 1 the
-                    // token's k slot for this expert (same entry format as the NCRISC buffer; the
-                    // merge copies whole entries).
-                    const uint32_t brisc_e_t_offset =
-                        (e * brisc_tokens_capacity + brisc_num_tokens_per_expert[e]) * e_t_entry_size;
-                    uint32_t* brisc_e_t_entry = reinterpret_cast<uint32_t*>(brisc_e_t_buffer_base + brisc_e_t_offset);
-                    brisc_e_t_entry[0] = t;
-                    brisc_e_t_entry[1] = k;
+                    activated = true;
                     brisc_num_tokens_per_expert[e]++;
                     break;
                 }
@@ -389,11 +409,13 @@ void kernel_main() {
         }
     }
 
-    // Push BRISC's e_t buffer (no -1 cap needed, NCRISC will cap final merged buffer)
+    // Push BRISC's e_t buffer (no -1 cap needed, NCRISC will cap final merged buffer) or its pair list
     cb_brisc_e_t.push_back(one_page);
 
-    // Push BRISC's expert_activation buffer
-    cb_brisc_expert_activation.push_back(one_page);
+    if constexpr (!local_output) {
+        // Push BRISC's expert_activation buffer
+        cb_brisc_expert_activation.push_back(one_page);
+    }
 
     // Push BRISC's per-expert counts to CB for NCRISC to read
     cb_brisc_expert_counts.reserve_back(one_page);
@@ -403,10 +425,12 @@ void kernel_main() {
     }
     cb_brisc_expert_counts.push_back(one_page);
 
-    // Push BRISC's activated token count
-    cb_brisc_activated_count.reserve_back(one_page);
-    *reinterpret_cast<uint32_t*>(cb_brisc_activated_count.get_write_ptr()) = brisc_num_activated_tokens;
-    cb_brisc_activated_count.push_back(one_page);
+    if constexpr (!local_output) {
+        // Push BRISC's activated token count
+        cb_brisc_activated_count.reserve_back(one_page);
+        *reinterpret_cast<uint32_t*>(cb_brisc_activated_count.get_write_ptr()) = brisc_num_activated_tokens;
+        cb_brisc_activated_count.push_back(one_page);
+    }
 
     // Wait for reader to push per-expert token counts (includes merged NCRISC + BRISC counts)
     cb_per_expert_total_tokens.wait_front(1);
