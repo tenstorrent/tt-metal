@@ -77,9 +77,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     // staying at 0.
     // This overflow happens when z_f32 < -127. Therefore, we clamp z_f32 to -127.
     sfpi::vFloat z_f32 = pow * log2_result;
-    const sfpi::vFloat low_threshold = sfpi::vConstFloatPrgm1;
-    v_if(z_f32 < low_threshold) { z_f32 = low_threshold; }
-    v_endif;
 
     // The paper relies on the following formula (c.f. Sections 1 and 5):
     // z = (bias + x * log2(a)) * N_m; where:
@@ -89,17 +86,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     // In this case, we transform the formula to:
     // z = (bias) * N_m + (x * log2(a)) * N_m
     // where (bias + N_m) = 0x3f800000
-    // and (x * log2(a)) * N_m = addexp(z_f32, 23)
-
-    // Notes:
-    // - N_m being a power of 2 ensures equivalent results
-    // - addexp(z_f32, 23) is used because it translates to a single-cycle SFPDIVP2
-    //   instruction with immediate operand (i.e. no extra register used).
-    //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
-
-    z_f32 = addexp(z_f32, 23);  // equal to multiplying by 2**23
-    const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
-    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
+    z_f32 = z_f32 * sfpi::vConstFloatPrgm2 + sfpi::vFloat(0x3f800000);
+    v_if(z_f32 < 0.0f) { z_f32 = 0.0f; }
+    v_endif;
+    sfpi::vInt z = _float_to_int32_positive_(z_f32);
 
     sfpi::vInt zii = exexp(sfpi::as<sfpi::vFloat>(z));        // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman(sfpi::as<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
@@ -405,6 +395,7 @@ inline void sfpu_binary_pow_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstFloatPrgm0 = 1.442695f;
     sfpi::vConstFloatPrgm1 = -127.0f;
+    sfpi::vConstFloatPrgm2 = 8388608.0f;
 }
 
 }  // namespace sfpu
