@@ -147,6 +147,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     } else {
         v_if(abs_base == 0.f) {
             y = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), y);
+            v_if(sfpi::is_nan(pow)) { y = sfpi::vConstFloatPrgm2; }
+            v_endif;
         }
         v_endif;
     }
@@ -348,6 +350,8 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
     } else {
         v_if(abs_base == 0.f) {
             y = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), y);
+            v_if(sfpi::is_nan(pow)) { y = sfpi::vConstFloatPrgm2; }
+            v_endif;
         }
         v_endif;
     }
