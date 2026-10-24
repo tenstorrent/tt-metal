@@ -45,3 +45,32 @@ unset. If `TT_MESH_GRAPH_DESC_PATH` is not set, the demo sets it from the profil
     pytest models/demos/blackhole/qwen38_flash_next/demo/text_demo.py -s -k traced_256k
 
 `CI=true` also writes the benchmark JSON.
+
+## Batched decode (`test_demo_text_batched`)
+
+Ids: `batched_128_b8`, `batched_128_b32`, `batched_1k_b8`, `batched_1k_b32`, `batched_4k_b8`, `batched_4k_b32`,
+`batched_8k_b8`, `batched_16k_b8`, `batched_32k_b8`, `batched_64k_b8` (ISL and users B). The context choice is the same
+as above. `batched_64k_b8` may not fit in device memory.
+
+B users decode together on the plain lane body (`tools/qwen38_batch_decode.py`) with paged KV (page size 64, pool =
+1 + the users' pages for prompt + 128 tokens + 8 spare). All users are admitted first (B=1 prefill each, then import
+into the lane). Then each user gets 128 tokens: t0 from the prefill and 127 batched steps. No stop on EOS.
+
+Each user has its own prompt: the same ISL, a different non-overlapping War and Peace excerpt, and its own 5-digit
+pass key (58213 for user 0). One prompt for all users would route the MoE to few experts and give a wrong speed.
+
+What the test checks, per user: the first 8 tokens equal the B=1 reference (adapter prefill + 127 decode steps,
+computed before the lane capture), the user's own pass key is in its output, and no other user's key is in it. The
+log and the JSON report also give the exact match of all 128 tokens and the first difference.
+
+The log line gives the mean TTFT per user, the admission time (prefill and import), the decode step in ms (mean, first
+16 and last 16 steps), t/s/u, aggregate tok/s, the B=1 ms/token and the model-ready time. With `CI=true` the benchmark
+JSON has `batch_size=B`; `decode_t/s` is the aggregate, `decode_t/s/u` the per-user rate.
+
+The step time depends on the text: a step is faster when the users emit the same tokens (fewer routed experts). The
+first 16 steps (every user writes its pass key) are the fastest; the summary steps, where the users differ, are the
+realistic rate.
+
+Extra env: `QWEN38_LANE_INDEXER_FORM=wide|per_lane` (default `wide`) picks the QSA lane indexer form.
+
+    pytest models/demos/blackhole/qwen38_flash_next/demo/text_demo.py -s -k batched_4k_b8

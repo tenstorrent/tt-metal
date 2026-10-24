@@ -24,6 +24,7 @@ layouts exclude the KV family).
 
 from __future__ import annotations
 
+import os
 import random
 import time
 from contextlib import contextmanager
@@ -125,9 +126,16 @@ class Qwen38PlainLaneDecoder:
     """B lanes of the plain lane body over one adapter; see the module docstring."""
 
     def __init__(
-        self, lanes: int, paging: Qwen38LanePaging | None = None, decode_steps: int = 32, seed: int = 0
+        self,
+        lanes: int,
+        paging: Qwen38LanePaging | None = None,
+        decode_steps: int = 32,
+        seed: int = 0,
+        indexer_form: str | None = None,
     ) -> None:
         self.lanes = lanes
+        # QSA lane indexer form, "wide" or "per_lane"; the argument beats QWEN38_LANE_INDEXER_FORM (default "wide")
+        self.indexer_form = indexer_form or os.environ.get("QWEN38_LANE_INDEXER_FORM", "wide")
         self.paging = paging
         self.decode_steps = decode_steps
         self.allocator = None if paging is None else Qwen38PageAllocator(paging.num_pages, seed)
@@ -157,7 +165,7 @@ class Qwen38PlainLaneDecoder:
         lanes = self.lanes
         started = time.perf_counter()
         paging = self.paging
-        self.ls = ls = model.allocate_lane_state(lanes, indexer_form="wide", residue_free=True, paged=paging)
+        self.ls = ls = model.allocate_lane_state(lanes, indexer_form=self.indexer_form, residue_free=True, paged=paging)
         gl = model.generic_lane_layout(chain.state, exclude_kv=paging is not None)
         ll = model.lane_layout(ls)
         self.pager_g = Qwen38TTNNLanePager(mesh, model.mesh_contract, gl)
