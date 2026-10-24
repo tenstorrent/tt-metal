@@ -15,6 +15,7 @@ import torch
 import ttnn
 from models.experimental.bevformer.model_config import RESNET_KWARGS
 from models.experimental.bevformer.tests.common import (
+    BACKBONE_FPN_PCC,
     BACKBONE_OUTPUT_DTYPES,
     assert_pcc,
     build_reference_backbone,
@@ -53,8 +54,8 @@ def test_backbone_fpn(device, reset_seeds):
     tt_features = tt_backbone(tt_input)
     # Read before the FPN runs: it deallocates its inputs.
     for torch_feature, tt_feature in zip(torch_features, tt_features, strict=True):
-        assert_pcc(torch_feature, from_conv_layout(tt_feature, torch_feature.shape), 0.99)
+        assert_pcc(torch_feature, from_conv_layout(tt_feature, torch_feature.shape), BACKBONE_FPN_PCC)
     tt_outputs = tt_fpn(list(tt_features))
 
     for torch_output, tt_output in zip(torch_outputs, tt_outputs, strict=True):
-        assert_pcc(torch_output, from_conv_layout(tt_output, torch_output.shape), 0.99)
+        assert_pcc(torch_output, from_conv_layout(tt_output, torch_output.shape), BACKBONE_FPN_PCC)
