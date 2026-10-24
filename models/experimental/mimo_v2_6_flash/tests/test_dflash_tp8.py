@@ -74,8 +74,9 @@ def test_dflash(mesh_device):
     def host(t):
         return ttnn.from_torch(t.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep)
 
-    # Each prompt's context, as a prefill chunk writes it into its group's ring.
+    # Each prompt's context, as a prefill chunk writes it into its group's ring (after the request's reset).
     for grp in range(DRAFT_GROUPS):
+        dflash.reset(grp)
         n = prompts[grp]
         padded = -(-n // TILE) * TILE
         acc = None

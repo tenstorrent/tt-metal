@@ -608,8 +608,16 @@ class TtDFlash:
         full.deallocate(True)
         return out
 
+    def warm(self):
+        """Compile the draft program with an idle run (an all-zero scatter writes nothing) before any trace capture
+        (TtMiMoModel.capture_decode_trace): the tiled reshape owns a device mapping table, allocated when its program
+        compiles, and a buffer allocated after a capture may sit where that trace writes on replay (a draft program
+        first compiled after the decode and verify captures hung on it in serving)."""
+        self.upload([])
+        self._body()
+
     def capture_trace(self):
-        """Compile with an idle run (an all-zero scatter writes nothing), then capture the draft program."""
+        """Compile with an idle run (warm: a hit by now), then capture the draft program."""
         assert self.trace is None and self.head is not None
         m = self.model
         self.upload([])

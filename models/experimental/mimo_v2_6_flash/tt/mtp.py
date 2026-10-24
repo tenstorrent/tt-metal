@@ -177,6 +177,7 @@ class TtMiMoMTP:
         self.history = None  # MtpHistory (setup_cache, with ``backfill`` and the decode RoPE tables)
         self.trace = None
         self.backfill_trace = None
+        self._inputs = None  # the one-layer draft program's inputs (``_trace_inputs``)
 
     def setup_cache(self):
         """The ring KV caches, their page table, the greedy heads, with every layer the program's LayerInputs, and the
@@ -404,25 +405,44 @@ class TtMiMoMTP:
             rope = [host(torch.zeros(1, m.max_batch, dtype=torch.int32), ttnn.uint32) for _ in range(3)]
         return [tokens, *idle, *rope]
 
-    def capture_trace(self):
-        """Compile with an idle run (every position -1: no K / V written; with every layer an idle description, which
-        leaves the stash as it was), then capture the draft program."""
-        assert self.trace is None and self.heads is not None
+    def _trace_inputs(self):
+        """The one-layer draft program's inputs (made once, before any trace capture); none with every layer."""
         m = self.model
         if self.multi:
             assert m.rope_tables is not None, "every-layer drafting reads its cos / sin from the decode RoPE tables"
-            inputs = []
-
-            def body():
-                self._body_layers()
-
-        else:
-            inputs = [
+            return []
+        if self._inputs is None:
+            self._inputs = [
                 ttnn.to_device(t, m.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in self._idle_inputs()
             ]
+        return self._inputs
 
-            def body():
-                self._body(inputs)
+    def _run_body(self, inputs):
+        if self.multi:
+            self._body_layers()
+        else:
+            self._body(inputs)
+
+    def warm(self):
+        """Compile the draft programs (the draft and, with the history, the backfill) with idle runs before any trace
+        capture (TtMiMoModel.capture_decode_trace): an op that owns device buffers (the tiled reshape's mapping table)
+        allocates them when its program compiles, and a buffer allocated after a capture may sit where that trace
+        writes on replay. Every position -1 (no K / V written); with every layer an idle description, which leaves the
+        stash as it was."""
+        self.model.spec_inputs.reset()
+        self._run_body(self._trace_inputs())
+        if self.history is not None:
+            self.history.upload_backfill()
+            self._body_backfill()
+
+    def capture_trace(self):
+        """Compile with an idle run (warm: a hit by now), then capture the draft program."""
+        assert self.trace is None and self.heads is not None
+        m = self.model
+        inputs = self._trace_inputs()
+
+        def body():
+            self._run_body(inputs)
 
         # The packed upload still holds the last served draft (a recapture): idle it, so the runs below write no K / V.
         m.spec_inputs.reset()

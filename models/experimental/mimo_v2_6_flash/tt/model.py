@@ -1203,6 +1203,10 @@ class TtMiMoModel:
             self.spec_chain.warm(self.verify_sampler.ctrl)
         if self._history() is not None:
             self._history().warm(self.mtp.inputs)
+        if self.spec_chain is not None:
+            # The drafter's programs too (its setup made the chain): they compile before any capture (TtMiMoMTP.warm,
+            # TtDFlash.warm).
+            (self.mtp if self.mtp is not None else self.dflash).warm()
         ttnn.synchronize_device(self.mesh_device)
         captured = []
         for sample in variants:
