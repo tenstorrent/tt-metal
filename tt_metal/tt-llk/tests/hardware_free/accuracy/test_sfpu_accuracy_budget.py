@@ -1520,6 +1520,19 @@ def test_a_demoted_row_measured_past_the_ceiling():
 #: handful of inputs does not belong here: name the inputs in
 #: ``ulp_sweep._KNOWN_NONFINITE_LANES`` instead, and the rest of the cell stays gated.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
+    # -- the kernel's own bfloat16 rounding on a 16-bit Dest ---------------------------
+    (
+        MathOperation.Logsigmoid,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        None,
+        DestAccumulation.No,
+    ): (
+        "the kernel rounds its result to bfloat16 before the store on a 16-bit Dest, so "
+        "the four top-of-fp16 inputs (-65504 down to -65408, where logsigmoid(x) = x) "
+        "round to -65536 and pack to -inf; the rest of the cell reads up to 12 fp16 "
+        "steps, that rounding on top of the bfloat16-level residual (#58607's class)"
+    ),
     # -- the approximation's own shortfall at the fp16 and fp32 overflow edges -----
     (
         MathOperation.Exp,
@@ -1633,6 +1646,13 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 #: must be looked at, and the number here bumped on purpose. Exact-cell keys need no pin.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     (
+        MathOperation.Logsigmoid,
+        DataFormat.Float16,
+        DataFormat.Float16,
+        None,
+        DestAccumulation.No,
+    ): 1,
+    (
         MathOperation.Exp,
         DataFormat.Float16,
         DataFormat.Float16,
@@ -1738,7 +1758,17 @@ def _acknowledges(key, cell) -> bool:
 #: `atol`/`rtol` anchor) and the sweep's format set then grows -- the cell is measured,
 #: resolves to the global default, and nothing holds it. A cell listed here is a
 #: decision, with its reason, not a gap.
-_UNRESOLVED_SWEPT_CELLS: dict = {}
+_UNRESOLVED_SWEPT_CELLS: dict = {
+    # #54080: Logsigmoid was swept on the ttsim Wormhole model, which cannot unpack a
+    # Float32 input, and budgets do not transfer from Blackhole. These cells resolve to
+    # tolerance until a Wormhole board sweeps them.
+    (MathOperation.Logsigmoid, DataFormat.Float32, out, approx, dest): (
+        "Float32 input unreachable on the ttsim Wormhole model"
+    )
+    for out in (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
+    for approx in (ApproximationMode.Yes, ApproximationMode.No)
+    for dest in (DestAccumulation.Yes, DestAccumulation.No)
+}
 
 
 def test_every_swept_cell_of_an_enrolled_op_resolves_to_a_row_of_its_own():

@@ -2368,6 +2368,7 @@ class UnarySFPUGolden:
             MathOperation.Cos: self._cos,
             MathOperation.Log: self._log,
             MathOperation.Log1p: self._log1p,
+            MathOperation.Logsigmoid: self._logsigmoid,
             MathOperation.Reciprocal: self._reciprocal,
             MathOperation.Relu: self._relu,
             MathOperation.Rsqrt: self._rsqrt,
@@ -3002,6 +3003,9 @@ class UnarySFPUGolden:
 
     def _log1p(self, x):
         return self._torch_unary(x, torch.log1p)
+
+    def _logsigmoid(self, x):
+        return self._torch_unary(x, torch.nn.functional.logsigmoid)
 
     def _reciprocal(self, x):
         return self._torch_unary(x, torch.reciprocal)
@@ -4199,7 +4203,6 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
                 MathOperation.SfpuMulInt32: self._mul_int32,
                 MathOperation.SfpuIsclose: self._isclose,
                 MathOperation.SfpuIscloseEqualNan: self._isclose_equal_nan,
-                MathOperation.SfpuLogsigmoid: self._logsigmoid,
                 # Integer / format-typed binary SFPU ops.
                 MathOperation.SfpuEqInt: self._eq_int,
                 MathOperation.SfpuNeInt: self._ne_int,
@@ -4799,13 +4802,6 @@ class BinarySFPUGolden(EltwiseBinaryGolden):
 
     def _isclose_equal_nan(self, t1, t2):
         return self._isclose_impl(t1, t2, equal_nan=True)
-
-    def _logsigmoid(self, t1, t2):
-        # logsigmoid(x) = log(sigmoid(x)) = -softplus(-x), with x = t1. The kernel takes
-        # exp(-x) as its second operand (t2), which the test bakes into the paired
-        # stimuli; the golden only needs x. It is a piecewise (poly + exp) approximation,
-        # so it is matched under the PCC tolerance. Evaluated in fp32.
-        return torch.nn.functional.logsigmoid(t1.to(torch.float32))
 
     def _reshuffle_rows(self, tensor, src_idx, dst_idx, data_format):
         """reshuffle_rows on a tilized Dest image; every row's SFPSTORE truncates to the Dest width."""

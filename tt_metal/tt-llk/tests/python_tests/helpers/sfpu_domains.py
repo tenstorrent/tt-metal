@@ -404,6 +404,11 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.Log1p: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-0.99, high=10.0)
     ),
+    # logsigmoid: all reals; [-30, 30] reaches the linear tail on one side and the
+    # small-residual tail on the other.
+    MathOperation.Logsigmoid: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-30.0, high=30.0)
+    ),
     # neg: all reals
     MathOperation.Neg: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
@@ -1926,6 +1931,7 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.LessThanEqualZero,
         MathOperation.LessThanZero,
         MathOperation.Log1p,
+        MathOperation.Logsigmoid,  # NaN -> NaN, -inf -> -inf, +inf -> 0
         MathOperation.Lrelu,
         MathOperation.Mish,
         MathOperation.Neg,  # -/+inf, -/+0; the only negative NaN here (cast_to_dest_dtype)
@@ -2287,9 +2293,6 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # mask_posinf is the same zero test on the mask operand (_sfpu_is_fp16_zero_), so it
         # waits on the same thing as SfpuMask.
         MathOperation.SfpuMaskPosinf,
-        # Effectively unary: the kernel reads operand B only on its x > 4 branch and the golden
-        # ignores it, so a cat-B probe in B asserts nothing.
-        MathOperation.SfpuLogsigmoid,
         # Bit copy of one operand. A non-finite probe checks the pipeline,
         # not this kernel.
         MathOperation.SfpuCopyDest,

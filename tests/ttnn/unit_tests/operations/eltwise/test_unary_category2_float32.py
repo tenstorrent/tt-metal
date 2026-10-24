@@ -69,12 +69,8 @@ Accuracy criteria (FTZ = flush-to-zero, SNB = smallest normal bfloat16)
 | softsign     | |x| > 1/SNB - 1        | exactly 0                | reciprocal(1 + |x|) FTZ                    |
 |              | |x| == 1/SNB - 1       | 0 or golden ±1           | arch-dependent rounding                    |
 |              | elsewhere              | ULP ≤ 2                  |                                            |
-| log_sigmoid  | x <= -4                | device returns x         | identity branch                            |
-|              | x <= -13               | ULP ≤ 2                  | identity within 2 ULP of golden            |
-|              | -4 < x <= 0            | abs ≤ 0.02               | degree-8 polynomial                        |
-|              | 0 < x <= 4             | abs ≤ 0.005              | degree-8 polynomial                        |
-|              | x > 4, golden normal   | rel ≤ 0.04               | fast-approx exp                            |
-|              | golden < SNB           | exactly 0                | -exp(-x) underflow FTZ                     |
+| log_sigmoid  | x >= 87.5 (golden<SNB) | exactly 0                | -log1p(exp(-x)) underflow FTZ              |
+|              | elsewhere              | ULP ≤ 2                  | min(x, 0) - log1p(exp(-|x|)), one pass     |
 | tanhshrink   | |x| < 1, result < SNB  | exactly 0                | x^3/3 underflow FTZ (mpmath reference)     |
 |              | |x| < 1, elsewhere     | ULP ≤ 3 vs mpmath        | torch golden cancels; mpmath doesn't       |
 |              | 1 <= |x| < 1.625       | ULP ≤ 8                  | partial cancellation in x - tanh(x)        |
@@ -365,33 +361,11 @@ def test_softsign(device):
 def test_log_sigmoid(device):
     """Float32 sweep over every normal bfloat16 value for log_sigmoid = log(sigmoid(x)).
 
-    Kernel branches (ckernel_sfpu_logsigmoid.h branches on -x):
-
-    | Input range | Kernel computes                   | Error vs golden                         |
-    |-------------|-----------------------------------|-----------------------------------------|
-    | x <= -4     | x                                 | log1p(exp(x)): 0.018 at x = -4,         |
-    |             |                                   | 2.5e-3 at -6, 4.6e-5 at -10             |
-    | -4 < x <= 4 | degree-8 polynomial, softplus(-x) | max abs 0.016 (at x ≈ -0.54)            |
-    | x > 4       | -exp(-x), fast-approx exp         | max rel 3.6% (at x = 4.5)               |
-
-    Checks:
-
-    | Input range          | Check            | Reason                                          |
-    |----------------------|------------------|-------------------------------------------------|
-    | x <= -4              | device returns x | pins the identity branch exactly                |
-    | x <= -13             | ULP ≤ 2          | identity is within 2 ULP of golden from here on |
-    | -4 < x <= 0          | abs ≤ 0.02       | polynomial (max 0.0163)                         |
-    | 0 < x <= 4           | abs ≤ 0.005      | polynomial (max 0.0020)                         |
-    | x > 4, golden normal | rel ≤ 0.04       | fast-approx exp; abs is vacuous once            |
-    |                      |                  | |golden| < 0.005 (x > ~5.3)                     |
-    | golden < SNB         | exactly 0        | -exp(-x) underflows; device FTZs (x >= 87.5)    |
-
-    Known kernel bug (#55457): for x > ~172 the
-    large-positive branch diverges and eventually returns -inf (e.g. x=266
-    -> -inf) instead of ~0, so 170 is the tested upper bound.
+    ULP ≤ 2 over the full domain, both signs, including x > 170 (#55457).
+    The subnormal positive tail (x >= 87.5) must be non-empty and exactly zero on device.
     """
     negative_domain = generate_float32_bits_in_range(-torch.finfo(torch.float32).max, 0.0)
-    positive_domain = generate_float32_bits_in_range(0.0, 170.0)
+    positive_domain = generate_float32_bits_in_range(0.0, torch.finfo(torch.float32).max)
 
     tt_neg = to_float32_tt_tensor(negative_domain, device)
     tt_pos = to_float32_tt_tensor(positive_domain, device)
@@ -403,25 +377,12 @@ def test_log_sigmoid(device):
     result_neg = ttnn.to_torch(ttnn.log_sigmoid(tt_neg))
     result_pos = ttnn.to_torch(ttnn.log_sigmoid(tt_pos))
 
-    identity_branch = negative_domain <= -4.0
-    assert_equal(negative_domain[identity_branch], result_neg[identity_branch])
+    exp_underflow = (golden_pos != 0) & (golden_pos.abs() < SMALLEST_NORMAL_BF16)
+    assert_ftz_band(result_pos, exp_underflow, "exp underflow band")
+    golden_pos = torch.where(exp_underflow, torch.zeros_like(golden_pos), golden_pos)
 
-    identity_within_ulp = negative_domain <= -13.0
-    assert_with_ulp(
-        expected_result=golden_neg[identity_within_ulp],
-        actual_result=result_neg[identity_within_ulp],
-        ulp_threshold=2,
-    )
-    assert_allclose(golden_neg[~identity_branch], result_neg[~identity_branch], rtol=0, atol=0.02)
-
-    polynomial_pos = positive_domain <= 4.0
-    assert_allclose(golden_pos[polynomial_pos], result_pos[polynomial_pos], rtol=0, atol=0.005)
-
-    exp_underflow = ~polynomial_pos & (golden_pos.abs() < SMALLEST_NORMAL_BF16)
-    assert_ftz_band(result_pos, exp_underflow, "exp-branch underflow band")
-
-    exp_branch = ~polynomial_pos & ~exp_underflow
-    assert_allclose(golden_pos[exp_branch], result_pos[exp_branch], rtol=0.04, atol=0)
+    assert_with_ulp(expected_result=golden_neg, actual_result=result_neg, ulp_threshold=2)
+    assert_with_ulp(expected_result=golden_pos, actual_result=result_pos, ulp_threshold=2)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
