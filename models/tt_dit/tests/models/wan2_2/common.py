@@ -17,10 +17,9 @@ import ttnn
 # 0.5x / 2x). The spread is real: bh_sc1 hosts differ by ~40% on denoising, and the two bh_sc4
 # quads by ~25%. Only test_performance_wan.py gates on them, on both bounds.
 #
-# PENDING: the BH galaxy (4x8 BH, 4x32) bands were measured on the standard bh_sc1 / bh_sc4 pools;
-# their CI legs now run on the high-power pools and get re-derived from those runs. The BH 4x8 vae
-# bounds also predate the bh_sc1 host-contention fix (#61784, ~0.4 s off the readback): they keep the
-# pre-regression upper limit and an estimated lower until then.
+# The BH galaxy perf legs run on the high-power pools. Their denoising/total bands still span the
+# standard-pool hosts too (high-power runs so far landed in the same ranges, on fewer hosts); the BH 4x8
+# vae bands come from high-power runs after the bh_sc1 host-contention fix (#61784, 2026-10-24).
 TIMING_LIMITS = {
     ("t2v", (2, 2), 480, "bh"): {
         "encoder": (0.01, 0.16),
@@ -31,7 +30,7 @@ TIMING_LIMITS = {
     ("t2v", (4, 8), 480, "bh"): {
         "encoder": (0.035, 0.17),
         "denoising": (27.0, 74.0),
-        "vae": (0.23, 0.42),  # PENDING
+        "vae": (0.18, 0.34),
         "total": (27.0, 75.0),
     },
     ("t2v", (4, 8), 480, "wh"): {
@@ -43,7 +42,7 @@ TIMING_LIMITS = {
     ("t2v", (4, 8), 720, "bh"): {
         "encoder": (0.034, 0.17),
         "denoising": (86.0, 210.0),
-        "vae": (0.42, 0.85),  # PENDING
+        "vae": (0.38, 0.70),
         "total": (87.0, 210.0),
     },
     ("t2v", (4, 8), 720, "wh"): {
@@ -70,7 +69,7 @@ TIMING_LIMITS = {
     ("i2v", (4, 8), 720, "bh"): {
         "encoder": (0.041, 0.17),
         "denoising": (86.0, 210.0),
-        "vae": (0.42, 0.85),  # PENDING
+        "vae": (0.39, 0.72),
         "total": (87.0, 210.0),
     },
     # Not run in CI, so never measured here: upper limits only, carried over from before.
