@@ -16,9 +16,10 @@ from pathlib import Path
 import pytest
 
 from models.tt_dit.pipelines.minimax_h3 import weights_minimax_h3 as weights
-from models.tt_dit.utils.checkpoint import WEIGHTS_ROOT_ENV
+from models.tt_dit.utils.checkpoint import WEIGHTS_ROOT_ENV, CheckpointCacheError
 
 REPO_DIR = "models--MiniMaxAI--MiniMax-H3"
+MIRROR_COMMIT = "f" * 40
 
 
 def _make_snapshot(root: Path, *partitions: str, always: bool = True) -> Path:
@@ -49,6 +50,8 @@ def isolated_env(monkeypatch, tmp_path):
     monkeypatch.delenv(weights.MODEL_PATH_ENV, raising=False)
     monkeypatch.setenv(WEIGHTS_ROOT_ENV, str(tmp_path / "mirror"))
     monkeypatch.delenv(weights.ALLOW_DOWNLOAD_ENV, raising=False)
+    monkeypatch.delenv("HF_HUB_CACHE", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_HUB_CACHE", raising=False)
     hf_home = tmp_path / "hf"
     monkeypatch.setenv("HF_HOME", str(hf_home))
     return hf_home
@@ -75,9 +78,20 @@ def _no_download(monkeypatch):
     monkeypatch.setattr("huggingface_hub.snapshot_download", snapshot_download)
 
 
-def _mirror_snapshot(tmp_path: Path, *partitions: str, always: bool = True) -> Path:
-    """A snapshot in the local mirror that `isolated_env` points at."""
-    return _make_snapshot(tmp_path / "mirror" / weights.MINIMAX_H3_REPO_ID, *partitions, always=always)
+def _mirror_snapshot(tmp_path: Path, *partitions: str) -> Path:
+    """A repo in the local mirror `isolated_env` points at, laid out as `hf download --local-dir` leaves it.
+
+    Holds `partitions` and the always-fetched assets, one file each, with per-file download metadata.
+    """
+    mirror = tmp_path / "mirror" / weights.MINIMAX_H3_REPO_ID
+    files = ["model_index.json", *(f"{name}/config.json" for name in (*weights._ALWAYS_DIRS, *partitions))]
+    for rel in files:
+        (mirror / rel).parent.mkdir(parents=True, exist_ok=True)
+        (mirror / rel).write_text("{}")
+        metadata = mirror / ".cache" / "huggingface" / "download" / f"{rel}.metadata"
+        metadata.parent.mkdir(parents=True, exist_ok=True)
+        metadata.write_text(f"{MIRROR_COMMIT}\netag-{rel.replace('/', '-')}\n")
+    return mirror
 
 
 # --- explicit path -------------------------------------------------------------------------------------
@@ -180,11 +194,12 @@ def test_refs_main_pointing_at_an_incomplete_snapshot_falls_back_to_the_newest_c
 # --- local mirror --------------------------------------------------------------------------------------
 
 
-def test_mirror_wins_over_cache_without_downloading(isolated_env, monkeypatch, tmp_path):
-    _cache_snapshot(isolated_env, "cached", "vae", main=True)
-    mirrored = _mirror_snapshot(tmp_path, "vae")
+def test_mirror_populates_the_cache_without_downloading(isolated_env, monkeypatch, tmp_path):
+    _mirror_snapshot(tmp_path, "vae")
     _no_download(monkeypatch)
-    assert weights.resolve_weights_dir("vae") == mirrored
+    resolved = weights.resolve_weights_dir("vae")
+    assert resolved == isolated_env / "hub" / REPO_DIR / "snapshots" / MIRROR_COMMIT
+    assert (resolved / "vae" / "config.json").is_file()
 
 
 def test_explicit_path_wins_over_mirror(isolated_env, tmp_path):
@@ -193,16 +208,17 @@ def test_explicit_path_wins_over_mirror(isolated_env, tmp_path):
     assert weights.resolve_weights_dir("vae", weights_dir=explicit) == explicit
 
 
-def test_mirror_lacking_a_required_partition_falls_back_to_cache(isolated_env, tmp_path):
+def test_mirror_lacking_a_required_partition_fails_when_downloads_are_off(isolated_env, tmp_path, expect_error):
     _mirror_snapshot(tmp_path, "vae")
-    cached = _cache_snapshot(isolated_env, "cached", "vae", "transformer", main=True)
-    assert weights.resolve_weights_dir("vae", "transformer") == cached
+    with expect_error(weights.WeightsNotFoundError, "MiniMax-H3 weights not found"):
+        weights.resolve_weights_dir("vae", "transformer")
 
 
-def test_mirror_without_always_assets_falls_back_to_cache(isolated_env, tmp_path):
-    _mirror_snapshot(tmp_path, "vae", always=False)
-    cached = _cache_snapshot(isolated_env, "cached", "vae", main=True)
-    assert weights.resolve_weights_dir("vae") == cached
+def test_mirror_and_cache_at_different_commits_fail(isolated_env, tmp_path, expect_error):
+    _cache_snapshot(isolated_env, "cached", "vae", main=True)
+    _mirror_snapshot(tmp_path, "vae")
+    with expect_error(CheckpointCacheError, "is at commit cached, but local mirror"):
+        weights.resolve_weights_dir("vae")
 
 
 # --- download gating ------------------------------------------------------------------------------------

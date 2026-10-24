@@ -31,7 +31,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
-from ....utils.checkpoint import local_checkpoint_dir
+from ....utils.checkpoint import ensure_cached
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from .common_av import is_host
 
@@ -125,18 +125,15 @@ def _two_refs_golden_path(seed: int, variant: str = "two_refs") -> Path:
 
 
 def _conditioner_dir() -> str:
-    """`MINIMAX_H3_REPO`, then the shared and personal local mirrors, then a scoped Hub snapshot. Missing is a skip."""
+    """`MINIMAX_H3_REPO`, then the local mirror, then a scoped Hub snapshot. Missing is a skip."""
     try:
         ref = os.environ.get("MINIMAX_H3_REPO", "").strip()
-        mirrored = None if ref else local_checkpoint_dir(_HF_REPO, _SUBFOLDER)
         if ref and os.path.isdir(ref):
             root = ref
-        elif mirrored is not None:
-            root = str(mirrored)
         elif not ref and os.path.isdir(_LOCAL_MIRROR):
             root = _LOCAL_MIRROR
         else:
-            repo_id = ref or _HF_REPO
+            repo_id = ensure_cached(ref or _HF_REPO)
             logger.info(f"MiniMax-H3 conditioner not local; fetching {_PATTERNS} from {repo_id}")
             root = snapshot_download(repo_id=repo_id, allow_patterns=_PATTERNS)
         return os.path.join(root, _SUBFOLDER)
