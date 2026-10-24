@@ -177,25 +177,32 @@ class DSV41DeviceHead:
         mx = ttnn.max(logits, dim=-1, keepdim=True)  # [1,1,T,1]
         idx = ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True)
         idxf = ttnn.typecast(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), ttnn.float32)
-        mx_all = mesh_config.allgather(mx, ccl, axis=1, dim=3)  # [1,1,T,cols]
-        ix_all = mesh_config.allgather(idxf, ccl, axis=1, dim=3)
-        best = ttnn.argmax(
-            ttnn.to_layout(mx_all, ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True
-        )  # first max wins, like torch
-        bestf = ttnn.typecast(ttnn.to_layout(best, ttnn.TILE_LAYOUT), ttnn.float32)  # [1,1,T,1]
-        if getattr(self, "_col_ids", None) is None:  # [1,1,1,cols] = 0..cols-1, built once outside any trace
-            self._col_ids = ttnn.from_torch(
-                torch.arange(cols, dtype=torch.float32).reshape(1, 1, 1, cols),
+        # ONE gather of the (max, local index) PAIR instead of two width-1 gathers: a width-1 gather of this shape is a
+        # broadcast + concat pair of launches (~55 us) and the pair rides in the very same two launches
+        pair = mesh_config.allgather(
+            ttnn.concat([mx, idxf], dim=-1), ccl, axis=1, dim=3
+        )  # [1,1,T,2*cols] = (max_0, idx_0, max_1, idx_1, ...)
+        if getattr(self, "_pair_ids", None) is None:  # [1,1,1,2*cols] constants, built once outside any trace
+            mk = lambda t: ttnn.from_torch(  # noqa: E731
+                t.reshape(1, 1, 1, 2 * cols),
                 device=self.md,
                 dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
             )
+            hide = torch.zeros(2 * cols, dtype=torch.float32)
+            hide[1::2] = -1e30  # the index lanes can never win the argmax over the interleaved row
+            self._pair_ids = (mk(hide), mk(torch.arange(2 * cols, dtype=torch.float32) - 1.0))
+        hide, lane = self._pair_ids
+        best = ttnn.argmax(
+            ttnn.to_layout(ttnn.add(pair, hide), ttnn.ROW_MAJOR_LAYOUT), dim=-1, keepdim=True
+        )  # = 2 * best column; first max wins, like torch
+        bestf = ttnn.typecast(ttnn.to_layout(best, ttnn.TILE_LAYOUT), ttnn.float32)  # [1,1,T,1]
         sel = ttnn.sum(
-            ttnn.multiply(ttnn.eq(bestf, self._col_ids), ix_all), dim=-1, keepdim=True
-        )  # index inside the best column
-        tok = ttnn.add(ttnn.multiply(bestf, float(shard)), sel)  # exact in fp32 (< 2^24)
+            ttnn.multiply(ttnn.eq(bestf, lane), pair), dim=-1, keepdim=True
+        )  # lane 2c+1 (lane[j] = j-1) of the best column c = its local index
+        tok = ttnn.add(ttnn.multiply(bestf, float(shard) / 2.0), sel)  # 2c * shard/2 + idx, exact in fp32 (< 2^24)
         T = tok.shape[2]
         return ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [T, 1])
 
