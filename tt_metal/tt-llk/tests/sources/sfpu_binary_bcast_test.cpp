@@ -94,7 +94,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "ckernel_sfpu.h"
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_binary_sfpu.h"
-#include "sfpu/ckernel_sfpu_binary_bcast.h"
+#include "llk_sfpu/ckernel_sfpu_binary_bcast.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;

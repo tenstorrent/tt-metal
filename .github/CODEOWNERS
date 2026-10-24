@@ -628,7 +628,7 @@ models/demos/gemma4_d_p @svuckovicTT @amilovanovicTT @sdjordjevicTT
 models/demos/gpt_oss @uaydonat @mtairum @sraizada-tt @djordje-tt @handrewsTT
 models/demos/gpt_oss_d_p @mdragulaTT @philei-tt @vmelnykovTT @ayerofieiev-tt @jmalone-tt
 models/demos/llama_3p1_8b_d_p @mgiermakowskiTT @djordje-tt
-models/demos/minimax_m3 @philei-tt @vmelnykovTT @zbaczewskiTT @ayerofieiev-tt @sumant-TT
+models/demos/minimax_m3 @philei-tt @vmelnykovTT @zbaczewskiTT @ayerofieiev-tt @sumant-TT @mdragulaTT
 models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @arginugaTT @tenstorrent/metalium-models-maintainers
 models/demos/pplx_decider_v1_27b @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt

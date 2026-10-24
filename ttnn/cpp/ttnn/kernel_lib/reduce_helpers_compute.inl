@@ -211,15 +211,15 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false, typename AccumDFB>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
-    AccumDFB& accum_dfb,
     uint32_t input_dfb_id,
     uint32_t scaler_dfb_id,
     const AccumulateT& accumulate,
     uint32_t dest_chunk_size = 1) {
     if constexpr (is_accumulate_v<AccumulateT>) {
         if (!accumulate.is_first()) {  // Reload on all iterations except first
+            auto& accum_dfb = *accumulate.config.accumulator;
             accum_dfb.wait_front(dest_chunk_size);
             constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
             const uint32_t prev_srca_cb = swap_operands ? scaler_dfb_id : input_dfb_id;
@@ -292,8 +292,14 @@ template <
     ReduceDataFormatReconfigMode reconfig_mode,
     ReduceFp32Mode fp32_mode,
     typename AccumulateT,
-    typename PostReduceOp>
+    typename PostReduceOp,
+    typename InputDFB,
+    typename ScalerDFB,
+    typename OutputDFB>
 ALWI void reduce(
+    InputDFB& input_dfb,
+    ScalerDFB& scaler_dfb,
+    OutputDFB& output_dfb,
     ReduceInputBlockShape input_block_shape,
     ReduceInputMemoryLayout input_memory_layout,
     AccumulateT accumulate,
@@ -367,13 +373,13 @@ ALWI void reduce(
 
     constexpr bool is_sfpu = is_sfpu_reduce_path<reduce_type, reduce_dim, reduce_format, fp32_mode>();
 
-    DataflowBuffer input_dfb(input_dfb_id);
-    DataflowBuffer scaler_dfb(scaler_dfb_id);
-    DataflowBuffer output_dfb(output_dfb_id);
-    DataflowBuffer accum_dfb([&]() -> uint32_t {
-        if constexpr (enable_accumulation) { return accumulate.config.cb_accumulator; }
-        else { return 0; }
-    }());
+    // The caller's buffers, bound by reference; reduce() never constructs a DataflowBuffer of its own.
+    ASSERT(input_dfb.get_id() == input_dfb_id);
+    ASSERT(scaler_dfb.get_id() == scaler_dfb_id);
+    ASSERT(output_dfb.get_id() == output_dfb_id);
+    if constexpr (enable_accumulation) {
+        ASSERT(accumulate.config.accumulator != nullptr);
+    }
 
     // Apply reconfig based on mode
     constexpr bool swap_operands = reduce_swaps_operands<reduce_type, reduce_dim, is_sfpu>();
@@ -430,7 +436,7 @@ ALWI void reduce(
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
             reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
-                accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
+                input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
             for (uint32_t ht = 0; ht < Ht; ++ht) {
@@ -500,7 +506,7 @@ ALWI void reduce(
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
                 reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
-                    accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
+                    input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
                     if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
@@ -609,7 +615,7 @@ ALWI void reduce(
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
                 reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
-                    accum_dfb, input_dfb_id, scaler_dfb_id, accumulate, current_chunk);
+                    input_dfb_id, scaler_dfb_id, accumulate, current_chunk);
                 if constexpr (is_sfpu) {
                     // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
                     if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
