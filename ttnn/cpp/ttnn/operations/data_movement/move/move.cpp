@@ -10,6 +10,8 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
+#include <algorithm>
+
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -89,7 +91,11 @@ inline Tensor move_impl(const Tensor& input_tensor, const std::optional<MemoryCo
     auto compute_with_storage_grid_size = ghost_input_tensor.device()->compute_with_storage_grid_size();
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
     uint32_t size_per_l1_bank = tt::tt_metal::detail::calculate_bank_size_spread(
-        output_tensor.buffer()->size(), output_tensor.buffer()->page_size(), num_l1_banks, hal::get_l1_alignment());
+        output_tensor.buffer()->size(),
+        output_tensor.buffer()->page_size(),
+        num_l1_banks,
+        std::max(
+            {hal::get_l1_alignment(), ghost_input_tensor.buffer()->alignment(), output_tensor.buffer()->alignment()}));
 
     if (move_within_same_mem_space) {
         switch (input_mem_config.buffer_type()) {
