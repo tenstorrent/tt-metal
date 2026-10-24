@@ -33,38 +33,54 @@ DEVICE_PARAMS = {"trace_region_size": 150000000}
 
 # VBench quality gate (RUN_VBENCH=1): every (prompt, seed) clip is rendered after the timed runs, and
 # each prompt's mean over the seeds must clear that prompt's floors (models/tt_dit/utils/vbench_bundle.py).
-# T2V: prompts whose content is motion, so every seed should clear dynamic_degree. The cyberpunk alley
-# was dropped: Wan renders it near-static (dynamic_degree 1 of 4 seeds on bh_sc4, 2026-10-23).
-VBENCH_T2V_PROMPTS = [
-    "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
-    "A golden retriever sprints across a beach chasing a frisbee, sand spraying behind it.",
-]
-# I2V: prompts that animate the fractal conditioning image itself. The T2V prompts ask for content the
-# image doesn't contain, which drags subject consistency to ~0.62 (bh_sc4, 2026-10-23) and gates on the
-# mismatch rather than on the pipeline.
-VBENCH_I2V_PROMPTS = [
-    "A slow, smooth camera push into a glowing fractal pattern, its intricate spiral edges and colors drifting gently.",
-    "The colorful fractal pattern slowly rotates and ripples like liquid, its fine detail shimmering as the light shifts.",
-]
+#
+# Floors were set ~0.03-0.06 below the lowest single-seed score of each prompt on bh_sc4 4x32 720p
+# (2026-10-24, quad A); the other quad renders different videos, so the mean needs room for that.
+# dynamic_degree is binary per clip: 0.75 tolerates one static seed out of four.
 VBENCH_SEEDS = [42, 43, 44, 45]
-
-
-def vbench_thresholds(model_type: str, height: int) -> dict:
-    # Loose "broken pipeline" floors carried over from the single-clip gate (#60488) until the
-    # per-prompt spread over these seeds is measured on both bh_sc4 quads (#60481). dynamic_degree is
-    # binary per clip, so 0.75 requires three of the four seeds to move.
-    if model_type == "i2v":
-        # The I2V conditioning image is a fractal: dynamic_degree and imaging_quality are meaningless
-        # on it, so only intra-video consistency is gated (see test_pipeline_wan.py). Placeholders from
-        # the single-clip test until VBENCH_I2V_PROMPTS are measured.
-        return {"subject_consistency": 0.70, "background_consistency": 0.80 if height == 720 else 0.82}
-    return {
-        "subject_consistency": 0.8,
-        "background_consistency": 0.8,
-        "motion_smoothness": 0.9,
-        "dynamic_degree": 0.75,
-        "imaging_quality": 0.5 if height == 720 else 0.45,
-    }
+VBENCH_GATE = {
+    # Prompts whose content is motion, so every seed should clear dynamic_degree. A cyberpunk-alley
+    # prompt was dropped: Wan rendered it near-static (dynamic_degree 1 of 4 seeds, 2026-10-23).
+    "t2v": [
+        {
+            "text": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
+            # Per seed: subject 0.930-0.953, background 0.940-0.975, motion 0.954-0.983, imaging 0.583-0.640.
+            "thresholds": {
+                "subject_consistency": 0.88,
+                "background_consistency": 0.90,
+                "motion_smoothness": 0.93,
+                "dynamic_degree": 0.75,
+                "imaging_quality": 0.55,
+            },
+        },
+        {
+            "text": "A golden retriever sprints across a beach chasing a frisbee, sand spraying behind it.",
+            # Per seed: subject 0.904-0.941, background 0.950-0.971, motion 0.962-0.982, imaging 0.613-0.737.
+            "thresholds": {
+                "subject_consistency": 0.86,
+                "background_consistency": 0.90,
+                "motion_smoothness": 0.93,
+                "dynamic_degree": 0.75,
+                "imaging_quality": 0.58,
+            },
+        },
+    ],
+    # Prompts that animate the fractal conditioning image itself; the T2V prompts ask for content the
+    # image doesn't contain and pulled subject consistency to ~0.62. dynamic_degree and imaging_quality
+    # are meaningless on a fractal, so only intra-video consistency is gated (see test_pipeline_wan.py).
+    "i2v": [
+        {
+            "text": "A slow, smooth camera push into a glowing fractal pattern, its intricate spiral edges and colors drifting gently.",
+            # Per seed: subject 0.910-0.956, background 0.957-0.982.
+            "thresholds": {"subject_consistency": 0.86, "background_consistency": 0.92},
+        },
+        {
+            "text": "The colorful fractal pattern slowly rotates and ripples like liquid, its fine detail shimmering as the light shifts.",
+            # Per seed: subject 0.942-0.968, background 0.970-0.985.
+            "thresholds": {"subject_consistency": 0.89, "background_consistency": 0.93},
+        },
+    ],
+}
 
 
 @pytest.mark.parametrize(
@@ -283,10 +299,7 @@ def test_pipeline_performance(
     gate_prompts = []
     gate_timings = []
     if run_vbench:
-        gate_texts = VBENCH_I2V_PROMPTS if model_type == "i2v" else VBENCH_T2V_PROMPTS
-        gate_prompts = [
-            {"text": text, "thresholds": vbench_thresholds(model_type, height), "timing": limits} for text in gate_texts
-        ]
+        gate_prompts = [{**prompt, "timing": limits} for prompt in VBENCH_GATE[model_type]]
         gate_profiler = BenchmarkProfiler()
         if is_global_rank_zero():
             vbench_bundle.create_bundle(vbench_dir)
