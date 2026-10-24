@@ -714,11 +714,10 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape tensor_sha
         _llk_math_eltwise_binary_with_dest_reuse_init_<eltwise_binary_type, src_b_bcast_type, math_fidelity, binary_reuse_dest>(tensor_shape, acc_to_dest);
     }
 
-    // ELWADD/ELWMUL/ELWSUB read the Src zero-substitution flag but
-    // eltwise-binary init never sets it, so re-establish the operand-driven DEFAULT here — otherwise a preceding
-    // copy_init/datacopy op that left PRESERVE leaks into the MOP (denormal Src results differ). Also
-    // covers bcast add/sub/mul, which route through this init. Mirrors reduce/transpose/datacopy.
-    math::_configure_default_zero_flag_state_();
+    // ELWADD/ELWMUL/ELWSUB need the Src zero-substitution flag clear, whatever the operand formats; a
+    // preceding copy_init/datacopy op may have left it set. Also covers bcast add/sub/mul, which route
+    // through this init.
+    math::_configure_elw_zero_flag_state_();
 }
 
 /**
@@ -748,13 +747,12 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>
 inline void _llk_math_eltwise_binary_(const ckernel::TensorShape tensor_shape, std::uint32_t dst_index, const bool clear_fp32_dst_acc = false)
 {
-    // Zero-flag leak guard. ELWADD/ELWMUL/ELWSUB honor ALU_ACC_CTRL_Zero_Flag_disabled_src; a prior
-    // copy_init/datacopy op leaking PRESERVE here changes denormal Src results. eltwise_binary_init
-    // must have re-established the format-driven DEFAULT (fires only under LLK asserts).
+    // Zero-flag leak guard. ELWADD/ELWMUL/ELWSUB need ALU_ACC_CTRL_Zero_Flag_disabled_src clear, which
+    // eltwise_binary_init establishes; a later op (copy_init/datacopy, a UInt16 reconfig) may have set it.
     LLK_ASSERT(
-        math::src_zero_flag_hw == (requires_disabled_src_zero_flag(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt) ? 1u : 0u),
-        "eltwise_binary: Src zero-substitution flag is not in DEFAULT state — a prior op (copy_init/datacopy) leaked "
-        "PRESERVE into ELWADD/ELWMUL/ELWSUB without a format-changing reconfig; denormal Src results will differ");
+        math::src_zero_flag_hw == 0,
+        "eltwise_binary: Src zero-substitution flag is set — an op after eltwise_binary_init left it set, and "
+        "ELWADD/ELWMUL/ELWSUB need it clear");
 
     if constexpr (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE)
     {

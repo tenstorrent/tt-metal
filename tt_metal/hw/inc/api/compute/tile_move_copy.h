@@ -29,10 +29,10 @@ namespace ckernel {
  * does not reconfigure the unpacker data types. Eltwise-unary / SFPU kernels use this same init:
  * compute_kernel_hw_startup(icb, ocb) once, then copy_init(icb).
  *
- * Numerics: the copy preserves bf16 -0.0 and denormal inputs (it keeps the Src zero-substitution flag
- * disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact value back out of DST.
- * Matmul and eltwise-binary re-establish the format-driven default themselves, so this preservation never
- * leaks into them.
+ * Numerics: a MOVA2D/MOVB2D copy preserves bf16 -0.0 and denormal inputs (it keeps the Src zero-substitution
+ * flag disabled), so sign-sensitive SFPU ops such as signbit / copysign read the exact value back out of DST. An
+ * ELWADD copy (32-bit DST, UInt8, integer math) runs with the flag clear, as ELW* need. Matmul and
+ * eltwise-binary set the flag themselves, so this preservation never leaks into them.
  *
  * Return value: None
  *
@@ -61,12 +61,13 @@ ALWI void copy_init(
     // 4th template arg is arch-divergent (unpack_to_dest on Quasar, is_int_fpu_en on WH/BH); keep it
     // arch-specific so WH/BH don't wrongly enable the integer-FPU datacopy MOP.
 #ifndef ARCH_QUASAR
-    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(cbid)));
     // Src zero-substitution flag, chosen by source format: preserve (keep) bf16 -0.0 and 16b integer
     // datums (drop-in for the eltwise-unary short init and the plain-copy path), but flush fp8
     // (e4m3/e5m2) whose zero widens to a nonzero SrcA residual and must read back as 0. MATH-only
     // config: records no format-reconfig diff, so single-SrcA reconfig tracking is unchanged. Not on Quasar.
+    // Set before the datacopy init, which clears it again when the copy runs as ELWADD.
     MATH((ckernel::math::_configure_copy_zero_flag_state_(get_operand_dst_format(cbid))));
+    MATH((llk_math_eltwise_unary_datacopy_init<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(cbid)));
 #else
     MATH((llk_math_eltwise_unary_datacopy_init<
           DataCopyType::A2D,
