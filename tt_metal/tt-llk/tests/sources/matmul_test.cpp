@@ -253,6 +253,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
 // MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
 inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
 {
+#if MATMUL_PACK_FORM != 0
+    // The fast forms need four faces of 16 rows. At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
+    constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
+    constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
+    if (MATMUL_PACK_FORM == 1 && fast_plain)
+    {
+        _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
+        return;
+    }
+    if (MATMUL_PACK_FORM == 2 && fast_closed)
+    {
+        _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
+        return;
+    }
+#endif
     if constexpr (MATMUL_PACK_FORM == 1)
     {
         _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
@@ -283,6 +298,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0
+        _llk_pack_block_fast_init_();
+#endif
         PROFILER_SYNC();
     }
     {
