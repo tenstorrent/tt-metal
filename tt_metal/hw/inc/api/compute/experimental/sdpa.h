@@ -301,6 +301,7 @@ template <
     std::uint32_t num_tiles_v,
     std::uint32_t scale_fp32,
     bool transpose_k,
+    // transpose_v must be false: the reuse-dest-SrcB OV matmul does not implement a V transpose.
     bool transpose_v,
     std::uint32_t packed_tile_size,
     bool exp_approx_mode = false,
@@ -341,6 +342,9 @@ void compute_sdpa_chunk(
     constexpr std::uint16_t scale_bf16 = scale_fp32 >> 16;
     constexpr std::uint32_t qk_kt = qk_contract_tiles ? qk_contract_tiles : num_tiles_k;
     static_assert(DST_ACCUM_MODE == false, "compute_sdpa_chunk: FP32 destination accumulation mode is not supported");
+    static_assert(
+        !transpose_v,
+        "compute_sdpa_chunk: transpose_v is not supported; the reuse-dest-SrcB OV matmul uses V as stored");
     static_assert(
         num_tiles_v % output_granularity == 0,
         "compute_sdpa_chunk: num_tiles_v must be divisible by output_granularity");
@@ -464,7 +468,7 @@ void compute_sdpa_chunk(
     MATH(LLK_ASSERT(
         ov_kt_dim == chunk_size || exp_signal_granularity == chunk_size,
         "OV-trim (ov_kt_dim != chunk_size) requires exp_signal_granularity == chunk_size"));
-    sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, transpose_v, chunk_size, num_tiles_v);
+    sdpa_custom_mm_reuse_dest_srcb_block_init_short(cb_q, ov_cb, cb_out, chunk_size, num_tiles_v);
     sdpa_custom_mm_reuse_dest_srcb_block<output_granularity, exp_signal_granularity>(
         cb_q,
         ov_cb,
@@ -472,7 +476,6 @@ void compute_sdpa_chunk(
         v_tile_offset,
         mm1_dst_offset,
         mm2_dst_offset,
-        transpose_v,
         ov_kt_dim,
         num_tiles_v,
         in1_k_stride,
