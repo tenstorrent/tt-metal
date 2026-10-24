@@ -145,21 +145,27 @@ def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tenso
     return out
 
 
-def _save_seed(model: GLM53MeshModel, streams, d: Path, job: str, toks: list[int], n: int, next_token: int) -> None:
-    """Every layer's state after a prefill of ``toks[:n]`` (slot 0) + the final streams, one safetensors per layer."""
+def _save_seed(model: GLM53MeshModel, streams, d: Path, job: str, toks: list[int], n: int, next_token: int) -> float:
+    """Every layer's state after a prefill of ``toks[:n]`` (slot 0) + the final streams, one safetensors per layer.
+    Returns the export wall time (device -> host -> file), seconds."""
+    t0 = time.perf_counter()
     d.mkdir(parents=True, exist_ok=True)
     save_file({"streams": _streams_host(model, streams, n).contiguous()}, str(d / "final_streams.safetensors"))
     for dec in model.layers:
         st = _dsa_state_host(model, dec, n) if dec.cache is not None else _kda_state_host(model, dec)
         save_file(st, str(d / f"layer_{dec.layer_idx}.safetensors"))
+    wall = time.perf_counter() - t0
     meta = {
         "job": job,
         "n": n,
         "tokens": toks[:n],
         "next_token": next_token,
         "layers": [x.layer_idx for x in model.layers],
+        "export_s": round(wall, 3),
     }
     (d / "meta.json").write_text(json.dumps(meta))
+    logger.info(f"[g53f-prefill] seed {d.name}: {len(model.layers)} layers exported in {wall:.2f} s")
+    return wall
 
 
 @pytest.mark.timeout(21600)
