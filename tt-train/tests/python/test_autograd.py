@@ -28,6 +28,7 @@ def supported_autograd_types_except(*except_types):
             ttnn.DataType.INT8,
             ttnn.DataType.FP8_E4M3,  # skipping FP8_E4M3 for now, until it is fully supported in tt-metal
         )
+        + ttnn.MX_DTYPES  # Quasar-only block formats, not supported by ttml autograd
         + tuple(except_type for except_type in except_types)
     )
 

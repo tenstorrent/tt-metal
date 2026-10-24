@@ -286,6 +286,53 @@ struct ttnn_datatype_traits<DataType::FP8_E4M3> {
     static constexpr auto name = nbd::const_name("FP8_E4M3");
 };
 
+// MX formats are treated as float32 on the host side, like bfloat8/4_b
+struct mx_host_float_traits {
+    using underlying_type = float;
+    static constexpr nbdlp::dtype value{
+        .code = static_cast<std::uint8_t>(nbdlp::dtype_code::Float), .bits = 32, .lanes = 1};
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXFP8_E4M3> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXFP8_E4M3");
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXFP8_E5M2> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXFP8_E5M2");
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXFP6_E2M3> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXFP6_E2M3");
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXFP6_E3M2> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXFP6_E3M2");
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXFP4> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXFP4");
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXINT8> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXINT8");
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXINT4> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXINT4");
+};
+
+template <>
+struct ttnn_datatype_traits<DataType::MXINT2> : mx_host_float_traits {
+    static constexpr auto name = nbd::const_name("MXINT2");
+};
+
 [[nodiscard]]
 constexpr nbdlp::dtype get_dtype_from_ttnn_datatype(DataType dt) noexcept {
     switch (dt) {
@@ -299,6 +346,14 @@ constexpr nbdlp::dtype get_dtype_from_ttnn_datatype(DataType dt) noexcept {
         case DataType::UINT16: return ttnn_datatype_traits<DataType::UINT16>::value;
         case DataType::INT32: return ttnn_datatype_traits<DataType::INT32>::value;
         case DataType::FP8_E4M3: return ttnn_datatype_traits<DataType::FP8_E4M3>::value;
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: return mx_host_float_traits::value;
         case DataType::INVALID: [[fallthrough]];
         default: TT_THROW("get_dtype_from_ttnn_datatype: got INVALID or unhandled DataType.");
     }

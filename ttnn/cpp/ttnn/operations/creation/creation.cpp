@@ -175,8 +175,9 @@ Tensor full_impl(
     DataType dtype_value = optional_output_tensor.has_value() ? optional_output_tensor.value().dtype()
                                                               : dtype.value_or(DataType::BFLOAT16);
     auto get_default_layout = [dtype_value]() {
-        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B) ? ttnn::TILE_LAYOUT
-                                                                                          : ttnn::ROW_MAJOR_LAYOUT;
+        return (dtype_value == DataType::BFLOAT4_B || dtype_value == DataType::BFLOAT8_B || is_mx(dtype_value))
+                   ? ttnn::TILE_LAYOUT
+                   : ttnn::ROW_MAJOR_LAYOUT;
     };
 
     Layout layout_value = optional_output_tensor.has_value() ? optional_output_tensor.value().layout()
@@ -200,7 +201,16 @@ Tensor full_impl(
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
         case DataType::BFLOAT4_B:
-        case DataType::BFLOAT8_B: {
+        case DataType::BFLOAT8_B:
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: {
+            // Block formats are packed on the host from float, then moved to the device.
             tt::tt_metal::TensorSpec tensor_spec(
                 shape_value, TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg));
             std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));

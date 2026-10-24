@@ -34,7 +34,10 @@ bool exact_spec_match(const TensorSpec& a, const TensorSpec& b) {
                          experimental::per_core_allocation::is_per_core_allocation(b.memory_config());
 }
 
-bool is_bfp_dtype(DataType dtype) { return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B; }
+// Block formats (BFP and MX) are packed tiles and must pivot through FLOAT32 on the host.
+bool is_bfp_dtype(DataType dtype) {
+    return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || is_mx(dtype);
+}
 
 bool is_integral_dtype(DataType dtype) {
     return dtype == DataType::UINT8 || dtype == DataType::UINT16 || dtype == DataType::UINT32 ||
