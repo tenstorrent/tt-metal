@@ -70,8 +70,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr bool stream_narrow = false;
 #endif
-#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow
-#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST, matmul_hoist_rows, matmul_max_row_tiles
+#ifdef MATMUL_STREAM_Z
+    constexpr std::uint32_t stream_z = 4;
+#else
+    constexpr std::uint32_t stream_z = 0;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow, stream_z
+#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST, matmul_hoist_rows, matmul_max_row_tiles, stream_z
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
@@ -123,7 +128,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     const bool perf_ring       = LOOP_FACTOR > 1;
                     const std::uint32_t addr_a = perf_ring ? PERF_ADDRESS(PERF_INPUT_A, 0) : L1_ADDRESS(buffer_A[0]);
                     const std::uint32_t addr_b = perf_ring ? PERF_ADDRESS(PERF_INPUT_B, 0) : L1_ADDRESS(buffer_B[0]);
-                    _llk_unpack_AB_matmul_k_<MAX_TILES_DEST>(
+                    _llk_unpack_AB_matmul_k_<MAX_TILES_DEST, stream_z>(
                         addr_a,
                         addr_b,
                         0,

@@ -69,9 +69,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr bool stream_narrow = false;
 #endif
-#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow
+#ifdef MATMUL_STREAM_Z
+    constexpr std::uint32_t stream_z = 4;
+#else
+    constexpr std::uint32_t stream_z = 0;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow, stream_z
 #define MATMUL_UNPACK_TEMPLATE_ARGS \
-    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles, stream_z
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
@@ -121,7 +126,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_K_LOOP)
-                    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()>(
+                    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), stream_z>(
                         L1_ADDRESS(buffer_A[0]),
                         L1_ADDRESS(buffer_B[0]),
                         0,
