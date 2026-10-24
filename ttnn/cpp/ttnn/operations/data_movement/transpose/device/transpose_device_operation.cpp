@@ -16,6 +16,7 @@ using ttnn::operations::data_movement::transpose::copy_experimental_allocation_f
 using ttnn::operations::data_movement::transpose::generate_transpose_shard_spec;
 using ttnn::operations::data_movement::transpose::is_native_transpose_sharding;
 using ttnn::operations::data_movement::transpose::OutputTiling;
+using ttnn::operations::data_movement::transpose::validate_sharded_rm_transpose_narrow_row;
 
 namespace ttnn::prim {
 
@@ -407,6 +408,16 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
             "Tiled tensor volume {} must be a multiple of TILE HEIGHT * TILE WIDTH",
             input_tensor.physical_volume(),
             TILE_HW);
+    }
+
+    // Shapes the narrow-row untilize of the sharded row-major WH factory packs wrong: H above one tile, an output
+    // row wider than one face or not a multiple of the L1 alignment in bytes, and W not a tile multiple (see
+    // validate_sharded_rm_transpose_narrow_row). The cheap shape and sharding tests gate the factory selection,
+    // which this validate pays on every dispatch.
+    if (row_major && input_tensor.is_sharded() && (input_tensor.logical_shape()[-2] % TILE_HEIGHT) != 0 &&
+        std::holds_alternative<TransposeWHShardedRMProgramFactory>(
+            select_program_factory(operation_attributes, tensor_args))) {
+        validate_sharded_rm_transpose_narrow_row(input_tensor);
     }
 }
 
