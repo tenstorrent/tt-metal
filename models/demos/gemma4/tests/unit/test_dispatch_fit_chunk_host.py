@@ -51,3 +51,26 @@ def test_fit_chunk_rounds_to_the_dispatch_group_tile(monkeypatch):
     assert dp.fit_chunk_tokens(128, 8, 4096) == 512  # an 8-chip group: 64 rows per chip
     assert dp.fit_chunk_tokens(128, 4, 4096, fit=False) == 4096
     assert dp.MIN_ROWS_PER_CHIP % 32 == 0
+
+
+def test_small_fit_rounds_to_the_dispatch_group_tile_without_the_dispatch_floor():
+    from models.demos.gemma4.tt.experts.dispatch_prefill import small_fit_chunk_tokens
+
+    # the small-row path has no dispatch histogram: a 128-token prompt on the 4-chip group runs 128 rows (32/chip)
+    assert small_fit_chunk_tokens(1, 4) == 128
+    assert small_fit_chunk_tokens(128, 4) == 128
+    assert small_fit_chunk_tokens(129, 4) == 256
+    assert small_fit_chunk_tokens(256, 4) == 256
+    assert small_fit_chunk_tokens(64, 8) == 256  # eight chips: one tile per chip
+
+
+def test_small_row_max_tokens_default_env_and_cap(monkeypatch):
+    from models.demos.gemma4.custom_ops.expert_gather_small import ExpertGatherSmall
+    from models.demos.gemma4.tt.experts.dispatch_prefill import small_row_max_tokens
+
+    monkeypatch.delenv("GEMMA4_SMALL_ROW_MAX_TOKENS", raising=False)
+    assert small_row_max_tokens() == 128
+    monkeypatch.setenv("GEMMA4_SMALL_ROW_MAX_TOKENS", "256")
+    assert small_row_max_tokens() == 256
+    monkeypatch.setenv("GEMMA4_SMALL_ROW_MAX_TOKENS", "4096")
+    assert small_row_max_tokens() == ExpertGatherSmall.MAX_TOKENS

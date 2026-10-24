@@ -3,7 +3,9 @@
 """The small-row expert path (GEMMA4_SMALL_ROW_EXPERTS=1: custom_ops/expert_gather_small + the GeGLU op + W @ out +
 one all-reduce) against the token-dispatch path on the same (4,1) column with the real 26B expert weights: the
 layer-level expert output of a 128- and a 256-token call must match the dispatch path's to bf16 rounding
-(PCC >= 0.9999), both are reported against HF, and a 1024-token call must keep the dispatch path."""
+(PCC >= 0.9999), both are reported against HF, and a 1024-token call must keep the dispatch path. The 128-token call runs the path's own 128-row plan
+(below the dispatch floor); the 256-token call takes it only with GEMMA4_SMALL_ROW_MAX_TOKENS=256 (the default 128
+keeps two-user prefills on the dispatch path)."""
 
 
 import pytest
@@ -48,6 +50,7 @@ def test_experts_small_rows_vs_dispatch(seq_len, mesh_device, reset_seeds, reque
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_PREFILL", "1")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_MIN_TOKENS", "128")
     monkeypatch.setenv("GEMMA4_MOE_DISPATCH_FIT_CHUNK", "1")
+    monkeypatch.setenv("GEMMA4_SMALL_ROW_MAX_TOKENS", "256" if seq_len == 256 else "128")
     hf_text_config = TestFactory.create_hf_text_config()
     hf_experts = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx=0).experts
     state_dict = {"gate_up_proj": hf_experts.gate_up_proj.data.clone(), "down_proj": hf_experts.down_proj.data.clone()}
@@ -79,6 +82,8 @@ def test_experts_small_rows_vs_dispatch(seq_len, mesh_device, reset_seeds, reque
         plan = min((q for q in plans.values() if q.chunk_tokens >= seq_len), key=lambda q: q.chunk_tokens)
         took_small = plan.gather is not None
         assert took_small == (flag == "1" and seq_len <= 256), (name, seq_len, took_small)
+        if took_small:
+            assert plan.chunk_tokens == seq_len, (plan.chunk_tokens, seq_len)  # the path's own tile-aligned plan
         print(
             f"[seq{seq_len} {name}] chunk {plan.chunk_tokens} small_path={took_small} pcc vs HF {_pcc(ref, outs[name]):.5f}"
         )

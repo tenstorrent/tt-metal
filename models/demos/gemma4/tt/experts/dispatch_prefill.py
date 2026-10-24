@@ -73,6 +73,22 @@ def fit_chunk_tokens(rows: int, dispatch_group_size: int, max_chunk: int = None,
     return max(unit, -(-rows // unit) * unit)
 
 
+def small_row_max_tokens() -> int:
+    """Longest call (tokens across the mesh) the small-row expert path takes: ``GEMMA4_SMALL_ROW_MAX_TOKENS``,
+    default 128 (one user's short prompt; the 0456 served A/B lost 170 ms of c32 TTFT when 256-token two-user
+    prefills took the 256-row small plan), at most ``ExpertGatherSmall.MAX_TOKENS``."""
+    return min(int(os.environ.get("GEMMA4_SMALL_ROW_MAX_TOKENS", "128")), ExpertGatherSmall.MAX_TOKENS)
+
+
+def small_fit_chunk_tokens(rows: int, dispatch_group_size: int) -> int:
+    """Chunk (tokens across the mesh) of the small-row path for a call of ``rows`` tokens: the smallest multiple
+    of ``dispatch_group_size * 32`` that holds them (a 128-token prompt on the 4-chip group runs a 128-row plan:
+    the path has no dispatch histogram, so the 64-rows-per-chip floor of ``fit_chunk_tokens`` does not apply).
+    Pure host logic (unit-tested)."""
+    unit = int(dispatch_group_size) * ttnn.TILE_SIZE
+    return max(unit, -(-int(rows) // unit) * unit)
+
+
 def dispatch_prefill_enabled(mesh_shape=None):
     """Effective switch: ``GEMMA4_MOE_DISPATCH_PREFILL`` when set, else the mesh-shape default (on for a Blackhole
     (4,1) column mesh; tt/mesh_orientation.py)."""
@@ -143,20 +159,26 @@ class _DispatchChunkPlan:
     bounds, the dispatch / combine modules sized for them and the GeGLU op bound to those buffers. The routing
     setup, dispatch table, expert weights and the reduce are shared by every plan of a layer (``owner``)."""
 
-    def __init__(self, owner, chunk_tokens: int):
+    def __init__(self, owner, chunk_tokens: int, small_only: bool = False):
+        """``small_only``: a plan below the dispatch path's chunk floor (``MIN_ROWS_PER_CHIP`` per chip) that only
+        the small-row path uses: no dispatch / combine modules are built for it."""
         dgs = owner.dgs
         assert (
             chunk_tokens % (dgs * ttnn.TILE_SIZE) == 0
         ), f"chunk {chunk_tokens} must split into {dgs} tile-aligned rows"
         self.chunk_tokens = int(chunk_tokens)
         self.seq_per_chip = self.chunk_tokens // dgs
+        self.small_only = bool(small_only)
+        assert small_only or self.seq_per_chip >= MIN_ROWS_PER_CHIP, (chunk_tokens, MIN_ROWS_PER_CHIP)
         experts_per_chip, self.metadata_len, self.max_buf, self.max_tok = compute_constants(
             self.seq_per_chip, owner.num_experts, owner.top_k, owner.rows * owner.cols, dgs, owner.top_k
         )
         assert experts_per_chip == owner.experts_per_chip
         assert self.max_buf >= dgs * self.seq_per_chip * owner.top_k, "dispatch buffer below the drop-free worst case"
         self.padding_cache: dict = {}  # n_tokens -> per-device [real, pad_side] (Gemma4DispatchExperts._padding_config)
-        if owner.ring:
+        if self.small_only:
+            self.dispatch = self.combine = None  # the small-row path only (``gather`` below is mandatory)
+        elif owner.ring:
             self.dispatch = None  # ttnn.experimental.deepseek_prefill.dispatch_fabric2d, called in _chunk
             self.combine = TtCombine2dModule(
                 mesh_device=owner.mesh_device,
@@ -210,7 +232,7 @@ class _DispatchChunkPlan:
         # custom_ops/expert_gather_small + the GeGLU op on a persistent zero-initialized output + W @ expert_out +
         # one all-reduce). Built here, outside any trace capture, with the drop-free buffer contract asserted.
         self.gather = None
-        if ExpertGatherSmall.enabled() and self.chunk_tokens <= ExpertGatherSmall.MAX_TOKENS and not owner.ring:
+        if ExpertGatherSmall.enabled() and self.chunk_tokens <= small_row_max_tokens() and not owner.ring:
             self.gather = ExpertGatherSmall(
                 self.chunk_tokens, owner.num_experts, experts_per_chip, owner.top_k, owner.hidden
             )
@@ -222,6 +244,7 @@ class _DispatchChunkPlan:
                 device=owner.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+        assert not self.small_only or self.gather is not None, "a small-only plan needs the small-row path"
 
 
 class Gemma4DispatchExperts:
@@ -322,6 +345,12 @@ class Gemma4DispatchExperts:
         self._plans: dict = {}
         self.fit_chunk = fit_chunk_enabled(tuple(mesh_device.shape))
         plan = self._plan(CHUNK_TOKENS)
+        if ExpertGatherSmall.enabled() and not self.ring and self.fit_chunk:
+            # the small-row path's plans (persistent zero output, gather op) are built here, outside any trace
+            # capture, for every chunk it can take: 128 rows (below the dispatch floor, small-only) and 256 when
+            # GEMMA4_SMALL_ROW_MAX_TOKENS admits it
+            for t_small in sorted({small_fit_chunk_tokens(r, self.dgs) for r in (1, small_row_max_tokens())}):
+                self._plan(t_small, small_only=t_small // self.dgs < MIN_ROWS_PER_CHIP)
         self.seq_per_chip, self.metadata_len, self.max_buf = plan.seq_per_chip, plan.metadata_len, plan.max_buf
         self.dispatch, self.combine, self.geglu_op = plan.dispatch, plan.combine, plan.geglu_op
         logger.info(
@@ -331,11 +360,11 @@ class Gemma4DispatchExperts:
             f"{self.max_buf} rows, max {plan.max_tok} tokens/expert"
         )
 
-    def _plan(self, chunk_tokens: int):
+    def _plan(self, chunk_tokens: int, small_only: bool = False):
         """The ``_DispatchChunkPlan`` for ``chunk_tokens`` (built on first use)."""
         plan = self._plans.get(chunk_tokens)
         if plan is None:
-            plan = self._plans[chunk_tokens] = _DispatchChunkPlan(self, chunk_tokens)
+            plan = self._plans[chunk_tokens] = _DispatchChunkPlan(self, chunk_tokens, small_only=small_only)
         return plan
 
     @staticmethod
@@ -547,6 +576,17 @@ class Gemma4DispatchExperts:
     def _pad_rows(t, pad):
         return ttnn.pad(t, [(0, 0), (0, 0), (0, pad), (0, 0)], 0.0)
 
+    def _small_rows_call(self, rows: int, sparse: bool) -> bool:
+        """Whether a call of ``rows`` tokens takes the small-row expert path (GEMMA4_SMALL_ROW_EXPERTS=1, dense
+        routing, no ring, at most ``small_row_max_tokens()`` tokens)."""
+        return (
+            ExpertGatherSmall.enabled()
+            and not sparse
+            and not self.ring
+            and self.fit_chunk
+            and int(rows) <= small_row_max_tokens()
+        )
+
     def forward(self, hidden, routing):
         """hidden [1,1,N,H] replicated on every chip; routing the dense [1,1,N,E] matrix (final per-expert weights,
         zeros off the top-k) or the router's sparse ``(values, indices)`` pair ([1,1,N,K] bf16 / uint16), replicated
@@ -557,7 +597,13 @@ class Gemma4DispatchExperts:
         start = 0
         while start < n:
             end = min(start + CHUNK_TOKENS, n)
-            plan = self._plan(fit_chunk_tokens(end - start, self.dgs, fit=self.fit_chunk))
+            if self._small_rows_call(end - start, sparse):
+                # the small-row path: its own tile-aligned chunk (128 rows for a 128-token prompt), a plan that
+                # exists only for it when it is below the dispatch path's chunk floor
+                T_small = small_fit_chunk_tokens(end - start, self.dgs)
+                plan = self._plan(T_small, small_only=T_small // self.dgs < MIN_ROWS_PER_CHIP)
+            else:
+                plan = self._plan(fit_chunk_tokens(end - start, self.dgs, fit=self.fit_chunk))
             T = plan.chunk_tokens
             h = self._rows(hidden, start, end, self.hidden)
             if sparse:
