@@ -13,7 +13,6 @@ from tt_lib.utils import (
     _nearest_32,
     pad_activation,
 )
-from tt_py_test_utils_common.utility_functions import skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 import torch
 
@@ -58,7 +57,6 @@ def run_tilize_matmul_test(M, K, N, device):
     )
 
 
-@skip_for_blackhole("Hanging on BH, see #12349")
 def test_tilize_hpadding_matmul(device):
     torch.manual_seed(0)
     run_tilize_matmul_test(4, 32 * 9, 32, device)
