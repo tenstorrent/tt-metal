@@ -1089,6 +1089,220 @@ struct RowWideChainMcastSelection {
     CoreCoord phys_end = CoreCoord{0, 0};
 };
 
+// The SDPA kernels' circular buffers: sizes, formats, and which are allocated or aliased to a live CB (so the kernels'
+// compile-time tile-size queries stay valid).
+struct RingJointCBInputs {
+    tt::DataFormat q_df, k_df, v_df, out_df, scalar_df, im_df, stats_df, sum_df, qk_im_df, mask_df, wuk_df;
+    tt::DataFormat sink_df = tt::DataFormat::Float16_b;  // with use_attention_sink
+    uint32_t q_tiles, k_tiles, v_tiles, qk_tiles, out_im_tiles, out0_t, scale_tiles, statistics_tiles;
+    uint32_t total_lightweight_mask_tiles, wuk_tiles, kexp_own_rows, Sk_chunk_t, ksplit_count;
+    bool v_shares_k_buffer, needs_lightweight_mask, has_sliding_window, use_streaming_compute, k_expand;
+    bool use_attention_sink;
+};
+
+// The CB indices the kernels read as compile-time args: the block every kernel shares, then the reader's and the
+// compute kernel's own (the compute kernel appends its own after the shared block).
+struct RingJointCBArgs {
+    std::vector<uint32_t> common;
+    std::vector<uint32_t> reader;
+    std::vector<uint32_t> compute;
+};
+
+// Allocates the SDPA CBs on `cores`, in index order.
+RingJointCBArgs allocate_ring_joint_cbs(
+    tt::tt_metal::ProgramDescriptor& desc, const CoreRangeSet& cores, const RingJointCBInputs& in) {
+    using namespace tt::tt_metal;
+    uint32_t q_tile_size = tt::tile_size(in.q_df);
+    uint32_t k_tile_size = tt::tile_size(in.k_df);
+    uint32_t v_tile_size = tt::tile_size(in.v_df);
+    uint32_t mask_tile_size = tt::tile_size(in.mask_df);
+    uint32_t out_tile_size = tt::tile_size(in.out_df);
+    uint32_t scalar_tile_size = tt::tile_size(in.scalar_df);
+    uint32_t im_tile_size = tt::tile_size(in.im_df);
+    uint32_t stats_tile_size = tt::tile_size(in.stats_df);
+    uint32_t sum_tile_size = tt::tile_size(in.sum_df);
+    uint32_t qk_im_tile_size = tt::tile_size(in.qk_im_df);
+
+    uint32_t next_cb_index = 0;
+    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
+        const uint32_t cb_index = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = page_size_bytes * num_pages,
+            .core_ranges = cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_index),
+                .data_format = data_format,
+                .page_size = page_size_bytes,
+            }}},
+        });
+        return cb_index;
+    };
+    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
+        return allocate_cb(tile_size, num_tiles, data_format);
+    };
+
+    const uint32_t cb_q_in = allocate_tile_cb(in.q_tiles, q_tile_size, in.q_df);
+    const uint32_t cb_k_in = allocate_tile_cb(in.k_tiles, k_tile_size, in.k_df);
+    const uint32_t cb_v_in = in.v_shares_k_buffer ? cb_k_in : allocate_tile_cb(in.v_tiles, v_tile_size, in.v_df);
+
+    // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
+    // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
+    constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
+    const uint32_t cb_mask_in = in.needs_lightweight_mask
+                                    ? allocate_tile_cb(in.total_lightweight_mask_tiles, mask_tile_size, in.mask_df)
+                                    : inactive_cb;
+
+    // Streaming normalization broadcasts the per-head sink scalar directly.
+    // Alias a valid CB while disabled so compile-time tile-size queries remain valid;
+    // sink producer/consumer code is removed by if constexpr in that specialization.
+    const uint32_t cb_attention_sink = [&]() {
+        if (!in.use_attention_sink) {
+            return cb_q_in;
+        }
+        return allocate_tile_cb(1, tt::tile_size(in.sink_df), in.sink_df);
+    }();
+
+    const uint32_t cb_scale_in = allocate_tile_cb(in.scale_tiles, scalar_tile_size, in.scalar_df);
+    const uint32_t cb_identity_scale_in = allocate_tile_cb(in.scale_tiles, scalar_tile_size, in.scalar_df);
+    const uint32_t cb_col_identity = allocate_tile_cb(in.scale_tiles, scalar_tile_size, in.scalar_df);
+
+    const uint32_t cb_qk_im = allocate_tile_cb(in.qk_tiles, qk_im_tile_size, in.qk_im_df);
+    const uint32_t cb_out_im_A = allocate_tile_cb(in.out_im_tiles, im_tile_size, in.im_df);
+    const uint32_t cb_out_im_B = allocate_tile_cb(in.out_im_tiles, im_tile_size, in.im_df);
+    const uint32_t cb_max_A = allocate_tile_cb(in.statistics_tiles, stats_tile_size, in.stats_df);
+    const uint32_t cb_max_B = allocate_tile_cb(in.statistics_tiles, stats_tile_size, in.stats_df);
+    const uint32_t cb_sum_A = allocate_tile_cb(in.statistics_tiles, sum_tile_size, in.sum_df);
+    const uint32_t cb_sum_B = allocate_tile_cb(in.statistics_tiles, sum_tile_size, in.sum_df);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(in.statistics_tiles, stats_tile_size, in.stats_df);
+
+    const uint32_t cb_out = allocate_tile_cb(in.out0_t, out_tile_size, in.out_df);
+
+    // These CBs carry accumulator state between passes: DRAM save/restore across ring iterations, or the K-split
+    // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
+    // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
+    const bool needs_accumulator_staging_cbs = !in.has_sliding_window || in.ksplit_count > 1;
+    const uint32_t cb_stats_in =
+        needs_accumulator_staging_cbs ? allocate_tile_cb(in.statistics_tiles, im_tile_size, in.im_df) : cb_max_A;
+    const uint32_t cb_prev_out =
+        needs_accumulator_staging_cbs ? allocate_tile_cb(in.out_im_tiles, out_tile_size, in.out_df) : cb_out;
+    const uint32_t cb_stats_out =
+        needs_accumulator_staging_cbs ? allocate_tile_cb(in.statistics_tiles, im_tile_size, in.im_df) : cb_max_B;
+
+    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
+    // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
+    const uint32_t cb_recip_scratch =
+        in.use_streaming_compute ? allocate_tile_cb(1, im_tile_size, in.im_df) : inactive_cb;
+
+    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
+    // cb_sum_out = compute pushes sum for writer to save to DRAM.
+    // cb_sum_in = writer pushes restored sum from DRAM for compute to read.
+    const uint32_t cb_sum_out =
+        in.use_streaming_compute
+            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(in.statistics_tiles, stats_tile_size, in.stats_df)
+                                             : cb_sum_A)
+            : inactive_cb;
+    const uint32_t cb_sum_in =
+        in.use_streaming_compute
+            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(in.statistics_tiles, stats_tile_size, in.stats_df)
+                                             : cb_sum_B)
+            : inactive_cb;
+
+    // Signal CB, compute to writer, one page: compute pushes it when a Q chunk's last K chunk starts (the writer pops
+    // it during SALAD, before compute pushes the next Q's), when a K-split sender's state is staged in half A, and when
+    // a floater visit is staged for its save (the writer's pop frees half A again).
+    constexpr uint32_t signal_page_size = 16;
+    const uint32_t cb_signal =
+        in.use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
+    // Reader-to-compute mailbox for the metadata-derived logical geometry.
+    const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    // Expanded K: the core's head's W_UK (pushed and popped with Q), and the expanded no-PE rows of each K chunk, this
+    // core's own and its peer's, which the QK reads in place beside the latent chunk's PE rows.
+    //
+    // Head pairs: each head's two Q chunks sit one per core and walk the same K chunks (one Q chunk per core, per-head
+    // V chains, batch 1), and the two cores of a (K-split band, head) split the expansion: each expands kexp_own_rows
+    // of the no-PE tile rows of every K chunk and exchanges them with its peer, so each K chunk is expanded once per
+    // pair. Pairs are the only expanded-K schedule.
+    // Disabled, they alias live CBs so compile-time tile-size queries in the kernels stay valid (as cb_attention_sink).
+    const uint32_t cb_wuk = in.k_expand ? allocate_tile_cb(in.wuk_tiles, tt::tile_size(in.wuk_df), in.wuk_df) : cb_q_in;
+    // This core's expanded rows on their way to the peer (compute -> reader) and the peer's arriving rows
+    // (reader -> compute), both double-buffered.
+    // cb_kexp_own holds exactly two slots: compute never pops it (the reader does, once the peer copy has landed) and
+    // its QK addresses this core's half by the expansion's slot parity (k_expand_chunk_count).
+    const uint32_t cb_kexp_own =
+        in.k_expand ? allocate_tile_cb(in.kexp_own_rows * in.Sk_chunk_t * 2, k_tile_size, in.k_df) : cb_k_in;
+    const uint32_t cb_kexp_peer =
+        in.k_expand ? allocate_tile_cb(in.kexp_own_rows * in.Sk_chunk_t * 2, k_tile_size, in.k_df) : cb_k_in;
+
+    const std::vector<uint32_t> cb_compile_time_args = {
+        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
+        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,      cb_sum_in,
+        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
+        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
+    const std::vector<uint32_t> reader_cb_compile_time_args = {
+        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived, cb_wuk, cb_kexp_own, cb_kexp_peer};
+    auto compute_cb_compile_time_args = cb_compile_time_args;
+    compute_cb_compile_time_args.insert(
+        compute_cb_compile_time_args.end(), {cb_attention_sink, cb_wuk, cb_kexp_own, cb_kexp_peer});
+    return {cb_compile_time_args, reader_cb_compile_time_args, compute_cb_compile_time_args};
+}
+
+// The rotated Q split's lockstep groups: one per grid row, the row's cores in multicast order with its injector, from
+// the live row-wide multicast family (mcast_configs, or none). Both multicast families cover full logical rows. Empty,
+// with `reject` saying why, when a row does not form such a group.
+std::vector<ttnn::operations::transformer::sdpa::ring_joint::RotatedQLockstepGroup> collect_rotated_q_groups(
+    const std::vector<ChainConfig>* mcast_configs, uint32_t num_cores, CoreCoord grid, std::string& reject) {
+    namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
+    std::vector<ring_joint::RotatedQLockstepGroup> rotated_groups;
+    if (mcast_configs == nullptr) {
+        reject = "no row-wide mcast family is live";
+    } else if (mcast_configs->size() != num_cores || grid.x == 0) {
+        reject = "mcast family is not built per core";
+    } else {
+        for (uint32_t row = 0; row < grid.y && reject.empty(); ++row) {
+            ring_joint::RotatedQLockstepGroup group;
+            group.members.reserve(grid.x);
+            bool injector_found = false;
+            for (uint32_t col = 0; col < grid.x; ++col) {
+                const auto& cfg = (*mcast_configs)[row * grid.x + col];
+                if (!cfg.participates) {
+                    // Every scheduled core must belong to a multicast group.
+                    reject = fmt::format("row {} has a non-participating core", row);
+                    break;
+                }
+                if (cfg.is_injector) {
+                    // Unlike participates/is_injector, this field distinguishes multicast
+                    // injectors from linear-chain injectors.
+                    if (cfg.mcast_num_dests == 0) {
+                        reject = fmt::format("row {} injector is not a mcast injector", row);
+                        break;
+                    }
+                    if (injector_found) {
+                        reject = fmt::format("row {} has more than one mcast injector", row);
+                        break;
+                    }
+                    group.injector_pos = static_cast<uint32_t>(group.members.size());
+                    injector_found = true;
+                }
+                group.members.push_back(row * grid.x + col);
+            }
+            if (!reject.empty()) {
+                break;
+            }
+            if (!injector_found) {
+                // Defaulting to member 0 would put the first float on a non-injector core and
+                // quietly violate the injector-never-pads invariant -- a wrong-but-running program.
+                reject = fmt::format("row {} has no mcast injector", row);
+                break;
+            }
+            rotated_groups.push_back(std::move(group));
+        }
+    }
+    if (!reject.empty()) {
+        rotated_groups.clear();
+    }
+    return rotated_groups;
+}
+
 // Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
 // op-specific name suffix avoids Unity-build collisions with the sibling ring
@@ -2113,17 +2327,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Use fp32 precision for cb_qk_im when fp32 accumulation is enabled so operations on QK retain precision.
     tt::DataFormat qk_im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
-    uint32_t q_tile_size = tt::tile_size(q_df);
-    uint32_t k_tile_size = tt::tile_size(k_df);
-    uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
-    uint32_t im_tile_size = tt::tile_size(im_df);
-    uint32_t stats_tile_size = tt::tile_size(stats_df);
-    uint32_t sum_tile_size = tt::tile_size(sum_df);
-    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
-
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
     log_debug(tt::LogOp, "v_data_format: {}", v_df);
@@ -2135,102 +2338,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
     log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
 
-    uint32_t next_cb_index = 0;
-    const auto allocate_cb = [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat data_format) -> uint32_t {
-        const uint32_t cb_index = next_cb_index++;
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = page_size_bytes * num_pages,
-            .core_ranges = core_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = data_format,
-                .page_size = page_size_bytes,
-            }}},
-        });
-        return cb_index;
-    };
-    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
-        return allocate_cb(tile_size, num_tiles, data_format);
-    };
-
-    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
-    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
-
-    // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
-    // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
-    constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
-    const uint32_t cb_mask_in =
-        needs_lightweight_mask ? allocate_tile_cb(total_lightweight_mask_tiles, mask_tile_size, mask_df) : inactive_cb;
-
-    // Streaming normalization broadcasts the per-head sink scalar directly.
-    // Alias a valid CB while disabled so compile-time tile-size queries remain valid;
-    // sink producer/consumer code is removed by if constexpr in that specialization.
-    const uint32_t cb_attention_sink = [&]() {
-        if (!use_attention_sink) {
-            return cb_q_in;
-        }
-        const tt::DataFormat sink_df = tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype());
-        return allocate_tile_cb(1, tt::tile_size(sink_df), sink_df);
-    }();
-
-    const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-
-    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
-
-    // These CBs carry accumulator state between passes: DRAM save/restore across ring iterations, or the K-split
-    // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
-    // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
-    const bool needs_accumulator_staging_cbs = !has_sliding_window || ksplit_count > 1;
-    const uint32_t cb_stats_in =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
-    const uint32_t cb_prev_out =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles, out_tile_size, out_df) : cb_out;
-    const uint32_t cb_stats_out =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_B;
-
-    // Streaming compute v2: 1-tile recip scratch CB for normalize_row_streaming.
-    // cb_scale_in is live in ring joint, so streaming uses a dedicated scratch CB.
-    const uint32_t cb_recip_scratch = use_streaming_compute ? allocate_tile_cb(1, im_tile_size, im_df) : inactive_cb;
-
-    // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    // cb_sum_out = compute pushes sum for writer to save to DRAM.
-    // cb_sum_in = writer pushes restored sum from DRAM for compute to read.
-    const uint32_t cb_sum_out =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_A)
-            : inactive_cb;
-    const uint32_t cb_sum_in =
-        use_streaming_compute
-            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B)
-            : inactive_cb;
-
-    // Signal CB, compute to writer, one page: compute pushes it when a Q chunk's last K chunk starts (the writer pops
-    // it during SALAD, before compute pushes the next Q's), when a K-split sender's state is staged in half A, and when
-    // a floater visit is staged for its save (the writer's pop frees half A again).
-    constexpr uint32_t signal_page_size = 16;
-    const uint32_t cb_signal =
-        use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
-    // Reader-to-compute mailbox for the metadata-derived logical geometry.
-    const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
-    // Expanded K: the core's head's W_UK (pushed and popped with Q), and the expanded no-PE rows of each K chunk, this
-    // core's own and its peer's, which the QK reads in place beside the latent chunk's PE rows.
-    //
-    // Head pairs: each head's two Q chunks sit one per core and walk the same K chunks (one Q chunk per core, per-head
-    // V chains, batch 1), and the two cores of a (K-split band, head) split the expansion: each expands kexp_own_rows
-    // of the no-PE tile rows of every K chunk and exchanges them with its peer, so each K chunk is expanded once per
-    // pair. Pairs are the only expanded-K schedule.
     TT_FATAL(
         !k_expand || (use_head_chain && build_kv_chains && max_q_per_core == 1 && num_q_chunks == 2),
         "RingJointSDPA k_expand_weight needs head pairs: two Q chunks per head (got {} chunks of {} rows), "
@@ -2239,35 +2346,48 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         Sq_chunk_t * tt::constants::TILE_HEIGHT,
         all_heads_num_q_chunks,
         num_cores);
-    const tt::DataFormat wuk_df =
-        k_expand ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.k_expand_weight->dtype()) : k_df;
-    // Disabled, they alias live CBs so compile-time tile-size queries in the kernels stay valid (as cb_attention_sink).
-    const uint32_t cb_wuk = k_expand ? allocate_tile_cb(wuk_tiles, tt::tile_size(wuk_df), wuk_df) : cb_q_in;
-    // This core's expanded rows on their way to the peer (compute -> reader) and the peer's arriving rows
-    // (reader -> compute), both double-buffered.
-    // cb_kexp_own holds exactly two slots: compute never pops it (the reader does, once the peer copy has landed) and
-    // its QK addresses this core's half by the expansion's slot parity (k_expand_chunk_count).
-    const uint32_t cb_kexp_own =
-        k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
-    const uint32_t cb_kexp_peer =
-        k_expand ? allocate_tile_cb(kexp_own_rows * Sk_chunk_t * 2, k_tile_size, k_df) : cb_k_in;
-
-    const std::vector<uint32_t> cb_compile_time_args = {
-        cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
-        cb_stats_in, cb_prev_out, cb_col_identity, cb_recip_scratch, cb_sum_out,      cb_sum_in,
-        cb_signal,   cb_out,      cb_stats_out,    cb_qk_im,         cb_out_im_A,     cb_out_im_B,
-        cb_max_A,    cb_max_B,    cb_sum_A,        cb_sum_B,         cb_exp_max_diff, cb_kv_pad_derived};
-    const std::vector<uint32_t> reader_cb_compile_time_args = {
-        cb_q_in, cb_k_in, cb_v_in, cb_attention_sink, cb_kv_pad_derived, cb_wuk, cb_kexp_own, cb_kexp_peer};
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(), reader_cb_compile_time_args.begin(), reader_cb_compile_time_args.end());
-    writer_compile_time_args.insert(
-        writer_compile_time_args.end(), cb_compile_time_args.begin(), cb_compile_time_args.end());
-    auto compute_cb_compile_time_args = cb_compile_time_args;
-    compute_cb_compile_time_args.insert(
-        compute_cb_compile_time_args.end(), {cb_attention_sink, cb_wuk, cb_kexp_own, cb_kexp_peer});
-    compute_compile_time_args.insert(
-        compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
+    const RingJointCBArgs cb_args = allocate_ring_joint_cbs(
+        desc,
+        core_grid_set,
+        RingJointCBInputs{
+            .q_df = q_df,
+            .k_df = k_df,
+            .v_df = v_df,
+            .out_df = out_df,
+            .scalar_df = scalar_df,
+            .im_df = im_df,
+            .stats_df = stats_df,
+            .sum_df = sum_df,
+            .qk_im_df = qk_im_df,
+            .mask_df = mask_df,
+            .wuk_df =
+                k_expand ? tt::tt_metal::datatype_to_dataformat_converter(tensor_args.k_expand_weight->dtype()) : k_df,
+            .sink_df = use_attention_sink
+                           ? tt::tt_metal::datatype_to_dataformat_converter(attention_sink.value().dtype())
+                           : tt::DataFormat::Float16_b,
+            .q_tiles = q_tiles,
+            .k_tiles = k_tiles,
+            .v_tiles = v_tiles,
+            .qk_tiles = qk_tiles,
+            .out_im_tiles = out_im_tiles,
+            .out0_t = out0_t,
+            .scale_tiles = scale_tiles,
+            .statistics_tiles = statistics_tiles,
+            .total_lightweight_mask_tiles = total_lightweight_mask_tiles,
+            .wuk_tiles = wuk_tiles,
+            .kexp_own_rows = kexp_own_rows,
+            .Sk_chunk_t = Sk_chunk_t,
+            .ksplit_count = ksplit_count,
+            .v_shares_k_buffer = v_shares_k_buffer,
+            .needs_lightweight_mask = needs_lightweight_mask,
+            .has_sliding_window = has_sliding_window,
+            .use_streaming_compute = use_streaming_compute,
+            .k_expand = k_expand,
+            .use_attention_sink = use_attention_sink,
+        });
+    reader_compile_time_args.insert(reader_compile_time_args.end(), cb_args.reader.begin(), cb_args.reader.end());
+    writer_compile_time_args.insert(writer_compile_time_args.end(), cb_args.common.begin(), cb_args.common.end());
+    compute_compile_time_args.insert(compute_compile_time_args.end(), cb_args.compute.begin(), cb_args.compute.end());
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -2723,56 +2843,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     } else if (gqa_mcast_enabled) {
         rotated_mcast_configs = &gqa_chain_configs;
     }
-    // Both multicast families cover full logical rows.
-    std::vector<ring_joint::RotatedQLockstepGroup> rotated_groups;
     std::string rotated_group_reject;
-    if (rotated_mcast_configs == nullptr) {
-        rotated_group_reject = "no row-wide mcast family is live";
-    } else if (rotated_mcast_configs->size() != num_cores || grid_size.x == 0) {
-        rotated_group_reject = "mcast family is not built per core";
-    } else {
-        for (uint32_t row = 0; row < grid_size.y && rotated_group_reject.empty(); ++row) {
-            ring_joint::RotatedQLockstepGroup group;
-            group.members.reserve(grid_size.x);
-            bool injector_found = false;
-            for (uint32_t col = 0; col < grid_size.x; ++col) {
-                const auto& cfg = (*rotated_mcast_configs)[row * grid_size.x + col];
-                if (!cfg.participates) {
-                    // Every scheduled core must belong to a multicast group.
-                    rotated_group_reject = fmt::format("row {} has a non-participating core", row);
-                    break;
-                }
-                if (cfg.is_injector) {
-                    // Unlike participates/is_injector, this field distinguishes multicast
-                    // injectors from linear-chain injectors.
-                    if (cfg.mcast_num_dests == 0) {
-                        rotated_group_reject = fmt::format("row {} injector is not a mcast injector", row);
-                        break;
-                    }
-                    if (injector_found) {
-                        rotated_group_reject = fmt::format("row {} has more than one mcast injector", row);
-                        break;
-                    }
-                    group.injector_pos = static_cast<uint32_t>(group.members.size());
-                    injector_found = true;
-                }
-                group.members.push_back(row * grid_size.x + col);
-            }
-            if (!rotated_group_reject.empty()) {
-                break;
-            }
-            if (!injector_found) {
-                // Defaulting to member 0 would put the first float on a non-injector core and
-                // quietly violate the injector-never-pads invariant -- a wrong-but-running program.
-                rotated_group_reject = fmt::format("row {} has no mcast injector", row);
-                break;
-            }
-            rotated_groups.push_back(std::move(group));
-        }
-    }
-    if (!rotated_group_reject.empty()) {
-        rotated_groups.clear();
-    }
+    const std::vector<ring_joint::RotatedQLockstepGroup> rotated_groups =
+        collect_rotated_q_groups(rotated_mcast_configs, num_cores, grid_size, rotated_group_reject);
     // Each accepted group contains exactly grid_size.x members by construction.
     // Variable-size groups would need a different packing rule for the divide/modulo below.
     const uint32_t rotated_group_size =
