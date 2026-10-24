@@ -55,7 +55,7 @@ RELU_MIN_THRESHOLD = 5.0
 
 # Negative-side slopes.
 PRELU_SLOPE = 0.25
-LRELU_NEGATIVE_SLOPE = 0.1
+LRELU_NEGATIVE_SLOPE = 0.009999999776482582
 
 # UnaryMax/MinInt32 and UnaryMax/MinUint32 compare against this scalar.
 INT_MAXMIN_SCALAR = 1000
