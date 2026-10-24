@@ -198,7 +198,7 @@ class _PushRig:
     over the mesh (slots: layer L, layer L + 1), the plan of the real indices, and the compact buffers of both
     parities. sparse_sdpa runs on `sdpa_grid` (None: every core); a fused push's senders and muxes on `push_grid`."""
 
-    def __init__(self, mesh_device, layer, kv_fmt, front_bytes, sdpa_grid, push_grid):
+    def __init__(self, mesh_device, layer, kv_fmt, front_bytes, sdpa_grid, push_grid, hot=True):
         from safetensors.numpy import load_file
 
         from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner, _shard_over_mesh
@@ -217,7 +217,7 @@ class _PushRig:
         self.cache_tokens = _TRACE_1M_START + chunk_global
         width = _KV_FORMATS[kv_fmt][2] * (1 if kv_fmt == "fp8" else 2)
         self.page_bytes = -(-width // 64) * 64  # DRAM-aligned row pages: 704 B scaled FP8, 1152 B BF16
-        self.planner = SparseKvPushPlanner(mesh_device, _LINKS, l1_front_bytes_per_core=front_bytes)
+        self.planner = SparseKvPushPlanner(mesh_device, _LINKS, l1_front_bytes_per_core=front_bytes, hot=hot)
         self.pages_per_packet = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // self.page_bytes)
         self.buffer_rows = self.planner.buffer_rows(self.cache_tokens, self.page_bytes)
 
@@ -255,6 +255,7 @@ class _PushRig:
         )
         self.table = table
         self.gather_table()
+        self.hot_table = self.hot(self.compact_idx) if hot else None
         self.compact = [self.compact_buffer(0), self.compact_buffer(1)]
         self.sdpa_kw = dict(kv_format=_KV_FORMATS[kv_fmt][0], scale=K_DIM**-0.5, k_chunk_size=128)
 
@@ -271,6 +272,26 @@ class _PushRig:
         )
         self._shard_over_mesh(table, self.mesh_device)
         return table, compact_idx
+
+    def hot(self, compact_idx, table=None):
+        """The hot table of the gathered tables; rewrites compact_idx (of the plan of `table`, default the one built
+        at setup) in place."""
+        from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import HOT_PREFIX_CAP, HOT_THRESHOLD
+
+        return ttnn.experimental.sparse_push_hot(
+            self.idx_natural,
+            compact_idx,
+            self.table if table is None else table,
+            self.tables,
+            num_devices=self.mesh_device.get_num_devices(),
+            stripe_chunk=self.stripe_chunk,
+            max_rows=self.cache_tokens,
+            pages_per_packet=self.pages_per_packet,
+            banks=self.planner.banks,
+            threshold=HOT_THRESHOLD,
+            prefix_cap=HOT_PREFIX_CAP,
+            chunk_start=self.start,
+        )
 
     def gather_table(self, table=None):
         """All-gather a plan's per-chip tables (default: the one built at setup) into the push table."""
@@ -303,6 +324,7 @@ class _PushRig:
             push_table=self.tables,
             push_stripe_chunk=self.stripe_chunk,
             push_max_rows=self.cache_tokens,
+            push_hot_table=self.hot_table,
         )
 
     def fused_push(self, parity, slot):
@@ -320,6 +342,7 @@ class _PushRig:
             push_ready_semaphore=self.sems[0],
             push_data_valid_semaphore=self.sems[1],
             push_core_grid=self.push_grid,
+            push_hot_table=self.hot_table,
         )
 
     def sdpa_compact(self, parity, **fused):
@@ -352,8 +375,10 @@ class _PushRig:
 @pytest.mark.parametrize("layer", [14, 62], ids=["L14", "L62"])
 # Compact buffer placement: all DRAM; the model's L1 front (most rows in L1); a tiny front (most rows in the spill).
 @pytest.mark.parametrize("front_bytes", [0, None, 16 * 704], ids=["dram", "l1_front", "l1_front_spill"])
-def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer, front_bytes):
-    rig = _PushRig(mesh_device, layer, "fp8", front_bytes, sdpa_grid=_cols(0, 7), push_grid=_cols(8, 11))
+# Hot rows multicast into the hot region (sparse_push_hot), or every row pushed per requester.
+@pytest.mark.parametrize("hot", [True, False], ids=["hot", "no_hot"])
+def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer, front_bytes, hot):
+    rig = _PushRig(mesh_device, layer, "fp8", front_bytes, sdpa_grid=_cols(0, 7), push_grid=_cols(8, 11), hot=hot)
     # Layer L's buffer by one push of every row; layer L + 1's by its prefix fused into layer L's attention, then its
     # remainder.
     rig.push(0, 0, 0)
@@ -387,12 +412,14 @@ def test_sparse_kv_push_real_topk_matches_gather(mesh_device, layer, front_bytes
 @pytest.mark.parametrize("layer", [14, 62], ids=["L14", "L62"])
 @pytest.mark.parametrize("front_bytes", [None, 0], ids=["l1_front", "dram"])
 @_KV_FMT
-def test_sparse_kv_push_unfused_perf(mesh_device, layer, front_bytes, kv_fmt):
-    rig = _PushRig(mesh_device, layer, kv_fmt, front_bytes, sdpa_grid=None, push_grid=None)
+@pytest.mark.parametrize("hot", [True, False], ids=["hot", "no_hot"])
+def test_sparse_kv_push_unfused_perf(mesh_device, layer, front_bytes, kv_fmt, hot):
+    rig = _PushRig(mesh_device, layer, kv_fmt, front_bytes, sdpa_grid=None, push_grid=None, hot=hot)
 
     def plan_gather_push():
         table, compact_idx = rig.plan()
-        return table, compact_idx, rig.gather_table(table), rig.push(0, 0, 0)
+        gathered = rig.gather_table(table)
+        return table, compact_idx, gathered, rig.hot(compact_idx, table) if hot else None, rig.push(0, 0, 0)
 
     # A shared layer's exposed push is the remainder: this chunk's own rows. Against it, a plain all-gather of the
     # chunk's rows (160 per chip) into every chip.
@@ -406,6 +433,7 @@ def test_sparse_kv_push_unfused_perf(mesh_device, layer, front_bytes, kv_fmt):
     us = {
         "plan": _traced_us(mesh_device, rig.plan),
         "table gather": _traced_us(mesh_device, rig.gather_table),
+        **({"hot": _traced_us(mesh_device, lambda: rig.hot(rig.compact_idx))} if hot else {}),
         "push all rows": _traced_us(mesh_device, lambda: rig.push(0, 0, 0)),
         "push remainder": _traced_us(mesh_device, lambda: rig.push(0, 0, 2)),
         "chunk all-gather": _traced_us(mesh_device, chunk_gather),
@@ -413,6 +441,7 @@ def test_sparse_kv_push_unfused_perf(mesh_device, layer, front_bytes, kv_fmt):
     }
     table = "\n".join(f"  {k:<22} {v:9.1f} us" for k, v in us.items())
     logger.info(
-        f"unfused sparse KV push, GLM-5.3 L{layer} 1M {kv_fmt} {'l1 front' if front_bytes is None else 'dram'} "
+        f"unfused sparse KV push, GLM-5.3 L{layer} 1M {kv_fmt} {'l1 front' if front_bytes is None else 'dram'}"
+        f"{' hot' if hot else ''} "
         f"(traced, us per call):\n{table}"
     )

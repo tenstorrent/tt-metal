@@ -111,6 +111,9 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 push_max_rows: Row capacity the plan tables were built for.
                 push_part: 0 pushes every needed row; 2 only the rows from the plan's chunk start on (the
                     prefix rows were pushed earlier by a ``sparse_sdpa`` with a fused push).
+                push_spill: DRAM spill of an L1-front ``output_tensor``.
+                push_hot_table: this chip's ``sparse_push_hot`` table: its hot rows go out as one multicast
+                    to every chip.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -134,7 +137,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("push_stripe_chunk") = 0,
         nb::arg("push_max_rows") = 0,
         nb::arg("push_part") = 0,
-        nb::arg("push_spill") = nb::none());
+        nb::arg("push_spill") = nb::none(),
+        nb::arg("push_hot_table") = nb::none());
 
     ttnn::bind_function<"sparse_push_plan", "ttnn.experimental.">(
         mod,
@@ -153,6 +157,32 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("pages_per_packet"),
         nb::arg("banks"),
         nb::arg("chunk_start") = nb::none());
+
+    ttnn::bind_function<"sparse_push_hot", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Hot rows of the sparse KV push, on every requester chip after the all-gather of the ``sparse_push_plan``
+            tables: rows at least ``threshold`` chips need get one slot in a hot region at the front of every chip's
+            compact buffer (owner-major; per owner its prefix-part rows, at most ``prefix_cap``, then its current-part
+            rows, at most ``current_cap``), so their owner multicasts them once. Returns the hot table (uint32
+            [1, 1, pages, 1024]) for the push and rewrites ``compact`` (the plan's compact indices) in place, from this
+            chip's own plan ``table`` and the gathered ``tables``.
+        )doc",
+        &sparse_push_hot,
+        nb::arg("indices").noconvert(),
+        nb::arg("compact").noconvert(),
+        nb::arg("table").noconvert(),
+        nb::arg("tables").noconvert(),
+        nb::kw_only(),
+        nb::arg("num_devices"),
+        nb::arg("stripe_chunk"),
+        nb::arg("max_rows"),
+        nb::arg("pages_per_packet"),
+        nb::arg("banks"),
+        nb::arg("threshold"),
+        nb::arg("prefix_cap"),
+        nb::arg("chunk_start").noconvert(),
+        nb::arg("current_cap") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

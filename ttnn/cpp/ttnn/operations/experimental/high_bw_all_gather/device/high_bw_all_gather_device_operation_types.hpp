@@ -105,6 +105,9 @@ struct HighBwAllGatherInputs {
     // Optional DRAM spill of the push's output: the output then holds only its first rows (an L1 front) and the rest
     // land in push_spill, whose pages hold one packet (pages_per_packet rows) each: row r at page r / P.
     std::optional<Tensor> push_spill{std::nullopt};
+    // Optional sparse_push_hot table of this chip (uint32 [1, 1, pages, 1024]): the plan's hot rows go out as one
+    // multicast to every chip, into the hot region at the front of every compact buffer.
+    std::optional<Tensor> push_hot_table{std::nullopt};
 };
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather

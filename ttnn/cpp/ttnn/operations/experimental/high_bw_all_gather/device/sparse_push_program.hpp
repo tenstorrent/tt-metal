@@ -22,6 +22,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "sparse_push_hot_device_operation.hpp"
 #include "sparse_push_plan_device_operation.hpp"
 
 namespace ttnn::operations::experimental::high_bw_all_gather::sparse_push {
@@ -36,7 +37,10 @@ constexpr uint32_t kScalarCbBytes = 64;
 constexpr uint32_t kTableCbBytes = 64 * 128 + 32 * (384 + 128);
 constexpr uint32_t kHeaderSlots = 1 + 4;  // semaphore increments + one per packet in flight
 
-enum Cb : uint32_t { kData = 0, kMeta = 1, kTable = 2, kScalar = 3, kHeaders = 4 };
+enum Cb : uint32_t { kData = 0, kMeta = 1, kTable = 2, kScalar = 3, kHeaders = 4, kHotMine = 5 };
+// This owner's hot words (sparse_push_hot table), kept for the whole push: up to 409 local blocks (a 2M-row cache at
+// 160 rows per block over 32 chips) of 5 words.
+constexpr uint32_t kHotMineBytes = 8192;
 
 constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/experimental/high_bw_all_gather/device/kernels/";
 
@@ -57,6 +61,7 @@ inline std::vector<CircularBuffer> circular_buffers(uint32_t packet_bytes) {
          static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()),
          kHeaderSlots,
          tt::DataFormat::RawUInt32},
+        {kHotMine, kHotMineBytes, 1, tt::DataFormat::RawUInt32},
     };
 }
 
@@ -151,6 +156,7 @@ struct ReaderConfig {
     const Tensor& input;
     const Tensor& table;
     const std::optional<Tensor>& batch_index_tensor;
+    const std::optional<Tensor>& hot_table;  // sparse_push_hot table of this chip, or none
     uint32_t num_devices;
     uint32_t stripe_chunk;
     uint32_t max_rows;
@@ -179,16 +185,23 @@ inline std::vector<uint32_t> reader_compile_args(const ReaderConfig& cfg, uint32
         SparsePushPlanLayout::kBitmapOff,
         SparsePushPlanLayout::kOwnerPrefixOff,
         cfg.push_part,
+        cfg.hot_table.has_value() ? 1u : 0u,
+        SparsePushHotLayout::kBasesOff,
     };
+    TT_FATAL(
+        (layout.num_blocks + cfg.num_devices - 1) / cfg.num_devices * (cfg.stripe_chunk / 32) * 4 <= kHotMineBytes,
+        "the sparse KV push keeps at most {} B of an owner's hot words",
+        kHotMineBytes);
     tt::tt_metal::TensorAccessorArgs(cfg.input.buffer()).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(cfg.table.buffer()).append_to(ct);
+    tt::tt_metal::TensorAccessorArgs(cfg.hot_table.has_value() ? cfg.hot_table->buffer() : nullptr).append_to(ct);
     if (cfg.batch_index_tensor.has_value()) {
         tt::tt_metal::TensorAccessorArgs(cfg.batch_index_tensor->buffer()).append_to(ct);
     }
     return ct;
 }
 
-// Reader common runtime args: {input, table, batch index tensor, num layers, layer index, scalar slot}.
+// Reader common runtime args: {input, table, batch index tensor, num layers, layer index, scalar slot, hot table}.
 inline std::vector<uint32_t> reader_common_args(
     const ReaderConfig& cfg,
     uint32_t batch_slot_num_layers,
@@ -200,7 +213,8 @@ inline std::vector<uint32_t> reader_common_args(
         cfg.batch_index_tensor.has_value() ? cfg.batch_index_tensor->buffer()->address() : 0u,
         batch_slot_num_layers,
         batch_slot_layer_idx,
-        input_batch_index};
+        input_batch_index,
+        cfg.hot_table.has_value() ? cfg.hot_table->buffer()->address() : 0u};
 }
 
 inline std::vector<uint32_t> reader_runtime_args(const CoreLayout& layout, uint32_t sender, uint32_t my_rank) {
@@ -221,7 +235,8 @@ inline std::vector<uint32_t> writer_compile_args(
     uint32_t num_devices,
     uint32_t my_rank,
     const CoreLayout& layout,
-    const tt::tt_fabric::FabricMuxConfig& mux) {
+    const tt::tt_fabric::FabricMuxConfig& mux,
+    bool has_hot) {
     const uint32_t page_bytes = output.buffer()->aligned_page_size();
     std::vector<uint32_t> ct = {
         page_bytes,
@@ -229,7 +244,8 @@ inline std::vector<uint32_t> writer_compile_args(
         my_rank,
         layout.num_senders(),
         pages_per_packet(page_bytes) * page_bytes,
-        layout.links};
+        layout.links,
+        has_hot ? 1u : 0u};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(ct);
     ct.push_back(spill.has_value() ? output.buffer()->num_pages() : 0xFFFFFFFFu);
     tt::tt_metal::TensorAccessorArgs(spill.has_value() ? spill->buffer() : nullptr).append_to(ct);

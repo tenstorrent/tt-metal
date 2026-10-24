@@ -427,6 +427,7 @@ void bind_sdpa(nb::module_& mod) {
                 all-gathered sparse_push_plan tables, push_output the next layer's compact buffer.
                 push_batch_index_tensor (trace-safe) replaces push_batch_index with the slot read on device as
                 push_batch_index_tensor[0] * push_batch_slot_num_layers + push_batch_slot_layer_idx.
+                push_hot_table (this chip's sparse_push_hot table) multicasts the plan's hot rows.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8).
         )doc",
@@ -460,7 +461,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("push_batch_slot_num_layers") = 1,
         nb::arg("push_batch_slot_layer_idx") = 0,
         nb::arg("kv_spill") = nb::none(),
-        nb::arg("push_output_spill") = nb::none());
+        nb::arg("push_output_spill") = nb::none(),
+        nb::arg("push_hot_table") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

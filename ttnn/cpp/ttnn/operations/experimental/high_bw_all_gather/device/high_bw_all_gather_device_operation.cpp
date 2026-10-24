@@ -264,6 +264,14 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             "the sparse KV push needs push_stripe_chunk and push_max_rows");
         TT_FATAL(args.push_part == 0 || args.push_part == 2, "push_part must be 0 (all rows) or 2 (remainder)");
         TT_FATAL(!tensor_args.has_gathered_prefix_metadata(), "push_table replaces the gathered extent controls");
+        if (tensor_args.push_hot_table.has_value()) {
+            const auto& hot = *tensor_args.push_hot_table;
+            TT_FATAL(
+                hot.dtype() == DataType::UINT32 && hot.layout() == Layout::ROW_MAJOR &&
+                    hot.memory_config().buffer_type() == BufferType::DRAM &&
+                    hot.padded_shape()[2] * args.num_devices == table.padded_shape()[2],
+                "push_hot_table must be this chip's UINT32 ROW_MAJOR DRAM sparse_push_hot table");
+        }
         if (tensor_args.push_spill.has_value()) {
             const auto& spill = *tensor_args.push_spill;
             TT_FATAL(
@@ -535,7 +543,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t push_stripe_chunk,
     uint32_t push_max_rows,
     uint32_t push_part,
-    const std::optional<Tensor>& push_spill) {
+    const std::optional<Tensor>& push_spill,
+    const std::optional<Tensor>& push_hot_table) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -644,7 +653,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .input_batch_index_tensor = input_batch_index_tensor,
             .gathered_prefix_tensor = gathered_prefix_tensor,
             .push_table = push_table,
-            .push_spill = push_spill}};
+            .push_spill = push_spill,
+            .push_hot_table = push_hot_table}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -672,7 +682,8 @@ Tensor high_bw_all_gather(
     uint32_t push_stripe_chunk,
     uint32_t push_max_rows,
     uint32_t push_part,
-    const std::optional<Tensor>& push_spill) {
+    const std::optional<Tensor>& push_spill,
+    const std::optional<Tensor>& push_hot_table) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -694,7 +705,8 @@ Tensor high_bw_all_gather(
         push_stripe_chunk,
         push_max_rows,
         push_part,
-        push_spill);
+        push_spill,
+        push_hot_table);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

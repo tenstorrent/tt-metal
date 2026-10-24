@@ -2024,6 +2024,7 @@ class ttMLA:
             push_part=2 if prefetched else 0,
             ready_semaphore=ready_sem,
             data_valid_semaphore=done_sem,
+            push_hot_table=plan.hot_table,
         )
         kvpe_dev = MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry)
         return self._finish_sparse_chunked_attn(
@@ -2107,6 +2108,7 @@ class ttMLA:
             push_ready_semaphore=resources.ready_semaphore,
             push_data_valid_semaphore=resources.data_valid_semaphore,
             push_core_grid=resources.gather_core_grid,
+            push_hot_table=plan.hot_table,
         )
 
     def _prepare_sparse_kv_prefix(

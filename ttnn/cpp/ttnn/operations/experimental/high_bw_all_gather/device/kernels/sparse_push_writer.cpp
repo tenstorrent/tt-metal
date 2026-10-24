@@ -13,6 +13,10 @@
 //   end:   every sender increments done on the sync core of every chip in its direction (on the same route as
 //          its data) and on its own chip's; the sync core waits for (num_devices - 1) * links * K + workers and
 //          consumes it, leaving both semaphores at zero.
+//   hot:   with a hot table, packets marked for multicast go on this direction's branch of a whole-mesh multicast
+//          (E and W along the row; N and S down the column with E/W teeth in every row: the four branches cover
+//          every other chip once), and the E senders also write them locally. Every sender then also multicasts one
+//          done increment on its branch, behind its data, so the sync core waits for twice the remote count.
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -26,7 +30,8 @@ using namespace ttnn::operations::ccl::common;
 
 namespace {
 constexpr uint32_t kData = 0, kMeta = 1, kHeaders = 4;
-constexpr uint32_t kBatch = 4;  // packets in flight per flush; matches the reader's push batches
+constexpr uint32_t kBatch = 4;                // packets in flight per flush; matches the reader's push batches
+constexpr uint32_t kMulticast = 0xFFFFFFFFu;  // packet destination: every chip (see the reader)
 
 template <typename Sender>
 void send_sem_inc(
@@ -54,7 +59,8 @@ void kernel_main() {
     constexpr uint32_t workers = get_compile_time_arg_val(3);
     constexpr uint32_t packet_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t links = get_compile_time_arg_val(5);
-    constexpr auto output_args = TensorAccessorArgs<6>();
+    constexpr bool has_hot = get_compile_time_arg_val(6) != 0;
+    constexpr auto output_args = TensorAccessorArgs<7>();
     // With a spill, `output` holds only the first front_pages compact rows (an L1 front); the rest go to the DRAM
     // spill, whose pages are one packet (pages_per_packet rows) each: row r is at page r / P, offset r % P.
     constexpr uint32_t front_pages = get_compile_time_arg_val(output_args.next_compile_time_args_offset());
@@ -90,6 +96,18 @@ void kernel_main() {
             my_rank, d, static_cast<uint32_t>(get_next_hop_router_direction(dest_mesh_ids[d], dest_chip_ids[d])));
     };
     auto in_my_direction = [&](uint32_t d) { return d != my_rank && route_to(d).dir == dir; };
+    // This direction's branch of the whole-mesh multicast (hops E, W, N, S from this chip).
+    constexpr uint16_t east = MESH_COLS / 2, west = MESH_COLS - 1 - MESH_COLS / 2;
+    constexpr uint16_t north = MESH_ROWS / 2, south = MESH_ROWS - 1 - MESH_ROWS / 2;
+    const bool horizontal = dir == sparse_push::kEast || dir == sparse_push::kWest;
+    const uint16_t br_e = dir == sparse_push::kWest ? 0 : east, br_w = dir == sparse_push::kEast ? 0 : west;
+    const uint16_t br_n = dir == sparse_push::kNorth ? north : 0, br_s = dir == sparse_push::kSouth ? south : 0;
+    const bool branch_empty = horizontal ? (dir == sparse_push::kEast ? east == 0 : west == 0)
+                                         : (dir == sparse_push::kNorth ? north : south) == 0;
+    auto set_branch = [&](volatile PACKET_HEADER_TYPE* hdr) {
+        tt::tt_fabric::fabric_set_mcast_route(
+            (HybridMeshPacketHeader*)hdr, dest_chip_ids[my_rank], dest_mesh_ids[my_rank], br_e, br_w, br_n, br_s);
+    };
 
     const uint32_t headers_l1 = get_write_ptr(kHeaders);
     auto* sem_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(headers_l1);
@@ -160,7 +178,25 @@ void kernel_main() {
             const bool to_spill = first_page >= front_pages;
             const uint32_t spill_page = first_page / pages_per_packet;
             const uint32_t spill_offset = (first_page % pages_per_packet) * page_bytes;
-            if (dest == my_rank) {
+            if (dest == kMulticast) {
+                if (dir == sparse_push::kEast) {
+                    noc_async_write(
+                        data_l1,
+                        to_spill ? spill.get_noc_addr(spill_page, spill_offset) : output.get_noc_addr(first_page),
+                        bytes);
+                }
+                if (!branch_empty) {
+                    auto* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+                        headers_l1 + (1 + pending) * sizeof(PACKET_HEADER_TYPE));
+                    set_branch(hdr);
+                    if (to_spill) {
+                        tt::tt_fabric::linear::to_noc_unicast_write(bytes, hdr, spill_page, spill, spill_offset);
+                    } else {
+                        tt::tt_fabric::linear::to_noc_unicast_write(bytes, hdr, first_page, output);
+                    }
+                    perform_payload_send<false, false>(conn, data_l1, bytes, hdr);
+                }
+            } else if (dest == my_rank) {
                 noc_async_write(
                     data_l1,
                     to_spill ? spill.get_noc_addr(spill_page, spill_offset) : output.get_noc_addr(first_page),
@@ -194,6 +230,13 @@ void kernel_main() {
                 send_sem_inc(
                     conn, sem_hdr, dest_chip_ids[d], dest_mesh_ids[d], remote_done, route_to(d).flip_turn, my_rank);
             }
+        }
+        if (has_hot && !branch_empty) {
+            set_branch(sem_hdr);
+            sem_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{remote_done, 1, true});
+            conn.wait_for_empty_write_slot();
+            conn.send_payload_flush_blocking_from_address(
+                reinterpret_cast<uint32_t>(sem_hdr), sizeof(PACKET_HEADER_TYPE));
         }
         noc_async_atomic_barrier();
     };
@@ -236,7 +279,7 @@ void kernel_main() {
         noc_async_atomic_barrier();
     }
     if (worker == 0) {
-        constexpr uint32_t expected = (num_devices - 1) * links * per_channel + workers;
+        constexpr uint32_t expected = (num_devices - 1) * links * per_channel * (has_hot ? 2 : 1) + workers;
         noc_semaphore_wait_min(done_ptr, expected);
         noc_semaphore_inc(get_noc_addr(done_sem), uint32_t{0} - expected);
         noc_async_atomic_barrier();

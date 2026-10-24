@@ -8,8 +8,10 @@ requester's top-k indices reference, into the requester's compact buffer; sparse
 indices rewritten to compact slots (no block-cyclic remap).
 
 The plan is built on device (ttnn.experimental.sparse_push_plan, then an all-gather of its tables), so it needs no host
-round trip and is trace-safe. One plan serves every layer that reuses the same indices (GLM shared layers), since only
-the KV slot differs between them. The indexer writes every chunk's indices into the same buffer, so a layer that
+round trip and is trace-safe. Rows at least HOT_THRESHOLD chips need are "hot" (ttnn.experimental.sparse_push_hot, on
+the gathered tables): their owner multicasts them once into a hot region at the front of every chip's compact buffer
+instead of pushing them to each requester, which cuts the load on the fabric's busiest links. One plan serves every
+layer that reuses the same indices (GLM shared layers), since only the KV slot differs between them. The indexer writes every chunk's indices into the same buffer, so a layer that
 computes new indices must call invalidate().
 """
 
@@ -26,6 +28,15 @@ class SparseKvPushPlan:
     compact_indices: ttnn.Tensor  # indices rewritten to compact slots, same distribution as the top-k indices
     stripe_chunk: int
     max_rows: int
+    hot_table: ttnn.Tensor | None = None  # this chip's sparse_push_hot table (push_hot_table of the pushes)
+
+
+# A row is hot when at least this many chips need it (GLM-5.3 at 1M: the busiest link carries ~36% less at L42/L62
+# and less at every full layer). Per owner at most HOT_PREFIX_CAP hot rows of the prefix and HOT_CURRENT_CAP of the
+# current chunk (2 blocks always fit: a chunk start need not be block aligned), which bounds the hot region.
+HOT_THRESHOLD = 12
+HOT_PREFIX_CAP = 2048
+HOT_CURRENT_CAP = 512
 
 
 def sparse_kv_push_supported(mesh_device) -> bool:
@@ -63,9 +74,10 @@ class SparseKvPushPlanner:
 
     Every buffer is allocated on first use, which the warm pass does before a trace capture."""
 
-    def __init__(self, mesh_device, links: int, l1_front_bytes_per_core: int | None = None):
+    def __init__(self, mesh_device, links: int, l1_front_bytes_per_core: int | None = None, hot: bool = True):
         self.mesh_device = mesh_device
         self.links = links
+        self.hot = hot
         self.l1_front_bytes_per_core = (
             L1_FRONT_BYTES_PER_CORE if l1_front_bytes_per_core is None else l1_front_bytes_per_core
         )
@@ -146,9 +158,12 @@ class SparseKvPushPlanner:
         self.prefetched.clear()
 
     def buffer_rows(self, rows: int, page_bytes: int) -> int:
-        """Compact buffer rows for up to `rows` distinct rows: each owner's run pads to whole bank-lane units."""
+        """Compact buffer rows for up to `rows` distinct rows: each owner's run pads to whole bank-lane units, behind
+        the hot region (each owner's two capped sub-runs, padded likewise)."""
         unit = self._pages_per_packet(page_bytes) * self.banks
-        return rows + self.mesh_device.get_num_devices() * unit
+        devices = self.mesh_device.get_num_devices()
+        hot = devices * sum(-(-cap // unit) * unit for cap in (HOT_PREFIX_CAP, HOT_CURRENT_CAP)) if self.hot else 0
+        return hot + rows + devices * unit
 
     @staticmethod
     def _pages_per_packet(page_bytes: int) -> int:
@@ -196,7 +211,29 @@ class SparseKvPushPlanner:
         ttnn.experimental.high_bw_all_gather(
             table, dim=2, output_tensor=self._tables, cluster_axis=None, num_links=self.links
         )
+        hot_table = None
+        if self.hot:
+            assert 2 * stripe_chunk <= HOT_CURRENT_CAP, f"stripe_chunk {stripe_chunk} > HOT_CURRENT_CAP / 2"
+            hot_table = ttnn.experimental.sparse_push_hot(
+                indices,
+                compact,
+                table,
+                self._tables,
+                num_devices=self.mesh_device.get_num_devices(),
+                stripe_chunk=stripe_chunk,
+                max_rows=max_rows,
+                pages_per_packet=self._pages_per_packet(page_bytes),
+                banks=self.banks,
+                threshold=HOT_THRESHOLD,
+                prefix_cap=HOT_PREFIX_CAP,
+                current_cap=2 * stripe_chunk,
+                chunk_start=chunk_start,
+            )
         ttnn.deallocate(table)
         return SparseKvPushPlan(
-            table=self._tables, compact_indices=compact, stripe_chunk=stripe_chunk, max_rows=max_rows
+            table=self._tables,
+            compact_indices=compact,
+            stripe_chunk=stripe_chunk,
+            max_rows=max_rows,
+            hot_table=hot_table,
         )

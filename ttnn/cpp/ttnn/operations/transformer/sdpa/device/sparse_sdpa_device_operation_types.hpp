@@ -68,6 +68,8 @@ struct SparseSDPAInputs {
     std::optional<Tensor> kv_spill;
     // Optional DRAM spill of push_output, likewise.
     std::optional<Tensor> push_output_spill;
+    // Optional sparse_push_hot table of this chip: the fused push multicasts its hot rows.
+    std::optional<Tensor> push_hot_table;
 };
 
 }  // namespace ttnn::prim

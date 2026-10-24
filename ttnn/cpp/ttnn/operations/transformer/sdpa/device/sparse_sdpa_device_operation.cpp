@@ -315,7 +315,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.push_input.has_value() ? t.push_input->tensor_spec() : t.q.tensor_spec(),
         t.push_table.has_value() ? t.push_table->logical_shape() : ttnn::Shape{},
         t.push_output.has_value() ? t.push_output->tensor_spec() : t.q.tensor_spec(),
-        t.push_batch_index_tensor.has_value());
+        t.push_batch_index_tensor.has_value(),
+        t.push_hot_table.has_value());
 }
 
 SparseSDPAOperation::program_factory_t SparseSDPAOperation::select_program_factory(
@@ -345,7 +346,8 @@ Tensor sparse_sdpa(
     const std::optional<Tensor>& push_output,
     const std::optional<Tensor>& push_batch_index_tensor,
     const std::optional<Tensor>& kv_spill,
-    const std::optional<Tensor>& push_output_spill) {
+    const std::optional<Tensor>& push_output_spill,
+    const std::optional<Tensor>& push_hot_table) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     if (fused_push.has_value()) {
         TT_FATAL(
@@ -391,6 +393,7 @@ Tensor sparse_sdpa(
             .push_batch_index_tensor = push_batch_index_tensor,
             .kv_spill = kv_spill,
             .push_output_spill = push_output_spill,
+            .push_hot_table = push_hot_table,
         });
 }
 

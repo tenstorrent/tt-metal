@@ -93,6 +93,8 @@ ttnn::Tensor sparse_sdpa(
     // Optional DRAM spills: `kv` (and `push_output`) then hold only their first rows, e.g. an L1 front, and the rows
     // past them live in the spill, R consecutive rows per spill page (R = spill page / kv row page).
     const std::optional<ttnn::Tensor>& kv_spill = std::nullopt,
-    const std::optional<ttnn::Tensor>& push_output_spill = std::nullopt);
+    const std::optional<ttnn::Tensor>& push_output_spill = std::nullopt,
+    // Optional sparse_push_hot table of this chip: the fused push multicasts its hot rows.
+    const std::optional<ttnn::Tensor>& push_hot_table = std::nullopt);
 
 }  // namespace ttnn::transformer

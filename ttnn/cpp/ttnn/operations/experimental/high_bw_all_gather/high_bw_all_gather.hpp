@@ -43,7 +43,8 @@ Tensor high_bw_all_gather(
     uint32_t push_max_rows = 0,
     // 0 = every needed row; 2 = only the rows from the chunk start on (the prefix was pushed by a fused sparse_sdpa).
     uint32_t push_part = 0,
-    const std::optional<Tensor>& push_spill = std::nullopt);
+    const std::optional<Tensor>& push_spill = std::nullopt,
+    const std::optional<Tensor>& push_hot_table = std::nullopt);
 
 // On-device plan for the sparse KV push: returns {plan table, indices rewritten to compact slots}
 // (see device/sparse_push_plan_device_operation.hpp).
@@ -56,9 +57,27 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t banks,
     const std::optional<Tensor>& chunk_start = std::nullopt);
 
+// Hot rows of the sparse KV push (see device/sparse_push_hot_device_operation.hpp): returns the hot table and rewrites
+// `compact` (the plan's compact indices) in place. current_cap defaults to two blocks (stripe_chunk * 2).
+Tensor sparse_push_hot(
+    const Tensor& indices,
+    const Tensor& compact,
+    const Tensor& table,
+    const Tensor& tables,
+    uint32_t num_devices,
+    uint32_t stripe_chunk,
+    uint32_t max_rows,
+    uint32_t pages_per_packet,
+    uint32_t banks,
+    uint32_t threshold,
+    uint32_t prefix_cap,
+    const Tensor& chunk_start,
+    std::optional<uint32_t> current_cap = std::nullopt);
+
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 
 namespace ttnn::experimental {
 using operations::experimental::high_bw_all_gather::high_bw_all_gather;
+using operations::experimental::high_bw_all_gather::sparse_push_hot;
 using operations::experimental::high_bw_all_gather::sparse_push_plan;
 }  // namespace ttnn::experimental

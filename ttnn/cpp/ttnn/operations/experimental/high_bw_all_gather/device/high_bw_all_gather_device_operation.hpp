@@ -85,6 +85,7 @@ Tensor high_bw_all_gather(
     uint32_t push_stripe_chunk = 0,
     uint32_t push_max_rows = 0,
     uint32_t push_part = 0,
-    const std::optional<Tensor>& push_spill = std::nullopt);
+    const std::optional<Tensor>& push_spill = std::nullopt,
+    const std::optional<Tensor>& push_hot_table = std::nullopt);
 
 }  // namespace ttnn::prim

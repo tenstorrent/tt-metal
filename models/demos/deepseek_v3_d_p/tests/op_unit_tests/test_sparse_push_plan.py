@@ -155,6 +155,142 @@ def test_sparse_push_plan_matches_reference(mesh_device, max_rows, prefix, banks
     assert not bad, f"device plan differs from the host reference: {bad[:8]}"
 
 
+HOT_MAGIC = 0x484F5431
+
+
+def _hot_reference(indices, num_devices, stripe_chunk, pages_per_packet, banks, threshold, caps, split):
+    """Host reference of sparse_push_hot. A row is hot when at least `threshold` chips need it; each owner's hot rows
+    of the prefix part (blocks before the split block) and of the current part form sub-runs in a hot region at the
+    front of every chip's compact buffer, identical on every chip: owner-major, part 0 then part 1, each padded to
+    whole bank-lane units and holding at most caps[part] rows (an owner's first ones, in local-row order). Behind the
+    region every requester keeps the plan's owner runs (one slot per needed row), now holding its cold rows (needed,
+    not in the region): those of the current part first, then those of the prefix part, each in local-row order.
+    Returns (hot slots H, bases [num_devices, 2], hot row mask, final compact indices)."""
+    unit = pages_per_packet * banks
+    valid = indices != SENTINEL
+    rows_needed = np.zeros(int(indices[valid].max()) + 1, dtype=np.int32)
+    for d in range(num_devices):
+        rows_needed[np.unique(indices[d][indices[d] != SENTINEL])] += 1
+    nrows = rows_needed.size
+    row = np.arange(nrows)
+    blk = row // stripe_chunk
+    owner, part = blk % num_devices, (blk >= split // stripe_chunk).astype(np.int64)
+    hot0 = rows_needed >= threshold
+    rank = np.zeros(nrows, dtype=np.int64)
+    hot = np.zeros(nrows, dtype=bool)
+    counts = np.zeros((num_devices, 2), dtype=np.int64)
+    for o in range(num_devices):
+        for q in range(2):
+            sel = np.flatnonzero(hot0 & (owner == o) & (part == q))  # ascending natural row = local-row order
+            rank[sel] = np.arange(sel.size)
+            keep = sel[: caps[q]]
+            hot[keep] = True
+            counts[o, q] = keep.size
+    bases = np.zeros((num_devices, 2), dtype=np.int64)
+    acc = 0
+    for o in range(num_devices):
+        for q in range(2):
+            bases[o, q] = acc
+            acc += -(-counts[o, q] // unit) * unit
+    H = acc
+    lane = (
+        lambda r: (r // pages_per_packet % banks)
+        + (r // pages_per_packet // banks) * unit
+        + (r % pages_per_packet) * banks
+    )
+    out = np.full(indices.shape, SENTINEL, dtype=np.int64)
+    for d in range(num_devices):
+        ok = indices[d] != SENTINEL
+        v = indices[d][ok]
+        need = np.unique(v)
+        needed_counts = np.bincount(owner[need], minlength=num_devices)
+        run_base = np.concatenate(([0], np.cumsum(-(-needed_counts // unit) * unit)))[:-1]
+        slot = np.zeros(nrows, dtype=np.int64)
+        hv = need[hot[need]]
+        slot[hv] = bases[owner[hv], part[hv]] + lane(rank[hv])
+        for o in range(num_devices):
+            cold = need[(owner[need] == o) & ~hot[need]]
+            ordered = np.concatenate((cold[part[cold] == 1], cold[part[cold] == 0]))
+            slot[ordered] = H + run_base[o] + lane(np.arange(ordered.size))
+        flat = out[d][ok]
+        flat[:] = slot[v]
+        out[d][ok] = flat
+    return H, bases, hot, out
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "max_rows, prefix",
+    [(10240, 10240), (1044480, 61440), (1044480, "L14"), (1044480, "L62")],
+    ids=["10k", "1M_cap_60k_prefix", "1M_real_L14", "1M_real_L62"],
+)
+@pytest.mark.parametrize("banks", [8, 1], ids=["dram_banks", "consecutive"])
+# A low threshold and small caps exercise the per-owner caps and every part's sub-run.
+@pytest.mark.parametrize("threshold, prefix_cap", [(12, 2048), (4, 96)], ids=["t12", "t4_cap96"])
+def test_sparse_push_hot_matches_reference(mesh_device, max_rows, prefix, banks, threshold, prefix_cap):
+    n_dev = mesh_device.get_num_devices()
+    rows, topk, sc, p = 160, 2048, 160, 8
+    split = max_rows - 5120
+    idx, tt_idx, tt_split = _plan_inputs(mesh_device, prefix, rows, topk, split)
+    plan_kw = dict(num_devices=n_dev, stripe_chunk=sc, max_rows=max_rows, pages_per_packet=p, banks=banks)
+    table, compact = ttnn.experimental.sparse_push_plan(tt_idx, **plan_kw, chunk_start=tt_split)
+    from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import _shard_over_mesh
+
+    _shard_over_mesh(table, mesh_device)
+    tables = ttnn.from_torch(
+        torch.zeros(1, 1, table.shape[2] * n_dev, table.shape[3], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    ttnn.experimental.high_bw_all_gather(table, dim=2, output_tensor=tables, cluster_axis=None, num_links=2)
+    compact_cols = lambda t: (
+        ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)).to(torch.int64).numpy() & 0xFFFFFFFF
+    ).reshape(n_dev, rows, topk)
+    current_cap = 2 * sc
+    hot_table = ttnn.experimental.sparse_push_hot(
+        tt_idx, compact, table, tables, **plan_kw, threshold=threshold, prefix_cap=prefix_cap, chunk_start=tt_split
+    )
+    want_H, want_bases, want_hot, want_compact = _hot_reference(
+        idx, n_dev, sc, p, banks, threshold, (prefix_cap, current_cap), split
+    )
+    got_compact = compact_cols(compact)
+    hot_host = (
+        ttnn.to_torch(hot_table, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=2)).to(torch.int64).numpy()
+        & 0xFFFFFFFF
+    ).reshape(n_dev, -1)
+    w = max_rows // 32
+    mask = np.zeros(w * 32, dtype=bool)
+    mask[: want_hot.size] = want_hot
+    want_words = np.packbits(mask.reshape(-1, 32)[:, ::-1], axis=1, bitorder="big").view(">u4").reshape(-1)
+    v = idx[idx != SENTINEL]
+    aw = -(-(int(v.max()) + 1) // sc) * (sc // 32)
+    bad = []
+    for d in range(n_dev):
+        checks = {
+            "header": hot_host[d, 0] == HOT_MAGIC and hot_host[d, 1] == want_H and hot_host[d, 3] * (sc // 32) == aw,
+            "bases": np.array_equal(hot_host[d, OWNER_OFF : OWNER_OFF + 2 * n_dev], want_bases.reshape(-1)),
+            # Only words of the active blocks are written; later ones may be stale.
+            "hot_mask": np.array_equal(hot_host[d, BITMAP_OFF : BITMAP_OFF + aw], want_words[:aw].astype(np.int64)),
+            "compact": np.array_equal(got_compact[d], want_compact[d]),
+        }
+        bad += [(d, k) for k, ok in checks.items() if not ok]
+    logger.info(f"hot slots {want_H}, hot rows {int(want_hot.sum())} (threshold {threshold}, prefix cap {prefix_cap})")
+    assert not bad, f"device hot plan differs from the host reference: {bad[:8]}"
+
+
 # Cache capacity (max_rows) and populated prefix of the perf cases: GLM-5.3's 1M cache filled to a depth (clustered
 # picks), and the real 1M top-k of a light (L14) and a heavy (L62) layer.
 _PERF_CASES = [

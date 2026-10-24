@@ -31,6 +31,7 @@ sparse_push::ReaderConfig reader_config(const SparseSDPAFusedPush& push, const S
         .input = *t.push_input,
         .table = *t.push_table,
         .batch_index_tensor = t.push_batch_index_tensor,
+        .hot_table = t.push_hot_table,
         .num_devices = devices,
         .stripe_chunk = push.stripe_chunk,
         .max_rows = push.max_rows,
@@ -96,14 +97,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAPushFusedFactory:
          t.push_batch_index_tensor.has_value() ? t.push_batch_index_tensor->buffer()->address() : 0u,
          push.batch_slot_num_layers,
          push.batch_slot_layer_idx,
-         push.input_batch_index});
+         push.input_batch_index,
+         t.push_hot_table.has_value() ? t.push_hot_table->buffer() : nullptr});
 
     tt::tt_metal::KernelDescriptor writer;
     writer.kernel_source = kdir + "sparse_push_writer.cpp";
     writer.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer.core_ranges = layout.sender_range;
-    writer.compile_time_args =
-        sparse_push::writer_compile_args(*t.push_output, t.push_output_spill, num_devices, my_rank, layout, mux);
+    writer.compile_time_args = sparse_push::writer_compile_args(
+        *t.push_output, t.push_output_spill, num_devices, my_rank, layout, mux, t.push_hot_table.has_value());
     writer.defines = defines;
     writer.config = tt::tt_metal::WriterConfigDescriptor{};
     writer.emplace_common_runtime_args(

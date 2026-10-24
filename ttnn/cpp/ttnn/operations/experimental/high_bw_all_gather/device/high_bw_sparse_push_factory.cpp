@@ -18,6 +18,7 @@ sparse_push::ReaderConfig reader_config(
         .input = tensor_args.input_tensor,
         .table = *tensor_args.push_table,
         .batch_index_tensor = tensor_args.input_batch_index_tensor,
+        .hot_table = tensor_args.push_hot_table,
         .num_devices = num_devices,
         .stripe_chunk = params.push_stripe_chunk,
         .max_rows = params.push_max_rows,
@@ -94,7 +95,13 @@ HighBwSparsePushFactory::cached_mesh_workload_t HighBwSparsePushFactory::create_
             layout.sender_range,
             tt::tt_metal::WriterDataMovementConfig(
                 sparse_push::writer_compile_args(
-                    output_tensor, tensor_args.push_spill, num_devices, my_rank, layout, mux),
+                    output_tensor,
+                    tensor_args.push_spill,
+                    num_devices,
+                    my_rank,
+                    layout,
+                    mux,
+                    tensor_args.push_hot_table.has_value()),
                 defines));
         auto mux_kernel = tt::tt_metal::CreateKernel(
             program,
