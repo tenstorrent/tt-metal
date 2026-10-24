@@ -23,6 +23,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
+from ....utils.checkpoint import ensure_cached
 
 # Shared device configuration for UMT5 tests to reduce code duplication and ensure we are using consistent device configurations.
 
@@ -95,7 +96,7 @@ def test_umt5_embeddings(
     if dit_unit_test:
         hf_model = get_random_weights_model()
     else:
-        model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+        model_name_checkpoint = ensure_cached("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
         hf_model = UMT5EncoderModel.from_pretrained(
             model_name_checkpoint, subfolder="text_encoder", local_files_only=False
         )
@@ -200,7 +201,7 @@ def test_umt5_encoder(
 
     parallel_config, ccl_manager = parallel_config_and_ccl_manager
 
-    model_name_checkpoint = f"Wan-AI/Wan2.2-T2V-A14B-Diffusers"
+    model_name_checkpoint = ensure_cached("Wan-AI/Wan2.2-T2V-A14B-Diffusers")
 
     if dit_unit_test:
         hf_model = get_random_weights_model()
