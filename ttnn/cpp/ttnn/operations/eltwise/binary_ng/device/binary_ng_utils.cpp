@@ -253,8 +253,12 @@ OpConfig::OpConfig(
             break;
         // a * (2**b)
         case BinaryOpType::LDEXP:
-            process_rhs = unary::UnaryOpType::EXP2;
-            binary_op = EnumT::MUL;
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LDEXP;
+            } else {
+                process_rhs = unary::UnaryOpType::EXP2;
+                binary_op = FpuBinaryOp::MUL;
+            }
             break;
         // max(a, b) + log1p(exp(-|a - b|)), in the fused SFPU kernel. There is no FPU form:
         // the composed log(exp(a) + exp(b)) overflows at |x| > 88.7 even though the result
@@ -489,6 +493,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LOGADDEXP: return {"logaddexp_binary_tile_init();", "logaddexp_binary_tile"};
         case LOGADDEXP2: return {"logaddexp2_binary_tile_init();", "logaddexp2_binary_tile"};
+        case LDEXP: return {"ldexp_binary_tile_init();", "ldexp_binary_tile"};
         case LEFT_SHIFT:
             return {
                 "binary_shift_tile_init();",
