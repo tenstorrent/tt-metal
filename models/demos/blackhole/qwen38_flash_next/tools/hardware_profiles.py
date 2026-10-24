@@ -84,6 +84,9 @@ class ResidentHardwareProfile:
 
 
 DEVICE_ROOT = Path("/dev/tenstorrent")
+SYSFS_ROOT = Path("/sys/class/tenstorrent")
+# The one mesh of the ring profiles' 1x4 LINE mesh graph descriptors (``top_level_instance ... mesh_id: 0``).
+RING_FABRIC_MESH_ID = 0
 
 
 def present_device_nodes(device_root: Path = DEVICE_ROOT) -> tuple[int, ...]:
@@ -221,6 +224,24 @@ def mesh_graph_descriptor_path(profile: ResidentHardwareProfile) -> Path | None:
     return None if profile.mesh_graph_descriptor is None else Path(__file__).with_name(profile.mesh_graph_descriptor)
 
 
+def system_mesh_chip_id(fabric_chip_id: int) -> int:
+    """The local chip ID of fabric chip ``fabric_chip_id`` of a ring profile's 1x4 mesh, read with no mesh open.
+
+    The system mesh gives its coordinate (0, k) fabric chip k and the chip the control plane maps that node to; the
+    control plane is built from the descriptor ``TT_MESH_GRAPH_DESC_PATH`` names.  ``set_fabric_config`` rebuilds it
+    without comparing the two mappings, so ``live_mapping`` checks the open mesh again.
+    """
+
+    system_mesh = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+    shape = tuple(int(value) for value in system_mesh.shape())
+    if shape != (1, 4):
+        raise HardwareProfileError(
+            f"the system mesh is {shape}, not the 1x4 line of a ring profile's mesh graph descriptor "
+            f"(TT_MESH_GRAPH_DESC_PATH={os.environ.get('TT_MESH_GRAPH_DESC_PATH')!r})"
+        )
+    return int(system_mesh.get_device_id(ttnn.MeshCoordinate(0, fabric_chip_id)))
+
+
 def verify_inherited_locks(profile: ResidentHardwareProfile) -> list[dict[str, Any]]:
     """Every lock the profile requires is held exclusively on the expected inherited fd."""
 
@@ -243,7 +264,9 @@ def live_mapping(
     mesh: Any, chips_with_mmio: Mapping[int, int], profile: ResidentHardwareProfile
 ) -> list[dict[str, Any]]:
     """The open mesh's coordinates against the profile: physical id, KMD node, and the optional board / BDF / NUMA
-    identities; the node order must be the pinned route."""
+    identities; the node order must be the pinned route.  On a ring profile coordinate (0, k) must also hold fabric
+    chip k: the route was read from the system mesh before ``set_fabric_config`` rebuilt the control plane.  A line's
+    fabric orientation is the topology mapper's choice and either way a line, so it is not checked."""
 
     if profile.route is None or profile.route_nodes is None:
         raise HardwareProfileError(f"profile {profile.lane} has no route yet (resolve it before the mesh opens)")
@@ -254,7 +277,7 @@ def live_mapping(
         node = chips_with_mmio.get(actual_id)
         if actual_id != physical_id or node is None:
             raise HardwareProfileError(f"mesh coordinate {(0, column)} maps to logical={actual_id} node={node}")
-        sysfs = Path(f"/sys/class/tenstorrent/tenstorrent!{node}/device").resolve(strict=True)
+        sysfs = (SYSFS_ROOT / f"tenstorrent!{node}" / "device").resolve(strict=True)
         board = profile.boards.get(node)
         if board is not None:
             board_link = Path(f"/dev/tenstorrent/by-id/blackhole-{board}")
@@ -281,6 +304,14 @@ def live_mapping(
         mapping.append(record)
     if tuple(item["device_node"] for item in mapping) != profile.route_nodes:
         raise HardwareProfileError(f"canonical route changed: {mapping} vs nodes {profile.route_nodes}")
+    if profile.ethernet_graph == "ring":
+        fabric = [(item["fabric_mesh_id"], item["fabric_chip_id"]) for item in mapping]
+        expected = [(RING_FABRIC_MESH_ID, chip_id) for chip_id in range(4)]
+        if fabric != expected:
+            raise HardwareProfileError(
+                f"{profile.lane} mesh is not in the fabric's line order: fabric (mesh, chip) by coordinate "
+                f"(0, 0..3) actual={fabric} expected={expected} for route {profile.route}"
+            )
     return mapping
 
 

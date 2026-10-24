@@ -154,13 +154,10 @@ def derive_fabric_line_route(
     which three: the QuietBox (4x p150) came out as chips (0, 2, 1, 3), a QuietBox 2 (2x p300c) as (1, 0, 3, 2)
     (2026-09-18).  The collectives are Linear along the mesh row, so the mesh must be opened in exactly this order:
     any other ethernet path through the ring puts a mesh neighbour pair on a link the fabric line does not carry
-    and the first all_gather fails ("Could not find any forwarding direction").  ``fabric_node_chip_id(chip_id)`` is
-    that fabric chip's process-local chip ID, read from the system mesh with no mesh open
-    (``SystemMeshDescriptor().get_device_id`` at coordinate (0, chip_id): the system mesh gives its k-th coordinate
-    fabric chip k and the chip the control plane maps that node to; the control plane initializes from the descriptor
-    ``TT_MESH_GRAPH_DESC_PATH`` names, and FABRIC_1D keeps the fabric-disabled mapping).  The result is checked to be
-    a bijection over the four local chips and an ethernet path (consecutive chips linked).  Deterministic: the fabric
-    mapping is a function of the cluster descriptor and the mesh graph descriptor, not of any open order.
+    and the first all_gather fails ("Could not find any forwarding direction").  ``fabric_node_chip_id(k)`` returns
+    the local chip ID of fabric chip k of the host's mesh.  The result is checked to be a bijection over the four
+    local chips and an ethernet path (consecutive chips linked).  Deterministic: the fabric mapping is a function of
+    the cluster descriptor and the mesh graph descriptor, not of any open order.
     """
 
     adjacency = _ethernet_adjacency(descriptor, chips_with_mmio)

@@ -185,7 +185,7 @@ def main() -> int:
     import torch
     import yaml
 
-    from models.demos.blackhole.qwen38_flash_next.tools import physical_route
+    from models.demos.blackhole.qwen38_flash_next.tools import hardware_profiles, physical_route
 
     phase("before-discovery")
     discovered = (int(ttnn.GetNumAvailableDevices()), int(ttnn.get_num_pcie_devices()), int(ttnn.get_num_devices()))
@@ -238,16 +238,13 @@ def main() -> int:
         f"[info] ethernet graph kind actual={graph_kind} expected=line adjacency={report['topology']['ethernet_adjacency']}",
         flush=True,
     )
-    descriptor = ttnn._ttnn.multi_device.SystemMeshDescriptor()
     try:
         route = physical_route.derive_canonical_line_route(document, chips_with_mmio)
         report["topology"]["route_derivation"] = "physical_route.derive_canonical_line_route"
     except physical_route.PhysicalRouteError as error:
         report["topology"]["line_route_error"] = str(error)
         route = physical_route.derive_fabric_line_route(
-            document,
-            chips_with_mmio,
-            lambda chip_id: int(descriptor.get_device_id(ttnn.MeshCoordinate(0, chip_id))),
+            document, chips_with_mmio, hardware_profiles.system_mesh_chip_id
         )
         walk = _ring_walk(adjacency)
         report["topology"]["ring_walk_route"] = list(walk)
@@ -266,6 +263,7 @@ def main() -> int:
         collective_topology="Linear",
     )
 
+    descriptor = ttnn._ttnn.multi_device.SystemMeshDescriptor()
     physical_shape = tuple(int(value) for value in descriptor.local_shape())
     all_local = bool(descriptor.all_local())
     report["topology"]["system_mesh_local_shape"] = list(physical_shape)
@@ -338,6 +336,12 @@ def main() -> int:
             )
         report["topology"]["live_mapping"] = mapping
         print(json.dumps(mapping, indent=1), flush=True)
+        if "line_route_error" in report["topology"]:  # a ring: the route was read before the fabric was enabled
+            checks.expect(
+                "fabric (mesh, chip) by coordinate (0, 0..3)",
+                [[item["fabric_mesh_id"], item["fabric_chip_id"]] for item in mapping],
+                [[hardware_profiles.RING_FABRIC_MESH_ID, chip_id] for chip_id in range(4)],
+            )
         mesh.enable_program_cache()
 
         # 6. eager op on a dim-0 sharded tensor: coordinate k holds the value k + 1.
