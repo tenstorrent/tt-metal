@@ -21,12 +21,16 @@ them apart:
 * a single-layer ND-sharded tensor whose shard IS the segment (``[1, 1, D, 32]`` / ``[1, K-1, 64]``),
   the form PR #56443 measured and the one ``to_memory_config`` produces from a native tensor;
 * the consolidated per-rank slabs the engine owns (``KdaStates``): the recurrent slab keeps the ND
-  form over ``[slots * layers, H_local, D, D]`` and is written per layer with ``fill_cache_for_user_``;
+  form over ``[slots * layers, H_local, D, D]`` and is written per layer with ``indexed_entry_copy``;
   the convolution slab is an INTERLEAVED row-major ``[slots * layers, SEG, (K-1)*64]`` tensor whose
   384-byte pages are the segments (``row0[64c:64c+64] | row1[...] | row2[...]``). Interleaved page
   ``p`` lives at bank ``p % N``, offset ``(p // N) * 384``, which is where ND shard ``s = p`` would
-  live, so the bytes and the table math are the same while the write becomes a plain ``slice_write``
-  of whole rows (``slice_write`` refuses sharded outputs, and ``fill_cache`` refuses row-major).
+  live, so the bytes and the table math are the same while the write becomes a plain whole-row copy.
+
+Exports take the slot as a replicated one-element UINT32 device tensor (``slot_index``, or the traced
+metadata's slot word) and write slab batch ``slot * L + layer_position`` with ``indexed_entry_copy``, which
+resolves the batch on device. A captured export therefore follows the slot written before each replay.
+Imports run outside any capture and keep a host slot.
 
 Segment numbering (``g`` is the GLOBAL head ``tp_col * H_local + h_local``, ``branch`` is q/k/v =
 0/1/2, the golden's ``[all q | all k | all v]`` order):
@@ -365,16 +369,39 @@ def slab_rows_to_convolution(rows: ttnn.Tensor, geometry: KdaContractGeometry) -
     return convolution
 
 
-def export_recurrent(slab: ttnn.Tensor, recurrent: ttnn.Tensor, batch: int) -> None:
-    """Write one layer's native recurrent carry into slab batch ``batch`` (a captured device op)."""
-    ttnn.kv_cache.fill_cache_for_user_(slab, recurrent, batch)
+def slot_index(device: ttnn.Device | ttnn.MeshDevice, slot: int) -> ttnn.Tensor:
+    """A host slot as the replicated one-element UINT32 device tensor exports and loads take."""
+    return ttnn.from_torch(
+        torch.tensor([slot], dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
 
 
-def export_convolution(slab: ttnn.Tensor, convolution: ttnn.Tensor, batch: int, geometry: KdaContractGeometry) -> None:
-    """Write one layer's native convolution tail into slab batch ``batch`` (captured device ops)."""
+def export_recurrent(
+    slab: ttnn.Tensor, recurrent: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
+) -> None:
+    """Write one layer's native recurrent carry into slab batch ``slot * num_layers + position`` (captured).
+
+    The native tiles land in the ND slab's segments through logical page ids, as ``fill_cache_for_user_`` put them.
+    """
+    ttnn.experimental.indexed_entry_copy(recurrent, slab, slot, index_scale=num_layers, index_offset=position)
+
+
+def export_convolution(
+    slab: ttnn.Tensor,
+    convolution: ttnn.Tensor,
+    slot: ttnn.Tensor,
+    num_layers: int,
+    position: int,
+    geometry: KdaContractGeometry,
+) -> None:
+    """Write one layer's native convolution tail into slab batch ``slot * num_layers + position`` (captured)."""
     rows = convolution_to_slab_rows(convolution, geometry)
-    _, seg, width = rows.shape
-    ttnn.experimental.slice_write(rows, slab, [batch, 0, 0], [batch + 1, seg, width], [1, 1, 1])
+    ttnn.experimental.indexed_entry_copy(rows, slab, slot, index_scale=num_layers, index_offset=position)
     _free_unless_shared(rows, convolution)
 
 
@@ -498,10 +525,11 @@ class KdaStates:
                 "the interleaved row form only matches the contract when one row is one aligned page"
             )
 
-    def export_layer(self, state: KdaState, slot: int, layer_idx: int) -> None:
-        batch = self.batch_index(slot, layer_idx)
-        export_recurrent(self.recurrent, state.recurrent, batch)
-        export_convolution(self.convolution, state.convolution, batch, self.geometry)
+    def export_layer(self, state: KdaState, slot: ttnn.Tensor, layer_idx: int) -> None:
+        """Write one layer's native state into its slot's batch; ``slot`` is read on device (see ``slot_index``)."""
+        position = self.layer_position(layer_idx)
+        export_recurrent(self.recurrent, state.recurrent, slot, self.num_layers, position)
+        export_convolution(self.convolution, state.convolution, slot, self.num_layers, position, self.geometry)
 
     def import_layer(self, destination: KdaState, slot: int, layer_idx: int) -> None:
         batch = self.batch_index(slot, layer_idx)
