@@ -305,7 +305,10 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // across the exp helper avoids pushing this kernel past the SFPU register-allocator
     // budget (reload-insn ICE); out_exp >= 255 is equivalent to s >= 128.
     sfpi::vInt out_exp = sfpi::exexp(y, sfpi::ExponentMode::Biased) + k_int;
-    y = sfpi::setexp(y, out_exp);
+    sfpi::vFloat out_val = 0.0f;
+    v_if(out_exp > 0) { out_val = sfpi::setexp(y, out_exp); }
+    v_endif;
+    y = out_val;
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
