@@ -19,6 +19,7 @@
 #include "impl/context/context_types.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
+#include <internal/mesh_device.hpp>
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -389,7 +390,7 @@ void GlobalCircularBufferImpl::setup_cb_buffers(BufferType buffer_type, uint32_t
             if (!device_->is_local(coord)) {
                 continue;
             }
-            per_device_config.push_back(make_config_host_buffer(device_->get_device(coord)));
+            per_device_config.push_back(make_config_host_buffer(internal::get_device(*device_, coord)));
             shard_data_transfers.push_back(
                 distributed::ShardDataTransfer(coord).host_data(per_device_config.back().data()));
         }
