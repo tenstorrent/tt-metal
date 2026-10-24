@@ -985,7 +985,7 @@ m2::KernelSpec::CompileTimeArgs writer_compile_time_args(
             writer_num_varargs > 0,
             "Writer write-back segment block length is 0, but this configuration writes back. The "
             "length is measured by build_run_args, which must run before the kernel specs are built.");
-        args.emplace("max_write_back_segments", writer_num_varargs / 3);
+        args.emplace("max_write_back_segments", writer_num_varargs / 2);
     }
     return args;
 }
@@ -1024,7 +1024,7 @@ void bind_writer_resources(m2::KernelSpec& kernel, const SpecConfig& c) {
     }
     if (c.writes_back) {
         bind_dfb(kernel, OUT, "out", m2::DFBEndpointType::CONSUMER);
-        // The write-back moves nothing through a buffer: it reads this binding's base address and
+        // The write-back moves nothing through a buffer: it addresses this binding by shard and
         // issues its own remote writes to the storage cores.
         bind_tensor(kernel, OUTPUT, "dst");
     }
@@ -1668,9 +1668,9 @@ std::vector<uint32_t> sender_coord_varargs(const CoreIndices& idx, const Runtime
     return {ctx.mcast_noc_x[idx.height_index], ctx.mcast_noc_y[0]};
 }
 
-// Which storage-core segments this worker's output block spans, three values each: the byte count and
-// the destination node's coordinates. Advances the shared storage-core cursor, so it must be called
-// once per core in shard order.
+// Which storage-core segments this worker's output block spans, two values each: the byte count and
+// the destination output shard id (storage core i holds output shard i). Advances the shared
+// storage-core cursor, so it must be called once per core in shard order.
 std::vector<uint32_t> write_back_varargs(
     const RuntimeArgsContext& ctx,
     uint32_t& current_storage_core,
@@ -1689,8 +1689,7 @@ std::vector<uint32_t> write_back_varargs(
 
         num_segments_out += 1;
         args.push_back(tiles_to_write * ctx.out_single_tile_size);
-        args.push_back(ctx.storage_core_noc_x[current_storage_core]);
-        args.push_back(ctx.storage_core_noc_y[current_storage_core]);
+        args.push_back(current_storage_core);
 
         worker_offset += tiles_to_write;
         current_storage_core_offset += tiles_to_write;

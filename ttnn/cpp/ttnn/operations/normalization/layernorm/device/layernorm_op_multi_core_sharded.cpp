@@ -19,6 +19,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <bit>
 #include <cstdint>
@@ -172,13 +173,20 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     bool output_row_wise = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     CoreRangeSet all_storage_cores = output_shard_spec.grid;
-    std::vector<uint32_t> storage_core_noc_x;
-    std::vector<uint32_t> storage_core_noc_y;
-    std::vector<CoreCoord> storage_core_coords =
-        corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), output_row_wise);
-    for (auto core : storage_core_coords) {
-        storage_core_noc_x.push_back((std::uint32_t)device->worker_core_from_logical_core(core).x);
-        storage_core_noc_y.push_back((std::uint32_t)device->worker_core_from_logical_core(core).y);
+    if (writes_back) {
+        // The writer names each storage core by the output shard it holds (ShardView): storage core i, in the
+        // shard grid's orientation order, must hold output shard i (at most one shard per core).
+        const std::vector<CoreCoord> storage_core_coords =
+            corerange_to_cores(all_storage_cores, all_storage_cores.num_cores(), output_row_wise);
+        const auto output_bds = output.tensor_spec().compute_buffer_sharding_args().buffer_distribution_spec();
+        TT_FATAL(
+            output_bds.has_value() && output_bds->num_shards() <= output_bds->cores().size() &&
+                output_bds->num_shards() <= storage_core_coords.size() &&
+                std::equal(
+                    storage_core_coords.begin(),
+                    storage_core_coords.begin() + output_bds->num_shards(),
+                    output_bds->cores().begin()),
+            "Sharded layernorm write-back needs output shard i on storage core i, at most one shard per core");
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -404,8 +412,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .writes_back = writes_back,
         .num_distributed_devices = num_distributed_devices,
         .reader_noc = reader_noc,
-        .storage_core_noc_x = std::move(storage_core_noc_x),
-        .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (std::uint32_t)all_storage_cores.num_cores()};
 
     // The write-back segment block's length is measured per node while the run args are built, and
