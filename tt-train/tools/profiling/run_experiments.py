@@ -493,7 +493,7 @@ def run_experiment(exp, run_dir, textprotos, skip_reset=False):
             "TT_METAL_READ_DEBUG_DELAY_RISCVS=BR "
             "TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR "
             "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 "
-            f'python3 -m tracy -r -v -p "{NANO_GPT_BIN} --config {training_cfg_abs}"'
+            f'python3 -m tracy --no-web-server -r -v -p "{NANO_GPT_BIN} --config {training_cfg_abs}"'
         )
     elif profiler_mode == "naive":
         cmd = f"TTML_NAIVE_PROFILER=1 {NANO_GPT_BIN} --config {training_cfg_abs}"
