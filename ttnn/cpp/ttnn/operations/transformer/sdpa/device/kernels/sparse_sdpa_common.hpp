@@ -127,6 +127,12 @@ inline uint32_t debug_mask() {
     const char* v = std::getenv("SPARSE_SDPA_DBG");
     return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
 }
+// Packed KV slabs buffered between gather and compute (SPARSE_SDPA_KRM_SLABS, default 2 = base double buffer).
+inline uint32_t krm_slabs() {
+    const char* v = std::getenv("SPARSE_SDPA_KRM_SLABS");
+    const uint32_t n = v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
+    return n >= 2 ? n : CB_DOUBLE_BUFFER_DEPTH;
+}
 // Split-K work distribution (prototype): SPARSE_SDPA_SPLITK=1 enables, unset/0 keeps the whole-token split.
 inline bool split_k_enabled() {
     const char* v = std::getenv("SPARSE_SDPA_SPLITK");

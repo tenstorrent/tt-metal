@@ -137,13 +137,15 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     };
     cb(cb_q_rm, q_row_bytes, H, q_rm_df);              // cb_q_rm : H row-sticks (native Q dtype: fp8 or bf16)
     cb(cb_q_in, q_in_tile_bytes, Sqt * DHt, q_in_df);  // cb_q_in : [Sqt,DHt] (bfp8 when Q is fp8)
+    // Packed-row slabs (32 rows each) the gather may run ahead of compute. Base: 2 (double buffer).
+    const uint32_t krm_slabs = ::sparse_sdpa::krm_slabs();
     if (scaled_kv) {
         // One double-buffered allocation with an owning FP8 FIFO and a format-only BF16 RoPE alias. Both use
         // the physical packed-page stride. Only cb_k_rm advances FIFO state; compute derives the alias read
         // pointer from the owner before reading RoPE. This lets the reader gather slab N+1 while compute
         // reconstructs slab N without independent alias pointers drifting at the ring wrap.
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = packed_page_bytes * tt::constants::TILE_HEIGHT * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
+            .total_size = packed_page_bytes * tt::constants::TILE_HEIGHT * krm_slabs,
             .core_ranges = core_grid,
             .format_descriptors = {{
                 tt::tt_metal::CBFormatDescriptor{
@@ -180,7 +182,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_kreq, ::sparse_sdpa::gather_request::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_kack, ::sparse_sdpa::ACK_PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     if (scaled_kv) {
-        cb(cb_k_scale_bcast, fp32_tile_bytes, scale_blocks * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, fp32);
+        cb(cb_k_scale_bcast, fp32_tile_bytes, scale_blocks * krm_slabs, fp32);
         cb(cb_k_latent_tile, k_in_tile_bytes, vDHt, tt::DataFormat::Bfp8_b);
         cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
     }

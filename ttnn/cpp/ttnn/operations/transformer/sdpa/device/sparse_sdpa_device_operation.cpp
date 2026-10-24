@@ -318,7 +318,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.push_batch_index_tensor.has_value(),
         t.push_hot_table.has_value(),
         ::sparse_sdpa::debug_mask(),
-        ::sparse_sdpa::split_k_enabled());
+        ::sparse_sdpa::split_k_enabled(),
+        ::sparse_sdpa::krm_slabs());
 }
 
 SparseSDPAOperation::program_factory_t SparseSDPAOperation::select_program_factory(
