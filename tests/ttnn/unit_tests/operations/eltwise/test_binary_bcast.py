@@ -5001,6 +5001,30 @@ def test_binary_specless_sharded_output_zero_volume(device, shape, layout):
 
 
 @pytest.mark.parametrize(
+    "op",
+    [
+        lambda a, b: ttnn.add(a, b),
+        lambda a, b: ttnn.add(
+            a, b, memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1)
+        ),
+        lambda a, b: ttnn.relu(a),
+        lambda a, b: ttnn.typecast(a, ttnn.float32),
+    ],
+    ids=["add", "add_height_sharded", "relu", "typecast"],
+)
+def test_zero_volume_op_skips_launch(device, op):
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    shape = (1, 1, 0, 64)
+    a = ttnn.from_torch(torch.empty(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.empty(shape, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    entries_before = device.num_program_cache_entries()
+    result = op(a, b)
+    assert device.num_program_cache_entries() == entries_before, "zero-volume op must not build or launch a program"
+    assert ttnn.to_torch(result).numel() == 0
+
+
+@pytest.mark.parametrize(
     "shape, layout",
     [
         ((1, 1, 32, 0), ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
