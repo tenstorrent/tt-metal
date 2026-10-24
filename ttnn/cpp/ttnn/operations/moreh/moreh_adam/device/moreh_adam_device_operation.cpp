@@ -102,6 +102,25 @@ MorehAdamOperation::tensor_return_value_t MorehAdamOperation::create_output_tens
     return ret;
 }
 
+std::vector<tt::tt_metal::TensorTopology> MorehAdamOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const Tensor* max_exp_avg_sq_in =
+        tensor_args.max_exp_avg_sq_in.has_value() ? &*tensor_args.max_exp_avg_sq_in : nullptr;
+    // output_tensors holds the caller's slot for every entry of compute_output_specs, in the same order.
+    const std::vector<std::reference_wrapper<const std::optional<Tensor>>> preallocated_outputs(
+        tensor_args.output_tensors.begin(), tensor_args.output_tensors.end());
+    return preallocated_or_union_output_topologies(
+        {&tensor_args.param_in,
+         &tensor_args.grad,
+         &tensor_args.exp_avg_in,
+         &tensor_args.exp_avg_sq_in,
+         max_exp_avg_sq_in},
+        tensor_args.param_in,
+        compute_output_specs(operation_attributes, tensor_args),
+        preallocated_outputs,
+        "ttnn::moreh_adam");
+}
+
 auto MorehAdamOperation::compute_program_hash(
     const MorehAdamOperation::operation_attributes_t& operation_attributes,
     const MorehAdamOperation::tensor_args_t& tensor_args) -> ttsl::hash::hash_t {
@@ -142,7 +161,8 @@ ttnn::operations::moreh::moreh_adam::MorehAdamOperation::tensor_return_value_t m
         step.value_or(0),
         amsgrad.value_or(false),
         memory_config.value_or(param_in.memory_config()),
-        init_device_compute_kernel_config(param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
+        init_device_compute_kernel_config(
+            param_in.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4),
     };
     auto tensor_args = OperationType::tensor_args_t{
         param_in,
