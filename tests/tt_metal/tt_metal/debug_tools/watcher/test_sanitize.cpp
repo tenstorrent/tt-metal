@@ -59,6 +59,7 @@ enum watcher_features_t {
     SanitizeNOCLinkedTransaction,
     SanitizeL1Overflow,
     SanitizeL1OverflowStraddle,
+    SanitizeL1OverflowPastEthL1,
     SanitizeEthSrcL1Overflow,
     SanitizeEthDestL1Overflow,
     SanitizeNOCMulticastInvalidRange,
@@ -402,6 +403,10 @@ void RunTestOnCore(
             // 4-byte access starting 2 bytes below the top of L1, straddling the cached/uncached-alias seam.
             l1_overflow_addr = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE) - 2;
             break;
+        case SanitizeL1OverflowPastEthL1:
+            l1_overflow_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE) +
+                               hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
+            break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         case SanitizeNOCMulticastInvalidRange: {
@@ -739,6 +744,7 @@ void RunTestOnCore(
                 output_buffer_addr);
         } break;
         case SanitizeL1OverflowStraddle:
+        case SanitizeL1OverflowPastEthL1:
         case SanitizeL1Overflow: {
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} core overflowed L1 with access to {:#x} "
@@ -1043,6 +1049,18 @@ TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeNOCInlineWriteDram) {
     this->RunTestOnDevice(
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             RunTestIEth(fixture, mesh_device, SanitizeNOCInlineWriteDram);
+        },
+        this->devices_[0]);
+}
+
+TEST_F(MeshWatcherFixture, IdleEthTestWatcherSanitizeL1OverflowPastEthL1) {
+    if (!this->IsSlowDispatch()) {
+        log_info(tt::LogTest, "FD-on-idle-eth not supported.");
+        GTEST_SKIP();
+    }
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            RunTestIEth(fixture, mesh_device, SanitizeL1OverflowPastEthL1);
         },
         this->devices_[0]);
 }
