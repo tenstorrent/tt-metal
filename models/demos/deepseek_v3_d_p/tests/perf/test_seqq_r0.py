@@ -418,10 +418,14 @@ def test_seqq_r0(mesh_device, variant, config_only):
         def seq_chain(kv=5 * S * SP, pc=None, qb_mem=L1, b1_mem=L1, rm=True, partition=False):
             src = ttnn.mesh_partition(qr, dim=2, cluster_axis=1) if partition else qr_loc
             kw = {"program_config": pc} if pc is not None else {}
-            q = ttnn.linear(src, tw_qb_full, memory_config=qb_mem, dtype=ttnn.bfloat16, compute_kernel_config=hifi2, **kw)
+            q = ttnn.linear(
+                src, tw_qb_full, memory_config=qb_mem, dtype=ttnn.bfloat16, compute_kernel_config=hifi2, **kw
+            )
             if partition:
                 ttnn.deallocate(src)
-            nope, rp = ttnn.experimental.nlp_create_q_heads_split(q, num_heads=NH, split_head_dim=NOPE, memory_config=DRAM)
+            nope, rp = ttnn.experimental.nlp_create_q_heads_split(
+                q, num_heads=NH, split_head_dim=NOPE, memory_config=DRAM
+            )
             ttnn.deallocate(q)
             nope2 = ttnn.linear(
                 nope,
@@ -473,35 +477,87 @@ def test_seqq_r0(mesh_device, variant, config_only):
         timer("Q1 q_b full [1d_n5_k8] DRAM out", lambda: qb_full(pc1d(5, 8), mem=DRAM))
         log(f"Q best q_b full: {best[1] if best else None} {best[0] if best else None}")
         bpc = best[2] if best else None
-        timer(f"Q2 seq chain [{best[1] if best else 'auto'}] (q_b,heads64,wkv_b1,rope sub+cat,untilize)", lambda: seq_chain(pc=bpc))
+        timer(
+            f"Q2 seq chain [{best[1] if best else 'auto'}] (q_b,heads64,wkv_b1,rope sub+cat,untilize)",
+            lambda: seq_chain(pc=bpc),
+        )
         timer("Q2b seq chain without untilize", lambda: seq_chain(pc=bpc, rm=False))
         timer("Q2c seq chain + mesh_partition", lambda: seq_chain(pc=bpc, partition=True))
         timer("Q2d seq chain wkv_b1 out DRAM", lambda: seq_chain(pc=bpc, b1_mem=DRAM))
         # pieces
         q_base = ttnn.linear(
-            qr, tw_qb, program_config=qb_cfg["program_config"], memory_config=qb_cfg["out_mem_config"],
-            dtype=ttnn.bfloat16, compute_kernel_config=hifi2,
+            qr,
+            tw_qb,
+            program_config=qb_cfg["program_config"],
+            memory_config=qb_cfg["out_mem_config"],
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=hifi2,
         )
         q_seq = qb_full(bpc)
-        timer("Q3 base q_b [640,2048]x[2048,4096]", lambda: ttnn.linear(
-            qr, tw_qb, program_config=qb_cfg["program_config"], memory_config=qb_cfg["out_mem_config"],
-            dtype=ttnn.bfloat16, compute_kernel_config=hifi2,
-        ))
-        timer("Q3 base heads16", lambda: list(ttnn.experimental.nlp_create_q_heads_split(
-            q_base, num_heads=HEADS_L, split_head_dim=NOPE, memory_config=DRAM)))
-        timer("Q3 seq heads64", lambda: list(ttnn.experimental.nlp_create_q_heads_split(
-            q_seq, num_heads=NH, split_head_dim=NOPE, memory_config=DRAM)))
-        nb, rb = ttnn.experimental.nlp_create_q_heads_split(q_base, num_heads=HEADS_L, split_head_dim=NOPE, memory_config=DRAM)
-        ns, rsq = ttnn.experimental.nlp_create_q_heads_split(q_seq, num_heads=NH, split_head_dim=NOPE, memory_config=DRAM)
-        timer("Q4 base wkv_b1 16x[640,192]x[192,512]", lambda: ttnn.linear(
-            nb, tw_b1, program_config=b1_cfg["program_config"], memory_config=b1_cfg["out_mem_config"],
-            dtype=ttnn.bfloat16, compute_kernel_config=hifi2))
-        timer("Q4 seq wkv_b1 64x[160,192]x[192,512]", lambda: ttnn.linear(
-            ns, tw_b1_full, program_config=b1_pc160, memory_config=L1, dtype=ttnn.bfloat16, compute_kernel_config=hifi2))
-        nb2 = ttnn.linear(nb, tw_b1, program_config=b1_cfg["program_config"], memory_config=b1_cfg["out_mem_config"],
-                          dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
-        ns2 = ttnn.linear(ns, tw_b1_full, program_config=b1_pc160, memory_config=L1, dtype=ttnn.bfloat16,
-                          compute_kernel_config=hifi2)
+        timer(
+            "Q3 base q_b [640,2048]x[2048,4096]",
+            lambda: ttnn.linear(
+                qr,
+                tw_qb,
+                program_config=qb_cfg["program_config"],
+                memory_config=qb_cfg["out_mem_config"],
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=hifi2,
+            ),
+        )
+        timer(
+            "Q3 base heads16",
+            lambda: list(
+                ttnn.experimental.nlp_create_q_heads_split(
+                    q_base, num_heads=HEADS_L, split_head_dim=NOPE, memory_config=DRAM
+                )
+            ),
+        )
+        timer(
+            "Q3 seq heads64",
+            lambda: list(
+                ttnn.experimental.nlp_create_q_heads_split(q_seq, num_heads=NH, split_head_dim=NOPE, memory_config=DRAM)
+            ),
+        )
+        nb, rb = ttnn.experimental.nlp_create_q_heads_split(
+            q_base, num_heads=HEADS_L, split_head_dim=NOPE, memory_config=DRAM
+        )
+        ns, rsq = ttnn.experimental.nlp_create_q_heads_split(
+            q_seq, num_heads=NH, split_head_dim=NOPE, memory_config=DRAM
+        )
+        timer(
+            "Q4 base wkv_b1 16x[640,192]x[192,512]",
+            lambda: ttnn.linear(
+                nb,
+                tw_b1,
+                program_config=b1_cfg["program_config"],
+                memory_config=b1_cfg["out_mem_config"],
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=hifi2,
+            ),
+        )
+        timer(
+            "Q4 seq wkv_b1 64x[160,192]x[192,512]",
+            lambda: ttnn.linear(
+                ns,
+                tw_b1_full,
+                program_config=b1_pc160,
+                memory_config=L1,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=hifi2,
+            ),
+        )
+        nb2 = ttnn.linear(
+            nb,
+            tw_b1,
+            program_config=b1_cfg["program_config"],
+            memory_config=b1_cfg["out_mem_config"],
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=hifi2,
+        )
+        ns2 = ttnn.linear(
+            ns, tw_b1_full, program_config=b1_pc160, memory_config=L1, dtype=ttnn.bfloat16, compute_kernel_config=hifi2
+        )
         timer("Q5 base rope+cat [16,640]", lambda: rope(rb, 5 * S * SP, nb2))
         timer("Q5 seq rope+cat sub [64,160]", lambda: rope(rsq, 5 * S * SP, ns2, sub=1))
         qq_b = rope(rb, 5 * S * SP, nb2)
@@ -618,16 +674,38 @@ def test_seqq_r0(mesh_device, variant, config_only):
         timer("O2 tilize [64,160,512]", lambda: ttnn.to_layout(attn_rm, ttnn.TILE_LAYOUT))
         timer("O3 base a2a s2h [64,160,512] bf16", lambda: a2a(t_til, 2, 1))
         h_b = a2a(t_til, 2, 1)
-        timer("O4 base wkv_b2 16x[640,512]x[512,256]", lambda: ttnn.linear(
-            h_b, tw_b2, program_config=b2_cfg["program_config"], memory_config=b2_cfg["out_mem_config"],
-            dtype=ttnn.bfloat8_b, compute_kernel_config=hifi2))
-        timer("O4 seq wkv_b2 64x[160,512]x[512,256]", lambda: ttnn.linear(
-            t_til, tw_b2_full, program_config=b2_pc160, memory_config=L1, dtype=ttnn.bfloat8_b, compute_kernel_config=hifi2))
+        timer(
+            "O4 base wkv_b2 16x[640,512]x[512,256]",
+            lambda: ttnn.linear(
+                h_b,
+                tw_b2,
+                program_config=b2_cfg["program_config"],
+                memory_config=b2_cfg["out_mem_config"],
+                dtype=ttnn.bfloat8_b,
+                compute_kernel_config=hifi2,
+            ),
+        )
+        timer(
+            "O4 seq wkv_b2 64x[160,512]x[512,256]",
+            lambda: ttnn.linear(
+                t_til,
+                tw_b2_full,
+                program_config=b2_pc160,
+                memory_config=L1,
+                dtype=ttnn.bfloat8_b,
+                compute_kernel_config=hifi2,
+            ),
+        )
         for dt, dn in ((ttnn.bfloat8_b, "bfp8"), (ttnn.bfloat16, "bf16")):
-            v = ttnn.linear(t_til, tw_b2_full, program_config=b2_pc160, memory_config=DRAM, dtype=dt, compute_kernel_config=hifi2)
+            v = ttnn.linear(
+                t_til, tw_b2_full, program_config=b2_pc160, memory_config=DRAM, dtype=dt, compute_kernel_config=hifi2
+            )
             timer(f"O5 a2a s2h [64,160,256] {dn} (DRAM in)", lambda v=v: a2a(v, 2, 1))
             cc = ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM)
-            timer(f"O5 concat heads [64,160,256] {dn}", lambda v=v: ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM))
+            timer(
+                f"O5 concat heads [64,160,256] {dn}",
+                lambda v=v: ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM),
+            )
             timer(f"O5 a2a cols->rows [160,16384] {dn}", lambda cc=cc: a2a(cc, 2, 3))
             _free([v, cc])
         _free([t_til, h_b, attn_rm, tw_b2, tw_b2_full, tw_o])
