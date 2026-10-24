@@ -13,8 +13,22 @@ namespace ckernel::sfpu {
 
 inline void elu_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 
+bool bf16_dest_elu();
+template <int ITERATIONS>
+void calculate_elu_bf16();
+// The slope the generated elu kernel is fitted for, as FP32 bits; any other slope runs the stock kernel.
+inline constexpr std::uint32_t elu_bf16_slope_bits = 0x3f800000u;
+// Whether BF16 DEST runs the generated elu kernel as one call over the whole tile.
+inline constexpr bool elu_bf16_whole_tile = true;
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
+    if constexpr (!is_fp32_dest_acc_en && ITERATIONS == 32) {
+        if (bf16_dest_elu() && slope == ckernel::sfpu::elu_bf16_slope_bits) {
+            calculate_elu_bf16<ITERATIONS>();
+            return;
+        }
+    }
     sfpi::vFloat alpha = Converter::as_float(slope);
 // unroll 2: with expm1_cw_clamped inlined the loop body is large enough that
 // partial unroll outperforms both full (unroll 8) and no-unroll (~0.8us on WH)
@@ -35,3 +49,5 @@ inline void calculate_elu(uint slope) {
 }
 
 }  // namespace ckernel::sfpu
+
+#include "ckernel_sfpu_elu_bf16.h"
