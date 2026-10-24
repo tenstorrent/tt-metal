@@ -932,6 +932,163 @@ uint32_t add_ring_joint_semaphore(
     return id;
 }
 
+/**
+ * Create semaphores used for L1-L1 store-and-forward of KV between cores.
+ * ChainSemaphores groups the three semaphore IDs for a single chain (sender,
+ * receiver, valid) and pushes them as SemaphoreDescriptor entries on the
+ * descriptor. The IDs are sequential indices into desc.semaphores.
+ */
+struct ChainSemaphores {
+    uint32_t sender_id;
+    uint32_t receiver_id;
+    uint32_t valid_id;
+
+    static ChainSemaphores create(ProgramDescriptor& desc, const CoreRangeSet& cores) {
+        ChainSemaphores out;
+        out.sender_id = add_ring_joint_semaphore(desc, cores, INVALID, "KV chain");
+        out.receiver_id = add_ring_joint_semaphore(desc, cores, INVALID, "KV chain");
+        out.valid_id = add_ring_joint_semaphore(desc, cores, VALID, "KV chain");
+        return out;
+    }
+
+    void append_to_compile_args(std::vector<uint32_t>& args) const {
+        const size_t start_size = args.size();
+        args.push_back(sender_id);
+        args.push_back(receiver_id);
+        args.push_back(valid_id);
+        TT_FATAL(
+            args.size() == start_size + kRingJointChainSemaphoreCompileArgCount,
+            "RingJoint ChainSemaphores expected to append {} compile-time args, appended {}",
+            kRingJointChainSemaphoreCompileArgCount,
+            args.size() - start_size);
+    }
+};
+
+/**
+ * Build chain selection for store-and-forward across cores per head.
+ */
+struct CoreHeadWork {
+    uint32_t head = 0;
+    uint32_t q_chunk_count = 0;
+};
+
+struct CoreWork {
+    CoreCoord physical_core;
+    uint32_t global_q_start = 0;
+    uint32_t global_q_count = 0;
+    std::vector<CoreHeadWork> head_work;
+};
+
+struct HeadSegmentRef {
+    uint32_t core_idx = 0;
+    uint32_t head_work_index = 0;
+};
+
+// Unified chain configuration for head-level and shared-K chains.
+struct ChainConfig {
+    // Core participation flags
+    bool participates = false;
+    bool is_injector = false;
+    bool is_sink = false;
+
+    // Chain scope: head distinguishes head-level from shared-K chains.
+    uint32_t head = 0;  // 0 for shared-K chains
+
+    // Linear chain topology
+    CoreCoord prev_physical = CoreCoord{0, 0};
+    CoreCoord next_physical = CoreCoord{0, 0};
+    uint32_t next_core_q_chunks = 0;
+
+    // Multicast configuration (1D for V, 2D for K)
+    CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
+    CoreCoord mcast_end = CoreCoord{0, 0};          // Rectangle end (physical)
+    CoreCoord injector_physical = CoreCoord{0, 0};  // Injector's coords (for receiver sem addr in mcast)
+    uint32_t mcast_num_dests = 0;                   // Receivers count (excludes self)
+
+    // Append runtime args in canonical order
+    void append_to_args(std::vector<uint32_t>& args) const {
+        const size_t start_size = args.size();
+        args.push_back(static_cast<uint32_t>(participates));
+        args.push_back(static_cast<uint32_t>(is_injector));
+        args.push_back(static_cast<uint32_t>(is_sink));
+        args.push_back(head);
+        args.push_back(static_cast<uint32_t>(prev_physical.x));
+        args.push_back(static_cast<uint32_t>(prev_physical.y));
+        args.push_back(static_cast<uint32_t>(next_physical.x));
+        args.push_back(static_cast<uint32_t>(next_physical.y));
+        args.push_back(next_core_q_chunks);
+        args.push_back(static_cast<uint32_t>(mcast_start.x));
+        args.push_back(static_cast<uint32_t>(mcast_start.y));
+        args.push_back(static_cast<uint32_t>(mcast_end.x));
+        args.push_back(static_cast<uint32_t>(mcast_end.y));
+        args.push_back(static_cast<uint32_t>(injector_physical.x));
+        args.push_back(static_cast<uint32_t>(injector_physical.y));
+        args.push_back(mcast_num_dests);
+        TT_FATAL(
+            args.size() == start_size + kRingJointChainConfigArgCount,
+            "RingJoint ChainConfig expected to append {} runtime args, appended {}",
+            kRingJointChainConfigArgCount,
+            args.size() - start_size);
+    }
+};
+
+// Helper: build a linear chain from sorted (core_idx, q_chunk_count) pairs.
+// - chain_segs[i].second = q iterations the i-th core will process in this chain scope
+// - injector = first core with head_work.size() == 1 (single head segment = no straddling)
+// - no wrap-around: wrapping would inflate q_iter_local and cause deadlock
+// - injector reselection for mcast is done separately in the mcast eligibility pass
+using ChainSegment = std::pair<uint32_t, uint32_t>;  // (core_idx, q_chunk_count)
+bool build_linear_chain(
+    const std::vector<ChainSegment>& chain_segs,
+    uint32_t head,
+    std::vector<ChainConfig>& chain_configs,
+    const std::vector<CoreWork>& core_work,
+    bool require_single_head_injector = true) {
+    if (chain_segs.size() < 2) {
+        return false;
+    }
+    std::optional<size_t> injector_pos;
+    for (size_t idx = 0; idx + 1 < chain_segs.size(); ++idx) {
+        if (core_work[chain_segs[idx].first].global_q_count == 0) {
+            continue;
+        }
+        if (!require_single_head_injector || core_work[chain_segs[idx].first].head_work.size() == 1) {
+            injector_pos = idx;
+            break;
+        }
+    }
+    if (!injector_pos.has_value()) {
+        return false;
+    }
+    const size_t start = *injector_pos;
+    for (size_t idx = start; idx < chain_segs.size(); ++idx) {
+        uint32_t ci = chain_segs[idx].first;
+        auto& cfg = chain_configs[ci];
+        cfg.participates = true;
+        cfg.head = head;
+        cfg.is_injector = (idx == start);
+        cfg.is_sink = (idx == chain_segs.size() - 1);
+        if (idx > start) {
+            cfg.prev_physical = core_work[chain_segs[idx - 1].first].physical_core;
+        }
+        if (idx + 1 < chain_segs.size()) {
+            cfg.next_physical = core_work[chain_segs[idx + 1].first].physical_core;
+            cfg.next_core_q_chunks = chain_segs[idx + 1].second;
+        }
+    }
+    return true;
+}
+
+struct RowWideChainMcastSelection {
+    uint32_t row = 0;
+    uint32_t injector_idx = 0;
+    uint32_t max_q = 0;
+    uint32_t num_receivers = 0;
+    CoreCoord injector_physical = CoreCoord{0, 0};
+    CoreCoord phys_start = CoreCoord{0, 0};
+    CoreCoord phys_end = CoreCoord{0, 0};
+};
+
 // Per-coord ProgramDescriptor build. Pulled into an anonymous-namespace helper so
 // create_workload_descriptor() can loop coords and reuse this body verbatim. The
 // op-specific name suffix avoids Unity-build collisions with the sibling ring
@@ -1717,38 +1874,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .append_to(reader_compile_time_args);
     }
 
-    /**
-     * Create semaphores used for L1-L1 store-and-forward of KV between cores.
-     * ChainSemaphores groups the three semaphore IDs for a single chain (sender,
-     * receiver, valid) and pushes them as SemaphoreDescriptor entries on the
-     * descriptor. The IDs are sequential indices into desc.semaphores.
-     */
-    struct ChainSemaphores {
-        uint32_t sender_id;
-        uint32_t receiver_id;
-        uint32_t valid_id;
-
-        static ChainSemaphores create(ProgramDescriptor& desc, const CoreRangeSet& cores) {
-            ChainSemaphores out;
-            out.sender_id = add_ring_joint_semaphore(desc, cores, INVALID, "KV chain");
-            out.receiver_id = add_ring_joint_semaphore(desc, cores, INVALID, "KV chain");
-            out.valid_id = add_ring_joint_semaphore(desc, cores, VALID, "KV chain");
-            return out;
-        }
-
-        void append_to_compile_args(std::vector<uint32_t>& args) const {
-            const size_t start_size = args.size();
-            args.push_back(sender_id);
-            args.push_back(receiver_id);
-            args.push_back(valid_id);
-            TT_FATAL(
-                args.size() == start_size + kRingJointChainSemaphoreCompileArgCount,
-                "RingJoint ChainSemaphores expected to append {} compile-time args, appended {}",
-                kRingJointChainSemaphoreCompileArgCount,
-                args.size() - start_size);
-        }
-    };
-
     std::optional<ChainSemaphores> head_sems;
     std::optional<ChainSemaphores> batch_sems;
     std::optional<ChainSemaphores> gqa_sems;
@@ -2154,74 +2279,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     auto* const joint_out_buf = joint_output_tensor.buffer();
     auto* const stats_buf = stats_output_tensor.buffer();
 
-    /**
-     * Build chain selection for store-and-forward across cores per head.
-     */
-    struct CoreHeadWork {
-        uint32_t head = 0;
-        uint32_t q_chunk_count = 0;
-    };
-
-    struct CoreWork {
-        CoreCoord physical_core;
-        uint32_t global_q_start = 0;
-        uint32_t global_q_count = 0;
-        std::vector<CoreHeadWork> head_work;
-    };
-
-    struct HeadSegmentRef {
-        uint32_t core_idx = 0;
-        uint32_t head_work_index = 0;
-    };
-
-    // Unified chain configuration for head-level and shared-K chains.
-    struct ChainConfig {
-        // Core participation flags
-        bool participates = false;
-        bool is_injector = false;
-        bool is_sink = false;
-
-        // Chain scope: head distinguishes head-level from shared-K chains.
-        uint32_t head = 0;  // 0 for shared-K chains
-
-        // Linear chain topology
-        CoreCoord prev_physical = CoreCoord{0, 0};
-        CoreCoord next_physical = CoreCoord{0, 0};
-        uint32_t next_core_q_chunks = 0;
-
-        // Multicast configuration (1D for V, 2D for K)
-        CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
-        CoreCoord mcast_end = CoreCoord{0, 0};          // Rectangle end (physical)
-        CoreCoord injector_physical = CoreCoord{0, 0};  // Injector's coords (for receiver sem addr in mcast)
-        uint32_t mcast_num_dests = 0;                   // Receivers count (excludes self)
-
-        // Append runtime args in canonical order
-        void append_to_args(std::vector<uint32_t>& args) const {
-            const size_t start_size = args.size();
-            args.push_back(static_cast<uint32_t>(participates));
-            args.push_back(static_cast<uint32_t>(is_injector));
-            args.push_back(static_cast<uint32_t>(is_sink));
-            args.push_back(head);
-            args.push_back(static_cast<uint32_t>(prev_physical.x));
-            args.push_back(static_cast<uint32_t>(prev_physical.y));
-            args.push_back(static_cast<uint32_t>(next_physical.x));
-            args.push_back(static_cast<uint32_t>(next_physical.y));
-            args.push_back(next_core_q_chunks);
-            args.push_back(static_cast<uint32_t>(mcast_start.x));
-            args.push_back(static_cast<uint32_t>(mcast_start.y));
-            args.push_back(static_cast<uint32_t>(mcast_end.x));
-            args.push_back(static_cast<uint32_t>(mcast_end.y));
-            args.push_back(static_cast<uint32_t>(injector_physical.x));
-            args.push_back(static_cast<uint32_t>(injector_physical.y));
-            args.push_back(mcast_num_dests);
-            TT_FATAL(
-                args.size() == start_size + kRingJointChainConfigArgCount,
-                "RingJoint ChainConfig expected to append {} runtime args, appended {}",
-                kRingJointChainConfigArgCount,
-                args.size() - start_size);
-        }
-    };
-
     std::vector<CoreWork> core_work(num_cores_all);
     std::vector<ChainConfig> head_chain_configs(use_head_chain ? num_cores_all : 0);  // MHA K/V or separate-V V
     std::vector<ChainConfig> batch_chain_configs(
@@ -2349,62 +2406,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         next_global_chunk += chunk_count;
     }
-
-    // Helper: build a linear chain from sorted (core_idx, q_chunk_count) pairs.
-    // - chain_segs[i].second = q iterations the i-th core will process in this chain scope
-    // - injector = first core with head_work.size() == 1 (single head segment = no straddling)
-    // - no wrap-around: wrapping would inflate q_iter_local and cause deadlock
-    // - injector reselection for mcast is done separately in the mcast eligibility pass
-    using ChainSegment = std::pair<uint32_t, uint32_t>;  // (core_idx, q_chunk_count)
-    auto build_linear_chain = [](const std::vector<ChainSegment>& chain_segs,
-                                 uint32_t head,
-                                 std::vector<ChainConfig>& chain_configs,
-                                 const std::vector<CoreWork>& core_work,
-                                 bool require_single_head_injector = true) -> bool {
-        if (chain_segs.size() < 2) {
-            return false;
-        }
-        std::optional<size_t> injector_pos;
-        for (size_t idx = 0; idx + 1 < chain_segs.size(); ++idx) {
-            if (core_work[chain_segs[idx].first].global_q_count == 0) {
-                continue;
-            }
-            if (!require_single_head_injector || core_work[chain_segs[idx].first].head_work.size() == 1) {
-                injector_pos = idx;
-                break;
-            }
-        }
-        if (!injector_pos.has_value()) {
-            return false;
-        }
-        const size_t start = *injector_pos;
-        for (size_t idx = start; idx < chain_segs.size(); ++idx) {
-            uint32_t ci = chain_segs[idx].first;
-            auto& cfg = chain_configs[ci];
-            cfg.participates = true;
-            cfg.head = head;
-            cfg.is_injector = (idx == start);
-            cfg.is_sink = (idx == chain_segs.size() - 1);
-            if (idx > start) {
-                cfg.prev_physical = core_work[chain_segs[idx - 1].first].physical_core;
-            }
-            if (idx + 1 < chain_segs.size()) {
-                cfg.next_physical = core_work[chain_segs[idx + 1].first].physical_core;
-                cfg.next_core_q_chunks = chain_segs[idx + 1].second;
-            }
-        }
-        return true;
-    };
-
-    struct RowWideChainMcastSelection {
-        uint32_t row = 0;
-        uint32_t injector_idx = 0;
-        uint32_t max_q = 0;
-        uint32_t num_receivers = 0;
-        CoreCoord injector_physical = CoreCoord{0, 0};
-        CoreCoord phys_start = CoreCoord{0, 0};
-        CoreCoord phys_end = CoreCoord{0, 0};
-    };
 
     // Pick a row-wide multicast injector among max-work cores. The recent-column FIFO spreads injectors across
     // physical X columns for NoC diversity; correctness still requires a max-work injector so padded loops never
