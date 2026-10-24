@@ -6,6 +6,7 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "high_bw_all_gather.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
@@ -16,18 +17,21 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
     ttnn::bind_function<"high_bw_all_gather", "ttnn.experimental.">(
         mod,
         R"doc(
-            Gathers a large row-major or tile-layout DRAM tensor over one device-mesh
-            axis, or over a direct-neighbor ring linearized across a complete 2D mesh.
-            This is a one-dimensional Fabric line or ring collective. The
-            operation uses a native one-hop store-and-forward transport and does not
-            provide a composite fallback.
+            Gathers a row-major or tile-layout DRAM tensor over one device-mesh axis, or over the
+            whole 2D mesh, into a preallocated DRAM output.
 
-            Fabric2D supports a direct physical line or ring. A Torus may wrap
-            ``cluster_axis`` when the axis has a distinct wrap neighbor and every
-            ring edge is one physical hop. A size-two torus axis is treated as a
-            line because its ordinary and wrap neighbors are the same device.
-            Plain ``FABRIC_2D`` uses the direct-line schedule; only a Torus
-            configuration that wraps ``cluster_axis`` selects the ring schedule.
+            Per chip, per ring direction and per link one fabric link worker core reads (its own shard
+            from the input, forwarded shards from the output) and sends each fabric chunk one fabric hop
+            into the same pages of the neighbour's output; local copy cores write the chip's own shard
+            (and convert an ND-sharded input). Link workers sit as close as the core grid allows to their
+            link's Ethernet core. Calls are fenced: no chip writes into a neighbour's output before the
+            neighbour has started the same call. Even rings are balanced (the opposite shard travels half
+            each way). With ``cluster_axis=None`` on a torus whose sides are both at least 3, the mesh is
+            covered by two edge-disjoint Hamiltonian cycles, so every chip uses all four neighbours;
+            otherwise by a snake ring. The output is always in row-major chip order.
+
+            Pages move whole, so a ROW_MAJOR tensor cannot be gathered along its innermost dim (every
+            output row would mix ranks); gather a TILE_LAYOUT tensor or another dim instead.
 
             Channel trimming compatibility:
                 Channel trimming is selected during Fabric initialization and is shared
@@ -46,14 +50,10 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 output_tensor: Preallocated persistent output tensor.
 
             Keyword Args:
-                cluster_axis: Device-mesh axis (0 or 1) participating in the
-                    one-dimensional collective. Other mesh axes run independent
-                    all-gathers. Pass ``None`` to gather across every device in a 2D
-                    mesh using a snake Hamiltonian ring. The full-mesh mode requires
-                    at least one even mesh dimension, direct links for every edge of
-                    a row or column snake, and a tensor sharded over ``dim`` across
-                    all mesh devices. The host prefers a row snake, then tries a
-                    column snake if the row route cannot close directly.
+                cluster_axis: Device-mesh axis (0 or 1) participating in the collective; other
+                    mesh axes run independent all-gathers. ``None`` gathers across every device of
+                    the 2D mesh (two Hamiltonian cycles on a torus with both sides >= 3, else a snake
+                    ring); the tensor must be sharded over ``dim`` across all mesh devices.
                 num_links: Optional number of Fabric links to use. ``None`` uses every
                     link reported usable across the selected axis, or the minimum
                     discovered across both axes in full-mesh mode. An explicit value
@@ -102,6 +102,18 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 data_valid_semaphore: Optional caller-owned persistent relay/completion semaphore.
                     Supplying both semaphore handles selects the allocation-free, no-internal-sync
                     dispatch path intended for sub-device overlap.
+                push_table: Sparse KV push instead of the dense gather. The all-gathered
+                    ``sparse_push_plan`` tables of every chip (uint32 [1, 1, pages * devices, 1024]); each owner
+                    pushes only the rows of the selected cache slot that a requester's top-k references, into
+                    that requester's compact ``output_tensor``. Full mesh (``cluster_axis=None``) on a 2D torus,
+                    with caller-owned semaphores.
+                push_stripe_chunk: Rows per block-cyclic block of the cache the plan was built for.
+                push_max_rows: Row capacity the plan tables were built for.
+                push_part: 0 pushes every needed row; 2 only the rows from the plan's chunk start on (the
+                    prefix rows were pushed earlier by a ``sparse_sdpa`` with a fused push).
+                push_spill: DRAM spill of an L1-front ``output_tensor``.
+                push_hot_table: this chip's ``sparse_push_hot`` table: its hot rows go out as one multicast
+                    to every chip.
         )doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
@@ -120,7 +132,57 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
         nb::arg("ready_semaphore") = nb::none(),
-        nb::arg("data_valid_semaphore") = nb::none());
+        nb::arg("data_valid_semaphore") = nb::none(),
+        nb::arg("push_table") = nb::none(),
+        nb::arg("push_stripe_chunk") = 0,
+        nb::arg("push_max_rows") = 0,
+        nb::arg("push_part") = 0,
+        nb::arg("push_spill") = nb::none(),
+        nb::arg("push_hot_table") = nb::none());
+
+    ttnn::bind_function<"sparse_push_plan", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            On-device plan for the sparse KV push, from one requester's top-k indices (per device uint32
+            row-major [1, 1, rows, topk], 0xFFFFFFFF = masked). Returns ``[table, compact_indices]``: the plan table
+            (uint32 [1, 1, pages, 1024]) to all-gather for the owners, and the indices rewritten to slots in the
+            requester's compact buffer.
+        )doc",
+        &sparse_push_plan,
+        nb::arg("indices").noconvert(),
+        nb::kw_only(),
+        nb::arg("num_devices"),
+        nb::arg("stripe_chunk"),
+        nb::arg("max_rows"),
+        nb::arg("pages_per_packet"),
+        nb::arg("banks"),
+        nb::arg("chunk_start") = nb::none());
+
+    ttnn::bind_function<"sparse_push_hot", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Hot rows of the sparse KV push, on every requester chip after the all-gather of the ``sparse_push_plan``
+            tables: rows at least ``threshold`` chips need get one slot in a hot region at the front of every chip's
+            compact buffer (owner-major; per owner its prefix-part rows, at most ``prefix_cap``, then its current-part
+            rows, at most ``current_cap``), so their owner multicasts them once. Returns the hot table (uint32
+            [1, 1, pages, 1024]) for the push and rewrites ``compact`` (the plan's compact indices) in place, from this
+            chip's own plan ``table`` and the gathered ``tables``.
+        )doc",
+        &sparse_push_hot,
+        nb::arg("indices").noconvert(),
+        nb::arg("compact").noconvert(),
+        nb::arg("table").noconvert(),
+        nb::arg("tables").noconvert(),
+        nb::kw_only(),
+        nb::arg("num_devices"),
+        nb::arg("stripe_chunk"),
+        nb::arg("max_rows"),
+        nb::arg("pages_per_packet"),
+        nb::arg("banks"),
+        nb::arg("threshold"),
+        nb::arg("prefix_cap"),
+        nb::arg("chunk_start").noconvert(),
+        nb::arg("current_cap") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail
