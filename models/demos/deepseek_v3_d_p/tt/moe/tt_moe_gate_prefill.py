@@ -460,6 +460,23 @@ class TtMoEGateConfig:
         )
 
 
+# The gate's e_score_correction_bias is cached and fed to moe_grouped_topk in bfloat16. GLM-5.3's biases
+# carry large per-layer offsets (layer 3: 33.99..34.62, std 0.14), where bf16 spacing is 0.25: the cached
+# bias keeps 3 distinct values and the load-balancing signal is gone, so routing collapses onto the experts
+# that rounded up (layer 3: one expert takes 4690 of 5120 tokens; vLLM's max is 375). Expert selection is
+# invariant to a constant shift of the bias (top-k of score+bias, and group scores sum a fixed number of
+# biased scores per group), and the routing weights use the unbiased scores, so centering the bias before
+# the bf16 conversion is exact and keeps |bias| < 1, where bf16 spacing is <= 0.004. The cache name changes
+# with the transform so an uncentered file of the old name is never loaded as if it were centered.
+GATE_BIAS_CACHE_NAME = "e_score_correction_bias_centered"
+
+
+def center_gate_bias(bias: torch.Tensor) -> torch.Tensor:
+    """bias - mean(bias), in float32 (see GATE_BIAS_CACHE_NAME)."""
+    b = bias.float()
+    return (b - b.mean()).to(bias.dtype if bias.dtype == torch.float32 else torch.float32)
+
+
 class TtMoEGatePrefill(LightweightModule):
     """MoE gate module from DeepSeek-R1."""
 
@@ -471,8 +488,8 @@ class TtMoEGatePrefill(LightweightModule):
         if not pattern_exists(f"{cache_name_prefix}.weight*.tensorbin", "MoEGate"):
             logger.debug(f"TTNN cache missing: {cache_name_prefix}.weight")
             return False
-        if not pattern_exists(f"{cache_name_prefix}.e_score_correction_bias*.tensorbin", "MoEGate"):
-            logger.debug(f"TTNN cache missing: {cache_name_prefix}.e_score_correction_bias")
+        if not pattern_exists(f"{cache_name_prefix}.{GATE_BIAS_CACHE_NAME}*.tensorbin", "MoEGate"):
+            logger.debug(f"TTNN cache missing: {cache_name_prefix}.{GATE_BIAS_CACHE_NAME}")
             return False
         return True
 
@@ -517,6 +534,8 @@ class TtMoEGatePrefill(LightweightModule):
 
         if torch_bias is None:
             torch_bias = torch.empty(config.n_routed_experts)
+        else:
+            torch_bias = center_gate_bias(torch_bias)
 
         # Convert weight
         weight_tt = ttnn.as_tensor(
@@ -540,7 +559,7 @@ class TtMoEGatePrefill(LightweightModule):
             device=None,  # Always load to host first
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_file_name=_cache_name(GATE_BIAS_CACHE_NAME),
             cache_dump_mode=cache_dump_mode,
         )
 
