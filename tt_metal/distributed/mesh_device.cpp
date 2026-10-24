@@ -2406,3 +2406,21 @@ void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
+
+MetalDeviceProperties get_device_properties(
+    const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& coord) {
+    TT_FATAL(
+        distributed::MeshCoordinateRange(mesh_device.shape()).contains(coord),
+        "Coordinate {} is outside mesh device shape {}",
+        coord,
+        mesh_device.shape());
+    return MetalDeviceProperties(mesh_device.impl().metal_env());
+}
+
+MetalDeviceProperties get_device_properties(const distributed::MeshDevice& mesh_device) {
+    return MetalDeviceProperties(mesh_device.impl().metal_env());
+}
+
+}  // namespace tt::tt_metal::experimental

@@ -144,4 +144,25 @@ private:
     MetalEnvImpl& impl() { return *impl_; }
 };
 
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
+
+namespace experimental {
+
+// The returned views come from the MetalEnv the mesh device is bound to and are valid only while that MetalEnv is
+// alive, which it already must be for as long as the mesh device exists.
+
+/// @return Hardware properties of the device at coord. Coordinates are local to mesh_device, which may be a
+/// submesh. Throws if coord is outside mesh_device.shape(). Devices owned by other hosts are assumed to be
+/// identical to local ones, since a MetalEnv describes a homogeneous cluster.
+MetalDeviceProperties get_device_properties(
+    const distributed::MeshDevice& mesh_device, const distributed::MeshCoordinate& coord);
+
+/// @return Hardware properties common to every device in mesh_device. Mesh devices are homogeneous, so this always
+/// succeeds; it throws rather than picking one device if that ever stops being true.
+MetalDeviceProperties get_device_properties(const distributed::MeshDevice& mesh_device);
+
+}  // namespace experimental
+
 }  // namespace tt::tt_metal
