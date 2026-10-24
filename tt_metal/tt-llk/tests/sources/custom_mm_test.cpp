@@ -45,10 +45,10 @@
 //                           SrcA CFGSHIFTMASK walk reads them with read_transposed=false,
 //                           block_increment = inner_increment = tile_size).
 //
-// The single unpack call issues one MOP covering the whole kt walk; the single math call
-// loops kt internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own
-// run wrappers do (_llk_unpack_AB_custom_mm_run_ issues TT_MOP once for kt/2-1; the finalize
-// path is disabled here).
+// The single unpack call issues the MOP over the whole kt walk (one run of up to 255 k-tiles, or
+// two runs for kt_dim = 256, see _llk_unpack_AB_custom_mm_run_); the single math call loops kt
+// internally -- both are invoked ONCE (not per k-tile), exactly as the LLK's own run wrappers
+// do (the finalize path is disabled here).
 
 #include <algorithm>
 #include <cstdint>
@@ -69,6 +69,11 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr std::uint32_t num_calls   = CUSTOM_MM_NUM_CALLS;
 constexpr std::uint32_t kt_per_call = KT_DIM / num_calls;
 static_assert(kt_per_call * num_calls == KT_DIM, "K tiles must split evenly across the calls");
+
+// The LLKs' kt_dim ceiling (llk_unpack_AB_custom_mm.h): one SrcB face walk covers 255 k-tiles and kt_dim = 256 is
+// unpacked as two runs. A call past 256 is rejected by the unpack and math LLK_ASSERTs before either issues an
+// instruction; test_custom_mm_kt_past_max_asserts expects that, and the pack thread below packs nothing in that case.
+constexpr std::uint32_t custom_mm_kt_max = 256;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -110,18 +115,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_custom_mm_init_<false /* transpose */, true /* clear_src */>(params.in0_face_r_dim, formats.unpack_B_dst, CT_DIM);
 
     // SrcA=buffer_B (B matrix, full tiles), SrcB=buffer_A (A matrix). Call c takes K tiles
-    // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct,
-    // and an in0 tile is 4 * in0_face_r_dim 16-byte words (TILE_SIZE_UNPACK_A is a full tile here).
+    // [c * kt_per_call, (c + 1) * kt_per_call): B is k-major, so its tiles start at c * kt_per_call * ct.
+    // An in0 tile is the two dense in0_face_r_dim x 16 faces the SrcB walk strides by, not the full 32x32 tile
+    // TILE_SIZE_UNPACK_A describes (the in0 formats here are not block-float, so it scales with the datum count);
+    // the LLK uses it for tile_index_b and for the SrcB base of the second run at kt_dim = 256.
     // Within a call the SrcA walk covers its kt*ct grid via CFGSHIFTMASK, the SrcB walk covers kt via counters.
+    const std::uint32_t in0_tile_size = params.TILE_SIZE_UNPACK_A * params.in0_face_r_dim / TILE_R_DIM;
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
         _llk_unpack_AB_custom_mm_<false /* read_transposed */>(
             L1_ADDRESS(params.buffer_B[0]),
-            L1_ADDRESS(params.buffer_A[0]) + call * kt_per_call * 4 * params.in0_face_r_dim,
+            L1_ADDRESS(params.buffer_A[0]),
             call * kt_per_call * CT_DIM /* tile_index_a */,
-            0 /* tile_index_b */,
+            call * kt_per_call /* tile_index_b */,
             params.TILE_SIZE_UNPACK_B,
-            params.TILE_SIZE_UNPACK_A,
+            in0_tile_size,
             kt_per_call,
             CT_DIM);
     }
@@ -204,14 +212,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /*num_tiles*/, false /*skip_bh_tilize_workaround*/);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 
-    _llk_packer_wait_for_math_done_();
-
-    for (std::uint32_t i = 0; i < CT_DIM; i++)
+    // Expected-assert case (kt past the ceiling): math rejects the block and never posts MATH_PACK, so pack nothing. A
+    // SEMWAIT left in the Tensix pack FIFO would outlive the RISC soft reset and hang the next kernel on this core.
+    if constexpr (kt_per_call <= custom_mm_kt_max)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
-    }
+        _llk_packer_wait_for_math_done_();
 
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        for (std::uint32_t i = 0; i < CT_DIM; i++)
+        {
+            _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        }
+
+        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    }
 
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * (is_fp32_dest_acc_en ? 4 : 2));
 }

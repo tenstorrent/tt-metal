@@ -120,7 +120,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         0 /* tile_index_a (weights) */,
         0 /* tile_index_b (in0) */,
         params.TILE_SIZE_UNPACK_B /* tile_size_a (weights) */,
-        params.TILE_SIZE_UNPACK_A /* tile_size_b (in0) */,
+        // tile_size_b is the dense in0 k-tile stride (two IN0_TILE_R_DIM x 16 faces), not the padded 32x32 size
+        // TILE_SIZE_UNPACK_A describes; in0 is Float16_b here, so it scales with the datum count.
+        params.TILE_SIZE_UNPACK_A * IN0_TILE_R_DIM / TILE_R_DIM /* tile_size_b (in0) */,
         PRODUCER_KT /* producer kt_dim */,
         REUSE_KT /* producer ct_dim */);
 

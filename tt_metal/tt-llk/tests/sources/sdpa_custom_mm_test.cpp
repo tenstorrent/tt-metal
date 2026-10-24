@@ -93,6 +93,11 @@ constexpr std::uint32_t SDPA_INPUT_ROW_STRIDE = KT_DIM;
 #endif
 constexpr std::uint32_t SDPA_MASK_TILE_INDEX = SDPA_INPUT_TILE_OFFSET + SDPA_INPUT_ROW_STRIDE * CT_DIM;
 
+// The kt_dim ceiling of the shared unpack worker (llk_unpack_AB_custom_mm.h): one SrcB face walk covers 255 k-tiles and
+// kt_dim = 256 is unpacked as two runs. A call past 256 is rejected by the unpack and math LLK_ASSERTs before either
+// issues an instruction; test_sdpa_custom_mm_kt_past_max_asserts expects that, and the pack thread packs nothing then.
+constexpr std::uint32_t custom_mm_kt_max = 256;
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "experimental/llk_unpack_AB_sdpa_custom_mm.h"
@@ -124,9 +129,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // heuristic (post1) in the MOP config.
     _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(params.in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
 
-    // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
+    // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB). The in0 tile size is the two dense
+    // in0_face_r_dim x 16 faces the SrcB walk strides by (TILE_SIZE_UNPACK_B is the full 32x32 tile; Float16_b here,
+    // so it scales with the datum count); the LLK uses it for the SrcB base of the second run at kt_dim = 256.
+    const std::uint32_t in0_tile_size = params.TILE_SIZE_UNPACK_B * params.in0_face_r_dim / TILE_R_DIM;
     // The re-entry variant appends a mask to in1 and uses it only on the first pass.
-    // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
+    // The whole kt walk is issued by a single call (one MOP run of up to 255 k-tiles, two runs for kt_dim = 256).
     for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
     {
         _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
@@ -136,7 +144,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             SDPA_INPUT_TILE_OFFSET,                                                    // tile_index_a
             0,                                                                         // tile_index_b
             params.TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
-            params.TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
+            in0_tile_size,                                                             // tile_size_b (in0 [M,32], dense faces)
             KT_DIM,
             CT_DIM,
             SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only
@@ -227,7 +235,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * 8 * 2);
     cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * 8 * 2);
 
-    for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
+    // Expected-assert case (kt past the ceiling): math rejects the block and never posts MATH_PACK, so pack nothing. A
+    // SEMWAIT left in the Tensix pack FIFO would outlive the RISC soft reset and hang the next kernel on this core.
+    constexpr std::uint32_t passes = KT_DIM <= custom_mm_kt_max ? SDPA_PASSES : 0;
+    for (std::uint32_t pass = 0; pass < passes; ++pass)
     {
         _llk_packer_wait_for_math_done_();
         // Consume the FPU->SFPU notifications so subsequent passes cannot
