@@ -4,14 +4,16 @@
 """Tracy profile of one warm t0-gamma forward, reduced to one real layer per kind plus the last layer.
 
 Profiling all 24 layers would flood the device profiler buffers, so the profile keeps the real patch encoder and
-head plus layer 0 (time), layer 2 (group) and layer 23 (the last layer, which ends with the read-out cut), at the
-real benchmark shape and weights. Signposts (``tt-perf-report --start-signpost / --end-signpost``):
+head plus layer 0 (time), layer 2 (group), layer 22 (the last time layer: its attention output is cut to the
+read-out patches before its MLP) and layer 23 (the last layer, on the read-out patches), at the real benchmark shape
+and weights. Signposts (``tt-perf-report --start-signpost / --end-signpost``):
 
     MODEL_START / MODEL_END                   the whole reduced forward
     embed_start / embed_end                   patch encoder
-    layer_time_start / layer_time_end         one time layer        (x 16 in the full model)
+    layer_time_start / layer_time_end         one time layer        (x 15 in the full model)
     layer_group_start / layer_group_end       one group layer       (x 7)
-    last_start / last_end                     layer 23 + read-out   (x 1)
+    cut_start / cut_end                       layer 22: attention, read-out cut, MLP on the read-out rows (x 1)
+    last_start / last_end                     layer 23 on the read-out rows (x 1)
     head_start / head_end                     out_norm, decoder, monotone head
 
 ``layer_counts.json`` goes to ``$MODEL_PROFILE_OUT``. Run under ``python -m tracy -r -p -m pytest`` (``perf_iteration.sh``).
@@ -33,7 +35,7 @@ from models.experimental.t0_forecast.tests.helpers import golden, weights
 from models.experimental.t0_forecast.tests.perf.test_forward_perf import SHAPES
 from models.experimental.t0_forecast.tt.weights import GROUP, TIME
 
-REDUCED = {"layer_time": 0, "layer_group": 2, "last": 23}
+REDUCED = {"layer_time": 0, "layer_group": 2, "cut": 22, "last": 23}
 
 
 @pytest.mark.timeout(1800)
@@ -51,11 +53,13 @@ def test_profile_forward():
     w = weights()
     kinds = [layer.kind for layer in w.layers]
     assert kinds[REDUCED["layer_time"]] == TIME and kinds[REDUCED["layer_group"]] == GROUP
-    assert REDUCED["last"] == len(kinds) - 1
+    cut = max(i for i, k in enumerate(kinds) if k == TIME)
+    assert REDUCED["cut"] == cut and REDUCED["last"] == len(kinds) - 1 and kinds[-1] == GROUP
     counts = {
         "embed": 1,
-        "layer_time": kinds[:-1].count(TIME),
-        "layer_group": kinds[:-1].count(GROUP),
+        "layer_time": kinds[:cut].count(TIME),
+        "layer_group": kinds[:cut].count(GROUP),
+        "cut": 1,
         "last": 1,
         "head": 1,
     }
@@ -65,7 +69,8 @@ def test_profile_forward():
         tt = TtT0(device, w.reduced(list(REDUCED.values())), TtT0Precision.named(precision))
         prepared = tt.prepare_inputs(g["context"], horizon)
         inputs = tt.upload_inputs(prepared)
-        sections = ["layer_time", "layer_group"]
+        sections = list(REDUCED)
+        assert tt.cut_index == sections.index("cut")
 
         def forward(marked: bool):
             def mark(name):
@@ -76,13 +81,10 @@ def test_profile_forward():
             mark("embed_start")
             x = tt.embed(inputs)
             mark("embed_end")
-            for name, layer in zip(sections, tt.layers[:-1]):
+            for index, name in enumerate(sections):
                 mark(f"{name}_start")
-                x = tt.run_layer(layer, x, inputs)
+                x = tt.run_layer(index, x, inputs)
                 mark(f"{name}_end")
-            mark("last_start")
-            x = tt.run_layer(tt.layers[-1], x, inputs, last=True)
-            mark("last_end")
             mark("head_start")
             out = tt.head(x)
             mark("head_end")

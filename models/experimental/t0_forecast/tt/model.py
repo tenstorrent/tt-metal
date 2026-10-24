@@ -6,8 +6,8 @@
 reference : t0/forecaster.py (``_single_pass``, ``_backbone``) and t0/torch/model/model.py (``T0Forecaster``)
     host:   rollout buffer, causal per-step scaler + asinh, 96-wide patch tokens, masks, xPos RoPE tables
     device: x = patch_encoder(tokens) (+ type embedding)        # target rows: type_emb[0] folded in the bias
-            x = layers(x)                                      # tokens padded per row to a whole tile
-            x = x[:, readout patches]                          # output patch i predicts patch i + 1
+            x = layers(x)                                      # tokens padded per row to a whole tile; after the
+                                                               # last time attention, the read-out patches only
             q = monotone(decoder(RMSNorm(x) * out_norm))       # [raw_0, softplus(raw_1..)] @ kron(I, U)
     host:   sinh(q) * scale + loc, the requested levels, the adjustments (``host.predict``)
 
@@ -35,7 +35,7 @@ from models.experimental.t0_forecast.tt.common import (
 )
 from models.experimental.t0_forecast.tt.mlp import TtSwiGLU
 from models.experimental.t0_forecast.tt.residual_block import TtResidualBlock
-from models.experimental.t0_forecast.tt.weights import T0Weights
+from models.experimental.t0_forecast.tt.weights import TIME, T0Weights
 
 # Per-shape device constants kept by TtT0 (RoPE tables); one call uses 4.
 _MAX_CONSTANTS = 16
@@ -46,6 +46,7 @@ class TtT0DeviceInputs:
     tokens: object  # (1, 1, R * S_pad, 96)
     type_delta: object | None  # (1, 1, R * S_pad, d): type_emb[t] - type_emb[0]; None when every patch is a target
     attention: TtAttentionInputs
+    readout_attention: TtAttentionInputs  # the layers after the cut, on the read-out patches only
     readout_start: int
     readout_count: int
     owned: tuple  # what deallocate_inputs frees (not the cached constants)
@@ -85,6 +86,10 @@ class TtT0:
             device, weights.patch_encoder, self.precision, role="embed", extra_bias=weights.type_embeddings[0]
         )
         self._type_embeddings = weights.type_embeddings
+        kinds = [w.kind for w in weights.layers]
+        # Everything after the last time attention is per token (or per patch across a series' rows), so the stack
+        # is cut to the read-out patches there (the fp32 spec ``tests/golden/dataflow.py`` does the same).
+        self._cut = max((i for i, k in enumerate(kinds) if k == TIME), default=len(kinds) - 1)
         self._layers = [
             (TtAttention(device, w.attention, self.precision), TtSwiGLU(device, w.mlp, self.precision))
             for w in weights.layers
@@ -107,6 +112,11 @@ class TtT0:
     @property
     def layers(self):
         return self._layers
+
+    @property
+    def cut_index(self) -> int:
+        """Index of the layer whose attention output is cut to the read-out patches."""
+        return self._cut
 
     # --- host <-> device -----------------------------------------------------------------------------------
 
@@ -171,9 +181,14 @@ class TtT0:
         if prepared.time_mask is not None:
             time_mask = upload(self.device, _additive(_pad_time_mask(prepared.time_mask, sp)))
             owned.append(time_mask)
+        readout_group_mask = None
         if prepared.group_mask is not None:
             group_mask = self._upload_small_mask(_additive(_pad_group_mask(prepared.group_mask, sp)))
-            owned.append(group_mask)
+            lo, n = prepared.readout_start, prepared.readout_count
+            readout_group_mask = self._upload_small_mask(
+                _additive(_pad_group_mask(prepared.group_mask[lo : lo + n], n))
+            )
+            owned += [group_mask, readout_group_mask]
         attention = TtAttentionInputs(
             rows=r,
             padded_seq=sp,
@@ -182,10 +197,19 @@ class TtT0:
             time_mask=time_mask,
             group_mask=group_mask,
         )
+        readout_attention = TtAttentionInputs(
+            rows=r,
+            padded_seq=prepared.readout_count,
+            group_size=prepared.group_size,
+            rope=None,
+            time_mask=None,
+            group_mask=readout_group_mask,
+        )
         return TtT0DeviceInputs(
             tokens=tokens_dev,
             type_delta=type_delta,
             attention=attention,
+            readout_attention=readout_attention,
             readout_start=prepared.readout_start,
             readout_count=prepared.readout_count,
             owned=tuple(owned),
@@ -225,20 +249,21 @@ class TtT0:
         picked = ttnn.slice(rows, (0, lo, 0), (att.rows, lo + n, d), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return ttnn.reshape(picked, (1, 1, att.rows * n, d))
 
-    def run_layer(self, layer, x, inputs: TtT0DeviceInputs, *, last: bool = False):
-        """One transformer layer on the residual stream; consumes ``x``. ``last`` returns the read-out patches."""
+    def run_layer(self, index: int, x, inputs: TtT0DeviceInputs):
+        """Layer ``index`` on the residual stream; consumes ``x``. At the cut layer the attention output is cut to the
+        read-out patches before the MLP; later layers run on those patches only."""
         import ttnn
 
-        attention, mlp = layer
-        y = attention(x, inputs.attention)
+        attention, mlp = self._layers[index]
+        y = attention(x, inputs.attention if index <= self._cut else inputs.readout_attention)
         ttnn.deallocate(x)
+        if index == self._cut:
+            picked = self.readout(y, inputs)
+            ttnn.deallocate(y)
+            y = picked
         z = mlp(y)
         ttnn.deallocate(y)
-        if not last:
-            return z
-        out = self.readout(z, inputs)
-        ttnn.deallocate(z)
-        return out
+        return z
 
     def head(self, x):
         """Read-out hidden states ``(1, 1, R * n, d)`` -> fp32 ``(1, 1, R * n, ps * Q)`` quantiles in asinh space;
@@ -280,10 +305,9 @@ class TtT0:
     def forward_device(self, inputs: TtT0DeviceInputs):
         """Device inputs -> device head output ``(1, 1, R * n, ps * Q)`` (asinh space)."""
         x = self.embed(inputs)
-        *body, last = self._layers
-        for layer in body:
-            x = self.run_layer(layer, x, inputs)
-        return self.head(self.run_layer(last, x, inputs, last=True))
+        for index in range(len(self._layers)):
+            x = self.run_layer(index, x, inputs)
+        return self.head(x)
 
     def normalized(self, output_device, prepared: host.T0HostInputs) -> Tensor:
         """Download the head output -> ``[R, n, ps, Q]`` fp32 (asinh space)."""

@@ -119,9 +119,12 @@ def main():
                 inputs = tt.upload_inputs(prepared)
                 x = tt.embed(inputs)
                 drift = {}
-                for i, layer in enumerate(tt.layers):
-                    x = tt.run_layer(layer, x, inputs)
-                    h = download_rows(x, 1, prepared.num_patches)[:, 255:287]
+                for i in range(len(tt.layers)):
+                    x = tt.run_layer(i, x, inputs)
+                    if i < tt.cut_index:
+                        h = download_rows(x, 1, prepared.num_patches)[:, 255:287]
+                    else:  # already cut to the 32 read-out patches
+                        h = ttnn.to_torch(x).float().reshape(1, 32, -1)
                     ref = g[f"layer_{i}"][:, 255:287]
                     drift[i] = float(torch.corrcoef(torch.stack([h.flatten(), ref.flatten()]))[0, 1])
                 ttnn.deallocate(x)
