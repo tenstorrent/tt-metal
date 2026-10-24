@@ -16,8 +16,16 @@ inline void calculate_silu() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // silu(x) = x * sigmoid(x)
-        sfpi::vFloat result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en>(x);
+        // silu(x) = x * sigmoid(x); for x <= -88.5f (including -inf), exp(-x)
+        // overflows to +inf so sigmoid(x) == 0.0f and (-inf) * 0.0f would yield NaN.
+        sfpi::vFloat result;
+        v_if(x <= -88.5f) {
+            result = 0.0f;
+        }
+        v_else {
+            result = x * _sfpu_sigmoid_<is_fp32_dest_acc_en>(x);
+        }
+        v_endif;
 
         // Round to bfloat16 if not in fp32 accumulation mode
         if constexpr (!is_fp32_dest_acc_en) {
