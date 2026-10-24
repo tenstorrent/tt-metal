@@ -23,6 +23,17 @@ namespace ckernel {
  * SFPU operations must reinitialize it as needed.
  * On Wormhole, this operation also programs LREG12 and LREG13. Callers must
  * restore those programmable constants before another SFPU operation relies on them.
+ * This operation overwrites ADDR_MOD_6 (dest incr 2) on every call; that is the only
+ * state it re-establishes, so a rand_tile with no rand_tile_init in the same kernel
+ * (keeping the PRNG stream seeded by an earlier rand_tile_init or a host-set seed) is
+ * valid only while the SFPU control register still holds the state the generic SFPU
+ * init leaves (control register cleared). An init that changes SFPU control state
+ * (e.g. topk_tile_init, which enables index tracking) must be followed by a clear before
+ * rand_tile: any generic SFPU *_tile_init clears it, or the op that enabled it clears it
+ * on exit. rand_tile_init also clears it, but reseeds the PRNG stream, so it is not the
+ * tool for the seedless case above. Ops relying on ADDR_MOD_6 from
+ * their own init (e.g. topk_tile_init, square, sfpu reduce, matmul with THROTTLE_LEVEL)
+ * must re-run that init after rand_tile.
  *
  * Return value: None
  *
