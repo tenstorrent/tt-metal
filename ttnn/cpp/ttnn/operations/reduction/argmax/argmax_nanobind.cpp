@@ -37,7 +37,9 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
 
             - **dim = rank-1** (last / width):
               - ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (multi-core by default)
-              - TILE input: BFLOAT16/FLOAT32 (single-core)
+              - TILE input: BFLOAT16/FLOAT32. Inputs of rank >= 2 with more than one tile row, or at least 8 tile
+                columns, run multi-core (on ``sub_core_grids`` when given); others run single-core. Both compare the
+                tile bytes the same way, so NaN, infinity, signed zero and subnormal values give the same indices
 
             - **dim = rank-2** (height):
               - BFLOAT16/FLOAT32 only

@@ -626,3 +626,184 @@ def test_argmax_reduce_all_first_index_wins_across_cores(device, dtype, early, l
     ttnn_t = ttnn.from_torch(t, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     got = int(ttnn.to_torch(ttnn.from_device(ttnn.argmax(ttnn_t))).reshape(-1)[0])
     assert got == int(torch.argmax(t.reshape(-1))) == early, f"expected {early}, got {got}"
+
+
+# TILE input reduced over the last dim. Inputs of rank >= 2 with more than one tile row, or at least this many tile
+# columns, run on several cores; narrower single-tile-row inputs keep the single-core TILE reader. Both read the tile
+# bytes, so the widths below cover both programs and must give the same indices.
+TILE_MULTICORE_MIN_TILE_COLS = 8
+
+BF16_SPECIAL_BITS = {**BF16_BITS, "+sub": 0x0001, "-sub": 0x8001, "-inf": 0xFF80}
+FP32_SPECIAL_BITS = {**FP32_BITS, "+sub": 0x00000001, "-sub": 0x80000001, "-inf": 0xFF800000}
+
+
+def _planted_maxima(shape, dtype, seed, columns=None):
+    """Random data with one planted maximum per row: distinct values, exactly representable, far above the tail."""
+    torch.manual_seed(seed)
+    t = torch.randn(*shape, dtype=dtype)
+    width = shape[-1]
+    flat = t.reshape(-1, width)
+    if columns is None:
+        columns = torch.randint(0, width, (flat.shape[0],)).tolist()
+    planted = [columns[r % len(columns)] for r in range(flat.shape[0])]
+    for r, column in enumerate(planted):
+        flat[r, column] = 8.0 + 0.25 * (r % 8)
+    return t, torch.tensor(planted).reshape(shape[:-1])
+
+
+def _tile_argmax_to_torch(device, t, keepdim=False, padding=None, **kwargs):
+    ttnn_in = ttnn.from_torch(t, device=device, layout=TL, **kwargs)
+    if padding is not None:
+        ttnn_in = ttnn.fill_implicit_tile_padding(ttnn_in, padding)
+    out = ttnn.argmax(ttnn_in, dim=-1, keepdim=keepdim)
+    assert out.dtype == ttnn.uint32 and out.layout == RM
+    return out, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("keepdim", [False, True])
+@pytest.mark.parametrize("rows", [1, 5, 16, 17, 32, 33])
+@pytest.mark.parametrize(
+    "width", [32 * TILE_MULTICORE_MIN_TILE_COLS - 32, 32 * TILE_MULTICORE_MIN_TILE_COLS, 4096, 50257]
+)
+def test_argmax_tile_last_dim_planted_maximum(device, width, rows, keepdim, dtype):
+    """Exact indices and exact output shape. The padding holds a huge value, so any leak of it would win.
+
+    Up to 16 rows the multi-core reader reads only the data rows of the top faces; 17 rows need all four faces.
+    """
+    # Maxima at the ends and at tile, face and core-split edges.
+    columns = [0, width - 1, 31, 32, 15, 16, width - 2, width // 2, width // 3]
+    t, planted = _planted_maxima((1, 1, rows, width), dtype, seed=width + rows, columns=columns)
+    out, got = _tile_argmax_to_torch(device, t, keepdim=keepdim, padding=3.0e38)
+    ref = torch.argmax(t, dim=-1, keepdim=keepdim)
+    assert_equal(ref, got)
+    assert_equal(planted.reshape(ref.shape), got)
+    assert list(out.shape) == list(ref.shape)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (33, 4096),
+        (3, 33, 1000),
+        (2, 3, 5, 4096),
+        (2, 3, 4, 33, 1000),
+        (7, 1, 1, 50257),
+        # More tile rows (133) than cores on either board: each core takes whole rows, no merge.
+        (1, 1, 4237, 300),
+    ],
+)
+@pytest.mark.parametrize("keepdim", [False, True])
+def test_argmax_tile_last_dim_ranks(device, shape, keepdim, dtype):
+    t, _ = _planted_maxima(shape, dtype, seed=sum(shape))
+    out, got = _tile_argmax_to_torch(device, t, keepdim=keepdim, padding=3.0e38)
+    assert_equal(torch.argmax(t, dim=-1, keepdim=keepdim), got)
+    assert list(out.shape) == list(torch.argmax(t, dim=-1, keepdim=keepdim).shape)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("shape", [(1, 1, 33, 4096), (3, 2, 5, 1000), (2, 40, 50257)])
+def test_argmax_tile_last_dim_ties_first_index_wins(device, shape, dtype):
+    """Few distinct values, so the maximum repeats across tiles and cores; torch returns the first one."""
+    torch.manual_seed(0)
+    t = torch.randint(-4, 5, shape).to(dtype)
+    _, got = _tile_argmax_to_torch(device, t, padding=-42)
+    assert_equal(torch.argmax(t, dim=-1), got)
+
+
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_memory_config", [None, ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("rows", [1, 33])
+def test_argmax_tile_last_dim_output_memory_config(device, input_memory_config, output_memory_config, rows):
+    """The output follows the requested memory config, else the input's."""
+    t, planted = _planted_maxima((1, 1, rows, 2048), torch.bfloat16, seed=rows)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=TL, memory_config=input_memory_config)
+    out = ttnn.argmax(ttnn_in, dim=-1, memory_config=output_memory_config)
+    assert out.memory_config() == (output_memory_config or input_memory_config)
+    assert out.dtype == ttnn.uint32 and out.layout == RM
+    assert_equal(planted, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+@pytest.mark.parametrize("keepdim", [False, True])
+def test_argmax_tile_last_dim_preallocated_output(device, keepdim):
+    t, planted = _planted_maxima((1, 1, 33, 4096), torch.float32, seed=2)
+    ref = torch.argmax(t, dim=-1, keepdim=keepdim)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=TL)
+    ttnn_out = ttnn.zeros(list(ref.shape), dtype=ttnn.uint32, layout=RM, device=device)
+    result = ttnn.argmax(ttnn_in, dim=-1, keepdim=keepdim, output_tensor=ttnn_out)
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(result)).to(torch.int32))
+    assert_equal(ref, ttnn.to_torch(ttnn.from_device(ttnn_out)).to(torch.int32))
+
+
+@pytest.mark.parametrize(
+    "ranges",
+    [
+        [((0, 0), (1, 1))],
+        [((0, 0), (2, 0)), ((0, 2), (1, 3))],
+    ],
+)
+@pytest.mark.parametrize("shape", [(1, 1, 33, 4096), (1, 1, 300, 512)])
+def test_argmax_tile_last_dim_sub_core_grids(device, ranges, shape):
+    """The TILE multi-core reader runs on the given cores, split over one or two ranges."""
+    grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*a), ttnn.CoreCoord(*b)) for a, b in ranges})
+    t, planted = _planted_maxima(shape, torch.bfloat16, seed=3)
+    ttnn_in = ttnn.from_torch(t, device=device, layout=TL)
+    out = ttnn.argmax(ttnn_in, dim=-1, sub_core_grids=grids)
+    assert_equal(planted, ttnn.to_torch(ttnn.from_device(out)).to(torch.int32))
+
+
+def test_argmax_tile_last_dim_program_cache(device):
+    """A second call with new data and the same specs hits the program cache and stays correct."""
+    device.clear_program_cache()
+    device.enable_program_cache()
+
+    def run(seed):
+        t, planted = _planted_maxima((1, 1, 33, 4096), torch.bfloat16, seed=seed)
+        ttnn_in = ttnn.from_torch(t, device=device, layout=TL)
+        out = ttnn.argmax(ttnn_in, dim=-1)
+        return planted, ttnn_in, out
+
+    base = device.num_program_cache_entries()
+    planted1, input1, out1 = run(10)
+    after_first = device.num_program_cache_entries()
+    assert after_first - base == 1, "one program per call: no untilize and no scratch tensor"
+    planted2, input2, out2 = run(11)
+    assert device.num_program_cache_entries() == after_first
+    assert_equal(planted1, ttnn.to_torch(ttnn.from_device(out1)).to(torch.int32))
+    assert_equal(planted2, ttnn.to_torch(ttnn.from_device(out2)).to(torch.int32))
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("height", [1, 33])
+@pytest.mark.parametrize(
+    "values",
+    [
+        ["1.0", "+inf", "2.0"],
+        ["-0", "+0"],
+        ["+0", "-0"],
+        ["1.0", "1.0"],
+        ["1.0", "+nan", "2.0"],
+        ["+nan", "1.0"],
+        ["1.0", "-nan", "2.0"],
+        ["1.0", "+nan", "+inf"],
+        ["+nan", "-nan", "1.0"],
+        ["-nan", "+nan", "1.0"],
+        ["1.0", "+inf", "+nan"],
+        ["-inf", "+sub", "-sub"],
+        ["-sub", "+sub", "+0"],
+        ["-inf", "-sub", "-0"],
+    ],
+)
+def test_argmax_tile_last_dim_special_values(device, values, dtype, height):
+    """Every NaN, infinity, signed-zero and subnormal ordering matches torch, with the values on different cores."""
+    table = BF16_SPECIAL_BITS if dtype == torch.bfloat16 else FP32_SPECIAL_BITS
+    width = 8192
+    patterns = [table["fill"]] * (height * width)
+    for r in range(height):
+        for i, v in enumerate(values):
+            # About a third of the row apart, so on a split row each value sits on a different core.
+            patterns[r * width + (i * 2731 + 97 * r) % width] = table[v]
+    t = _from_bits(patterns, dtype).reshape(height, width)
+    _, got = _tile_argmax_to_torch(device, t)
+    assert_equal(torch.argmax(t, dim=-1), got)
