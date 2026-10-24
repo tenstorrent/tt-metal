@@ -12,6 +12,7 @@
 #include "kernels/sliding_window_work_plan.hpp"
 #include "sliding_halo_layout.hpp"
 #include "ring_joint_sdpa_schedule.hpp"
+#include "ring_joint_sdpa_plan.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"
@@ -147,54 +148,9 @@ ttnn::operations::ccl::common::MeshRingPlan mesh_ring_plan_from_attributes(
     };
 }
 
-struct RingJointInputParams {
-    bool has_joint_tensors = false;
-    bool joint_is_sharded = false;
-    const Tensor* joint_q = nullptr;
-    const Tensor* joint_k = nullptr;
-    const Tensor* joint_v = nullptr;
-    const Tensor* gathered_joint_k = nullptr;
-    const Tensor* gathered_joint_v = nullptr;
-    uint32_t L = 0;          // full (padded) joint sequence length across the ring
-    uint32_t L_local = 0;    // per-device joint length (padded L/P when sharded, else L)
-    uint32_t logical_l = 0;  // true (unpadded) joint token count; <= L on the sharded path
-};
-
-// Resolved joint Q/K/V params + sequence lengths for both replicated and sharded-joint paths.
-// Centralizes the optional-tensor / logical_l branching so descriptor construction and the
-// runtime planners share one definition of L (full) and L_local (per-device).
-RingJointInputParams resolve_ring_joint_input_params(
-    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    RingJointInputParams joint_input_params;
-    joint_input_params.has_joint_tensors = tensor_args.joint_q.has_value();
-    joint_input_params.joint_is_sharded = tensor_args.joint_is_sharded();
-
-    if (joint_input_params.has_joint_tensors) {
-        joint_input_params.joint_q = &tensor_args.joint_q.value();
-        joint_input_params.joint_k = &tensor_args.joint_k.value();
-        joint_input_params.joint_v =
-            tensor_args.joint_v.has_value() ? &tensor_args.joint_v.value() : joint_input_params.joint_k;
-    }
-
-    if (joint_input_params.joint_is_sharded) {
-        joint_input_params.gathered_joint_k = &tensor_args.gathered_joint_k.value();
-        joint_input_params.gathered_joint_v = &tensor_args.gathered_joint_v.value();
-        // Per-shard physical length is the (padded, tile-aligned) joint Q shard on this device.
-        // The padded total L is that shard times the ring; logical_l carries the true token count,
-        // which may be smaller than L when the joint prompt does not fill the last shard. This
-        // mirrors how the spatial path keeps logical_n separate from the padded gathered length.
-        joint_input_params.L_local = joint_input_params.joint_q->logical_shape()[2];
-        joint_input_params.L =
-            joint_input_params.L_local * static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
-        joint_input_params.logical_l = static_cast<uint32_t>(args.logical_l);
-    } else if (joint_input_params.has_joint_tensors) {
-        joint_input_params.L = joint_input_params.joint_q->logical_shape()[2];
-        joint_input_params.L_local = joint_input_params.L;
-        joint_input_params.logical_l = joint_input_params.L;
-    }
-
-    return joint_input_params;
-}
+using ttnn::prim::ring_joint_plan::fused_gather_kv_tensors;
+using ttnn::prim::ring_joint_plan::resolve_ring_joint_input_params;
+using ttnn::prim::ring_joint_plan::RingJointInputParams;
 
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
@@ -514,9 +470,7 @@ RingJointRuntimeDerivation build_runtime_derivation(
     derivation.joint_seq_len = joint_input_params.L;
     derivation.joint_local_padded_Nt = tt::div_up(joint_input_params.L_local, tt::constants::TILE_HEIGHT);
     derivation.logical_lt = tt::div_up(joint_input_params.logical_l, tt::constants::TILE_HEIGHT);
-    // Cross is non-causal on chunked-shaped tensors, so kernels and the work planner use the
-    // non-chunked path.
-    derivation.kernel_chunked = tensor_args.is_chunked(args.kv_stripe_split) && !args.is_cross;
+    derivation.kernel_chunked = ttnn::prim::ring_joint_plan::kernel_chunked(args, tensor_args);
     derivation.kv_pad_rotation_enabled = ttnn::prim::kv_pad_rotation_active(args, tensor_args);
     derivation.kernel_is_causal = args.is_causal && !derivation.kernel_chunked;
 
@@ -641,18 +595,6 @@ std::optional<uint32_t> compute_gather_valid_Ht(
     return std::min(
         valid_slabs * (kv_region / tt::constants::TILE_HEIGHT),
         tensor_args.input_k.padded_shape()[2] / tt::constants::TILE_HEIGHT);
-}
-
-// The fused gather's K/V inputs and gathered outputs: K, plus V unless V is K's latent alias.
-std::pair<std::vector<Tensor>, std::vector<Tensor>> fused_gather_kv_tensors(
-    const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    std::vector<Tensor> inputs = {tensor_args.input_k};
-    std::vector<Tensor> outputs = {tensor_args.gathered_k};
-    if (tensor_args.input_v.has_value()) {
-        inputs.push_back(tensor_args.input_v.value());
-        outputs.push_back(tensor_args.gathered_v.value_or(tensor_args.gathered_k));
-    }
-    return {inputs, outputs};
 }
 
 // Rows of K the fused gather sends from each device's slice: its valid prefix, bounded as the gather bounds its first
@@ -1452,6 +1394,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "kv_actual_isl requires the ring-joint streaming compute path; the compute_common.hpp path selected by "
         "fp32_dest_acc_en=true is not supported.");
 
+    // K split (kernels/ring_joint_ksplit.hpp), with the QK^T @ V output subblock and writer row group it depends on.
+    const ring_joint_plan::KSplitShape ksplit = ring_joint_plan::derive_ksplit(args, tensor_args);
+    TT_ASSERT(
+        ksplit.grid == grid_size && ksplit.num_q_chunks == num_q_chunks && ksplit.max_q_per_core == max_q_per_core &&
+        ksplit.use_streaming_compute == use_streaming_compute);
+    const uint32_t ksplit_count = ksplit.count;
+    const uint32_t ksplit_rows_per_split = ksplit.rows_per_split;
     // Sharded joint with a padded tail (logical_l < padded L) needs the reader to skip joint K chunks
     // beyond the real tail. That skip is mirrored only in the streaming compute path (sdpa_ring_v2);
     // the legacy fp32 path (sdpa_ring/sdpa_inner_loop) would leave compute waiting on K/V chunks the
@@ -1475,128 +1424,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         qk_out_subblock_h,
         qk_out_subblock_w);
 
-    // Keep the host phase-2 layout at one column for in-place latent V. The compute helper
-    // independently batches strided K^T rows into DST, including a short final batch.
-    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
-        Sq_chunk_t,
-        vDHt,
-        dst_size,
-        /*max_subblock_h=*/use_streaming_compute ? 2 : UINT32_MAX,
-        /*max_subblock_w=*/kt_inplace_v ? 1u : UINT32_MAX);
-    // Streaming compute may widen the QKT@V row group beyond the host matmul subblock
-    // height for odd Q chunks. The writer must drain cb_out with the same row-group
-    // cadence that compute pushes, otherwise deferred-save rows can be popped and
-    // reused before the matching grouped write has safely landed.
-    const uint32_t writer_out_row_group_h =
-        use_streaming_compute
-            ? ttnn::transformer::sdpa::streaming_qktv_h(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t)
-            : out_out_subblock_h;
-    // K split and segmented accumulation apply only to chunked calls; others ignore them, so one config serves every
-    // chunk. Both need one Q chunk per core and whole output row groups (static_assert in ring_joint_sdpa.cpp).
-    // Returns why this call cannot apply them, or "".
-    const auto single_q_chunk_blocker = [&]() -> std::string {
-        if (args.is_balanced) {
-            return "is_balanced is set";
-        }
-        if (!use_streaming_compute) {
-            return "fp32_dest_acc_en is set";
-        }
-        if (B != 1) {
-            return fmt::format("the batch is {}", B);
-        }
-        if (L != 0) {
-            return fmt::format("there is a joint sequence of {} rows", L);
-        }
-        if (max_q_per_core > 1) {
-            return fmt::format("{} Q chunks share {} cores", all_heads_num_q_chunks, num_cores);
-        }
-        if (Sq_chunk_t % writer_out_row_group_h != 0) {
-            return fmt::format(
-                "the {}-tile Q chunk is not a whole number of {}-tile row groups", Sq_chunk_t, writer_out_row_group_h);
-        }
-        return {};
-    };
+    const uint32_t out_out_subblock_h = ksplit.out_subblock_h;
+    const uint32_t out_out_subblock_w = ksplit.out_subblock_w;
+    const uint32_t writer_out_row_group_h = ksplit.writer_out_row_group_h;
+    log_debug(tt::LogOp, "ring_joint K split: splits={}", ksplit_count);
 
-    // K split: when the (head, Q chunk) units leave the grid idle, the rows are divided into bands that each hold
-    // every unit once and attend to a slice of every ring iteration's K chunks; the last band merges. Bands are whole
-    // rows so each row still consumes one K sequence through its multicast. See kernels/ring_joint_ksplit.hpp.
-    uint32_t ksplit_count = 1;
-    uint32_t ksplit_rows_per_split = 0;
-    const uint32_t ksplit_requested = args.program_config.has_value() ? args.program_config->k_splits : 1;
-    if (ksplit_requested > 1 && kernel_chunked) {
-        const std::string blocker = single_q_chunk_blocker();
-        TT_FATAL(blocker.empty(), "k_splits={} cannot be applied: {}. Set k_splits=1.", ksplit_requested, blocker);
-        // Separate V beside a shared K: bands stay on their K slice through the row multicast, which needs chains and
-        // at least two columns (TT_FATAL after the multicast pass).
-        TT_FATAL(
-            has_sliding_window || (gqa_grouped_kv && NHK == 1) ||
-                (k_uses_batch_chain && !v_shares_k_buffer && build_kv_chains && grid_size.x >= 2),
-            "k_splits={} cannot be applied: dense attention needs one grouped K/V head (there are {}), or a shared K "
-            "with a separate V on chains. Set k_splits=1.",
-            ksplit_requested,
-            NHK);
-        // Split KV slices packed source streams, not one source's local K chunks.
-        TT_FATAL(
-            args.kv_stripe_split == 1,
-            "k_splits={} cannot be applied: kv_stripe_split is {}. Set k_splits=1.",
-            ksplit_requested,
-            args.kv_stripe_split);
-        ksplit_rows_per_split = tt::div_up(all_heads_num_q_chunks, grid_size.x);
-        uint32_t max_ksplit = std::min(uint32_t(grid_size.y) / ksplit_rows_per_split, ring_joint::kKSplitMaxCount);
-        std::string sliding_limit;
-        if (has_sliding_window) {
-            // Every sliding band needs two K chunks: the oldest halo chunk can mask a Q chunk's later rows entirely.
-            const uint32_t sliding_cap = std::max(
-                1u,
-                ring_joint::chunked_sliding_halo_tile_rows(
-                    sliding_window_size, tt::constants::TILE_HEIGHT, Sk_chunk_t) /
-                    Sk_chunk_t / 2);
-            max_ksplit = std::min(max_ksplit, sliding_cap);
-            sliding_limit = fmt::format(", sliding window {} allows {}", sliding_window_size, sliding_cap);
-        }
-        TT_FATAL(
-            ksplit_requested <= max_ksplit,
-            "k_splits={}, but at most {} can be applied: {} (head, Q chunk) units take {} rows per band of the "
-            "{}x{} grid; the kernel caps it at {}{}.",
-            ksplit_requested,
-            max_ksplit,
-            all_heads_num_q_chunks,
-            ksplit_rows_per_split,
-            grid_size.x,
-            grid_size.y,
-            ring_joint::kKSplitMaxCount,
-            sliding_limit);
-        ksplit_count = ksplit_requested;
-    }
-    log_debug(tt::LogOp, "ring_joint K split: {}", ksplit_count);
-
-    // Progressive readiness (RingAttentionSliceReadiness): the gather sends every full slice, its own and the ones it
-    // relays, in parts that each hold a share of every K-split band, with a marker after each, so a remote ring step
-    // starts on the first part instead of waiting for the whole slice. Limited to the plain chunked dense path, where
-    // the gather's slice is the valid prefix of local K chunks the reader iterates. The SDPA reader recomputes the
-    // gather's on-device extent only when both run the metadata path.
-    const auto [readiness_gather_inputs, readiness_gather_outputs] = fused_gather_kv_tensors(tensor_args);
-    const bool slice_readiness = ag.topology == ttnn::ccl::Topology::Ring && ag.ring_size > 2 && kernel_chunked &&
-                                 !has_sliding_window && !joint_is_sharded && L == 0 && !args.is_balanced &&
-                                 args.kv_stripe_split == 1 && !v_shares_k_buffer &&
-                                 input_tensor_v.padded_shape()[2] == input_tensor_k.padded_shape()[2] &&
-                                 ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(
-                                     readiness_gather_inputs, readiness_gather_outputs, ag.dim);
+    // Progressive slice readiness (ring_joint_plan::slice_readiness_enabled).
+    const bool slice_readiness = ring_joint_plan::slice_readiness_enabled(args, tensor_args);
     sdpa_fused_op_signaler->slice_readiness = slice_readiness;
-    // Floaters (kernels/ring_joint_floaters.hpp). On the validated expanded-K shapes the K split's 24 home blocks
-    // of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid column and the gather column below its
-    // workers idle: 20 cores, five floater groups of 4 that take over pieces of the homes' bands. The gather's workers
-    // are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)).
-    ring_joint::FloaterSchedule floater_schedule{};
-    const bool floaters = k_expand && ksplit_count > 1 && !has_sliding_window && !use_attention_sink &&
-                          num_q_chunks == 2 && ring_joint::floater_schedule(NH, ksplit_count, floater_schedule) &&
-                          (NH / 2) * ksplit_count == ring_joint::kFloaterHomeBlocks && grid_size == CoreCoord(11, 10) &&
-                          ring_size == 8 && args.ccl_core_grid_offset == CoreCoord(grid_size.x, 0) &&
-                          ag.num_links == 2 &&
-                          ag.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR &&
-                          // The homes merge at interleaved ring steps (merge_step_after), which need progressive
-                          // readiness; the K split's own conditions give the rest of the interleave gate.
-                          slice_readiness;
+    // Expanded-K floaters (ring_joint_plan::floater_eligibility).
+    const std::optional<ring_joint::FloaterSchedule> floater_plan =
+        ring_joint_plan::floater_eligibility(args, tensor_args, ksplit);
+    const bool floaters = floater_plan.has_value();
+    const ring_joint::FloaterSchedule floater_schedule = floater_plan.value_or(ring_joint::FloaterSchedule{});
     // The device operation allocates the scratch on a looser gate (ring_joint_floaters_may_run), which must cover this.
     TT_FATAL(
         !floaters || output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX,
@@ -1659,7 +1499,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             num_q_chunks,
             Sq_chunk_t * tt::constants::TILE_HEIGHT,
             num_cores);
-        const std::string blocker = single_q_chunk_blocker();
+        const std::string blocker = ring_joint_plan::single_q_chunk_blocker(args, tensor_args, ksplit);
         TT_FATAL(
             blocker.empty(), "segmented_accumulation cannot be applied: {}. Turn segmented_accumulation off.", blocker);
     }
