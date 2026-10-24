@@ -12,7 +12,9 @@ frames of ``u32 header length | JSON header | u64 body length | body`` (body = s
 * ``{"op": "driver"}`` then ``{"op": "prefill", "ids": [...], "slot": s}`` -- the ring's stage 0. The server prefills
   ``ids[:S']`` with S' = 4 * floor((len(ids) - 1) / 4), exports every layer's state, pushes it, waits for every ack and
   answers ``{"op": "done", "S_prime": S', "prefill_s", "export_s", "push_ack_s", "bytes", "next_token", ...}``.
-* ``{"op": "stop"}`` -- stop every rank, answer the driver, exit.
+* ``{"op": "stop"}`` -- stop every rank, answer the driver, then wait for the next ring (the server outlives ring runs;
+  ``GLM53F_SEED_SERVER_ONESHOT=1`` exits instead). A ring that dies mid-run (a closed rank or driver socket) is dropped
+  the same way, and a connection that closes before its first header is ignored.
 
     GLM53_MESH_SHAPE=8,4 GLM53F_SEED_PORT=7653 pytest models/demos/glm53_flash/tests/test_prefill_seed_server.py -s
 """
@@ -109,13 +111,37 @@ def test_prefill_seed_server(mesh_device):
     pending = [srv]
     request = 0
     pool = ThreadPoolExecutor(max_workers=48)
+    oneshot = os.environ.get("GLM53F_SEED_SERVER_ONESHOT", "0") == "1"
+
+    def _accept_one():
+        c, addr = srv.accept()
+        c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        try:
+            hdr, _ = _recv(c)
+        except (ConnectionError, OSError, ValueError) as e:  # a probe or a dead peer: not a ring rank
+            logger.warning(f"[seed-server] connection from {addr} closed before its header ({e!r})")
+            c.close()
+            return None, None, addr
+        return c, hdr, addr
+
+    def _drop_ring(why: str):
+        nonlocal driver
+        logger.warning(f"[seed-server] dropping the ring ({why}): {len(ranks)} ranks, driver {driver is not None}")
+        for c in list(ranks.values()) + ([driver] if driver else []):
+            try:
+                c.close()
+            except OSError:
+                pass
+        ranks.clear()
+        driver = None
+
     while True:
         readable, _, _ = select.select(pending + ([driver] if driver else []), [], [])
         for s in readable:
             if s is srv:
-                c, addr = srv.accept()
-                c.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                hdr, _ = _recv(c)
+                c, hdr, addr = _accept_one()
+                if c is None:
+                    continue
                 if hdr["op"] == "register":
                     ranks[int(hdr["layer"])] = c
                     logger.info(
@@ -125,13 +151,24 @@ def test_prefill_seed_server(mesh_device):
                     driver = c
                     logger.info(f"[seed-server] driver connected from {addr}")
                 continue
-            hdr, _ = _recv(s)  # the driver
+            try:
+                hdr, _ = _recv(s)  # the driver
+            except (ConnectionError, OSError, ValueError) as e:
+                _drop_ring(f"driver socket: {e!r}")
+                continue
             if hdr["op"] == "stop":
                 for c in ranks.values():
-                    _send(c, {"op": "stop"})
+                    try:
+                        _send(c, {"op": "stop"})
+                    except OSError:
+                        pass
                 _send(s, {"op": "stopped"})
                 logger.info("[seed-server] stop")
-                return
+                if oneshot:
+                    return
+                _drop_ring("stop")
+                logger.info(f"[seed-server] READY for the next ring on port {PORT}")
+                continue
             if hdr["op"] == "verify":  # the per-request check: this mesh's own next token after the whole prompt
                 st, lg, owner = model.prefill(torch.tensor([int(t) for t in hdr["ids"]], dtype=torch.int64), user=0)
                 nt = model.first_token(lg, owner)
@@ -149,9 +186,9 @@ def test_prefill_seed_server(mesh_device):
                 _send(s, rep)
                 continue
             while len(ranks) < len(layers):  # every decoder rank must be registered before the first push
-                c, addr = srv.accept()
-                h2, _ = _recv(c)
-                ranks[int(h2["layer"])] = c
+                c, h2, addr = _accept_one()
+                if c is not None and h2["op"] == "register":
+                    ranks[int(h2["layer"])] = c
             ttnn.synchronize_device(mesh_device)
             t1 = time.perf_counter()
             st, lg, owner = model.prefill(torch.tensor(ids[:sp], dtype=torch.int64), user=0)
@@ -174,7 +211,15 @@ def test_prefill_seed_server(mesh_device):
                 ack, _ = _recv(ranks[L])
                 return L, len(bodies[L]), time.perf_counter() - tx, ack
 
-            outs = list(pool.map(push, layers))
+            try:
+                outs = list(pool.map(push, layers))
+            except (ConnectionError, OSError, ValueError) as e:  # a rank died mid-push: this ring is gone
+                try:
+                    _send(s, {"op": "error", "request": request, "error": repr(e)})
+                except OSError:
+                    pass
+                _drop_ring(f"push failed: {e!r}")
+                continue
             t3 = time.perf_counter()
             nbytes = sum(o[1] for o in outs)
             rep.update(
