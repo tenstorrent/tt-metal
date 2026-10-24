@@ -13,6 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.gemma4.custom_ops.qkv_norm_rope_prefill import QkvNormRopePrefill
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
 
 from .operations import (
@@ -29,6 +30,7 @@ from .operations import (
     effective_block_size,
     prefill_sdpa_program_config,
     prefill_short_lived_memcfg,
+    sdpa_device_grid,
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
@@ -165,6 +167,30 @@ def _left_pad_kv_to_hist(tt_k, tt_v, hist, head_dim, *, deallocate_inputs=False)
     return k_out, v_out
 
 
+def _zero_fill_ring(config, k_cache, v_cache, nkv_local, fill_page_table, user_id, block_size, paged_modulo_kwargs):
+    """Write a whole window of zeros into the user's bounded ring (both caches) from a persistent zero buffer kept on
+    ``config`` (allocated on the first, eager, call: a trace capture only records the fills)."""
+    modulo = int(paged_modulo_kwargs.get("cache_position_modulo") or 0)
+    if modulo <= 0:
+        return
+    key = (int(nkv_local), modulo, int(config.head_dim), k_cache.dtype)
+    cached = getattr(config, "_g4_ring_zero_fill", None)
+    if cached is None or cached[0] != key:
+        zeros = ttnn.zeros(
+            [1, int(nkv_local), modulo, int(config.head_dim)],
+            dtype=k_cache.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=k_cache.device(),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        config._g4_ring_zero_fill = (key, zeros)
+        cached = config._g4_ring_zero_fill
+    for cache in (k_cache, v_cache):
+        _paged_fill_cache(
+            cache, cached[1], fill_page_table, batch_idx=user_id, block_size=block_size, **paged_modulo_kwargs
+        )
+
+
 def _copy_sliding_tail_into_persistent(config, k_tail_out, v_tail_out, head_dim):
     """Copy a (possibly short) sliding-tail stash into the persistent ring buffers.
 
@@ -239,14 +265,68 @@ def _clone_sliding_prefill_tail(tt_k, tt_v, hist, head_dim, valid_seq_len=None, 
     return (k_owned, v_owned)
 
 
+def _owner_lane_device_index(mesh_config) -> int:
+    """Row-major index of the first chip of the lane that owns the current single-user prefill (0 without lanes).
+
+    ``_g4_single_lane_prefill_owner`` is set by ``prepare_inputs_prefill`` for eager single-user prefills; a
+    lane-parallel prefill (owner None) has one user per lane and keeps shard 0, as before.
+    """
+    if mesh_config is None or not getattr(mesh_config, "lane_sharded", False):
+        return 0
+    owner = getattr(mesh_config, "_g4_single_lane_prefill_owner", None)
+    if owner is None:
+        return 0
+    rows, cols = (int(x) for x in mesh_config.mesh_shape)
+    return int(owner) if int(mesh_config.sp_axis) == 1 else int(owner) * cols
+
+
+def _paged_tail_block_range(row, chunk_offset, sliding_window, block_size, pool_blocks):
+    """Blocks of the paged cache holding the prior window ``[chunk_offset - window, chunk_offset)``.
+
+    Returns ``(start_token, block_ids)`` or ``None``. Block 0 is vLLM's null block (never allocated to a
+    request; the lane scratch block here), and the hybrid allocator nulls blocks older than the kept
+    window, so leading null blocks are dropped and the tail shortened to the real ones: a cached-prefix
+    hit aligned down to the SDPA chunk can start one block before the window vLLM guarantees.
+    """
+    if chunk_offset is None or chunk_offset <= 0:
+        return None
+    take = min(int(sliding_window), int(chunk_offset))
+    start = int(chunk_offset) - take
+    if chunk_offset % block_size or start % block_size:
+        return None
+    lb0, lb1 = start // block_size, int(chunk_offset) // block_size
+    blocks = [int(b) for b in row[lb0:lb1]]
+    while blocks and blocks[0] == 0:
+        blocks.pop(0)
+        start += block_size
+    if not blocks or any(b <= 0 or b >= int(pool_blocks) for b in blocks):
+        return None
+    return start, blocks
+
+
 def _read_sliding_tail_from_paged_cache(
-    k_cache, v_cache, page_table, user_id, chunk_offset, sliding_window, head_dim, out_dtype, kv_local
+    k_cache,
+    v_cache,
+    page_table,
+    user_id,
+    chunk_offset,
+    sliding_window,
+    head_dim,
+    out_dtype,
+    kv_local,
+    lane_device_index=0,
 ):
     """Rebuild the prior-window K/V tail from the paged cache (APC cache-hit resumes carry no stash).
 
     Returns the last ``min(sliding_window, chunk_offset)`` tokens, or None when the range is not block-aligned.
+    ``lane_device_index`` selects the mesh shard holding the request's page-table row: under lane-sharded
+    batches the table is sharded over the lanes and only the owner lane's row carries real block ids (the
+    other lanes hold scratch rows), so reading shard 0 for a user on another lane would rebuild the tail
+    from the scratch block.
     """
     if page_table is None or chunk_offset is None or chunk_offset <= 0:
+        if chunk_offset is not None and chunk_offset > 0:
+            logger.warning("Gemma4 sliding prefill: no page table for the paged tail at chunk_start={}", chunk_offset)
         return None
     cache_kv, block_size, cache_hd = (int(k_cache.padded_shape[i]) for i in (1, 2, 3))
     if cache_kv != int(kv_local) or cache_hd != int(head_dim):
@@ -257,19 +337,29 @@ def _read_sliding_tail_from_paged_cache(
             f"the shared buffer is allocated as {tuple(k_cache.padded_shape)}"
         )
     try:
-        take = min(int(sliding_window), int(chunk_offset))
-        start = chunk_offset - take
-        if chunk_offset % block_size or start % block_size:
-            return None
         row = page_table
         if isinstance(row, ttnn.Tensor):
-            row = ttnn.to_torch(ttnn.get_device_tensors(row)[0])
+            shards = ttnn.get_device_tensors(row)
+            row = ttnn.to_torch(shards[min(int(lane_device_index), len(shards) - 1)])
         if row.dim() > 1:
             row = row[user_id]
-        lb0, lb1 = start // block_size, chunk_offset // block_size
-        blocks = [int(b) for b in row[lb0:lb1]]
-        if not blocks or any(b < 0 or b >= int(k_cache.padded_shape[0]) for b in blocks):
+        tail_range = _paged_tail_block_range(row, chunk_offset, sliding_window, block_size, k_cache.padded_shape[0])
+        if tail_range is None:
+            logger.warning(
+                "Gemma4 sliding prefill: no usable paged tail at chunk_start={} (table row {}, pool {} blocks)",
+                chunk_offset,
+                [int(b) for b in row[: min(int(row.shape[-1]), 16)]],
+                int(k_cache.padded_shape[0]),
+            )
             return None
+        start, blocks = tail_range
+        if start > chunk_offset - min(int(sliding_window), int(chunk_offset)):
+            logger.info(
+                "Gemma4 sliding prefill: paged tail shortened to [{}, {}) at chunk_start={} (null blocks before it)",
+                start,
+                chunk_offset,
+                chunk_offset,
+            )
         k_parts = [ttnn.slice(k_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
         v_parts = [ttnn.slice(v_cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
         k_tail = ttnn.concat(k_parts, dim=2) if len(k_parts) > 1 else k_parts[0]
@@ -290,6 +380,93 @@ def _read_sliding_tail_from_paged_cache(
         return (k_tail, v_tail)
     except Exception as e:
         logger.warning("Gemma4 sliding prefill: paged tail reconstruction failed: {}", e)
+        return None
+
+
+def _bounded_ring_tail_blocks(row, chunk_offset, sliding_window, modulo, block_size):
+    """Ring-local block ids, in position order, covering the prior window ``[chunk_offset - take, chunk_offset)`` of a
+    bounded ring whose fill wrote position p to slot ``p % modulo`` (``take`` = min(window, offset, modulo)), with the
+    window's first row inside that run: ``(blocks, first_row, take)``, or None when the ring table cannot hold it.
+    Block 0 is a legal ring block (the remapped sliding table's slot 0 starts at 0). Pure host logic (unit-tested)."""
+    chunk_offset, modulo, block_size = int(chunk_offset), int(modulo), int(block_size)
+    if chunk_offset <= 0 or modulo <= 0 or block_size <= 0 or modulo % block_size:
+        return None
+    take = min(int(sliding_window), chunk_offset, modulo)
+    if take <= 0:
+        return None
+    start = chunk_offset - take
+    p0 = (start // block_size) * block_size
+    blocks = []
+    for p in range(p0, chunk_offset, block_size):
+        b = (p % modulo) // block_size
+        if b >= int(row.shape[-1]):
+            return None
+        blocks.append(int(row[b]))
+    if not blocks or any(b < 0 for b in blocks):
+        return None
+    return blocks, start - p0, take
+
+
+def _read_sliding_tail_from_bounded_ring(
+    k_cache,
+    v_cache,
+    page_table,
+    user_id,
+    chunk_offset,
+    sliding_window,
+    modulo,
+    head_dim,
+    out_dtype,
+    kv_local,
+    lane_device_index=0,
+):
+    """Rebuild a sliding-window continuation's prior-window K/V tail from the bounded ring (a request whose first
+    chunk replayed the traced short bucket carries no stash: that graph records none). Returns the last
+    ``min(sliding_window, chunk_offset, modulo)`` positions in the activations' dtype, or None (warned)."""
+    if page_table is None or chunk_offset is None or chunk_offset <= 0:
+        return None
+    cache_kv, block_size, cache_hd = (int(k_cache.padded_shape[i]) for i in (1, 2, 3))
+    if cache_kv != int(kv_local) or cache_hd != int(head_dim):
+        raise ValueError(
+            f"bounded ring tail reconstruction needs the layer's own KV view ({kv_local}x{head_dim}); "
+            f"the pool is allocated as {tuple(k_cache.padded_shape)}"
+        )
+    try:
+        row = page_table
+        if isinstance(row, ttnn.Tensor):
+            shards = ttnn.get_device_tensors(row)
+            row = ttnn.to_torch(shards[min(int(lane_device_index), len(shards) - 1)])
+        if row.dim() > 1:
+            row = row[user_id]
+        plan = _bounded_ring_tail_blocks(row, chunk_offset, sliding_window, modulo, block_size)
+        pool_blocks = int(k_cache.padded_shape[0])
+        if plan is None or any(b >= pool_blocks for b in plan[0]):
+            logger.warning(
+                "Gemma4 sliding prefill: no usable ring tail at chunk_start={} (ring row {}, pool {} blocks)",
+                chunk_offset,
+                [int(b) for b in row[: min(int(row.shape[-1]), 16)]],
+                pool_blocks,
+            )
+            return None
+        blocks, first_row, take = plan
+        tails = []
+        for cache in (k_cache, v_cache):
+            parts = [ttnn.slice(cache, [b, 0, 0, 0], [b + 1, cache_kv, block_size, cache_hd]) for b in blocks]
+            run = ttnn.concat(parts, dim=2) if len(parts) > 1 else parts[0]
+            for part in parts:
+                if part is not run:
+                    part.deallocate(True)
+            tail = ttnn.slice(run, [0, 0, first_row, 0], [1, cache_kv, first_row + take, cache_hd])
+            if tail is not run:
+                run.deallocate(True)
+            if out_dtype is not None and tail.dtype != out_dtype:
+                cast = ttnn.typecast(tail, out_dtype)
+                tail.deallocate(True)
+                tail = cast
+            tails.append(tail)
+        return tuple(tails)
+    except Exception as e:  # noqa: BLE001 - a failed rebuild degrades to the (warned) no-tail path
+        logger.warning("Gemma4 sliding prefill: bounded ring tail reconstruction failed: {}", e)
         return None
 
 
@@ -473,6 +650,149 @@ def flush_deferred_bounded_fills(layers):
                     pass
 
 
+_SDPA_DUMP_STATE = {"calls": 0, "last_in": None}
+_SDPA_KEEP = []  # GEMMA4_SDPA_KEEP_REFS=1: strong references to the SDPA inputs / outputs for the process lifetime
+
+
+def _dump_sdpa_output(tt_out):
+    """GEMMA4_SDPA_DUMP_DIR (diagnostics): the chip-0 output of the call whose inputs were dumped last."""
+    import torch
+
+    path = _SDPA_DUMP_STATE.get("last_in")
+    if not path:
+        return
+    shards = ttnn.get_device_tensors(tt_out) if hasattr(tt_out, "device") else [tt_out]
+    if os.environ.get("GEMMA4_SDPA_DUMP_ALL_CHIPS", "0") == "1":
+        out = torch.stack([ttnn.to_torch(sh).to(torch.bfloat16) for sh in shards])
+    else:
+        out = ttnn.to_torch(shards[0]).to(torch.bfloat16)
+    torch.save({"out": out}, path.replace("sdpa_in_", "sdpa_out_"))
+    _SDPA_DUMP_STATE["last_in"] = None
+
+
+def _dump_sdpa_inputs(dump_dir, tt_q, tt_k, tt_v, config, seq_len, sliding_window):
+    """GEMMA4_SDPA_DUMP_DIR (diagnostics): save the chip-0 Q / K / V handed to the prefill SDPA op (post-norm, post-RoPE)
+    and the op arguments for the first sliding and the first global layer seen, as torch tensors."""
+    import torch
+
+    kind = "sliding" if config.is_sliding else "global"
+    if os.environ.get("GEMMA4_SDPA_DUMP_ALL", "0") == "1":  # every call, numbered in call order
+        _SDPA_DUMP_STATE["calls"] += 1
+        path = os.path.join(dump_dir, f"sdpa_in_{_SDPA_DUMP_STATE['calls']:03d}_{kind}.pt")
+    else:
+        path = os.path.join(dump_dir, f"sdpa_in_{kind}.pt")
+        if os.path.exists(path):
+            return
+    os.makedirs(dump_dir, exist_ok=True)
+    _SDPA_DUMP_STATE["last_in"] = path
+
+    def host(t):
+        shards = ttnn.get_device_tensors(t) if hasattr(t, "device") else [t]
+        if os.environ.get("GEMMA4_SDPA_DUMP_ALL_CHIPS", "0") == "1":  # every chip's shard, stacked: [chips, ...]
+            return torch.stack([ttnn.to_torch(sh).to(torch.bfloat16) for sh in shards])
+        return ttnn.to_torch(shards[0]).to(torch.bfloat16)
+
+    torch.save(
+        {
+            "q": host(tt_q),
+            "k": host(tt_k),
+            "v": host(tt_v),
+            "seq_len": int(seq_len),
+            "sliding_window": sliding_window,
+            "head_dim": int(config.head_dim),
+            "layer_idx": int(getattr(config, "layer_idx", -1)),
+            "kind": kind,
+            "scale": 1.0,
+        },
+        path,
+    )
+    logger.info(f"SDPA inputs dumped to {path} (q {tuple(tt_q.shape)}, k {tuple(tt_k.shape)}, window {sliding_window})")
+
+
+def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, compute_kernel_config, mm_attn_mask=None):
+    """Single-chunk prefill SDPA. With ``mm_attn_mask`` (image-span bidirectional mask, see
+    ``mm_attention_mask.py``) the op takes the explicit additive mask instead of ``is_causal`` and
+    ``sliding_window_size`` (the op forbids combining them; the window is baked into the mask)."""
+    dump_dir = os.environ.get("GEMMA4_SDPA_DUMP_DIR")  # diagnostics: the exact op inputs, once per layer type
+    if dump_dir:
+        _dump_sdpa_inputs(dump_dir, tt_q, tt_k, tt_v, config, seq_len, sliding_window)
+    if (
+        sliding_window is not None
+        and int(seq_len) <= int(sliding_window)
+        and os.environ.get("GEMMA4_PREFILL_SDPA_NO_WINDOW", "0") == "1"
+    ):
+        # diagnostics (opt-in): a window the prompt never reaches is inert, so the plain causal op path has the same
+        # semantics at this length; isolates the op's sliding-window handling from its K/V geometry.
+        sliding_window = None
+    if mm_attn_mask is not None:
+        return ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            attn_mask=mm_attn_mask,
+            is_causal=False,
+            scale=1.0,
+            program_config=prefill_sdpa_program_config(
+                config.head_dim,
+                seq_len,
+                sliding_window=None,
+                num_heads=int(tt_q.shape[1]),
+                device_grid=sdpa_device_grid(tt_q),
+            ),
+            compute_kernel_config=compute_kernel_config,
+        )
+    # diagnostics (opt-in, inventory 4m): GEMMA4_SDPA_SYNC=1 synchronizes the device before and after the op,
+    # GEMMA4_SDPA_OUT_DRAM=1 forces the output into DRAM interleaved, GEMMA4_SDPA_KEEP_REFS=1 keeps the inputs and
+    # the output referenced for the process lifetime (no buffer reuse behind the op).
+    if os.environ.get("GEMMA4_SDPA_SYNC", "0") == "1":
+        ttnn.synchronize_device(tt_q.device())
+    out_kwargs = (
+        {"memory_config": ttnn.DRAM_MEMORY_CONFIG} if os.environ.get("GEMMA4_SDPA_OUT_DRAM", "0") == "1" else {}
+    )
+    out = ttnn.transformer.scaled_dot_product_attention(
+        tt_q,
+        tt_k,
+        tt_v,
+        is_causal=True,
+        scale=1.0,
+        sliding_window_size=sliding_window,
+        program_config=prefill_sdpa_program_config(
+            config.head_dim,
+            seq_len,
+            sliding_window=sliding_window,
+            num_heads=int(tt_q.shape[1]),
+            device_grid=sdpa_device_grid(tt_q),
+        ),
+        compute_kernel_config=compute_kernel_config,
+        **out_kwargs,
+    )
+    if os.environ.get("GEMMA4_SDPA_SYNC", "0") == "1":
+        ttnn.synchronize_device(tt_q.device())
+    if os.environ.get("GEMMA4_SDPA_KEEP_REFS", "0") == "1":
+        _SDPA_KEEP.extend([tt_q, tt_k, tt_v, out])
+    if dump_dir:
+        _dump_sdpa_output(out)
+    return out
+
+
+def _fused_prefill_qkv_ok(tt_q, cos_cache, weights) -> bool:
+    """GEMMA4_QKV_NORM_ROPE_PREFILL=1 and the fused op's contract: bf16 TILE interleaved [B, H, S, D] heads with
+    S a multiple of 32 and D of 64, the layer's sliced [1, 1, >= S, D] cos cache and the TILE gamma rows."""
+    if not QkvNormRopePrefill.enabled():
+        return False
+    if getattr(weights, "q_norm_tile", None) is None:
+        return False
+    if tt_q.layout != ttnn.TILE_LAYOUT or tt_q.dtype != ttnn.bfloat16 or tt_q.is_sharded():
+        return False
+    shape = [int(v) for v in tt_q.shape]
+    if len(shape) != 4 or shape[2] % 32 or shape[3] % 64:
+        return False
+    if shape[0] * shape[2] > 8192:  # per-core unit lists stay well under the runtime-arg limit (64 units)
+        return False
+    cs = [int(v) for v in cos_cache.shape]
+    return len(cs) == 4 and cs[0] == 1 and cs[1] == 1 and cs[2] >= shape[2] and cs[3] == shape[3]
+
+
 def _prefill_forward_single(
     hidden_states,
     cos_cache,
@@ -491,8 +811,16 @@ def _prefill_forward_single(
     chunk_page_table=None,
     sliding_tail_in=None,
     sliding_tail_end=None,
+    mm_attn_mask=None,
+    traced_short_bucket=False,
 ):
     """Single-user prefill — matches arg/gemma4_optimizations.
+
+    ``traced_short_bucket`` (the traced short single-user bucket under bounded sliding, see
+    ``generator_trace.short_prefill_stash_skipped``): the kernel-capped ring fill first zeroes the whole ring from a
+    persistent buffer (ring hygiene the eager path gets from its zero-extended deferred fill), and the cross-chunk
+    sliding-tail stash after the SDPA is skipped: a replay never runs the Python that keys the stash to a request,
+    and the stash's left pad is a host write the capture cannot record.
 
     Generator-level multi-chunk prefill (``chunk_page_table`` not None): the
     current chunk's K/V is written at its absolute blocks via ``chunk_page_table``.
@@ -581,36 +909,86 @@ def _prefill_forward_single(
         memory_config=act_mc,
     )
 
-    tt_q = apply_per_head_norm(
-        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc, fp32_accumulate=True
-    )
-
-    if shared_kv is not None:
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-        tt_k, tt_v = shared_kv
+    if _fused_prefill_qkv_ok(tt_q, cos_cache, weights):
+        # GEMMA4_QKV_NORM_ROPE_PREFILL=1: the three per-head norms (with their flatten / unflatten reshapes) and
+        # the q / k RoPE as one program (custom_ops/qkv_norm_rope_prefill); KV-shared layers norm + rotate q only
+        gq = weights.q_norm_tile
+        gk = weights.k_norm_tile if weights.k_norm_tile is not None else gq
+        own_kv = shared_kv is None
+        nq, nk, nv = QkvNormRopePrefill.op(
+            tt_q, tt_k if own_kv else None, tt_v if own_kv else None, gq, gk, cos_cache, sin_cache, config.rms_norm_eps
+        )
+        for t in (tt_q, tt_k, tt_v):
+            t.deallocate(True)
+        tt_q = nq
+        tt_k, tt_v = (nk, nv) if own_kv else shared_kv
     else:
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(
-            tt_k,
-            weights.k_norm_weight,
+        tt_q = apply_per_head_norm(
+            tt_q,
+            weights.q_norm_weight,
             config.rms_norm_eps,
             with_scale=True,
             memory_config=act_mc,
             fp32_accumulate=True,
         )
-        tt_v = apply_per_head_norm(
-            tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
-        )
 
-    # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
-    # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
-    # the two rotary_embedding calls into one, but it adds concat+split device
-    # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
-    # rotated separately.
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
-    if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is not None:
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+            tt_k, tt_v = shared_kv
+        else:
+            # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
+            tt_k = apply_per_head_norm(
+                tt_k,
+                weights.k_norm_weight,
+                config.rms_norm_eps,
+                with_scale=True,
+                memory_config=act_mc,
+                fp32_accumulate=True,
+            )
+            tt_v = apply_per_head_norm(
+                tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
+            )
+
+        # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
+        # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
+        # the two rotary_embedding calls into one, but it adds concat+split device
+        # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
+        # rotated separately.
+        tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is None:
+            tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
+
+    # A sliding-window continuation on the bounded substrate without a stash (the request's first chunk replayed the
+    # traced short bucket, which records none): rebuild the prior window from the ring before the fill stash below
+    # (its padding restore) and the SDPA read it.
+    if (
+        sliding_tail_in is None
+        and sliding_chunked
+        and not isinstance(chunk_start_idx, ttnn.Tensor)
+        and chunk_offset is not None
+        and chunk_offset > 0
+        and config.cache_position_modulo is not None
+        and kv_cache is not None
+        and shared_kv is None
+        and page_table is not None
+    ):
+        _ring_k, _ring_v = kv_cache
+        sliding_tail_in = _read_sliding_tail_from_bounded_ring(
+            _ring_k,
+            _ring_v,
+            page_table,
+            user_id,
+            chunk_offset,
+            config.sliding_window,
+            int(config.cache_position_modulo),
+            config.head_dim,
+            tt_k.dtype,
+            kv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+            lane_device_index=_owner_lane_device_index(mesh_config),
+        )
+        if sliding_tail_in is not None and sliding_tail_end is None:
+            sliding_tail_end = chunk_offset
 
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
@@ -704,6 +1082,21 @@ def _prefill_forward_single(
                     valid_dev = _resolve_valid_seq_len_tensor(config, valid_seq_len, tt_k.shape[-2], k_cache.device())
                     if valid_dev is not None:
                         fill_kwargs["valid_seq_len_tensor"] = valid_dev
+                    if traced_short_bucket:
+                        # Ring hygiene for the replayed short bucket: the capped fill leaves the slots past the
+                        # prompt holding a previous occupant's K/V, which the ring-window SDPA attends (the eager
+                        # path zero-extends its deferred fill, flush_deferred_bounded_fills). Fill the whole window
+                        # from a persistent zero buffer first; the capture records it as a plain fill.
+                        _zero_fill_ring(
+                            config,
+                            k_cache,
+                            v_cache,
+                            int(tt_k.shape[1]),
+                            fill_page_table,
+                            user_id,
+                            eff_bs,
+                            paged_modulo_kwargs,
+                        )
                     _paged_fill_cache(
                         k_cache,
                         k_fill,
@@ -833,6 +1226,7 @@ def _prefill_forward_single(
                 config.head_dim,
                 tt_k.dtype,
                 kv_local=1 if weights.kv_replicated else config.num_key_value_heads // tp,
+                lane_device_index=_owner_lane_device_index(mesh_config),
             )
         if sliding_tail_in is not None:
             k_tail, v_tail = sliding_tail_in
@@ -876,7 +1270,11 @@ def _prefill_forward_single(
                 scale=1.0,
                 sliding_window_size=sliding_window,
                 program_config=prefill_sdpa_program_config(
-                    config.head_dim, hist + seq_len, sliding_window=sliding_window
+                    config.head_dim,
+                    hist + seq_len,
+                    sliding_window=sliding_window,
+                    num_heads=int(q_cat.shape[1]),
+                    device_grid=sdpa_device_grid(q_cat),
                 ),
                 compute_kernel_config=sdpa_ckc,
             )
@@ -902,15 +1300,15 @@ def _prefill_forward_single(
                     "K/V for this chunk.",
                     chunk_offset,
                 )
-            tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+            tt_sdpa = _sdpa_single_chunk(
                 tt_q,
                 tt_k,
                 tt_v,
-                is_causal=True,
-                scale=1.0,
-                sliding_window_size=sliding_window,
-                program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
-                compute_kernel_config=sdpa_ckc,
+                config,
+                seq_len,
+                sliding_window,
+                sdpa_ckc,
+                mm_attn_mask=mm_attn_mask if not is_chunked else None,
             )
         # Save this chunk's last ``hist`` K/V tokens as the next chunk's tail.
         # Slices may be views of tt_k/tt_v; clone (+ left-pad if short) so the
@@ -1001,15 +1399,15 @@ def _prefill_forward_single(
             fp32_dest_acc_en=sdpa_fp32_dest_acc_en(True),
             packer_l1_acc=False,
         )
-        tt_sdpa = ttnn.transformer.scaled_dot_product_attention(
+        tt_sdpa = _sdpa_single_chunk(
             tt_q,
             tt_k,
             tt_v,
-            is_causal=True,
-            scale=1.0,
-            sliding_window_size=sliding_window,
-            program_config=prefill_sdpa_program_config(config.head_dim, seq_len, sliding_window=sliding_window),
-            compute_kernel_config=sdpa_compute_kernel_config,
+            config,
+            seq_len,
+            sliding_window,
+            sdpa_compute_kernel_config,
+            mm_attn_mask=mm_attn_mask if not is_chunked else None,
         )
     # Persist sliding-window K/V tail after *any* sliding prefill, not only
     # generator-level ``sliding_chunked``. vLLM token-chunked prefill
@@ -1023,6 +1421,7 @@ def _prefill_forward_single(
     # stash alive after traced 4k grants (see ``_DEFAULT_TRACE_PREFILL_SEQ_LENS``).
     if (
         sliding_tail_out is None
+        and not traced_short_bucket
         and config.is_sliding
         and sliding_window is not None
         and tt_k is not None
@@ -1082,6 +1481,8 @@ def prefill_forward(
     chunk_page_table=None,
     sliding_tail_in=None,
     sliding_tail_end=None,
+    mm_attn_mask=None,
+    traced_short_bucket=False,
 ):
     """
     Multi-token prefill attention, fully on device.
@@ -1123,6 +1524,8 @@ def prefill_forward(
             chunk_page_table=chunk_page_table,
             sliding_tail_in=sliding_tail_in,
             sliding_tail_end=sliding_tail_end,
+            mm_attn_mask=mm_attn_mask,
+            traced_short_bucket=traced_short_bucket,
         )
 
     tp = mesh_config.tp if mesh_config else 1
@@ -1150,36 +1553,55 @@ def prefill_forward(
     )
     ttnn.deallocate(xqkv)
 
-    tt_q = apply_per_head_norm(
-        tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc, fp32_accumulate=True
-    )
-
-    if shared_kv is not None:
-        tt_k.deallocate(True)
-        tt_v.deallocate(True)
-        tt_k, tt_v = shared_kv
+    if _fused_prefill_qkv_ok(tt_q, cos_cache, weights):
+        # GEMMA4_QKV_NORM_ROPE_PREFILL=1: the three per-head norms (with their flatten / unflatten reshapes) and
+        # the q / k RoPE as one program (custom_ops/qkv_norm_rope_prefill); KV-shared layers norm + rotate q only
+        gq = weights.q_norm_tile
+        gk = weights.k_norm_tile if weights.k_norm_tile is not None else gq
+        own_kv = shared_kv is None
+        nq, nk, nv = QkvNormRopePrefill.op(
+            tt_q, tt_k if own_kv else None, tt_v if own_kv else None, gq, gk, cos_cache, sin_cache, config.rms_norm_eps
+        )
+        for t in (tt_q, tt_k, tt_v):
+            t.deallocate(True)
+        tt_q = nq
+        tt_k, tt_v = (nk, nv) if own_kv else shared_kv
     else:
-        # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
-        tt_k = apply_per_head_norm(
-            tt_k,
-            weights.k_norm_weight,
+        tt_q = apply_per_head_norm(
+            tt_q,
+            weights.q_norm_weight,
             config.rms_norm_eps,
             with_scale=True,
             memory_config=act_mc,
             fp32_accumulate=True,
         )
-        tt_v = apply_per_head_norm(
-            tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
-        )
 
-    # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
-    # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
-    # the two rotary_embedding calls into one, but it adds concat+split device
-    # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
-    # rotated separately.
-    tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
-    if shared_kv is None:
-        tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is not None:
+            tt_k.deallocate(True)
+            tt_v.deallocate(True)
+            tt_k, tt_v = shared_kv
+        else:
+            # Do not K→V clone (resync): that produced unicode garbage on LB 12B.
+            tt_k = apply_per_head_norm(
+                tt_k,
+                weights.k_norm_weight,
+                config.rms_norm_eps,
+                with_scale=True,
+                memory_config=act_mc,
+                fp32_accumulate=True,
+            )
+            tt_v = apply_per_head_norm(
+                tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True
+            )
+
+        # RoPE Q (and K, unless KV-shared — then K comes already-RoPE'd from the
+        # source layer). A concat(Q,K)->rope->split fusion was evaluated to collapse
+        # the two rotary_embedding calls into one, but it adds concat+split device
+        # kernels for no throughput benefit (RoPE is ~1% of the step), so Q and K are
+        # rotated separately.
+        tt_q = apply_rope(tt_q, cos_cache, sin_cache, memory_config=act_mc)
+        if shared_kv is None:
+            tt_k = apply_rope(tt_k, cos_cache, sin_cache, memory_config=act_mc)
 
     if kv_cache is not None and shared_kv is None:
         k_cache, v_cache = kv_cache
@@ -1339,7 +1761,13 @@ def prefill_forward(
         is_causal=True,
         scale=1.0,
         sliding_window_size=sliding_window,
-        program_config=prefill_sdpa_program_config(config.head_dim, int(tt_q.shape[-2]), sliding_window=sliding_window),
+        program_config=prefill_sdpa_program_config(
+            config.head_dim,
+            int(tt_q.shape[-2]),
+            sliding_window=sliding_window,
+            num_heads=int(tt_q.shape[1]),
+            device_grid=sdpa_device_grid(tt_q),
+        ),
         compute_kernel_config=sdpa_compute_kernel_config,
     )
     tt_q.deallocate(True)

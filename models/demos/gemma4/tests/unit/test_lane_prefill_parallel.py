@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Lane-parallel prefill (galaxy lanes): four users in one forward must match their serial single-user
-prefills in last-token logits (equal argmax, high PCC), else the lanes mix or misroute users."""
+prefills in last-token logits (equal argmax, high PCC), else the lanes mix or misroute users. The k-users-per-lane
+form (``[lanes, k, seq]``: each column prefills its k users as one batched stream) must match them too."""
 
 import os
 
@@ -112,3 +113,36 @@ def test_lane_prefill_parallel(mesh_device, reset_seeds, request):
         print(f"[lane {i}] serial argmax={s_arg} lane argmax={l_arg} pcc={pcc:.5f}")
         assert pcc > 0.99, f"lane {i} logits diverge from serial prefill: pcc={pcc}"
         assert s_arg == l_arg, f"lane {i} next-token mismatch: serial {s_arg} vs lane {l_arg}"
+
+    # ── k = 2 users per lane as one batched stream per column ─────────────
+    # Round r shares one prompt length across lanes: truncate the prompts to the shortest and rotate them
+    # so lane i prefills prompts i and (i + 1) % lanes at its slots 0 and 1. Serial references on the
+    # same truncated prompts.
+    L = min(plens)
+    trunc = [t[:L] for t in prompts_tok]
+    padded2 = 1 << max(int(L - 1).bit_length(), 7)
+    assert 2 * padded2 <= int(generator.model_args[0].max_prefill_chunk_size), "k=2 stream must fit the chunk"
+    serial2 = serial_prefill(trunc, [L] * lanes, padded2)
+    tokens_k = torch.zeros(lanes, 2, padded2, dtype=torch.long)
+    tables_k = torch.zeros(lanes, 2, blocks_per_user, dtype=torch.int32)
+    for i in range(lanes):
+        for r in range(2):
+            tokens_k[i, r, :L] = trunc[(i + r) % lanes]
+            tables_k[i, r] = block_ids + r * blocks_per_user  # slot r of lane i's pool
+    lane_k = generator.prefill_forward_lanes(
+        tokens_k,
+        tables_k,
+        tt_kv_cache,
+        [L] * (lanes * 2),
+        slot_ids=[i * SLOTS_PER_LANE + r for i in range(lanes) for r in range(2)],
+    )
+    assert tuple(lane_k.shape) == (lanes * 2, vocab)
+    for i in range(lanes):
+        for r in range(2):
+            ref = serial2[(i + r) % lanes]
+            got = lane_k[i * 2 + r]
+            s_arg, l_arg = int(torch.argmax(ref).item()), int(torch.argmax(got).item())
+            pcc = _pcc(ref, got)
+            print(f"[lane {i} user {r}] serial argmax={s_arg} batched argmax={l_arg} pcc={pcc:.5f}")
+            assert pcc > 0.99, f"lane {i} user {r}: batched lane prefill diverges from serial: pcc={pcc}"
+            assert s_arg == l_arg, f"lane {i} user {r}: next-token mismatch: serial {s_arg} vs batched {l_arg}"

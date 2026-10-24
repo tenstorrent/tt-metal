@@ -14,7 +14,7 @@ class _Model:
         self._active_page_tables_per_layer = tables
         self.staged = []
 
-    def update_persistent_per_layer_page_tables(self, tables):
+    def update_persistent_per_layer_page_tables(self, tables, force=False):
         self.staged.append([t.clone() if isinstance(t, torch.Tensor) else t for t in tables])
 
 

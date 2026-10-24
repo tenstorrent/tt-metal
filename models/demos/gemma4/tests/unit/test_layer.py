@@ -77,6 +77,12 @@ def _create_hf_reference_layer(hf_text_config, layer_idx):
     return hf_layer
 
 
+def _reduced_experts(mesh_device):
+    """A small expert set for speed that still shards whole experts over every chip (ep*tp)."""
+    n_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "shape") else 1
+    return max(4, n_devices)
+
+
 def _create_hf_text_config(num_experts=None, top_k=None):
     """Create HF text config from HF_MODEL, with optional MoE overrides for speed."""
     from transformers import AutoConfig
@@ -146,7 +152,7 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds,
     forward passes with the same input, and checks PCC >= 0.90.
     """
     # Create HF config and reference layer
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config(num_experts=_reduced_experts(mesh_device), top_k=2)
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
 
     # Get HF state_dict and convert for TT
@@ -226,19 +232,29 @@ def test_layer_forward(batch_size, seq_len, layer_idx, mesh_device, reset_seeds,
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("layer_idx", [0], ids=["sliding"])
-def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
+@pytest.mark.parametrize("fused_norms", [False, True], ids=["norms_plain", "norms_fused"])
+def test_layer_forward_decode(layer_idx, fused_norms, mesh_device, reset_seeds, request, monkeypatch):
     """
     Full decoder layer decode test (seq_len=1, fully on device).
 
     Uses KV cache pre-filled with random data, then decodes one token.
     Compares against HF reference with same KV cache state.
+
+    ``norms_fused``: the dense layer tail as fused norm programs (GEMMA4_NORM_FUSED=2 + GEMMA4_LAYER_NORM_FUSED=1:
+    post-attention norm + residual, pre-FF norm, post-FF norm + residual * layer scalar) against the same HF
+    reference; dense variants only (the MoE layer's fused tail needs the whole-expert fused MoE path).
     """
     from transformers.cache_utils import DynamicCache
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 
-    hf_text_config = _create_hf_text_config(num_experts=4, top_k=2)
+    hf_text_config = _create_hf_text_config(num_experts=_reduced_experts(mesh_device), top_k=2)
+    if fused_norms:
+        if getattr(hf_text_config, "enable_moe_block", False):
+            pytest.skip("fused layer norms variant covers the dense layer tail only")
+        monkeypatch.setenv("GEMMA4_NORM_FUSED", "2")
+        monkeypatch.setenv("GEMMA4_LAYER_NORM_FUSED", "1")
     hf_layer = _create_hf_reference_layer(hf_text_config, layer_idx)
     hf_state = hf_layer.state_dict()
     tt_state = _hf_state_to_tt_state(hf_state, layer_idx)
@@ -356,6 +372,8 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None,
     )
+    # the fused tail must be taken when requested (a silent fallback would make that variant a duplicate)
+    fused_engaged = tt_layer._fused_dense_layer_norms_ok(x_tt)
     tt_output = tt_layer(
         x_tt,
         rope_mats=(cos_tt, sin_tt),
@@ -374,3 +392,5 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
     # Relaxed threshold for decode: MoE router bf16 topk can pick different experts
     passing, pcc_msg = compare_tensors(tt_output_torch, hf_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, f"Full layer decode (layer_idx={layer_idx}, tp={tp}) PCC too low: {pcc_msg}"
+    if fused_norms:
+        assert fused_engaged, "fused dense layer tail not engaged"

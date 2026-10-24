@@ -39,6 +39,7 @@ def drafter_snapshot(tmp_path, monkeypatch):
         "hidden_size": 5376,
         "head_dim": 128,
         "num_key_value_heads": 8,
+        "block_size": 16,  # the checkpoint's block geometry; spec_plan reads it (GEMMA4_DFLASH_BLOCK overrides)
     }
     (tmp_path / "config.json").write_text(json.dumps(cfg))
     monkeypatch.setenv("GEMMA4_DFLASH_DRAFTER", str(tmp_path))

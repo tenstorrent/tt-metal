@@ -13,11 +13,17 @@ computes on the device is not something a host test can attest.
 import ast
 import dataclasses
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
+
+# dFlash serves on Blackhole; this 120-case host suite runs on every Blackhole unit job (12B / 26B / 31B / E4B on
+# bh_quietbox_2, E2B on bh_p150) and is skipped on the Wormhole N150 tier-3 leg, whose 10-min step it was pushing over.
+if os.environ.get("ARCH_NAME", "").startswith("wormhole"):
+    pytest.skip("dFlash contract host suite runs on the Blackhole unit jobs", allow_module_level=True)
 
 from models.demos.gemma4.tests.unit.conftest import build_model, import_adapter
 from models.demos.gemma4.tests.unit.dflash_contract_harness import (
@@ -105,6 +111,8 @@ def test_contract_sampled_top_k_uses_host_when_the_device_cannot_honor_it(adapte
     sampling.temperature[0] = temperature
     sampling.top_k[0] = top_k
     runner = SimpleNamespace(
+        # The plugin runner reads its seeded-sampling policy before the top-k rule (None = device default).
+        seeded_sampling_policy=None,
         sample_on_device_mode="decode_only",
         num_devices=8,
         tt_data_parallel_size=1,
@@ -129,6 +137,8 @@ def test_contract_penalty_request_uses_host_sampler(adapter):
     sampling.temperature[0] = 0.7
     sampling.top_k[0] = 2
     runner = SimpleNamespace(
+        # The plugin runner reads its seeded-sampling policy before the top-k rule (None = device default).
+        seeded_sampling_policy=None,
         sample_on_device_mode="decode_only",
         num_devices=8,
         tt_data_parallel_size=1,

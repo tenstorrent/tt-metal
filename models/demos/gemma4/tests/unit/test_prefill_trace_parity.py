@@ -17,7 +17,12 @@ import torch
 from loguru import logger
 from transformers import AutoModelForCausalLM
 
-from models.demos.gemma4.demo.text_demo import _batch_prefill_hits_ceiling, _maybe_xfail_batch_prefill_dram
+from models.demos.gemma4.demo.text_demo import (
+    _batch_prefill_hits_ceiling,
+    _install_hybrid_page_tables,
+    _maybe_xfail_batch_prefill_dram,
+    _resolve_bounded_sliding,
+)
 from models.demos.gemma4.tt.generator import Gemma4Generator
 from models.demos.gemma4.tt.generator_trace import (
     GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS,
@@ -210,19 +215,26 @@ def _ensure_prefill_warmup(generator, kv_cache, tokens, page_table, prompt_lens,
     setattr(generator, warmed_attr, True)
 
 
-def _run_prefill_logits(generator, kv_cache, tokens, page_table, prompt_lens, *, enable_trace, paged_cfg):
-    """Warm up once for the given trace mode, then return measured last-token logits on clean KV."""
+def _run_prefill_logits(
+    generator, kv_cache, tokens, page_table, prompt_lens, *, enable_trace, paged_cfg, fresh_kv=True
+):
+    """Warm up once for the given trace mode, then return measured last-token logits on clean KV (``fresh_kv``;
+    the bounded-sliding generator keeps its own ring pools: the measured call reuses ``kv_cache``)."""
     _ensure_prefill_warmup(generator, kv_cache, tokens, page_table, prompt_lens, enable_trace=enable_trace)
 
     model_args = generator.model_args[0]
-    measure_kv = [
-        _allocate_fresh_kv_cache(
-            generator.model[0],
-            max_batch_size=model_args.max_batch_size,
-            max_seq_len=model_args.max_seq_len,
-            paged_attention_config=paged_cfg,
-        )
-    ]
+    measure_kv = (
+        [
+            _allocate_fresh_kv_cache(
+                generator.model[0],
+                max_batch_size=model_args.max_batch_size,
+                max_seq_len=model_args.max_seq_len,
+                paged_attention_config=paged_cfg,
+            )
+        ]
+        if fresh_kv
+        else kv_cache
+    )
 
     out = generator.prefill_forward_text(
         tokens,
@@ -311,38 +323,90 @@ def test_prefill_trace_eager_hf_parity(batch_size, prefill_len, mesh_device, res
 
     max_batch_size = max_padded_batch
 
+    # the demo / vLLM bounded-sliding resolution (policy + GEMMA4_BOUNDED_SLIDING): with it the generator keeps
+    # ring pools for the sliding layers and the per-layer (hybrid) page tables route the paged ops, exactly the
+    # served configuration the short-prefill trace opt-in (GEMMA4_TRACE_SHORT_PREFILL) replays under
+    bounded = _resolve_bounded_sliding(max_seq_len, mesh_device, model_path)
     generator, kv_caches, _tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
         max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         paged_attention_config=paged_cfg,
+        bounded_sliding_kv_cache=bounded,
     )
+    if bounded:
+        _install_hybrid_page_tables(
+            generator.model[0],
+            generator.model_args[0],
+            batch_size=max_batch_size,
+            block_size=int(paged_cfg.block_size),
+            max_seq_len=max_seq_len,
+        )
+    logger.info(f"prefill trace parity: bounded_sliding={bounded}")
     model_args = generator.model_args[0]
     assert model_args.can_enable_trace(
         kernel_len, batch_size=max_batch_size
     ), f"Trace not enabled for kernel_len={kernel_len} batch_size={max_batch_size}"
 
     kv_eager = kv_caches
-    kv_trace = [
-        _allocate_fresh_kv_cache(
-            generator.model[0],
-            max_batch_size=model_args.max_batch_size,
-            max_seq_len=max_seq_len,
-            paged_attention_config=paged_cfg,
-        )
-    ]
+    kv_trace = (
+        kv_caches
+        if bounded
+        else [
+            _allocate_fresh_kv_cache(
+                generator.model[0],
+                max_batch_size=model_args.max_batch_size,
+                max_seq_len=max_seq_len,
+                paged_attention_config=paged_cfg,
+            )
+        ]
+    )
 
     out_eager = _run_prefill_logits(
-        generator, kv_eager, tokens, page_table, prompt_lens, enable_trace=False, paged_cfg=paged_cfg
+        generator,
+        kv_eager,
+        tokens,
+        page_table,
+        prompt_lens,
+        enable_trace=False,
+        paged_cfg=paged_cfg,
+        fresh_kv=not bounded,
     )
     out_trace = _run_prefill_logits(
-        generator, kv_trace, tokens, page_table, prompt_lens, enable_trace=True, paged_cfg=paged_cfg
+        generator,
+        kv_trace,
+        tokens,
+        page_table,
+        prompt_lens,
+        enable_trace=True,
+        paged_cfg=paged_cfg,
+        fresh_kv=not bounded,
     )
+    eager_tokens = out_eager.argmax(-1).flatten().tolist()
+    traced_tokens = out_trace.argmax(-1).flatten().tolist()
+    logger.info(
+        f"first tokens: eager {eager_tokens} traced {traced_tokens} "
+        f"agree={sum(int(a == b) for a, b in zip(eager_tokens, traced_tokens))}/{len(eager_tokens)}"
+    )
+    if os.environ.get("PREFILL_TRACE_PARITY_TOP1", "0") == "1":
+        # the short-prefill trace gate: the replayed graph must pick the same first token as the eager path
+        assert eager_tokens == traced_tokens, f"traced first tokens {traced_tokens} != eager {eager_tokens}"
 
-    out_direct = _run_direct_model_prefill_last_logit(generator, tokens, prompt_lens).float()
-    _assert_parity("direct model prefill vs HF", hf_last_eager, out_direct, request)
+    # The direct-model reference prefills with page_table=None (a minimal tile-aligned kernel); under bounded
+    # sliding its deferred ring fill needs the ring tables (paged_fill_cache: modulo must be a multiple of the
+    # block), so that reference is skipped there and the Generator eager path is the reference.
+    # The trace audit first (traced vs eager Generator), the HF references after: the direct-model reference's own
+    # agreement with HF (a minimal 32-token kernel on an MoE whose routing is chaotic at that length) must not mask the
+    # traced-vs-eager verdict (batch-32 x 128 on the 26B (4,1): traced == eager on all 32 first tokens while the direct
+    # reference sat at 0.91 vs HF, 2026-10-23).
     _assert_parity("traced vs eager (Generator)", out_eager, out_trace, request)
+    out_direct = None if bounded else _run_direct_model_prefill_last_logit(generator, tokens, prompt_lens).float()
+    if out_direct is None and prompt_len >= prefill_len:
+        _assert_parity("eager (Generator) vs HF", hf_last_trace, out_eager, request)
     if prompt_len >= prefill_len:
         _assert_parity("traced vs HF", hf_last_trace, out_trace, request)
-        _assert_parity("traced vs direct model prefill", out_direct, out_trace, request)
+        if out_direct is not None:
+            _assert_parity("traced vs direct model prefill", out_direct, out_trace, request)
+    if out_direct is not None:
+        _assert_parity("direct model prefill vs HF", hf_last_eager, out_direct, request)

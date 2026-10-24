@@ -28,7 +28,7 @@ def test_activate_sequential_per_layer_row_refreshes_persistent_device_tables():
     sliding = torch.tensor([[110, 111], [120, 121], [130, 131]], dtype=torch.int32)
     updates = []
 
-    def _update(sliced):
+    def _update(sliced, force=False):
         updates.append([t.detach().clone() for t in sliced])
 
     model = SimpleNamespace(

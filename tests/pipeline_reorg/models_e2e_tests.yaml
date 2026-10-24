@@ -748,11 +748,12 @@
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
     # 10m; demo+lm_head+matches_sequential+full_model already fill it.
-    pytest -s --timeout 900 \
-      models/demos/gemma4/tests/unit/test_lm_head.py \
-      models/demos/gemma4/tests/unit/test_packed_verify.py \
-      models/demos/gemma4/tests/unit/test_model.py::test_full_model \
-      --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # test_full_model ("MoE model too large for TP=4") and test_packed_verify
+    # (expert prefill needs seq_len % 32 == 0) skip on the 26B, so only lm_head
+    # is listed. The image e2e (SigLIP tower shared with the 31B, 1152->2816
+    # projector, soft tokens merged into the MoE prefill) runs batch 1 only.
+    pytest -s --timeout 900 models/demos/gemma4/tests/unit/test_lm_head.py
+    pytest -s --timeout 900 models/demos/gemma4/demo/vision_demo.py -k "not 32"
   model: gemma-4-26b-a4b
   model_family: Gemma
   skus:
@@ -761,7 +762,7 @@
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 22
+      timeout: 14  # measured 7.7 min warm (16.4 cold) 2026-10-24
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
@@ -782,21 +783,35 @@
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
     # Deselect packed-verify batch_perf (~2–3m): WH llmbox_perf SKU budget is
-    # 10m; demo+lm_head+matches_sequential+full_model already fill it.
+    # 14m; demo+lm_head+matches_sequential+full_model measure 11-13m there.
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (~1.5 min with the load)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      models/demos/gemma4/tests/test_prose_accuracy.py \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
+    # Vision tower + encoder at full depth against the masked HF reference
+    # (PCC >= 0.98), weight-backed; ~2.5 min on the QB2 1x4 mesh. The vision
+    # tests keep CI to their two_layers case unless told otherwise.
+    if [ "$ARCH_NAME" = "blackhole" ]; then
+      GEMMA4_VISION_FULL_DEPTH=1 pytest -s --timeout 900 \
+        models/demos/gemma4/tests/unit/test_vision_tower.py \
+        models/demos/gemma4/tests/unit/test_vision_encoder.py \
+        -k "all_layers"
+    fi
   model: gemma-4-31b
   model_family: Gemma
   skus:
     wh_llmbox_perf:
-      timeout: 12
+      timeout: 14
       tier: 2
       release_ready: false
     bh_quietbox_2:
-      timeout: 25
+      timeout: 26  # run 40103786590 (first full run past the SDPA grid throw): 20.7 min wall at the 19-min kill with
+                   # the prose gate (~1.5 min) added on top; the cached HF reference takes ~8 min off from the second run on
+                   # the vision run not yet started; text_demo 404 s + lm_head / packed_verify / full_model 614 s (the
+                   # full model is 498 s, ~8 min of it the 31B HF reference forward on the CPU) + the vision towers
       tier: 1
       release_ready: true
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
@@ -808,15 +823,40 @@
   team: models
   budget_type: e2e
 
+- name: Gemma-4-31B token-accuracy tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    # Whole-model teacher-forced token-accuracy gate (top-1 / top-5 vs the
+    # stored HF predictions, batch 1): ~8 min on the QB2 1x4 mesh including the
+    # checkpoint load on a warm TT cache; a cold cache converts the 1188 tensors
+    # first (2026-10-24: the 11-minute job was killed ~10 min into that build,
+    # which also never let the cache warm). The budget covers one cold build.
+    # The full-depth vision gate runs in the 31B e2e job.
+    pytest -s --timeout 1500 models/demos/gemma4/tests/test_token_accuracy.py -k "batch_1"
+  model: gemma-4-31b
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      timeout: 16  # run 40103786590: 3.3 min warm; a cold TT-cache rebuild (one-off after a cache layout change) is
+                   # the shield runner's exposure, not the PR gate's
+      tier: 1  # the tier-2 QB2 bucket is full (186/186); this fits the tier-1 headroom
+      release_ready: false
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: e2e
+
 - name: Gemma-4-12B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    # test_prose_accuracy: 2048 prose tokens on the (1,4) mesh against the fp32 top-5 reference (skips on bh_p150)
     pytest -s --timeout 900 \
       models/demos/gemma4/tests/unit/test_lm_head.py \
       models/demos/gemma4/tests/unit/test_packed_verify.py \
       models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      models/demos/gemma4/tests/test_prose_accuracy.py \
       --deselect models/demos/gemma4/tests/unit/test_packed_verify.py::test_packed_verify_batch_perf
   model: gemma-4-12b
   model_family: Gemma
@@ -829,7 +869,7 @@
       timeout: 6
       tier: 2
     bh_quietbox_2:
-      timeout: 22
+      timeout: 13  # run 40103786590: 9.7 min, plus ~1 min for test_prose_accuracy (24 s of test on a warm cache + load)
       tier: 1
       release_ready: true
   owner_id: U088413NP0Q # Ashai Reddy
