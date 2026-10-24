@@ -32,6 +32,8 @@ SHAPE_NAME = os.environ.get("GEMMA4_GEGLU_SHAPE", "block")
 SHAPE = dict(SHAPES[SHAPE_NAME])
 if os.environ.get("GEMMA4_GEGLU_HIDDEN"):  # intermediate-size override: scales weight bytes and per_core_N, not rounds
     SHAPE["hidden"] = int(os.environ["GEMMA4_GEGLU_HIDDEN"])
+if os.environ.get("GEMMA4_GEGLU_EMB"):  # model-dim override: scales the gate/up K (bytes, K-blocks and MACs alike)
+    SHAPE["emb"] = int(os.environ["GEMMA4_GEGLU_EMB"])
 WEIGHTS = {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[
     os.environ.get("GEMMA4_GEGLU_WEIGHTS", "bf4")
 ]
@@ -46,7 +48,7 @@ def test_geglu_routed_expert_rows(mesh_device, device_params):
     iters = int(os.environ.get("GEMMA4_GEGLU_TIMING_ITERS", "10"))
     times = []
     tag = (
-        f"shape={SHAPE_NAME} hidden={SHAPE['hidden']} weights={os.environ.get('GEMMA4_GEGLU_WEIGHTS', 'bf4')} "
+        f"shape={SHAPE_NAME} emb={SHAPE['emb']} hidden={SHAPE['hidden']} weights={os.environ.get('GEMMA4_GEGLU_WEIGHTS', 'bf4')} "
         f"active={ACTIVE}/{SHAPE['E']} "
         f"M_max={os.environ.get('GEMMA4_GEGLU_PER_CORE_M_MAX', 'default')} w_gu={os.environ.get('GEMMA4_GEGLU_IN0_BLOCK_W', 'default')}"
     )

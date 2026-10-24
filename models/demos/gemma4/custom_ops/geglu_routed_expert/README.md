@@ -70,3 +70,14 @@ experts, buffer, counts and region offsets), small shapes with both x layouts, a
 (hidden 2816, intermediate 704, 4 local experts, 4096 max tokens per expert, counts covering a full region, a
 multi-chunk tail, a single partial tile and an empty expert); PCC vs the torch golden and vs the shared op on
 the same inputs, and the warm per-call time of both.
+
+## Per-expert cost at the QB2 (4,1) shape (0451 / 0454 / 0455 / 0456, bf8, 8 rows per expert)
+
+`tests/unit/custom_ops/test_geglu_routed_expert_rows.py` (knobs `GEMMA4_GEGLU_SHAPE=4x1`, `_WEIGHTS`, `_HIDDEN`, `_EMB`,
+`_ACTIVE`, `_ROWS`) measured ~41 us per active expert = ~47 us per call + per expert: phases 1-3 ~16 us that do not
+move with K, N (<= 704), weight bytes (bf4 / bf16), the gate/up K-block count or per_core_M (a protocol / latency
+chain per expert; compute shows only from N = 1408 on), plus the down phase ~18.6 us (its 11 structural rounds, ~8 us,
+and its weight stream at ~3.4 us/MB). The weights themselves stream at ~450 GB/s. Consequences: fewer / wider K-blocks
+(`per_core_m_max`, `in0_block_w_gu`) change nothing; a one-round down phase would save ~11-13 us per expert; only
+running several experts concurrently (one per M-row) removes the per-expert constant. Both are parked
+(`_logs/g2_geglu_pipelining_plan.md`).
