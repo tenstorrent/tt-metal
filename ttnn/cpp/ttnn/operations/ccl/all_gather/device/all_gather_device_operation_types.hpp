@@ -29,7 +29,6 @@ struct AgForce {
     AgAlgo algo = AgAlgo::Auto;
     uint8_t workers = 0;        // unicast workers per link-direction
     uint8_t links = 0;          // links used
-    uint8_t k = 0;              // packets per slot
     uint16_t reader_delay = 0;  // cycles a reader spins per slot (sync stress)
     uint16_t writer_delay = 0;  // cycles a writer spins per slot (sync stress)
 };

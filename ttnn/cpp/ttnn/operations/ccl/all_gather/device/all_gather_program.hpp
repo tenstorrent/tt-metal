@@ -26,19 +26,11 @@ inline constexpr const char* kMulticastWriterKernel =
 inline constexpr uint32_t kReaderIdx = 0;
 inline constexpr uint32_t kWriterIdx = 1;
 
-// The two RISCs of a core must use different NOCs. The writer takes NOC0 except on a unicast line, where the reader
-// does. Measured on BH at 26 MB: multicast writer on NOC0 1.42x faster on a ring, 1.13x on a line (it writes every
-// packet into the ethernet cores, a path that is slow on NOC1, as for the Mux V2 forwarder below); unicast writer on
-// NOC0 5% (n = 3) / 10% (n = 2) faster on a ring at 8-42 MB, but 8% / 3% slower on a line.
+// The reader and writer NOCs (Tuning::writer_noc; the two RISCs of a core use different NOCs).
 struct KernelNocs {
     tt::tt_metal::NOC reader, writer;
 };
-constexpr KernelNocs kernel_nocs(AgAlgo algo, bool ring) {
-    return (algo == AgAlgo::Unicast && !ring) ? KernelNocs{tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1}
-                                              : KernelNocs{tt::tt_metal::NOC::NOC_1, tt::tt_metal::NOC::NOC_0};
-}
-// Mux V2 forwarder NOC (NOC1 measured 1.8-2.3x slower on BH).
-inline constexpr tt::tt_metal::NOC kMuxForwarderNoc = tt::tt_metal::NOC::NOC_0;
+KernelNocs kernel_nocs(const all_gather_plan::AgPlan& plan);
 
 // The plan of one call, re-expanded from the hashed choice, and a workload holding its two GlobalSemaphores (init,
 // then data_valid / done) on the plan's worker cores.
@@ -55,7 +47,7 @@ CoreRangeSet worker_cores(const all_gather_plan::AgPlan& plan);
 // The slot CB: kCbSlots pages of plan.slot_bytes on `cores`.
 tt::tt_metal::CBDescriptor slot_cb(const all_gather_plan::AgPlan& plan, const CoreRangeSet& cores);
 
-// The reader kernel (ag_reader.cpp) on `cores`. Named CT args: A, P_A, K, SLOT_BYTES, CB_ID, UI, UO, S, N, E,
+// The reader kernel (ag_reader.cpp) on `cores`. Named CT args: A, CAP, K, SLOT_BYTES, CB_ID, P_A, UI, UO, S, N, E,
 // DST_CROSS, SRC_CROSS, RDELAY; positional CT args: TensorAccessorArgs(input), TensorAccessorArgs(output).
 tt::tt_metal::KernelDescriptor reader_kernel(
     const all_gather_plan::AgPlan& plan,
@@ -64,7 +56,7 @@ tt::tt_metal::KernelDescriptor reader_kernel(
     const Tensor& output,
     const CoreRangeSet& cores);
 
-// A writer kernel on `cores`. Named CT args: A, P_A, K, SLOT_BYTES, CB_ID, CB_SLOTS, WDELAY, then `extra`.
+// A writer kernel on `cores`. Named CT args: A, CAP, K, SLOT_BYTES, CB_ID, WDELAY, then `extra`.
 tt::tt_metal::KernelDescriptor writer_kernel(
     const all_gather_plan::AgPlan& plan,
     const AgForce& force,

@@ -19,19 +19,24 @@ namespace {
 constexpr const char* kReaderKernel = "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/ag_reader.cpp";
 constexpr uint32_t kSlotCb = tt::CBIndex::c_0;
 
+// The slot layout every kernel derives (ag::slot_offsets) and checks against SLOT_BYTES.
 tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs slot_ct_args(const all_gather_plan::AgPlan& plan) {
     return {
         {"A", plan.geo.A},
-        {"P_A", plan.geo.P_A},
         {"CAP", plan.geo.cap},
         {"K", plan.choice.k},
         {"SLOT_BYTES", plan.slot_bytes},
         {"CB_ID", kSlotCb},
-        {"CB_SLOTS", all_gather_plan::kCbSlots},
     };
 }
 
 }  // namespace
+
+KernelNocs kernel_nocs(const all_gather_plan::AgPlan& plan) {
+    const uint32_t algo = plan.choice.algo == AgAlgo::Unicast ? all_gather_plan::kUc : all_gather_plan::kMc;
+    const auto writer = all_gather_plan::tuning(plan.arch).writer_noc[algo][plan.ring ? 1 : 0];
+    return {writer == tt::tt_metal::NOC::NOC_0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0, writer};
+}
 
 WorkloadStart start_workload(const AllGatherParams& params, const Tensor& input, const Tensor& output) {
     TT_FATAL(input.buffer() != nullptr && output.buffer() != nullptr, "all_gather needs allocated tensors");
@@ -98,6 +103,7 @@ tt::tt_metal::KernelDescriptor reader_kernel(
     reader.named_compile_time_args.insert(
         reader.named_compile_time_args.end(),
         {
+            {"P_A", geo.P_A},
             {"UI", geo.Ui},
             {"UO", geo.Uo},
             {"S", geo.S},
@@ -110,8 +116,7 @@ tt::tt_metal::KernelDescriptor reader_kernel(
     tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader.compile_time_args);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader.compile_time_args);
     reader.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-        .noc = kernel_nocs(plan.choice.algo, plan.ring).reader};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = kernel_nocs(plan).reader};
     return reader;
 }
 
@@ -129,8 +134,7 @@ tt::tt_metal::KernelDescriptor writer_kernel(
     writer.named_compile_time_args.emplace_back("WDELAY", force.writer_delay);
     writer.named_compile_time_args.insert(writer.named_compile_time_args.end(), extra.begin(), extra.end());
     writer.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-        .noc = kernel_nocs(plan.choice.algo, plan.ring).writer};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = kernel_nocs(plan).writer};
     return writer;
 }
 

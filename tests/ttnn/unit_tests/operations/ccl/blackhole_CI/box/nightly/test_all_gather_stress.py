@@ -9,7 +9,8 @@
 # gets new data and the output a sentinel, after it the output is checked. A replay that starts before the previous
 # one's handshakes have drained, or a signal counted twice, hangs or corrupts the block's last replay. rdelay /
 # wdelay stall the reader / writer per slot, shifting which side waits on which semaphore. Each test then replays a
-# second shape's trace and returns to the first. The output is persistent, or allocated by the op at capture.
+# second and a third shape's traces (the third with narrow row-major rows: about 30 short packets per slot) and returns
+# to the first. The output is persistent, or allocated by the op at capture.
 #
 # Overlap: cached gathers back to back with no sync, a different input each time, into one reused persistent output,
 # with every device but one stalled after each launch and the output copied out behind it. Without the init
@@ -52,6 +53,7 @@ ALGOS = ["uc_n2", "uc_n3", "mc"]
 
 SHAPE_A = Case([1, 1, 256, 8192], 3)  # 4 MB: several slots per iteration, relays on every device
 SHAPE_B = Case([1, 1, 224, 2816], 3)  # 11 tiles x 7 rows per device: odd slices that start mid-row
+SHAPE_K = Case([1, 1, 2048, 1024], 3, layout=RM)  # 256 B per device per row: 1 KB packet cap, k = 30 per slot
 
 # id -> (replays of shape A, rdelay, wdelay, marks)
 DELAYS = {
@@ -109,7 +111,10 @@ def test_all_gather_traced_stress(mesh_device, device_params, algo, delay_id, ou
     a.replay(replays, f"A {label}")
     b = Traced(mesh_device, SHAPE_B, persistent)
     b.replay(BLOCK, f"B {label}")
+    k = Traced(mesh_device, SHAPE_K, persistent)
+    k.replay(BLOCK, f"K {label}")
     a.replay(BLOCK, f"A again {label}")
+    k.release()
     b.release()
     a.release()
 

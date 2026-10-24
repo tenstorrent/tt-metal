@@ -5,9 +5,8 @@
 #pragma once
 
 // Packet builder: walk runs -> packets of <= cap bytes (packet_cap) and <= NOC_SCATTER_WRITE_MAX_CHUNKS segments, cut
-// on A. The
-// reader builds each packet's record (the fabric's own scatter command) in its slot; the writer encodes it into the
-// slot's header with the official setters. Compiled on host by the kernel-lib sim.
+// on A. The reader builds each packet's record (the fabric's own scatter command) in its slot; the writer encodes it
+// into the slot's header with the official setters. Compiled on host by the kernel-lib sim.
 
 #include <cstdint>
 #include <new>

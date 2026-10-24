@@ -5,8 +5,7 @@
 # Shared helpers for the BH box all_gather device tests (test_all_gather_matrix.py, test_all_gather_stress.py).
 #
 # Algorithms are forced through the TTNN_ALL_GATHER_FORCE override (grammar in all_gather_plan.hpp, parse_force):
-# "<auto|unicast|multicast|composite>[:key=value(,key=value)*]", keys n (unicast), links, k (packets per slot),
-# rdelay, wdelay. Unset = auto.
+# "<auto|unicast|multicast|composite>[:key=value(,key=value)*]", keys n (unicast), links, rdelay, wdelay. Unset = auto.
 
 from dataclasses import dataclass
 from typing import Optional

@@ -3,10 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // all_gather multicast writer: the slot consumer. Each packet goes once over every connection (one per direction
-// with a neighbor) and reaches every other device of the collective. On an even ring the two directions are
-// unbalanced by one hop, so packets alternate between two route variants. Done rides every (connection, variant), so
-// it lands after our data whichever variant the data took, and every device counts VARIANTS done credits from each
-// other device. Init orders nothing, so it rides variant 0 only: one credit from each other device.
+// with a neighbor), and together the connections reach every other device of the collective once. Init and done ride
+// the same routes, so every device counts one of each from every other device, and done lands after our data.
 
 #include <cstdint>
 
@@ -34,7 +32,7 @@ namespace {
 // Directions a device can have neighbors in (E, W, N, S).
 constexpr uint32_t kMaxConnections = 4;
 
-// A connection's route for one variant: hop counts packed one byte per physical direction (E, W, N, S).
+// Each connection's route: hop counts packed one byte per physical direction (E, W, N, S).
 struct Routes {
 #ifdef FABRIC_2D
     tt::tt_fabric::mesh::experimental::MeshMcastRange range[kMaxConnections];
@@ -94,9 +92,7 @@ void kernel_main() {
     constexpr uint32_t K = get_named_compile_time_arg_val("K");
     constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("SLOT_BYTES");
     constexpr uint32_t CB_ID = get_named_compile_time_arg_val("CB_ID");
-    constexpr uint32_t VARIANTS = get_named_compile_time_arg_val("VARIANTS");
     constexpr uint32_t WDELAY = get_named_compile_time_arg_val("WDELAY");
-    static_assert(VARIANTS == 1 || VARIANTS == 2, "one route, or two alternating on an even ring");
 
     constexpr ag::SlotLayout lay = ag::slot_offsets(K, A, sizeof(PACKET_HEADER_TYPE), CAP);
     static_assert(lay.slot_bytes == SLOT_BYTES, "host and kernel disagree on the packet header size");
@@ -111,14 +107,9 @@ void kernel_main() {
     const uint32_t mirror_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     ASSERT(num_connections >= 1 && num_connections <= kMaxConnections);
-    Routes routes[VARIANTS];
+    Routes routes;
     for (uint32_t c = 0; c < num_connections; ++c) {
-        const uint32_t v0 = get_arg_val<uint32_t>(arg_idx++);
-        const uint32_t v1 = get_arg_val<uint32_t>(arg_idx++);
-        routes[0].set(c, v0);
-        if constexpr (VARIANTS == 2) {
-            routes[1].set(c, v1);
-        }
+        routes.set(c, get_arg_val<uint32_t>(arg_idx++));
     }
 
     Noc noc;
@@ -126,38 +117,29 @@ void kernel_main() {
     tt::tt_fabric::RoutingPlaneConnectionManager mgr;
     tt::tt_fabric::common::experimental::open_connections(mgr, num_connections, arg_idx);
 
-    // Per variant: one unicast-write route (also carries init and done) and one scatter-write route, each a header
-    // per connection. Headers are reused, so every re-encode waits for the previous send to leave L1.
-    uint8_t unicast_route[VARIANTS], scatter_route[VARIANTS];
-    for (uint32_t v = 0; v < VARIANTS; ++v) {
-        unicast_route[v] = PacketHeaderPool::allocate_header_n(num_connections);
-        scatter_route[v] = PacketHeaderPool::allocate_header_n(num_connections);
-    }
-    // Sends one credit to the same core on every other device, once per variant in [0, variants).
-    auto signal_all = [&](uint32_t sem, uint32_t variants) {
-        const uint64_t addr = ag::fabric_frame_addr(mirror_x, mirror_y, sem);
-        for (uint32_t v = 0; v < variants; ++v) {
-            atomic_inc_set_state<
-                UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val |
-                UnicastAtomicIncUpdateMask::Flush>(mgr, unicast_route[v], routes[v], addr);
-            fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
-                mgr, unicast_route[v]);
-        }
+    // One unicast-write route (also carries init and done) and one scatter-write route, each a header per
+    // connection. Headers are reused, so every re-encode waits for the previous send to leave L1.
+    const uint8_t unicast_route = PacketHeaderPool::allocate_header_n(num_connections);
+    const uint8_t scatter_route = PacketHeaderPool::allocate_header_n(num_connections);
+    // Sends one credit to the same core on every other device.
+    auto signal_all = [&](uint32_t sem) {
+        atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            mgr, unicast_route, routes, ag::fabric_frame_addr(mirror_x, mirror_y, sem));
+        fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
+            mgr, unicast_route);
         noc.async_writes_flushed();
     };
 
     if (init_send) {
-        signal_all(init_sem, 1);
+        signal_all(init_sem);
     }
-    for (uint32_t v = 0; v < VARIANTS; ++v) {
-        unicast_write_set_state(mgr, unicast_route[v], routes[v]);
-        scatter_write_set_state(mgr, scatter_route[v], routes[v]);
-    }
+    unicast_write_set_state(mgr, unicast_route, routes);
+    scatter_write_set_state(mgr, scatter_route, routes);
     // Our data goes into every other device's output: wait until all are alive (each sent its init the same way).
     // Our reader fills the slots and does the local copy meanwhile.
     ag::wait_and_consume(init_sem, init_wait);
 
-    uint32_t v = 0;
     for (bool iter_end = take == 0; !iter_end;) {
         cb.wait_front(1);
         const uint32_t slot = cb.get_read_ptr();
@@ -171,7 +153,7 @@ void kernel_main() {
                 fabric_api::fabric_multicast_noc_unicast_write_with_state<
                     UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                     mgr,
-                    unicast_route[v],
+                    unicast_route,
                     payload,
                     tt::tt_fabric::NocUnicastCommandHeader{rec.cmd.noc_address[0]},
                     rec.payload_bytes);
@@ -179,9 +161,8 @@ void kernel_main() {
                 fabric_api::fabric_multicast_noc_scatter_write_with_state<
                     UnicastScatterWriteUpdateMask::DstAddrs | UnicastScatterWriteUpdateMask::ChunkSizes |
                     UnicastScatterWriteUpdateMask::PayloadSize>(
-                    mgr, scatter_route[v], payload, rec.cmd, rec.payload_bytes);
+                    mgr, scatter_route, payload, rec.cmd, rec.payload_bytes);
             }
-            v = (v + 1) % VARIANTS;
         }
         noc.async_writes_flushed();
         cb.pop_front(1);
@@ -189,9 +170,9 @@ void kernel_main() {
         ag::test_delay<WDELAY>();
     }
 
-    // After every data packet on every route, so each receiver's done count implies our data has landed. Sent even
-    // with nothing to send: every reader waits for all of them.
-    signal_all(done_sem, VARIANTS);
+    // After every data packet on the same routes, so each receiver's done count implies our data has landed. Sent
+    // even with nothing to send: every reader waits for all of them.
+    signal_all(done_sem);
     tt::tt_fabric::common::experimental::close_connections(mgr);
     noc.async_write_barrier();
     noc.async_atomic_barrier();
