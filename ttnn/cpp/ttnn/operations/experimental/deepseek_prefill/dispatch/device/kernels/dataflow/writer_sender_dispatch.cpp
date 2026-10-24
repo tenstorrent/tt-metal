@@ -19,6 +19,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
@@ -111,6 +112,11 @@ void kernel_main() {
     // Stride the producer was given verbatim (writer_worker_dispatch arg 10), so producer and
     // consumer walk the route_info ring in lockstep by construction.
     constexpr uint32_t route_info_slot_stride = get_compile_time_arg_val(writer_extra_args_base + 2);
+    // Packed cross-device slots (dispatch_plan.hpp); writer_worker_dispatch.cpp derives the same values.
+    constexpr bool packed_xdev = packed_xdev_enabled(aligned_metadata_page_size, aligned_output_page_size);
+    constexpr uint32_t ring_slots = packed_xdev ? writer_cb_size - 1 : writer_cb_size;
+    constexpr uint32_t payload_slot_stride =
+        packed_xdev ? aligned_output_page_size + PACKED_META_SLOT_BYTES : aligned_output_page_size;
 
     // ===== Runtime Args =====
     size_t rt_args_idx = 0;
@@ -321,7 +327,7 @@ void kernel_main() {
             // (which compiles to a `fence`, itself a no-op on Wormhole) does nothing there.
             invalidate_l1_cache();
             if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
-                uint32_t slot = consumed[s] % writer_cb_size;
+                uint32_t slot = consumed[s] % ring_slots;
                 volatile tt_l1_ptr uint32_t* route_info =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_route_base[s] + slot * route_info_slot_stride);
                 if (route_info[0] == ROUTE_INFO_SENTINEL) {
@@ -428,7 +434,7 @@ void kernel_main() {
                     uint32_t distance = route_info[1];
                     uint32_t page_idx = route_info[2];
                     uint32_t dst_chip_index = route_info[3];
-                    uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
+                    uint32_t payload_addr = ring_payload_base[s] + slot * payload_slot_stride;
                     uint32_t metadata_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
                     DPRINT_DISPATCH("ring={} send: route={} page={}\n", s, route, page_idx);
 #ifdef DEST_CHIP_ID
@@ -462,7 +468,62 @@ void kernel_main() {
 #else
                     auto& payload_sender = fabric_connections[fabric_route];
 #endif
-                    {
+                    if constexpr (packed_xdev) {
+                        // Token row + metadata are one contiguous record at payload_addr. Ship them as
+                        // the fewest packets the fabric payload allows, the metadata as the last scatter
+                        // chunk of the last packet, with non-blocking sends on two headers and a single
+                        // flush before the slot goes back to the worker.
+                        constexpr uint32_t P = aligned_output_page_size;
+                        constexpr uint32_t MW = PACKED_META_WIRE_BYTES;
+                        volatile PACKET_HEADER_TYPE* hdr_a = unicast_packet_header;
+                        volatile PACKET_HEADER_TYPE* hdr_b = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(
+                            packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+                        const uint64_t page_noc =
+                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addr_gen, page_idx, 0);
+                        const uint64_t meta_noc =
+                            tt::tt_fabric::linear::addrgen_detail::get_noc_address(metadata_addr_gen, page_idx, 0);
+                        // N packets: the first N-1 carry CHUNK bytes of the row as plain writes, the last the
+                        // rest of the row plus the metadata as a two-chunk scatter write (row tail -> payload
+                        // page, metadata -> metadata page). ADJ keeps the last packet's row part non-empty.
+                        constexpr uint32_t CHUNK = fabric_max_packet_size & ~63u;
+                        constexpr uint32_t N = (P + MW + CHUNK - 1) / CHUNK;
+                        constexpr uint32_t LAST0 = P - (N - 1) * CHUNK;
+                        constexpr uint32_t ADJ = (LAST0 == 0) ? 64u : 0u;
+                        constexpr uint32_t LAST = LAST0 + ADJ;
+                        static_assert(LAST + MW <= 0xFFFFu, "scatter chunk sizes are 16-bit");
+                        uint32_t off = 0;
+                        for (uint32_t i = 0; i + 1 < N; i++) {
+                            volatile PACKET_HEADER_TYPE* h = (i & 1) ? hdr_b : hdr_a;
+                            if (i >= 2) {
+                                noc_async_writes_flushed();  // header h is reused
+                            }
+                            const uint32_t sz = CHUNK - ((i + 2 == N) ? ADJ : 0u);
+                            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(h), pkt_route_info);
+                            h->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{page_noc + off}, sz);
+                            payload_sender.wait_for_empty_write_slot();
+                            payload_sender.send_payload_without_header_non_blocking_from_address(payload_addr + off, sz);
+                            payload_sender.send_payload_flush_non_blocking_from_address(
+                                (uint32_t)h, sizeof(PACKET_HEADER_TYPE));
+                            off += sz;
+                        }
+                        {
+                            volatile PACKET_HEADER_TYPE* h = ((N - 1) & 1) ? hdr_b : hdr_a;
+                            if constexpr (N - 1 >= 2) {
+                                noc_async_writes_flushed();
+                            }
+                            ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_for_route_helper(h), pkt_route_info);
+                            h->to_noc_unicast_scatter_write(
+                                tt::tt_fabric::NocUnicastScatterCommandHeader{
+                                    {page_noc + off, meta_noc}, {static_cast<uint16_t>(P - off)}},
+                                P - off + MW);
+                            payload_sender.wait_for_empty_write_slot();
+                            payload_sender.send_payload_without_header_non_blocking_from_address(
+                                payload_addr + off, P - off + MW);
+                            payload_sender.send_payload_flush_non_blocking_from_address(
+                                (uint32_t)h, sizeof(PACKET_HEADER_TYPE));
+                        }
+                        noc_async_writes_flushed();  // record + headers left L1 before the slot is freed
+                    } else {
                         // Send payload
                         ccl_routing_utils::fabric_set_line_unicast_route(
                             pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
