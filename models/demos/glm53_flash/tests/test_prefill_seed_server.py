@@ -132,6 +132,13 @@ def test_prefill_seed_server(mesh_device):
                 _send(s, {"op": "stopped"})
                 logger.info("[seed-server] stop")
                 return
+            if hdr["op"] == "verify":  # the per-request check: this mesh's own next token after the whole prompt
+                st, lg, owner = model.prefill(torch.tensor([int(t) for t in hdr["ids"]], dtype=torch.int64), user=0)
+                nt = model.first_token(lg, owner)
+                ttnn.deallocate(lg)
+                ttnn.deallocate(st)
+                _send(s, {"op": "verified", "next_token": nt})
+                continue
             assert hdr["op"] == "prefill", hdr
             ids = [int(t) for t in hdr["ids"]]
             slot = int(hdr.get("slot", 0))
