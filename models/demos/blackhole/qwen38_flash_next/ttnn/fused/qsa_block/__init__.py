@@ -692,6 +692,8 @@ _MAIN_TAIL_CBS = (
     (24, BF16, KV_TILES),
 )
 CB_STGC, CB_STGW, CB_MT_POS_R, CB_MT_POS_W, CB_MT_POSCR, CB_MT_POSCW = 21, 22, 25, 26, 27, 28
+CB_MT_PT = 29  # the paged writer's page-table window (PAGED only)
+PT_WINDOW_BYTES = 64  # one DRAM-aligned window of the page table row that holds a lane's page entry
 
 
 def _rect(x0: int, y0: int, x1: int, y1: int) -> ttnn.CoreRangeSet:
@@ -740,13 +742,19 @@ def main_tail(
     k_first: int = 0,
     v_first: int = 0,
     kv_stage: KVStage | None = None,
+    page_table=None,
+    page_size: int = 0,
 ):
     """The fused main tail on ``rows`` lanes; returns the sparse query [1, 32, rows, 512] bf16 ROW_MAJOR and updates
     ``staging`` [1, rows, 32, 512] (TILE) and ``kv_cache`` [1, 1, C, 512] (ROW_MAJOR, lane r's block at
     r * lane_rows + (P_r & ~31)) in place.  The gate halves stay in ``qg_ws`` for the post-attention program.
     ``qg_ws`` / ``k_ws`` / ``v_ws`` hold their projections from tile ``qg_first`` / ``k_first`` / ``v_first``: the
     separate projection shards at 0, or the merged projection shard in all three slots with its windows' first
-    tiles."""
+    tiles.
+
+    With ``page_table`` (int32 ROW_MAJOR [1, 1, 32, max_blocks]) and ``page_size`` (the PAGED program) ``kv_cache`` is
+    the page pool [1, 1, num_pages * page_size, 512] and lane u's block lands at the pool row
+    ``page_table[u][P >> shift] * page_size + (P & (page_size - 1))`` (P = the block start, a multiple of 32)."""
 
     rows = fp.rows_of(qg_ws)
     if fp.rows_of(k_ws) != rows or fp.rows_of(v_ws) != rows:
@@ -770,7 +778,14 @@ def main_tail(
         or kv_cache.layout != ttnn.ROW_MAJOR_LAYOUT
     ):
         raise ValueError(f"KV cache must be ROW_MAJOR bf16 [1, 1, C, 512], got {kv_cache.layout} {cache_shape}")
-    if kv_stage is None and rows > 1 and (lane_rows % fp.TILE or cache_shape[2] < rows * lane_rows):
+    paged = page_table is not None
+    if paged and kv_stage is not None:
+        raise ValueError("the paged main tail has no KV stage")
+    if paged:
+        page_table_blocks(page_table, page_size, rows)
+        if cache_shape[2] % page_size:
+            raise ValueError(f"the page pool's {cache_shape[2]} rows must be a multiple of page_size {page_size}")
+    elif kv_stage is None and rows > 1 and (lane_rows % fp.TILE or cache_shape[2] < rows * lane_rows):
         raise ValueError(
             f"{rows} lanes need lane_rows a multiple of 32 with {rows} * lane_rows <= {cache_shape[2]}, got {lane_rows}"
         )
@@ -805,6 +820,8 @@ def main_tail(
     )
     cbs += [fp.cb_descriptor(cb, ttnn.uint32, POS_PAGE, 1, all_set) for cb in (CB_MT_POS_R, CB_MT_POS_W)]
     cbs += [fp.cb_descriptor(cb, ttnn.uint32, POSC_BYTES, 1, all_set) for cb in (CB_MT_POSCR, CB_MT_POSCW)]
+    if paged:  # the writer's page-table window: 64 bytes, aligned to 64 in the kernel
+        cbs.append(fp.cb_descriptor(CB_MT_PT, ttnn.uint32, 2 * PT_WINDOW_BYTES, 1, all_set))
     eps_bits = _bits(eps)
     acc = fp.accessor_args
     norm_set, rope_set = _rect(0, 0, LOCAL_HEADS, 0), _rect(0, 1, LOCAL_HEADS, 1)
@@ -894,7 +911,7 @@ def main_tail(
             fp.writer_kernel(
                 MAIN_TAIL["writer_staging"],
                 staging_set,
-                [*acc(staging), *acc(kv_cache), *acc(block_start), *acc(row_hit)],
+                [*acc(staging), *acc(kv_cache), *acc(block_start), *acc(row_hit), *(acc(page_table) if paged else ())],
                 [
                     (
                         core,
@@ -907,16 +924,32 @@ def main_tail(
                             lane_rows,
                             u,
                             1,
+                            *((page_table.buffer_address(), page_shift(page_size), page_size) if paged else ()),
                         ],
                     )
                     for u, core in enumerate(staging_cores)
                 ],
+                defines=[PAGED_DEFINE] if paged else (),
             ),
         ]
 
     if kv_stage is None:
         kernels += staging_kernels()
-        io = _io(qg_ws, k_ws, v_ws, block_start, row_hit, q_norm, k_norm, cos, sin, staging, kv_cache, query)
+        io = _io(
+            qg_ws,
+            k_ws,
+            v_ws,
+            block_start,
+            row_hit,
+            q_norm,
+            k_norm,
+            cos,
+            sin,
+            staging,
+            kv_cache,
+            *((page_table,) if paged else ()),
+            query,
+        )
     else:
         kernels += kv_stage.kernels({"acc": acc, "staging_set": staging_set, "xy": xy, "rows": rows})
         io = _io(
@@ -938,7 +971,11 @@ def main_tail(
             rows,
             reads=(block_start, row_hit, q_norm, k_norm, cos, sin, staging),
             writes=(staging, query),
-            partial=(*windows, (kv_cache, rows * fp.TILE * KV_WIDTH * 2)),
+            partial=(
+                *windows,
+                (kv_cache, rows * fp.TILE * KV_WIDTH * 2),
+                *(((page_table, rows * PT_WINDOW_BYTES),) if paged else ()),
+            ),
             flops=rows * ((LOCAL_HEADS + 1) * (4 * HEAD_DIM + 6 * ROPE_DIM) + 3 * fp.TILE * KV_WIDTH),
             cores=2 * (LOCAL_HEADS + 1) + rows,
         )
@@ -1069,6 +1106,7 @@ PARTIAL_WIDTH = 2560
 PARTIAL_TILES = PARTIAL_WIDTH // fp.TILE  # 80
 WIDEN_CORES = 16
 SELECTION_WIDTH, EXPANDED_WIDTH, BLOCK_IDS = 2080, 2048, 512
+MASKED_ID = 0xFFFFFFFF  # the sparse row's masked-slot sentinel
 SELECTION_SLICES = 8
 SELECTION_ROW_GROUPS = 8  # the lanes' rows spread over up to 8 core rows (row r on core row r % 8)
 
@@ -1205,12 +1243,51 @@ def _rows_at_least(tensor, rows: int, width: int, label: str) -> None:
         raise ValueError(f"{label} must be uint32 ROW_MAJOR [1, 1, >= {rows}, {width}], got {shape}")
 
 
-def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill):
+PAGE_SIZES = (32, 64, 128, 256)  # the paged KV pool's page sizes (rows per page): powers of two >= 32
+PAGED_DEFINE = ("PAGED", "1")  # the kernels' compile-time flag; the unpaged programs are built without it
+PAGE_TABLE_ROWS = 32  # the page table's rows: row u = lane u (rows >= B zero), int32 ROW_MAJOR [1, 1, 32, max_blocks]
+PT_ALIGN_SLACK = 64  # L1 bytes added to a page-table row buffer so the kernel can align it to 64
+
+
+def page_shift(page_size: int) -> int:
+    """log2 of a supported page size (a power of two >= 32)."""
+
+    if page_size < fp.TILE or page_size & (page_size - 1):
+        raise ValueError(f"page_size must be a power of two >= {fp.TILE}, got {page_size}")
+    return page_size.bit_length() - 1
+
+
+def page_table_blocks(page_table, page_size: int, rows: int = 1) -> int:
+    """Validate the page table (int32 ROW_MAJOR [1, 1, >= rows, max_blocks], max_blocks a multiple of 8) and return
+    max_blocks."""
+
+    page_shift(page_size)
+    shape = tuple(page_table.shape)
+    if (
+        len(shape) != 4
+        or shape[:2] != (1, 1)
+        or shape[2] < rows
+        or shape[3] % 8
+        or page_table.dtype != ttnn.int32
+        or page_table.layout != ttnn.ROW_MAJOR_LAYOUT
+    ):
+        raise ValueError(
+            f"page_table must be int32 ROW_MAJOR [1, 1, >= {rows}, a multiple of 8], got "
+            f"{page_table.layout} {page_table.dtype} {shape}"
+        )
+    return shape[3]
+
+
+def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill, page_table=None, page_size=0):
     """The sparse-attention row of token ids [1, 1, rows, 2080] uint32 ROW_MAJOR from the top-k block ids
     [1, 1, rows, 512] and the position-derived keep / fill rows (rows 0 .. rows-1 of [1, 1, >= rows, 2080] tensors)
     with the module's constant rows ``sentinel_pad`` [1, 1, 1, 32] and ``block_offsets``: one row [1, 1, 1, 2048]
     shared by every row (the decode step), or per-row offsets [1, 1, >= rows, 2048] (the lanes: row u = the offsets
-    + lane u's KV region start, the chain's ``block_offsets_lanes``)."""
+    + lane u's KV region start, the chain's ``block_offsets_lanes``).
+
+    With ``page_table`` (int32 ROW_MAJOR [1, 1, 32, max_blocks]) and ``page_size`` (the PAGED program) the ids are
+    lane-local token indices v (zero lane offsets) and every output value other than 0xFFFFFFFF becomes
+    ``page_table[r][v >> shift] * page_size + (v & (page_size - 1))`` for output row r."""
 
     shape = tuple(block_ids.shape)
     if (
@@ -1238,35 +1315,109 @@ def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fil
     tensors = (block_ids, block_offsets, sentinel_pad, row_keep_bits, row_fill, out)
     compile_args = [a for t in tensors for a in fp.accessor_args(t)]
     addresses = [t.buffer_address() for t in tensors]
+    paged_args, defines, cb_bytes = [], [], 8192
+    if page_table is not None:
+        max_blocks = page_table_blocks(page_table, page_size, rows)
+        compile_args += fp.accessor_args(page_table)
+        paged_args = [page_table.buffer_address(), page_shift(page_size), page_size, max_blocks]
+        defines = [PAGED_DEFINE]
+        cb_bytes = max(cb_bytes, 256 + 1024 + 128 + 3 * 1152 + PT_ALIGN_SLACK + max_blocks * 4)
     kernel = fp.reader_kernel(
         SELECTION_ROW,
         cores,
         compile_args,
         [
-            (ttnn.CoreCoord(i, g), [*addresses, rows, i, offset_rows, g, row_groups])
+            (ttnn.CoreCoord(i, g), [*addresses, rows, i, offset_rows, g, row_groups, *paged_args])
             for g in range(row_groups)
             for i in range(SELECTION_SLICES)
         ],
+        defines=defines,
     )
-    cbs = [fp.cb_descriptor(0, ttnn.uint32, 8192, 1, cores)]
+    cbs = [fp.cb_descriptor(0, ttnn.uint32, cb_bytes, 1, cores)]
     meta = fp.program_meta(  # the block ids, offsets and sentinel rows, the rows' keep / fill rows in, the row out
         "qsa_selection_row",
         "selection_row",
         rows,
         reads=(block_ids, block_offsets, sentinel_pad),
         writes=(out,),
-        partial=((row_keep_bits, rows * SELECTION_WIDTH * 4), (row_fill, rows * SELECTION_WIDTH * 4)),
+        partial=(
+            (row_keep_bits, rows * SELECTION_WIDTH * 4),
+            (row_fill, rows * SELECTION_WIDTH * 4),
+            *(() if page_table is None else ((page_table, rows * max_blocks * 4),)),
+        ),
         flops=4 * rows * SELECTION_WIDTH,
         cores=SELECTION_SLICES * row_groups,
     )
-    return fp.run_program([*tensors[:-1], out], fp.program_descriptor([kernel], cbs=cbs), meta=meta)
+    io = [*tensors[:-1], *(() if page_table is None else (page_table,)), out]
+    return fp.run_program(io, fp.program_descriptor([kernel], cbs=cbs), meta=meta)
 
 
-def selection_row_composed(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill):
-    """Today's chain (ttnn/qsa.py ``_materialize_row_generic`` after topk_large_indices) for one row."""
+def paged_rows_composed(values, page_table, page_size: int):
+    """The paged mapping on uint32 ROW_MAJOR ``values`` [1, 1, rows, W] (lane-local token indices, 0xFFFFFFFF masked):
+    ``page_table[r][v >> shift] * page_size + (v & (page_size - 1))`` for row r, the sentinels kept, as composed ttnn
+    ops (shift, gather along dim 3 of the page-table rows, shift, add, sentinel restore)."""
 
-    if tuple(block_ids.shape)[2] != 1:
-        raise ValueError("the composed selection row is the one-row chain")
+    rows, width = tuple(values.shape)[2], tuple(values.shape)[3]
+    blocks = page_table_blocks(page_table, page_size, rows)
+    shift = page_shift(page_size)
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    table = page_table
+    if tuple(page_table.shape)[2] != rows:
+        table = ttnn.slice(page_table, (0, 0, 0, 0), (1, 1, rows, blocks), memory_config=dram)
+    table_tiled = ttnn.to_layout(table, ttnn.TILE_LAYOUT, memory_config=dram)
+    masked = ttnn.eq(values, MASKED_ID, memory_config=dram)
+    pages = ttnn.bitwise_right_shift(values, shift, memory_config=dram)
+    safe_pages = ttnn.where(masked, 0, pages, memory_config=dram)
+    gathered = ttnn.gather(table_tiled, 3, ttnn.to_layout(safe_pages, ttnn.TILE_LAYOUT, memory_config=dram))
+    physical_pages = ttnn.typecast(
+        ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram), ttnn.uint32, memory_config=dram
+    )
+    starts = ttnn.bitwise_left_shift(physical_pages, shift, memory_config=dram)
+    within = ttnn.bitwise_and(values, page_size - 1, memory_config=dram)
+    rows_out = ttnn.add(starts, within, memory_config=dram)
+    # the sentinel back: masked * 0xFFFF * 0x10001 = 0xFFFFFFFF where masked, 0 elsewhere, OR-ed in
+    half_mask = ttnn.multiply(masked, 0xFFFF, memory_config=dram)
+    full_mask = ttnn.multiply(half_mask, 0x10001, memory_config=dram)
+    out = ttnn.bitwise_or(rows_out, full_mask, memory_config=dram)
+    for t in (
+        table_tiled,
+        masked,
+        pages,
+        safe_pages,
+        gathered,
+        physical_pages,
+        starts,
+        within,
+        rows_out,
+        half_mask,
+        full_mask,
+    ):
+        ttnn.deallocate(t)
+    if table is not page_table:
+        ttnn.deallocate(table)
+    return out
+
+
+def paged_lane_row_starts_composed(block_start, page_table, page_size: int, lanes: int):
+    """The paged lanes' KV write rows as composed ops: ``block_start`` (uint32 ROW_MAJOR [1, 1, 1, >= lanes], lane u's
+    P & ~31) -> lanes tensors uint32 [1, 1, 1, 1], lane u's ``page_table[u][P >> shift] * page_size + (P & (page_size -
+    1))`` (the ``update_padded_kv_cache`` start rows)."""
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    starts = ttnn.slice(block_start, (0, 0, 0, 0), (1, 1, 1, lanes), memory_config=dram)
+    column = ttnn.reshape(starts, (1, 1, lanes, 1))
+    physical = paged_rows_composed(column, page_table, page_size)
+    per_lane = tuple(
+        ttnn.slice(physical, (0, 0, u, 0), (1, 1, u + 1, 1), memory_config=dram) if lanes > 1 else physical
+        for u in range(lanes)
+    )
+    if lanes > 1:
+        ttnn.deallocate(physical)
+    ttnn.deallocate(starts)
+    return per_lane
+
+
+def _selection_row_one_composed(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill):
     dram = ttnn.DRAM_MEMORY_CONFIG
     starts = ttnn.bitwise_left_shift(block_ids, 2, memory_config=dram)
     repeated = ttnn.repeat_interleave(starts, repeats=COMPRESS_RATIO, dim=3, memory_config=dram)
@@ -1275,6 +1426,43 @@ def selection_row_composed(block_ids, sentinel_pad, block_offsets, row_keep_bits
     kept = ttnn.bitwise_and(template, row_keep_bits, memory_config=dram)
     out = ttnn.bitwise_or(kept, row_fill, memory_config=dram)
     for t in (starts, repeated, expanded, template, kept):
+        ttnn.deallocate(t)
+    return out
+
+
+def selection_row_composed(
+    block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill, page_table=None, page_size=0
+):
+    """Today's chain (ttnn/qsa.py ``_materialize_row_generic`` after topk_large_indices) for one row.  With
+    ``page_table`` / ``page_size`` the chain runs once per row (rows of the inputs sliced) and its rows go through
+    :func:`paged_rows_composed` (the lane form: ``selection_row``'s PAGED program)."""
+
+    rows = tuple(block_ids.shape)[2]
+    if page_table is None:
+        if rows != 1:
+            raise ValueError("the composed selection row is the one-row chain")
+        return _selection_row_one_composed(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill)
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    per_row_offsets = tuple(block_offsets.shape)[2] != 1
+
+    def row(tensor, r, width):
+        if tuple(tensor.shape)[2] == 1 and r == 0:
+            return tensor
+        return ttnn.slice(tensor, (0, 0, r, 0), (1, 1, r + 1, width), memory_config=dram)
+
+    pieces = [
+        _selection_row_one_composed(
+            row(block_ids, r, BLOCK_IDS),
+            sentinel_pad,
+            row(block_offsets, r, EXPANDED_WIDTH) if per_row_offsets else block_offsets,
+            row(row_keep_bits, r, SELECTION_WIDTH),
+            row(row_fill, r, SELECTION_WIDTH),
+        )
+        for r in range(rows)
+    ]
+    values = pieces[0] if rows == 1 else ttnn.concat(pieces, dim=2, memory_config=dram)
+    out = paged_rows_composed(values, page_table, page_size)
+    for t in {id(t): t for t in (*pieces, values)}.values():
         ttnn.deallocate(t)
     return out
 

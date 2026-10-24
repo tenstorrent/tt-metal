@@ -7,9 +7,13 @@
 // row: the decode step) or [>= rows, 2048] (row r for row r: the lanes, row u = offsets + lane u's KV region start),
 // sentinel [1, 32], keep / fill [>= rows, 2080] (rows 0 .. rows-1 read), out [rows, 2080].  CB 0: scratch (one 8 KB
 // page).
-// Compile-time args: TensorAccessorArgs ids, offsets, sentinel, keep, fill, out.
+// Compile-time args: TensorAccessorArgs ids, offsets, sentinel, keep, fill, out (+ page table under PAGED).
 // Runtime args: 0-5 those addresses, 6 rows, 7 slice, 8 offset rows (1 or >= rows), 9 row_first, 10 row_step (this
 // core's rows: row_first, row_first + row_step, ... below rows; the lanes spread their rows over row groups of cores).
+// PAGED (compile-time define; the unpaged program is unchanged): the finished value v of each non-sentinel column
+// (0xFFFFFFFF stays) is a lane-local token index and becomes pt[r][v >> shift] * bs + (v & (bs - 1)), pt = the int32
+// ROW_MAJOR page table [1, 1, 32, max_blocks] (row r = output row r).  Extra runtime args: 11 page table address,
+// 12 shift, 13 bs, 14 max_blocks.  The CB holds the row after the scratch (64-byte aligned).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -34,6 +38,14 @@ void kernel_main() {
     constexpr auto keep_args = TensorAccessorArgs<sentinel_args.next_compile_time_args_offset()>();
     constexpr auto fill_args = TensorAccessorArgs<keep_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<fill_args.next_compile_time_args_offset()>();
+#ifdef PAGED
+    constexpr auto pt_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const uint32_t pt_addr = get_arg_val<uint32_t>(11);
+    const uint32_t shift = get_arg_val<uint32_t>(12);
+    const uint32_t bs = get_arg_val<uint32_t>(13);
+    const uint32_t max_blocks = get_arg_val<uint32_t>(14);
+    const auto pt = TensorAccessor(pt_args, pt_addr);
+#endif
     const auto ids = TensorAccessor(ids_args, ids_addr);
     const auto off = TensorAccessor(off_args, off_addr);
     const auto sentinel = TensorAccessor(sentinel_args, sentinel_addr);
@@ -53,6 +65,10 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* out_l1 =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1 + 256 + 1024 + 128 + 2 * 1152);
 
+#ifdef PAGED
+    volatile tt_l1_ptr uint32_t* pt_l1 =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>((l1 + 256 + 1024 + 128 + 3 * 1152 + 63) & ~63u);
+#endif
     if (offset_rows == 1) {
         noc_async_read(off.get_noc_addr(0, col0 * 4), l1 + 256, COLS * 4);
     }
@@ -67,13 +83,22 @@ void kernel_main() {
         noc_async_read(ids.get_noc_addr(r, slice * IDS * 4), l1, IDS * 4);
         noc_async_read(keep.get_noc_addr(r, col0 * 4), l1 + 256 + 1024 + 128, cols * 4);
         noc_async_read(fill.get_noc_addr(r, col0 * 4), l1 + 256 + 1024 + 128 + 1152, cols * 4);
+#ifdef PAGED
+        noc_async_read(pt.get_noc_addr(r, 0), reinterpret_cast<uint32_t>(pt_l1), max_blocks * 4);  // lane r's pages
+#endif
         noc_async_read_barrier();
         invalidate_l1_cache();
         for (uint32_t i = 0; i < cols; ++i) {
             const uint32_t column = col0 + i;
             const uint32_t value =
                 column < EXPANDED ? (ids_l1[i >> 2] << 2) + off_l1[i] : sentinel_l1[column - EXPANDED];
-            out_l1[i] = (value & keep_l1[i]) | fill_l1[i];
+            uint32_t v = (value & keep_l1[i]) | fill_l1[i];
+#ifdef PAGED
+            if (v != 0xFFFFFFFFu) {
+                v = pt_l1[v >> shift] * bs + (v & (bs - 1));
+            }
+#endif
+            out_l1[i] = v;
         }
         noc_async_write(l1 + 256 + 1024 + 128 + 2 * 1152, out.get_noc_addr(r, col0 * 4), cols * 4);
         noc_async_write_barrier();

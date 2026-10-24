@@ -7376,11 +7376,30 @@ class Qwen38TTNNQSA:
             state, state.kv_staging, lanes.kv_row_start_lanes, label="filled QSA lane KV staging"
         )
 
-    def _write_kv_slabs_lanes(self, state: Qwen38TTNNQSALaneState, staging_tiled, row_starts, *, label: str) -> None:
+    def _write_kv_slabs_lanes(
+        self,
+        state: Qwen38TTNNQSALaneState,
+        staging_tiled,
+        row_starts,
+        *,
+        label: str,
+        page_table=None,
+        page_size: int = 0,
+        block_start=None,
+    ) -> None:
         """One untilize of every lane's ``[1,B,32,512]`` staging tile, then lane u's slab written at its flat-cache
-        row ``row_starts[u]`` (read on device from the lane's metadata scalar); the staging is left to the caller."""
+        row ``row_starts[u]`` (read on device from the lane's metadata scalar); the staging is left to the caller.
+        PAGED (``page_table`` int32 ``[1,1,32,max_blocks]`` and ``page_size``): the cache is the page pool and the
+        start rows are the page lookups of ``block_start`` (uint32 ``[1,1,1,>=B]``, lane u's ``P & ~31``), composed on
+        device (``qsa_block.paged_lane_row_starts_composed``); ``row_starts`` is then unused."""
 
         count = state.lanes
+        owned_starts = ()
+        if page_table is not None:
+            from models.demos.blackhole.qwen38_flash_next.ttnn.fused import qsa_block
+
+            owned_starts = qsa_block.paged_lane_row_starts_composed(block_start, page_table, page_size, count)
+            row_starts = owned_starts
         slabs = ttnn.to_layout(staging_tiled, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         _retag_tensor(slabs, reference=state.packed_kv_cache, shard_dim=1)
         _require_shape(slabs, (1, count, CACHE_WRITE_ROWS, 2 * HEAD_DIM), label)
@@ -7411,6 +7430,7 @@ class Qwen38TTNNQSA:
             if slab is not slabs:
                 _deallocate(slab)
         _deallocate(slabs)
+        _deallocate(*owned_starts)
 
     def forward_decode_lanes(
         self,

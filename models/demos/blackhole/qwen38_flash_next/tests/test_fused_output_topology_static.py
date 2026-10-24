@@ -92,6 +92,7 @@ UNDECLARED: dict[tuple[str, str], str] = {
     ): "the MoE module stamps the scores and indices (fused.program.stamp_topology) after the launch",
     ("sampler_tail", '"sample"'): "the token is read back to the host",
     ("sparse_sdpa_tiled", '"flash"'): "the slab attention's output is consumed by the out-projection on the same die",
+    ("kv_page_scatter", '"scatter_rows"'): "the pool is written in place on the same die (the prompt's KV hand-over)",
     ("untilize_rows", '"rows"'): "the untilized rows are consumed on the same die",
 }
 

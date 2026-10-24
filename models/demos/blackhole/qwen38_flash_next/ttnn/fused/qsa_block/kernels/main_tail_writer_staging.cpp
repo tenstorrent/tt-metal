@@ -4,9 +4,12 @@
 // main_tail, staging core writer (one staging core per lane): for this core's lanes the canonical staging tiles back
 // to DRAM (in place) and the 32 untilized rows into the lane's KV cache block at lane * lane_rows + (P & ~31) (page =
 // row).
-// Compile-time args: TensorAccessorArgs staging, cache, kv_block_start, kv_row_hit.
+// Compile-time args: TensorAccessorArgs staging, cache, kv_block_start, kv_row_hit (+ page table under PAGED).
 // Runtime args: 0 staging, 1 cache, 2 kv_block_start, 3 kv_row_hit addresses, 4 rows, 5 lane rows (cache rows per
-// lane), 6 lane_first, 7 lane_count.
+// lane), 6 lane_first, 7 lane_count; PAGED: 8 page table address, 9 shift, 10 bs.
+// PAGED (compile-time define; the unpaged program is unchanged): the cache is the page pool and the block base is
+// pt[lane][P_blk >> shift] * bs + (P_blk & (bs - 1)) (P_blk = P & ~31, pt = int32 ROW_MAJOR [1, 1, 32, max_blocks])
+// instead of lane * lane_rows + P_blk; the entry comes through one 64-byte aligned window read (CB_PT).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -33,6 +36,14 @@ void kernel_main() {
     const auto cache = TensorAccessor(cache_args, cache_addr);
     const auto pos = TensorAccessor(pos_args, pos_addr);
     const auto hit = TensorAccessor(hit_args, hit_addr);
+#ifdef PAGED
+    constexpr auto pt_args = TensorAccessorArgs<hit_args.next_compile_time_args_offset()>();
+    const auto pt = TensorAccessor(pt_args, get_arg_val<uint32_t>(8));
+    const uint32_t shift = get_arg_val<uint32_t>(9);
+    const uint32_t bs = get_arg_val<uint32_t>(10);
+    cb_reserve_back(CB_PT, 1);
+    const uint32_t pt_l1 = (get_write_ptr(CB_PT) + 63) & ~63u;
+#endif
 
     cb_reserve_back(CB_POS_W, 1);
     cb_reserve_back(CB_POSCW, 1);
@@ -54,7 +65,17 @@ void kernel_main() {
 
         cb_wait_front(CB_RM, PACK_TILES);
         const uint32_t rm = get_read_ptr(CB_RM);
-        const uint32_t base = lane * lane_rows + (positions[lane] & ~31u);
+        const uint32_t block = positions[lane] & ~31u;
+#ifdef PAGED
+        const uint32_t entry_byte = (block >> shift) * 4;
+        noc_async_read(pt.get_noc_addr(lane, entry_byte & ~63u), pt_l1, 64);
+        noc_async_read_barrier();
+        invalidate_l1_cache();
+        const uint32_t base =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pt_l1)[(entry_byte & 63u) >> 2] * bs + (block & (bs - 1));
+#else
+        const uint32_t base = lane * lane_rows + block;
+#endif
         for (uint32_t k = 0; k < tile_rows::TILE_ROWS; ++k) {
             noc_async_write(rm + k * QUERY_ROW_BYTES, cache.get_noc_addr(base + k, 0), QUERY_ROW_BYTES);
         }
