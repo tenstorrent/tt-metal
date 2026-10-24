@@ -45,7 +45,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, V41DecodePool, scatter_rows
 from models.demos.deepseek_v3_d_p.tt.v41.qdq import fp4_e4m3_qdq, fp8_qdq
-from models.demos.deepseek_v3_d_p.tt.v41.rope import cos_sin
+from models.demos.deepseek_v3_d_p.tt.v41.rope import RopeTables, cos_sin
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import TtV41Transformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
@@ -58,6 +58,86 @@ JOIN_MIN_WIDTH = 8192  # the narrowest join index (tokens); doubles up to the po
 class _User:
     position: int  # the position the next token goes to
     engram_history: torch.Tensor | None = None
+
+
+class StepPacker:
+    """The step's small per-rank inputs packed into few host tensors (``V41_DECODE_HOST_INPUTS=packed``): every ``from_torch`` with a mesh mapper and every ``copy_host_to_device_tensor`` cost
+    0.2 to 0.4 ms for 32 chips whatever the size, and the step had 19 of each (11 + 6 ms a step at two rows).
+    ``pack`` builds one uint32 row-major tensor of the integer rows (``[sp, 1, R, ROWS]``: token, ring, the
+    per-ratio newest and comp pages, the sampler's k), one bf16 row-major tensor of the sampler's p and
+    temperature, one bf16 tiled tensor of the six RoPE rows side by side (``[sp, 1, ROWS, 6 * rope_dim]``) and,
+    when the step masks, one fp32 tiled tensor of the per-ratio visible counts as columns; ``unpack`` slices the
+    device buffers back into the tensors the graph reads, keyed as before (a dozen tiny ops inside the capture).
+    The row and column orders are fixed at the first ``pack``."""
+
+    INTS = "ints"
+    FLOATS = "floats"
+    ROPE = "rope"
+    VISIBLE = "visible"
+
+    def __init__(self, pool, sp: int):
+        self.pool, self.sp = pool, sp
+        self.int_rows: list[str] = []
+        self.float_rows: list[str] = []
+        self.rope_cols: list[str] = []
+        self.visible_cols: list[str] = []
+
+    @staticmethod
+    def _order(have: list[str], keys) -> list[str]:
+        keys = list(keys)
+        if not have:
+            have.extend(keys)
+        assert have == keys, (have, keys)
+        return have
+
+    def pack(self, ints: dict, floats: dict, rope: dict, visible: dict) -> dict:
+        """``ints`` name -> int32 ``[sp, ROWS]``; ``floats`` name -> fp32 ``[sp, ROWS]``; ``rope`` name -> (cos, sin)
+        bf16 ``[sp * ROWS, rope_dim]``; ``visible`` name -> fp32 ``[sp, ROWS]`` -> the host tensors (per rank)."""
+        sp, pool = self.sp, self.pool
+        out = {}
+        rows = self._order(self.int_rows, ints)
+        packed = torch.stack([ints[k].to(torch.int32) for k in rows], dim=1).view(sp, 1, len(rows), ROWS)
+        out[self.INTS] = pool.per_rank(packed.contiguous(), ttnn.uint32, device=False)
+        if floats:
+            rows = self._order(self.float_rows, floats)
+            packed = torch.stack([floats[k].float() for k in rows], dim=1).view(sp, 1, len(rows), ROWS)
+            out[self.FLOATS] = pool.per_rank(packed.contiguous(), ttnn.bfloat16, device=False)
+        cols = self._order(self.rope_cols, rope)
+        packed = torch.cat([t for k in cols for t in rope[k]], dim=1).view(sp, 1, ROWS, -1)
+        out[self.ROPE] = pool.per_rank(packed.contiguous(), ttnn.bfloat16, ttnn.TILE_LAYOUT, device=False)
+        if visible:
+            cols = self._order(self.visible_cols, visible)
+            packed = torch.zeros(sp, 1, ROWS, 32, dtype=torch.float32)
+            for j, k in enumerate(cols):
+                packed[:, 0, :, j] = visible[k].float()
+            out[self.VISIBLE] = pool.per_rank(packed, ttnn.float32, ttnn.TILE_LAYOUT, device=False)
+        return out
+
+    def unpack(self, buffers: dict) -> dict:
+        """The device buffers of ``pack`` -> the graph's tensors by name: the int and float rows as ``[1, 1, 1,
+        ROWS]`` (the sampler's as ``[ROWS]``), the RoPE pairs as tiled ``[1, 1, ROWS, rope_dim]``, the visible
+        counts as tiled ``[1, 1, ROWS, 1]``."""
+        out = {}
+        ints = buffers[self.INTS]
+        for i, k in enumerate(self.int_rows):
+            t = ttnn.slice(ints, [0, 0, i, 0], [1, 1, i + 1, ROWS])
+            out[k] = ttnn.reshape(t, (ROWS,)) if k == "k" else t
+        if self.float_rows:
+            floats = buffers[self.FLOATS]
+            for i, k in enumerate(self.float_rows):
+                out[k] = ttnn.reshape(ttnn.slice(floats, [0, 0, i, 0], [1, 1, i + 1, ROWS]), (ROWS,))
+        rope = buffers[self.ROPE]
+        width = rope.shape[3] // (2 * len(self.rope_cols))
+        for i, k in enumerate(self.rope_cols):
+            out[k] = tuple(
+                ttnn.slice(rope, [0, 0, 0, (2 * i + j) * width], [1, 1, ROWS, (2 * i + j + 1) * width])
+                for j in range(2)
+            )
+        if self.visible_cols:
+            visible = buffers[self.VISIBLE]
+            for j, k in enumerate(self.visible_cols):
+                out[k] = ttnn.slice(visible, [0, 0, 0, j], [1, 1, ROWS, j + 1])
+        return out
 
 
 class DeviceSampler:
@@ -207,6 +287,14 @@ class TtV41BatchDecoder(TtV41Decoder):
         )
         self.capture = None
         self.eager_count = 0
+        # V41_DECODE_HOST_INPUTS=packed: the RoPE rows from host tables by position, the
+        # Engram rows gathered for the chips that hold a live row only, the small inputs packed into four
+        # uploads (StepPacker) and sliced apart in the graph; the default builds and uploads every input apart
+        self.host_inputs_mode = os.environ.get("V41_DECODE_HOST_INPUTS", "")
+        assert self.host_inputs_mode in ("", "packed"), self.host_inputs_mode
+        self.packer = StepPacker(self.pool, self.sp) if self.host_inputs_mode == "packed" else None
+        self.rope_tables = RopeTables(self.config, self.pool.max_seq_len) if self.packer else None
+        self.inputs = self.buffers  # what the graph reads: the buffers, or their unpacked slices (``_forward``)
         # a join's compressed index is as wide as the prompt's bucket, not the pool: at a 1M pool
         # the full-width index was ~200 MB of host sharding and copies per join, 65 ms on the path
         # between two prefills at c32; captures are per (state, slot, width)
@@ -303,8 +391,11 @@ class TtV41BatchDecoder(TtV41Decoder):
     def _host_inputs(self, tokens: dict[int, int], sampling: dict | None = None) -> dict:
         """The step's host tensors (per rank, device layouts), keyed as the device buffers: ``tokens`` slot ->
         token of the slots that step (the others get zeros and write nothing); ``sampling`` slot -> (k, p,
-        temperature) when sampling on device (other slots: argmax)."""
+        temperature) when sampling on device (other slots: argmax). Under ``V41_DECODE_HOST_INPUTS=packed`` the
+        keys are the ``StepPacker``'s (plus ``engram``) and ``_forward`` unpacks them."""
         cfg, sp, users = self.config, self.sp, self.users
+        tick = self._tick("in")
+        packed = self.packer is not None
         step = self.pool.step
         ids = torch.zeros(sp, 1, ROWS, dtype=torch.int32)
         positions = torch.zeros(sp, ROWS, dtype=torch.int64)
@@ -314,7 +405,10 @@ class TtV41BatchDecoder(TtV41Decoder):
             ids[r, 0, u] = token
             positions[r, u] = self.slots[slot].position
             active[r, u] = True
-        inputs = {"token": self.pool.per_rank(ids, ttnn.uint32, device=False)}
+        tick("rows")
+        ints, floats, rope, visible_cols = {"token": ids.view(sp, ROWS)}, {}, {}, {}
+        inputs = {} if packed else {"token": self.pool.per_rank(ids, ttnn.uint32, device=False)}
+        tick("token")
         if self.sample_on_device:
             k = torch.ones(sp * ROWS, dtype=torch.int32)
             p = torch.zeros(sp * ROWS, dtype=torch.float32)
@@ -325,35 +419,59 @@ class TtV41BatchDecoder(TtV41Decoder):
                 if st <= 0:
                     continue  # argmax
                 k[i], p[i], temp[i] = max(1, min(int(sk), 32)) if sk > 0 else 32, float(sp_), 1.0 / float(st)
-            inputs.update(self.sampler.host_inputs(k, p, temp))
+            if packed:
+                ints["k"], floats["p"], floats["temp"] = k.view(sp, ROWS), p.view(sp, ROWS), temp.view(sp, ROWS)
+            else:
+                inputs.update(self.sampler.host_inputs(k, p, temp))
+            tick("sampling")
 
-        def rope(compressed: bool, pos: torch.Tensor):
+        def rope_rows(compressed: bool, pos: torch.Tensor):
+            if packed:
+                out = self.rope_tables.rows(compressed, pos)
+                tick("rope_cos_sin")
+                return out
             out = []
-            for t in cos_sin(cfg, compressed, pos.flatten()):
+            tables = cos_sin(cfg, compressed, pos.flatten())
+            tick("rope_cos_sin")
+            for t in tables:
                 out.append(self.pool.per_rank(t.view(sp, 1, ROWS, -1), ttnn.bfloat16, ttnn.TILE_LAYOUT, device=False))
+            tick("rope_tensors")
             return tuple(out)
 
-        inputs["rope0"], inputs["ropec"] = rope(False, positions), rope(True, positions)
-        inputs["ropeg"] = rope(True, positions // 2 * 2)
-        inputs["ring"] = self._replicated(
-            torch.full((1, 1, 1, ROWS), step % RING, dtype=torch.int32),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            device=False,
-        )
+        rope["rope0"], rope["ropec"] = rope_rows(False, positions), rope_rows(True, positions)
+        rope["ropeg"] = rope_rows(True, positions // 2 * 2)
+        if not packed:
+            inputs.update(rope)
+        ring = torch.full((sp, ROWS), step % RING, dtype=torch.int32)
+        if packed:
+            ints["ring"] = ring
+        else:
+            inputs["ring"] = self._replicated(
+                ring[:1].view(1, 1, 1, ROWS), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, device=False
+            )
+        tick("ring")
         for ratio in sorted(self.iota):
             visible = torch.where(active, (positions + 1) // ratio, torch.zeros_like(positions)).float()
-            inputs[f"visible{ratio}"] = self.pool.per_rank(
-                visible.view(sp, 1, ROWS, 1), ttnn.float32, ttnn.TILE_LAYOUT, device=False
-            )
             # the selection's per-row pins: each row's newest compressed row, the sentinel for an idle or empty row
             newest = torch.where(visible > 0, visible - 1, torch.full_like(visible, -1)).to(torch.int32)
-            inputs[f"newest{ratio}"] = self.pool.per_rank(newest.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
             writes = active & (positions % ratio == ratio - 1)
             comp = torch.where(writes, positions // ratio, torch.full_like(positions, -1)).to(
                 torch.int32
             )  # -1: sentinel
-            inputs[f"comp{ratio}"] = self.pool.per_rank(comp.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
+            if packed:
+                ints[f"newest{ratio}"], ints[f"comp{ratio}"] = newest, comp
+                if not self.single_query:  # the masks are the only reader
+                    visible_cols[f"visible{ratio}"] = visible
+            else:
+                inputs[f"visible{ratio}"] = self.pool.per_rank(
+                    visible.view(sp, 1, ROWS, 1), ttnn.float32, ttnn.TILE_LAYOUT, device=False
+                )
+                inputs[f"newest{ratio}"] = self.pool.per_rank(newest.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
+                inputs[f"comp{ratio}"] = self.pool.per_rank(comp.view(sp, 1, 1, ROWS), ttnn.uint32, device=False)
+            tick(f"ratio{ratio}")
+        if packed:
+            inputs.update(self.packer.pack(ints, floats, rope, visible_cols))
+            tick("pack")
         if self.model.engram:
             hash_ = self.model.engram_hash
             order = list(tokens)
@@ -362,13 +480,19 @@ class TtV41BatchDecoder(TtV41Decoder):
                     torch.tensor([tokens[s] for s in order]),
                     torch.stack([self.slots[s].engram_history for s in order]),
                 )  # [U, n_layers, cols]
+            tick("engram_hash")
             inputs["engram"] = {}
+            # packed: the rows of the chips that hold a live row only; the others read the all-zero shard (their
+            # rows are idle: nothing reads what they compute)
+            live = active.flatten().nonzero().flatten() if packed else None
             for l, e in self.model.engram.items():
                 ids = torch.zeros(sp * ROWS, hash_.n_hash_cols, dtype=torch.int64)
                 for k, slot in enumerate(order):
                     r, u = divmod(slot, users)
                     ids[r * ROWS + u] = ids_batch[k, hash_.layer_index(l)]
-                inputs["engram"][l] = e.prepare_host(ids, sp * ROWS)
+                tick(f"engram{l}_ids")
+                inputs["engram"][l] = e.prepare_host(ids, sp * ROWS, live_rows=live)
+                tick(f"engram{l}_rows")
         return inputs
 
     # --- one step ----------------------------------------------------------------------------------------------
@@ -379,6 +503,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         for slot in tokens:
             user = self.slots[slot]
             assert user.position < self.pool.max_seq_len, f"slot {slot} at {user.position}: the pool is full"
+        self.items = {}
         t0 = time.time()
         inputs = self._host_inputs(tokens, sampling)
         t1 = time.time()
@@ -393,6 +518,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         else:
             mode = "eager"
         self.last = {"mode": mode, "inputs_s": round(t1 - t0, 4), "stage_s": round(t2 - t1, 4)}
+        if self.input_timing:
+            self.last["items"] = dict(self.items)
         if mode == "eager":
             self.eager_count += 1
             logits = self._forward(self.on_block)
@@ -484,14 +611,19 @@ class TtV41BatchDecoder(TtV41Decoder):
         """The step's device graph on the staged buffers -> the logits tile ``[1, 1, ROWS, vocab/tp]`` per chip
         (row u: slot u of the chip's rank); the pool is updated in place."""
         model = self.model
+        if self.packer is not None:
+            self.inputs = dict(self.packer.unpack(self.buffers), engram=self.buffers["engram"])
+            self.inputs["token"] = ttnn.reshape(self.inputs["token"], (1, 1, ROWS))
+        else:
+            self.inputs = self.buffers
         masks = {ratio: None if self.single_query else self._mask(ratio) for ratio in self.iota}
         selection = {}
-        h = model.embedding(self.buffers["token"])
+        h = model.embedding(self.inputs["token"])
         x = mhc_expand(ttnn.typecast(h, ttnn.float32), self.config.HC_MULT)
         pre = self.pre_mix
         for layer, block, moe in zip(model.layers, model.blocks, self.moes):
             if layer in model.engram:
-                x = model.engram[layer](x, self.buffers["engram"][layer])
+                x = model.engram[layer](x, self.inputs["engram"][layer])
             x, pre = block.residual(
                 x,
                 pre,
@@ -504,7 +636,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         logits, _ = model.head(final, 0)  # [1, 1, ROWS, vocab/tp] fp32 per chip, row u slot u of the chip's rank
         ccl = model.blocks[0].attn.ccl
         if self.sample_on_device:
-            return self.sampler(logits, self.buffers)  # the slots' sampled ids (DeviceSampler.to_host)
+            return self.sampler(logits, self.inputs)  # the slots' sampled ids (DeviceSampler.to_host)
         # the slots' rows, gathered over TP (the vocabulary) and SP (the ranks): one [1, 1, slots, vocab] read
         rows = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(logits)
@@ -518,7 +650,7 @@ class TtV41BatchDecoder(TtV41Decoder):
 
     def _mask(self, ratio: int):
         """Additive ``[1, 1, ROWS, cap + 32]`` bf16: row u -inf at the columns at or past its visible count."""
-        beyond = ttnn.ge(self.iota[ratio], self.buffers[f"visible{ratio}"])
+        beyond = ttnn.ge(self.iota[ratio], self.inputs[f"visible{ratio}"])
         return ttnn.typecast(ttnn.where(beyond, NEG_INF, 0.0), ttnn.bfloat16)
 
     def moe_real_rows(self) -> int:
@@ -538,7 +670,7 @@ class TtV41BatchDecoder(TtV41Decoder):
     def _attention(self, attn: TtV41Attention, x, masks: dict, selection: dict):
         """``TtV41Attention.forward`` for the tile of users (``x`` [1, 1, ROWS, hidden/tp] bf16)."""
         layer, pool, cfg = attn.layer, self.pool, self.config
-        cos, sin = self.buffers["ropec" if attn.ratio else "rope0"]
+        cos, sin = self.inputs["ropec" if attn.ratio else "rope0"]
         xq = fp8_qdq(x)
         qr = ttnn.rms_norm(attn.ccl.tp_all_reduce(attn._dense(xq, "wq_a")), weight=attn.q_norm, epsilon=attn.eps)
         q = attn._dense(fp8_qdq(qr), "wq_b")  # [1, 1, ROWS, H/tp * head_dim]
@@ -551,7 +683,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         scatter_rows(
             rows,
             kv_tensor,
-            self.buffers["ring"],
+            self.inputs["ring"],
             dst_base=pool.ring_row(layer),
             stride=pool.slot_rows(layer),
             rows=self.users,
@@ -563,11 +695,11 @@ class TtV41BatchDecoder(TtV41Decoder):
             ratio, src = attn.ratio, cfg.kv_source(layer)
             if attn.is_kv_source:
                 latent = self._compress(attn.compressor, x, layer)
-                c_rope = self.buffers["ropeg" if ratio == 2 else "ropec"]  # the group's first position
+                c_rope = self.inputs["ropeg" if ratio == 2 else "ropec"]  # the group's first position
                 keys = attn.index_keys(latent, c_rope)
                 comp_kv = attn._rope(latent, *c_rope)
                 rows = self._encode(fp4_e4m3_qdq(comp_kv) if reference_values else comp_kv, kv_format)
-                idx, n = self.buffers[f"comp{ratio}"], self.users
+                idx, n = self.inputs[f"comp{ratio}"], self.users
                 scatter_rows(rows, pool.kv[src], idx, dst_base=pool.comp_row(src), stride=pool.slot_rows(layer), rows=n)
                 ttnn.deallocate(rows)
                 keys = ttnn.to_layout(keys, ttnn.ROW_MAJOR_LAYOUT)
@@ -640,8 +772,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         cfg, pool = self.config, self.pool
         cap = pool.slots[source].cap
         assert (cap + 32) % 32 == 0, cap  # the score's width, a segment_max input
-        pins = DecodePins(self.buffers[f"newest{cfg.compress_ratio(source)}"])
-        cos, sin = self.buffers["ropec"]
+        pins = DecodePins(self.inputs[f"newest{cfg.compress_ratio(source)}"])
+        cos, sin = self.inputs["ropec"]
         q = ttnn.linear(fp8_qdq(qr), indexer.wq_b, compute_kernel_config=indexer.compute_kernel_config)
         q, _, _ = ttnn.experimental.nlp_create_qkv_heads(
             q, num_heads=indexer.heads, num_kv_heads=0, transpose_k_heads=False

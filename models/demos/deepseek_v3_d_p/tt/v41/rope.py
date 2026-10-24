@@ -39,3 +39,27 @@ def cos_sin(config, compressed: bool, positions: torch.Tensor) -> tuple[torch.Te
     angles = torch.outer(positions.to(torch.float32), inv_freq(config, compressed))
     cos, sin = torch.cos(angles), torch.sin(angles)
     return tuple(t.repeat_interleave(2, dim=-1).view(1, 1, len(positions), -1) for t in (cos, sin))
+
+
+class RopeTables:
+    """The step's RoPE rows by position, from host bf16 tables built once (``cos_sin`` at every position below
+    ``length``, as the per-step call computes them: the same fp32 products and the same bf16 rounding). A
+    decode
+    step's rows are then one gather (``rows``) instead of three ``cos_sin`` calls."""
+
+    def __init__(self, config, length: int, chunk: int = 65536):
+        self.length = length
+        self.tables: dict[bool, tuple[torch.Tensor, torch.Tensor]] = {}
+        for compressed in (False, True):
+            parts = [[], []]
+            for start in range(0, length, chunk):
+                positions = torch.arange(start, min(start + chunk, length))
+                for part, t in zip(parts, cos_sin(config, compressed, positions)):
+                    part.append(t.view(len(positions), -1).to(torch.bfloat16))
+            self.tables[compressed] = tuple(torch.cat(p) for p in parts)
+
+    def rows(self, compressed: bool, positions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """cos, sin ``[len(positions), rope_head_dim]`` bf16 at integer ``positions`` (each below ``length``)."""
+        cos, sin = self.tables[compressed]
+        index = positions.flatten().to(torch.int64)
+        return cos.index_select(0, index), sin.index_select(0, index)

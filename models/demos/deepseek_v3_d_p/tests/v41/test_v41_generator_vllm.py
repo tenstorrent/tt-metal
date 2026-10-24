@@ -181,6 +181,7 @@ def test_v41_generator_vllm(mesh_device, device_params, monkeypatch):
             sampling_params=_Params(len(rows)) if sample_on_device else None,
         )
         result.setdefault("decode_s", []).append(round(time.time() - t0, 3))
+        result.setdefault("decode_last", []).append(dict(model.decoder.last))
         if sample_on_device:
             assert out.shape == (len(rows),), tuple(out.shape)
             ids = out

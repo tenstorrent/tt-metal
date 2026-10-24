@@ -136,6 +136,9 @@ class TtV41Decoder:
         self.eager_steps: dict[int, int] = {}
         self.carries: dict[int, dict] = {}
         self.last = {}  # how the last step ran: mode (eager / capture / replay), device_s for replays
+        # V41_DECODE_INPUT_TIMING=1: ``last["items"]`` holds the host inputs' and the staging's time per item (ms)
+        self.input_timing = os.environ.get("V41_DECODE_INPUT_TIMING", "0") == "1"
+        self.items: dict[str, float] = {}
 
     # --- construction ----------------------------------------------------------------------------------
     def _replicated(self, host: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT, device=True) -> ttnn.Tensor:
@@ -232,6 +235,7 @@ class TtV41Decoder:
                 else:
                     self.buffers[key] = ttnn.to_device(value, self.mesh_device)
             return
+        tick = self._tick("stage")
         for key, value in inputs.items():
             if key == "engram":
                 for l, e in value.items():
@@ -241,6 +245,21 @@ class TtV41Decoder:
                     ttnn.copy_host_to_device_tensor(host, dev)
             else:
                 ttnn.copy_host_to_device_tensor(value, self.buffers[key])
+            tick(key)
+
+    def _tick(self, prefix: str):
+        """A timer: ``tick(name)`` adds the time since the last tick to ``items[prefix.name]`` (ms) when
+        ``V41_DECODE_INPUT_TIMING`` is set; a no-op otherwise."""
+        if not self.input_timing:
+            return lambda name: None
+        last = [time.perf_counter()]
+
+        def tick(name):
+            now = time.perf_counter()
+            self.items[f"{prefix}.{name}"] = round(self.items.get(f"{prefix}.{name}", 0.0) + 1e3 * (now - last[0]), 3)
+            last[0] = now
+
+        return tick
 
     def _window_rows(self) -> ttnn.Tensor:
         """``sparse_sdpa`` index rows ``[1, 1, ROWS, SLIDING_WINDOW]`` uint32 row-major of the window rows of
