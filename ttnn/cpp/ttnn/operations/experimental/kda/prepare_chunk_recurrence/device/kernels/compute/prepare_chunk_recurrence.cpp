@@ -101,6 +101,12 @@ constexpr uint32_t max_dst_tiles =
 
 enum class ElementwiseBinaryOp { Add, Subtract, Multiply };
 
+// Every helper streams: before each destination-register acquire it waits only for the input tiles that acquire
+// reads, and after packing it publishes that acquire's output tiles. A stage's first acquire therefore starts as soon
+// as the previous stage has packed the tiles it needs, while that stage is still packing its later tiles, instead of
+// after the whole previous stage. Packing is in order (the output indices below only document the layout), so each
+// publish covers exactly the tiles the acquire packed; constants and buffers awaited by the caller wait at no cost.
+
 // Compute out_i[Mt,Nt] = A_i[Mt,Kt] @ (transpose_b ? B_i[Nt,Kt]^T : B_i[Kt,Nt]) for `items` independent products, in
 // the largest rectangular subblocks that exactly divide the output and fit in destination registers. Item i's
 // matrices follow item i-1's in each buffer; a shared A is the one matrix at the front of a.
@@ -121,6 +127,8 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
         const uint32_t a_base = a_shared ? 0 : item * Mt * Kt;
         const uint32_t b_base = item * Kt * Nt;
         const uint32_t o_base = item * Mt * Nt;
+        a.wait_front(a_base + Mt * Kt);
+        b.wait_front(b_base + Kt * Nt);
         for (uint32_t mi = 0; mi < Mt; mi += subblock_rows) {
             for (uint32_t ni = 0; ni < Nt; ni += subblock_columns) {
                 tile_regs_acquire();
@@ -145,10 +153,10 @@ KDA_PREP_HELPER void matmul_blocks(DFB0& a, bool a_shared, DFB1& b, DFB2& o, uin
                     pack_tiles(row * subblock_columns, o_id, o_base + (mi + row) * Nt + ni, subblock_columns);
                 }
                 tile_regs_release();
+                o.push_back(subblock_rows * subblock_columns);
             }
         }
     }
-    o.push_back(items * Mt * Nt);
 }
 
 // Tilewise binary operation, shared by every elementwise stage and by the batched inverse, where the core's work
@@ -181,6 +189,12 @@ KDA_ITEMS_HELPER void binary_items(
     }
     for (uint32_t first = 0; first < n; first += max_dst_tiles) {
         const uint32_t count = n - first < max_dst_tiles ? n - first : max_dst_tiles;
+        if (!a_shared) {
+            a.wait_front(a_base + first + count);
+        }
+        if (!b_shared) {
+            b.wait_front(b_base + first + count);
+        }
         tile_regs_acquire();
         for (uint32_t item = 0; item < count; ++item) {
             const uint32_t a_tile = a_shared ? a_base : a_base + first + item;
@@ -197,8 +211,8 @@ KDA_ITEMS_HELPER void binary_items(
         tile_regs_wait();
         pack_tiles(0, o_id, first, count);
         tile_regs_release();
+        o.push_back(count);
     }
-    o.push_back(n);
 }
 
 // Apply a binary operation tilewise to n tiles of a and b.
@@ -218,6 +232,7 @@ KDA_PREP_HELPER void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
     square_tile_init();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+        in.wait_front(block_start + block_tiles);
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
@@ -227,8 +242,8 @@ KDA_PREP_HELPER void square_tiles(DFB0& in, DFB1& o, uint32_t n) {
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
+        o.push_back(block_tiles);
     }
-    o.push_back(n);
 }
 
 // Mode and Iterations restrict the exponential to a row vector for row-replicated inputs: VectorMode::R visits faces 0
@@ -245,6 +260,7 @@ KDA_PREP_HELPER void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
     exp_tile_init();
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+        in.wait_front(block_start + block_tiles);
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             copy_tile(in_id, block_start + tile, tile);
@@ -254,8 +270,8 @@ KDA_PREP_HELPER void exponential_tiles(DFB0& in, DFB1& o, uint32_t n) {
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
+        o.push_back(block_tiles);
     }
-    o.push_back(n);
 }
 
 // out[Mt,Nt] = A[Mt,Nt] * col[Mt,1]  (broadcast the single column of `col` across N)
@@ -272,6 +288,8 @@ KDA_PREP_HELPER void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt
     for (uint32_t block_start = 0; block_start < output_tiles; block_start += max_dst_tiles) {
         const uint32_t block_tiles =
             (output_tiles - block_start < max_dst_tiles) ? output_tiles - block_start : max_dst_tiles;
+        a.wait_front(block_start + block_tiles);
+        col.wait_front((block_start + block_tiles - 1) / Nt + 1);
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             const uint32_t input_tile = block_start + tile;
@@ -281,8 +299,8 @@ KDA_PREP_HELPER void multiply_by_column(DFB0& a, DFB1& col, DFB2& o, uint32_t Mt
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
+        o.push_back(block_tiles);
     }
-    o.push_back(Mt * Nt);
 }
 
 // out[Mt,Nt] = (a[Mt,Nt] * col[Mt,1], broadcast across N) * b[Mt,Nt]: the column product stays in DST and the second
@@ -298,6 +316,9 @@ KDA_PREP_HELPER void multiply_by_column_then(DFB0& a, DFB1& col, DFB2& b, DFB3& 
     for (uint32_t block_start = 0; block_start < output_tiles; block_start += max_dst_tiles) {
         const uint32_t block_tiles =
             (output_tiles - block_start < max_dst_tiles) ? output_tiles - block_start : max_dst_tiles;
+        a.wait_front(block_start + block_tiles);
+        col.wait_front((block_start + block_tiles - 1) / Nt + 1);
+        b.wait_front(block_start + block_tiles);
         tile_regs_acquire();
         reconfig_data_format(a_id, col_id);
         mul_bcast_cols_init(a_id, col_id);
@@ -314,8 +335,8 @@ KDA_PREP_HELPER void multiply_by_column_then(DFB0& a, DFB1& col, DFB2& b, DFB3& 
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
+        o.push_back(block_tiles);
     }
-    o.push_back(output_tiles);
 }
 
 // out_i = (a_i[1,Kt] @ b_i[1,Kt]^T) * mask, one tile per item: each product stays in DST and the mask multiplies it
@@ -329,6 +350,8 @@ KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3
     o.reserve_back(items);
     for (uint32_t first = 0; first < items; first += max_dst_tiles) {
         const uint32_t count = items - first < max_dst_tiles ? items - first : max_dst_tiles;
+        a.wait_front((first + count) * Kt);
+        b.wait_front((first + count) * Kt);
         reconfig_data_format(b_id, a_id);
         matmul_tiles_block_init(a_id, b_id, true, 1, 1, Kt);
         tile_regs_acquire();
@@ -347,8 +370,8 @@ KDA_PREP_HELPER void matmul_transposed_masked(DFB0& a, DFB1& b, DFB2& mask, DFB3
         tile_regs_wait();
         pack_tiles(0, o_id, first, count);
         tile_regs_release();
+        o.push_back(count);
     }
-    o.push_back(items);
 }
 
 // out[n] = A[n] * row[n]  (broadcast row 0 of each `row` tile down its tile)
@@ -363,6 +386,8 @@ KDA_PREP_HELPER void multiply_by_row(DFB0& a, DFB1& row, DFB2& o, uint32_t n) {
     mul_bcast_rows_init(a_id, row_id);
     for (uint32_t block_start = 0; block_start < n; block_start += max_dst_tiles) {
         const uint32_t block_tiles = (n - block_start < max_dst_tiles) ? n - block_start : max_dst_tiles;
+        a.wait_front(block_start + block_tiles);
+        row.wait_front(block_start + block_tiles);
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             mul_tiles_bcast_rows(a_id, row_id, block_start + tile, block_start + tile, tile);
@@ -371,8 +396,8 @@ KDA_PREP_HELPER void multiply_by_row(DFB0& a, DFB1& row, DFB2& o, uint32_t n) {
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
+        o.push_back(block_tiles);
     }
-    o.push_back(n);
 }
 
 // o[i] = a[i] @ b[i] for one-tile matrices.
@@ -386,6 +411,8 @@ KDA_ITEMS_HELPER void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
     matmul_tiles_block_init(a_id, b_id, false, 1, 1, 1);
     for (uint32_t first = 0; first < n; first += max_dst_tiles) {
         const uint32_t count = n - first < max_dst_tiles ? n - first : max_dst_tiles;
+        a.wait_front(first + count);
+        b.wait_front(first + count);
         tile_regs_acquire();
         for (uint32_t item = 0; item < count; ++item) {
             matmul_tiles_block(a_id, b_id, first + item, first + item, item, false, 1, 1, 1);
@@ -394,8 +421,8 @@ KDA_ITEMS_HELPER void matmul_items(DFB0& a, DFB1& b, DFB2& o, uint32_t n) {
         tile_regs_wait();
         pack_tiles(0, o_id, first, count);
         tile_regs_release();
+        o.push_back(count);
     }
-    o.push_back(n);
 }
 
 // T_inv = (I + strictly_lower(Akk))^-1 for the n items whose raw Akk tiles are the front of `akk`.
@@ -411,53 +438,38 @@ template <typename DFB0, typename DFB1, typename DFB2, typename DFB3, typename D
 __attribute__((noinline)) void invert_items(
     DFB0& akk, DFB1& identity, DFB2& block_masks, DFB3& inverse, DFB4& matrix, DFB5& total, DFB6& product, uint32_t n) {
     using Op = ElementwiseBinaryOp;
-    akk.wait_front(n);
     binary_items(Op::Multiply, akk, 0, false, block_masks, 0, true, matrix, n);  // N1
-    matrix.wait_front(n);
     binary_items(Op::Add, identity, 0, true, matrix, 0, false, total, n);
-    total.wait_front(n);
     for (uint32_t step = 0; step < 2; ++step) {
         matmul_items(matrix, total, product, n);
-        product.wait_front(n);
         // The double-depth total holds the old and new Horner values together.
         binary_items(Op::Add, identity, 0, true, product, 0, false, total, n);
-        total.wait_front(2 * n);
         total.pop_front(n);
         product.pop_front(n);
     }
     matrix.pop_front(n);  // total holds A
 
     binary_items(Op::Multiply, akk, 0, false, block_masks, 1, true, matrix, n);  // L2
-    matrix.wait_front(n);
-    matmul_items(total, matrix, product, n);  // M2 = A L2
-    product.wait_front(n);
+    matmul_items(total, matrix, product, n);                                     // M2 = A L2
     matrix.pop_front(n);
     matmul_items(product, total, matrix, n);  // M2 A
-    matrix.wait_front(n);
     product.pop_front(n);
     binary_items(Op::Add, total, 0, false, matrix, 0, false, total, n);  // B = A + M2 A
-    total.wait_front(2 * n);
     total.pop_front(n);
     matrix.pop_front(n);
 
     binary_items(Op::Multiply, akk, 0, false, block_masks, 2, true, product, n);  // L3
-    product.wait_front(n);
     // Akk is dead after extracting L3; its buffer holds I+M3 below.
     akk.pop_front(n);
     auto& identity_plus_m3 = akk;
     matmul_items(total, product, matrix, n);  // M3 = B L3
-    matrix.wait_front(n);
     product.pop_front(n);
-    matmul_items(matrix, matrix, product, n);  // M3^2
-    product.wait_front(n);
+    matmul_items(matrix, matrix, product, n);                                         // M3^2
     binary_items(Op::Add, identity, 0, true, matrix, 0, false, identity_plus_m3, n);  // I+M3
-    identity_plus_m3.wait_front(n);
     matrix.pop_front(n);
     binary_items(Op::Add, identity, 0, true, product, 0, false, matrix, n);  // I+M3^2
-    matrix.wait_front(n);
     product.pop_front(n);
     matmul_items(identity_plus_m3, matrix, product, n);  // (I+M3)(I+M3^2)
-    product.wait_front(n);
     identity_plus_m3.pop_front(n);
     matrix.pop_front(n);
     matmul_items(product, total, inverse, n);
@@ -477,6 +489,7 @@ KDA_PREP_HELPER void transpose_tile_row_to_column(DFB0& in, DFB1& o, uint32_t ro
     for (uint32_t block_start = 0; block_start < row_tiles; block_start += max_dst_tiles) {
         const uint32_t block_tiles =
             (row_tiles - block_start < max_dst_tiles) ? row_tiles - block_start : max_dst_tiles;
+        in.wait_front(block_start + block_tiles);
         tile_regs_acquire();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
             transpose_tile(in_id, block_start + tile, tile);
@@ -485,8 +498,8 @@ KDA_PREP_HELPER void transpose_tile_row_to_column(DFB0& in, DFB1& o, uint32_t ro
         tile_regs_wait();
         pack_tiles(0, o_id, block_start, block_tiles);
         tile_regs_release();
+        o.push_back(block_tiles);
     }
-    o.push_back(row_tiles);
 }
 
 // Reduce each row of squared values directly to its inverse-L2 factor. Applying epsilon, rsqrt,
@@ -541,9 +554,7 @@ KDA_PREP_HELPER void normalize_l2_rows(
     reduce_squared_rows_to_inverse_norms<SquaredDfb, InverseNormsDfb>(
         row_tiles, ColumnTiles, eps_bits, scale, scale_bits);
 
-    inverse_norms.wait_front(row_tiles);
     multiply_by_column(input, inverse_norms, normalized, row_tiles, ColumnTiles);
-    normalized.wait_front(matrix_tiles);
     inverse_norms.pop_front(row_tiles);
     input.pop_front(matrix_tiles);
 }
@@ -573,10 +584,9 @@ KDA_PREP_HELPER void activate_beta(DFB0& logits, DFB1& beta_row, DFB2& beta, uin
         tile_regs_wait();
         pack_tiles(0, row_id, block_start, block_tiles);
         tile_regs_release();
+        beta_row.push_back(block_tiles);
     }
-    beta_row.push_back(tiles);
     logits.pop_front(tiles);
-    beta_row.wait_front(tiles);
     transpose_tile_row_to_column(beta_row, beta, tiles);
     beta_row.pop_front(tiles);
 }
@@ -599,6 +609,7 @@ KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32
     o.reserve_back(items * Nt);
     for (uint32_t item = 0; item < items; ++item) {
         const uint32_t base = item * Nt;
+        c.wait_front(base + Nt);
         reconfig_data_format(b_id, a_id);
         matmul_tiles_block_init(a_id, b_id, false, Nt, 1, 1);
         tile_regs_acquire();
@@ -612,8 +623,8 @@ KDA_PREP_HELPER void matmul_row_minus(DFB0& a, DFB1& b, DFB2& c, DFB3& o, uint32
         tile_regs_wait();
         pack_tiles(0, o_id, base, Nt);
         tile_regs_release();
+        o.push_back(Nt);
     }
-    o.push_back(items * Nt);
 }
 
 // exp(x) into exponential and its precise reciprocal exp(-x) into inverse, from one unpack of x: half a DST acquire
@@ -631,6 +642,7 @@ KDA_PREP_HELPER void exponential_and_reciprocal(DFB0& in, DFB1& exponential, DFB
     copy_init(in_id);
     for (uint32_t block_start = 0; block_start < n; block_start += half) {
         const uint32_t block_tiles = (n - block_start < half) ? n - block_start : half;
+        in.wait_front(block_start + block_tiles);
         tile_regs_acquire();
         exp_tile_init();
         for (uint32_t tile = 0; tile < block_tiles; ++tile) {
@@ -650,9 +662,9 @@ KDA_PREP_HELPER void exponential_and_reciprocal(DFB0& in, DFB1& exponential, DFB
         pack_tiles(0, exp_id, block_start, block_tiles);
         pack_tiles(half, inv_id, block_start, block_tiles);
         tile_regs_release();
+        exponential.push_back(block_tiles);
+        inverse.push_back(block_tiles);
     }
-    exponential.push_back(n);
-    inverse.push_back(n);
 }
 
 template <
@@ -686,24 +698,19 @@ KDA_PREP_HELPER void prepare_gate_factors(
     static_assert(Ct == 1, "the gate factors take one tile row per chunk");
     // The sum-broadcast matrix carries half the gate scale, so this is the anchor G_last/2, replicated.
     matmul_blocks<Ct, Ct, Kt, false>(sum_broadcast_matrix, /*a_shared=*/true, g, anchor_g, items);
-    anchor_g.wait_front(key_tiles);
 
     // G - anchor, the prefix sum kept in DST.
     matmul_row_minus<Kt>(prefix_sum_mask, g, anchor_g, centered_g, items);
-    centered_g.wait_front(key_tiles);
     g.pop_front(key_tiles);
 
     // exp(G_last/2) is row-replicated and the broadcasts read only row 0, so only the face rows holding it are
     // computed. That takes two SFPU iterations: one leaves part of row 0 unwritten, and kd, q_decay, k_dec_t and
     // final_decay come out wrong.
     exponential_tiles<VectorMode::R, 2>(anchor_g, anchor_decay, key_tiles);
-    anchor_decay.wait_front(key_tiles);
     anchor_g.pop_front(key_tiles);
 
     // exp(G-anchor) and its precise reciprocal exp(anchor-G). The anchor's buffer is free again for centered_decay.
     exponential_and_reciprocal(centered_g, centered_decay, centered_inverse_decay, key_tiles);
-    centered_decay.wait_front(key_tiles);
-    centered_inverse_decay.wait_front(key_tiles);
     centered_g.pop_front(key_tiles);
 }
 
@@ -719,7 +726,6 @@ KDA_PREP_HELPER void prepare_final_decay(
     DFB2& final_decay_rows) {
     const uint32_t key_tiles = items * Ct * Kt;
     square_tiles(anchor_decay, final_decay_rows, key_tiles);
-    final_decay_rows.wait_front(key_tiles);
     pack_reconfig_data_format(final_decay_rows.get_id(), final_decay.get_id());
     transpose_tile_row_to_column(final_decay_rows, final_decay, items * Kt);
     final_decay_rows.pop_front(key_tiles);
@@ -760,8 +766,7 @@ KDA_PREP_HELPER void prepare_q_terms(
     normalize_l2_rows<Kt, SquaredDfb, InverseNormsDfb>(
         q, normalized_q, items * Ct, EPS_BITS, /*scale=*/true, SCALE_BITS, squared, inverse_norms);
     elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_q, centered_decay, q_pairwise, key_tiles);
-    q_pairwise.wait_front(key_tiles);  // q*exp(G-anchor)
-    normalized_q.pop_front(key_tiles);
+    normalized_q.pop_front(key_tiles);  // q*exp(G-anchor) is packed
 
     // The scan-facing factor exp(G) = exp(G-anchor) * exp(anchor) reuses the anchored product.
     pack_reconfig_data_format(q_pairwise.get_id(), q_decay.get_id());
@@ -811,13 +816,11 @@ KDA_PREP_HELPER void prepare_k_terms(
 
     // beta*k*exp(G-anchor), beta*k kept in DST.
     multiply_by_column_then(normalized_k, beta, centered_decay, k_beta_pairwise, items * Ct, Kt);
-    k_beta_pairwise.wait_front(key_tiles);
     beta.pop_front(items * Ct);
     centered_decay.pop_front(key_tiles);
 
     elementwise_binary<ElementwiseBinaryOp::Multiply>(normalized_k, centered_inverse_decay, k_pairwise, key_tiles);
-    k_pairwise.wait_front(key_tiles);  // k*exp(anchor-G)
-    normalized_k.pop_front(key_tiles);
+    normalized_k.pop_front(key_tiles);  // k*exp(anchor-G) is packed
     centered_inverse_decay.pop_front(key_tiles);
 
     pack_reconfig_data_format(k_pairwise.get_id(), kd.get_id());
@@ -867,7 +870,6 @@ KDA_PREP_HELPER void prepare_k_decay_transposed(
     DFB3& k_dec) {
     const uint32_t key_tiles = items * Ct * Kt;
     multiply_by_row(k_pairwise, anchor_decay, k_dec, key_tiles);
-    k_dec.wait_front(key_tiles);
     k_pairwise.pop_front(key_tiles);
     anchor_decay.pop_front(key_tiles);
     pack_reconfig_data_format(k_dec.get_id(), k_dec_t.get_id());
@@ -947,8 +949,9 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         }
     }
     // The work items run stage by stage in batches of batch_items, every helper over the whole batch before the next,
-    // so each stage's unpack, math and pack overlap across the batch's destination-register acquires and its init,
-    // format reconfiguration and buffer handoff are paid once per batch. The per-item buffers hold one batch, and the
+    // so each stage's unpack, math and pack overlap across the batch's destination-register acquires and its init and
+    // format reconfiguration are paid once per batch; the helpers stream, so consecutive stages overlap too (the next
+    // stage's first acquire waits only for the tiles it reads). The per-item buffers hold one batch, and the
     // items past the last whole batch run one at a time: every transaction then stays inside its ring, which unpack
     // and pack do not wrap. Each item's values come from the same operations, in the same order, as one at a time.
     // The gate factors come first, so six Kt-tile row buffers hold every live value; the PACK state persists across
@@ -974,7 +977,6 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
 
         beta_logits.wait_front(items * Ct);
         activate_beta<Ct>(beta_logits, beta_row, beta, items);
-        beta.wait_front(items * Ct);
 
         // q and k normalize through the same squared and normalized buffers, so one copy of the row reduction serves
         // both.
