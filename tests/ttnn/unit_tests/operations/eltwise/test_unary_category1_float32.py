@@ -1071,6 +1071,24 @@ def test_lgamma_poles(device):
     assert torch.all(torch.isposinf(result))
 
 
+def test_lgamma_large_negative(device):
+    """Negative inputs of magnitude >= ~4e36 return +inf, matching torch.
+
+    Every float of that magnitude is an integer, so these are poles. Above ~4e36 the
+    reflection's Stirling term (z - 0.5) * log(z) also overflows to +inf, and the
+    kernel must let the pole win instead of producing inf - inf.
+    """
+    # -1e30 is a finite-Stirling control: (z - 0.5) * log(z) = 6.9e31 stays finite, so the
+    # old kernel already returned inf - finite = +inf there. The Stirling term overflows from
+    # about 4.04e36 onwards; -5e36 (4.2e38) and beyond are the lanes that need the pole override.
+    xs = torch.tensor([[-1e30, -5e36, -1e37, -3e38, -3.4e38]], dtype=torch.float32)
+    golden = ttnn.get_golden_function(ttnn.lgamma)(xs, device=device)
+    result = ttnn.to_torch(ttnn.lgamma(to_float32_tt_tensor(xs, device)))
+
+    assert torch.all(torch.isposinf(golden))
+    assert torch.all(torch.isposinf(result)), result
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Modified Bessel functions (i0, i1)
 # ─────────────────────────────────────────────────────────────────────────────
