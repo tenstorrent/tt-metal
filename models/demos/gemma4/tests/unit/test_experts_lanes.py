@@ -290,5 +290,7 @@ def test_single_owner_prefill_every_lane_engine_layout(mesh_device, reset_seeds,
         per_lane = _run(experts, mesh_device, mesh_config, hidden, routing)
         ref = _ref(hf_experts, hidden, idx, wts, owner, rows)
         for lane in range(lanes):
-            _check(per_lane[lane], ref, request, f"engine layout owner {owner} seen from lane {lane}")
+            # the decode MoE kernel's bar (bfloat4_b experts; test_experts_decode_kernel passes at ~0.98)
+            passing, msg = compare_tensors(per_lane[lane][:rows], ref, pcc_threshold=0.97)
+            assert passing, f"engine layout owner {owner} seen from lane {lane}: {msg}"
     mesh_config._g4_single_lane_prefill_owner = None
