@@ -36,6 +36,7 @@ from models.demos.gemma4.tt.generator import (
     _vision_encoder_seq_len,
     align_num_cached_tokens_to_sdpa,
     gemma4_packed_prefill_enabled,
+    lane_prefill_table_upload_enabled,
     mask_page_table_columns_past_allocation,
     max_batched_prefill_users,
     resolve_batched_prefill_chunk_users,
@@ -2222,8 +2223,15 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
             # Upload the call's tables: ``ttnn_prefill_forward`` resolves the stash through
             # ``_page_tables_to_ttnn``, which hands back a key's existing device buffers without refreshing
             # them, so without this copy every call after a key's first would prefill through that first
-            # call's block ids.
-            self._install_per_layer_page_tables(model, per_layer, writer="prefill")
+            # call's block ids (GEMMA4_LANE_PREFILL_TABLE_UPLOAD=0 reproduces that path for evidence only).
+            if lane_prefill_table_upload_enabled():
+                self._install_per_layer_page_tables(model, per_layer, writer="prefill")
+            elif not getattr(self, "_g4_lane_table_upload_off_logged", False):
+                self._g4_lane_table_upload_off_logged = True
+                logger.warning(
+                    "Gemma4 vLLM: GEMMA4_LANE_PREFILL_TABLE_UPLOAD=0 -- lane prefill calls keep the per-layer page "
+                    "tables of the first call per table key (the pre-fix path; evidence runs only)"
+                )
             out_rows = self.prefill_forward_lanes(
                 toks if kc > 1 else toks[:, 0], tables, kwargs.get("kv_cache"), plens_call, slot_ids=None
             )

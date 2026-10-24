@@ -257,3 +257,22 @@ def test_router_with_one_prompt_per_lane_keeps_full_rounds_and_the_serial_remain
     inst, _model, calls = _bridge(monkeypatch, prompts=1)
     kwargs, tables = _step([0, 32, 64], [50] * 3)
     assert inst._try_lane_parallel_prefill(kwargs, tables) is None, "B < lanes falls through"
+
+
+def test_router_uploads_every_call_unless_the_evidence_knob_keeps_the_pre_fix_path(monkeypatch):
+    """The lane router stashed its per-layer tables without uploading them: ``_page_tables_to_ttnn`` reuses a key's
+    buffers unrefreshed, so every group after a key's first prefilled through the first group's block ids.
+    GEMMA4_LANE_PREFILL_TABLE_UPLOAD=0 keeps that path for the before/after coherence evidence only."""
+    inst, _model, calls = _bridge(monkeypatch, prompts=1)
+    kwargs, tables = _step([0, 32, 64, 96, 1, 33, 65, 97], [50] * 8)
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is not None
+    assert len(calls["lanes"]) == 2 and len(calls["installs"]) == 2
+
+    monkeypatch.setenv("GEMMA4_LANE_PREFILL_TABLE_UPLOAD", "0")
+    inst, model, calls = _bridge(monkeypatch, prompts=1)
+    inst.prefill_forward_lanes = lambda tokens, page_tables, kv_cache, prompt_lens, slot_ids=None: (
+        calls["lanes"].append(tuple(tokens.shape)) or torch.zeros(LANES, VOCAB)
+    )
+    assert inst._try_lane_parallel_prefill(kwargs, tables) is not None
+    assert len(calls["lanes"]) == 2 and calls["installs"] == [], "the pre-fix path: stash only"
+    assert not hasattr(model, "_g4_page_table_writer_by_rows")

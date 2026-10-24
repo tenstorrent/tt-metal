@@ -575,6 +575,15 @@ def _g4_dram_bottom_up_bytes(view) -> int:
     return total
 
 
+def lane_prefill_table_upload_enabled():
+    """Every lane-parallel prefill call uploads its per-layer page tables into the persistent device buffers
+    (GEMMA4_LANE_PREFILL_TABLE_UPLOAD, default 1). ``ttnn_prefill_forward`` resolves the stash through
+    ``_page_tables_to_ttnn``, which hands back a key's existing buffers without refreshing them, so without the upload
+    every call after a key's first prefills through that first call's block ids. 0 reproduces that pre-fix path (the
+    before/after coherence evidence of the 2026-10-24 Galaxy window); never serve with it."""
+    return os.environ.get("GEMMA4_LANE_PREFILL_TABLE_UPLOAD", "1").lower() in ("1", "true", "yes")
+
+
 class ChunkedPrefillPageTableGuardMixin:
     """Gemma4 prefill guards + async decode continuity (no ``tt_transformers`` edits).
 
@@ -1656,7 +1665,8 @@ class ChunkedPrefillPageTableGuardMixin:
             per_layer = self._lane_prefill_ring_tables(model, g_host, slots_l, block_size)
             if per_layer is not None:
                 model._active_page_tables_per_layer = per_layer
-                self._install_per_layer_page_tables(model, per_layer, writer="prefill")
+                if lane_prefill_table_upload_enabled():
+                    self._install_per_layer_page_tables(model, per_layer, writer="prefill")
 
         max_chunk = int(self.model_args[0].max_prefill_chunk_size)
         if seq_len <= max_chunk:
@@ -1829,7 +1839,8 @@ class ChunkedPrefillPageTableGuardMixin:
             if per_layer is None:
                 per_layer = [g_frame] * len(getattr(model, "layers", []))
             model._active_page_tables_per_layer = per_layer
-            self._install_per_layer_page_tables(model, per_layer, writer="prefill")
+            if lane_prefill_table_upload_enabled():
+                self._install_per_layer_page_tables(model, per_layer, writer="prefill")
 
         inputs = model.prepare_inputs_prefill(
             tokens.reshape(lanes, k * seq_len),
