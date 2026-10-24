@@ -7,6 +7,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "experimental/llk_custom_mm_common.h"
 #include "llk_defs.h"
 #include "params.h"
 
@@ -26,6 +27,11 @@ constexpr std::uint32_t kt_per_call         = KT_DIM / num_calls;
 constexpr std::uint32_t b_words_per_call    = kt_per_call * CT_DIM * 68;
 constexpr std::uint32_t meta_bytes_per_call = ((kt_per_call * CT_DIM + 9) / 10) * sizeof(std::uint32_t);
 static_assert(kt_per_call * num_calls == KT_DIM && kt_per_call % 2 == 0, "each call needs an even share of the K tiles");
+
+// CUSTOM_MM_LAYOUT picks where the output tiles sit in DEST, the same on the math and pack threads. Compressed custom_mm
+// has no SplitAcc layouts, so nothing finalizes.
+static_assert(CUSTOM_MM_LAYOUT <= static_cast<std::uint8_t>(ckernel::CustomMmDestLayout::Compact), "CUSTOM_MM_LAYOUT is not a CustomMmDestLayout");
+constexpr auto dest_layout = static_cast<ckernel::CustomMmDestLayout>(CUSTOM_MM_LAYOUT);
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -94,12 +100,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-    _llk_math_compressed_custom_mm_init_<false, false, true>(params.in0_face_r_dim);
+    _llk_math_compressed_custom_mm_init_<false /* transpose */, dest_layout>();
 
-    _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+    LLK_ASSERT(
+        (custom_mm_fits_dest<dest_sync, dest_layout>(0 /* dst_index */, CT_DIM)), "compressed_custom_mm: CT_DIM output tiles overrun the DEST sync region");
+
+    _llk_math_wait_for_dest_available_<dest_sync>();
 
     for (std::uint32_t call = 0; call < num_calls; call++)
     {
@@ -111,16 +120,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // bank when call c + 1 changes format. Without the delay math keeps up and neither boundary is contended.
             ckernel::wait(2000);
         }
-        _llk_math_compressed_custom_mm_<false>(params.buffer_C[0] + call * meta_bytes_per_call, params.in0_face_r_dim, 0, kt_per_call, CT_DIM);
+        _llk_math_compressed_custom_mm_<dest_layout>(params.buffer_C[0] + call * meta_bytes_per_call, 0 /* dst_index */, kt_per_call, CT_DIM);
     }
 
-    _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }
 
 #endif
 
 #ifdef LLK_TRISC_PACK
 
+#include "experimental/llk_pack_custom_mm.h"
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -131,24 +141,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 
-    _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, true);
 
     _llk_pack_init_<PackMode::Default, false /* zero_output */, false /* skip_addrmod_config */, true /* skip_packer_strides */>(
         formats.pack_src, params.in0_face_r_dim, TILE_C_DIM, params.num_faces, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>((TILE_NUM_FACES / 2) * FACE_C_DIM * FACE_R_DIM * 2);
+    _llk_pack_custom_mm_init_<dest_layout>(formats.pack_src);
 
     _llk_packer_wait_for_math_done_();
 
     for (std::uint32_t i = 0; i < CT_DIM; i++)
     {
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
     }
 
-    _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 
-    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(TILE_NUM_FACES * FACE_C_DIM * FACE_R_DIM * 2);
+    _llk_pack_custom_mm_uninit_<dest_layout>(formats.pack_src);
 }
 
 #endif
