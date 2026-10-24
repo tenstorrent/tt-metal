@@ -211,6 +211,57 @@ class TtV41Transformer(LightweightModule):
             assert not missing, f"DSpark needs the taps of layers {sorted(missing)}"
             self.dspark = TtV41DSpark(mesh_device, config, dspark_weights)
         self.pre_mix = initial_pre_mix(mesh_device, config, chunk)  # every chunk's first pre-mix (read only)
+        self.weight_cache_path = weight_cache_path
+
+    def with_chunk(self, chunk: int, max_seq_len: int) -> "TtV41Transformer":
+        """A view of this model for prefill chunks of ``chunk`` tokens (``max_seq_len`` its states' context): the
+        same weights and modules except what the chunk sizes, which is ``pre_mix`` and each block's MoE (``TtMoe``
+        is built for a sequence length: gate bias rows, dispatch and combine buffers). The blocks are shallow copies
+        with a new ``TtV41Moe`` of the chunk, built as the decoder builds its 32-row MoEs (``TtV41Decoder._decode_moe``):
+        the routed and shared experts' weights are this model's device tensors (injected under ``mock.patch``:
+        ``TtV41Moe.__init__`` is part of the weight cache's key), the gate loads from the weight cache; the shared
+        expert keeps the prefill's overlap with the dispatch. Prefill a chunk of this model before one of the view: the
+        shared expert's reduce-scatter intermediate is one buffer per mesh, allocated at the first input's shape
+        (``TtCCL.get_shared_rs_intermediate``) and the Linear path tolerates a smaller input, not a larger one.
+        Short prompts in a small chunk: a 1,028-token prompt in a 5,120-row chunk paid the
+        padded rows in every op but the MoE's."""
+        import copy
+        from unittest import mock
+
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+        from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+        from models.demos.deepseek_v3_d_p.tt.v41.moe import TtV41Moe
+
+        assert self.weight_cache_path is not None, "a chunk view builds its MoE gates from the weight cache"
+        assert chunk < self.chunk and max_seq_len % chunk == 0, (chunk, self.chunk, max_seq_len)
+        view = copy.copy(self)
+        view.chunk, view.max_seq_len = chunk, max_seq_len
+        view.pre_mix = initial_pre_mix(self.mesh_device, self.config, chunk)
+        view.blocks = []
+        for layer, block in zip(self.layers, self.blocks):
+            source = block.ffn.moe.routed_expert
+            routed = (source.gate_projs, source.up_projs, source.down_projs)
+            dense = block.ffn.moe.shared_expert
+            shared = {"gate": dense.gate_proj, "up": dense.up_proj, "down": dense.down_proj}
+            with (
+                mock.patch.object(
+                    TtRoutedExpert, "_convert_and_cache_expert_weights", staticmethod(lambda *a, **k: routed)
+                ),
+                mock.patch.object(TtSharedExpert, "_convert_and_cache_weights", staticmethod(lambda *a, **k: shared)),
+            ):
+                moe = TtV41Moe(
+                    self.mesh_device,
+                    self.config,
+                    layer,
+                    {},
+                    chunk,
+                    routed_expert_weights_dtype=self.routed_expert_weights_dtype,
+                    weight_cache_path=self.weight_cache_path,
+                )
+            copied = copy.copy(block)
+            copied.ffn = moe
+            view.blocks.append(copied)
+        return view
 
     def _token_ids(self, tokens: torch.Tensor, device=True):
         """[chunk] int -> [1, 1, chunk/sp] uint32 SP-sharded, replicated over TP (a host tensor unless ``device``)."""

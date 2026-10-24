@@ -373,6 +373,38 @@ class TtMoEGateConfig:
                     fuse_batch=True,
                 )
             ),
+            # DeepSeek-V4.1's short-prompt chunks (TT_V41_SHORT_CHUNK 2,048 and 3,072 tokens: 256 and 384 rows a
+            # chip, 8 and 12 M-tiles): the same blocks (in0_block_w 8, out_subblock_w 2, per_core_N 2) over a
+            # shorter grid, so the gate logits are the production entry's bit for bit; without an entry TTNN's
+            # default blocks the contraction differently and warns on every call.
+            (256, DeepSeekV41FlashConfig.EMB_SIZE // 4, DeepSeekV41FlashConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=1,
+                    out_block_w=2,
+                    per_core_M=1,
+                    per_core_N=2,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (384, DeepSeekV41FlashConfig.EMB_SIZE // 4, DeepSeekV41FlashConfig.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(6, 6),
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=2,
+                    out_block_h=2,
+                    out_block_w=2,
+                    per_core_M=2,
+                    per_core_N=2,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
             (GATE_PRODUCTION_SP_DIM, GptOss120BConfig.EMB_SIZE // 4, GptOss120BConfig.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),

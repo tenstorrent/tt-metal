@@ -30,11 +30,12 @@ from collections import OrderedDict
 import torch
 from loguru import logger
 
+import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import TtV41BatchDecoder
-from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
+from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import (
@@ -58,10 +59,25 @@ TRACE_PREFILL_SLACK = "TT_V41_TRACE_PREFILL_SLACK"  # also capture each listed l
 # phase captures one ``V41GenericPrefillTrace`` per state (one capture per score-width bucket), so prompts of any
 # length longer than one chunk replay captures for every chunk but the final one. The per-length captures above
 # still apply to prompts of exactly those lengths (they replay the final chunk too).
+# ``TT_V41_SHORT_CHUNK``: smaller prefill chunks (tokens, comma-separated, ascending, each below TT_V41_CHUNK; 0 or
+# unset: none) for the short prompts. Each is a view of the model with that chunk (``TtV41Transformer.with_chunk``)
+# and one prefill state whose context is the first score-width bucket; the listed lengths that fit a short chunk
+# are captured on the smallest one that holds them instead of the full-chunk states, and a whole prompt of such a
+# length prefills there (a 1,028-token prompt paid a 5,120-row chunk's padded rows).
+SHORT_CHUNK = "TT_V41_SHORT_CHUNK"
 
 
 def _round_up(x: int, m: int) -> int:
     return -(-x // m) * m
+
+
+def _dram_bytes(mesh_device) -> int:
+    """Bytes allocated in DRAM per chip (0 when the statistics are unavailable: a report, not a gate)."""
+    try:
+        view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+        return int(view.total_bytes_allocated_per_bank * view.num_banks)
+    except Exception:
+        return 0
 
 
 def _layers(spec: str) -> list[int]:
@@ -116,14 +132,32 @@ class DeepseekV41ForCausalLM:
             model.new_state(generic=self.generic) for _ in range(prefill_slots)
         ]
         self.generic_traces: dict[int, V41GenericPrefillTrace] = {}  # id(state) -> its bucket captures
+        # the short-chunk geometries (TT_V41_SHORT_CHUNK): per chunk its model view and its one prefill state;
+        # ``models`` maps every prefill state (by id) to the model it prefills through
+        self.models: dict[int, TtV41Transformer] = {id(st): model for st in self.prefill_states}
+        self.short: list[tuple[int, TtV41Transformer, V41PrefillState]] = []
+        spec = os.environ.get(SHORT_CHUNK, "0").strip()
+        for chunk in sorted({int(x) for x in spec.split(",") if x.strip() and int(x) > 0}):
+            assert chunk < model.chunk, f"{SHORT_CHUNK} {chunk}: not below the chunk ({model.chunk})"
+            t0, dram0 = time.time(), _dram_bytes(mesh_device)
+            # the state's context: the first score-width bucket, so a short prompt scores at the width the
+            # full-chunk state would score it at (the same selection, up to the MoE's row split)
+            view = model.with_chunk(chunk, _round_up(V41ChunkTables.MIN_BUCKET, chunk))
+            state = view.new_state(generic=self.generic)
+            self.models[id(state)] = view
+            self.short.append((chunk, view, state))
+            logger.info(
+                f"DeepSeek-V4.1-Flash: chunk {chunk} geometry (max_seq_len {view.max_seq_len}) built in "
+                f"{time.time() - t0:.1f} s, {(_dram_bytes(mesh_device) - dram0) / 2**20:.0f} MB of DRAM a chip"
+            )
         # requests prefilled (wholly or up to a chunk boundary) but not yet joined into a decode slot:
         # request key -> (its prefill state, the prefix so far); oldest first
         self.pending: OrderedDict[int, tuple[V41PrefillState, torch.Tensor, dict]] = OrderedDict()
         self.next_prefill_state = 0
         self.warmed_up = False
-        # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace
+        # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace of a model
         self.prefill_traces: dict[tuple[int, int], V41PrefillTrace] = {}
-        self.prefill_buffers: dict = {}
+        self.prefill_buffers: dict[int, dict] = {id(m): {} for m in [model] + [v for _, v, _ in self.short]}
         self.prefill_traced = False
         spec = os.environ.get(TRACE_PREFILL_LENGTHS, "").strip()
         listed = sorted({int(x) for x in spec.split(",") if x.strip()})
@@ -237,22 +271,39 @@ class DeepseekV41ForCausalLM:
         self.next_prefill_state = (self.next_prefill_state + 1) % len(self.prefill_states)
         return state
 
-    def _state_for(self, key: int, start: int) -> V41PrefillState:
-        """The prefill state of request ``key``: at ``start`` 0 a free one, else the one holding the request's
+    def _short_state(self, n: int | None) -> V41PrefillState | None:
+        """The short-chunk state a whole prompt of ``n`` tokens prefills through: the smallest short chunk that
+        holds it and has its capture (``n`` None: a chunk of a longer prompt; no short state)."""
+        if n is None:
+            return None
+        for chunk, _, state in self.short:
+            if n <= chunk and (id(state), n) in self.prefill_traces:
+                return state
+        return None
+
+    def _state_for(self, key: int, start: int, whole: int | None = None) -> V41PrefillState:
+        """The prefill state of request ``key``: at ``start`` 0 a free one (a short-chunk state when ``whole``, the
+        length of a prompt that is one call, fits one with a capture), else the one holding the request's
         earlier chunks. States are owned from a request's first chunk to its join into a decode slot; the join
         happens at the request's first decode step, or here, when another request needs its state first (the
         scheduler prefills the waiting requests before it decodes, so a request's prefix is complete by then: it
         admits one new prefill a step and advances a partial one alone)."""
         if start == 0:
+            short = self._short_state(whole)
             if key in self.pending:  # the same request restarted (preempted and resumed from position 0)
-                return self.pending.pop(key)[0]
+                state = self.pending.pop(key)[0]
+                if short is None or short is state:
+                    return state
+            candidates = [short] if short is not None else self.prefill_states
             owned = {id(st) for st, _, _ in self.pending.values()}
-            free = [st for st in self.prefill_states if id(st) not in owned]
+            free = [st for st in candidates if id(st) not in owned]
             if free:
                 return free[0]
-            old_key, (state, _, _) = next(iter(self.pending.items()))
-            self._join_pending(old_key)
-            return state
+            for old_key, (state, _, _) in self.pending.items():  # the oldest pending request holding one
+                if any(state is c for c in candidates):
+                    self._join_pending(old_key)
+                    return state
+            raise AssertionError(f"no prefill state for request {key}")
         assert key in self.pending, f"request {key}: a chunk at {start} without its earlier chunks"
         state, _, _ = self.pending[key]
         assert state.start == start, f"request {key}: chunk at {start}, its state is at {state.start}"
@@ -287,7 +338,8 @@ class DeepseekV41ForCausalLM:
             total = n if total_lens is None else max(n, int(total_lens[i]))
             prompt = tokens[i, :total].to(torch.int64)  # the whole prompt when given, else the prefix so far
             key = self._request_key(page_table, i)
-            state = self._state_for(key, start)
+            state = self._state_for(key, start, n if start == 0 and n == total else None)
+            model = self.models[id(state)]  # the full-chunk model, or a short chunk's view
             resume = self.pending[key][2] if key in self.pending else {}
             t0 = time.time()
             trace = self.prefill_traces.get((id(state), n)) if start == 0 and n == total else None
@@ -296,11 +348,7 @@ class DeepseekV41ForCausalLM:
                 logger.info(f"DeepSeek-V4.1-Flash: prefill of {n} tokens captured in {time.time() - t0:.1f} s")
                 t0 = time.time()
             generic = self.generic_traces.get(id(state)) if trace is None and n - start > 0 else None
-            if (
-                generic is not None
-                and n - start <= self.model.chunk
-                and generic.key_of(start // self.model.chunk, total) is None
-            ):
+            if generic is not None and n - start <= model.chunk and generic.key_of(start // model.chunk, total) is None:
                 generic = None  # one chunk without a capture: eager either way
             if trace is not None:
                 logits, _ = trace.run(prompt)
@@ -311,14 +359,15 @@ class DeepseekV41ForCausalLM:
                 logits, _ = generic.run(prompt, start=start, end=n, resume=resume)
                 mode = f"generic {generic.last['replayed']}+{generic.last['eager']}"
             else:
-                logits = self.model.prefill_into(prompt, state, start=start, end=n, resume=resume)
+                logits = model.prefill_into(prompt, state, start=start, end=n, resume=resume)
                 mode = "eager"
             self.pending[key] = (state, prompt, resume)
             self.pending.move_to_end(key)
             phases = trace if trace is not None else generic
             logger.info(
                 f"DeepSeek-V4.1-Flash: prefill of {n - start} tokens at {start} (prefix {n}) in {time.time() - t0:.2f} s "
-                f"({mode}{'' if phases is None else ' ' + ' '.join(f'{k} {v:.3f}' for k, v in phases.last.items() if isinstance(v, float))})"
+                f"({mode}{'' if phases is None else ' ' + ' '.join(f'{k} {v:.3f}' for k, v in phases.last.items() if isinstance(v, float))}"
+                f"{'' if model is self.model else f' chunk {model.chunk}'})"
             )
             if logits is not None:
                 out[i, 0] = logits[-1]
@@ -339,13 +388,14 @@ class DeepseekV41ForCausalLM:
         """Capture the prefill of ``n``-token prompts into ``state`` (the slot's own cache tensors, so the slot's
         decode captures read what the replay wrote). The first capture at a length compiles its kernels (two
         untraced runs); later slots at that length need one untraced run for the steady-state resources."""
-        first = not any(k[1] == n for k in self.prefill_traces)
+        model = self.models[id(state)]
+        first = not any(k[1] == n and self.models[k[0]] is model for k in self.prefill_traces)
         trace = V41PrefillTrace(
-            self.model,
+            model,
             self._warmup_prompt(n),
             1,
             state=state,
-            buffers=self.prefill_buffers,
+            buffers=self.prefill_buffers[id(model)],
             warmup=2 if first else 1,
         )
         self.prefill_traces[(id(state), n)] = trace
@@ -407,7 +457,8 @@ class DeepseekV41ForCausalLM:
         the second (trace) call, which the plugin makes after the decode capture, captures the prefill of every
         ``TT_V41_TRACE_PREFILL_LENGTHS`` length on every prefill state (the captures' persistent tensors are
         consumed right after each replay, so they may share addresses with the decode capture's intermediates; the
-        pool and the prefill states predate every capture). Other lengths keep running eagerly."""
+        pool and the prefill states predate every capture), a length that fits a short chunk on that chunk's state
+        only (``TT_V41_SHORT_CHUNK``; its joins captured at the chunk's width). Other lengths keep running eagerly."""
         if enable_trace:
             if self.prefill_traced:
                 return
@@ -415,6 +466,9 @@ class DeepseekV41ForCausalLM:
             for state in self.prefill_states:
                 for slot in range(self.max_batch_size):
                     self.decoder.capture_join(state, slot)
+            for chunk, _, state in self.short:  # a short state's prompts join at the chunk's width
+                for slot in range(self.max_batch_size):
+                    self.decoder.capture_join(state, slot, self.decoder.join_width(chunk))
             logger.info(
                 f"DeepSeek-V4.1-Flash warm-up: {len(self.decoder.join_traces)} joins captured in {time.time() - t0:.1f} s"
             )
@@ -422,16 +476,21 @@ class DeepseekV41ForCausalLM:
             for n in self.trace_lengths:
                 if self.generic and n > chunk:
                     continue  # the generic captures below serve it (its final chunk captured per length)
-                for state in self.prefill_states:
+                short = self._short_chunk(n)
+                states = [self.short[short][2]] if short is not None else self.prefill_states
+                for state in states:
                     t0 = time.time()
                     self._capture_prefill(state, n)
                     logger.info(
                         f"DeepSeek-V4.1-Flash warm-up: prefill of {n} tokens captured in {time.time() - t0:.1f} s"
+                        f"{'' if short is None else f' (chunk {self.short[short][0]})'}"
                     )
             if self.generic:
                 for k, state in enumerate(self.prefill_states):
                     t0 = time.time()
-                    trace = V41GenericPrefillTrace(self.model, state, self.prefill_buffers, warmup=2 if k == 0 else 1)
+                    trace = V41GenericPrefillTrace(
+                        self.model, state, self.prefill_buffers[id(self.model)], warmup=2 if k == 0 else 1
+                    )
                     self.generic_traces[id(state)] = trace
                     # the final chunks of the listed prompt lengths (a partial chunk's capture is exact in its
                     # valid length, generic in its start within the bucket)
@@ -449,41 +508,61 @@ class DeepseekV41ForCausalLM:
             return
         self._warmup_join()
 
-    def _padding_lengths(self) -> list[int]:
-        """Every chunk valid length the served prefills will hand the MoE: the chunk, each listed prompt length's
-        single chunk or final chunk, the warm-up prompt's."""
-        chunk = self.model.chunk
+    def _short_chunk(self, n: int) -> int | None:
+        """The index in ``short`` of the smallest short chunk that holds a whole prompt of ``n`` tokens (None: the
+        full chunk's states serve it)."""
+        for k, (chunk, _, _) in enumerate(self.short):
+            if n <= chunk:
+                return k
+        return None
+
+    def _padding_lengths(self, model: TtV41Transformer | None = None) -> list[int]:
+        """Every chunk valid length the served prefills will hand ``model``'s MoE (the full-chunk model, or a short
+        chunk's view): the chunk, the warm-up prompt's, and each listed prompt length's single chunk or final chunk
+        (a short chunk: the listed lengths it serves)."""
+        model = self.model if model is None else model
+        chunk = model.chunk
         lengths = {chunk, WARMUP_PROMPT}
         for n in self.trace_lengths:
-            lengths.add(n if n <= chunk else n - (n - 1) // chunk * chunk)
+            if model is self.model:
+                lengths.add(n if n <= chunk else n - (n - 1) // chunk * chunk)
+            elif self._short_chunk(n) is not None and self.short[self._short_chunk(n)][1] is model:
+                lengths.add(n)
         return sorted(lengths)
 
     def _prebuild_padding_configs(self) -> None:
         """Build the MoE gates' memoized padding configs (``TtMoEGatePrefill.build_padding_config``, one device
-        tensor per chunk valid length) before any capture. Built lazily, a length's config was allocated the
-        first time it ran, during the per-length captures after the decode capture, where a persistent buffer
-        can take the addresses of a capture's freed intermediates: the decode replay then overwrote the config
-        and the next prefill of that length dispatched pad rows (a one-chunk replay 0.26 to 0.36 s by what the
-        decode had written, the logits unchanged)."""
-        t0 = time.time()
-        gates = [block.ffn.moe.gate for block in self.model.blocks if hasattr(getattr(block, "ffn", None), "moe")]
-        lengths = self._padding_lengths()
-        for gate in gates:
-            for n in lengths:
-                gate.build_padding_config(n, "right", 0)
-        logger.info(
-            f"DeepSeek-V4.1-Flash warm-up: padding configs of {len(gates)} MoE gates for {len(lengths)} lengths "
-            f"{lengths} built in {time.time() - t0:.1f} s"
-        )
+        tensor per chunk valid length) before any capture, for the full-chunk model and every short chunk's view.
+        Built lazily, a length's config was allocated the first time it ran, during the per-length captures after
+        the decode capture, where a persistent buffer can take the addresses of a capture's freed intermediates:
+        the decode replay then overwrote the config and the next prefill of that length dispatched pad rows (a
+        one-chunk replay 0.26 to 0.36 s by what the decode had written, the logits unchanged)."""
+        for model in [self.model] + [view for _, view, _ in self.short]:
+            t0 = time.time()
+            gates = [block.ffn.moe.gate for block in model.blocks if hasattr(getattr(block, "ffn", None), "moe")]
+            lengths = self._padding_lengths(model)
+            for gate in gates:
+                for n in lengths:
+                    gate.build_padding_config(n, "right", 0)
+            logger.info(
+                f"DeepSeek-V4.1-Flash warm-up: padding configs of {len(gates)} MoE gates (chunk {model.chunk}) for "
+                f"{len(lengths)} lengths {lengths} built in {time.time() - t0:.1f} s"
+            )
 
     def _warmup_join(self) -> None:
-        """Prefill the warm-up prompt into every prefill state and join every decode slot from them."""
+        """Prefill the warm-up prompt into every prefill state (the full-chunk states first: the shared expert's
+        reduce-scatter intermediate is allocated at the first input's shape, ``with_chunk``) and join every decode
+        slot from them."""
         self._prebuild_padding_configs()
         prompt = self._warmup_prompt()
-        for k, state in enumerate(self.prefill_states):
+        for state in self.prefill_states + [state for _, _, state in self.short]:
+            model = self.models[id(state)]
             t0 = time.time()
-            self.model.prefill_into(prompt, state)
-            logger.info(f"DeepSeek-V4.1-Flash warm-up: prefill of {prompt.numel()} tokens in {time.time() - t0:.1f} s")
+            model.prefill_into(prompt, state)
+            logger.info(
+                f"DeepSeek-V4.1-Flash warm-up: prefill of {prompt.numel()} tokens (chunk {model.chunk}) in "
+                f"{time.time() - t0:.1f} s"
+            )
         t0 = time.time()
         for slot in range(self.max_batch_size):
             self.decoder.join(slot, prompt, self.prefill_states[slot % len(self.prefill_states)])
