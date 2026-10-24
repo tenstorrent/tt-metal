@@ -396,6 +396,28 @@ def test_hf_rope_is_part_of_the_variant(tmp_path):
     assert args.weight_cache_is_complete(DTYPE) is False
 
 
+def test_padded_hidden_dim_is_part_of_the_variant(tmp_path):
+    """Padding hidden_dim renames the MLP weights, so a marker seeded unpadded must not certify a
+    padded build: the renamed files would be built from the placeholder."""
+    args = _FakeArgs(tmp_path)
+    args.hidden_dim = args.unpadded_hidden_dim = args.table_padded_hidden_dim = 8960
+    assert "hidden_dim" not in args._weight_cache_build_variant()
+    _touch_tensorbin(tmp_path)
+    args.mark_weight_cache_complete(DTYPE, SAMPLE_SD)
+    assert args.weight_cache_is_complete(DTYPE) is True
+    args.hidden_dim = 9216
+    assert args.weight_cache_is_complete(DTYPE) is False
+
+
+def test_table_padding_keeps_existing_markers(tmp_path):
+    """Padding from the shared table must not change the variant, or every padded model's existing markers
+    would stop matching and read-only caches would cold-load on every run."""
+    args = _FakeArgs(tmp_path)
+    args.unpadded_hidden_dim = 18944
+    args.hidden_dim = args.table_padded_hidden_dim = 19456
+    assert "hidden_dim" not in args._weight_cache_build_variant()
+
+
 def test_sidecar_loaded_once_per_warm_run(tmp_path, monkeypatch):
     """The completeness gate's validation load must be reused by build_cached_state_dict, not
     repeated -- the sidecar can be multi-GB on NAS. The builder consumes the memoized entry so the
