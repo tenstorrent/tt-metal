@@ -4,7 +4,8 @@
 # Output is installed under ${OMPI_PREFIX} (default /opt/openmpi-<tag>-ulfm).
 set -euo pipefail
 
-OMPI_VERSION="${OMPI_VERSION:-v5.0.7}"
+OMPI_VERSION="${OMPI_VERSION:-v5.0.10}"
+OMPI_COMMIT_SHA="${OMPI_COMMIT_SHA:-0d48030d410ae8f56790933135b28be1b3920ba1}"
 INSTALL_DIR="${INSTALL_DIR:-/opt}"
 OMPI_PREFIX="${INSTALL_DIR}/openmpi-${OMPI_VERSION}-ulfm"
 

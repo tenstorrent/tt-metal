@@ -83,7 +83,7 @@ ensure_pipeline_dir_on_host() {
 for h in $HOSTS; do ensure_pipeline_dir_on_host "$h"; done
 
 HOSTS_WITH_SLOTS="$(echo "$HOSTS" | tr ' ' '\n' | sed 's/$/:4/' | paste -sd,)"
-# OpenMPI 5.0.7 rejects rankfile paths containing '-'; bootstrap_pipeline_dir.sh
+# OpenMPI 5.0.10 rejects rankfile paths containing '-'; bootstrap_pipeline_dir.sh
 # pre-copies the rankfile to /var/tmp/single_pod_rankfile (hyphen-free).
 RANKFILE_FOR_MPI="${SINGLE_POD_RANKFILE_PATH:-/var/tmp/single_pod_rankfile}"
 if [ ! -f "$RANKFILE_FOR_MPI" ]; then
@@ -108,7 +108,7 @@ cat <<EOF
 [run] ─────────────────────────────────────────────────────────────────
 EOF
 
-export PATH=/opt/openmpi-v5.0.7-ulfm/bin:$PATH
+export PATH=/opt/openmpi-v5.0.10-ulfm/bin:$PATH
 ulimit -n 65536
 cd "$PIPELINE_DIR"
 
