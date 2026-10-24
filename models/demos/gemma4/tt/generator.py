@@ -709,20 +709,24 @@ class ChunkedPrefillPageTableGuardMixin:
     def _install_per_layer_page_tables(cls, model, page_tables_per_layer, *, writer):
         """H2D the per-layer tables into the persistent buffers for their row count and record the writer.
 
-        Prefill and decode share those buffers; decode must re-upload before replaying after a prefill write.
+        Prefill and decode share those buffers; decode must re-upload before replaying after a prefill write, and
+        a prefill must re-upload after a decode wrote (its trace inputs rewrite the device table), so a prefill
+        forces the upload unless the last writer for this row count was prefill: then the host-side "unchanged"
+        shortcut of ``update_persistent_per_layer_page_tables`` may skip the H2D (the chunks of one long prompt,
+        back-to-back prefills on the same table).
         """
         if not hasattr(model, "update_persistent_per_layer_page_tables"):
             return
-        # A prefill always re-uploads: the host-side "unchanged" shortcut must not reuse a device
-        # table that a decode-trace replay may have overwritten since the last upload.
-        model.update_persistent_per_layer_page_tables(page_tables_per_layer, force=(writer == "prefill"))
         rows = cls._page_tables_rows(page_tables_per_layer)
-        if rows is None:
-            return
         writers = getattr(model, "_g4_page_table_writer_by_rows", None)
         if writers is None:
             writers = {}
             model._g4_page_table_writer_by_rows = writers
+        last_writer = writers.get(rows) if rows is not None else None
+        force = writer == "prefill" and last_writer != "prefill"
+        model.update_persistent_per_layer_page_tables(page_tables_per_layer, force=force)
+        if rows is None:
+            return
         writers[rows] = writer
 
     @classmethod
