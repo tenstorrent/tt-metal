@@ -181,7 +181,7 @@ inline void _llk_math_compressed_custom_mm_(
             else
             {
                 // TTI_STALLWAIT(ckernel::p_stall::STALL_MATH, ckernel::p_stall::SRCA_VLD | 0);
-                TTI_ZEROACC(p_zeroacc::CLR_16, 0, 0, ADDR_MOD_2, 0xff);
+                TTI_ADDRMOD_ONLY(ADDR_MOD_2);
                 // TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_AB);
             }
             index++;
