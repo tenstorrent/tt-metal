@@ -16,6 +16,7 @@
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
 // runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
+template <bool auto_ttsync = false, bool stream_narrow = false>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -27,7 +28,7 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
     const bool partial_face_b) {
-    _llk_unpack_AB_matmul_init_(
+    _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow>(
         transpose,
         ct_dim,
         rt_dim,
@@ -40,6 +41,9 @@ inline void llk_unpack_AB_matmul_init_impl(
         partial_face_b);
 }
 
+// kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
+// unknown.
+template <bool auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -53,7 +57,12 @@ inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t rt_dim,
     const std::uint32_t kt_dim) {
     WAYPOINT("UPMW");
-    _llk_unpack_AB_matmul_(
+    _llk_unpack_AB_matmul_<
+        0,
+        0,
+        auto_ttsync,
+        get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+        unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>()>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -76,6 +85,18 @@ inline void llk_unpack_AB_matmul_set_in1_column_stride(
     _llk_unpack_AB_matmul_set_in1_column_stride_(tile_size, stride_tiles);
 }
 
+// False when no unpack format of the kernel has 8 bits per datum or less: the 8-bit stream then folds away even in a
+// kernel whose operand ids are run-time values.
+constexpr bool llk_unpack_AB_matmul_kernel_has_narrow_format() {
+    for (const std::uint8_t format : unpack_src_format) {
+        if (_llk_unpack_AB_matmul_narrow_format_(format)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <bool auto_ttsync = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -92,6 +113,9 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t unpB_face_r_dim = get_operand_face_r_dim(operandB_id);
 
     const bool reuse_a = ct_dim >= rt_dim;
+    constexpr std::uint32_t dest_max_tiles =
+        get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
+    constexpr bool may_stream_narrow = dest_max_tiles > 8 && llk_unpack_AB_matmul_kernel_has_narrow_format();
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
@@ -124,19 +148,41 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
-    llk_unpack_AB_matmul_init_impl(
-        transpose,
-        ct_dim,
-        rt_dim,
-        kt_dim,
-        unpA_face_r_dim,
-        unpB_face_r_dim,
-        unpA_num_faces,
-        unpB_num_faces,
-        partial_face_a,
-        partial_face_b);
+    if (may_stream_narrow && _llk_unpack_AB_matmul_stream_narrow_(
+                                 ct_dim,
+                                 rt_dim,
+                                 unpack_src_format[operandA_id],
+                                 unpack_src_format[operandB_id],
+                                 dest_max_tiles,
+                                 unpB_face_r_dim,
+                                 MATH_FIDELITY == ckernel::MathFidelity::HiFi4)) {
+        llk_unpack_AB_matmul_init_impl<auto_ttsync, true>(
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            unpA_num_faces,
+            unpB_num_faces,
+            partial_face_a,
+            partial_face_b);
+    } else {
+        llk_unpack_AB_matmul_init_impl<auto_ttsync>(
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            unpA_face_r_dim,
+            unpB_face_r_dim,
+            unpA_num_faces,
+            unpB_num_faces,
+            partial_face_a,
+            partial_face_b);
+    }
 }
 
+template <bool auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -188,7 +234,7 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl(
+    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -200,4 +246,49 @@ inline void llk_unpack_AB_matmul(
         ct_dim,
         rt_dim,
         kt_dim);
+}
+
+// llk_unpack_AB_matmul for num_k k steps in one call: in0 advances one tile and in1 in1_k_stride tiles per step.
+inline void llk_unpack_AB_matmul_k(
+    const std::uint32_t operandA,
+    const std::uint32_t operandB,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t num_k,
+    const std::uint32_t in1_k_stride) {
+    const std::uint32_t operandA_id = get_operand_id(operandA);
+    const std::uint32_t operandB_id = get_operand_id(operandB);
+
+    const bool partial_face_a = get_operand_partial_face(operandB_id);
+    const bool partial_face_b = get_operand_partial_face(operandA_id);
+
+    LLK_ASSERT_BLOCK(are_unpackers_AB_configured_correctly(
+        unpack_src_format[operandB_id],
+        unpack_dst_format[operandB_id],
+        unpack_src_format[operandA_id],
+        unpack_dst_format[operandA_id],
+        get_operand_face_r_dim(operandB_id),
+        get_operand_face_r_dim(operandA_id),
+        get_operand_num_faces(operandB_id),
+        get_operand_num_faces(operandA_id)));
+
+    WAYPOINT("UPMW");
+    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()>(
+        get_local_cb_interface(operandA_id).fifo_rd_ptr - 1,
+        get_local_cb_interface(operandB_id).fifo_rd_ptr - 1,
+        tile_index_a,
+        tile_index_b,
+        get_local_cb_interface(operandA_id).fifo_page_size,
+        get_local_cb_interface(operandB_id).fifo_page_size,
+        partial_face_a,
+        partial_face_b,
+        ct_dim,
+        rt_dim,
+        kt_dim,
+        num_k,
+        in1_k_stride);
+    WAYPOINT("UPMD");
 }
