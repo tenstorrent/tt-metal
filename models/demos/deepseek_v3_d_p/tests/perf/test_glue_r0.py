@@ -1116,4 +1116,18 @@ def test_glue_r0(mesh_device, variant, config_only):
         _free(ref)
         timer("K0 interleaved rms_norm [160,2048] DRAM->L1 (seqq production)", base_norm)
 
+    # ======================= L. seqq q_a RS over rows (dim 2) worker sweep =======================
+    if want("l"):
+        qa_p = mk(mesh, torch.randn(1, 1, S, Q_LORA), mem=L1)  # q_a partial [640,2048] L1 (replicated data)
+        try:
+            r0 = rs(qa_p, dim=2)
+            r8 = rs(qa_p, dim=2, workers=8)
+            cmp("L RS dim2 8 workers vs default", r8, r0)
+            _free([r0, r8])
+        except Exception as e:
+            log(f"FAIL L pcc: {type(e).__name__}: {str(e)[:300]}")
+        for w in (None, 4, 8):
+            timer(f"L RS dim2 [640,2048]->[160,2048] workers={w}", lambda w=w: rs(qa_p, dim=2, workers=w))
+        _free(qa_p)
+
     log("DONE")
