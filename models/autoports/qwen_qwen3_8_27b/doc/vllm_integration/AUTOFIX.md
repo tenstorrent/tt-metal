@@ -43,7 +43,7 @@ headline performance, or the final sampling/lifecycle gates.
   IDs and execution signatures, with host preparation/warm/capture elapsed time.
   Failed attempts remain marked failed. These are not device-profile latencies.
   Details: `preparation_events.md`; host checks:
-  `preparation_events_host_check.json`.
+  `tests/evidence/preparation_events_host_check.json`.
 
 All bare evidence filenames above are under the model's `readiness_vllm/`.
 The adapter host command was:

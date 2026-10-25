@@ -2,8 +2,11 @@
 
 **Primary: 445.55 ms TTFT; 36.24 tokens/s/user** at
 **4,096 input / 128 output / batch 1 / one concurrent request**.
-Full sampling passes (76 tests); qualitative review passes. All serving gates are
-measured and independent [stage review](stage_review.md) returned **clean-pass**.
+Full sampling passes (76 tests); qualitative review passes. Independent
+[stage review](stage_review.md) returned **clean-pass**. Runner re-verification
+returns **exit 1 (advisory)** for documented weight copies and KV-pool shortfall.
+The reported critical context-cap finding was a synthetic host fixture, preserved
+under `tests/evidence/`; the work log records the concrete refutation.
 Local checkpoint SHAs are recorded in the work log; nothing was pushed.
 
 | Workload and server capacity | TTFT P50 / P99 (ms) | TPOT mean / P50 / P99 (ms) | ITL P50 / P99 (ms) | Output tokens/s | 1000 / mean TPOT (tokens/s/user) |

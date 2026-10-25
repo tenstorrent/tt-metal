@@ -28,5 +28,5 @@ Validation: container `/opt/venv/bin/python -m py_compile` passes. A host-only
 AST extraction of `prepare_decode`, using fake tensor/trace operations, verifies
 successful signatures/IDs, bucket timing, idempotence, partial-capture failure,
 cleanup counts, and append-only retry behavior. Compact results:
-`readiness_vllm/preparation_events_host_check.json`. No devices were opened for
+`tests/evidence/preparation_events_host_check.json`. No devices were opened for
 this check; representative serving execution remains the parent stage's gate.
