@@ -445,9 +445,9 @@ class MATMUL_PHASE_ELIDE(TemplateParameter):
         )
 
     @staticmethod
-    def fidelity(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None):
+    def fidelity(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None, keep=False):
         """The fidelity the elided matmul runs, the same rule as matmul_phase_fidelity."""
-        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE or keep:
             return math_fidelity
         if formats.input_format != formats.input_format_B or transpose == Transpose.Yes:
             return math_fidelity
@@ -470,9 +470,20 @@ class MATMUL_PHASE_ELIDE(TemplateParameter):
         return math_fidelity
 
     @staticmethod
-    def for_block(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None) -> list:
+    def keeps_requested(tile_dims, dest_sync, math_fidelity) -> bool:
+        """Half sync 1x4 one k step at HiFi2 or HiFi3 on a tile with a partial K face (in0 tile width under 16): the elided form lands at 130.2 where the
+        requested one reads 128.7 to 129.3, so it keeps the requested fidelity. ttnn tiles are 16 or 32 wide, so no ttnn kernel reaches the cell."""
+        return (
+            tile_dims.in0_tile_c_dim < 16
+            and dest_sync == DestSync.Half
+            and (tile_dims.rt_dim, tile_dims.ct_dim, tile_dims.kt_dim) == (1, 4, 1)
+            and math_fidelity in (MathFidelity.HiFi2, MathFidelity.HiFi3)
+        )
+
+    @staticmethod
+    def for_block(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None, keep=False) -> list:
         """[MATMUL_PHASE_ELIDE(in0, in1)] where the elided fidelity is lower than the requested one, else []."""
-        if MATMUL_PHASE_ELIDE.fidelity(formats, math_fidelity, dest_acc, throttle, transpose) == math_fidelity:
+        if MATMUL_PHASE_ELIDE.fidelity(formats, math_fidelity, dest_acc, throttle, transpose, keep) == math_fidelity:
             return []
         return [MATMUL_PHASE_ELIDE(formats.input_format, formats.input_format_B)]
 

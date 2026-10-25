@@ -256,7 +256,7 @@ def test_perf_math_matmul(
         run_types,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces, MATMUL_PHASE_ELIDE.keeps_requested(matmul_config.tile_dimensions, matmul_config.dest_sync, math_fidelity)),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
             *MATMUL_STREAM_NARROW.for_block(
