@@ -103,7 +103,10 @@ def test_spec_mtp(mesh_device):
     )
 
     def upload(t0_step):
-        steps = ref["steps"][t0_step : t0_step + n]
+        NS = len(ref["steps"])
+        steps = [
+            ref["steps"][(t0_step + j) % NS] for j in range(n)
+        ]  # n > the 3 reference steps: cyclic (A/B + timing only)
         hid = torch.stack([rep(s["main_hidden"]) for s in steps], 1).reshape(B * n, 15360)  # user-major rows
         pos = (torch.full((B, 1), S + t0_step) + torch.arange(n).reshape(1, n)).reshape(-1)
         tokt = rep(steps[-1]["tok"])  # [B]
@@ -129,8 +132,9 @@ def test_spec_mtp(mesh_device):
         [ttnn.to_torch(ttnn.get_device_tensors(t)[r * cols]).reshape(-1) for r in range(rows)]
     ).long()
     results = []
-    for t0_step in range(0, len(ref["steps"]) - n + 1, n):
-        st = ref["steps"][t0_step + n - 1]
+    dump = []
+    for t0_step in range(0, max(1, len(ref["steps"]) - n + 1), n):
+        st = ref["steps"][(t0_step + n - 1) % len(ref["steps"])]
         upload(t0_step)
         out = run()
         ttnn.synchronize_device(md)
@@ -148,7 +152,7 @@ def test_spec_mtp(mesh_device):
             pcc_l.append(R.pcc(lg, rep(st["logits"][:, i])))
         conf = torch.cat(
             [
-                ttnn.to_torch(ttnn.get_device_tensors(out["conf"])[r * cols])[0, 0, :, 0].reshape(BLOCK, U).T
+                ttnn.to_torch(ttnn.get_device_tensors(out["conf"])[r * cols])[0, 0, : BLOCK * U, 0].reshape(BLOCK, U).T
                 for r in range(rows)
             ]
         ).float()  # [B, 5]
@@ -158,6 +162,25 @@ def test_spec_mtp(mesh_device):
             f"step {t0_step + n - 1} (n={n}): draft token agreement per position {[round(a, 2) for a in agree]}  logits PCC {[round(p, 4) for p in pcc_l]}  conf PCC {pc:.4f}"
         )
         results.append((agree, pcc_l, pc))
+        if os.environ.get("DSV41_MTP_DUMP"):
+            dump.append(
+                dict(
+                    toks=toks.clone(),
+                    logits=[
+                        ttnn.to_torch(
+                            out["logits"][i],
+                            mesh_composer=ttnn.ConcatMesh2dToTensor(md, dims=(2, 3), mesh_shape=(rows, cols)),
+                        )
+                        .reshape(B, -1)
+                        .float()
+                        for i in range(BLOCK)
+                    ],
+                    conf=conf.clone(),
+                    conf_q=None,
+                )
+            )
+    if os.environ.get("DSV41_MTP_DUMP"):
+        torch.save(dump, os.environ["DSV41_MTP_DUMP"])
     # traced timing
     upload(0)
     run()
@@ -172,7 +195,7 @@ def test_spec_mtp(mesh_device):
         ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
     ttnn.synchronize_device(md)
     log(f"MTP_TIMING users={B} U={U} n={n}: write_main + draft traced {(time.perf_counter() - t) / N * 1e3:.2f} ms")
-    assert (
+    assert n > len(ref["steps"]) or (
         min(sum(r[1][i] for r in results) / len(results) for i in range(BLOCK)) > 0.95
     ), results  # mean over steps per draft position (one near-tie flip lowers a single step)
 

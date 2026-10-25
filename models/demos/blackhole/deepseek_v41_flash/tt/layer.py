@@ -202,7 +202,9 @@ class DSV41Layer:
         # FillPads) per layer become one, and the mixes coefficients stay 8-row so expand needs no pad either.
         # Branch taken only on this decode path: _odd_t(T) is None for T in (4, 8, 16, 32) and for DSV41_MHC_PAD8=0,
         # where P*/S* are the identity and every call below is exactly the previous code.
-        Tp = None if (_STREAM_BF16 or int(x.shape[0]) != T) else _odd_t(T)
+        # The drafter keeps its stream ALREADY padded (x / pre_in [Tp,1,..] on entry, same on exit): no pad on entry, no slice on exit, between its 3 stages.
+        kept = (not _STREAM_BF16) and _odd_t(T) is not None and int(x.shape[0]) == _odd_t(T)
+        Tp = None if (_STREAM_BF16 or (int(x.shape[0]) != T and not kept)) else _odd_t(T)
         if Tp:
             P0 = lambda t: _pad_rows(t, T, Tp, 0)  # noqa: E731
             P2 = lambda t: _pad_rows(t, T, Tp, 2)  # noqa: E731
@@ -210,7 +212,8 @@ class DSV41Layer:
             S2 = lambda t: _slice_rows(t, T, 2)  # noqa: E731
         else:
             P0 = P2 = S0 = S2 = lambda t: t  # noqa: E731
-        xp, prep = P0(x), P0(pre_in)
+        xp, prep = (x, pre_in) if kept else (P0(x), P0(pre_in))
+        S0o = (lambda t: t) if kept else S0  # stream outputs
 
         fuse_pre = (not _STREAM_BF16) and self.mhc_attn.pre_fused_ok(
             int(xp.shape[0])
@@ -260,7 +263,7 @@ class DSV41Layer:
             self.debug.update(
                 attn_out=a, ffn_in=h, ffn_out=ttnn.add(ttnn.typecast(m, ttnn.float32), sh), routed=m, shared=sh
             )
-        x3 = S0(
+        x3 = S0o(
             self.mhc_ffn.expand(P2(m), x2, ffn_post, ffn_comb, P2(sh))
         )  # post * (routed + shared) + comb^T x, summed inside the kernel
         if _STREAM_BF16:
@@ -269,5 +272,5 @@ class DSV41Layer:
         # hand DRAM-resident tensors to the caller (the next layer): an L1-sharded `ffn_pre` kept alive across
         # calls overlaps the static buffers of the next norm kernel.
         return ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG), ttnn.to_memory_config(
-            S0(ffn_pre), ttnn.DRAM_MEMORY_CONFIG
+            S0o(ffn_pre), ttnn.DRAM_MEMORY_CONFIG
         )

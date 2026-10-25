@@ -177,6 +177,8 @@ class DSV41DeviceHead:
         """Greedy sampling entirely on the device: the global argmax over the vocab -> token ids [T,1] uint32 row-major, identical on
         every device. Per column (max, local index) -> all-gathered over the 8 columns -> best column -> token = col * shard + idx.
         """
+        if os.environ.get("DSV41_SAMPLE_V2", "1") == "1":
+            return self.sample_global_rm(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), mesh_config, ccl)
         cols = self.cols
         shard = VOCAB // cols
         mx = ttnn.max(logits, dim=-1, keepdim=True)  # [1,1,T,1]
@@ -210,6 +212,27 @@ class DSV41DeviceHead:
         tok = ttnn.add(ttnn.multiply(bestf, float(shard) / 2.0), sel)  # 2c * shard/2 + idx, exact in fp32 (< 2^24)
         T = tok.shape[2]
         return ttnn.reshape(ttnn.to_layout(ttnn.typecast(tok, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [T, 1])
+
+    def sample_global_rm(self, rm, mesh_config, ccl):
+        """``sample_global`` from the ROW-MAJOR fp32 logits [1,1,T,V/cols] of this column: the same tokens (exact: the max is the gathered element at the argmax index, ties -> lowest index like torch),
+        in 12 ops instead of 30: the width-16160 ``max`` (3 single-core programs, 123 us) is a 3 us ``gather``, the (max, index) pair is built and the 8 pairs are reduced in row-major with strided slices.
+        """
+        cols = self.cols
+        shard = VOCAB // cols
+        T = rm.shape[2]
+        idx = ttnn.argmax(rm, dim=-1, keepdim=True)  # [1,1,T,1] uint32, local index in this slice
+        mx = ttnn.gather(rm, 3, idx)  # [1,1,T,1] fp32 = max
+        pair_in = ttnn.to_layout(ttnn.concat([mx, ttnn.typecast(idx, ttnn.float32)], dim=3), ttnn.TILE_LAYOUT)
+        pair = mesh_config.allgather(pair_in, ccl, axis=1, dim=3)  # [1,1,T,2*cols] = (max_0, idx_0, max_1, idx_1, ...)
+        pr = ttnn.to_layout(pair, ttnn.ROW_MAJOR_LAYOUT)
+        mxs = ttnn.slice(pr, [0, 0, 0, 0], [1, 1, T, 2 * cols], [1, 1, 1, 2])  # the 8 column maxima
+        ids = ttnn.slice(pr, [0, 0, 0, 1], [1, 1, T, 2 * cols], [1, 1, 1, 2])  # their local indices
+        c = ttnn.argmax(mxs, dim=-1, keepdim=True)  # best column, first max wins
+        il = ttnn.gather(ids, 3, c)
+        tok = ttnn.add(
+            ttnn.multiply(ttnn.typecast(c, ttnn.float32), float(shard)), il
+        )  # col * shard + idx, exact in fp32 (< 2^24)
+        return ttnn.reshape(ttnn.typecast(tok, ttnn.uint32), [T, 1])
 
     def combine(self, sampled):
         """Host side of ``sample``: read ONE device per mesh row (the gather made every column identical) -> tokens [B]."""

@@ -26,7 +26,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM, NH,
 from models.demos.blackhole.deepseek_v41_flash.tt.ckpt_stamp import ensure_stamp
 from models.demos.blackhole.deepseek_v41_flash.tt.layer import DSV41Layer
 from models.demos.blackhole.deepseek_v41_flash.tt.loader import _fp8, rope_freqs
-from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC
+from models.demos.blackhole.deepseek_v41_flash.tt.mhc import DSV41MHC, _odd_t
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import (
     HIDDEN,
     INTER,
@@ -188,6 +188,14 @@ class DraftGate:
         score = ttnn.add(logits, self._zero, input_tensor_a_activations=acts, memory_config=mc)
         ttnn.deallocate(logits)
         rank = ttnn.add(score, self._bias, memory_config=mc)
+        if os.environ.get("DSV41_DRAFT_ROUTER", "fused") == "fused":
+            # ONE JIT program (one scalar core per token row) = topk + one-hot select + normalise + layout chain (~13 ops), same maths as DSV41Gate._forward_fused
+            from models.demos.blackhole.deepseek_v41_flash.tt.router_select import router_select
+
+            w, idx = router_select(rank, score, k, 1e-20, self.scale / ROUTED_GAIN)
+            ttnn.deallocate(rank)
+            ttnn.deallocate(score)
+            return w, idx
         _, idx = ttnn.topk(rank, k=k, dim=-1, largest=True, sorted=True, memory_config=mc)
         ttnn.deallocate(rank)
         idxf = ttnn.typecast(idx, ttnn.float32, memory_config=mc)
@@ -618,6 +626,20 @@ class DSparkDrafter:
             pad(cw[5120:]).reshape(1, 1, 256, 32), ttnn.float32
         )
         self.pre0 = up(torch.tensor([1.0, 0, 0, 0]).repeat(T_d, 1, 1, 1), ttnn.float32)
+        # T_d = 5..7 rows (B=4: one user per mesh row): the 3 stages keep the stream padded to Tp = 8 rows (the mHC kernels' row count), see DSV41Layer.forward
+        self.Tp = _odd_t(T_d) if os.environ.get("DSV41_DRAFT_KEEP_PAD", "1") == "1" else None
+        if self.Tp:
+            Tp = self.Tp
+            self.pre0p = up(torch.tensor([1.0, 0, 0, 0]).repeat(Tp, 1, 1, 1), ttnn.float32)
+            self.tok_pad = ttnn.from_torch(
+                torch.full((Tp - T_d, 1), NOISE_ID, dtype=torch.int32),
+                device=md,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=rep,
+            )
+            self.me_pad = up(torch.zeros(1, 1, Tp - T_d, 256), ttnn.float32)
         self.ucfg_v = ttnn.create_sharded_memory_config(
             shape=(32, HEAD_DIM),
             core_grid=ttnn.num_cores_to_corerangeset(T_v, ttnn.CoreCoord(8, 8), row_wise=True),
@@ -719,9 +741,17 @@ class DSparkDrafter:
         """
         U, T = self.U, self.T_d
         st = self.state.build_draft(f_rows)
-        emb = ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,5120]
-        x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [T, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
-        pre = self.pre0
+        Tp = self.Tp
+        if Tp:  # padded stream: embedding rows of the Tp token ids (pad rows = noise ids)
+            emb = ttnn.embedding(
+                ttnn.concat([tok_rows, self.tok_pad], dim=0), self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            )  # [Tp,1,5120]
+            x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [Tp, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
+            pre = self.pre0p
+        else:
+            emb = ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,5120]
+            x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [T, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
+            pre = self.pre0
         if self.stop == "embed":
             return {"tokens": [], "logits": [], "conf": x}
         diag = os.environ.get("DSV41_L1_DIAG") == "1"
@@ -742,29 +772,47 @@ class DSparkDrafter:
                 return {"tokens": [], "logits": [], "conf": x}
         if self.stop == "stages":
             return {"tokens": [], "logits": [], "conf": x}
-        y = ttnn.matmul(pre, x, compute_kernel_config=self.ckc)  # hc_pre -> [T,1,1,D]
-        xb = ttnn.typecast(ttnn.reshape(y, [1, 1, T, 5120]), ttnn.bfloat16)  # pre-norm (the confidence head reads this)
+        y = ttnn.matmul(pre, x, compute_kernel_config=self.ckc)  # hc_pre -> [Tp or T,1,1,D]
+        R = (
+            Tp or T
+        )  # rows carried to the end (the pad rows are independent of the real ones; every consumer takes the first T rows)
+        xb = ttnn.typecast(ttnn.reshape(y, [1, 1, R, 5120]), ttnn.bfloat16)  # pre-norm (the confidence head reads this)
         xn = ttnn.rms_norm(xb, weight=self.norm_w, epsilon=1e-20)
         logits = ttnn.matmul(
             xn, self.head.head_w, compute_kernel_config=self.head.ckc, dtype=ttnn.float32
-        )  # [1,1,T,V/cols]
+        )  # [1,1,R,V/cols]
         if self.stop == "head":
             return {"tokens": [], "logits": [], "conf": logits}
         toks, lgs, mes = [], [], []
         tok = ttnn.slice(tok_rows, [0, 0], [U, 1])  # t_u
+        rm_mode = os.environ.get("DSV41_DRAFT_SAMPLE_RM", "1") == "1"
+        if rm_mode:
+            lrm = ttnn.to_layout(
+                logits, ttnn.ROW_MAJOR_LAYOUT
+            )  # untilize once; the 5 steps slice / add / argmax in row-major
+        V8 = logits.shape[3]
         for i in range(BLOCK):
             me = ttnn.reshape(
                 ttnn.embedding(tok, self.embed_m, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), [1, 1, U, 256]
             )
             mes.append(me)
             bias = ttnn.matmul(me, self.head_m, compute_kernel_config=self.ckc, dtype=ttnn.float32)
-            lg = ttnn.add(ttnn.slice(logits, [0, 0, i * U, 0], [1, 1, (i + 1) * U, logits.shape[3]]), bias)
+            if rm_mode:
+                lg = ttnn.add(
+                    ttnn.slice(lrm, [0, 0, i * U, 0], [1, 1, (i + 1) * U, V8]),
+                    ttnn.to_layout(bias, ttnn.ROW_MAJOR_LAYOUT),
+                )
+                tok = self.head.sample_global_rm(lg, self.mesh_config, self.ccl)
+            else:
+                lg = ttnn.add(ttnn.slice(logits, [0, 0, i * U, 0], [1, 1, (i + 1) * U, V8]), bias)
+                tok = self.head.sample_global(
+                    lg, self.mesh_config, self.ccl
+                )  # [U,1] uint32 row-major, identical on every device
             lgs.append(lg)
-            tok = self.head.sample_global(
-                lg, self.mesh_config, self.ccl
-            )  # [U,1] uint32 row-major, identical on every device
             toks.append(tok)
         me_all = ttnn.typecast(ttnn.concat(mes, dim=2), ttnn.float32)  # [1,1,T,256] block-index-major like the rows
+        if R != T:
+            me_all = ttnn.concat([me_all, self.me_pad], dim=2)  # [1,1,R,256]: same row count as xb
         conf = ttnn.add(
             ttnn.matmul(ttnn.typecast(xb, ttnn.float32), self.conf_x, compute_kernel_config=self.ckc),
             ttnn.matmul(me_all, self.conf_m, compute_kernel_config=self.ckc),
