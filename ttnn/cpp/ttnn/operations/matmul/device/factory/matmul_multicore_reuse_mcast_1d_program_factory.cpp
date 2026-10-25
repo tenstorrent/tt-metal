@@ -179,7 +179,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     const bool use_global_cb = global_cb.has_value();
-    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb;
+    // A DRAM-resident sharded weight (ND or width sharded) is read through its TensorAccessor like an
+    // interleaved one; only an L1-sharded in1 is consumed in place.
+    const bool in1_is_dram_sharded = in1_is_sharded && in1_tensor.memory_config().is_dram();
+    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb && !in1_is_dram_sharded;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -3416,6 +3419,11 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             !transpose_b,
             "matmul mcast_in0 over prefetcher_pipes does not support transpose_b: the pipes deliver the weight's "
             "K-blocks in its DRAM layout");
+    }
+    // A DRAM-resident sharded weight (ND or width sharded) is read through its TensorAccessor like an
+    // interleaved one (the reader's generic path); only an L1-sharded in1 is borrowed in place.
+    if (in1_is_sharded && in1_tensor.memory_config().is_dram()) {
+        in1_is_sharded = false;
     }
 
     // Mask-mode sparsity (the sparse matmul): the in0 sender and the in1 sender/writer read the mask
