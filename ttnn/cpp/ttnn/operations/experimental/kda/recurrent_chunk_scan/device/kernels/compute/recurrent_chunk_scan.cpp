@@ -16,10 +16,11 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/engine_state.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
 
 template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut>
-FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
+FORCE_INLINE void matrix_multiply(kda::EngineState& engine, DFBA& a, DFBB& b, DFBOut& output) {
     constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
     constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
     const uint32_t a_id = a.get_id();
@@ -27,8 +28,10 @@ FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
     const uint32_t output_id = output.get_id();
 
     output.reserve_back(Mt * Nt);
-    reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
-    matmul_block_init(a_id, b_id, false, subblock_columns, subblock_rows, Kt);
+    // The init runs before the operands are waited for, so it overlaps their arrival.
+    engine.matmul_init(a_id, b_id, subblock_columns, subblock_rows, Kt);
+    a.wait_front(Mt * Kt);
+    b.wait_front(Kt * Nt);
     for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
         for (uint32_t column_start = 0; column_start < Nt; column_start += subblock_columns) {
             tile_regs_acquire();
@@ -65,7 +68,8 @@ template <
     typename DFBB,
     typename DFBOperand,
     typename DFBOut>
-FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DFBOut& output) {
+FORCE_INLINE void matrix_multiply_then(
+    kda::EngineState& engine, DFBA& a, DFBB& b, DFBOperand& operand, DFBOut& output) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     // Whole output rows per destination acquire when they fit, else column groups of one row (the summary's
@@ -82,8 +86,7 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
     output.reserve_back(Mt * Nt);
     for (uint32_t first_row = 0; first_row < Mt; first_row += group_rows) {
         for (uint32_t first_column = 0; first_column < Nt; first_column += group_columns) {
-            reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
-            matmul_block_init(a_id, b_id, false, group_columns, 1, Kt);
+            engine.matmul_init(a_id, b_id, group_columns, 1, Kt);
             tile_regs_acquire();
             for (uint32_t row = 0; row < group_rows; ++row) {
                 for (uint32_t k = 0; k < Kt; ++k) {
@@ -103,13 +106,13 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
             // The operand unpacks to srcA; any BF16 output mask leaves it in a different format than the state. The
             // product moves from DST to srcB in srcB's format, kept FP32 (state_ring's, under every mask) so a BF16
             // matmul input does not round it.
-            reconfig_data_format_srca(operand_id);
-            reconfig_data_format_srcb(dfb::state_ring);
+            engine.sources(operand_id, dfb::state_ring);
             if constexpr (Op == EltwiseBinaryType::ELWADD) {
                 add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id);
             } else {
                 sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id);
             }
+            engine.other_init();
             for (uint32_t row = 0; row < group_rows; ++row) {
                 for (uint32_t column = 0; column < group_columns; ++column) {
                     const uint32_t tile = row * group_columns + column;
@@ -136,15 +139,16 @@ FORCE_INLINE void matrix_multiply_then(DFBA& a, DFBB& b, DFBOperand& operand, DF
 
 // output = a + b. Inputs remain resident; PacketTiles specifies output publication granularity.
 template <uint32_t Count, uint32_t PacketTiles, typename DFBA, typename DFBB, typename DFBOut>
-FORCE_INLINE void elementwise_add(DFBA& a, DFBB& b, DFBOut& output) {
+FORCE_INLINE void elementwise_add(kda::EngineState& engine, DFBA& a, DFBB& b, DFBOut& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t a_id = a.get_id();
     const uint32_t b_id = b.get_id();
     const uint32_t output_id = output.get_id();
-    reconfig_data_format(a_id, b_id);
+    engine.sources(a_id, b_id);
     add_init(a_id, b_id);
+    engine.other_init();
     for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
         output.reserve_back(PacketTiles);
         for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
@@ -164,14 +168,15 @@ FORCE_INLINE void elementwise_add(DFBA& a, DFBB& b, DFBOut& output) {
 }
 
 template <uint32_t Count, uint32_t PacketTiles, typename DFBIn, typename DFBOut>
-FORCE_INLINE void copy(DFBIn& input, DFBOut& output) {
+FORCE_INLINE void copy(kda::EngineState& engine, DFBIn& input, DFBOut& output) {
     static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t input_id = input.get_id();
     const uint32_t output_id = output.get_id();
-    reconfig_data_format_srca(input_id);
+    engine.srca(input_id);
     copy_init(input_id);
+    engine.other_init();
     for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
         output.reserve_back(PacketTiles);
         for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
@@ -194,19 +199,20 @@ FORCE_INLINE void copy(DFBIn& input, DFBOut& output) {
 // The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
 // state whose first Vt columns hold B. Publish (A + B) - B, or copy B, one tile row of Vt tiles per packet.
 template <bool Difference, uint32_t Kt, uint32_t Vt, uint32_t PacketRows, typename DFBPair, typename DFBOut>
-FORCE_INLINE void extract_paths(DFBPair& pair, DFBOut& output) {
+FORCE_INLINE void extract_paths(kda::EngineState& engine, DFBPair& pair, DFBOut& output) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     static_assert(Kt % PacketRows == 0 && PacketRows * Vt <= dst_tiles);
     const uint32_t pair_id = pair.get_id();
     const uint32_t output_id = output.get_id();
     if constexpr (Difference) {
-        reconfig_data_format(pair_id, pair_id);
+        engine.sources(pair_id, pair_id);
         sub_init(pair_id, pair_id);
     } else {
-        reconfig_data_format_srca(pair_id);
+        engine.srca(pair_id);
         copy_init(pair_id);
     }
+    engine.other_init();
     for (uint32_t first_row = 0; first_row < Kt; first_row += PacketRows) {
         output.reserve_back(PacketRows * Vt);
         tile_regs_acquire();
@@ -232,7 +238,12 @@ FORCE_INLINE void extract_paths(DFBPair& pair, DFBOut& output) {
 
 template <typename DFBState, typename DFBDecay, typename DFBOut>
 FORCE_INLINE void multiply_by_decay(
-    DFBState& state, DFBDecay& decay, DFBOut& output, uint32_t key_tiles, uint32_t value_tiles) {
+    kda::EngineState& engine,
+    DFBState& state,
+    DFBDecay& decay,
+    DFBOut& output,
+    uint32_t key_tiles,
+    uint32_t value_tiles) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     const uint32_t count = key_tiles * value_tiles;
@@ -241,8 +252,9 @@ FORCE_INLINE void multiply_by_decay(
     const uint32_t output_id = output.get_id();
 
     output.reserve_back(count);
-    reconfig_data_format(state_id, decay_id);
+    engine.sources(state_id, decay_id);
     mul_bcast_cols_init(state_id, decay_id);
+    engine.other_init();
     // Batch independent tiles to amortize destination-register lifecycle overhead.
     for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
         const uint32_t remaining = count - block_start;
@@ -278,7 +290,8 @@ template <
     typename DFBA,
     typename DFBB,
     typename DFBOut>
-FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, DFBA& a, DFBB& b, DFBOut& output) {
+FORCE_INLINE void decayed_state_plus_product(
+    kda::EngineState& engine, DFBState& state, DFBDecay& decay, DFBA& a, DFBB& b, DFBOut& output) {
     constexpr uint32_t dst_tiles =
         ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
     constexpr uint32_t group_columns = Nt <= dst_tiles ? Nt : dst_tiles;
@@ -294,8 +307,9 @@ FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, D
         for (uint32_t first_column = 0; first_column < Nt; first_column += group_columns) {
             output.reserve_back(group_rows * group_columns);
             tile_regs_acquire();
-            reconfig_data_format(state_id, decay_id);
+            engine.sources(state_id, decay_id);
             mul_bcast_cols_init(state_id, decay_id);
+            engine.other_init();
             for (uint32_t row = 0; row < group_rows; ++row) {
                 for (uint32_t column = 0; column < group_columns; ++column) {
                     mul_tiles_bcast_cols(
@@ -306,10 +320,9 @@ FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, D
                         row * group_columns + column);
                 }
             }
+            engine.matmul_init(a_id, b_id, group_columns, 1, Kt);
             // Returns at once after the first group.
             b.wait_front(Kt * Nt);
-            reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
-            matmul_block_init(a_id, b_id, false, group_columns, 1, Kt);
             for (uint32_t row = 0; row < group_rows; ++row) {
                 for (uint32_t k = 0; k < Kt; ++k) {
                     matmul_block(
@@ -342,7 +355,7 @@ FORCE_INLINE void decayed_state_plus_product(DFBState& state, DFBDecay& decay, D
 // FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
 // segment's A and B also leave in FP32.
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs>
-FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
+FORCE_INLINE void compute_summary(kda::EngineState& engine, uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -386,15 +399,15 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         // overlaps them, and the state update forms dl S before it waits on the packed U. The state is published and
         // waited for in row groups, so the next chunk's kd S starts on its first rows while the last are packed.
         matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, pair_columns, Vt>(
-            kd, current, v_beta, value_new);  // v_beta - kd S
+            engine, kd, current, v_beta, value_new);  // v_beta - kd S
         if constexpr (EmitOutputs) {
             q_decay.wait_front(chunk_key_tiles);
-            matrix_multiply<Ct, Kt, pair_columns>(q_decay, current, query_projection);  // q_decay S
+            matrix_multiply<Ct, Kt, pair_columns>(engine, q_decay, current, query_projection);  // q_decay S
         }
-        value_new.wait_front(Ct * pair_columns);
-        matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
+        matrix_multiply<Ct, Ct, pair_columns>(engine, t_inv, value_new, scratch);  // v_new
         value_new.pop_front(Ct * pair_columns);
         decayed_state_plus_product<Kt, Ct, pair_columns>(
+            engine,
             current,
             final_decay,
             k_decay_transposed,
@@ -405,7 +418,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
             query_projection.wait_front(chunk_pair_tiles);
             // q_decay S + intra v_new on both paths, [F(0) | F(I)], straight to the writer in FP32.
             matrix_multiply_then<EltwiseBinaryType::ELWADD, Ct, Ct, pair_columns, chunk_pair_tiles>(
-                intra, scratch, query_projection, chunk_base);
+                engine, intra, scratch, query_projection, chunk_base);
             query_projection.pop_front(chunk_pair_tiles);
             intra.pop_front(chunk_chunk_tiles);
             q_decay.pop_front(chunk_key_tiles);
@@ -415,13 +428,13 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_ring.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
-            extract_paths<true, Kt, Vt, 1>(state_ring, summary_head_output);
-            extract_paths<false, Kt, Vt, 1>(state_ring, summary_head_state);
+            extract_paths<true, Kt, Vt, 1>(engine, state_ring, summary_head_output);
+            extract_paths<false, Kt, Vt, 1>(engine, state_ring, summary_head_state);
             pack_reconfig_data_format(dfb::state_ring);
             // Restart from zero and identity so the tail summary is independent
             // of the head transition just saved above.
             state.wait_front(key_pair_tiles);
-            copy<key_pair_tiles, key_pair_tiles>(state, state_ring);
+            copy<key_pair_tiles, key_pair_tiles>(engine, state, state_ring);
             state_ring.pop_front(key_pair_tiles);
             state.pop_front(key_pair_tiles);
         }
@@ -435,20 +448,20 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     pack_reconfig_data_format(output.get_id());
     constexpr uint32_t packet_rows = kda::largest_divisor_at_most(
         Kt, ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>() / Vt);
-    extract_paths<true, Kt, Vt, packet_rows>(final_state, output);
-    extract_paths<false, Kt, Vt, packet_rows>(final_state, transport_state);
+    extract_paths<true, Kt, Vt, packet_rows>(engine, final_state, output);
+    extract_paths<false, Kt, Vt, packet_rows>(engine, final_state, transport_state);
     if constexpr (EmitOutputs) {
         DataflowBuffer final_a(dfb::final_a);
         DataflowBuffer final_b(dfb::final_b);
         pack_reconfig_data_format(final_a.get_id());
-        extract_paths<true, Kt, Vt, packet_rows>(final_state, final_a);
-        extract_paths<false, Kt, Vt, packet_rows>(final_state, final_b);
+        extract_paths<true, Kt, Vt, packet_rows>(engine, final_state, final_a);
+        extract_paths<false, Kt, Vt, packet_rows>(engine, final_state, final_b);
     }
     final_state.pop_front(key_pair_tiles);
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
+FORCE_INLINE void compute_recurrent(kda::EngineState& engine, uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -483,7 +496,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         if (reset_chunk != 0 && chunk == reset_chunk) {
             state_ring.wait_front(key_value_tiles);
             tail_entry_states.wait_front(key_value_tiles);
-            copy<key_value_tiles, key_value_tiles>(tail_entry_states, state_ring);
+            copy<key_value_tiles, key_value_tiles>(engine, tail_entry_states, state_ring);
             state_ring.pop_front(key_value_tiles);
             tail_entry_states.pop_front(key_value_tiles);
         }
@@ -496,11 +509,11 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         kd.wait_front(chunk_key_tiles);
         v_beta.wait_front(chunk_value_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWSUB, Ct, Kt, Vt, chunk_value_tiles>(
-            kd, current_state, v_beta, output_intermediate);  // v_beta - kd S
+            engine, kd, current_state, v_beta, output_intermediate);  // v_beta - kd S
         q_decay.wait_front(chunk_key_tiles);
-        matrix_multiply<Ct, Kt, Vt>(q_decay, current_state, query_projection);  // q_decay S
+        matrix_multiply<Ct, Kt, Vt>(engine, q_decay, current_state, query_projection);  // q_decay S
         final_decay.wait_front(Kt);
-        multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);  // dl * S
+        multiply_by_decay(engine, current_state, final_decay, state_temporary, Kt, Vt);  // dl * S
         kd.pop_front(chunk_key_tiles);
         q_decay.pop_front(chunk_key_tiles);
         final_decay.pop_front(Kt);
@@ -509,7 +522,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         output_intermediate.wait_front(chunk_value_tiles);
         v_beta.pop_front(chunk_value_tiles);
         t_inv.wait_front(chunk_chunk_tiles);
-        matrix_multiply<Ct, Ct, Vt>(t_inv, output_intermediate, value_new);
+        matrix_multiply<Ct, Ct, Vt>(engine, t_inv, output_intermediate, value_new);
         value_new.wait_front(chunk_value_tiles);
         t_inv.pop_front(chunk_chunk_tiles);
         output_intermediate.pop_front(chunk_value_tiles);
@@ -521,9 +534,9 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         k_decay_transposed.wait_front(key_chunk_tiles);
         state_temporary.wait_front(key_value_tiles);
         matrix_multiply_then<EltwiseBinaryType::ELWADD, Kt, Ct, Vt, key_value_tiles>(
-            k_decay_transposed, value_new, state_temporary, destination);  // dl S + k_dec_t v_new
+            engine, k_decay_transposed, value_new, state_temporary, destination);  // dl S + k_dec_t v_new
         intra.wait_front(chunk_chunk_tiles);
-        matrix_multiply<Ct, Ct, Vt>(intra, value_new, scratch);  // intra v_new
+        matrix_multiply<Ct, Ct, Vt>(engine, intra, value_new, scratch);  // intra v_new
         state_temporary.pop_front(key_value_tiles);
         k_decay_transposed.pop_front(key_chunk_tiles);
         intra.pop_front(chunk_chunk_tiles);
@@ -534,7 +547,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
         scratch.wait_front(chunk_value_tiles);
         query_projection.wait_front(chunk_value_tiles);
         pack_reconfig_data_format(output.get_id());
-        elementwise_add<chunk_value_tiles, chunk_value_tiles>(query_projection, scratch, output);
+        elementwise_add<chunk_value_tiles, chunk_value_tiles>(engine, query_projection, scratch, output);
         query_projection.pop_front(chunk_value_tiles);
         scratch.pop_front(chunk_value_tiles);
         pack_reconfig_data_format(dfb::state_ring);
@@ -544,6 +557,8 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs>
 TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
+    // Matmul maps in0 to srcB and in1 to srcA.
+    kda::EngineState engine(dfb::v_beta, dfb::kd);
 
     kda_chronology::Topology topology{};
     {
@@ -557,8 +572,8 @@ TT_KERNEL void compute(uint32_t num_chunks, uint32_t group) {
         return;
     }
     if constexpr (summary) {
-        compute_summary<Ct, Kt, Vt, emit_outputs != 0>(valid_chunks, reset_chunk);
+        compute_summary<Ct, Kt, Vt, emit_outputs != 0>(engine, valid_chunks, reset_chunk);
     } else {
-        compute_recurrent<Ct, Kt, Vt>(valid_chunks, reset_chunk);
+        compute_recurrent<Ct, Kt, Vt>(engine, valid_chunks, reset_chunk);
     }
 }
