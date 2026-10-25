@@ -273,3 +273,6 @@ source provenance, status repair and packet values. Final CPU compilation and
 `git diff --check` pass. The supplied failure is refuted as a completion blocker
 with the stock advisory outcome explicitly retained. Local checkpoint follows;
 no push. Commit receipt is stored in the required external packet.
+
+Local checkpoint: repository `/home/mvasiljev/tt-metal`, branch
+`exp26-qwen38-bringup`, commit `f047d7df040adf1c384349ba1d4414619f80a590`. No push.
