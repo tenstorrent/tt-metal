@@ -137,7 +137,7 @@ class TtReduceModule(LightweightModule):
                 num_links=self.num_links,
                 topology=self.topology,
                 # glue track (GLUE_EPI_L1=1): the [S, emb/tp] output is consumed at once by the final add.
-                **({"memory_config": ttnn.L1_MEMORY_CONFIG} if os.environ.get("GLUE_EPI_L1", "0") == "1" else {}),
+                **({"memory_config": ttnn.L1_MEMORY_CONFIG} if os.environ.get("GLUE_EPI_L1", "1") == "1" else {}),
             )
         else:
             output = summed
