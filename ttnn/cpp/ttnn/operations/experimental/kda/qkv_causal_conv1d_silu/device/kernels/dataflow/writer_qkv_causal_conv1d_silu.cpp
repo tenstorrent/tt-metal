@@ -45,7 +45,7 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
     // With the fabric exchange, stage this core's share of the rows the exchange core sends, channel tiles
     // [ct_start, ct_start + ct_count) of this rank's outgoing rows and, on the final segment's owner, its end rows.
     // The writer has nothing to write until compute's first output, so staging first does not delay the convolution.
-    // It walks the reader's order, which defers the tile row that waits for the predecessor's rows.
+    // It walks the reader's order, which runs the tile row that waits for the predecessor's rows last.
     uint32_t deferred_row = no_deferred_row;
     if constexpr (exchange) {
         Scratchpad<uint32_t> scratch(scratch::staging);

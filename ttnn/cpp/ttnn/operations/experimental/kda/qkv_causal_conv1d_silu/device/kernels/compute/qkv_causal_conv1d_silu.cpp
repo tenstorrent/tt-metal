@@ -96,9 +96,12 @@ TT_KERNEL void compute(uint32_t wi_start, uint32_t wi_count) {
             activation_writer.pop_front(group * writer_taps);
         }
     };
-    // The reader and writer may defer a tile row within each block; compute depends only on the block sequence, which
-    // deferral does not change.
-    qkv_conv::for_each_work_item(wi_start, wi_count, Mt, qkv_conv::no_deferred_row, process);
+    // Walk the reader's order, which runs the tile row that waits for the predecessor's rows last.
+    DataflowBuffer order(dfb::order);
+    order.wait_front(1);
+    const uint32_t deferred_row = read_tile_value(dfb::order, 0, 0);
+    order.pop_front(1);
+    qkv_conv::for_each_work_item(wi_start, wi_count, Mt, deferred_row, process);
     if (current_block != no_block) {
         weights.pop_front(weight_tiles);
     }

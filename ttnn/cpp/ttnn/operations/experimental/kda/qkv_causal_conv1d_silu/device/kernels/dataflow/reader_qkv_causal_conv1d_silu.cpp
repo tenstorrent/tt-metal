@@ -52,6 +52,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer eye(dfb::eye);
     DataflowBuffer activation(dfb::act_tile);
     DataflowBuffer strips(dfb::strips);
+    DataflowBuffer order(dfb::order);
     Scratchpad<uint16_t> scratch(scratch::act_window);
     Noc noc;
     UnicastEndpoint self;
@@ -73,6 +74,15 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     const auto topology = read_chronology<false, sp_rank, sp_size, local_rows>(noc, rows);
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
+    // The tile row every kernel walks last (for_each_work_item) depends on the runtime chronology, which compute
+    // cannot read: publish it. Reading the word back before the push makes sure the store has landed.
+    const uint32_t deferred_row = exchange ? predecessor_tile_row(topology) : no_deferred_row;
+    order.reserve_back(1);
+    auto* order_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(order.get_write_ptr());
+    *order_word = deferred_row;
+    while (*order_word != deferred_row) {
+    }
+    order.push_back(1);
 
     // Read history_rows rows of this channel block's columns into the rows staging area.
     const auto read_rows = [&](const auto& source, uint32_t first_row, uint32_t ct_start) {
@@ -236,5 +246,5 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
         previous_work = work;
         previous_base = strip_base;
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange ? predecessor_tile_row(topology) : no_deferred_row, process);
+    for_each_work_item(wi_start, wi_count, Mt, deferred_row, process);
 }

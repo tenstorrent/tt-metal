@@ -52,6 +52,8 @@ struct QkvCausalConv1dSiluDfbTiles {
 // The strips dataflow buffer: one entry per work item, double-buffered, so the reader stages the next item's strips
 // while the writer still copies out of the current one.
 constexpr uint32_t qkv_causal_conv1d_silu_strip_entries = 2;
+// The order dataflow buffer: the reader's deferred tile row for compute, one aligned word.
+constexpr uint32_t qkv_causal_conv1d_silu_order_bytes = qkv_conv::read_alignment;
 
 inline QkvCausalConv1dSiluDfbTiles qkv_causal_conv1d_silu_dfb_tiles(uint32_t block_ct, uint32_t dest_limit) {
     using qkv_conv::tap_count;
@@ -69,7 +71,8 @@ inline uint64_t qkv_causal_conv1d_silu_l1_bytes(
     uint32_t block_ct, uint32_t dest_limit, uint64_t tile_bytes, uint32_t max_staged_ct) {
     return (qkv_causal_conv1d_silu_dfb_tiles(block_ct, dest_limit).total() * tile_bytes) +
            (qkv_causal_conv1d_silu_strip_entries * qkv_conv::StripEntry{block_ct}.bytes()) +
-           qkv_conv::ReaderScratch{block_ct}.bytes() + qkv_conv::StagingScratch{max_staged_ct}.bytes();
+           qkv_causal_conv1d_silu_order_bytes + qkv_conv::ReaderScratch{block_ct}.bytes() +
+           qkv_conv::StagingScratch{max_staged_ct}.bytes();
 }
 
 struct QkvCausalConv1dSiluProgramFactory {
