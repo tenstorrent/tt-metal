@@ -55,6 +55,8 @@ class CombineProbes:
     inj_b: int = 8  # SPC_INJB: injection batch
     abl: str = "0"  # SPC_ABL: ablation mask
     credthr: str = "8"  # SPC_CREDTHR: credit return threshold
+    credidle: int = 0  # SPC_CREDIDLE: idle credit sends wait for this many rows ... (0: the combine's choice)
+    credage: int = 0  # SPC_CREDAGE: ... or for their oldest to be this many cycles old
     noyread: str = "0"  # SPC_NOYREAD: rows not read from y (garbage)
     nodrain: bool = False  # SPC_NODRAIN=1: no end-of-call credit drain
     piggy: str = ""  # SPC_PIGGY: 1 / 0 overrides piggyback_credits
@@ -75,6 +77,8 @@ class CombineProbes:
             inj_b=int(env.get("SPC_INJB", "8")),
             abl=env.get("SPC_ABL", "0"),
             credthr=env.get("SPC_CREDTHR", "8"),
+            credidle=int(env.get("SPC_CREDIDLE", "0")),
+            credage=int(env.get("SPC_CREDAGE", "0")),
             noyread=env.get("SPC_NOYREAD", "0"),
             nodrain=env.get("SPC_NODRAIN") == "1",
             se=env.get("SPC_SE", ""),
@@ -369,6 +373,7 @@ constexpr uint32_t CRED = __CRED__, USED = __USED__, RET = __RET__, MISC = __MIS
                    RINGS = __RINGS__, LAYR = __LAYR__, LAYO = __LAYO__, U0 = __U0__;
 constexpr uint32_t PROF = __PROF__;
 constexpr uint32_t CRED_THR = __CREDTHR__;  // rows consumed from a source before its credits go back (or when idle)
+constexpr uint32_t CRED_IDLE = __CREDIDLE__, CRED_AGE = __CREDAGE__;  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
 constexpr uint32_t PACE = __PACE__;
 constexpr uint32_t P = __P__, PD = __PD__, PS = __PS__;  // pieces per row, bytes per piece, piece stride
 constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);  // the last piece's trailer
@@ -578,11 +583,23 @@ void kernel_main() {
     };
     // credits: a snapshot of the cumulative consumed counts of source s's rings (one per accumulator) written over
     // s's credit array for my chip: one small packet returns any number of rows
+    // (idle sends: at least CRED_IDLE rows, or rows waiting CRED_AGE cycles - fewer, fuller snapshots; every row's
+    // credit still goes back within CRED_AGE of an idle pass)
+    uint32_t tfirst[N];
+    for (uint32_t s = 0; s < N; ++s) tfirst[s] = 0;
     auto give_back = [&](bool all) {
+        const uint32_t now = get_timestamp_32b();
         for (uint32_t s = 0; s < N; ++s) {
             if (sx[s] == 0) continue;
             const uint32_t pend = rtot[s] - rdone[s];
             if (pend == 0 || (!all && pend < CRED_THR)) continue;
+            if constexpr (CRED_IDLE > 1) {
+                if (all && pend < CRED_IDLE) {
+                    if (tfirst[s] == 0) tfirst[s] = now | 1;
+                    if (now - tfirst[s] < CRED_AGE) continue;
+                }
+                tfirst[s] = 0;
+            }
             if (unflushed >= NH) flush();
             const uint32_t t0 = get_timestamp_32b();
             const uint32_t rot = sent % NH;
@@ -1472,6 +1489,14 @@ def sparse_combine_rf_prepare(
         f"{row_bytes} and a fabric payload >= {row_bytes + 32})"
     )
     pr = probes or CombineProbes.from_env()
+    # idle credit snapshots batched (at least 8 rows, or 6 us old) where there are many sources: a snapshot costs an EDM
+    # slot on the row-injecting sender, so per-source packets scale with the source count - on the Galaxy's 31 (the
+    # LoudBox with CombineProbes.bk 4) batching took 9-10 % off the fused call (GLM-5.3 836 -> 762 us); with the LoudBox's
+    # 7 it was a wash (+-5 us), so off there
+    sources = R * C * max(int(pr.bk), 1)
+    cred_idle, cred_age = (8, 8100) if sources >= 16 else (1, 0)
+    if pr.credidle:
+        cred_idle, cred_age = int(pr.credidle), int(pr.credage)
     chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     FUSED = bool(acc_on_ports)
     assert not FUSED or l1 is not None, "acc_on_ports: the L1 hand-off"
@@ -1716,6 +1741,8 @@ def sparse_combine_rf_prepare(
         "__ABL__": pr.abl,
         "__INJB__": str(inj_b),
         "__CREDTHR__": pr.credthr,
+        "__CREDIDLE__": str(cred_idle),
+        "__CREDAGE__": str(cred_age),
         "__PACE__": str(int(pace_us > 0)),
         "__P__": str(NP),
         "__TPROF__": pr.tprof,

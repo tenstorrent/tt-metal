@@ -89,6 +89,7 @@ class FC:
     arena_kb: int = None
     arena_reserve_kb: int = None  # None: the flat plan's static CBs and the writers' words (fused_arena_reserve)
     det_repeat: int = 0
+    soak: int = 0  # fused calls after the first, back to back (every 500th checked)
     pipe: bool = False
     trace: bool = False  # (traced replays back to back: wall, and the profiler's device time a replay)
     timing: bool = True
@@ -410,6 +411,21 @@ def test_flat_combine_depth(mesh_device, device_params, model, depth, mesh):
     """Combine alone, flat alone and fused (pipelined) at a forced landing ring depth D."""
     c = closeout_cfg(model, 5120, mesh, routings=("uniform",), timing=True, pipe=True, ITERS=12, ring_depth=depth)
     logger.info(f"depth {model} D {depth} on {mesh}: {c}")
+    _run(mesh_device, c)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, depth, calls",
+    [
+        pytest.param(*_mesh_params("2x4", fabric_payload(MODELS[m]["H"])), m, d, 20000, id=f"{m}-D{d}-soak")
+        for m, d in (("glm53", 2), ("glm53_flash", 4), ("k3", 5))
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(7200)
+def test_flat_combine_depth_soak(mesh_device, device_params, model, depth, calls):
+    """The fused call soaked at a model's Galaxy D (with CombineProbes.bk the Galaxy's source count's credit policy)."""
+    c = closeout_cfg(model, 5120, "2x4", routings=("uniform",), timing=False, ring_depth=depth, soak=calls)
     _run(mesh_device, c)
 
 
@@ -870,6 +886,25 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
                 f"  home {o}: {len(bad)} / {S} tokens off; first {bad[:8]}; out[0,:4] {outs[o][0, :4].tolist()} ref {ref[o][0, :4].tolist()}"
             )
     assert worst < 2e-2 or os.environ.get("SPC_NOYREAD") == "1", f"{routing}: combine result off ({worst:.2e})"
+    for i_ in range(
+        c.soak
+    ):  # (a soak: fused calls back to back, every 500th and the last checked against the reference)
+        run_fused()
+        if i_ % 500 == 499 or i_ == c.soak - 1:
+            ttnn.synchronize_device(mesh_device)
+            o2 = [ttnn.to_torch(t).reshape(S, H).float() for t in ttnn.get_device_tensors(out)]
+            w2 = max(
+                [
+                    ((o2[o][fin[o]] - ref[o][fin[o]]).norm(dim=1) / ref[o][fin[o]].norm(dim=1).clamp(min=1e-30))
+                    .max()
+                    .item()
+                    for o in range(N)
+                    if fin[o].any()
+                ]
+                + [0.0]
+            )
+            logger.info(f"{routing}: soak {i_ + 1} of {c.soak} fused calls, worst per-token rel err {w2:.2e}")
+            assert w2 < 2e-2, f"{routing}: soak call {i_ + 1}: combine result off ({w2:.2e})"
 
     def tprof(fn, run_, name):  # (SPC_TPROF: timeline of one call per chip, us from the combine's first start)
         fn()

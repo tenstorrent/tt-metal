@@ -1893,3 +1893,20 @@ Per sender (SPC_TPROF, mean of 40): the credit-return time triples (fused GLM-5.
 rows. So the per-source bookkeeping - mostly credit / layout packets sharing the senders' fabric slots - is a real part
 of the Galaxy's loss: fused / flat GLM-Flash 1.09 -> 1.22, GLM-5.3 1.25 -> 1.68, M3 1.13 -> 1.41 (the Galaxy's
 GLM-Flash: 1.77). Not all of it: multi-hop forwarding and per-link load are still not emulated.
+
+### Cutting the bookkeeping cost (bk 4 = the Galaxy's source count)
+- The credit threshold (SPC_CREDTHR 8 / 16 / 32 / 64) changes nothing: the snapshots go out from idle passes (give_back(all)),
+  one per source with anything pending - not threshold sends.
+- Idle batching (CombineProbes.credidle / credage): an idle pass sends a source's snapshot only with >= CRED_IDLE rows
+  pending or the oldest CRED_AGE cycles old (bounded delay: every credit still returns; what is sent is unchanged).
+  bk 4, fused: idle 4 / 1 us: GLM-5.3 836 -> 796, 8 / 3 us 765, 8 / 6 us 753-762, 16 / 10 us 756, 32 / 20 us 794;
+  8 / 6 us kept. Snapshot packets -30-40 %, credit time halved (GLM-5.3 159 -> 90 us a sender, K3 185 -> 102).
+- At each model's Galaxy D, bk 4, fused (alone): K3 1204 -> 1209 (517 -> 508), GLM-Flash 442 -> 415 (371 -> 342), GLM-5.3
+  836 -> 762 (673 -> 638), M3 544 -> 497 (375 -> 355), V4.1 641 -> 624 (429 -> 392). bk 1 with the same batching: +-5 us
+  (K3 +5, GLM-Flash +5, M3 -6): so the default batches only with >= 16 sources (N x bk: the Galaxy, or bk emulation);
+  the LoudBox's 7 keep sending at once (unchanged).
+- Soak (test_flat_combine_depth_soak, bk 4, batching on): GLM-5.3 D 2, GLM-Flash D 4, K3 D 5 - 20000 fused calls each,
+  every 500th checked: worst rel err 2.4e-3, clean.
+- Moving credits / layouts off the row senders: each link's router has one worker sender channel - a second fabric
+  connection on another core needs the fabric mux; not attempted. What stays: GLM-5.3 at D 2 senders blocked on full
+  rings (279 passes vs 239 at bk 1) - the depth, not the packets.
