@@ -218,3 +218,17 @@ remain local under stage .gitignore and manifest receipts; compact human tables,
 filtered perf-report CSVs, head-candidate CSV, summaries and provenance are committed.
 Generated table CRLF/trailing whitespace is normalized without changing metrics or
 raw op/device captures. git diff --cached --check passes. Checkpoint SHA follows.
+
+Local implementation/evidence checkpoint:
+- Repository: /home/mvasiljev/tt-metal
+- Branch: exp26-qwen38-bringup
+- SHA: db6a0a26defe9b41dcf333fa69f2ae662195ff5f
+- Independent clean-pass report: stage_review.md
+- No push performed. This receipt-only follow-up records the checkpoint SHA.
+
+Required compact packet is written from the exact supplied template at
+/home/mvasiljev/agentic-research-data/experiment-26/bringup-logs/qwen38-27b/20261023-astra-medium-exp26-clean/telemetry/packets/7e42486c-136c-4a99-b106-d41352ac0a38.json.
+It contains matching all64 autoregressive4096/128/B1/one-request medians, accuracy
+with explicit one-problem scope, null unavailable device/roofline values and reasons;
+no raw logs/tensors/profiler dumps or credentials. Commit references are refreshed
+after this receipt commit. Stage07 required work is complete.
