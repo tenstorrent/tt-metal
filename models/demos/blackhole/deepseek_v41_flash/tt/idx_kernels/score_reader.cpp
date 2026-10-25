@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_q = get_compile_time_arg_val(0);
@@ -19,20 +20,39 @@ void kernel_main() {
     constexpr uint32_t K_TILES_PER_USER =
         get_compile_time_arg_val(7);  // n_alloc / 32 (tile columns of the slab per user)
     constexpr uint32_t NROW = R / U;
-    constexpr auto q_args = TensorAccessorArgs<8>();
+    constexpr uint32_t cb_mail = get_compile_time_arg_val(8);
+    constexpr uint32_t NCORES = get_compile_time_arg_val(9);
+    constexpr uint32_t NCT_TOTAL = get_compile_time_arg_val(10);
+    constexpr auto q_args = TensorAccessorArgs<11>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto w_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     const uint32_t q_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t ct0 = get_arg_val<uint32_t>(0);
-    const uint32_t nct = get_arg_val<uint32_t>(1);
+    const uint32_t v_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t core_idx = get_arg_val<uint32_t>(0);
 
     Noc noc;
     const auto qa = TensorAccessor(q_args, q_addr, 2048);
     const auto ka = TensorAccessor(k_args, k_addr, K_TILE_BYTES);
     const auto wa = TensorAccessor(w_args, w_addr, 2048);
     experimental::CB cbq(cb_q), cbk(cb_k), cbwt(cb_wt), cbw(cb_w);
+
+    // live key tile columns from the valid length (device tensor): this core's slice [ct0, ct0 + nct)
+    experimental::CB cbm(cb_mail);
+    cbm.reserve_back(1);
+    const uint32_t valid = trace_metadata::read_metadata_scalar_u32(noc, v_args, v_addr, cbm.get_write_ptr());
+    uint32_t live = (valid + 31) / 32;
+    if (live > NCT_TOTAL) {
+        live = NCT_TOTAL;
+    }
+    const uint32_t per = live / NCORES, extra = live % NCORES;
+    const uint32_t ct0 = core_idx * per + (core_idx < extra ? core_idx : extra);
+    const uint32_t nct = per + (core_idx < extra ? 1 : 0);
+    volatile tt_l1_ptr uint32_t* mp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbm.get_write_ptr());
+    mp[0] = nct;
+    cbm.push_back(1);
 
     // gate tiles
     cbw.reserve_back(1);

@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_out = get_compile_time_arg_val(0);
@@ -15,12 +16,15 @@ void kernel_main() {
     constexpr uint32_t NS = get_compile_time_arg_val(4);
     constexpr uint32_t NEG = get_compile_time_arg_val(5);  // bf16 bits of -1e30
     constexpr uint32_t CB_NV = get_compile_time_arg_val(6);
-    constexpr auto o_args = TensorAccessorArgs<7>();
+    constexpr uint32_t NCORES = get_compile_time_arg_val(7);
+    constexpr uint32_t NCT_TOTAL = get_compile_time_arg_val(8);
+    constexpr auto o_args = TensorAccessorArgs<9>();
     constexpr auto nv_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<nv_args.next_compile_time_args_offset()>();
     const uint32_t o_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t nv_addr = get_common_arg_val<uint32_t>(1);
-    const uint32_t ct0 = get_arg_val<uint32_t>(0);
-    const uint32_t nct = get_arg_val<uint32_t>(1);
+    const uint32_t v_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t core_idx = get_arg_val<uint32_t>(0);
 
     Noc noc;
     const auto oa = TensorAccessor(o_args, o_addr, NS * 2);
@@ -28,6 +32,14 @@ void kernel_main() {
     experimental::CB out(cb_out), stage(cb_stage), cbnv(CB_NV);
 
     cbnv.reserve_back(1);
+    const uint32_t valid = trace_metadata::read_metadata_scalar_u32(noc, v_args, v_addr, cbnv.get_write_ptr() + 128);
+    uint32_t live = (valid + 31) / 32;
+    if (live > NCT_TOTAL) {
+        live = NCT_TOTAL;
+    }
+    const uint32_t per = live / NCORES, extra = live % NCORES;
+    const uint32_t ct0 = core_idx * per + (core_idx < extra ? core_idx : extra);
+    const uint32_t nct = per + (core_idx < extra ? 1 : 0);
     noc.async_read(nva, cbnv, 128, {.page_id = 0, .offset_bytes = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     volatile tt_l1_ptr uint32_t* nv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cbnv.get_write_ptr());

@@ -81,7 +81,9 @@ class SpecIndexer(DSV41DecodeIndexer):
             from models.demos.blackhole.deepseek_v41_flash.tt.idx_score import score_mask_fused
 
             q, w = self.project(x, qr, st)
-            sc = score_mask_fused(q, self.k_cache, self._w_flat, self._nvalid_u32(st), self.n, self.n_score)
+            sc = score_mask_fused(
+                q, self.k_cache, self._w_flat, self._nvalid_u32(st), self.n, self.n_score, valid=st["valid"]
+            )
             ids = ttnn.experimental.topk_large_indices(sc, k=self.topk, valid_length_tensor=st["valid"])
             return ids if ids.shape[0] == self.R else ttnn.reshape(ids, [self.R, 1, 1, self.topk])
         return super().forward(x, qr, st, return_scores)
