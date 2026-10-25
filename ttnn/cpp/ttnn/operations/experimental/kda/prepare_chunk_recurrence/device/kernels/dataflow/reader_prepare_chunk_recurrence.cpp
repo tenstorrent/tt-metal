@@ -221,4 +221,40 @@ TT_KERNEL void reader(uint32_t work_item_start, uint32_t work_item_count, uint32
         publish(k, Kt, true);
         done += batch_size;
     }
+
+    // Once its reads are done this kernel writes the two FP32 outputs with the most tiles, v_beta and k_dec_t, on its
+    // own NoC; the writer writes the rest on the other. Every core writes its outputs across all banks at about the
+    // same time, so the writes are NoC-bound and splitting them over both NoCs shortens the tail after the last
+    // batch. Compute publishes them per batch, as the writer drains them.
+    const auto v_beta_accessor = TensorAccessor(tensor::v_beta_output);
+    const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed_output);
+    DataflowBuffer v_beta(dfb::v_beta);
+    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
+    const auto drain = [&](auto& buffer, const auto& accessor, uint32_t tiles) {
+        buffer.wait_front(batch_size * tiles);
+        for (uint32_t item = 0; item < batch_size; ++item) {
+            for (uint32_t tile = 0; tile < tiles; ++tile) {
+                noc.async_write(
+                    buffer,
+                    accessor,
+                    buffer.get_entry_size(),
+                    {.offset_bytes = (item * tiles + tile) * buffer.get_entry_size()},
+                    {.page_id = batch_work_items[item] * tiles + tile});
+            }
+        }
+        noc.async_write_barrier();
+        buffer.pop_front(batch_size * tiles);
+    };
+    next = 0;
+    for (uint32_t done = 0; done < valid_items;) {
+        batch_size = valid_items - done >= batch_items ? batch_items : 1;
+        for (uint32_t item = 0; item < batch_size; ++next) {
+            if ((work_item_start + next) % num_chunks < valid_chunks) {
+                batch_work_items[item++] = work_item_start + next;
+            }
+        }
+        drain(v_beta, v_beta_accessor, Ct * Vt);
+        drain(k_decay_transposed, k_decay_transposed_accessor, Kt * Ct);
+        done += batch_size;
+    }
 }

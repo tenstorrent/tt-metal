@@ -172,21 +172,16 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
     control.pop_front(1);
     constexpr uint32_t cc = Ct * Ct;
     constexpr uint32_t ck = Ct * Kt;
-    constexpr uint32_t cv = Ct * Vt;
-    constexpr uint32_t kc = Kt * Ct;
 
-    const auto v_beta_accessor = TensorAccessor(tensor::v_beta_output);
+    // The reader writes v_beta and k_dec_t on the other NoC.
     const auto kd_accessor = TensorAccessor(tensor::kd_output);
     const auto q_decay_accessor = TensorAccessor(tensor::q_decay_output);
     const auto intra_accessor = TensorAccessor(tensor::intra_output);
-    const auto k_decay_transposed_accessor = TensorAccessor(tensor::k_decay_transposed_output);
     const auto final_decay_accessor = TensorAccessor(tensor::final_decay_output);
     const auto t_inv_accessor = TensorAccessor(tensor::t_inv_output);
-    DataflowBuffer v_beta(dfb::v_beta);
     DataflowBuffer kd(dfb::kd);
     DataflowBuffer q_decay(dfb::q_decay);
     DataflowBuffer intra(dfb::intra);
-    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_decay(dfb::final_decay);
     DataflowBuffer t_inv(dfb::t_inv);
     Noc noc;
@@ -227,10 +222,8 @@ TT_KERNEL void writer(uint32_t work_item_start, uint32_t work_item_count, uint32
         }
         drain_items(final_decay, final_decay_accessor, Kt, batch, items);
         drain_items(q_decay, q_decay_accessor, ck, batch, items);
-        drain_items(v_beta, v_beta_accessor, cv, batch, items);
         drain_items(kd, kd_accessor, ck, batch, items);
         drain_items(intra, intra_accessor, cc, batch, items);
-        drain_items(k_decay_transposed, k_decay_transposed_accessor, kc, batch, items);
         done += items;
     }
     // Compute inverts every item's Akk together after the per-item terms, padded to max_items, and publishes them

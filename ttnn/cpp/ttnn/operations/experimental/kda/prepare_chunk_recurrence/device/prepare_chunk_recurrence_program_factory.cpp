@@ -188,6 +188,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::DFBBinding{v_dfb, "v", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{g_dfb, "g", m2::DFBEndpointType::PRODUCER},
                 m2::DFBBinding{beta_dfb, "beta", m2::DFBEndpointType::PRODUCER},
+                // After its reads, the reader writes the two largest outputs on its own NoC.
+                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::CONSUMER},
+                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
             },
         .tensor_bindings =
             {
@@ -196,6 +199,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
                 m2::TensorBinding{V_TENSOR, "v"},
                 m2::TensorBinding{G_TENSOR, "g"},
                 m2::TensorBinding{BETA_TENSOR, "beta"},
+                m2::TensorBinding{V_BETA_OUTPUT, "v_beta_output"},
+                m2::TensorBinding{K_DECAY_TRANSPOSED_OUTPUT, "k_decay_transposed_output"},
             },
         .compile_time_args =
             {{"Ct", Ct},
@@ -215,12 +220,10 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
             "writer_prepare_chunk_recurrence.cpp",
         .dfb_bindings =
             {
-                m2::DFBBinding{v_beta_dfb, "v_beta", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{t_inv_dfb, "t_inv", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{kd_dfb, "kd", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{q_decay_dfb, "q_decay", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{intra_dfb, "intra", m2::DFBEndpointType::CONSUMER},
-                m2::DFBBinding{k_decay_transposed_dfb, "k_decay_transposed", m2::DFBEndpointType::CONSUMER},
                 m2::DFBBinding{final_decay_dfb, "final_decay", m2::DFBEndpointType::CONSUMER},
                 // The writer generates compute's constants while the reader reads the first batch.
                 m2::DFBBinding{eye_dfb, "eye", m2::DFBEndpointType::PRODUCER},
@@ -232,11 +235,9 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
             },
         .tensor_bindings =
             {
-                m2::TensorBinding{V_BETA_OUTPUT, "v_beta_output"},
                 m2::TensorBinding{KD_OUTPUT, "kd_output"},
                 m2::TensorBinding{Q_DECAY_OUTPUT, "q_decay_output"},
                 m2::TensorBinding{INTRA_OUTPUT, "intra_output"},
-                m2::TensorBinding{K_DECAY_TRANSPOSED_OUTPUT, "k_decay_transposed_output"},
                 m2::TensorBinding{FINAL_DECAY_OUTPUT, "final_decay_output"},
                 m2::TensorBinding{T_INV_OUTPUT, "t_inv_output"},
             },
