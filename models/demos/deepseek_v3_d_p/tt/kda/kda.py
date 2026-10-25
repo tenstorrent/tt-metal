@@ -699,6 +699,11 @@ class ttKDA:
             output_gate=output_gate,
             defer_final_carry=self.carry_with_output_projection,
         )
+        # Chunk preparation was q, k and v's last reader. Freeing them before the norm and the output projection
+        # removes the lowest L1 buffers at the projection's call (Galaxy SP8xTP4: its CB budget 906 -> 1088 KiB), so
+        # matmul_reduce_scatter plans K-block 16 with a 2-window DEST super-block instead of K-block 12 without one.
+        for tensor in (q, k, v):
+            ttnn.deallocate(tensor)
         if self.overlap_output_gate:
             # The norm reads the relay's output gate: the projection's last readers (chunk preparation's beta and the
             # relay's gate copy) ran inside the recurrence, so its L1 is freed first and the norm output can take it.
