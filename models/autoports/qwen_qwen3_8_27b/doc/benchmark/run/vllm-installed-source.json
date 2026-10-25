@@ -1,0 +1,7 @@
+{
+  "version": "0.30.0+empty",
+  "python_file_count": 2480,
+  "source_tree_sha256": "b4139c4feea5b723ed674692a39d9313e459b93a666f3906bef5060c868207cb",
+  "source_commit": null,
+  "reason": "Installed wheel has no direct_url.json and _version.commit_id is None"
+}

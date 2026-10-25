@@ -1,0 +1,2 @@
+["/home/mvasiljev/tt-metal/.cache/benchmark-client/bin/python", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/benchmark_roofline.py", "--run-dir", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run", "--concurrency", "8", "--action", "collect"]
+{"batch": 8, "requests": 24, "seconds": {"prefill": 21.10416199103929, "decode": 18.537260620854795}, "flops": 4894773020811264, "dram_bytes": 7358602739712}

@@ -1,0 +1,13 @@
+{
+  "upstream_file": "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/run.py",
+  "upstream_sha256": "8ad6d5b606c45252300d9698921842e66ef45a2aebf705f016806ceb917cb2fe",
+  "previous_elapsed_seconds": 2598.8852161588147,
+  "remaining_budget_seconds": 2935,
+  "deadline_unix": 1792946193.9837196,
+  "modifications": [
+    "Reuse existing validated B32 server (same PID; pre-accuracy collector check retained)",
+    "Reuse existing output directory after preserving failed runner/warmup artifacts",
+    "Reuse all completed accuracy evidence unchanged",
+    "Reduce budget to original remaining time minus reporting reserve"
+  ]
+}

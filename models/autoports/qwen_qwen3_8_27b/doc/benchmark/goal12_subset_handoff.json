@@ -1,0 +1,49 @@
+{
+  "eval": "r1_gpqa_diamond",
+  "stage11_task": "gpqa_diamond_cot_zeroshot",
+  "manifest": "doc/benchmark/run/manifest.json",
+  "manifest_sha256": "fb01e42fbed84a24ad4f7c57b6355afa2abbd27e7cc3a27418e20b861fd6b5d7",
+  "doc_ids": [
+    1,
+    2,
+    5,
+    6,
+    7,
+    9,
+    11,
+    12,
+    13,
+    15
+  ],
+  "document_sha256": [
+    "46b474e2ce3fed9fb712152fd0c5609dbf2c0c902f6c878b4c2c8bd7efef5249",
+    "b3ac809b712f04ac18383743e04c51f904eecc04df48ab375ea909b287136572",
+    "c21ef60ba0d6e5f609971b78c31267d48dce06a569b2f7bf22e4a80c67d4be40",
+    "97119ebb342140447e645b8c38828cb917be82681d38a3cbd6ad8b6f51f97497",
+    "d252410497721ab73806dc0bc70b97da330904759755e4870289e1a95ba06f2e",
+    "d13f7643721fd3b4ddc9e7732ac7ab8afe40757a5e05bf128d3e4b807a22d266",
+    "f2d6751756e501ef39e0286637916d63bc50a27f09c57bed9e451da473b15c5b",
+    "dd524cfa81f54fe949c7cb0ef5e47795055d085ec97320e24cc7736f8e50aff8",
+    "f9856978c27aa7bb83f78aced76d68fc2abe32171603a16c0cb2e6624e101aa5",
+    "4168cf6665c1e75a2b4983659fa5c768f1f3933915d685c7f1a8eb8a2dc9c428"
+  ],
+  "population": 198,
+  "concurrency": 32,
+  "generation": {
+    "max_gen_toks": 16384,
+    "do_sample": true,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0,
+    "until": [],
+    "chat_template_kwargs": {
+      "enable_thinking": true,
+      "reasoning_effort": "xhigh",
+      "preserve_thinking": true
+    }
+  },
+  "requirement": "Goal12 comparison must reuse these exact frozen documents; report any harness/prompt/scorer differences, not a claim of identical recipe."
+}

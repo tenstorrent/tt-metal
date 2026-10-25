@@ -1,0 +1,26 @@
+{
+  "32": {
+    "min_live_rows": 32,
+    "max_live_rows": 32,
+    "full_steps": 381,
+    "decode_steps": 381
+  },
+  "16": {
+    "min_live_rows": 16,
+    "max_live_rows": 16,
+    "full_steps": 381,
+    "decode_steps": 381
+  },
+  "8": {
+    "min_live_rows": 8,
+    "max_live_rows": 8,
+    "full_steps": 381,
+    "decode_steps": 381
+  },
+  "1": {
+    "min_live_rows": 1,
+    "max_live_rows": 1,
+    "full_steps": 1016,
+    "decode_steps": 1016
+  }
+}

@@ -76,3 +76,17 @@ rejects(lambda:partition(a,foreign,{'a','b'},window=(.4,8.3)),'Foreign execution
 rejects(lambda:partition(a,e,{'a','b'},window=(.4,7.9)),'escapes')
 print('PASS: D→P drain/build ownership; P→D delayed consumption; state-apply carving;')
 print('same-phase overlap and active gaps; HTTP idle residuals; terminal queued bookkeeping; rejection cases')
+
+# A finished warmup's deferred CPU state update can run inside the first measured
+# build. Its explicitly tagged span is residual, despite measured base service.
+a=[phase(11,'prefill',1,4)]
+e=[admit('r',.5),consume(11,4.1,4.2,finish=True),
+   dict(event='state_apply',step=10,phase='decode',enclosing_step=11,
+        start=1.5,end=1.7,requests=['warmup']),
+   consume(10,2,2.1,rid='warmup',finish=True)]
+p=partition(a,e,{'r'})
+own(p,1,1.5,'prefill');own(p,1.5,1.7,'residual');own(p,1.7,2,'prefill')
+own(p,2,2.1,'residual');own(p,2.1,4,'prefill')
+assert any(x['reason']=='foreign_state_apply' for x in p)
+assert any(x['reason']=='foreign_consumed' for x in p)
+print('PASS: foreign warmup/probe host bookkeeping carved out as explicit residual')

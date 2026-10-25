@@ -1,0 +1,199 @@
+"""Bound a complete client-side benchmark stage and retain failed-run evidence."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+from benchmark_stage.evidence import validate_performance, validate_server
+from benchmark_stage.roofline import load_roofline
+from benchmark_stage.subsets import digest
+
+
+def command(argv, log, deadline, *, terminate_grace_seconds=10):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError('benchmark stage exceeded its wall-clock budget')
+    with Path(log).open('w') as stream:
+        stream.write(json.dumps(argv) + '\n')
+        stream.flush()
+        process = subprocess.Popen(argv, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            code = process.wait(timeout=remaining)
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            # A terminated group leader does not imply its children have exited.
+            grace_deadline = time.monotonic() + terminate_grace_seconds
+            while True:
+                process.poll()
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    break
+                except PermissionError:
+                    # macOS can return EPERM briefly while a terminated leader
+                    # is being reaped. Keep the bounded cleanup attempt active.
+                    pass
+                if time.monotonic() >= grace_deadline:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    break
+                time.sleep(0.05)
+            process.wait()
+            raise
+    if code:
+        raise RuntimeError(f'command exited {code}; inspect {log}')
+
+
+def run(*, config_path, output):
+    config_path = Path(config_path).resolve()
+    config = json.loads(config_path.read_text())
+    output = Path(output).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    (output / 'run_config.json').write_text(json.dumps(config, indent=2) + '\n')
+    source_manifest = Path(config['manifest'])
+    if source_manifest.is_file():
+        frozen_manifest = output / 'manifest.json'
+        frozen_manifest.write_bytes(source_manifest.read_bytes())
+        config['source_manifest'] = str(source_manifest)
+        config['manifest'] = str(frozen_manifest)
+        (output / 'run_config.json').write_text(json.dumps(config, indent=2) + '\n')
+    concurrencies = config.get('concurrencies', [1, 8, 16, 32])
+    if (not isinstance(concurrencies, list) or not concurrencies
+            or not all(isinstance(c, int) and not isinstance(c, bool) and c > 0 for c in concurrencies)
+            or len(set(concurrencies)) != len(concurrencies)):
+        raise ValueError('concurrencies must be a non-empty list of unique positive integers')
+    # Measure largest first: the biggest server is the baseline every smaller
+    # profile validates against, and accuracy runs once on it.
+    concurrencies = sorted(concurrencies, reverse=True)
+    accuracy_concurrency = concurrencies[0]
+    # Each profile costs a server switch, warmup and roofline collection. The
+    # per-profile allowance is what the original two-profile hour allowed.
+    cap = 1800.0 * len(concurrencies)
+    budget = min(float(config.get('budget_seconds', cap)), cap)
+    if not 0 < budget <= cap:
+        raise ValueError(f'budget_seconds must be positive and at most {cap:.0f}')
+    deadline = started + budget
+    summary = {'schema_version': 1, 'status': 'running', 'accuracy': {}, 'performance': {}}
+    def interrupted(signum, frame):
+        raise InterruptedError(f'benchmark interrupted by signal {signum}')
+    previous_term = signal.signal(signal.SIGTERM, interrupted)
+    try:
+        server_command = config.get('performance_server_command')
+        if not isinstance(server_command, list) or not server_command or not all(isinstance(arg, str) for arg in server_command):
+            raise ValueError('performance_server_command is required to select and record 32-slot and one-slot servers')
+        roofline_command = config.get('roofline_command')
+        if not isinstance(roofline_command, list) or not roofline_command or not all(
+                isinstance(arg, str) and arg.strip() for arg in roofline_command):
+            raise ValueError('roofline_command is required to collect full-phase prefill/decode accounting')
+
+        def phase_accounting(capacity, action):
+            command([*roofline_command, '--run-dir', str(output), '--concurrency', str(capacity),
+                     '--action', action], output / f'roofline-b{capacity}-{action}.log', deadline)
+            if action == 'collect':
+                load_roofline(output, required=(str(capacity),))
+
+        def select_server(capacity, baseline=None):
+            server_path = output / f'perf-b{capacity}-server.json'
+            command([*server_command, '--max-num-seqs', str(capacity),
+                     '--base-url', config['base_url'], '--output', str(server_path)],
+                    output / f'perf-b{capacity}-server.log', deadline)
+            server = json.loads(server_path.read_text())
+            validate_server(server, capacity, config['model'], config['base_url'],
+                            baseline=baseline, output=output)
+            phase_accounting(capacity, 'check')
+            return server
+
+        baseline_server = json.loads((output / f'perf-b{accuracy_concurrency}-server.json').read_text())
+        validate_server(baseline_server, accuracy_concurrency, config['model'], config['base_url'], output=output)
+        execution = config.get('accuracy_execution', 'sequential')
+        if execution not in ('sequential', 'shared'):
+            raise ValueError('accuracy_execution must be sequential or shared')
+        summary['accuracy_execution'] = execution
+        summary['concurrencies'] = concurrencies
+        summary['accuracy_concurrency'] = accuracy_concurrency
+        batches = [config['tasks']] if execution == 'shared' else [[task] for task in config['tasks']]
+        for task in config['tasks']:
+            result = json.loads((output / task / 'results.json').read_text())
+            meta = result['benchmark_stage']
+            assert meta['responses'] == meta['expected_samples']
+            assert meta['generation_overrides'] == config['generation'][task]
+            assert meta['concurrency'] == accuracy_concurrency
+            assert meta['subset_sha256'] == json.loads((output / 'manifest.json').read_text())['manifest_sha256']
+            summary['accuracy'][task] = meta
+        summary['continuation'] = {'accuracy_reused': True, 'prior_summary': 'rejected-tokenization/summary.json',
+            'reason': 'Correct exact input-token transport after rejected warmup; no accuracy rerun'}
+        for concurrency in concurrencies:
+            server = baseline_server if concurrency == accuracy_concurrency else select_server(concurrency, baseline_server)
+            for warmup in (True, False):
+                name = f'perf-b{concurrency}' + ('-warmup' if warmup else '')
+                requests = concurrency if warmup else max(8, concurrency * 3)
+                argv = [*config.get('benchmark_command', [config.get('vllm_cli', 'vllm'), 'bench', 'serve']), '--backend', 'vllm',
+                        '--model', config['model'], '--base-url', config['base_url'],
+                        '--endpoint', '/v1/completions', '--dataset-name', 'random',
+                        '--random-input-len', '4096', '--random-output-len', str(config.get('output_tokens', 128)),
+                        '--random-range-ratio', '0.0', '--num-prompts', str(requests),
+                        '--max-concurrency', str(concurrency), '--request-rate', 'inf', '--ignore-eos',
+                        '--temperature', '0', '--seed', str(4100 + concurrency + int(warmup)),
+                        '--percentile-metrics', 'ttft,tpot,itl,e2el', '--metric-percentiles', '50,95,99',
+                        '--save-result', '--save-detailed', '--result-dir', str(output),
+                        '--result-filename', f'{name}.json']
+                command(argv, output / f'{name}.log', deadline)
+                raw = json.loads((output / f'{name}.json').read_text())
+                validate_performance(raw, requests, config.get('output_tokens', 128))
+                if raw.get('model_id') != config['model'] or raw.get('max_concurrency') != concurrency:
+                    raise ValueError(f'{name}: raw performance model or concurrency mismatch')
+                if not warmup:
+                    summary['performance'][str(concurrency)] = {
+                        'concurrency': concurrency, 'requested_input_tokens': 4096,
+                        'server_max_num_seqs': server['max_num_seqs'], 'server_identity_sha256': digest(server),
+                        'requested_output_tokens': config.get('output_tokens', 128), 'requests': requests,
+                        'completed': raw['completed'],
+                        **{k: v for k, v in raw.items() if k.startswith(('mean_', 'median_', 'p95_', 'p99_')) or k in
+                           ('duration', 'request_throughput', 'output_throughput', 'total_token_throughput',
+                            'total_input_tokens', 'total_output_tokens')},
+                    }
+            # Flush and retain this server's timings before a profile switch can
+            # destroy its in-memory counters or task-local logs.
+            phase_accounting(concurrency, 'collect')
+        load_roofline(output, required=tuple(str(c) for c in concurrencies))
+        summary['status'] = 'completed'
+    except BaseException as exc:
+        summary['status'] = 'failed'
+        summary['error'] = f'{type(exc).__name__}: {exc}'
+        raise
+    finally:
+        from benchmark_stage.report import write_report
+        try:
+            write_report(output, config, summary)
+        except Exception as report_error:
+            summary['report_error'] = f'{type(report_error).__name__}: {report_error}'
+            if summary['status'] == 'completed':
+                summary['status'] = 'failed'
+                summary['error'] = 'Report generation failed: ' + summary['report_error']
+        summary['elapsed_seconds'] = time.monotonic() - started
+        if summary['status'] == 'completed' and summary['elapsed_seconds'] >= budget:
+            summary['status'] = 'failed'
+            summary['error'] = 'Stage including reporting exceeded its configured wall-clock budget'
+        report_path = output / 'REPORT.md'
+        if summary['status'] == 'failed' and report_path.exists():
+            report_path.write_text(report_path.read_text().replace('Status: completed.', 'Status: failed.', 1))
+        with (output / 'REPORT.md').open('a') as report:
+            if summary['status'] == 'failed':
+                report.write(f"\nFinal status: failed. {summary.get('error', 'Benchmark failed')}\n")
+            report.write(f"\nTotal client-stage wall time: {summary['elapsed_seconds']:.1f} seconds.\n")
+        (output / 'summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+        signal.signal(signal.SIGTERM, previous_term)
+    if summary['status'] != 'completed':
+        raise RuntimeError(summary.get('error', 'benchmark failed'))
+    return summary

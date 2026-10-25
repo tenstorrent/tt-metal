@@ -1,0 +1,200 @@
+{
+  "results": {
+    "gpqa_diamond_cot_zeroshot": {
+      "name": "gpqa_diamond_cot_zeroshot",
+      "alias": "gpqa_diamond_cot_zeroshot",
+      "sample_len": 10,
+      "exact_match,strict-match": 0.0,
+      "exact_match_stderr,strict-match": 0.0,
+      "exact_match,flexible-extract": 0.5,
+      "exact_match_stderr,flexible-extract": 0.16666666666666666
+    }
+  },
+  "group_subtasks": {},
+  "configs": {
+    "gpqa_diamond_cot_zeroshot": {
+      "task": "gpqa_diamond_cot_zeroshot",
+      "dataset_path": "Idavidrein/gpqa",
+      "dataset_name": "gpqa_diamond",
+      "training_split": "train",
+      "validation_split": "train",
+      "process_docs": "def process_docs(dataset):\n    \"\"\"Keep upstream preprocessing/answer keys, with a private per-population RNG.\n\n    lm-eval 0.4.13's GPQA utility uses global random.shuffle. Dataset.map does\n    not put that RNG state into its cache key, and task loading accesses the\n    processed population repeatedly. A private RNG plus forced recomputation\n    keeps warm/cold caches and the separate evaluator load on the same choices.\n    \"\"\"\n    from lm_eval.tasks.gpqa.cot_zeroshot.utils import preprocess\n\n    rng = random.Random(PROCESSING_POLICY['seed'])\n\n    def process_doc(doc):\n        choices = [\n            preprocess(doc['Incorrect Answer 1']),\n            preprocess(doc['Incorrect Answer 2']),\n            preprocess(doc['Incorrect Answer 3']),\n            preprocess(doc['Correct Answer']),\n        ]\n        rng.shuffle(choices)\n        correct = choices.index(preprocess(doc['Correct Answer']))\n        return {\n            'choice1': choices[0], 'choice2': choices[1],\n            'choice3': choices[2], 'choice4': choices[3],\n            'choices': choices,\n            'answer': f'({chr(65 + correct)})',\n        }\n\n    return dataset.map(process_doc, load_from_cache_file=False)\n",
+      "doc_to_text": "What is the correct answer to this question:{{Question}}\nChoices:\n(A) {{choice1}}\n(B) {{choice2}}\n(C) {{choice3}}\n(D) {{choice4}}\nLet's think step by step: ",
+      "doc_to_target": "answer",
+      "unsafe_code": false,
+      "description": "",
+      "target_delimiter": " ",
+      "fewshot_delimiter": "\n\n",
+      "fewshot_config": {
+        "sampler": "default",
+        "split": null,
+        "process_docs": "<function process_docs at 0x7e64919d7740>",
+        "fewshot_indices": null,
+        "samples": null,
+        "doc_to_text": "What is the correct answer to this question:{{Question}}\nChoices:\n(A) {{choice1}}\n(B) {{choice2}}\n(C) {{choice3}}\n(D) {{choice4}}\nLet's think step by step: ",
+        "doc_to_choice": null,
+        "doc_to_target": "answer",
+        "gen_prefix": null,
+        "fewshot_delimiter": "\n\n",
+        "target_delimiter": " "
+      },
+      "num_fewshot": 0,
+      "metric_list": [
+        {
+          "metric": "exact_match",
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": true
+        }
+      ],
+      "output_type": "generate_until",
+      "generation_kwargs": {
+        "until": [],
+        "do_sample": true,
+        "temperature": 1.0,
+        "max_gen_toks": 16384,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "chat_template_kwargs": {
+          "enable_thinking": true,
+          "reasoning_effort": "xhigh",
+          "preserve_thinking": true
+        }
+      },
+      "repeats": 1,
+      "filter_list": [
+        {
+          "name": "strict-match",
+          "filter": [
+            {
+              "function": "regex",
+              "regex_pattern": "(?<=The answer is )(.*)(?=.)"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        },
+        {
+          "name": "flexible-extract",
+          "filter": [
+            {
+              "function": "multi_choice_regex",
+              "group_select": -1,
+              "ignore_case": true,
+              "ignore_punctuation": true,
+              "regex_pattern": "(\\([A-Z]\\))"
+            },
+            {
+              "function": "take_first"
+            }
+          ]
+        }
+      ],
+      "should_decontaminate": false,
+      "metadata": {
+        "version": 2.2,
+        "config_source": "inline"
+      }
+    }
+  },
+  "versions": {
+    "gpqa_diamond_cot_zeroshot": 2.2
+  },
+  "n-shot": {
+    "gpqa_diamond_cot_zeroshot": 0
+  },
+  "higher_is_better": {
+    "gpqa_diamond_cot_zeroshot": {
+      "exact_match": true
+    }
+  },
+  "n-samples": {
+    "gpqa_diamond_cot_zeroshot": {
+      "original": 198,
+      "effective": 10
+    }
+  },
+  "config": {
+    "model": "RecordedChat",
+    "model_args": null,
+    "batch_size": null,
+    "batch_sizes": [],
+    "device": null,
+    "use_cache": null,
+    "limit": null,
+    "bootstrap_iters": 100000,
+    "gen_kwargs": {
+      "max_gen_toks": 16384,
+      "do_sample": true,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "until": [],
+      "chat_template_kwargs": {
+        "enable_thinking": true,
+        "reasoning_effort": "xhigh",
+        "preserve_thinking": true
+      }
+    },
+    "random_seed": 0,
+    "numpy_seed": 1234,
+    "torch_seed": 1234,
+    "fewshot_seed": 1234
+  },
+  "git_hash": "v0.81.0-32-g1b50f262914",
+  "date": 1792940660.9095502,
+  "pretty_env_info": "PyTorch version: 2.14.1+cpu\nIs debug build: False\nCUDA used to build PyTorch: None\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 24.04.4 LTS (x86_64)\nGCC version: (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nClang version: 20.1.8 (++20250804090239+87f0227cb601-1~exp1~20250804210352.139)\nCMake version: version 4.0.2\nLibc version: glibc-2.39\n\nPython version: 3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0] (64-bit runtime)\nPython platform: Linux-7.0.0-34-generic-x86_64-with-glibc2.39\nIs CUDA available: False\nCUDA runtime version: No CUDA\nCUDA_MODULE_LOADING set to: N/A\nGPU models and configuration: No CUDA\nNvidia driver version: No CUDA\ncuDNN version: No CUDA\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: False\nCaching allocator config: N/A\n\nCPU:\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  16\nOn-line CPU(s) list:                     0-15\nVendor ID:                               AuthenticAMD\nModel name:                              AMD Ryzen 7 9700X 8-Core Processor\nCPU family:                              26\nModel:                                   68\nThread(s) per core:                      2\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                0\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      92%\nCPU max MHz:                             5582.3008\nCPU min MHz:                             605.3100\nBogoMIPS:                                7585.60\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpuid_fault cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d amd_lbr_pmc_freeze\nVirtualization:                          AMD-V\nL1d cache:                               384 KiB (8 instances)\nL1i cache:                               256 KiB (8 instances)\nL2 cache:                                8 MiB (8 instances)\nL3 cache:                                32 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-15\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; IBPB on VMEXIT only\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB on VMEXIT\n\nVersions of relevant libraries:\n[pip3] numpy==2.3.5\n[pip3] torch==2.14.1+cpu\n[conda] Could not collect",
+  "transformers_version": "4.57.6",
+  "lm_eval_version": "0.4.13",
+  "upper_git_hash": null,
+  "benchmark_stage": {
+    "model": "Qwen/Qwen3.8-27B",
+    "group": "gpqa_diamond_cot_zeroshot",
+    "subset_sha256": "fb01e42fbed84a24ad4f7c57b6355afa2abbd27e7cc3a27418e20b861fd6b5d7",
+    "concurrency": 32,
+    "elapsed_seconds": 2226.03152179718,
+    "timing_scope": "shared accuracy pass",
+    "shared_groups": [
+      "gpqa_diamond_cot_zeroshot"
+    ],
+    "request_timeout_seconds": 3600,
+    "expected_samples": 10,
+    "responses": 10,
+    "finish_reasons": {
+      "stop": 6,
+      "length": 4
+    },
+    "generation_overrides": {
+      "max_gen_toks": 16384,
+      "do_sample": true,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "until": [],
+      "chat_template_kwargs": {
+        "enable_thinking": true,
+        "reasoning_effort": "xhigh",
+        "preserve_thinking": true
+      }
+    },
+    "empty_final_length_responses": 4,
+    "template": "native server chat template; structured messages exactly once",
+    "fewshot_as_multiturn": true,
+    "document_processing": {
+      "processor": "gpqa-cot-zeroshot-choice-shuffle-v1",
+      "seed": 0,
+      "map_cache": "recompute"
+    }
+  }
+}

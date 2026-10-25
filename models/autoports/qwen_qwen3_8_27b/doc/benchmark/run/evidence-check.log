@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "upstream_source": "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/check.py",
+  "upstream_sha256": "a92dea8224c7bf476d1d07816060d692b71408aabc9a4cdbd7eee887fdf8aa58",
+  "correction": {
+    "before": "min(config.get('budget_seconds', 3600), 3600)",
+    "after": "min(config.get('budget_seconds', 3600), 1800 * len(config.get('concurrencies', [1, 8, 16, 32])))"
+  },
+  "original_start_unix": 1792938993.9837196,
+  "checked_unix": 1792944648.0153823,
+  "combined_elapsed_seconds": 5654.03166270256,
+  "budget_seconds": 7200,
+  "origin_note": "Frozen initial run_config timestamp immediately after runner monotonic start; per-attempt monotonic durations are in their summaries.",
+  "conservative_elapsed_including_observed_setup_seconds": 6502.0153822898865,
+  "scope": "Both attempts, repairs, launches, compilation, warmups, inference, collection, verification and reporting through this check"
+}

@@ -1,0 +1,21 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/__main__.py", line 50, in <module>
+    main()
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/__main__.py", line 37, in main
+    print(json.dumps(run(config_path=args.config, output=args.output), indent=2))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/run.py", line 137, in run
+    command(argv, output / ('accuracy-shared.log' if execution == 'shared' else f'{batch[0]}.log'), deadline)
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/run.py", line 26, in command
+    code = process.wait(timeout=remaining)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 1264, in wait
+    return self._wait(timeout=timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/subprocess.py", line 2047, in _wait
+    time.sleep(delay)
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/run.py", line 89, in interrupted
+    raise InterruptedError(f'benchmark interrupted by signal {signum}')
+InterruptedError: benchmark interrupted by signal 15

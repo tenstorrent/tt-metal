@@ -1,0 +1,18 @@
+/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/benchmark_protocol/check.py:16: DeprecationWarning: get_task_dict is deprecated. Use TaskManager.load() instead.
+  task = flatten(get_task_dict([task_spec(name)]))[name]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 286.26 examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 281.96 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3136.82 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 2177.30 examples/s]
+{
+  "status": "pass",
+  "benchmark_stage_module": "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/__init__.py",
+  "population": 198,
+  "population_sha256": "2ed8c1e6bb9d79c67848407d60c89eadc23fa3cb8ab1d8e1e65230aea0953bbf",
+  "selected": 10,
+  "num_fewshot": 0,
+  "native_template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+  "structured_messages_preserved": true,
+  "native_template_application_count": 1,
+  "native_thinking_prefix": true,
+  "first_document_prompt_tokens": 181
+}

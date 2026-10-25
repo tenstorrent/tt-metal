@@ -1,0 +1,12 @@
+{
+  "upstream_commit": "ced6857afa0ea7b2e3f0846a62e1394e90f15607",
+  "upstream_ref": "v0.30.0",
+  "installed_files": 2480,
+  "identical_files": 2479,
+  "different_files": [],
+  "generated_or_missing_files": [
+    "vllm/_version.py"
+  ],
+  "method": "SHA256 byte equality for each installed vllm Python module against exact upstream tag commit",
+  "source": "https://github.com/vllm-project/vllm/tree/v0.30.0"
+}

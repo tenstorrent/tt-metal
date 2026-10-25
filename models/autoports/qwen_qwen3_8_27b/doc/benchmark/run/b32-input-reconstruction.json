@@ -1,0 +1,6 @@
+{
+  "method": "Deterministic offline regeneration using identical upstream RandomDataset seed/settings and exact-token adapter; no inference",
+  "measured_seed": 4132,
+  "warmup_seed": 4133,
+  "validation": "Collector must compare every measured prompt hash against actual engine admission before acceptance"
+}

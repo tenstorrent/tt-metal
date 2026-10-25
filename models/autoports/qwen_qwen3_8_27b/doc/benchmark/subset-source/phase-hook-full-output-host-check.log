@@ -1,0 +1,16 @@
+{
+  "status": "pass",
+  "scope": "host mocks; no hardware/runtime performance claim",
+  "checks": [
+    "sync forward/finalization signature",
+    "async keyword call signature",
+    "immutable context mapping across overlapping submissions",
+    "request identity after row reorder",
+    "resident-feedback position advancement",
+    "output construction included after readback",
+    "idle buffer flush",
+    "64-layer ready identity"
+  ],
+  "phases": 3,
+  "requests": 2
+}

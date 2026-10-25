@@ -1,0 +1,109 @@
+{
+  "capacity": 8,
+  "args": [
+    "--model",
+    "/workspace/.cache/qwen38-full",
+    "--served-model-name",
+    "Qwen/Qwen3.8-27B",
+    "--block-size",
+    "4096",
+    "--max-num-seqs",
+    "8",
+    "--port",
+    "8000",
+    "--max-model-len",
+    "262144",
+    "--additional-config",
+    "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 134217728, \"fabric_config\": \"FABRIC_1D_RING\", \"trace_mode\": \"decode_only\"}}",
+    "--language-model-only",
+    "--mamba-cache-mode",
+    "align",
+    "--mamba-block-size",
+    "4096",
+    "--max-num-batched-tokens",
+    "32768",
+    "--max-logprobs",
+    "-1",
+    "--async-scheduling",
+    "--enable-prefix-caching",
+    "--reasoning-parser",
+    "qwen3",
+    "--long-prefill-token-threshold",
+    "4096"
+  ],
+  "log": "/workspace/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run/server-b8.log",
+  "phase_path": "/workspace/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run/phases-b8.jsonl",
+  "owner": {
+    "pid": 1678930,
+    "start_ticks": "190864813",
+    "state": "D",
+    "pgid": 1678930,
+    "argv": [
+      ""
+    ]
+  },
+  "started_unix": 1792943830.8337424,
+  "members": [
+    {
+      "pid": 1678930,
+      "start_ticks": "190864813",
+      "state": "S",
+      "pgid": 1678930,
+      "argv": [
+        "/opt/venv/bin/python",
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--model",
+        "/workspace/.cache/qwen38-full",
+        "--served-model-name",
+        "Qwen/Qwen3.8-27B",
+        "--block-size",
+        "4096",
+        "--max-num-seqs",
+        "8",
+        "--port",
+        "8000",
+        "--max-model-len",
+        "262144",
+        "--additional-config",
+        "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 134217728, \"fabric_config\": \"FABRIC_1D_RING\", \"trace_mode\": \"decode_only\"}}",
+        "--language-model-only",
+        "--mamba-cache-mode",
+        "align",
+        "--mamba-block-size",
+        "4096",
+        "--max-num-batched-tokens",
+        "32768",
+        "--max-logprobs",
+        "-1",
+        "--async-scheduling",
+        "--enable-prefix-caching",
+        "--reasoning-parser",
+        "qwen3",
+        "--long-prefill-token-threshold",
+        "4096"
+      ]
+    },
+    {
+      "pid": 1679008,
+      "start_ticks": "190865560",
+      "state": "S",
+      "pgid": 1678930,
+      "argv": [
+        "/opt/venv/bin/python",
+        "-c",
+        "from multiprocessing.resource_tracker import main;main(34)"
+      ]
+    },
+    {
+      "pid": 1679009,
+      "start_ticks": "190865560",
+      "state": "S",
+      "pgid": 1678930,
+      "argv": [
+        "VLLM::EngineCore"
+      ]
+    }
+  ],
+  "stopped_unix": 1792944178.682274
+}

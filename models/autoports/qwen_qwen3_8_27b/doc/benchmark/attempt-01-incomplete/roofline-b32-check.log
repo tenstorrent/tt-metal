@@ -1,0 +1,2 @@
+["/home/mvasiljev/tt-metal/.cache/benchmark-client/bin/python", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/benchmark_roofline.py", "--run-dir", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run", "--concurrency", "32", "--action", "check"]
+READY: actual prefill and asynchronous decode completion; model/hardware accounting loaded

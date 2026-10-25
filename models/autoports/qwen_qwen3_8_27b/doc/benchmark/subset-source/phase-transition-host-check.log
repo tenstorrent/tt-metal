@@ -1,0 +1,23 @@
+{
+  "status": "pass",
+  "scope": "host mocks; no hardware/runtime performance claim",
+  "checks": [
+    "sync forward/finalization signature",
+    "async keyword call signature",
+    "immutable context mapping across overlapping submissions",
+    "request identity after row reorder",
+    "resident-feedback position advancement",
+    "output construction included after readback",
+    "schedule start retained through execute",
+    "scheduler consumption matched across overlapping submissions",
+    "pending records zero at idle flush",
+    "prefill deferred state remains prefill inside later decode build",
+    "decode drain and state apply remain decode inside next prefill",
+    "drain-driven resolution and later repeated finalization emit once",
+    "admission and exact consumed-finish request lifetimes",
+    "idle buffer flush",
+    "64-layer ready identity"
+  ],
+  "phases": 4,
+  "requests": 3
+}

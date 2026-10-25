@@ -1,0 +1,13 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/__main__.py", line 50, in <module>
+    main()
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/__main__.py", line 37, in main
+    print(json.dumps(run(config_path=args.config, output=args.output), indent=2))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/run.py", line 158, in run
+    validate_performance(raw, requests, config.get('output_tokens', 128))
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/evidence.py", line 63, in validate_performance
+    raise ValueError(f'performance {field}: expected {requests} requests of {length} tokens')
+ValueError: performance input_lens: expected 32 requests of 4096 tokens

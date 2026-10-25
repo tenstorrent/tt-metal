@@ -1,0 +1,103 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "implementation": "models/autoports/qwen_qwen3_8_27b",
+  "generator_module": "models.autoports.qwen_qwen3_8_27b.tt.generator_vllm",
+  "imported_module_file": "/workspace/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py:Qwen38ForCausalLM",
+  "model_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "tokenizer_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "revision_evidence": "configuration-b8.log checkpoint_tokenizer_proof; model weights inherited from Stage10",
+  "precision": {
+    "schema_version": 1,
+    "config_id": "head_bfp8_hifi2",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "mlp": "bfloat4_b",
+      "down": "bfloat4_b",
+      "embedding": "bfloat16",
+      "head": "bfloat8_b",
+      "norm": "bfloat16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "projection": "LoFi",
+      "fused_prefill": "LoFi",
+      "fused_decode": "LoFi",
+      "sdpa": "LoFi",
+      "head": "HiFi2",
+      "norm": "HiFi4"
+    },
+    "activation_dtype": {
+      "prefill_column": "bfloat8_b",
+      "ordinary_attention": "bfloat16",
+      "ordinary_mlp": "bfloat16",
+      "fused_row": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "decode_b1": "bfloat8_b",
+      "prefill": "bfloat8_b",
+      "native_batched": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat8_b",
+    "logits_sampling": {
+      "logits": "bfloat16",
+      "sampling": "bfloat16",
+      "token_ids": "uint32"
+    },
+    "recurrent_state_dtype": "float32",
+    "max_context": 262144
+  },
+  "layer_count": 64,
+  "configured_layer_count": 64,
+  "source_commits": {
+    "tt-metal": "1b50f2629148ad7d33a7e455b23bc9d8a8ccbb88",
+    "vllm-tt-plugin": "d5ee19c6754905e7a9a69c79d9e2ee4b99b84295",
+    "vllm": null
+  },
+  "vllm_source_limitation": "Installed 0.30.0+empty wheel has no direct_url.json; source commit unestablished.",
+  "hardware": "4 Blackhole p300c ASICs; P300x2; TP mesh 1x4; physical IDs 0,1,2,3",
+  "server_command": [
+    "/opt/venv/bin/python",
+    "-m",
+    "vllm.entrypoints.openai.api_server",
+    "--model",
+    "/workspace/.cache/qwen38-full",
+    "--served-model-name",
+    "Qwen/Qwen3.8-27B",
+    "--block-size",
+    "4096",
+    "--max-num-seqs",
+    "8",
+    "--port",
+    "8000",
+    "--max-model-len",
+    "262144",
+    "--additional-config",
+    "{\"tt\": {\"sample_on_device_mode\": \"all\", \"trace_region_size\": 134217728, \"fabric_config\": \"FABRIC_1D_RING\", \"trace_mode\": \"decode_only\"}}",
+    "--language-model-only",
+    "--mamba-cache-mode",
+    "align",
+    "--mamba-block-size",
+    "4096",
+    "--max-num-batched-tokens",
+    "32768",
+    "--max-logprobs",
+    "-1",
+    "--async-scheduling",
+    "--enable-prefix-caching",
+    "--reasoning-parser",
+    "qwen3",
+    "--long-prefill-token-threshold",
+    "4096"
+  ],
+  "prefix_caching": true,
+  "max_num_seqs": 8,
+  "max_model_len": 262144,
+  "base_url": "http://127.0.0.1:8000",
+  "configuration_evidence": "configuration-b8.log",
+  "configuration_evidence_sha256": "e4abd0fd4c89e12d725a592c135616a8cb44f299c0e8998369e87ae2de56ebf6",
+  "server_started_unix": 1792943830.8337424,
+  "selection_wait_seconds": 275.7090508309193,
+  "phase_path": "/workspace/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run/phases-b8.jsonl",
+  "owned_state": "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/benchmark/owned_server.json"
+}

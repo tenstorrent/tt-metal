@@ -1,0 +1,60 @@
+["/home/mvasiljev/tt-metal/.cache/benchmark-client/bin/python", "-m", "benchmark_stage", "evaluate", "--model", "Qwen/Qwen3.8-27B", "--base-url", "http://127.0.0.1:8000", "--manifest", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run/manifest.json", "--task", "gpqa_diamond_cot_zeroshot", "--output", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run", "--generation", "{\"max_gen_toks\": 16384, \"do_sample\": true, \"temperature\": 1.0, \"top_p\": 0.95, \"top_k\": 20, \"min_p\": 0.0, \"presence_penalty\": 0.0, \"repetition_penalty\": 1.0, \"until\": [], \"chat_template_kwargs\": {\"enable_thinking\": true, \"reasoning_effort\": \"xhigh\", \"preserve_thinking\": true}}", "--concurrency", "32", "--shared"]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3728.54 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3880.04 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 2542.41 examples/s]
+generation_kwargs: {'max_gen_toks': 16384, 'do_sample': True, 'temperature': 1.0, 'top_p': 0.95, 'top_k': 20, 'min_p': 0.0, 'presence_penalty': 0.0, 'repetition_penalty': 1.0, 'until': [], 'chat_template_kwargs': {'enable_thinking': True, 'reasoning_effort': 'xhigh', 'preserve_thinking': True}} specified through cli, these settings will update set parameters in yaml tasks. Ensure 'do_sample=True' for non-greedy decoding!
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3819.91 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 4012.80 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map:   8%|▊         | 15/198 [00:00<00:02, 77.68 examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 817.15 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 4045.16 examples/s]
+  0%|          | 0/10 [00:00<?, ?it/s]100%|██████████| 10/10 [00:00<00:00, 2774.38it/s]
+Requesting API:   0%|          | 0/10 [00:00<?, ?it/s]Requesting API:  10%|█         | 1/10 [02:35<23:23, 155.98s/it]Requesting API:  20%|██        | 2/10 [03:38<13:26, 100.78s/it]Requesting API:  30%|███       | 3/10 [03:57<07:25, 63.57s/it] Requesting API:  40%|████      | 4/10 [06:37<10:10, 101.81s/it]Requesting API:  50%|█████     | 5/10 [09:46<11:05, 133.05s/it]Requesting API:  60%|██████    | 6/10 [28:12<30:55, 463.97s/it]Requesting API:  70%|███████   | 7/10 [36:59<24:13, 484.67s/it]Requesting API: 100%|██████████| 10/10 [36:59<00:00, 221.99s/it]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3485.70 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3663.92 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3792.94 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3909.74 examples/s]
+Map:   0%|          | 0/198 [00:00<?, ? examples/s]Map: 100%|██████████| 198/198 [00:00<00:00, 3540.78 examples/s]
+{
+  "gpqa_diamond_cot_zeroshot": {
+    "model": "Qwen/Qwen3.8-27B",
+    "group": "gpqa_diamond_cot_zeroshot",
+    "subset_sha256": "fb01e42fbed84a24ad4f7c57b6355afa2abbd27e7cc3a27418e20b861fd6b5d7",
+    "concurrency": 32,
+    "elapsed_seconds": 2226.03152179718,
+    "timing_scope": "shared accuracy pass",
+    "shared_groups": [
+      "gpqa_diamond_cot_zeroshot"
+    ],
+    "request_timeout_seconds": 3600,
+    "expected_samples": 10,
+    "responses": 10,
+    "finish_reasons": {
+      "stop": 6,
+      "length": 4
+    },
+    "generation_overrides": {
+      "max_gen_toks": 16384,
+      "do_sample": true,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "until": [],
+      "chat_template_kwargs": {
+        "enable_thinking": true,
+        "reasoning_effort": "xhigh",
+        "preserve_thinking": true
+      }
+    },
+    "empty_final_length_responses": 4,
+    "template": "native server chat template; structured messages exactly once",
+    "fewshot_as_multiturn": true,
+    "document_processing": {
+      "processor": "gpqa-cot-zeroshot-choice-shuffle-v1",
+      "seed": 0,
+      "map_cache": "recompute"
+    }
+  }
+}

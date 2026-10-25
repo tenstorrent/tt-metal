@@ -1,0 +1,1 @@
+["env", "PYTHONPATH=", "python3", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/benchmark_server.py", "--max-num-seqs", "32", "--base-url", "http://127.0.0.1:8000", "--output", "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/benchmark/run/perf-b32-server.json"]

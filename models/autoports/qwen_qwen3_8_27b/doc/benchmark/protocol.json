@@ -3,7 +3,7 @@
   "operator_eval": "r1_gpqa_diamond",
   "upstream_task": "gpqa_diamond_cot_zeroshot",
   "harness": "lm-eval==0.4.13",
-  "completed_samples": null,
+  "completed_samples": 10,
   "selected_samples": 10,
   "dataset_samples": 198,
   "scope": "subset",
@@ -57,5 +57,18 @@
     "swe_bench_verified": "Requires repository/tool-using agent harness, outside lm-evaluation-harness; belongs to goal12.",
     "terminal_bench_2": "Requires terminal/environment agent harness, outside lm-evaluation-harness; belongs to goal12."
   },
-  "validation": "subset-source/protocol-host-check-fixed.log; dataset checksum, subset checks, structured-message transport, native Jinja once and thinking prefix passed. Initial check harness expected str rather than JsonChatStr; fixed check uses .prompt, no model/runtime change."
+  "validation": "subset-source/protocol-host-check-fixed.log; dataset checksum, subset checks, structured-message transport, native Jinja once and thinking prefix passed. Initial check harness expected str rather than JsonChatStr; fixed check uses .prompt, no model/runtime change.",
+  "scorer_settings": {
+    "strict_regex": "(?<=The answer is )(.*)(?=.)",
+    "flexible_regex": "(\\([A-Z]\\))",
+    "flexible_group_select": -1,
+    "ignore_case": true,
+    "ignore_punctuation": true,
+    "template_sha256": "809e56db15e55c08aebe73ddd712194e507649fa7c432112ccaf0bad61383ff9"
+  },
+  "finish_reasons": {
+    "stop": 6,
+    "length": 4
+  },
+  "empty_final_length_responses": 4
 }

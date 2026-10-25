@@ -77,10 +77,21 @@ def partition(events, auxiliary, request_ids, *, window=None):
                 if set(e['requests'])-ids:
                     raise ValueError('Mixed scheduler consumption')
                 tails.append((e['start'],e['end'],phases[e['step']]['phase'],2,'consumed',e['step']))
+            elif set(e.get('requests',())) & ids:
+                raise ValueError('Measured scheduler consumption has no matched phase')
+            else:
+                tails.append((e['start'],e['end'],'residual',2,'foreign_consumed',e['step']))
         elif e['event']=='state_apply' and e.get('step') in phases:
             if set(e['requests'])-ids or e['phase']!=phases[e['step']]['phase']:
                 raise ValueError('Unjoinable or mixed state application')
             tails.append((e['start'],e['end'],e['phase'],3,'state_apply',e['step']))
+        elif e['event']=='state_apply':
+            if set(e.get('requests',())) & ids:
+                raise ValueError('Measured state application has no matched phase')
+            # Warmup/probe outputs can be ready yet leave CPU bookkeeping until
+            # the first measured build. Exclude only this observed foreign span,
+            # never stretch the old request or charge its work to the new phase.
+            tails.append((e['start'],e['end'],'residual',3,'foreign_state_apply',e.get('step')))
         elif e['event']=='drain' and e.get('step') in phases:
             origins=e['origin_steps']
             if not origins:
@@ -209,6 +220,15 @@ def main():
     assert len(reqs)==raw['completed'], (len(reqs),raw['completed'],lo,hi)
     assert all(e['prompt_tokens']==4096 for e in reqs.values())
     assert len({e['prompt_sha256'] for e in reqs.values()})==len(reqs), 'Performance prompts must be distinct'
+    input_path=root/f'perf-b{n}-inputs.jsonl'
+    client_inputs=[json.loads(line) for line in input_path.read_text().splitlines()]
+    assert sorted(row['index'] for row in client_inputs)==list(range(raw['completed']))
+    assert all(len(row['tokens'])==4096 and
+               hashlib.sha256(json.dumps(row['tokens']).encode()).hexdigest()==row['prompt_sha256']
+               for row in client_inputs)
+    by_index={row['index']:row for row in client_inputs}
+    assert all(by_index[int(pattern.fullmatch(rid)[1])]['prompt_sha256']==event['prompt_sha256']
+               for rid,event in reqs.items()), 'Client token arrays differ from actual engine input'
     selected=[e for e in events if e['event']=='phase' and any(r['request'] in reqs for r in e['rows'])]
     assert selected and all(all(r['request'] in reqs for r in e['rows']) for e in selected), 'Mixed probe/measurement step'
     coverage={rid:dict(prefill=0,decode=0) for rid in reqs}

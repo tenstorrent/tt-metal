@@ -1,0 +1,194 @@
+{
+  "scope": "Protocol/extraction audit; no accuracy acceptance verdict",
+  "upstream_template": ".cache/benchmark-client/lib/python3.12/site-packages/lm_eval/tasks/gpqa/cot_zeroshot/_gpqa_cot_zeroshot_yaml",
+  "upstream_template_sha256": "809e56db15e55c08aebe73ddd712194e507649fa7c432112ccaf0bad61383ff9",
+  "strict_pattern": "(?<=The answer is )(.*)(?=.)",
+  "flexible_pattern": "(\\([A-Z]\\))",
+  "records": [
+    {
+      "doc_id": 1,
+      "filter": "strict-match",
+      "target": "(C)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 2,
+      "filter": "strict-match",
+      "target": "(D)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 5,
+      "filter": "strict-match",
+      "target": "(A)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 6,
+      "filter": "strict-match",
+      "target": "(C)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 7,
+      "filter": "strict-match",
+      "target": "(A)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 9,
+      "filter": "strict-match",
+      "target": "(B)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 11,
+      "filter": "strict-match",
+      "target": "(D)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 12,
+      "filter": "strict-match",
+      "target": "(B)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 13,
+      "filter": "strict-match",
+      "target": "(A)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 15,
+      "filter": "strict-match",
+      "target": "(A)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 1,
+      "filter": "flexible-extract",
+      "target": "(C)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 2,
+      "filter": "flexible-extract",
+      "target": "(D)",
+      "filtered_resps": [
+        "(D)"
+      ],
+      "exact_match": 1.0
+    },
+    {
+      "doc_id": 5,
+      "filter": "flexible-extract",
+      "target": "(A)",
+      "filtered_resps": [
+        "(A)"
+      ],
+      "exact_match": 1.0
+    },
+    {
+      "doc_id": 6,
+      "filter": "flexible-extract",
+      "target": "(C)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 7,
+      "filter": "flexible-extract",
+      "target": "(A)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 9,
+      "filter": "flexible-extract",
+      "target": "(B)",
+      "filtered_resps": [
+        "(B)"
+      ],
+      "exact_match": 1.0
+    },
+    {
+      "doc_id": 11,
+      "filter": "flexible-extract",
+      "target": "(D)",
+      "filtered_resps": [
+        "(D)"
+      ],
+      "exact_match": 1.0
+    },
+    {
+      "doc_id": 12,
+      "filter": "flexible-extract",
+      "target": "(B)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    },
+    {
+      "doc_id": 13,
+      "filter": "flexible-extract",
+      "target": "(A)",
+      "filtered_resps": [
+        "(A)"
+      ],
+      "exact_match": 1.0
+    },
+    {
+      "doc_id": 15,
+      "filter": "flexible-extract",
+      "target": "(A)",
+      "filtered_resps": [
+        "[invalid]"
+      ],
+      "exact_match": 0.0
+    }
+  ],
+  "observations": [
+    "All 10 strict filters returned [invalid]; the native responses did not match the upstream literal answer format.",
+    "Flexible extraction returned five correct answers and five [invalid] results; four invalid results have token-limited empty final content.",
+    "Raw reasoning is retained but only final content is scored, unchanged by this audit."
+  ]
+}

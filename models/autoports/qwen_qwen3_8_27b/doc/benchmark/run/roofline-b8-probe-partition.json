@@ -1,0 +1,133 @@
+{
+  "request_ids": [
+    "cmpl-85036f3baf4a5def-0-a2cfb794"
+  ],
+  "phases": [
+    {
+      "step": 1,
+      "start": 1908923.961140762,
+      "scheduled": {
+        "cmpl-85036f3baf4a5def-0-a2cfb794": 4096
+      },
+      "work_start": 1908923.962518403,
+      "phase": "prefill",
+      "rows": [
+        {
+          "request": "cmpl-85036f3baf4a5def-0-a2cfb794",
+          "start": 0,
+          "length": 4096,
+          "final": true
+        }
+      ],
+      "batch": 8,
+      "mesh": [
+        1,
+        4
+      ],
+      "event": "phase",
+      "end": 1908927.427579915,
+      "completion": "sync_sample_and_runner_output"
+    },
+    {
+      "step": 2,
+      "start": 1908927.427656842,
+      "scheduled": {
+        "cmpl-85036f3baf4a5def-0-a2cfb794": 1
+      },
+      "work_start": 1908927.429058699,
+      "phase": "decode",
+      "rows": [
+        {
+          "request": "cmpl-85036f3baf4a5def-0-a2cfb794",
+          "position": 4096,
+          "host_position": 4096
+        }
+      ],
+      "batch": 8,
+      "mesh": [
+        1,
+        4
+      ],
+      "submit_ns": 1908927429076874,
+      "complete_ns": 1908927486064519,
+      "event": "phase",
+      "end": 1908927.486128351,
+      "completion": "async_readback_sampling_and_runner_output_complete"
+    }
+  ],
+  "disjoint_timeline": [
+    {
+      "start": 1908923.96111344,
+      "end": 1908923.961140762,
+      "phase": "residual",
+      "reason": "initial_admission_before_service"
+    },
+    {
+      "start": 1908923.961140762,
+      "end": 1908927.427579915,
+      "phase": "prefill",
+      "reason": "base_service"
+    },
+    {
+      "start": 1908927.427579915,
+      "end": 1908927.427656842,
+      "phase": "decode",
+      "reason": "active_request_host_gap"
+    },
+    {
+      "start": 1908927.427656842,
+      "end": 1908927.428220513,
+      "phase": "decode",
+      "reason": "base_service"
+    },
+    {
+      "start": 1908927.428220513,
+      "end": 1908927.428256542,
+      "phase": "prefill",
+      "reason": "state_apply"
+    },
+    {
+      "start": 1908927.428256542,
+      "end": 1908927.434111234,
+      "phase": "decode",
+      "reason": "base_service"
+    },
+    {
+      "start": 1908927.434111234,
+      "end": 1908927.434229471,
+      "phase": "prefill",
+      "reason": "consumed"
+    },
+    {
+      "start": 1908927.434229471,
+      "end": 1908927.486128351,
+      "phase": "decode",
+      "reason": "base_service"
+    },
+    {
+      "start": 1908927.486128351,
+      "end": 1908927.486203074,
+      "phase": "decode",
+      "reason": "active_request_host_gap"
+    },
+    {
+      "start": 1908927.486203074,
+      "end": 1908927.486228253,
+      "phase": "decode",
+      "reason": "state_apply"
+    },
+    {
+      "start": 1908927.486228253,
+      "end": 1908927.486285112,
+      "phase": "decode",
+      "reason": "active_request_host_gap"
+    },
+    {
+      "start": 1908927.486285112,
+      "end": 1908927.486418998,
+      "phase": "decode",
+      "reason": "consumed"
+    }
+  ],
+  "raw_events_sha256": "a424f042c78d248a6afd11d9fdb7c558ffbbc11a32cb28077f697a176f3ef2c0"
+}

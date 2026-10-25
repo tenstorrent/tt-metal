@@ -1,0 +1,48 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/__main__.py", line 50, in <module>
+    main()
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/__main__.py", line 34, in main
+    print(json.dumps(freeze(tasks, dict(zip(tasks, counts)), args.output, args.reuse_manifest), indent=2))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/benchmark_stage/subsets.py", line 78, in prepare
+    tasks = flatten(get_task_dict([task_spec(group)]))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/typing_extensions.py", line 3140, in wrapper
+    return arg(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/lm_eval/tasks/__init__.py", line 167, in get_task_dict
+    result = task_manager.load_task_or_group(specs) if specs else {}
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/typing_extensions.py", line 3140, in wrapper
+    return arg(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/lm_eval/tasks/manager.py", line 279, in load_task_or_group
+    collections.ChainMap(*[_to_nested(self._load_spec(s)) for s in task_list])
+                                      ^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/lm_eval/tasks/manager.py", line 170, in _load_spec
+    return self._factory.build(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/lm_eval/tasks/_factory.py", line 61, in build
+    return self._build_task(entry, overrides)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/lm_eval/tasks/_factory.py", line 81, in _build_task
+    obj = ConfigurableTask(config=cfg)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/lm_eval/api/task.py", line 753, in __init__
+    self.download(self.config.dataset_kwargs)
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/lm_eval/api/task.py", line 869, in download
+    self.dataset = datasets.load_dataset(
+                   ^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/datasets/load.py", line 1696, in load_dataset
+    builder_instance = load_dataset_builder(
+                       ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/datasets/load.py", line 1323, in load_dataset_builder
+    dataset_module = dataset_module_factory(
+                     ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/datasets/load.py", line 1209, in dataset_module_factory
+    raise e1 from None
+  File "/home/mvasiljev/tt-metal/.cache/benchmark-client/lib/python3.12/site-packages/datasets/load.py", line 1197, in dataset_module_factory
+    raise DatasetNotFoundError(message) from e
+datasets.exceptions.DatasetNotFoundError: Dataset 'Idavidrein/gpqa' is a gated dataset on the Hub. You must be authenticated to access it.

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "accuracy": {
+    "gpqa_diamond_cot_zeroshot": {
+      "model": "Qwen/Qwen3.8-27B",
+      "group": "gpqa_diamond_cot_zeroshot",
+      "subset_sha256": "fb01e42fbed84a24ad4f7c57b6355afa2abbd27e7cc3a27418e20b861fd6b5d7",
+      "concurrency": 32,
+      "elapsed_seconds": 2226.03152179718,
+      "timing_scope": "shared accuracy pass",
+      "shared_groups": [
+        "gpqa_diamond_cot_zeroshot"
+      ],
+      "request_timeout_seconds": 3600,
+      "expected_samples": 10,
+      "responses": 10,
+      "finish_reasons": {
+        "stop": 6,
+        "length": 4
+      },
+      "generation_overrides": {
+        "max_gen_toks": 16384,
+        "do_sample": true,
+        "temperature": 1.0,
+        "top_p": 0.95,
+        "top_k": 20,
+        "min_p": 0.0,
+        "presence_penalty": 0.0,
+        "repetition_penalty": 1.0,
+        "until": [],
+        "chat_template_kwargs": {
+          "enable_thinking": true,
+          "reasoning_effort": "xhigh",
+          "preserve_thinking": true
+        }
+      },
+      "empty_final_length_responses": 4,
+      "template": "native server chat template; structured messages exactly once",
+      "fewshot_as_multiturn": true,
+      "document_processing": {
+        "processor": "gpqa-cot-zeroshot-choice-shuffle-v1",
+        "seed": 0,
+        "map_cache": "recompute"
+      }
+    }
+  },
+  "performance": {},
+  "accuracy_execution": "shared",
+  "concurrencies": [
+    32,
+    16,
+    8,
+    1
+  ],
+  "accuracy_concurrency": 32,
+  "error": "ValueError: performance input_lens: expected 32 requests of 4096 tokens",
+  "elapsed_seconds": 2598.8852161588147
+}
