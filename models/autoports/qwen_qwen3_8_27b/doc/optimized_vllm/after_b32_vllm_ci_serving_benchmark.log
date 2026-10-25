@@ -1,0 +1,99 @@
+INFO 10-25 13:05:35 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 13:05:35 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 13:05:35 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-10-25 13:05:36.165 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+INFO 10-25 13:05:36 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 13:05:38 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 13:05:38 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+INFO 10-25 13:05:39 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+INFO 10-25 13:05:39 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+INFO 10-25 13:05:39 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+INFO 10-25 13:05:39 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+INFO 10-25 13:05:39 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+Namespace(subparser='bench', bench_type='serve', dispatch_function=<function BenchmarkServingSubcommand.cmd at 0x763be56bd5a0>, trust_remote_code=False, seed=0, num_prompts=32, dataset_name='random', no_stream=False, dataset_path=None, no_oversample=False, skip_chat_template=False, enable_multimodal_chat=False, disable_shuffle=False, custom_output_len=256, custom_ensure_client_side_data=False, spec_bench_output_len=256, spec_bench_category=None, sonnet_input_len=550, sonnet_output_len=150, sonnet_prefix_len=200, sharegpt_output_len=None, timed_trace_chunk_hash_size=16, timed_trace_sec_multiplier=1, timed_trace_label_timestamp='timestamp', timed_trace_label_input_length='input_length', timed_trace_label_output_length='output_length', timed_trace_label_hash_ids='hash_ids', blazedit_min_distance=0.0, blazedit_max_distance=1.0, asr_max_audio_len_sec=inf, asr_min_audio_len_sec=0.0, random_input_len=100, random_output_len=100, random_range_ratio='0.0', random_prefix_len=0, random_batch_size=1, no_reranker=False, random_mm_base_items_per_request=1, random_mm_num_mm_items_range_ratio=0.0, random_mm_limit_mm_per_prompt={'image': 255, 'video': 1}, random_mm_bucket_config={(256, 256, 1): 0.5, (720, 1280, 1): 0.5, (720, 1280, 16): 0.0}, hf_subset=None, hf_split=None, hf_name=None, hf_output_len=None, bfcl_categories=None, prefix_repetition_prefix_len=256, prefix_repetition_suffix_len=256, prefix_repetition_num_prefixes=10, prefix_repetition_output_len=128, speed_bench_dataset_subset='qualitative', speed_bench_output_len=4096, speed_bench_category=None, label=None, backend='vllm', base_url='http://localhost:8000', host='127.0.0.1', port=8000, endpoint='/v1/completions', header=None, max_concurrency=None, model='/workspace/.cache/qwen38-full', input_len=None, output_len=None, tokenizer=None, tokenizer_mode='auto', use_beam_search=False, logprobs=None, request_rate=inf, burstiness=1.0, probe_request_rate=0.0, disable_tqdm=False, num_warmups=0, profile=False, save_result=True, save_detailed=False, append_result=False, metadata=None, result_dir=None, result_filename='/workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_ci_serving_result.json', ignore_eos=True, self_timed=None, percentile_metrics='ttft,tpot,itl,e2el', metric_percentiles='99', goodput=None, request_id_prefix='bench-d3bdce81-', top_p=None, top_k=None, min_p=None, temperature=0.0, frequency_penalty=None, presence_penalty=None, repetition_penalty=None, served_model_name=None, lora_modules=None, lora_assignment='random', ramp_up_strategy=None, ramp_up_start_rps=None, ramp_up_end_rps=None, ready_check_timeout_sec=0, chat_template_kwargs=None, extra_body=None, skip_tokenizer_init=False, insecure=False, plot_timeline=False, timeline_itl_thresholds='25,50', plot_dataset_stats=False)
+INFO 10-25 13:05:39 [utils.py:90] Sampling input_len from [100, 100] and output_len from [100, 100]
+Starting initial single prompt test run...
+Skipping endpoint ready check.
+Starting main benchmark run...
+Traffic request rate: inf
+Burstiness factor: 1.0 (Poisson process)
+Maximum request concurrency: None
+  0%|          | 0/32 [00:00<?, ?it/s]  3%|▎         | 1/32 [00:13<06:58, 13.49s/it]100%|██████████| 32/32 [00:13<00:00,  2.37it/s]
+tip: install termplotlib and gnuplot to plot the metrics
+============ Serving Benchmark Result ============
+Successful requests:                     32        
+Failed requests:                         0         
+Benchmark duration (s):                  13.49     
+Total input tokens:                      3200      
+Total generated tokens:                  3200      
+Request throughput (req/s):              2.37      
+Output token throughput (tok/s):         237.24    
+Peak output token throughput (tok/s):    320.00    
+Peak concurrent requests:                32.00     
+Total token throughput (tok/s):          474.48    
+---------------Time to First Token----------------
+Mean TTFT (ms):                          2393.40   
+Median TTFT (ms):                        2394.81   
+P99 TTFT (ms):                           2395.24   
+-----Time per Output Token (excl. 1st token)------
+Mean TPOT (ms):                          112.05    
+Median TPOT (ms):                        112.04    
+P99 TPOT (ms):                           112.36    
+---------------Inter-token Latency----------------
+Mean ITL (ms):                           112.05    
+Median ITL (ms):                         109.07    
+P99 ITL (ms):                            204.70    
+----------------End-to-end Latency----------------
+Mean E2EL (ms):                          13486.34  
+Median E2EL (ms):                        13486.25  
+P99 E2EL (ms):                           13487.77  
+==================================================
+nanobind: leaked 138 instances!
+ - leaked instance 0x56f6d3157830 of type "ttnn._ttnn.operations.unary.lez_t"
+ - leaked instance 0x763c48569ba8 of type "ttnn._ttnn.tensor.CoreCoord"
+ - leaked instance 0x56f6d35cc020 of type "ttnn._ttnn.operations.unary.square_t"
+ - leaked instance 0x56f6d3606060 of type "ttnn._ttnn.operations.unary.rsqrt_t"
+ - leaked instance 0x56f6d3a16bc0 of type "ttnn._ttnn.operations.moreh.moreh_fold_t"
+ - leaked instance 0x56f6d3607cf0 of type "ttnn._ttnn.operations.unary.sqrt_t"
+ - leaked instance 0x56f6d3621980 of type "ttnn._ttnn.operations.unary.log2_t"
+ - leaked instance 0x56f6d3a22e60 of type "ttnn._ttnn.operations.moreh.moreh_softmin_backward_t"
+ - leaked instance 0x763c48569db8 of type "ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig"
+ - leaked instance 0x763c5eeea708 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x763c48617928 of type "ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig"
+ - leaked instance 0x56f6d355b200 of type "ttnn._ttnn.operations.unary.sin_t"
+ - leaked instance 0x56f6d3a1d160 of type "ttnn._ttnn.operations.moreh.moreh_mean_t"
+ - leaked instance 0x56f6d31cd2c0 of type "ttnn._ttnn.operations.unary.abs_t"
+ - leaked instance 0x56f6d31b9570 of type "ttnn._ttnn.operations.unary.tan_t"
+ - leaked instance 0x56f6d3a10c80 of type "ttnn._ttnn.operations.moreh.moreh_abs_pow_t"
+ - leaked instance 0x763c4857f4c8 of type "ttnn._ttnn.operations.sliding_window.Op2DSliceConfig"
+ - leaked instance 0x56f6d32f61b0 of type "ttnn._ttnn.operations.unary.hardsigmoid_t"
+ - leaked instance 0x763c484d4f28 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x56f6d3a13ef0 of type "ttnn._ttnn.operations.moreh.moreh_bmm_t"
+ - ... skipped remainder
+nanobind: leaked 1032 types!
+ - leaked type "SocketEndpoint"
+ - leaked type "ttnn._ttnn.operations.experimental.quasar.gt__t"
+ - leaked type "ttnn._ttnn.d2d_stream_service.D2DStreamServiceSender"
+ - leaked type "ttnn._ttnn.prefetcher_pipe.PrefetcherPipeSpace"
+ - leaked type "ttnn._ttnn.operations.experimental.insert_t"
+ - leaked type "ttnn._ttnn.operations.reduction.var_t"
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.operations.unary.fill_t"
+ - leaked type "ttnn._ttnn.operations.data_movement.gather_t"
+ - leaked type "ttnn._ttnn.operations.ternary.where_t"
+ - ... skipped remainder
+nanobind: leaked 4786 functions!
+ - leaked function ""
+ - leaked function "__call__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "set_buffer_from_cb"
+ - leaked function "stop"
+ - leaked function "__eq__"
+ - leaked function "is_allocated"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

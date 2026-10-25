@@ -1,0 +1,61 @@
+2026-10-25 12:42:48.338 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 10 items
+
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_all_intermediate_updates_state_without_host_opt_in_or_readback PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_mixed_host_prefill_reads_only_final_group PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_final_host_prefill_still_requires_explicit_compatibility PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_mixed_device_prefill_does_not_sample_intermediate_group PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_events_record_physical_pieces_and_non_aligned_tail PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_terminal_work_only_for_final_emitted_chunk[False] PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_terminal_work_only_for_final_emitted_chunk[True] PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_sampled_output_uses_one_replica_and_never_rereads_async_host[False] PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_sampled_output_uses_one_replica_and_never_rereads_async_host[True] PASSED
+models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_torch_output_is_formatted_without_device_api PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
+============================= slowest 25 durations =============================
+0.21s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_all_intermediate_updates_state_without_host_opt_in_or_readback
+0.20s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_events_record_physical_pieces_and_non_aligned_tail
+0.20s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_torch_output_is_formatted_without_device_api
+0.20s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_final_host_prefill_still_requires_explicit_compatibility
+0.20s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_sampled_output_uses_one_replica_and_never_rereads_async_host[True]
+0.20s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_terminal_work_only_for_final_emitted_chunk[False]
+0.20s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_mixed_host_prefill_reads_only_final_group
+0.19s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_sampled_output_uses_one_replica_and_never_rereads_async_host[False]
+0.19s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_terminal_work_only_for_final_emitted_chunk[True]
+0.19s setup    models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_mixed_device_prefill_does_not_sample_intermediate_group
+
+(15 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_all_intermediate_updates_state_without_host_opt_in_or_readback
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_mixed_host_prefill_reads_only_final_group
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_final_host_prefill_still_requires_explicit_compatibility
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_mixed_device_prefill_does_not_sample_intermediate_group
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_events_record_physical_pieces_and_non_aligned_tail
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_terminal_work_only_for_final_emitted_chunk[False]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_prefill_contract.py::test_terminal_work_only_for_final_emitted_chunk[True]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_sampled_output_uses_one_replica_and_never_rereads_async_host[False]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_sampled_output_uses_one_replica_and_never_rereads_async_host[True]
+PASSED models/autoports/qwen_qwen3_8_27b/tests/test_serving_output_contract.py::test_torch_output_is_formatted_without_device_api
+======================== 10 passed, 2 warnings in 2.89s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

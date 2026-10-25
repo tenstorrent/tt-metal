@@ -1,0 +1,403 @@
+2026-10-25 13:11:07.245 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 10-25 13:11:07 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 13:11:07 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 13:11:07 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-25 13:11:07 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 13:11:09 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 13:11:09 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 150 items
+
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py::test_a_completed_request_also_moved_the_draft_counters SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py::test_the_per_position_acceptance_is_exactly_the_configured_depth SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py::test_the_committed_width_per_step_follows_the_acceptance SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py::test_the_committed_ids_are_the_dummy_s_own_arithmetic SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py::test_a_request_that_asks_for_one_token_still_speculates_nothing_wrong SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_adaptive_policy.py::test_a_lone_request_is_drafted_for_on_every_step SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_adaptive_policy.py::test_a_batch_is_not_drafted_for SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_adaptive_policy.py::test_speculation_resumes_when_the_batch_empties SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_the_output_is_the_rule_whatever_the_acceptance SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_zero_acceptance_commits_one_token_per_step SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_partial_acceptance_commits_exactly_the_depth SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_preemption_replays_without_losing_a_token SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_a_forced_prefix_reset_keeps_every_response_intact SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_a_cancelled_row_is_reused_without_inheriting_anything SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_prefills_arriving_during_decode_do_not_disturb_the_decoders SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_an_output_limit_inside_an_accepted_block SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py::test_distinct_histories_stay_distinct SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py::test_the_resolved_server_schedules_asynchronously SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py::test_ordinary_steps_overlap_and_no_verify_does SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py::test_speculation_happens_and_resumes_on_the_asynchronous_launch SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py::test_the_asynchronous_output_is_the_rule_s_own_sequence SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_capacity.py::test_preempted_requests_still_emit_their_full_output SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_capacity.py::test_a_resumed_request_speculates_again_after_its_replay SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_capacity.py::test_a_request_admitted_after_the_flood_is_unaffected SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py::test_distinct_requests_each_get_their_own_output SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py::test_the_rows_shared_engine_steps SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py::test_a_request_joining_a_running_batch_is_served_correctly SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py::test_every_row_s_acceptance_matches_the_configured_depth SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_lossless_device.py::test_the_speculated_output_equals_the_unspeculated_output SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_lossless_device.py::test_the_two_arms_reach_the_same_output_in_different_step_counts SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_lossless_device.py::test_a_deliberately_wrong_drafter_still_emits_the_same_output SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_mixed_sampling.py::test_a_sampled_request_joining_a_speculating_one_is_sampled SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_mixed_sampling.py::test_a_sampled_request_is_refused_where_every_step_verifies[temperature] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_mixed_sampling.py::test_a_sampled_request_is_refused_where_every_step_verifies[presence-penalty] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_mixed_sampling.py::test_a_sampled_request_is_refused_where_every_step_verifies[repetition-penalty] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py::test_a_control_is_admitted_exactly_when_the_model_serves_logits[logprobs] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py::test_a_control_is_admitted_exactly_when_the_model_serves_logits[logprobs-0] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py::test_a_control_is_admitted_exactly_when_the_model_serves_logits[structured_outputs] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py::test_a_control_is_admitted_exactly_when_the_model_serves_logits[allowed_token_ids] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py::test_a_control_is_admitted_exactly_when_the_model_serves_logits[bad_words] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py::test_a_control_is_admitted_exactly_when_the_model_serves_logits[min_tokens] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py::test_logit_bias_is_refused_on_every_speculating_launch SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_allowed_token_ids_speculate_and_commit_only_allowed_tokens[sampled] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_allowed_token_ids_speculate_and_commit_only_allowed_tokens[greedy] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_a_two_token_bad_word_is_never_committed SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_min_tokens_holds_a_stop_token_back_until_it_is_reached SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_logprobs_report_the_target_s_raw_distribution[sampled] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_logprobs_report_the_target_s_raw_distribution[greedy] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_logprobs_report_the_target_s_raw_distribution[penalized] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_structured_output_speculates_and_follows_each_request_s_grammar[sampled] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_structured_output_speculates_and_follows_each_request_s_grammar[greedy] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_a_grammar_the_model_drafts_follow_accepts_its_drafts SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py::test_requests_with_different_controls_keep_their_own_in_one_verify SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_sampled_requests_speculate_and_commit_the_target_distribution[temperature] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_sampled_requests_speculate_and_commit_the_target_distribution[top-k] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_sampled_requests_speculate_and_commit_the_target_distribution[top-p] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_sampled_requests_speculate_and_commit_the_target_distribution[penalties] SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_unseeded_sampled_requests_commit_the_target_distribution SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_a_greedy_penalized_request_speculates_to_its_exact_output SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_a_seeded_sampled_request_repeats_alone_and_in_company SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_greedy_and_sampled_requests_keep_their_own_semantics_in_one_batch SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_a_stop_token_ends_a_sampled_request_where_it_was_drawn SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_a_greedy_request_on_a_logits_launch_still_follows_the_rule SKIPPED
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py::test_sampled_requests_survive_preemption SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py::test_max_tokens_cuts_inside_a_committed_prefix SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py::test_a_stop_token_inside_a_prefix_ends_the_request_there SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py::test_the_end_of_sequence_id_inside_a_prefix_ends_the_request SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py::test_streaming_and_non_streaming_stop_at_the_same_boundary SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py::test_streaming_and_non_streaming_agree_on_a_length_boundary SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py::test_a_cancelled_request_frees_its_row_for_the_next_one SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py::test_many_cancellations_do_not_exhaust_the_rows SKIPPEDspeculative_tokens)
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0 PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_top_n_at_cols_1_to_n PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_selected_token_ranks PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_at_rank0 PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_max_num_logprobs_zero PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_dtypes PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_per_user_different_sampled PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py::test_a_solo_split_prefill_recalls_its_needle SKIPPED-
+budget=<max_num_batched_tokens>)
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py::test_a_long_split_prefill_recalls_its_needle SKIPPED-
+budget=<max_num_batched_tokens>)
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py::test_prefills_sharing_a_step_each_recall_their_own_needle SKIPPED-
+budget=<max_num_batched_tokens>)
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_config_reads_additional_config PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_logit_bias PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1.5] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_different_seeds_produce_different_outputs PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-1] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-0] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_noseed_varied PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_negative_seed_does_not_crash PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[7] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[10] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[19] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[32] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32] PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_reuses_slots_with_mixed_requests PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tile_size.py::test_plugin_tile_matches_ttnn PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_different_repetition_penalties PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_changes_output PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_is_per_request PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_changes_output PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_different_frequency_penalties PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+__________ TestRepetitionPenalty.test_repetition_penalty_mixed_batch ___________
+------------------------------ Captured log call -------------------------------
+ERROR    asyncio:base_events.py:1758 Task exception was never retrieved
+future: <Task finished name='Task-1008' coro=<AsyncClient.aclose() done, defined at /opt/venv/lib/python3.10/site-packages/httpx2/_client.py:2198> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.10/site-packages/httpx2/_client.py", line 2205, in aclose
+    await self._transport.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpx2/_transports/default.py", line 400, in aclose
+    await self._pool.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection_pool.py", line 382, in aclose
+    await self._close_connections(closing_connections)
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection_pool.py", line 374, in _close_connections
+    await connection.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection.py", line 157, in aclose
+    await self._connection.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/http11.py", line 236, in aclose
+    await self._network_stream.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_backends/anyio.py", line 56, in aclose
+    await self._stream.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/anyio/_backends/_asyncio.py", line 1467, in aclose
+    self._transport.close()
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/selector_events.py", line 706, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 753, in call_soon
+    self._check_closed()
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 515, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+ERROR    asyncio:base_events.py:1758 Task exception was never retrieved
+future: <Task finished name='Task-1009' coro=<AsyncClient.aclose() done, defined at /opt/venv/lib/python3.10/site-packages/httpx2/_client.py:2198> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.10/site-packages/httpx2/_client.py", line 2205, in aclose
+    await self._transport.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpx2/_transports/default.py", line 400, in aclose
+    await self._pool.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection_pool.py", line 382, in aclose
+    await self._close_connections(closing_connections)
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection_pool.py", line 374, in _close_connections
+    await connection.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection.py", line 157, in aclose
+    await self._connection.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/http11.py", line 236, in aclose
+    await self._network_stream.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_backends/anyio.py", line 56, in aclose
+    await self._stream.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/anyio/_backends/_asyncio.py", line 1467, in aclose
+    self._transport.close()
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/selector_events.py", line 706, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 753, in call_soon
+    self._check_closed()
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 515, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+- generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
+============================= slowest 25 durations =============================
+30.95s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_changes_output
+30.59s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_changes_output
+24.72s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+16.54s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied
+16.09s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1]
+16.04s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0]
+9.93s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words
+9.04s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1]
+8.94s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0]
+8.59s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32]
+7.17s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches
+5.81s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens
+5.80s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_reuses_slots_with_mixed_requests
+5.33s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_is_per_request
+4.89s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19]
+4.76s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+4.39s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15]
+4.24s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1]
+4.23s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0]
+4.16s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches
+3.70s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37]
+3.35s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5]
+3.26s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding
+3.22s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999]
+3.21s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0]
+=========================== short test summary info ============================
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_top_n_at_cols_1_to_n
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_selected_token_ranks
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_at_rank0
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_max_num_logprobs_zero
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_dtypes
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_per_user_different_sampled
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_config_reads_additional_config
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_config.py::test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_logit_bias
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_allowed_token_ids
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-0.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[0-1.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-0.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-0.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[3-1.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-0.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[5-1.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-0.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[10-1.5]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_different_seeds_produce_different_outputs
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-1]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[1-0]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_noseed_varied
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_negative_seed_does_not_crash
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[7]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[10]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[19]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[32]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32]
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_full_capacity_mixes_structured_and_plain_requests
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_reuses_slots_with_mixed_requests
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tile_size.py::test_plugin_tile_matches_ttnn
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_different_repetition_penalties
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestRepetitionPenalty::test_repetition_penalty_mixed_batch
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_changes_output
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_is_per_request
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_changes_output
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_different_frequency_penalties
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_mixed_batch
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py:46: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py:75: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py:107: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py:143: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py:182: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_adaptive_policy.py:46: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_adaptive_policy.py:70: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_adaptive_policy.py:123: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:123: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:142: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:169: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:208: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:247: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:298: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:326: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:361: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_correctness.py:391: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py:95: no --tt-spec-artifacts directory, so nothing can be recorded
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py:113: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py:168: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_async_transitions.py:246: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_capacity.py:45: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_capacity.py:86: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_capacity.py:127: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py:50: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py:86: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py:117: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_concurrency.py:151: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_lossless_device.py:49: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_lossless_device.py:90: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_lossless_device.py:126: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_mixed_sampling.py:91: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [3] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_mixed_sampling.py:220: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [6] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py:27: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_request_admission.py:42: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [2] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py:194: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py:245: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py:295: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [3] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py:376: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [2] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py:449: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py:517: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_controls.py:571: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [4] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:153: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:224: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:286: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:324: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:367: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:392: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:430: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_sampled_speculation.py:449: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py:42: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py:73: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py:121: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py:169: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py:206: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py:228: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.py:262: the server is not speculating: pass --tt-spec-k with the launched num_speculative_tokens
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py:145: Needs a server with chunked prefill enabled; pass --tt-chunked-prefill-budget=<max_num_batched_tokens>
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py:175: Needs a server with chunked prefill enabled; pass --tt-chunked-prefill-budget=<max_num_batched_tokens>
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py:206: Needs a server with chunked prefill enabled; pass --tt-chunked-prefill-budget=<max_num_batched_tokens>
+============ 76 passed, 74 skipped, 2 warnings in 315.02s (0:05:15) ============
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

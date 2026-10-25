@@ -1,0 +1,103 @@
+2026-10-25 12:43:30.705 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-25 12:43:32.185 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-25 12:43:32.185 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-25 12:43:32.185 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-25 12:43:32.185 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-25 12:43:32.196 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-25 12:43:32.196 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-25 12:43:32.275 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-25 12:43:32.275 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-25 12:43:32.275 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-25 12:43:32.275 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-25 12:43:32.276 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-25 12:43:32.511 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-25 12:43:32.574 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-25 12:43:32.574 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-25 12:43:32.574 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-25 12:43:32.575 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-25 12:43:52.585 | critical |           Metal | Device 0: Virtual core 29-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x357c, ERISC1 reset PC: 0x9330, RISC soft reset: 0x47000, Heartbeat start: 0xdcba2640, Heartbeat end: 0xdcba2640, Heartbeat changed: false (llrt.cpp:412)
+2026-10-25 12:43:52.585 | critical |          Always | TT_THROW: Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+Traceback (most recent call last):
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/probe_prefill_terminal_suppression.py", line 16, in <module>
+    mesh=ttnn.open_mesh_device(ttnn.MeshShape(1,4),trace_region_size=134217728)
+  File "/workspace/ttnn/ttnn/distributed/distributed.py", line 674, in open_mesh_device
+    return ttnn._ttnn.multi_device.open_mesh_device(
+RuntimeError: TT_THROW @ /workspace/tt_metal/llrt/llrt.cpp:678: tt::exception
+info:
+Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xdf7a98) [0x7920f67f7a98]
+ --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(tt::tt_metal::MetalEnvImpl&, int, tt::xy_pair const&, int)
+ --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::reset_cores(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::run_launch_phase(std::set<int, std::less<int>, std::allocator<int> > const&)
+ --- tt::tt_metal::MetalContext::initialize(tt::tt_metal::DispatchCoreConfig const&, unsigned char, std::vector<unsigned int, std::allocator<unsigned int> > const&, unsigned long, bool)
+ --- tt::tt_metal::MetalContext::initialize_device_manager(std::vector<int, std::allocator<int> > const&, unsigned char, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long, bool, bool)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::ScopedDevices::ScopedDevices(std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, std::vector<tt::tt_metal::distributed::MaybeRemote<int>, std::allocator<tt::tt_metal::distributed::MaybeRemote<int> > > const&, unsigned long, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::distributed::MeshDeviceImpl::create(ttsl::StrongType<int, tt::tt_metal::ContextIdTag>, tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig const&, unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::span<unsigned int const, 18446744073709551615ul>, unsigned long)
+ --- ttnn::distributed::open_mesh_device(unsigned long, unsigned long, unsigned long, tt::tt_metal::DispatchCoreConfig const&, std::optional<tt::tt_metal::distributed::MeshShape> const&, std::optional<tt::tt_metal::distributed::MeshCoordinate> const&, std::vector<int, std::allocator<int> > const&, unsigned long)
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x58778b) [0x7920fa98778b]
+ --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca9dd) [0x7920fa7ca9dd]
+ --- python(+0x3010ec) [0x5e50578e10ec]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x5e50578c8ab8]
+ --- python(_PyFunction_Vectorcall+0x2e3) [0x5e5057851373]
+ --- python(+0x3010ec) [0x5e50578e10ec]
+ --- python(_PyEval_EvalFrameDefault+0x1cfe8) [0x5e50578c8ab8]
+ --- python(+0x3ee472) [0x5e50579ce472]
+ --- python(+0x424d82) [0x5e5057a04d82]
+ --- python(+0x1b728c) [0x5e505779728c]
+ --- python(_PyRun_SimpleFileObject+0x113) [0x5e5057796d93]
+ --- python(_PyRun_AnyFileObject+0xb6) [0x5e5057796786]
+ --- python(+0x1c0f18) [0x5e50577a0f18]
+ --- python(+0x1c0a25) [0x5e50577a0a25]
+ --- python(Py_RunMain+0x612) [0x5e5057a118e2]
+ --- python(+0x431fb2) [0x5e5057a11fb2]
+ --- python(+0x35847c) [0x5e505793847c]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x79213e46dd90]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x79213e46de40]
+ --- python(+0x35838d) [0x5e505793838d]
+
+2026-10-25 12:43:53.221 | info     |    BuildKernels | JIT cache stats: 10/10 hits (100.0%) [10 cached, 27 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-25 12:43:53.221 | info     |    BuildKernels | JIT telemetry: 6 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-25 12:44:13.223 | critical |           Metal | Device 0: Virtual core 29-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x357c, ERISC1 reset PC: 0x9330, RISC soft reset: 0x47000, Heartbeat start: 0xdcba2640, Heartbeat end: 0xdcba2640, Heartbeat changed: false (llrt.cpp:412)
+2026-10-25 12:44:13.223 | critical |          Always | TT_THROW: Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+2026-10-25 12:44:13.224 | warning  |           Metal | Skipping RISC reset on device 0 during teardown: TT_THROW @ /workspace/tt_metal/llrt/llrt.cpp:678: tt::exception
+info:
+Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xdf7a98) [0x7920f67f7a98]
+ --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(tt::tt_metal::MetalEnvImpl&, int, tt::xy_pair const&, int)
+ --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::MetalContext::teardown()
+ --- tt::tt_metal::MetalContext::~MetalContext()
+ --- tt::tt_metal::MetalContext::destroy_instance(bool, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::MetalContext::destroy_all_instances(bool)
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x45495) [0x79213e489495]
+ --- /lib/x86_64-linux-gnu/libc.so.6(on_exit+0) [0x79213e489610]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d97) [0x79213e46dd97]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x79213e46de40]
+ --- python(+0x35838d) [0x5e505793838d]
+ (risc_firmware_initializer.cpp:283)
+2026-10-25 12:44:33.225 | critical |           Metal | Device 1: Virtual core 25-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x357c, ERISC1 reset PC: 0x9330, RISC soft reset: 0x47000, Heartbeat start: 0xdcbacd40, Heartbeat end: 0xdcbacd40, Heartbeat changed: false (llrt.cpp:412)
+2026-10-25 12:44:33.225 | critical |          Always | TT_THROW: Device 1: Timed out while waiting for active ethernet core 25-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+2026-10-25 12:44:33.226 | warning  |           Metal | Skipping RISC reset on device 1 during teardown: TT_THROW @ /workspace/tt_metal/llrt/llrt.cpp:678: tt::exception
+info:
+Device 1: Timed out while waiting for active ethernet core 25-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+backtrace:
+ --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xdf7a98) [0x7920f67f7a98]
+ --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(tt::tt_metal::MetalEnvImpl&, int, tt::xy_pair const&, int)
+ --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::MetalContext::teardown()
+ --- tt::tt_metal::MetalContext::~MetalContext()
+ --- tt::tt_metal::MetalContext::destroy_instance(bool, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::MetalContext::destroy_all_instances(bool)
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x45495) [0x79213e489495]
+ --- /lib/x86_64-linux-gnu/libc.so.6(on_exit+0) [0x79213e489610]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d97) [0x79213e46dd97]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x79213e46de40]
+ --- python(+0x35838d) [0x5e505793838d]
+ (risc_firmware_initializer.cpp:283)

@@ -1,0 +1,60 @@
+
+=== Running vLLM serving benchmark: single_user_decode ===
+  prompt_len=4096, output_len=128, num_requests=1, concurrency=1, temperature=0.0
+  comparison_scope: Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.
+  command: /opt/venv/bin/vllm bench serve --backend vllm --model /workspace/.cache/qwen38-full --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 4096 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_benchmark.log
+
+=== Serving benchmark summary: single_user_decode ===
+  Requests : 1/1 completed
+  TTFT     : P50=449.6ms  P99=449.6ms
+  TPOT     : mean=27.6ms  P99=27.6ms
+  ITL      : P50=27.6ms  P99=28.3ms
+  Output   : 32.3 tok/s aggregate
+  Decode   : 36.2 t/s/u from mean TPOT
+  Raw      : /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_result.json
+  Summary  : /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_benchmark.json
+
+=== Running qualitative prompts from /workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+  Prompt mode: chat
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : 'We need to respond to user: "Write a haiku about machine learning." Simple. Need'
+    Sampled: 'We need to respond to user: "Write a haiku about machine learning." Simple. Need'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : 'We need to answer user: "Explain the difference between supervised and unsupervi'
+    Sampled: 'We need to answer user: "Explain the difference between supervised and unsupervi'
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : 'We need to respond to user: "Complete this story: Once upon a time, in a faraway'
+    Sampled: 'We need to respond to user: "Complete this story: Once upon a time, in a faraway'
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : 'We need answer user: "What are the three laws of thermodynamics? Need final conc'
+    Sampled: 'We need answer user: "What are the three laws of thermodynamics? We need produce'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : 'We need to answer user: "Translate the following to French: \'Hello, how are you '
+    Sampled: 'We need to translate "Hello, how are you today?" to French. User asked in Englis'
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : 'We need answer user: "Write a Python function to calculate the Fibonacci sequenc'
+    Sampled: 'We need answer user: "Write a Python function to calculate the Fibonacci sequenc'
+
+Saved 6 completions to /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm
+============================================================
+explain 0.0 complete
+explain 0.7 complete
+structured 0.0 complete
+structured 0.7 complete
+code 0.0 complete
+code 0.7 complete
