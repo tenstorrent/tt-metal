@@ -135,12 +135,26 @@ def _inputs(mesh_device: ttnn.MeshDevice, case: dict) -> tuple[ttnn.Tensor, ttnn
         memory_config=ttnn.L1_MEMORY_CONFIG if case.get("in0") == "L1" else ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mapper(3),
     )
+    w_memory = ttnn.DRAM_MEMORY_CONFIG
+    if case.get("wmem") == "dram_ws":
+        # Width-sharded over the DRAM banks: each bank holds a contiguous run of whole weight columns.
+        banks = mesh_device.dram_grid_size().x
+        shard_w = -(-case["N"] // _T // banks) * _T
+        w_memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))]),
+                (case["K"], shard_w),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
     w = ttnn.from_torch(
         torch.randn(1, 1, case["K"], case["N"]) * 0.02,
         dtype=getattr(ttnn, case.get("wdtype", "bfloat8_b")),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=w_memory,
         mesh_mapper=mapper(2),
     )
     return a, w
