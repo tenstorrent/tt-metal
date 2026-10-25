@@ -1910,3 +1910,20 @@ GLM-Flash: 1.77). Not all of it: multi-hop forwarding and per-link load are stil
 - Moving credits / layouts off the row senders: each link's router has one worker sender channel - a second fabric
   connection on another core needs the fabric mux; not attempted. What stays: GLM-5.3 at D 2 senders blocked on full
   rings (279 passes vs 239 at bk 1) - the depth, not the packets.
+
+### Per-link load (b): the Galaxy's link loads on the 2x4 (CombineProbes.fill_y / SPC_FILLY)
+Combine bytes per directed edge, uniform routing, routes Y first then X (ties Y- / X+), in a chip's rows (S K):
+8x4 torus XY: X max 0.75 / mean 0.50, Y max 1.25 / mean 1.00; 4x4 (torus X, line Y): X 0.75 / 0.50, Y 1.00 / 0.83;
+2x4 line: X 1.00 / 0.83, Y 0.50 / 0.50. So the busiest link is 1.25 x the 2x4's on the 8x4, the same on the 4x4; the
+Galaxy's extra load is on Y. Probe: every Y-bound row is followed by fill_y x its bytes of filler to the Y neighbour's
+sink (16 KB L1 on every core, allocated before the arena), on the row's own connection (so it also contends at the
+worker channel - more than real forwarding, which enters the routers from other links).
+- 8x4 emulation (bk 4, each model's Galaxy D, batching on), fill 1.0 (mean Y) / 1.5 (busiest Y), fused (alone):
+  K3 1210 / 1216 (609 / 699), GLM-Flash 453 / 496 (356 / 394), GLM-5.3 767 / 794 (677 / 699), M3 508 / 529, V4.1
+  623 / 626. GLM-Flash fused / flat 1.25 / 1.36.
+- The quoted Galaxy number (GLM-Flash fused 695 / flat 392 = 1.77) is a 4x4 run at the 8x4 per-chip load: 16 sources
+  (bk 2), D 8 there (15 x 8 slots fit), Y filler 1.0 (its busiest Y edge is 2 x the 2x4's): fused 443 / flat 363 = 1.22
+  (bk 2 alone 401, filler alone 437). Not reproduced: source-count bookkeeping and link load together explain about a
+  third of the Galaxy's loss (1.09 -> 1.22 of 1.77). Left: the Galaxy's flat itself (392 alone vs 363 here - GDDR speed
+  / DRISC), multi-hop router forwarding (the filler is single-hop, from the worker channel) and the credits' multi-hop
+  round trip (650 ns a hop).

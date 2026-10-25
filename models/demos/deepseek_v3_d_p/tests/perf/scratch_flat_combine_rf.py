@@ -524,6 +524,20 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
     plan = op.plan
     writers = len(plan["y_writers"])
     grid0 = mesh_device.compute_with_storage_grid_size()
+    fill_t = None
+    if float(os.environ.get("SPC_FILLY", "0")):  # (probe: the Y-link filler's sink - 16 KB on every core, garbage)
+        gcrs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid0.x - 1, grid0.y - 1))])
+        fill_t = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([grid0.x * grid0.y, 4096]),
+            ttnn.uint32,
+            ttnn.ROW_MAJOR_LAYOUT,
+            mesh_device,
+            ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(gcrs, [1, 4096], ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
     # (DRISC: only the reader cells that still run Tensix readers / the launcher are taken; the rest go to combine)
     rd_key = "tensix_readers" if "tensix_readers" in plan else "readers"
     taken = {tuple(v) for k in ("arena_cores", "gu", "down", rd_key, "relays", "coords") for v in plan[k]}
@@ -704,6 +718,8 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
             f"{routing}: flat role offsets (KB) " + ", ".join(f"{k} {v >> 10}" for k, v in plan["role_offsets"].items())
         )
     common = dict(num_links=L, torus=TORUS, n_acc=n_acc, depth=copt["depth"], cells=cells, arena=arena)
+    if fill_t is not None:
+        common["fill_sink"] = int(fill_t.buffer_address())
     combine_kw = dict(
         piece_max=copt["piece_max"],
         inj_slots=copt["inj_slots"],

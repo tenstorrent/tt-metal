@@ -61,6 +61,8 @@ class CombineProbes:
     nodrain: bool = False  # SPC_NODRAIN=1: no end-of-call credit drain
     piggy: str = ""  # SPC_PIGGY: 1 / 0 overrides piggyback_credits
     hw: bool = False  # SPC_HW=1: hang words - a sparse snapshot of each port's / accumulator's loop state in MISC 480..
+    fill_y: float = 0.0  # SPC_FILLY: filler bytes a Y-bound row byte, to the Y neighbour's sink (fill_sink): a Y link's
+    # load as on the Galaxy 8x4 (its Y edges carry 2-2.5 x the 2x4's: fill 1.0 mean, 1.5 the busiest)
     bk: int = 1  # SPC_BK: bookkeeping load x bk - every credit snapshot / ring layout packet sent bk times (the copies
     # idempotent: the same cumulative counts / layouts), every ring polled bk times a pass - the per-source bookkeeping of
     # bk x the sources (the Galaxy's 31 from the LoudBox's 7 at 4); the data path unchanged
@@ -85,6 +87,7 @@ class CombineProbes:
             piggy=env.get("SPC_PIGGY", ""),
             hw=env.get("SPC_HW") == "1",
             bk=int(env.get("SPC_BK", "1")),
+            fill_y=float(env.get("SPC_FILLY", "0")),
         )
 
 
@@ -373,7 +376,8 @@ constexpr uint32_t CRED = __CRED__, USED = __USED__, RET = __RET__, MISC = __MIS
                    RINGS = __RINGS__, LAYR = __LAYR__, LAYO = __LAYO__, U0 = __U0__;
 constexpr uint32_t PROF = __PROF__;
 constexpr uint32_t CRED_THR = __CREDTHR__;  // rows consumed from a source before its credits go back (or when idle)
-constexpr uint32_t CRED_IDLE = __CREDIDLE__, CRED_AGE = __CREDAGE__;  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
+constexpr uint32_t CRED_IDLE = __CREDIDLE__, CRED_AGE = __CREDAGE__;
+constexpr uint32_t FILLY = __FILLY__, FILL_SINK = __FILLSINK__, FC_ = __FILLC__;  // (probe SPC_FILLY: Y filler x 256)  // (idle: CRED_IDLE rows, or CRED_AGE cycles old)
 constexpr uint32_t PACE = __PACE__;
 constexpr uint32_t P = __P__, PD = __PD__, PS = __PS__;  // pieces per row, bytes per piece, piece stride
 constexpr uint32_t LASTPB = (P - 1) * PS + (row_bytes - (P - 1) * PD);  // the last piece's trailer
@@ -686,6 +690,7 @@ void kernel_main() {
     uint32_t n_piggy = 0;
     // one row (P pieces, its trailer's header word at LASTPB) from L1 src to its home's ring; false: not yet (the
     // ring's layout has not arrived, or the ring is full)
+    uint32_t fill_debt = 0;  // (probe SPC_FILLY)
     auto send_row = [&](uint32_t src) -> bool {
         const uint32_t hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[0];
         const uint32_t home = hdr & 0xFF, t = (hdr >> 8) & 0xFFFF, o = t % A, ci = home * AP + o;
@@ -730,6 +735,23 @@ void kernel_main() {
             ++unflushed;
         }
         used[ci] = u + 1;
+        if constexpr (FILLY) {  // (probe SPC_FILLY: the Galaxy's Y-link load - filler after my Y-bound rows, to the
+            // Y neighbour's sink: FILLY / 256 bytes a row byte, on this row's connection)
+            if (home / FC_ != me / FC_) {
+                fill_debt += row_bytes * FILLY / 256;
+                const uint32_t nb = ((me / FC_ + 1) % (N / FC_)) * FC_ + me % FC_;
+                while (fill_debt >= PD) {
+                    if (unflushed >= NH) flush();
+                    auto* h = hdr_at(nb, sent % NH);
+                    h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(my_x[noc_index], my_y[noc_index], FILL_SINK)}, PD);
+                    cn.wait_for_empty_write_slot();
+                    cn.send_current_slot_non_blocking(src, PD, reinterpret_cast<uint32_t>(h));
+                    ++sent;
+                    ++unflushed;
+                    fill_debt -= PD;
+                }
+            }
+        }
         return true;
     };
     // the shared-expert rows: reads into free staging slots (a slot is free once its send is flushed), a batch ready
@@ -1431,6 +1453,7 @@ def sparse_combine_rf_prepare(
     piggyback_credits=True,
     pool_slots=None,
     local_keep=8,
+    fill_sink=None,
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -1493,6 +1516,9 @@ def sparse_combine_rf_prepare(
     # slot on the row-injecting sender, so per-source packets scale with the source count - on the Galaxy's 31 (the
     # LoudBox with CombineProbes.bk 4) batching took 9-10 % off the fused call (GLM-5.3 836 -> 762 us); with the LoudBox's
     # 7 it was a wash (+-5 us), so off there
+    assert (
+        not pr.fill_y or fill_sink
+    ), "CombineProbes.fill_y: an L1 sink (fill_sink: a packet's bytes on every port cell)"
     sources = R * C * max(int(pr.bk), 1)
     cred_idle, cred_age = (8, 8100) if sources >= 16 else (1, 0)
     if pr.credidle:
@@ -1742,6 +1768,9 @@ def sparse_combine_rf_prepare(
         "__INJB__": str(inj_b),
         "__CREDTHR__": pr.credthr,
         "__CREDIDLE__": str(cred_idle),
+        "__FILLY__": str(int(round(pr.fill_y * 256))),
+        "__FILLSINK__": str(int(fill_sink or 0)),
+        "__FILLC__": str(C),
         "__CREDAGE__": str(cred_age),
         "__PACE__": str(int(pace_us > 0)),
         "__P__": str(NP),
