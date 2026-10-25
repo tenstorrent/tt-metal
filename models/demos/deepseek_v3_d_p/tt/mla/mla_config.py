@@ -154,19 +154,18 @@ MLA_MATMUL_CONFIG = {
     "q_b_proj": {
         # GLM-5.3 sequence-sharded Q (ttMLA._q_stem_seq): this chip's 160 TP-quarter rows x all 64 heads against the
         # TP-replicated weight, [160, 2048] x [2048, 16384]. M = 5 tiles: multicast the whole M slab to N-parallel
-        # cores (the indexer's wq_b shape, 4x wider); weight-read bound (35.6 MB bfp8). Measured on 8x4 (seqq R0 b/c,
-        # trace replay): N6/K2 on 86 cores of the 12x10 grid 115.7-116.9 us, rel-L2 vs fp32 truth 9.4e-3; the K8
-        # tiling of the 640-row head-path config 125-132 us, 1.41e-2 (K8 accumulates more products in the bf16 dest
-        # per pack). fp32 dest acc would give 4.4e-3 at ~124 us.
+        # cores (the indexer's wq_b shape, 4x wider); weight-read bound (35.6 MB bfp8). Same K8 tiling as the 640-row
+        # entry (bit-exact with the head path). Rejected (seqq R0 c + R3): N6/K2 on 12x10 was 10 us faster in
+        # isolation and 1.5x lower rel-L2 vs fp32 truth, but R3 got +22.6 ms slower (+2 ms on every chunk).
         160: {
             **_GLM_TAGS,
             "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(12, 10),
-                in0_block_w=2,
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=8,
                 out_subblock_h=1,
-                out_subblock_w=6,
+                out_subblock_w=5,
                 per_core_M=5,
-                per_core_N=6,
+                per_core_N=5,
                 fuse_batch=True,
                 fused_activation=None,
                 mcast_in0=True,
