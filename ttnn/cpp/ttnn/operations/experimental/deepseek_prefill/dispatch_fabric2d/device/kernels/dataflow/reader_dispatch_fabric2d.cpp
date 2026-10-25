@@ -172,6 +172,120 @@ void wait_for_untilize() {
 
 using routing_index::slice_begin;
 
+// ===== Load-aware split of the opposite-chip flows =====
+// A flow to the diametrically opposite chip can take either direction around the ring, and the static schedule
+// gives each of the four streams a quarter. With skewed routing (hot destination chips) one direction's links
+// then run far hotter than the other's. Every chip of the ring sees the same replicated offsets table, so each can
+// compute every (origin, destination) flow size and the same per-origin cw share for the opposite flows: start at
+// the static half, then a few rounds of moving each opposite flow toward its less-loaded direction (integer
+// arithmetic only, so every chip and every stream core gets the identical answer). Each direction's share is
+// still split evenly over the links. A stream's share stays within what the host reserved for it in the
+// forwarding section (opposite_cap), so any routing still fits.
+constexpr bool LOAD_AWARE_OPPOSITE = true;
+constexpr uint32_t MAX_RING = 16;
+struct OppositeSplit {
+    uint32_t cw[MAX_RING];     // pairs of origin's opposite flow sent clockwise
+    uint32_t total[MAX_RING];  // pairs of origin's opposite flow
+};
+OppositeSplit g_opp;
+
+uint32_t run_len(const Scratch& c, uint32_t origin_pos, uint32_t e);
+
+void compute_opposite_split(const Scratch& c) {
+    constexpr uint32_t P = ct.extent;
+    static_assert(P <= MAX_RING, "ring too long for the opposite-split table");
+    constexpr uint32_t m = P / 2;
+    constexpr uint32_t L = ct.num_links;
+    // Pages one stream may carry of one opposite flow: the host's forwarding-section reservation
+    // (fwd_pages_per_stream: div_up(per_pair, streams)), less one page per expert of rounding.
+    constexpr uint32_t per_pair = ct.seq_len * (ct.topk < ct.experts_per_chip ? ct.topk : ct.experts_per_chip);
+    constexpr uint32_t opposite_cap = (per_pair + 2 * L - 1) / (2 * L) - ct.experts_per_chip;
+    uint32_t lcw[P], lccw[P];
+    for (uint32_t p = 0; p < P; p++) {
+        lcw[p] = 0;
+        lccw[p] = 0;
+    }
+    for (uint32_t h = 0; h < P; h++) {
+        g_opp.total[h] = 0;
+        for (uint32_t d = 1; d < P; d++) {
+            const uint32_t t = (h + d) % P;
+            uint32_t f = 0;
+            for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
+                f += run_len(c, h, c.chip_experts[t * ct.experts_per_chip + j]);
+            }
+            if (d < m) {
+                for (uint32_t k = 0; k < d; k++) {
+                    lcw[(h + k) % P] += f;
+                }
+            } else if (d > m) {
+                for (uint32_t k = 0; k < P - d; k++) {
+                    lccw[(h + P - k) % P] += f;
+                }
+            } else {
+                g_opp.total[h] = f;
+            }
+        }
+    }
+    const auto place = [&](uint32_t h, int32_t sign) {
+        const uint32_t x = g_opp.cw[h], y = g_opp.total[h] - g_opp.cw[h];
+        for (uint32_t k = 0; k < m; k++) {
+            lcw[(h + k) % P] += sign * (int32_t)x;
+            lccw[(h + P - k) % P] += sign * (int32_t)y;
+        }
+    };
+    for (uint32_t h = 0; h < P; h++) {
+        g_opp.cw[h] = g_opp.total[h] / 2;
+        place(h, 1);
+    }
+    for (uint32_t round = 0; round < 16; round++) {
+        for (uint32_t h = 0; h < P; h++) {
+            place(h, -1);
+            uint32_t mcw = 0, mccw = 0;
+            for (uint32_t k = 0; k < m; k++) {
+                mcw = lcw[(h + k) % P] > mcw ? lcw[(h + k) % P] : mcw;
+                mccw = lccw[(h + P - k) % P] > mccw ? lccw[(h + P - k) % P] : mccw;
+            }
+            const int32_t n = (int32_t)g_opp.total[h];
+            int32_t x = ((int32_t)mccw - (int32_t)mcw + n) / 2;
+            const int32_t hi = (int32_t)(L * opposite_cap);
+            const int32_t lo = n - hi;
+            x = x < 0 ? 0 : (x > n ? n : x);
+            x = x > hi ? hi : x;
+            x = x < lo ? lo : x;
+            if (lo > hi) {
+                x = n / 2;  // cannot happen below per_pair; keep the static split rather than overrun a reservation
+            }
+            g_opp.cw[h] = (uint32_t)x;
+            place(h, 1);
+        }
+    }
+}
+
+// Start of share `idx` of `count` of a run of n pages that origin_pos sends to dst_pos. Opposite-chip runs use the
+// load-aware split: share idx = 2*link + (ccw ? 1 : 0), cw shares first covering the first cw_n pages.
+uint32_t share_begin(uint32_t n, uint32_t idx, uint32_t count, uint32_t origin_pos) {
+    if constexpr (LOAD_AWARE_OPPOSITE) {
+        if (count == 2 * ct.num_links && idx < count && g_opp.total[origin_pos] > 0) {
+            const uint32_t cw_n = (n * g_opp.cw[origin_pos]) / g_opp.total[origin_pos];
+            const uint32_t link = idx / 2;
+            return (idx % 2 == 0) ? slice_begin(cw_n, link, ct.num_links)
+                                  : cw_n + slice_begin(n - cw_n, link, ct.num_links);
+        }
+    }
+    return slice_begin(n, idx, count);
+}
+uint32_t share_end(uint32_t n, uint32_t idx, uint32_t count, uint32_t origin_pos) {
+    if constexpr (LOAD_AWARE_OPPOSITE) {
+        if (count == 2 * ct.num_links && g_opp.total[origin_pos] > 0) {
+            const uint32_t cw_n = (n * g_opp.cw[origin_pos]) / g_opp.total[origin_pos];
+            const uint32_t link = idx / 2;
+            return (idx % 2 == 0) ? slice_begin(cw_n, link + 1, ct.num_links)
+                                  : cw_n + slice_begin(n - cw_n, link + 1, ct.num_links);
+        }
+    }
+    return slice_begin(n, idx + 1, count);
+}
+
 // The reader -> sender queue of queue_depth entries. Two monotonic counters with one writer each: this side
 // owns `filled`, the sender owns `freed`, and each uses the difference, so neither needs an atomic
 // read-modify-write. `claimed` runs ahead of `published` so several token reads are in flight at once.
@@ -218,7 +332,7 @@ struct TokenQueue {
 // chunks, one per expert on the destination.
 uint32_t chunk_len(const Scratch& c, uint32_t origin_pos, uint32_t e, uint32_t idx, uint32_t count) {
     const uint32_t n = run_len(c, origin_pos, e);
-    return slice_begin(n, idx + 1, count) - slice_begin(n, idx, count);
+    return share_end(n, idx, count, origin_pos) - share_begin(n, idx, count, origin_pos);
 }
 
 // Page offset of each chunk of a descriptor list within a stream's fwd_section. The section holds only pages,
@@ -275,8 +389,8 @@ void own_phase(
             const uint32_t b = dst_pos * ct.experts_per_chip + j;
             const uint32_t first_record = c.bucket_start[b];
             const uint32_t n = c.bucket_start[b + 1u] - first_record;
-            const uint32_t from = slice_begin(n, split_idx, split_count);
-            const uint32_t to = slice_begin(n, split_idx + 1, split_count);
+            const uint32_t from = share_begin(n, split_idx, split_count, ct.my_pos);
+            const uint32_t to = share_end(n, split_idx, split_count, ct.my_pos);
             const uint32_t out_base = direct ? 0 : c.out_start[a * ct.experts_per_chip + j];
             for (uint32_t i = from; i < to; i++) {
                 const uint32_t at = (first_record + i) * dspf2d::record_words();
@@ -507,6 +621,9 @@ void kernel_main() {
     TokenQueue queue;
     {
         DeviceZoneScopedN("dspf2d_starts");
+        if constexpr (LOAD_AWARE_OPPOSITE) {
+            compute_opposite_split(c);
+        }
         chunk_starts(c, ct.in_descriptors_base, c.in_start);
         chunk_starts(c, ct.out_descriptors_base, c.out_start);
     }
