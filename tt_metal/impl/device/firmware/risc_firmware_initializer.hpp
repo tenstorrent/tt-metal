@@ -58,6 +58,8 @@ private:
     void assert_dispatch_cores(tt::ChipId device_id);
 
     CoreCoord virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord);
+    // NoC coord (`noc_x`, `noc_y`) packed the way the firmware's bank-to-NoC tables hold one.
+    uint32_t pack_bank_noc_xy(uint32_t noc_x, uint32_t noc_y) const;
     void generate_device_bank_to_noc_tables(tt::ChipId device_id);
     void generate_device_bank_to_noc_tables(
         tt::ChipId device_id,
