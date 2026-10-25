@@ -372,6 +372,17 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             )
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        # LoFi, full sync, four k steps, a 3 tile row, 16-bit DEST and Float16_b output: the hoisted unpack of the Float16_b column reads 0.4 cycles
+        # slower than main and main's own form does not recover it; the per-row unpack with the row MOP (the Float32 column) does
+        if (
+            (kt_dim, ct_dim, rt_dim) == (4, 3, 1)
+            and math_fidelity == MathFidelity.LoFi
+            and dest_sync == DestSync.Full
+            and dest_acc == DestAccumulation.No
+            and formats.output_format == DataFormat.Float16_b
+            and DataFormat.Float32 not in (formats.input_format, formats.input_format_B)
+        ):
+            return [MATMUL_FORM_KEYS(2, DataFormat.Float32, True)]
         # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
         if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
             from helpers.matmul_prod_keys import main_form_cell
