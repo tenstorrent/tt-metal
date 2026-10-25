@@ -53,8 +53,8 @@ void ExpectMeshAnswersLike(
 
 // The legacy default context keeps its cluster open until atexit and is reused as-is by later legacy opens, so it is
 // released on entry (an earlier test may have left one bound to a different cluster) and on exit (so later tests in
-// this binary can open their own cluster). On exit, ownership is released before mock mode is switched off so
-// teardown sees the config the context was created under.
+// this binary can open their own cluster). The mock-mode flag is only read when the default context is created, so
+// releasing a context after the flag changed is safe.
 struct LegacyContextCleanup {
     explicit LegacyContextCleanup(bool disable_mock = false) : disable_mock_mode(disable_mock) {
         if (MetalContext::instance_exists()) {
