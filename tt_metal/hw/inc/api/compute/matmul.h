@@ -51,31 +51,47 @@ static std::uint32_t throttled_mop_status = 0;
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
  */
 // clang-format on
+template <bool row_mop = false, bool tile_mop = true, int in1_order = 0, bool multi_k = false>
 ALWI void matmul_block_math_dynamic_throttle(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
     std::uint32_t idst,
     const std::uint32_t transpose,
     std::uint32_t ct_dim,
-    std::uint32_t rt_dim) {
+    std::uint32_t rt_dim,
+    std::uint32_t num_k = 1) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
-    volatile std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    const std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
-            MATH((
-                llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX, false, true, in1_order>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+        if constexpr (multi_k) {
+            for (std::uint32_t k = 0; k < num_k; k++) {
+                MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+            }
+        } else {
+            MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+        }
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, row_mop, tile_mop, in1_order>(
+                in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+        if constexpr (multi_k) {
+            for (std::uint32_t k = 0; k < num_k; k++) {
+                MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop>(
+                    idst, ct_dim, rt_dim)));
+            }
+        } else {
+            MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop>(idst, ct_dim, rt_dim)));
+        }
     }
 #endif
 }
@@ -193,6 +209,17 @@ ALWI void matmul_tiles(
  * reconfig_data_format is inappropriate when the data formats did not change. No current kernel hits this;
  * tracked in #46769.
  *
+ * Template parameter row_mop (ignored outside Blackhole): one math MOP per reuse row, the same value in matmul_block.
+ * It sets the math ADDR_MOD_3, 6 and 7: redo this init after a math-thread SFPU init, and that init after the matmul.
+ *
+ * Template parameter unpack_auto_ttsync (ignored outside Blackhole): row base addresses under Auto TTSync instead of polling
+ * for a free context, the same value in matmul_block; the kernel must define MATMUL_UNPACK_TTSYNC to a constant that
+ * is true when any of its calls passes true.
+ *
+ * Template parameters kt_per_section and out_format (ignored outside Blackhole): the matmul_block calls per DEST section
+ * and the packed output format, which pick the unpack and math forms (matmul_default_form); 0 and Invalid keep the
+ * forms main runs. The same values in matmul_block.
+ *
  * Return value: None
  *
  * | Argument  | Description                                                | Type     | Valid Range                                                                                    | Required |
@@ -205,6 +232,12 @@ ALWI void matmul_tiles(
  * | kt_dim    | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension                                                      | False    |
  */
 // clang-format on
+template <
+    bool row_mop = false,
+    bool unpack_auto_ttsync = false,
+    std::uint32_t kt_per_section = 0,
+    DataFormat out_format = DataFormat::Invalid,
+    int in1_order = 0>
 ALWI void matmul_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -216,11 +249,19 @@ ALWI void matmul_block_init(
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_AB_matmul_init<unpack_auto_ttsync>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<
+          MATH_FIDELITY,
+          MM_THROTTLE,
+          row_mop,
+          llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
+          in1_order>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
+#else
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
 #endif
 #else
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
@@ -239,6 +280,8 @@ ALWI void matmul_block_init(
  * output C is rt_dim x ct_dim tiles. So a block is just ct_dim * rt_dim output tiles produced in one
  * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
  * size is limited by DST size and sync mode (see matmul_block_init for the valid ct_dim/rt_dim ranges).
+ * A call may use smaller ct_dim and rt_dim than matmul_block_init but not flip ct_dim >= rt_dim, which fixes the held
+ * operand; row_mop, unpack_auto_ttsync and in1_order must be the values matmul_block_init was called with.
  *
  * Return value: None
  *
@@ -255,6 +298,12 @@ ALWI void matmul_block_init(
  * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
  */
 // clang-format on
+template <
+    bool row_mop = false,
+    bool unpack_auto_ttsync = false,
+    std::uint32_t kt_per_section = 0,
+    DataFormat out_format = DataFormat::Invalid,
+    int in1_order = 0>
 ALWI void matmul_block(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -269,17 +318,76 @@ ALWI void matmul_block(
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
 #ifdef ARCH_BLACKHOLE
+    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_per_section, out_format>(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
-    MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+    MATH((matmul_block_math_dynamic_throttle<
+          row_mop,
+          llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
+          in1_order>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
 #endif
 #else
     LLK_ASSERT(idst == 0, "non-default idst not supported on Quasar");
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_block(ct_dim, rt_dim)));
+#endif
+}
+
+// clang-format off
+/**
+ * matmul_block for num_k consecutive inner-dimension steps in one call: step k multiplies the rt_dim x 1 tiles of in0 at
+ * in0_tile_index + k (rows kt_dim apart) by the 1 x ct_dim tiles of in1 at in1_tile_index + k * in1_k_stride and
+ * accumulates into DST, as num_k matmul_block calls with the indices advanced by 1 and in1_k_stride. Blackhole runs the
+ * k loop inside the unpack and math calls; other architectures call matmul_block per step.
+ * The template parameters are those of matmul_block_init and matmul_block; unpack_auto_ttsync must be false. The unpack
+ * rows are always the hoisted form.
+ */
+// clang-format on
+template <
+    bool row_mop = false,
+    bool unpack_auto_ttsync = false,
+    std::uint32_t kt_per_section = 0,
+    DataFormat out_format = DataFormat::Invalid,
+    int in1_order = 0>
+ALWI void matmul_block_k(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t num_k,
+    std::uint32_t in1_k_stride,
+    std::uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    static_assert(!unpack_auto_ttsync, "matmul_block_k: Auto TTSync rows are not supported");
+    LLK_SAN_FUNCTION();
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul_k(
+        in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim, num_k, in1_k_stride)));
+    MATH((matmul_block_math_dynamic_throttle<row_mop, llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(), in1_order, true>(
+        in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, num_k)));
+#else
+    for (std::uint32_t k = 0; k < num_k; k++) {
+        matmul_block<row_mop, unpack_auto_ttsync, kt_per_section, out_format, in1_order>(
+            in0_cb_id,
+            in1_cb_id,
+            in0_tile_index + k,
+            in1_tile_index + k * in1_k_stride,
+            idst,
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            call_line);
+    }
 #endif
 }
 
