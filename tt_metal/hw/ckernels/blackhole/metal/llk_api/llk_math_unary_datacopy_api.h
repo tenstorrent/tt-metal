@@ -91,6 +91,19 @@ inline void llk_math_eltwise_unary_datacopy_block(
     }
 }
 
+// Math half of llk_unpack_A_to_dest_tiles: hands the unpacker the DEST address of the ntiles consecutive DEST tiles
+// from start_dst_index and waits until it has written them (see _llk_math_unpack_to_dest_tiles_). Needs no datacopy
+// init and leaves the math MOP and the address mods the kernel's op uses (all but ADDR_MOD_7) as they were.
+inline void llk_math_unpack_to_dest_tiles(
+    const std::uint32_t start_dst_index, const std::uint32_t ntiles, const std::uint32_t operand) {
+    const std::uint32_t operand_id = get_operand_id(operand);
+    LLK_ASSERT(
+        (start_dst_index + ntiles <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
+        "Unpack to DEST tiles past the DEST section");
+    _llk_math_unpack_to_dest_tiles_(
+        start_dst_index, ntiles, unpack_dst_format[operand_id], get_operand_num_faces(operand_id));
+}
+
 template <
     DataCopyType type,
     bool is_fp32_dest_acc_en,

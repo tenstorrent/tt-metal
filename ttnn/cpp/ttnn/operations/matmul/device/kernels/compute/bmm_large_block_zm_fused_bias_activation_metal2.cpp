@@ -119,9 +119,6 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     // reload copies through that alias while the FPU consumer keeps the original view. The alias
     // has its own read pointer, so align it with the partials buffer's current read position
     // before copying.
-    // Reconfigure input
-    reconfig_data_format_srca(in1_dfb_id, mm_partials_reload_dfb_id);
-    copy_init(mm_partials_reload_dfb_id);
     mm_partials_dfb.wait_front(out_subblock_num_tiles);
 
 #ifdef MM_PARTIALS_RELOAD_ALIAS
@@ -131,14 +128,19 @@ FORCE_INLINE void reload_from_dfb_to_dst(
     }
 #endif
 
-    uint32_t start_dst_index = 0;
-    uint32_t start_tile_index = 0;
-    copy_block(mm_partials_reload_dfb_id, start_tile_index, start_dst_index, out_subblock_num_tiles);
+    // Copy the partials into DST and return the unpacker and math engine to the matmul.
+    matmul_block_reload_partials(
+        in0_dfb_id,
+        in1_dfb_id,
+        mm_partials_reload_dfb_id,
+        0,
+        out_subblock_num_tiles,
+        in1_transpose_tile,
+        out_subblock_w,
+        out_subblock_h,
+        in0_block_w);
 
     mm_partials_dfb.pop_front(out_subblock_num_tiles);
-    // Reconfigure srcA back
-    reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init(in0_dfb_id, in1_dfb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
 template <uint32_t out_subblock_w, uint32_t out_block_w, typename IntermDFB, typename OutDFB>

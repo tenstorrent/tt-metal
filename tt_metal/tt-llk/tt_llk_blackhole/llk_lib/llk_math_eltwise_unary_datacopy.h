@@ -589,3 +589,55 @@ template <BroadcastType src_b_bcast_type = BroadcastType::NONE, bool unpack_to_d
 inline void _llk_math_eltwise_unary_datacopy_uninit_()
 {
 }
+
+/**
+ * @brief Math-thread half of @ref _llk_unpack_A_to_dest_tiles_: hand the unpacker the DEST address of ntiles
+ *        consecutive 32-bit tiles at once and wait until it has written them.
+ *
+ * The same handshake and zero-flag clears as ntiles calls of @ref _llk_math_eltwise_unary_datacopy_ with
+ * unpack_to_dest and a 32-bit input (BroadcastType::NONE), but one handshake for all the tiles: wait for the math
+ * pipe to drain, send the first tile's DEST address, wait for the unpacker's single UNPACK_TO_DEST post, then
+ * re-clear the DEST zero flags of every face written (the budabackend#2730 workaround, see
+ * @ref _llk_math_eltwise_unary_datacopy_). Needs no datacopy init: it runs no MOP, and its ZEROACCs step no counter
+ * (ADDR_MOD_7, programmed here with no increments), so the MOP and the address mods of the op around it (e.g. matmul)
+ * stay as they were.
+ *
+ * @param dst_index: DEST tile index of the first tile, relative to the current DEST section.
+ * @param ntiles: Number of tiles.
+ * @param dst_format: DEST data format of the operand (DataFormat enum underlying value); a 32-bit format.
+ * @param num_faces: Faces per tile, values = <1, 2, 4>.
+ * @note Pair with @ref _llk_unpack_A_to_dest_tiles_ on the unpack thread, with the same ntiles.
+ */
+inline void _llk_math_unpack_to_dest_tiles_(
+    const std::uint32_t dst_index, const std::uint32_t ntiles, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
+
+    math_unpack_to_dest_math_ready();
+    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(dst_index);
+    math::math_unpack_to_dest_tile_ready();
+
+    const std::uint32_t dst_format_masked = masked_data_format(dst_format);
+    const int clear_fp32                  = static_cast<int>(
+        dst_format_masked == (std::uint32_t)DataFormat::Float32 || dst_format_masked == (std::uint32_t)DataFormat::Int32 ||
+        dst_format_masked == (std::uint32_t)DataFormat::UInt32);
+    const std::uint32_t tiles_per_bank = clear_fp32 ? 4 : 8;
+#pragma GCC unroll 0
+    for (std::uint32_t t = 0; t < ntiles; t++)
+    {
+        const std::uint32_t local_tile = (dst_index + t) & (tiles_per_bank - 1);
+#pragma GCC unroll 0
+        for (std::uint32_t i = 0; i < num_faces; i++)
+        {
+            // Clears zero flags in DEST for one face.
+            TT_ZEROACC(p_zeroacc::CLR_16, clear_fp32, 1 /*clear zero flags*/, ADDR_MOD_7, get_dest_index_in_faces(local_tile, i));
+        }
+    }
+}
