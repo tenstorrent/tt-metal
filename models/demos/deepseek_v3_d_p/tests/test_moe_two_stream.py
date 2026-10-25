@@ -24,6 +24,7 @@ import copy
 import hashlib
 import os
 import threading
+import time
 
 import pytest
 import torch
@@ -84,6 +85,92 @@ def _host_inputs(variant, emb_dim, first_moe_layer):
         xs.append(x)
         residuals.append(h)
     return xs, residuals
+
+
+def _time_trace(mesh_device, fn, n_inner=8, n_replay=10):
+    ttnn.deallocate(fn())
+    ttnn.synchronize_device(mesh_device)
+    tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    for _ in range(n_inner):
+        ttnn.deallocate(fn())
+    ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+    ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=True)
+    ts = []
+    for _ in range(3):
+        t0 = time.perf_counter()
+        for _ in range(n_replay):
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        ts.append((time.perf_counter() - t0) / (n_replay * n_inner) * 1e6)
+    ttnn.release_trace(mesh_device, tid)
+    return sorted(ts)[1]
+
+
+def _pcr_probe(mesh_device, moe, forward):
+    """MOE2S_PCR_PROBE=1: capture the post_combine_reduce inputs of one real MoE forward (real routing, the overlapped
+    HRE+combine output) and time PCR alone, with the model's dispatch table and with an all-local one, and count the
+    active (token, slot) pairs the skip leaves. Explains the model's ~245 us vs ~92 us for a 2-of-8-active R0."""
+    stash = {}
+    orig = moe.reduce_module.forward
+
+    def spy(combine_output, weights=None, indices=None, expert_dispatch_table=None):
+        if not stash:
+            stash.update(
+                combine=ttnn.clone(combine_output),
+                weights=ttnn.clone(weights),
+                indices=ttnn.clone(indices),
+                table=expert_dispatch_table,
+            )
+        return orig(combine_output, weights=weights, indices=indices, expert_dispatch_table=expert_dispatch_table)
+
+    moe.reduce_module.forward = spy
+    try:
+        ttnn.deallocate(forward())
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        moe.reduce_module.forward = orig
+    c, w, i, tbl = stash["combine"], stash["weights"], stash["indices"], stash["table"]
+    logger.info(
+        f"[pcr-probe] combine {tuple(c.shape)} {c.layout} {c.dtype} {c.memory_config()}; weights {tuple(w.shape)} "
+        f"{w.layout} {w.dtype}; indices {tuple(i.shape)} {i.layout} {i.dtype} {i.memory_config()}; table "
+        f"{tuple(tbl.shape)} {tbl.layout} {tbl.dtype}"
+    )
+    dev_i = ttnn.get_device_tensors(i)
+    dev_t = ttnn.get_device_tensors(tbl)
+    for d in (0, 1, 2, 3, 13, 31):
+        idx = ttnn.to_torch(dev_i[d]).long().reshape(-1, i.shape[-1])
+        table = ttnn.to_torch(dev_t[d]).long().flatten()
+        ok = idx < table.numel()
+        active = torch.zeros_like(idx, dtype=torch.bool)
+        active[ok] = table[idx[ok]] != -1
+        logger.info(
+            f"[pcr-probe] dev {d}: table entries {table.numel()} local {(table != -1).sum().item()}; "
+            f"active slots/token {active.float().sum(-1).mean().item():.2f} (tokens {idx.shape[0]}); "
+            f"max idx {idx.max().item()}"
+        )
+
+    def pcr(table):
+        return ttnn.experimental.deepseek_prefill.post_combine_reduce(
+            c, w, i, table, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    logger.info(f"[pcr-probe] PCR model table: {_time_trace(mesh_device, lambda: pcr(tbl)):.1f} us")
+    all_local = ttnn.from_torch(
+        torch.zeros(tuple(tbl.shape), dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    logger.info(f"[pcr-probe] PCR all-local table: {_time_trace(mesh_device, lambda: pcr(all_local)):.1f} us")
+    none_local = ttnn.from_torch(
+        torch.full(tuple(tbl.shape), -1, dtype=torch.int32),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    logger.info(f"[pcr-probe] PCR none-local table: {_time_trace(mesh_device, lambda: pcr(none_local)):.1f} us")
 
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
@@ -295,6 +382,9 @@ def test_glm_moe_two_stream(
 
         # Eager: the single-stream reference (stream 0 for both chunks), then stream 1 for both (warms stream 1's
         # programs and lazily created per-stream buffers, e.g. the gate's device padding config).
+        if os.environ.get("MOE2S_PCR_PROBE", "0") == "1":
+            _pcr_probe(mesh_device, moes[0][1], lambda: moe_call(moes[0][1], 0, 0))
+            return
         eager = to_host(run_all(lambda s: 0))
         ttnn.synchronize_device(mesh_device)
         # The two chunks must really differ, or a stream mix-up would be invisible.
