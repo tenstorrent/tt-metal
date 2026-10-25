@@ -702,6 +702,10 @@ def per_axis_topology(
         fabric_config = ttnn.get_fabric_config()
     mapped = _FABRIC_PER_AXIS_TOPOLOGY.get(fabric_config)
     if mapped is not None:
+        if os.environ.get("PIPE_TP_LINEAR", "0") == "1":
+            # Two-chunk pipeline diagnostic: TP-axis collectives off the wrap links (EDM deadlock class next to
+            # dispatch_fabric2d); SP axis unchanged.
+            return (mapped[0], ttnn.Topology.Linear)
         return mapped
     # Unknown fabric → all-Linear. If the fabric name looks ring/torus-capable, this means a wrap-
     # capable fabric was opened but has no per-axis mapping here: collectives would silently run

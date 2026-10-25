@@ -22,6 +22,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_yield
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
@@ -904,6 +905,7 @@ class TtIndexerBase:
         # the host scalars a captured program would freeze at their capture-time values.
         traced = metadata is not None
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
+        pipeline_yield("kv_gather_start")  # two-chunk pipeline: full-mesh ring next; keep it out of the other stream's dispatch window
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
             k_full,
@@ -1516,6 +1518,7 @@ class TtCsaIndexer(TtIndexerBase):
             head_group_size=0,
         )
         gathered_k = self.tt_ccl.get_indexer_ring_k_buffer(local_k=index_kv_cache, sp_axis=self.sp_axis)
+        pipeline_yield("kv_gather_start")  # two-chunk pipeline: full-mesh ring next; keep it out of the other stream's dispatch window
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q,
             gathered_k,

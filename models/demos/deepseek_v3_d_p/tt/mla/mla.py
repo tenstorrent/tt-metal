@@ -11,6 +11,11 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_yield
+
+# Two-chunk pipeline diagnostic (PIPE_TP_LINEAR=1): keep the TP-axis all-to-alls off the wrap links (Linear), like the
+# other TP collectives under tt_ccl.per_axis_topology's PIPE_TP_LINEAR override.
+_PIPE_A2A_KW = {"topology": ttnn.Topology.Linear} if os.environ.get("PIPE_TP_LINEAR", "0") == "1" else {}
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -2147,6 +2152,7 @@ class ttMLA:
             actual_end=actual_end,
             metadata=metadata,
         )
+        pipeline_yield("kv_gather_start")
         kvpe_dev = self._gather_kvpe_prefix(
             kvpe_cache,
             cache_batch_idx,
@@ -2192,6 +2198,9 @@ class ttMLA:
             # Without it a captured replay writes every chunk at the captured kv_actual_isl.
             metadata=metadata,
         )
+        # Two-chunk pipeline switch point: everything after this is full-mesh fabric traffic (plan tables, push) or
+        # depends on it; it must not run next to the other stream's dispatch_fabric2d (EDM deadlock class).
+        pipeline_yield("kv_gather_start")
         planner, ready_sem, done_sem = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)
         storage = kvpe_cache.storage
         plan, push_buffer = self._sparse_push_plan(
@@ -2809,6 +2818,7 @@ class ttMLA:
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=self.tp_axis,
+            **_PIPE_A2A_KW,
         )
         ttnn.deallocate(t)
         return out
@@ -2931,6 +2941,7 @@ class ttMLA:
                 num_links=self.ccl_num_links,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 cluster_axis=self.tp_axis,
+                **_PIPE_A2A_KW,
             )
             ttnn.deallocate(ret)
             ret = head_sharded
@@ -2948,6 +2959,7 @@ class ttMLA:
             num_links=self.ccl_num_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=self.tp_axis,
+            **_PIPE_A2A_KW,
             subdevice_id=subdevice_id,
         )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
