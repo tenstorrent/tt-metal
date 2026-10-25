@@ -340,3 +340,14 @@ B32 selected token-out:4096 input median8.899521t/s/u (three repeats);32768 inpu
 All selected benchmarks exited0, serialized B1/B32/B8/B16. Offline audit_precision_runtime and summarize_precision_selection pass. Full actual dtype/fidelity inventories verified for all batches. Context strict check exits0 at262144; degenerate selected autoregressive output check exits0. Agentic checker exits1 for six inherited, evidence-backed representation-copy advisories only (no critical finding); physical payload counted once per named tensor family. Exact commands/output retained in final_checks.json. Final packet regenerated from supplied template with actual4096/128/B1 autoregressive values; device time/rooflines remain null.
 
 Final independent xhigh stage-review returns **clean-pass**, no required work (stage_review.md). Reviewer independently reproduced all medians and hashed raw allocator peaks, checked actual output text, source hashes, lifetime/trace warning evidence, full runtime policy propagation and exact telemetry. Initial pending-evidence findings are closed. All changed/new Python and shell syntax checks and git diff --check pass. Stage08 complete; no vLLM integration or push. Local checkpoint follows this review.
+
+## Local checkpoint receipt
+
+Repository: `/home/mvasiljev/tt-metal`; branch `exp26-qwen38-bringup`.
+Implementation and reviewed evidence commit: `e6000ca73151fe8181a39621b4b80d844fc634c7`.
+Includes required sweep CSV despite repository-wide CSV ignore (local exception).
+Commit identity is the same command-local `Codex <codex@localhost>` used by prior
+stages; no global Git configuration changed. No push was performed.
+This receipt is committed separately; its SHA and the implementation SHA are
+recorded in the external exact telemetry packet after the receipt commit.
+Only this repository was touched for implementation; no vLLM repository changes.
