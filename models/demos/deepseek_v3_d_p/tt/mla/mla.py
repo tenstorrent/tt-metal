@@ -43,6 +43,22 @@ _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
 _GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "32"))
 # glue track: workers per link for the seqq q_a reduce-scatter over rows; 0 = op default.
 _GLUE_SEQQ_RS_WORKERS = int(os.environ.get("GLUE_SEQQ_RS_WORKERS", "0")) or None
+# glue track (stem): on the non-overlapped sparse path (shared layers) build the sequence-sharded Q AFTER the KV
+# cache write + prefix push/gather, so the [1, H, S/(sp*tp), 576] Q buffer can live in L1 for its short life
+# (wkv_b1 -> in-place RoPE -> untilize to DRAM) without clashing with later static CBs.
+_GLUE_Q_DEFER_L1 = os.environ.get("GLUE_Q_DEFER_L1", "1") == "1"
+
+
+class _DeferredQ:
+    """A Q stem whose ops are issued only when the attention consumes it (glue track, GLUE_Q_DEFER_L1)."""
+
+    __slots__ = ("_build",)
+
+    def __init__(self, build):
+        self._build = build
+
+    def __call__(self):
+        return self._build()
 
 
 class ttMLA:
@@ -819,6 +835,7 @@ class ttMLA:
         # glue track: in-place RoPE for the sequence-sharded Q stem too (see _q_stem_seq). The head-path padded
         # weight built above is unused once Q is sequence-sharded; rebuild it from the TP-replicated wkv_b1.
         self._q_rope_inplace_seq = False
+        self._q_defer_l1 = False
         if self._seq_q:
             if self._q_rope_inplace:
                 ttnn.deallocate(self.wkv_b1_weight_padded)
@@ -830,6 +847,7 @@ class ttMLA:
                 self.wkv_b1_weight_padded = self._pad_wkv_b1_weight()
                 self._wkv_b1_padded_pc_seq = self._padded_wkv_b1_program_config(cfg["program_config"])
                 self._q_rope_inplace_seq = True
+                self._q_defer_l1 = _GLUE_Q_DEFER_L1 and self._has_indexer and not self.kv_only
         if os.getenv("MLA_MEMLOG") and layer_idx in (0, layer_num - 2, layer_num - 1):
             self._log_dram(f"after MLA layer {layer_idx} weights (seq_q={self._seq_q})")
 
@@ -1969,6 +1987,9 @@ class ttMLA:
         elif self._seq_q:
             # Only this TP rank's row quarter of the latent (see _q_a_latent_seq).
             q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local // self.tp_factor)
+            if self._q_defer_l1 and indexer_indices is not None:
+                # Deferred Q (shared layer): qr outlives the kv stem and the push; keep it out of L1.
+                q_norm_mem_config = ttnn.DRAM_MEMORY_CONFIG
             qr, kv_a = self._q_a_latent_seq(hidden_states, seq_len_local, q_norm_mem_config), None
         elif self._merge_qkv_a:
             qr, kv_a = self._qkv_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
@@ -2017,7 +2038,12 @@ class ttMLA:
                 metadata=metadata,
             )
 
-        if self._seq_q:
+        if self._seq_q and self._q_defer_l1 and selection_state is None and indexer_indices is not None:
+            # Built inside _finish_sparse_chunked_attn, after the KV write and the prefix push/gather.
+            tt_q = _DeferredQ(
+                lambda qr=qr: self._q_stem_seq(qr, rope_tensors, kv_actual_isl, metadata=metadata, out_l1=True)
+            )
+        elif self._seq_q:
             tt_q = self._q_stem_seq(qr, rope_tensors, kv_actual_isl, metadata=metadata)
         else:
             tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata)
@@ -2389,6 +2415,8 @@ class ttMLA:
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
             ttnn.deallocate(value)
+        if isinstance(tt_q, _DeferredQ):
+            tt_q = tt_q()  # glue: Q built now, after the KV write and the prefix push/gather (L1 Q buffer)
 
         # Sparse attention runs over latent V; project to v_head_dim afterwards. The prefix is already
         # sliced to this slot (batch-1), so no cache_batch_idx.
@@ -2408,7 +2436,8 @@ class ttMLA:
         # fresh Python wrapper for its supplied output, so wrapper identity cannot decide this.) The old
         # sp==1 non-dedup route did produce a genuinely transient slice; with the SP-only gather gone
         # there is no transient buffer here any more.
-        ttnn.deallocate(tt_q)
+        if tt_q.is_allocated():  # an L1 Q is already freed right after its untilize (_sparse_mla)
+            ttnn.deallocate(tt_q)
         if self._seq_q:
             # All heads of this TP quarter's rows: project, then restore the head-sharded layout. attn_out is freed
             # before the all-to-all (under MLA_SEQQ_L1 it is an L1 buffer and must not outlive wkv_b2).
@@ -2841,6 +2870,7 @@ class ttMLA:
         rope_tensors: dict,
         kv_actual_isl: Optional[int],
         metadata: Optional[ttnn.Tensor] = None,
+        out_l1: bool = False,
     ) -> ttnn.Tensor:
         """Absorbed-Q stem over this chip's TP-quarter rows and ALL heads: [1, H, S/(sp*tp), kv_lora + rope]."""
         q_rows = qr.shape[2]
@@ -2861,7 +2891,7 @@ class ttMLA:
                 tt_q_nope,
                 self.wkv_b1_weight_padded,
                 program_config=self._wkv_b1_padded_pc_seq,
-                memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_Q_OUT_L1 else ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG if (out_l1 or _GLUE_Q_OUT_L1) else ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.default_compute_kernel_config,
             )
@@ -2971,8 +3001,13 @@ class ttMLA:
         # (_q_stem_seq) is built TP-sequence-sharded with all heads: _sparse_q_seq passes it through, and the
         # caller (_finish_sparse_chunked_attn) restores heads after wkv_b2 instead of here.
         q_seq_sharded = self._sparse_q_seq(q) if q_seq is None else q_seq
-        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
-        if q_seq_sharded is not q:
+        # the op is ROW_MAJOR-only; q comes in TILE. sparse_sdpa requires its q in DRAM: a deferred L1 Q (glue,
+        # GLUE_Q_DEFER_L1) is untilized straight to DRAM and freed at once, so it never sits under sparse_sdpa's CBs.
+        q_in_l1 = q_seq_sharded.memory_config().buffer_type == ttnn.BufferType.L1
+        q_rm = ttnn.to_layout(
+            q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG if q_in_l1 else None
+        )
+        if q_seq_sharded is not q or q_in_l1:
             ttnn.deallocate(q_seq_sharded)
 
         # Indices must match q_rm's sequence sharding. Direct TP sequence shards [1,1,S/(sp*tp),k]
