@@ -891,10 +891,14 @@ class TtRoutedExpert(LightweightModule):
         """
         if not self._is_blackhole:
             raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
-        if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT or dispatched_buffer.dtype != ttnn.bfloat16:
+        # ROW_MAJOR bf16 from the bf16 dispatch wire, or TILE bf8 from the fp8 wire's DQ1.
+        if (dispatched_buffer.layout, dispatched_buffer.dtype) not in (
+            (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
+            (ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+        ):
             raise ValueError(
-                f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 dispatch buffer, got "
-                f"{dispatched_buffer.layout} {dispatched_buffer.dtype}"
+                f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 or TILE bfloat8_b dispatch buffer, "
+                f"got {dispatched_buffer.layout} {dispatched_buffer.dtype}"
             )
         threshold = 0 if self.hybrid_token_threshold is None else self.hybrid_token_threshold
         if threshold >= self.max_tokens:

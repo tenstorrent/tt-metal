@@ -111,15 +111,15 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const bool fused_half_runs = hybrid_token_threshold > 0;
     const bool overlap_combine = dispatched_metadata.has_value();
     ttnn::Tensor output = dispatched_buffer;
-    // Overlapped, combine's untilizers take the bfloat8_b tiles the row-major path writes, the same handoff the
-    // two ops make back to back; a TILE x would be written back in place, where combine could not tell which
-    // rows are already output.
+    // Overlapped, combine's untilizers take the routed expert's bfloat8_b output tiles, the same handoff the two ops
+    // make back to back. They must be a buffer of their own even for a TILE x (the fp8 dispatch wire's DQ1 hands the
+    // expert bf8 tiles): written back in place, combine could not tell which rows are already output.
     TT_FATAL(
-        !overlap_combine || x_is_row_major,
-        "overlapped with combine, dispatched_buffer must be ROW_MAJOR (got {} {})",
+        !overlap_combine || x_is_row_major || dispatched_buffer.dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+        "overlapped with combine, dispatched_buffer must be ROW_MAJOR or BFLOAT8_B TILE (got {} {})",
         dispatched_buffer.dtype(),
         dispatched_buffer.layout());
-    if (x_is_row_major) {
+    if (x_is_row_major || overlap_combine) {
         output = ttnn::empty(
             dispatched_buffer.logical_shape(),
             tt::tt_metal::DataType::BFLOAT8_B,

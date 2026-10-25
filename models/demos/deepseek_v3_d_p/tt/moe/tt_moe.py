@@ -48,6 +48,16 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
 # glue track: build post_combine_reduce's [1, 1, S, k, 1] weights inside the dispatch || shared-expert window.
 _GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "1") == "1"
+# fp8wire track (port of pmilojevic/FP8-newDispatchCombine): the fp8 dispatch wire. Q1 (per_token_cast_to_fp8,
+# 1x<block> power-of-two scales packed in the row) before the dispatch window, dispatch_fabric2d moves the packed
+# [e4m3 | fp32 scales] rows byte for byte (half the link bytes), DQ1 (per_token_cast_back) dequantizes the valid
+# rows to bf8 tiles for the overlapped routed expert (bf16 rows for the separate one). Off by default.
+_GLM_FP8_DISPATCH = os.environ.get("GLM_FP8_DISPATCH", "0") == "1"
+_GLM_FP8_SCALE_BLOCK = int(os.environ.get("GLM_FP8_SCALE_BLOCK", "128"))
+# DQ1 output for the overlapped routed expert: 1 = bf8 TILE (half the bytes, no tilize in the RE), 0 = bf16 rows.
+_GLM_FP8_DQ1_TILE = os.environ.get("GLM_FP8_DQ1_TILE", "1") == "1"
+# Dispatch sub-device rows on the fp8 wire: the row-major fp8 input needs no untilizer row (default 1).
+_GLM_FP8_DISPATCH_SD_ROWS = int(os.environ.get("GLM_FP8_DISPATCH_SD_ROWS", "1"))
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
@@ -514,6 +524,17 @@ class TtMoe(LightweightModule):
             if fabric2d_error is not None:
                 logger.info(f"TtMoe: running dispatch and combine, not the fabric2d ops: {fabric2d_error}")
         self.moe_transport = moe_transport
+        self.dispatch_fp8 = _GLM_FP8_DISPATCH and moe_transport == "fabric2d" and is_blackhole()
+        self.fp8_scale_block = _GLM_FP8_SCALE_BLOCK
+        if self.dispatch_fp8:
+            if self.fp8_scale_block not in (32, 64, 128):
+                raise ValueError(f"TtMoe: GLM_FP8_SCALE_BLOCK must be 32, 64 or 128, got {self.fp8_scale_block}")
+            if self.routed_emb_dim % 128 != 0:
+                raise ValueError(f"TtMoe: the fp8 dispatch wire needs routed_emb_dim % 128 == 0, got {self.routed_emb_dim}")
+            logger.info(
+                f"TtMoe: fp8 dispatch wire on (scale block {self.fp8_scale_block}, DQ1 tile {_GLM_FP8_DQ1_TILE}, "
+                f"dispatch rows {_GLM_FP8_DISPATCH_SD_ROWS})"
+            )
 
         # ========================================
         # Sub-devices: when overlap is enabled, split the Tensix grid into a "dispatch"
@@ -527,7 +548,10 @@ class TtMoe(LightweightModule):
         if self.overlap_shared_expert_with_dispatch:
             # routed_x is TILE, so dispatch_fabric2d untilizes it on row 1, under its senders on row 0
             # next to the ethernet cores.
+            # The fp8 wire hands dispatch Q1's ROW_MAJOR rows, which need no untilizer row.
             dispatch_sd_rows = 2 if moe_transport == "fabric2d" else 1
+            if self.dispatch_fp8:
+                dispatch_sd_rows = _GLM_FP8_DISPATCH_SD_ROWS
             grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
             assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
@@ -569,6 +593,7 @@ class TtMoe(LightweightModule):
                 cluster_axis=0,
                 num_links=self.row_num_links,
                 subdevice_id=self.dispatch_sd_id,
+                fp8_output=self.dispatch_fp8,
             )
         else:
             self.dispatch_module = TtDispatchModule(
@@ -630,6 +655,8 @@ class TtMoe(LightweightModule):
         )
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
+        # Also read by DQ1 on the fp8 dispatch wire, to find each local expert's valid rows.
+        self.global_expert_idx_tt = global_expert_idx_tt
 
         # An opted-in model (None) overlaps wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
         # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is at most two fabric packets so
@@ -1092,6 +1119,20 @@ class TtMoe(LightweightModule):
             # the same tensor.
             indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
+        # Q1 on the fp8 wire, before the sub-device window so it gets the whole grid. Dispatch moves its packed
+        # rows as plain payload; the router and the shared expert never see fp8.
+        dispatch_input = routed_x
+        if self.dispatch_fp8:
+            dispatch_input, _q1_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+                routed_x,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                round_scale_to_power_of_two=True,
+                round_to_nearest_even=True,
+                pack_scales_in_row=True,
+                scale_block_w=self.fp8_scale_block,
+            )
+            _q1_scales = None
+
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -1108,7 +1149,7 @@ class TtMoe(LightweightModule):
             logger.debug(f"[TtMoe.forward] {routed_x.shape=} {routed_x.memory_config()=}")
         if self.moe_transport == "fabric2d":
             dispatched_buffer, metadata = self.dispatch_module(
-                routed_x,
+                dispatch_input,
                 indices,
                 expert_dispatch_table=self.tt_expert_dispatch_table,
                 expert_token_counts=tt_expert_token_counts,
@@ -1169,6 +1210,11 @@ class TtMoe(LightweightModule):
                 self._trace_controller.sub_device_clear()
             else:
                 self.mesh_device.clear_loaded_sub_device_manager()
+        # Freed only after the sub-device clear: under the shared-expert overlap dispatch may still be reading it
+        # when the host gets here, and the shared expert beside it could be allocated into the freed range.
+        if self.dispatch_fp8:
+            ttnn.deallocate(dispatch_input)
+        dispatch_input = None
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it
@@ -1213,12 +1259,34 @@ class TtMoe(LightweightModule):
         # tiles it internally for the extract loop. Either way the ROW_MAJOR input
         # is independent of the result and can be freed here, unless the PCC check
         # needs it to compare against the bfloat16 torch reference.
-        squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
         # Overlapped only when this forward is traced. Eager, the overlapped program costs ~2 ms of host time per
         # call -- it is 32 per-chip programs, each carrying the routed expert's ~11k buffer bindings -- which makes
         # an untraced prefill host-bound; a trace replays it for free. A traced model attaches its controller
         # before the warm-up forward, so the warm-up compiles the same programs the capture records.
         overlap_combine = self.overlap_routed_expert_with_combine and self._trace_controller is not None
+        if self.dispatch_fp8:
+            # DQ1 on the full grid, for the valid prefix of each local expert's region only. The overlapped program
+            # takes bf8 tiles (half the bytes of bf16 rows, and the routed expert then needs no tilize); the separate
+            # routed expert keeps the bf16 rows.
+            dq1_tile = overlap_combine and _GLM_FP8_DQ1_TILE
+            dispatched_fp8 = dispatched_buffer
+            dispatched_buffer = ttnn.experimental.deepseek_prefill.per_token_cast_back(
+                dispatched_fp8,
+                None,
+                output_dtype=ttnn.bfloat8_b if dq1_tile else ttnn.bfloat16,
+                tile_output=dq1_tile,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                scales_in_row_tail=True,
+                token_count_aware=True,
+                expert_region_offsets=tt_expert_region_offsets,
+                expert_token_counts=tt_expert_token_counts,
+                global_expert_idx_table=self.global_expert_idx_tt,
+                experts_per_chip=self.experts_per_chip,
+                scale_block_w=self.fp8_scale_block,
+            )
+            if not return_intermediates:
+                ttnn.deallocate(dispatched_fp8)
+        squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
         if overlap_combine and not TtMoe._overlap_forward_logged:
             TtMoe._overlap_forward_logged = True
             logger.info("TtMoe: traced forward runs the routed expert overlapped with combine_fabric2d")
