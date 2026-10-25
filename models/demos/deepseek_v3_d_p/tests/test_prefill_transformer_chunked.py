@@ -1684,6 +1684,7 @@ def run_chunked_transformer_updated(
     seq_cache=None,
     tp_shard_kv=None,
     kv_cache_format=None,
+    chunk_real_tokens=None,
 ):
     """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive the
     full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer host
@@ -1829,6 +1830,14 @@ def run_chunked_transformer_updated(
     chunk_local = CHUNK // sp  # 640
     seq_cache = seq_cache or SEQ_CACHE_NOPCC
     assert preload_isl % CHUNK == 0, f"preload_isl ({preload_isl}) must be a multiple of CHUNK ({CHUNK})"
+    # chunk_real_tokens (partial-chunk timing): each measured chunk carries only its first chunk_real_tokens
+    # positions as real tokens; the rest of the CHUNK-wide tile is pad (token 0, as in the padded tests) and
+    # the chunk's actual_end is kv_actual + chunk_real_tokens. Chunk starts stay CHUNK-aligned, so the depth
+    # schedule matches the full-chunk cell and the real tokens land on SP chips 0..ceil(real/chunk_local)-1.
+    real_tokens = CHUNK if chunk_real_tokens is None else int(chunk_real_tokens)
+    assert 0 < real_tokens <= CHUNK and real_tokens % ttnn.TILE_SIZE == 0, (
+        f"chunk_real_tokens={chunk_real_tokens} must be tile-aligned and in (0, {CHUNK}]"
+    )
     measured_len = n_chunks * CHUNK  # tokens actually run this call
     total_len = preload_isl + measured_len  # logical seq length: preloaded prefix + measured chunks
     assert (
@@ -2125,6 +2134,9 @@ def run_chunked_transformer_updated(
         flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
         chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
         chunk_local_pos.append(flat - kv_actual)  # permutation of [0, CHUNK)
+        if real_tokens < CHUNK:
+            chunk_tok_host[-1] = chunk_tok_host[-1].clone()
+            chunk_tok_host[-1].view(-1)[(flat - kv_actual) >= real_tokens] = 0  # pad rows -> pad token 0
 
     mesh_device.enable_program_cache()
 
@@ -2280,7 +2292,7 @@ def run_chunked_transformer_updated(
                 # would see it. No-op for variants without one.
                 write_chunk_metadata(
                     trace_metadata,
-                    (0, kv_actual, kv_actual + CHUNK),
+                    (0, kv_actual, kv_actual + real_tokens),
                     hf_config=config,
                     mesh_device=mesh_device,
                     chunk_size_global=CHUNK,
@@ -2316,9 +2328,9 @@ def run_chunked_transformer_updated(
             layer_outputs = transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
-                actual_isl=CHUNK,
+                actual_isl=real_tokens,
                 actual_start=kv_actual,
-                actual_end=kv_actual + CHUNK,
+                actual_end=kv_actual + real_tokens,
                 cache_user_id=0,
                 return_intermediates=check_layer_pcc,
                 index_kv_cache=tt_index_kv_cache,
@@ -3105,6 +3117,90 @@ def test_glm_prefill_transformer_chunked_no_pcc(
         preload_isl=preload_isl,
         use_trace=use_trace,
         kv_cache_format=GLM_KV_CACHE_FORMAT,
+    )
+
+
+# Long-context / partial-chunk TIMING for GLM-5.3 (production prefill: AgentX requests add a few k new
+# tokens to ~100k of cached context, so the common chunk is PARTIALLY filled at depth). Same driver, model
+# build and traced replay as test_glm_prefill_transformer_chunked_no_pcc, plus:
+#   * real_tokens: each measured chunk is a CHUNK-wide padded tile whose first real_tokens positions are
+#     real (actual_end = start + real_tokens, read on device from the trace metadata, so ONE capture
+#     replays every chunk); tok5120 is the ordinary full chunk.
+#   * a KV cache sized to preload + chunks (not the fixed SEQ_CACHE_NOPCC), so deep cells such as
+#     preload95k x chunks_eleven (KV depth 97.3k..153.6k) run. LC_SEQ_CACHE=<tokens> overrides it (to
+#     check that cost follows populated depth, not the allocated width).
+# Record-only (no baseline band). e.g. -k "L78 and preload95k and tok2048 and chunks_eleven and ten_iters"
+@pytest.mark.parametrize("use_trace", [True], ids=["traced"])
+@pytest.mark.parametrize("num_iters", [1, 2, 10], ids=["iters1", "two_iters", "ten_iters"])
+@pytest.mark.parametrize("n_chunks", [1, 2, 11, 20], ids=["chunks1", "chunks_two", "chunks_eleven", "chunks20"])
+@pytest.mark.parametrize(
+    "real_tokens", [5120, 3072, 2048, 1024, 512], ids=["tok5120", "tok3072", "tok2048", "tok1024", "tok0512"]
+)
+@pytest.mark.parametrize(
+    "preload_isl",
+    [0, 5 * CHUNK, 10 * CHUNK, 19 * CHUNK, 39 * CHUNK, 49 * CHUNK],
+    ids=["preload0", "preload25k", "preload50k", "preload95k", "preload195k", "preload250k"],
+)
+@pytest.mark.parametrize("num_layers", [10, 78], ids=["L10", "L78"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.skipif(
+    not (is_high_power() or os.environ.get("DS_PERF_IGNORE_POWER") == "1"),
+    reason="perf job requires a high-power (>=130W TDP) galaxy; DS_PERF_IGNORE_POWER=1 runs it anyway",
+)
+@pytest.mark.timeout(0)
+def test_glm_prefill_transformer_chunked_partial_no_pcc(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_iters,
+    num_links,
+    preload_isl,
+    real_tokens,
+    use_trace,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    needed = preload_isl + n_chunks * CHUNK
+    seq_cache = int(os.environ.get("LC_SEQ_CACHE", "0")) or max(SEQ_CACHE_NOPCC, -(-needed // CHUNK) * CHUNK)
+    assert seq_cache >= needed, f"LC_SEQ_CACHE={seq_cache} < preload_isl + chunks = {needed}"
+    run_chunked_transformer_updated(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        num_iters,
+        routing_use_l1_small_for_semaphores=True,
+        preload_isl=preload_isl,
+        use_trace=use_trace,
+        seq_cache=seq_cache,
+        kv_cache_format=GLM_KV_CACHE_FORMAT,
+        chunk_real_tokens=None if real_tokens == CHUNK else real_tokens,
     )
 
 
