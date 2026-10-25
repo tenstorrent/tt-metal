@@ -129,6 +129,9 @@ def _cases():
         ("k3", 1280),
         ("m3", 640),
         ("dsv41_flash", 640),
+        ("k27", 640),  # (the planner's 11x10 MT 2 head, compact RS zones, the fused non-latent tail)
+        ("k27", 1024),
+        ("glm53", 640),
     ):
         out.append(Case(mn, rows, "uniform", 10000, "soak"))
         out.append(Case(mn, rows, "zipf_packed", 10000, "soak"))

@@ -23,7 +23,9 @@ all_to_all_async_generic in one program, the add and tilize under the sends.
            every destination's ready; at its end it waits for every arrival it expects. Words are re-armed
            (decremented by what was consumed): trace-safe, nothing to reset between calls
   links    line: a destination's block travels toward it (the middle links of a line of 4 carry 4 blocks: the floor);
-           ring: distance < G / 2 forward, > G / 2 backward, at G / 2 (G even) half the block's runs each way."""
+           ring: the shorter way, at G / 2 (G even) the way the fabric's own routing sends it (XGather3.ring_dir: a
+           2D unicast injected toward the other neighbour is not delivered - the first ring run hung on it). A ready
+           goes the fabric's way back to its sender: on a tie that need not be the side the data arrives on."""
 
 import torch
 from ttnn.bringup.combine_rf import fabric_all_gather_py as fag
@@ -338,31 +340,39 @@ class TailSchedule:
     positions 0 .. G - 1 (a line, or a ring), L links, a destination block NTB tiles wide, RT own row tiles a chip,
     NBK DRAM banks, RP pages a run. Ports are (position, direction, link)."""
 
-    def __init__(self, *, G, ring, L, NTB, RT, NBK, RP):
+    def __init__(self, *, G, ring, L, NTB, RT, NBK, RP, ties=None):
         self.G, self.ring, self.L, self.NTB, self.RT, self.NBK, self.RP = G, ring, L, NTB, RT, NBK, RP
+        self.ties = ties or {}  # ((p, q) at distance G / 2 on a ring -> the fabric's direction; default "fwd")
         inc = lambda n: -(-n // INC_EVERY)  # noqa: E731  (an increment every INC_EVERY runs and the last)
         self.expect, self.readies = {}, {}
         for p in range(G):
             for d in ("fwd", "bwd"):
                 for l in range(L):
                     for q, part in self.dests(p, d):
-                        key = (q, fag._OPP[d], l)  # (the destination's port facing me: my arrivals, my ready from it)
-                        self.expect[key] = self.expect.get(key, 0) + inc(RT * self.runs(part, l))
-                        self.readies.setdefault(key, set()).add((p, d, l))
+                        # (my arrivals: the destination's port facing the side my packets come in by; my ready: its
+                        # port facing the fabric's way back to me)
+                        akey = (q, fag._OPP[d], l)
+                        self.expect[akey] = self.expect.get(akey, 0) + inc(RT * self.runs(part, l))
+                        self.readies.setdefault((q, self.dir(q, p), l), set()).add((p, d, l))
+
+    def dir(self, p, q):
+        """The way a packet from position p to q leaves: toward it on a line; the shorter way on a ring, a tie the
+        fabric's."""
+        if not self.ring:
+            return "fwd" if q > p else "bwd"
+        df = (q - p) % self.G
+        if 2 * df == self.G:
+            return self.ties.get((p, q), "fwd")
+        return "fwd" if 2 * df < self.G else "bwd"
 
     def dests(self, p, d):
-        """[(q, part)] position p sends toward d (part 0 all its runs, 1 / 2 the first / second half)."""
+        """[(q, part)] position p sends toward d, nearest first (part 0: all its runs; parts 1 / 2 - halves - unused:
+        a tie goes one way)."""
         G = self.G
         if not self.ring:
             return [(q, 0) for q in (range(p + 1, G) if d == "fwd" else range(p - 1, -1, -1))]
-        out = []
-        for k in range(1, G):
-            q = (p + k) % G if d == "fwd" else (p - k) % G
-            if 2 * k < G:
-                out.append((q, 0))
-            elif 2 * k == G:
-                out.append((q, 1 if d == "fwd" else 2))
-        return out
+        qs = [((p + k) % G if d == "fwd" else (p - k) % G) for k in range(1, G)]
+        return [(q, 0) for q in qs if self.dir(p, q) == d]
 
     def run_list(self, part, l):
         """A port of link l's runs of a destination's row tile: [(first tile m, pages n)] (for_each_run)."""
@@ -426,13 +436,31 @@ class TailA2A:
         self.z = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, self.S, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
         )
-        self.sched = TailSchedule(G=G, ring=self.ring, L=num_links, NTB=self.NTB, RT=self.RT, NBK=self.NBK, RP=self.RP)
+        self.sched = TailSchedule(
+            G=G, ring=self.ring, L=num_links, NTB=self.NTB, RT=self.RT, NBK=self.NBK, RP=self.RP, ties=self._ties()
+        )
         # (a TP group is a mesh row: its chips by (mesh row, position))
         self.by_pos = {(c[0], self._pos(c)): c for c in self.chips}
         self.cache = {}
 
     def _pos(self, coord):
         return self.chips[coord]["rings"][0]["p"]
+
+    def _ties(self):
+        """{(p, q): direction} for the ring's far side (distance G / 2): the way the fabric routes it from p (as
+        XGather3.ring_dir), the same on every mesh row (asserted)."""
+        if not self.ring or self.G % 2:
+            return {}
+        node = lambda c: self.mesh.get_fabric_node_id(ttnn.MeshCoordinate(*c))  # noqa: E731
+        ties = {}
+        for coord, ch in self.chips.items():
+            p = self._pos(coord)
+            q = (p + self.G // 2) % self.G
+            qc = next(c for c in self.chips if c[0] == coord[0] and self._pos(c) == q)
+            fd = ttnn._ttnn.fabric.get_eth_forwarding_direction(node(coord), node(ch["rings"][0]["next"]))
+            d = "fwd" if ttnn._ttnn.fabric.get_eth_forwarding_direction(node(coord), node(qc)) == fd else "bwd"
+            assert ties.setdefault((p, q), d) == d, "tail_a2a: ring ties differ between mesh rows"
+        return ties
 
     # ---- the program ----
     def _program(self, coord, y, se, out):

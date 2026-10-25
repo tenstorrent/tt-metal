@@ -1698,3 +1698,63 @@ Structural (not fixed here):
 - `landing='shared'` (slot grants from one free list per accumulator) vs the default rings, ports apart, bk 4: at the
   Galaxy's ~11 slots per source the combine is 3-8% faster (fused 1-6%); with the 2x4's deep pools 7-12% slower.
   Rings stay the default. Soaked 20000 calls x 3 cases + 1M calls (GLM-5.3 8K zipf) clean.
+
+## 2026-10-25: the head planner (layout + cost model), compact RS zones, the fused non-latent tail
+Trigger: Kimi K2.7 at a Galaxy chip's load on the 2x4 (96 experts = router 384 folded 4, 12 a chip, 640 rows a mesh row):
+head 762 us on an 11x4 engine, MT 1, 5 chunks - ~3x its shape's cost (K3's head, 3x its SE + router, is ~640 on the
+2x4); the tail as ops (tilize 13 + add 17 + all-to-all 64 = 94 us).
+
+Why the cliff: not the ranking - L1. The rows reduce-scatter (GLM, K2.7: rs_dim -2) kept a P-tile zone slot per arrival
+of a core's (half, direction): 3 slots of MT x ceil(NTH / GX) tiles each way on a line of 4 - 504 KB at H 7168, MT 2.
+11x10 MT 2 in one chunk was 28 KB over the cap at the smallest K step; the fit-first rule then took 11x4 x 5 chunks,
+where every chunk streams all of W down the columns again (the cost model's 449 us of W stream).
+- Compact zones (se_rs.RsPlan.compact, the rows scatter's default at G <= 4): a core's MT rows fall in one or two
+  blocks, so a direction's arrivals are at most P tiles - each slot at the sum of the core's earlier slots' tiles. The
+  ports compute a core's offset from its counts word and a per-unit prefix mask of the downstream's earlier slots'
+  blocks; the NCRISC credits a slot's own tiles (threshold | pages << 16); the compute reads at the offsets. 1/3 of the
+  zones' L1 on a line, 1/2 on a ring; the width scatter (K3) unchanged byte for byte. Protocol model:
+  test_rs_protocol_model (ports' offsets = the cores' slots, inside the zone, never overlapping; negative: a dropped
+  prefix block) - 102 pass.
+- The router's logits K chunk (on the engine) sat in the zones' region: compact zones shrank it (K2.7 128 rows: KC 28 ->
+  14, +8%); it may now grow the arena back by what the zones gave up (KC as before for every measured layout).
+
+The planner (tt/head_plan.py): HeadShape (rows, H, I/TP, TP, E, K, latent, links, ring, grid) -> every layout (engine
+GX x GY, MT, NCH, K step, logits on the engine / router cores, zone kind) sized by the engine's own arena code on the
+host (SeEngine3(None, ..., arena_max)) against the device's cap (se_engine3.arena_cap a K step), ranked by a cost model:
+per chunk max(the busiest column's HiFi2 tiles + W rounds, its W stream down the column, x row multicast) pipelined
+with the x gather / RS link time (line: G - 1 shards on the end links, ring (G - 1) / 2), DRAM W (re-read a chunk with a
+W ring), a chunk's fixed cost, the routing chain (fixed + expert tiles x K) and the logits (engine phase / router-core
+matmul). Fit (tests/test_head_plan.py fit_cost) on 62 traced heads - K3 / K2.7 / GLM-Flash / GLM-5.3 at 128 .. 1280
+rows, 2x4 line and ring of 4, P-tile and compact zones, K steps 1 .. 16: median error 6%, worst 23%.
+- Inside the model's error (3%) it does not separate layouts (GLM-5.3 512 rows: K step 6 331 us, 12 349, 8 357): there
+  the fewest row chunks (every chunk streams all of W again: K2.7 1024 rows 2 chunks 680 vs 4 750; GLM-5.3 1024 607 vs
+  638), then the fit-first rule's layout (every measured head's), then the prediction. K3 / GLM-Flash: every layout as
+  before; GLM-5.3: 128 .. 640 and 1280 as before.
+- Generality: the engine width follows I/TP (columns with no gate / up pair asserted: I_s 1024 on TP 4); with the logits
+  on the engine the router cores may take several free rows (1536 / 2048 rows: 12 / 16 router cores). Host sweep
+  (test_head_plan_sweep, H 2048 .. 8192 x I_s 1024 .. 8192 x E 256 / 384 / 896 x rows 128 .. 2048, TP 4, 2x4): shapes
+  with no fused layout 426 -> 33 of 1260; 6 cliffs left (predicted > 1.6x a neighbour per row): H 6144 / 8192 with
+  I_s 8192 and K3-size heads at 2048 rows - L1 (the call's whole x resident: xown 448 - 896 KB) and the W restream a
+  chunk. Levers (protocol changes, not done): an x slot ring (two chunks' x resident, credits back to the gather), a
+  W-major chunk loop.
+- Typed: MoEOptions.head_layout (a HeadLayout) for A/B sweeps (test_head_layout_ab); every build logs the planned
+  layout, K step, predicted us and its arena against the device's cap.
+
+The fused non-latent tail (tt/tail_a2a.py, FusedTail without a latent): one program a chip - workers (column slices of
+every owned row tile: row-major reads, tilize, + the shared expert's tiles, own block straight to the output, the
+others to a DRAM staging buffer, then +1 on the ports' z-ready word of that row tile) and ports (a core per direction x
+link, fabric_all_gather's plan: per row tile their runs of each destination's block into its output pages, multi-hop 2D
+unicasts, fused arrival increments; a ready fence from every destination first; arrivals awaited at the end).
+Protocol model test_tail_a2a_model (no deadlock, every run once a call, never before its destination started the call,
+always before it ended, re-armed; negatives: no fence, an arrival short, one z-ready count over the call - the device's
+first bug: fast workers' later row tiles stood in for a slow one's, a row tile of garbage). Device (test_tail_a2a,
+2x4, traced; ops tail = tilize + add + all_to_all_async_generic):
+| model | rows | ops tail us | fused us |
+|---|---|---|---|
+| K2.7 | 640 | 94 | 65 |
+| K2.7 | 1024 | 139 | 97 |
+| GLM-5.3 | 640 | 92 | 58 |
+| GLM-5.3 | 1024 | 128 | 87 |
+| GLM-Flash | 640 | 59 | 46 |
+| GLM-Flash | 1024 | 88 | 66 |
+(link floor, line of 4: the middle links carry 4 blocks - K2.7 640 rows ~56 us.)

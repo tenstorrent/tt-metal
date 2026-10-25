@@ -228,6 +228,20 @@ def test_tail_a2a_protocol(case, seed):
     _run(TailSchedule(**case), calls=3, seed=seed)
 
 
+@pytest.mark.parametrize("tie", ["fwd", "bwd", "mixed"])
+@pytest.mark.parametrize("seed", range(4))
+def test_tail_a2a_ring_ties(tie, seed):
+    """A ring of 4 whose far side goes the fabric's way (all forward, all backward, or by position): every destination
+    reached one way, the readies by the fabric's way back - its port need not face the arrivals' side."""
+    ties = {(p, (p + 2) % 4): (tie if tie != "mixed" else ("fwd" if p % 2 else "bwd")) for p in range(4)}
+    sc = TailSchedule(G=4, ring=True, L=2, NTB=56, RT=2, NBK=8, RP=2, ties=ties)
+    for p in range(4):  # (each destination once, by the fabric's way)
+        qs = [q for d in ("fwd", "bwd") for q, _ in sc.dests(p, d)]
+        assert sorted(qs) == sorted(q for q in range(4) if q != p), (p, qs)
+        assert all(sc.dir(p, q) == d for d in ("fwd", "bwd") for q, _ in sc.dests(p, d))
+    _run(sc, calls=3, seed=seed)
+
+
 @pytest.mark.parametrize("what", ["fence", "expect", "one_word"])
 def test_tail_a2a_model_catches(what):
     """Without the ready fence a write lands before its destination started the call (a fast chip runs ahead); with
