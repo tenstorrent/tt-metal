@@ -2385,6 +2385,13 @@ def run_chunked_transformer_updated(
             reset_block_timings()
     profiler.end("tt_forward")
 
+    # Overlap A/B correctness surface: KV_CACHE_DUMP=<path> saves the final KVPE cache (natural order) so a run with an
+    # overlap knob can be compared bit for bit with the baseline (same chunks, same positions).
+    if os.environ.get("KV_CACHE_DUMP"):
+        cache_dump, _ = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)
+        torch.save(cache_dump, os.environ["KV_CACHE_DUMP"])
+        logger.info(f"[kv dump] KVPE cache {tuple(cache_dump.shape)} saved to {os.environ['KV_CACHE_DUMP']}")
+
     if determinism_check:
         assert not det_failures, "captured-trace replay is not deterministic: " + "; ".join(
             f"iter {it}: {n} element(s), max abs delta {mx:.3e}" for it, n, mx in det_failures
