@@ -1607,3 +1607,32 @@ Levers (estimates, M 160):
 - Sub-blocks sized to M (5 row tiles as 3 + 2, not 2 + 2 + 1): the skeleton's third sub-block is ~13 us / expert, but
   128-row sub-blocks did not show it in the real run (535) - low.
 Logs: /localdev/mstaletovic/flat_glm53/.
+
+### Lever 1 (fewer, larger K steps): emulations say it is not the bound (2026-10-25, bh-lb-09, GLM-5.3 E 8)
+Why: the GLM-5.3 analysis above priced the per-K-block control cost at ~1.2 us / K-block / 128 rows and proposed
+16-tile K-blocks end to end. A global kKBlk = 16 hangs at the first call (se6_drecv / se5_recv / se11_xrd in
+cb_reserve_back: every kernel assumes 8-tile blocks; triage /localdev/mstaletovic/flat_glm53/hang_k16; reverted).
+Before rewriting every kernel, each step type was made larger on its own with the existing knobs (us a call, M 96 /
+128 / 160; base 459 / 500 / 522):
+| variant (one variable) | real run | no reads (XRD_SKIP GU_NOREAD DN_NOREAD; base 386 / - / 436) | skeleton M 160 (base 333) |
+|---|---|---|---|
+| DRISC units of 2 blocks (DRISC_UB 2: half the DRISC loop's per-unit cost) | 468 / 497 / 571 | 381 / - / 437 | - |
+| x pieces 2 (8.7 KB snake hops, half the handshakes) | 461 / 503 / 526 | 380 / - / 424 | 314 |
+| x pieces 1 | 474 / 510 / 538 | - | 328 |
+| x pieces 8 | - | - | 594 |
+| snake forward depth 6 (vs 3) | 459 / 499 / 524 | - | 313 |
+| pieces 2 + depth 6 | 463 / 502 / 526 | - | - |
+| gate/up K group 4 (one compute handshake per 32 K tiles) | - | 389 / - / 434 | (K group 1..24 earlier: 328-351) |
+| x ring 32 / 48 blocks (MT 2; 24 = one sub-block) | 457 / 497 / 527 ; 457 / 496 / 524 | - | 2 snakes a rectangle: 325 |
+- DRISC profile at M 160 (MIMO_FL_DRISC_PROF): each tile ~1000 cycles a 9.2 KB unit, busy 681-792 k cycles of a
+  ~860 k-cycle call; UB 2 cuts the busy time to ~535 k for the same call time: the DRISC loop is not what paces.
+- Skeleton zones (M 160): the gate/up UNPACK thread waits in its K loop 316 of 321 us (math 1.7, pack 0.8), the down
+  cores wait for h, the relays' readers wait on a full ring (XRD_FULL 195 us): the gate/up cores are starved of x.
+  The skeleton tracks the padded x bytes a gate/up core takes in: M 96 / 160 / 256 = 2 / 3 / 4 sub-blocks of 64 rows
+  = 6.7 / 10.0 / 13.4 MB a core a call at ~32 GB/s = 209 / 313 / 418 us vs 229 / 333 / 436 measured; bf16 x (1.9x
+  the bytes, its own plan) 229 -> 332 / 333 -> 476. Fewer handshakes (pieces 2, depth 6, K group) move it <= 6%.
+Takeaway: no larger-step emulation moves the real run by more than noise (best -0.5%), the no-read floor by <= 3%;
+the 16-tile rewrite of every kernel is not worth it on this evidence. The on-chip floor is the x intake of a gate/up
+core (~32 GB/s through the snake, every core takes all of x, padded to 64-row sub-blocks: M 160's third sub-block of
+32 rows ships 64); the real run is that floor (no reads 434) + the read interference (~87 us): lever 2 next.
+Logs: /localdev/mstaletovic/flat_glm53/ (ab_*, r_*, nr*, xs_*, zs_sk, zw_sk, sk_xbf16, ub2_glm53, dprof).
