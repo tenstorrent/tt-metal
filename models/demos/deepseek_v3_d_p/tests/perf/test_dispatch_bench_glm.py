@@ -12,7 +12,8 @@ is device time per launch plus the few-us inter-op gap.
 Env knobs (all optional):
   DB_PAYLOADS   comma list of fabric payload sizes, one mesh open each (default 6208 = production)
   DB_WORKERS    comma list of num_workers_per_sender for the direct dispatch (default 2 = production)
-  DB_ROUTING    uniform (default) | golden:<layer>:<chunk> (vLLM golden routing of that layer/chunk)
+  DB_ROUTINGS   comma list of uniform (default) | dist<d> (ring distance d, same pair count) | golden:<layer>:<chunk>
+  DB_FAB2D_ROUTINGS  routings for the dispatch_fabric2d timing (default uniform)
   DB_K, DB_R    launches per trace (8), replays (5)
   DB_CHECK      first (default) = validate the first direct variant against the torch reference, 1 = all, 0 = none
   DB_DIRECT     1 = run the direct dispatch variants (default 1)
@@ -65,11 +66,28 @@ def _beat(tag):
     logger.info(f"[dbench] step {tag}")
 
 
-def _routing():
-    spec = os.environ.get("DB_ROUTING", "uniform")
+def _routing(spec, table):
+    """indices [H, SEQ, TOPK] for a routing spec: uniform | dist<d> | golden:<layer>:<chunk>.
+
+    dist<d>: every token picks 2 distinct experts in each of the 4 EP groups, all on the chip d rows below its own
+    (mod 8): the same 2 pairs per token per column as uniform routing on average, at a controlled ring distance
+    (dist0 = all local, no fabric; dist1 = neighbours only, no router pass-through; dist4 = the opposite chip)."""
     g = torch.Generator().manual_seed(1234)
     if spec == "uniform":
-        idx = torch.stack([torch.randperm(E, generator=g)[:TOPK] for _ in range(H * SEQ)])
+        idx = torch.stack([torch.randperm(E, generator=g)[:TOPK] for _ in range(H * SEQ)]).view(H, SEQ, TOPK)
+    elif spec.startswith("dist"):
+        d = int(spec[4:])
+        per_group = TOPK // G
+        idx = torch.zeros(H, SEQ, TOPK, dtype=torch.int64)
+        for h in range(H):
+            tgt = (h + d) % H
+            on = [[e for e in range(E) if int(table[gi][e]) == tgt] for gi in range(G)]
+            for t in range(SEQ):
+                picks = []
+                for gi in range(G):
+                    perm = torch.randperm(len(on[gi]), generator=g)[:per_group]
+                    picks += [on[gi][int(i)] for i in perm]
+                idx[h, t] = torch.tensor(picks)
     else:
         from safetensors.torch import load_file
 
@@ -77,8 +95,8 @@ def _routing():
         f = glob.glob(f"{GOLDEN}/expert_ids_layer_{int(layer)}/*.safetensors")[0]
         ids = list(load_file(f).values())[0].long()
         c = int(chunk)
-        idx = ids[c * H * SEQ : (c + 1) * H * SEQ]
-    return spec, idx.view(H, SEQ, TOPK).to(torch.int32)
+        idx = ids[c * H * SEQ : (c + 1) * H * SEQ].view(H, SEQ, TOPK)
+    return idx.to(torch.int32)
 
 
 def _time_trace(mesh_device, fn, k, r, label):
@@ -128,24 +146,12 @@ _PAYLOAD_PARAMS = [
 def test_dispatch_bench(mesh_device, device_params):
     payload = ttnn.get_tt_fabric_max_payload_size_bytes()
     k, r = int(os.environ.get("DB_K", "8")), int(os.environ.get("DB_R", "5"))
-    spec, indices = _routing()
     torch.manual_seed(42)
     x = torch.randn(H, SEQ, EMB, dtype=torch.bfloat16)
-
     experts_per_chip, metadata_len, max_buf, max_per_expert = compute_constants(
         SEQ, E, TOPK, mesh_device.get_num_devices(), H, CAP_FACTOR
     )
     table = ExpertMapping.create_dispatch_table(num_routed_experts=E, dispatch_group_size=H, num_dispatch_groups=G)
-    offs, counts, region, _ = get_gate_outputs(
-        indices, H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=table
-    )
-    col_pairs = [int((table[g][indices.long()] >= 0).sum()) for g in range(G)]
-    logger.info(
-        f"[dbench] payload={payload} routing={spec} epc={experts_per_chip} max_buf={max_buf} "
-        f"pairs per column={col_pairs} grid={mesh_device.compute_with_storage_grid_size()}"
-    )
-    _beat("setup")
-
     mapper = get_dispatch_input_mesh_mapper(mesh_device, 0)
     tt_x = ttnn.from_torch(x, mesh_mapper=mapper, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16)
     tt_w = ttnn.from_torch(
@@ -155,101 +161,123 @@ def test_dispatch_bench(mesh_device, device_params):
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
-    tt_idx = ttnn.from_torch(
-        indices.to(torch.int16), mesh_mapper=mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.uint16
-    )
-    tt_offs = TtDispatchModule.shard_expert_offsets(mesh_device, offs)
     tt_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, table, 0)
-
+    logger.info(f"[dbench] payload={payload} epc={experts_per_chip} max_buf={max_buf} grid={mesh_device.compute_with_storage_grid_size()}")
     results = {}
+    check_mode = os.environ.get("DB_CHECK", "first")
+    checked = [False]
+
+    def guarded(label, fn):
+        try:
+            results[label] = fn()
+        except Exception as ex:  # one variant failing must not hide the others
+            logger.error(f"[dbench] FAIL {label}: {type(ex).__name__}: {str(ex).splitlines()[0] if str(ex) else ''}")
+            results[label] = None
+
+    routings = [v for v in os.environ.get("DB_ROUTINGS", "uniform").split(",") if v]
     if os.environ.get("DB_DIRECT", "1") == "1":
         mgr = _sub_device_split(mesh_device, 1)
         mesh_device.load_sub_device_manager(mgr)
         try:
-            for wi, w in enumerate(_env_list("DB_WORKERS", "2")):
-                mod = TtDispatchModule(
-                    mesh_device=mesh_device,
-                    dispatch_group_size=H,
-                    experts_per_chip=experts_per_chip,
-                    num_routed_experts=E,
-                    num_experts_per_tok=TOPK,
-                    metadata_len=metadata_len,
-                    max_dispatch_buffer_token_size=max_buf,
-                    seq_len_per_chip=SEQ,
-                    emb_dim=EMB,
-                    cluster_axis=0,
-                    num_links=NUM_LINKS,
-                    topology=ttnn.Topology.Ring,
-                    subdevice_id=ttnn.SubDeviceId(0),
-                    num_workers_per_sender=w,
+            for spec in routings:
+                indices = _routing(spec, table)
+                offs, counts, region, _ = get_gate_outputs(
+                    indices, H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=table
                 )
+                col_pairs = [int((table[gi][indices.long()] >= 0).sum()) for gi in range(G)]
+                logger.info(f"[dbench] routing={spec} pairs per column={col_pairs}")
+                tt_idx = ttnn.from_torch(
+                    indices.to(torch.int16),
+                    mesh_mapper=mapper,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=mesh_device,
+                    dtype=ttnn.uint16,
+                )
+                tt_offs = TtDispatchModule.shard_expert_offsets(mesh_device, offs)
+                for w in _env_list("DB_WORKERS", "2"):
 
-                def run():
-                    return mod(tt_x, tt_w, tt_idx, tt_offs, tt_table)
+                    def one(w=w, spec=spec, indices=indices, offs=offs, counts=counts, region=region, tt_idx=tt_idx, tt_offs=tt_offs):
+                        mod = TtDispatchModule(
+                            mesh_device=mesh_device,
+                            dispatch_group_size=H,
+                            experts_per_chip=experts_per_chip,
+                            num_routed_experts=E,
+                            num_experts_per_tok=TOPK,
+                            metadata_len=metadata_len,
+                            max_dispatch_buffer_token_size=max_buf,
+                            seq_len_per_chip=SEQ,
+                            emb_dim=EMB,
+                            cluster_axis=0,
+                            num_links=NUM_LINKS,
+                            topology=ttnn.Topology.Ring,
+                            subdevice_id=ttnn.SubDeviceId(0),
+                            num_workers_per_sender=w,
+                        )
 
-                out_buf, out_meta = run()
-                ttnn.synchronize_device(mesh_device)
-                _beat(f"direct w{w} eager")
-                check = os.environ.get("DB_CHECK", "first")
-                if check == "1" or (check == "first" and wi == 0):
-                    ref = TorchDispatchModule(
-                        dispatch_group_size=H,
-                        experts_per_chip=experts_per_chip,
-                        num_routed_experts=E,
-                        num_experts_per_tok=TOPK,
-                        metadata_len=metadata_len,
-                        max_dispatched_tokens_per_expert=max_per_expert,
-                        max_dispatch_buffer_token_size=max_buf,
-                        seq_len_per_chip=SEQ,
-                        emb_dim=EMB,
-                        num_dispatch_groups=G,
-                        expert_dispatch_table=table,
-                    )
-                    ref_buf, ref_meta = ref(x, torch.zeros(H, SEQ, TOPK), indices, offs)
-                    comp = get_ep_mesh_composer(mesh_device)
-                    got_buf = ttnn.to_torch(out_buf, mesh_composer=comp, dtype=torch.float32)
-                    got_meta = ttnn.to_torch(out_meta, mesh_composer=comp)
-                    rb = validate_dispatch_buffer(
-                        ref_buf, got_buf, region, counts, table, G, H, experts_per_chip, verbose=False
-                    )
-                    rm = validate_dispatch_metadata(
-                        ref_meta, got_meta, region, counts, table, G, H, experts_per_chip, verbose=False
-                    )
-                    logger.info(f"[dbench] CHECK direct w{w}: buffer={rb.passed} metadata={rm.passed}")
-                    assert rb.passed and rm.passed, f"direct w{w} output mismatch"
-                    _beat(f"direct w{w} check")
-                ttnn.deallocate(out_buf)
-                ttnn.deallocate(out_meta)
-                results[f"direct_w{w}"] = _time_trace(mesh_device, run, k, r, f"direct w{w} payload{payload} {spec}")
+                        def run():
+                            return mod(tt_x, tt_w, tt_idx, tt_offs, tt_table)
+
+                        out_buf, out_meta = run()
+                        ttnn.synchronize_device(mesh_device)
+                        _beat(f"direct w{w} {spec} eager")
+                        if check_mode == "1" or (check_mode == "first" and not checked[0]):
+                            checked[0] = True
+                            ref = TorchDispatchModule(
+                                dispatch_group_size=H,
+                                experts_per_chip=experts_per_chip,
+                                num_routed_experts=E,
+                                num_experts_per_tok=TOPK,
+                                metadata_len=metadata_len,
+                                max_dispatched_tokens_per_expert=max_per_expert,
+                                max_dispatch_buffer_token_size=max_buf,
+                                seq_len_per_chip=SEQ,
+                                emb_dim=EMB,
+                                num_dispatch_groups=G,
+                                expert_dispatch_table=table,
+                            )
+                            ref_buf, ref_meta = ref(x, torch.zeros(H, SEQ, TOPK), indices, offs)
+                            comp = get_ep_mesh_composer(mesh_device)
+                            got_buf = ttnn.to_torch(out_buf, mesh_composer=comp, dtype=torch.float32)
+                            got_meta = ttnn.to_torch(out_meta, mesh_composer=comp)
+                            rb = validate_dispatch_buffer(
+                                ref_buf, got_buf, region, counts, table, G, H, experts_per_chip, verbose=False
+                            )
+                            rm = validate_dispatch_metadata(
+                                ref_meta, got_meta, region, counts, table, G, H, experts_per_chip, verbose=False
+                            )
+                            logger.info(f"[dbench] CHECK direct w{w} {spec}: buffer={rb.passed} metadata={rm.passed}")
+                            assert rb.passed and rm.passed, f"direct w{w} {spec} output mismatch"
+                        ttnn.deallocate(out_buf)
+                        ttnn.deallocate(out_meta)
+                        return _time_trace(mesh_device, run, k, r, f"direct w{w} payload{payload} {spec}")
+
+                    guarded(f"direct_w{w}_{spec}", one)
         finally:
             mesh_device.clear_loaded_sub_device_manager()
             mesh_device.remove_sub_device_manager(mgr)
 
     if os.environ.get("DB_AG", "0") == "1":
 
-        def ag():
-            return [ttnn.all_gather(tt_x, dim=1, cluster_axis=0)]
+        def ag_one():
+            def ag():
+                return [ttnn.all_gather(tt_x, dim=1, cluster_axis=0)]
 
-        o = ag()
-        ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(o[0])
-        results["ag_axis0"] = _time_trace(mesh_device, ag, k, r, f"all_gather axis0 x payload{payload}")
-        logger.info(
-            f"[dbench] all_gather axis0: {7 * SEQ * EMB * 2 / 1e6:.2f} MB rx/chip -> "
-            f"{7 * SEQ * EMB * 2 / results['ag_axis0'] / 1e3:.1f} GB/s rx per chip"
-        )
+            o = ag()
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(o[0])
+            us = _time_trace(mesh_device, ag, k, r, f"all_gather axis0 x payload{payload}")
+            logger.info(
+                f"[dbench] all_gather axis0: {7 * SEQ * EMB * 2 / 1e6:.2f} MB rx/chip -> "
+                f"{7 * SEQ * EMB * 2 / us / 1e3:.1f} GB/s rx per chip"
+            )
+            return us
+
+        guarded("ag_axis0", ag_one)
 
     if os.environ.get("DB_FAB2D", "0") == "1" and payload >= 12352:
         from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d import _expert_dispatch_table
 
         t2 = _expert_dispatch_table(E, H, G)
-        ind4 = indices.long().unsqueeze(0).expand(G, -1, -1, -1).contiguous()
-        o2 = torch.zeros(G, H, E, dtype=torch.int32)
-        c2 = torch.zeros(G, H, E, dtype=torch.int32)
-        r2 = torch.zeros(G, H, E, dtype=torch.int32)
-        for g in range(G):
-            o, c, rr, _ = get_gate_outputs(ind4[g], H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=t2[g : g + 1])
-            o2[g], c2[g], r2[g] = o[0].to(torch.int32), c[0].to(torch.int32), rr[0].to(torch.int32)
 
         def shard(t, dims, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
             return ttnn.from_torch(
@@ -263,46 +291,60 @@ def test_dispatch_bench(mesh_device, device_params):
 
         x4 = x.unsqueeze(1).expand(H, G, SEQ, EMB).contiguous()
         f_x = shard(x4, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        f_idx = shard(ind4.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
         f_table = shard(t2.unsqueeze(1), (None, 0), ttnn.int32)
-        f_offs = shard(o2, (None, 0), ttnn.int32)
-        f_counts = shard(c2[:, 0:1, :], (None, 0), ttnn.int32)
-        f_region = shard(r2[:, 0:1, :], (None, 0), ttnn.int32)
         mgr2 = _sub_device_split(mesh_device, 2)
         mesh_device.load_sub_device_manager(mgr2)
         try:
+            for spec in [v for v in os.environ.get("DB_FAB2D_ROUTINGS", "uniform").split(",") if v]:
+                indices = _routing(spec, table)
+                ind4 = indices.long().unsqueeze(0).expand(G, -1, -1, -1).contiguous()
+                o2 = torch.zeros(G, H, E, dtype=torch.int32)
+                c2 = torch.zeros(G, H, E, dtype=torch.int32)
+                r2 = torch.zeros(G, H, E, dtype=torch.int32)
+                for gi in range(G):
+                    o, c, rr, _ = get_gate_outputs(
+                        ind4[gi], H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=t2[gi : gi + 1]
+                    )
+                    o2[gi], c2[gi], r2[gi] = o[0].to(torch.int32), c[0].to(torch.int32), rr[0].to(torch.int32)
+                f_idx = shard(ind4.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
+                f_offs = shard(o2, (None, 0), ttnn.int32)
+                f_counts = shard(c2[:, 0:1, :], (None, 0), ttnn.int32)
+                f_region = shard(r2[:, 0:1, :], (None, 0), ttnn.int32)
 
-            def run2():
-                return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
-                    f_x,
-                    f_idx,
-                    f_offs,
-                    f_table,
-                    f_counts,
-                    f_region,
-                    experts_per_chip=experts_per_chip,
-                    num_routed_experts=E,
-                    num_experts_per_tok=TOPK,
-                    metadata_len=3,
-                    max_dispatch_buffer_token_size=max_buf,
-                    seq_len_per_chip=SEQ,
-                    cluster_axis=0,
-                    num_links=NUM_LINKS,
-                    topology=ttnn.Topology.Ring,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    subdevice_id=ttnn.SubDeviceId(0),
-                )
+                def fab_one(spec=spec, f_idx=f_idx, f_offs=f_offs, f_counts=f_counts, f_region=f_region):
+                    def run2():
+                        return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
+                            f_x,
+                            f_idx,
+                            f_offs,
+                            f_table,
+                            f_counts,
+                            f_region,
+                            experts_per_chip=experts_per_chip,
+                            num_routed_experts=E,
+                            num_experts_per_tok=TOPK,
+                            metadata_len=3,
+                            max_dispatch_buffer_token_size=max_buf,
+                            seq_len_per_chip=SEQ,
+                            cluster_axis=0,
+                            num_links=NUM_LINKS,
+                            topology=ttnn.Topology.Ring,
+                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            subdevice_id=ttnn.SubDeviceId(0),
+                        )
 
-            outs = run2()
-            ttnn.synchronize_device(mesh_device)
-            for o in outs:
-                ttnn.deallocate(o)
-            _beat("fab2d eager")
-            results["fab2d"] = _time_trace(
-                mesh_device, run2, k, int(os.environ.get("DB_FAB2D_REPLAYS", "4")), f"fab2d payload{payload} {spec}"
-            )
+                    outs = run2()
+                    ttnn.synchronize_device(mesh_device)
+                    for o in outs:
+                        ttnn.deallocate(o)
+                    _beat(f"fab2d {spec} eager")
+                    return _time_trace(
+                        mesh_device, run2, k, int(os.environ.get("DB_FAB2D_REPLAYS", "4")), f"fab2d payload{payload} {spec}"
+                    )
+
+                guarded(f"fab2d_{spec}", fab_one)
         finally:
             mesh_device.clear_loaded_sub_device_manager()
             mesh_device.remove_sub_device_manager(mgr2)
 
-    logger.info(f"[dbench] SUMMARY payload={payload} routing={spec}: {results}")
+    logger.info(f"[dbench] SUMMARY payload={payload}: {results}")
