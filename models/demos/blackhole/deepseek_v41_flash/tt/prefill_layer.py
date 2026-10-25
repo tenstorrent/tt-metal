@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 import torch
-from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 
 import ttnn
 from models.common.moe.tt_moe_decode import TTMoEDecode, _TTMoEDecodeBuffers
@@ -223,7 +223,9 @@ class DSV41PrefillMoE:
 
     def _forward(self, tt_x_gate, tt_x_tokens):
         n = tt_x_gate.shape[2] // 32
-        if n > 1 and ROUTER_BATCH and os.environ.get("DSV41_ROUTER", "fused") == "fused":
+        if (
+            n > 1 and ROUTER_BATCH and os.environ.get("DSV41_ROUTER", "fused") in ("fused", "fused2")
+        ):  # fused2 falls back to fused for T > 16
             scores, indices = self.gate.forward(tt_x_gate)  # router_select handles T = 32 * n rows in one program
         elif (
             n > 1

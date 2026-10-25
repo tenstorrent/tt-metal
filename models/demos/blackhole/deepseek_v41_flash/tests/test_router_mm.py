@@ -90,7 +90,7 @@ def test_router_mm_exact(mesh_device):
         tot = Stat()
         for L in layers:
             gate, _ = make_gate(md, L, 32)
-            for T in (4, 8, 16, 24, 32):
+            for T in (1, 2, 4, 6, 8, 12, 16, 24, 32):
                 st = Stat()
                 for i in range(n_rand):
                     x = torch.randn(T, 5120) * (0.25, 0.5, 1.0, 2.0, 4.0)[i % 5]
