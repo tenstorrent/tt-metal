@@ -1180,6 +1180,49 @@ class TILIZE(TemplateParameter):
 
 
 @dataclass
+class PACK_BLOCK(TemplateParameter):
+    """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
+
+    pack_block: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+
+
+class MATMUL_PACK_BLOCK(TemplateParameter):
+    """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block."""
+
+    def __init__(self, pack_block: int = 0):
+        self.matmul_pack_block = int(pack_block)
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PACK_BLOCK({self.matmul_pack_block})"
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, MATMUL_PACK_BLOCK)
+            and other.matmul_pack_block == self.matmul_pack_block
+        )
+
+    def __hash__(self) -> int:
+        return hash(self.matmul_pack_block)
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_PACK_FORM {self.matmul_pack_block}"
+
+
+@dataclass
+class TINY_PACK_MODE(TemplateParameter):
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile."""
+
+    tiny_pack_mode: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int tiny_pack_mode = {self.tiny_pack_mode};"
+
+
+@dataclass
 class ENABLE_2X_FORMAT(TemplateParameter):
     enable_2x_format: bool = False
 

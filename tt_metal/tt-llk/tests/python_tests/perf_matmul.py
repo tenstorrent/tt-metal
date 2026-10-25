@@ -17,6 +17,7 @@ from helpers.matmul_sweep import (
     DEST_RT_CT_BLOCKS,
     PERF_RING_TILES,
     generate_tile_dims,
+    matmul_pack_form,
     mid_fill_rt_ct_pairs,
     unpack_matmul_fits_perf_ring,
 )
@@ -32,11 +33,8 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
-    MATMUL_FORM_KEYS,
-    MATMUL_K_LOOP,
+    MATMUL_PACK_BLOCK,
     MATMUL_STREAM_NARROW,
-    MATMUL_STREAM_Z,
-    MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -163,23 +161,17 @@ def test_perf_matmul(
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
+                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim
             ),
-            *MATMUL_STREAM_Z.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity,
-                kt_dim=dims.kt_dim,
-            ),
-            *MATMUL_UNPACK_TTSYNC.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
-            ),
-            *MATMUL_K_LOOP.for_block(
-                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
-            ),
-            *MATMUL_FORM_KEYS.for_block(
-                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
-                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc,
+            MATMUL_PACK_BLOCK(
+                matmul_pack_form(
+                    formats,
+                    dest_sync,
+                    math_fidelity,
+                    dims.rt_dim,
+                    dims.ct_dim,
+                    dims.kt_dim,
+                )
             ),
         ],
         runtimes=[
