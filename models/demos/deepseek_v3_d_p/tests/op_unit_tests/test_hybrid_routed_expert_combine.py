@@ -529,10 +529,26 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     counts_mapper = get_expert_token_counts_mesh_mapper(mesh_device)
     # ROW_MAJOR bf16: the tilized path is the one that writes the bf8 tiles combine reads.
     # fp8wire: HRE_X=bf8 hands the routed expert TILE bfloat8_b tiles, as the fp8 dispatch wire's DQ1 does.
+    # HRE_X=fp8 hands it the fp8 wire's own rows, [emb e4m3 | emb/128 pow2 fp32 scales] (Q1 on device), which the
+    # routed expert dequantizes itself (needs HYB_FP32_DEST=1).
     if os.environ.get("HRE_X", "bf16") == "bf8":
         tt_x = ttnn.from_torch(
             dispatched_buffer, mesh_mapper=ep_mapper, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat8_b
         )
+    elif os.environ.get("HRE_X", "bf16") == "fp8":
+        _x_tile = ttnn.from_torch(
+            dispatched_buffer, mesh_mapper=ep_mapper, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        )
+        tt_x, _x_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+            _x_tile,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            round_scale_to_power_of_two=True,
+            round_to_nearest_even=True,
+            pack_scales_in_row=True,
+            scale_block_w=128,
+        )
+        ttnn.deallocate(_x_tile)
+        _x_scales = None
     else:
         tt_x = ttnn.from_torch(
             dispatched_buffer,
