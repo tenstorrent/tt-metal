@@ -173,7 +173,7 @@ def test_fp8wire_bench(mesh_device, device_params):
         _time_trace(mesh_device, q1, k, r, f"q1 block{block}")
 
     results = {}
-    for spec in [v for v in os.environ.get("FW_ROUTINGS", "uniform,golden:24:5,golden:70:5").split(",") if v]:
+    for spec in [v for v in os.environ.get("FW_ROUTINGS", "uniform,golden:24:5,golden:70:5").split(",") if v and v != "none"]:
         indices = _routing(spec)
         ind4 = indices.unsqueeze(0).expand(G, -1, -1, -1).contiguous()
         o2 = torch.zeros(G, H, E, dtype=torch.int32)
