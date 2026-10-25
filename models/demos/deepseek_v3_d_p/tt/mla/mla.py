@@ -39,6 +39,9 @@ _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
 _GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
+# mm track: GLM o_proj on the full 12x10 grid (see ttMLA._oproj_grid12). Off by default: mla_config.py keeps MLA on
+# 11x10 for di/dt / throttling, so this must be judged at L78 (interleaved ABAB), not at R0 / L10.
+_MLA_OPROJ_GRID12 = os.environ.get("MLA_OPROJ_GRID12", "0") == "1"
 # glue track: seqq q_a norm on its 160 rows width-sharded over this many cores (0 = interleaved rms_norm, 5 cores).
 _GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "32"))
 # glue track: workers per link for the seqq q_a reduce-scatter over rows; 0 = op default.
@@ -1868,10 +1871,13 @@ class ttMLA:
             g = self._output_gate(hidden_states, seq_len_local)
             v_out = ttnn.multiply(v_out, g, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(g)
+        o_kwargs = self._get_mm_kwargs("o_proj", seq_len_local)
+        if _MLA_OPROJ_GRID12 and self._is_blackhole:
+            o_kwargs = self._oproj_grid12(o_kwargs)
         v_out = ttnn.linear(
             v_out,
             self.o_proj_weight,
-            **self._get_mm_kwargs("o_proj", seq_len_local),
+            **o_kwargs,
         )
         if self.tp_factor > 1:
             return ttnn.experimental.reduce_scatter_minimal_async(
@@ -2728,6 +2734,31 @@ class ttMLA:
             logger.debug(f"MLA layer {self.layer_idx}: sequence-sharded Q off ({'; '.join(reasons)})")
             return False
         return True
+
+    def _oproj_grid12(self, kwargs: dict) -> dict:
+        """mm track (MLA_OPROJ_GRID12=1): the GLM o_proj 2D mcast on the full 12x10 grid instead of 11x10 (N = 192
+        tiles = 12 x 16, sub 1x8; R0 -8.9%, sustained 32-chip 12x10 -7%, bit-exact on all chips). Only the tuned 11x10
+        2D config with per_core_N 18 is replaced; anything else passes through."""
+        pc = kwargs.get("program_config")
+        if not isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
+            return kwargs
+        g = pc.compute_with_storage_grid_size
+        n_t = self.o_proj_weight.shape[-1] // ttnn.TILE_SIZE
+        dev = self.mesh_device.compute_with_storage_grid_size()
+        if (g.x, g.y) != (11, 10) or pc.per_core_N != 18 or dev.x < 12 or n_t % 12 != 0 or (n_t // 12) % 8 != 0:
+            return kwargs
+        pc12 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(12, 10),
+            in0_block_w=pc.in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=pc.per_core_M,
+            per_core_N=n_t // 12,
+            transpose_mcast=pc.transpose_mcast,
+            fuse_batch=pc.fuse_batch,
+            fused_activation=pc.fused_activation,
+        )
+        return dict(kwargs, program_config=pc12)
 
     def _replicate_over_tp(self, w: ttnn.Tensor, dim: int) -> ttnn.Tensor:
         """TP-replicated copy of a TP-sharded weight, by an on-device all_gather along the TP axis (a tile copy, so
