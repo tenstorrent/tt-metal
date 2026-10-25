@@ -65,6 +65,26 @@ uint32_t full_sp_slab_tiles(
     return (input.padded_shape()[-2] / TILE_HEIGHT) * subshard_extent(mesh_view, axis);
 }
 
+// Block-cyclic block of the cos/sin shard rows in tiles: the fixed KV layout slab's per-chip run when set
+// (kv_slab_global), else the full SP chunk (today's layout).
+uint32_t rope_layout_block_tiles(
+    const RotaryEmbeddingIndexedDeviceOperation::operation_attributes_t& args,
+    const Tensor& input,
+    const distributed::MeshDeviceView& mesh_view) {
+    const uint32_t chunk_t = full_sp_slab_tiles(input, mesh_view, args.seq_subshard_axis);
+    if (!args.kv_slab_global.has_value()) {
+        return chunk_t;
+    }
+    const uint32_t sp = axis_extent(mesh_view, args.cluster_axis);
+    TT_FATAL(
+        *args.kv_slab_global % (sp * TILE_HEIGHT) == 0 && (chunk_t * TILE_HEIGHT) % (*args.kv_slab_global / sp) == 0,
+        "rotary_embedding_indexed: kv_slab_global ({}) must be a multiple of sp*TILE ({}) dividing the chunk ({} tok/chip)",
+        *args.kv_slab_global,
+        sp * TILE_HEIGHT,
+        chunk_t * TILE_HEIGHT);
+    return *args.kv_slab_global / (sp * TILE_HEIGHT);
+}
+
 // Structural + per-call checks shared by the cache-miss and cache-hit paths. The structural checks
 // (cluster_axis, 2D mesh, chunk height) run on both paths; the kv_actual_global VALUE checks run only
 // on the SCALAR path — on the METADATA path kv_actual_global lives in the 1-element device tensor
@@ -217,12 +237,14 @@ void validate_runtime_args(
     const uint32_t sp_factor = axis_extent(mesh_view, args.cluster_axis);
     const uint32_t kv_actual_global_t = args.kv_actual_global / TILE_HEIGHT;
     const uint32_t cos_shard_Ht = cos.padded_shape()[-2] / TILE_HEIGHT;
-    const uint32_t chunk_global_t = sp_factor * chunk_local_t;
-    const uint32_t boundary_slab_t = (kv_actual_global_t / chunk_global_t) * chunk_local_t;
-    const uint32_t boundary_chip = (kv_actual_global_t / chunk_local_t) % sp_factor;
-    const uint32_t boundary_offset_t = kv_actual_global_t % chunk_local_t;
+    // The rows a chunk reads start at update_idxt, derived from the layout block (the slab when set).
+    const uint32_t block_t = rope_layout_block_tiles(args, input, mesh_view);
+    const uint32_t chunk_global_t = sp_factor * block_t;
+    const uint32_t boundary_slab_t = (kv_actual_global_t / chunk_global_t) * block_t;
+    const uint32_t boundary_chip = (kv_actual_global_t / block_t) % sp_factor;
+    const uint32_t boundary_offset_t = kv_actual_global_t % block_t;
     const uint32_t max_update_idxt =
-        (boundary_chip > 0) ? boundary_slab_t + chunk_local_t : boundary_slab_t + boundary_offset_t;
+        (boundary_chip > 0) ? boundary_slab_t + block_t : boundary_slab_t + boundary_offset_t;
     TT_FATAL(
         max_update_idxt + chunk_local_t <= cos_shard_Ht,
         "kv_actual_global ({} tok) + chunk would index past the per-device cos/sin shard ({} tiles)",
@@ -368,6 +390,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         args.rotary_offset,
         args.compute_kernel_config,
         args.output_mem_config,
+        args.kv_slab_global.value_or(0u),
         tensor_args.input.tensor_spec(),
         tensor_args.cos.tensor_spec(),
         tensor_args.sin.tensor_spec(),
@@ -565,6 +588,11 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     KernelSpec::CompilerOptions::Defines reader_defines = reload_define;
     if (has_metadata) {
         reader_defines.emplace("HAS_METADATA", "1");
+    }
+    if (const uint32_t slab_t = rope_layout_block_tiles(args, tensor_args.input, mesh_view);
+        slab_t != full_sp_slab_tiles(tensor_args.input, mesh_view, args.seq_subshard_axis)) {
+        // Fixed KV layout slab: update_idxt's block-cyclic block is the slab's per-chip run, not the input chunk.
+        reader_defines.emplace("KV_SLAB_BLOCK_T", std::to_string(slab_t));
     }
 
     // ------------------------------------------------------------------ reader spec (this op's own)
@@ -864,7 +892,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
-    const std::optional<ttnn::Tensor>& output_tensor) {
+    const std::optional<ttnn::Tensor>& output_tensor,
+    std::optional<uint32_t> kv_slab_global) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::
         RotaryEmbeddingIndexedDeviceOperation;
 
@@ -892,6 +921,7 @@ ttnn::Tensor rotary_embedding_indexed(
         .rotary_offset = rotary_offset,
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
+        .kv_slab_global = kv_slab_global,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .input = input,

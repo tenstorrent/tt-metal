@@ -1666,6 +1666,218 @@ def test_glm_prefill_transformer_chunked(
     )
 
 
+def _mixed_schedule():
+    """GLM_TEST_MIX = "C:n,C:n,...": chunk sizes and counts run back to back on ONE KV cache (layout agent)."""
+    spec = os.environ.get("GLM_TEST_MIX", "5120:4,2048:5,1024:10")
+    return [(int(c), int(n)) for c, n in (part.split(":") for part in spec.split(",") if part)]
+
+
+def run_glm_slab_mixed_chunks(
+    variant, config, mesh_device, weight_cache_path, num_layers, num_links, topology, seq_cache, use_trace=False
+):
+    """Production layout check for a fixed KV layout slab (GLM_KV_SLAB_TOKENS): ONE KVPE + indexer-K cache is
+    written by a schedule of DIFFERENT chunk sizes (default 4 x 5120, then 5 x 2048, then 10 x 1024, from 0),
+    each by its own model instance (seq_len = its chunk; weights loaded per instance, fine at L10), the way a
+    size-bucketed runtime would extend a cached context with native small chunks. Per-layer decoder PCC
+    (notrace) for every chunk vs the golden trace, then the KVPE and indexer-K cache PCC over the whole
+    written prefix: a layout mismatch between chunk sizes shows up as a collapse of the later chunks' PCC."""
+    if weight_cache_path is None:
+        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+    trace_dir = _resolve_trace_dir(variant)
+    if not trace_dir.exists():
+        pytest.skip(f"golden trace not found: {trace_dir}")
+    schedule = _mixed_schedule()
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp, tp = mesh_shape
+    slab = SLAB
+    for c, _ in schedule:
+        assert c % slab == 0 and kv_slab_tokens(c) == min(slab, c), (
+            f"chunk {c} must be a multiple of the layout slab {slab} (set GLM_KV_SLAB_TOKENS={slab})"
+        )
+        assert seq_cache % c == 0, f"seq_cache {seq_cache} must be a multiple of every chunk ({c})"
+    total_len = sum(c * n for c, n in schedule)
+    assert total_len <= min(seq_cache, SEQ_CACHE), f"schedule covers {total_len} > cache/golden"
+    config = copy.deepcopy(config)
+    config.max_seq_len = seq_cache
+    rope_scaling = getattr(config, "rope_scaling", None)
+    if isinstance(rope_scaling, dict) and rope_scaling.get("factor", 1.0) == 1.0:
+        rope_scaling["original_max_position_embeddings"] = seq_cache
+    emb_dim = config.hidden_size
+    has_indexer = resolve_has_indexer(config)
+    cache_format = _sparse_cache_format(has_indexer, GLM_KV_CACHE_FORMAT)
+    tp_shard_kv = has_indexer
+    logger.info(f"slab mixed: schedule={schedule} slab={slab} total={total_len} cache={seq_cache} L={num_layers}")
+    token_ids_full = _load_metadata_token_ids(trace_dir, total_len, require_full=True)
+    effective_cache_path = weight_cache_path / f"{sp}x{tp}"
+    tt_kvpe_cache = init_mla_kv_cache(
+        cache_format=cache_format,
+        hf_config=config,
+        mesh_device=mesh_device,
+        seq_len=seq_cache,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis if tp_shard_kv else None,
+        num_kvpe_cache_layers=num_layers,
+        num_users=1,
+    )
+    tt_index_kv_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.index_head_dim,
+        mesh_device=mesh_device,
+        seq_len=seq_cache,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis if tp_shard_kv else None,
+        num_kvpe_cache_layers=full_indexer_rank(config, num_layers),
+        num_users=1,
+        dtype=ttnn.bfloat8_b,
+    )
+    models = {}
+    layer_min_pcc: dict[int, float] = {}
+    per_size_min: dict[int, float] = {}
+    kv_actual = 0
+    mesh_device.enable_program_cache()
+    for chunk, n_chunks in schedule:
+        if chunk not in models:
+            models[chunk] = TtPrefillTransformer(
+                mesh_device=mesh_device,
+                config=config,
+                model_cfg=variant.model_config,
+                state_dict={},
+                num_layers=num_layers,
+                seq_len=chunk,
+                max_seq_len=seq_cache,
+                dispatch_buffer_capacity_factor=8,
+                num_links=num_links,
+                topology=topology,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                is_balanced=False,
+                gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+                weight_cache_path=effective_cache_path,
+                is_chunked=True,
+                slot_num=1,
+                kv_only_last_layer=True,
+                routing_use_l1_small_for_semaphores=True,
+                tp_shard_kv=tp_shard_kv,
+                sparse_kv_cache_format=cache_format,
+            )
+            ttnn.synchronize_device(mesh_device)
+        transformer = models[chunk]
+        chunk_local = chunk // sp
+        for c in range(n_chunks):
+            positions = rotated_chip_positions(kv_actual, sp, chunk_local, min(slab, chunk) // sp)
+            flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
+            local_pos = flat - kv_actual
+            tt_tokens = ttnn.from_torch(
+                token_ids_full[flat].reshape(sp, 1, chunk_local),
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+            t0 = time.time()
+            layer_outputs = transformer.forward(
+                tt_tokens,
+                tt_kvpe_cache,
+                actual_isl=chunk,
+                actual_start=kv_actual,
+                actual_end=kv_actual + chunk,
+                cache_user_id=0,
+                return_intermediates=not use_trace,
+                index_kv_cache=tt_index_kv_cache,
+            )
+            ttnn.synchronize_device(mesh_device)
+            logger.info(f"[slab mixed] chunk size {chunk} #{c} start={kv_actual} {1000 * (time.time() - t0):.1f} ms")
+            for i in range(num_layers):
+                if layer_outputs is None or f"layer_{i}" not in layer_outputs:
+                    continue
+                out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+                natural = torch.zeros(chunk, emb_dim, dtype=torch.float32)
+                natural[local_pos] = out_flat
+                ref = _ref_layer_slice(trace_dir, variant.prefill_trace_layout, i, kv_actual, kv_actual + chunk)
+                _, pcc = comp_pcc(ref, natural)
+                layer_min_pcc[i] = min(layer_min_pcc.get(i, 1.0), pcc)
+                per_size_min[chunk] = min(per_size_min.get(chunk, 1.0), pcc)
+                logger.info(f"  size {chunk} start {kv_actual} layer {i} PCC: {pcc:.6f}")
+            ttnn.deallocate(tt_tokens)
+            kv_actual += chunk
+    for chunk, v in per_size_min.items():
+        logger.info(f"slab mixed: min per-layer PCC over chunks of size {chunk}: {v:.6f}")
+    if layer_min_pcc:
+        overall = min(layer_min_pcc.values())
+        logger.info(f"slab mixed: min per-layer PCC overall {overall:.6f}")
+        assert overall >= LAYER_PCC_THRESHOLD, f"min per-layer PCC {overall:.6f} < {LAYER_PCC_THRESHOLD}"
+    layout = variant.prefill_trace_layout
+    _record_kv_cache_pcc(
+        trace_dir,
+        layout,
+        tt_kvpe_cache,
+        mesh_device,
+        sp,
+        num_layers,
+        seq_cache,
+        total_len,
+        config.kv_lora_rank,
+        assert_threshold=KV_CACHE_PCC_THRESHOLD_SCALED_FP8,
+        tp_shard_kv=tp_shard_kv,
+    )
+    if (trace_dir / "dsa" / "indexer_k_layer_0").exists():
+        _record_indexer_k_cache_pcc(
+            trace_dir,
+            layout,
+            tt_index_kv_cache,
+            mesh_device,
+            sp,
+            num_layers,
+            seq_cache,
+            total_len,
+            config,
+            tp_shard_kv=tp_shard_kv,
+        )
+    for transformer in models.values():
+        transformer.release_sub_device_managers()
+
+
+@pytest.mark.parametrize("num_layers", [10], ids=["L10"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
+@pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
+@pytest.mark.timeout(0)
+def test_glm_prefill_slab_mixed_chunks(
+    variant, config_only, mesh_device, device_params, weight_cache_path, num_layers, num_links
+):
+    """Fixed KV layout slab: one cache written by 5120 / 2048 / 1024 chunks (GLM_TEST_MIX), per-layer + KV PCC."""
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_glm_slab_mixed_chunks(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        num_links,
+        topology,
+        seq_cache=int(os.environ.get("GLM_TEST_MIX_CACHE", 51200)),
+    )
+
+
 def _llama4_scale_buffer(transformer, chunk_size_global):
     """Mistral's persistent query-scale buffer, or None for every other variant.
 

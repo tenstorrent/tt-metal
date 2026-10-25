@@ -35,6 +35,9 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         uint32_t rotary_offset;
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
+        // Fixed KV layout slab (GLM_KV_SLAB_TOKENS), global tokens: the cos/sin shard rows (= KV cache rows) are
+        // block-cyclic in slabs of this size rather than in the input's SP chunk. nullopt: the chunk (today).
+        std::optional<uint32_t> kv_slab_global = std::nullopt;
     };
 
     struct tensor_args_t {
@@ -124,6 +127,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
     const std::optional<ttnn::Tensor>& concat_prefix,
-    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    std::optional<uint32_t> kv_slab_global = std::nullopt);
 
 }  // namespace ttnn::prim

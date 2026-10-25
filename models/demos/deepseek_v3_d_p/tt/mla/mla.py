@@ -1169,6 +1169,7 @@ class ttMLA:
             kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
             cluster_axis=self.sp_axis,
             concat_prefix=concat_prefix,
+            **self._rope_slab_kwargs(),
         )
 
     def _apply_rope_none(
@@ -1565,6 +1566,7 @@ class ttMLA:
                 kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
                 cluster_axis=self.sp_axis,
                 output_tensor=tt_q,
+                **self._rope_slab_kwargs(),
             )
             ttnn.deallocate(tt_q_rope)
             return tt_q
@@ -1871,6 +1873,13 @@ class ttMLA:
                 scales=scales,
                 **self._kv_slab_kwargs(),
             )
+
+    def _rope_slab_kwargs(self) -> dict:
+        """rotary_embedding_indexed's layout slab (only when it differs from the chunk): the cos/sin rows follow the
+        cache layout, so a chunk starting off a chunk boundary finds its rows by the slab's block-cyclic math."""
+        # GLM_KV_SLAB_ROPE=0 drops it (exact whenever chunk starts are multiples of the chunk).
+        on = self._kv_slab_mode and os.environ.get("GLM_KV_SLAB_ROPE", "0") == "1"
+        return {"kv_slab_global": self.kv_slab_global} if on else {}
 
     def _kv_slab_kwargs(self) -> dict:
         """update_padded_kv_cache's layout slab: only when it differs from the chunk (default: today's programs)."""
@@ -2993,6 +3002,7 @@ class ttMLA:
                 cluster_axis=self.sp_axis,
                 seq_subshard_axis=self.tp_axis,
                 output_tensor=tt_q,
+                **self._rope_slab_kwargs(),
             )
             ttnn.deallocate(tt_q_rope)
             return tt_q
@@ -3009,6 +3019,7 @@ class ttMLA:
             cluster_axis=self.sp_axis,
             seq_subshard_axis=self.tp_axis,
             concat_prefix=tt_q_nope_abs,
+            **self._rope_slab_kwargs(),
         )
         ttnn.deallocate(tt_q_nope_abs)
         ttnn.deallocate(tt_q_rope)

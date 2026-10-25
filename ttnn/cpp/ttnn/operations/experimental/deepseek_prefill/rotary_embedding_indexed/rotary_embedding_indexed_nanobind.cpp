@@ -100,7 +100,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const std::optional<uint32_t>&,
                 uint32_t,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&rotary_embedding_indexed),
+                const std::optional<Tensor>&,
+                std::optional<uint32_t>>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -113,7 +114,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("rotary_dim") = std::nullopt,
             nb::arg("rotary_offset") = 0,
             nb::arg("concat_prefix") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt),
+            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("kv_slab_global") = std::nullopt),
         // Metadata form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -129,7 +131,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
                 const std::optional<uint32_t>&,
                 uint32_t,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&rotary_embedding_indexed),
+                const std::optional<Tensor>&,
+                std::optional<uint32_t>>(&rotary_embedding_indexed),
             nb::arg("input").noconvert(),
             nb::arg("cos").noconvert(),
             nb::arg("sin").noconvert(),
@@ -142,7 +145,8 @@ void bind_rotary_embedding_indexed(nb::module_& mod) {
             nb::arg("rotary_dim") = std::nullopt,
             nb::arg("rotary_offset") = 0,
             nb::arg("concat_prefix") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt));
+            nb::arg("output_tensor") = std::nullopt,
+            nb::arg("kv_slab_global") = std::nullopt));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::detail

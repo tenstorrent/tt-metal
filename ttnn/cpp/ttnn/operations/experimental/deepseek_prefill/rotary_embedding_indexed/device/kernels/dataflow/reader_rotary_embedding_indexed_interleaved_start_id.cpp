@@ -93,15 +93,21 @@ void kernel_main() {
     // Derive this chip's tile-row offset into its (block-cyclic) cos/sin shard from the global
     // valid KV length using the ORIGINAL SP slab, then select this query subshard within it.
     // Identical math to the per-chip kv-cache writer's update_idxt -- see writer_update_padded_kv_cache.
-    const uint32_t chunk_global_t = sp_factor * chunk_local_t;
+#ifdef KV_SLAB_BLOCK_T
+    // Fixed KV layout slab: the shard rows are block-cyclic in the slab's per-chip run, not the input chunk.
+    constexpr uint32_t layout_block_t = KV_SLAB_BLOCK_T;
+#else
+    constexpr uint32_t layout_block_t = chunk_local_t;
+#endif
+    const uint32_t chunk_global_t = sp_factor * layout_block_t;
     const uint32_t boundary_slab_idx = chunk_global_t == 0 ? 0 : kv_actual_global_t / chunk_global_t;
-    const uint32_t boundary_chip = chunk_local_t == 0 ? 0 : (kv_actual_global_t / chunk_local_t) % sp_factor;
-    const uint32_t boundary_offset_t = chunk_local_t == 0 ? 0 : kv_actual_global_t % chunk_local_t;
+    const uint32_t boundary_chip = layout_block_t == 0 ? 0 : (kv_actual_global_t / layout_block_t) % sp_factor;
+    const uint32_t boundary_offset_t = layout_block_t == 0 ? 0 : kv_actual_global_t % layout_block_t;
     // From the current slab base, chips before the boundary advance a full slab, the boundary chip
     // advances by its pad offset, and chips after it stay at the base.
     const uint32_t update_idxt =
-        boundary_slab_idx * chunk_local_t +
-        (my_sp_coord < boundary_chip ? chunk_local_t : (my_sp_coord == boundary_chip ? boundary_offset_t : 0)) +
+        boundary_slab_idx * layout_block_t +
+        (my_sp_coord < boundary_chip ? layout_block_t : (my_sp_coord == boundary_chip ? boundary_offset_t : 0)) +
         query_offset_t;
 
     const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;

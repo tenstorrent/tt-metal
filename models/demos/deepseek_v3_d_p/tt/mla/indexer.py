@@ -370,6 +370,11 @@ class TtIndexerBase:
         # Fixed KV layout slab (GLM_KV_SLAB_TOKENS; default = the chunk): see ttMLA.kv_slab_global.
         self.kv_slab_global = kv_slab_tokens(self.active_seq_len)
         self._kv_slab_mode = self.kv_slab_global != self.active_seq_len
+        self._rope_slab_kwargs = lambda: (
+            {"kv_slab_global": self.kv_slab_global}
+            if self._kv_slab_mode and os.environ.get("GLM_KV_SLAB_ROPE", "0") == "1"
+            else {}
+        )
         # Block-cyclic key-cache path: mirrors the MLA KVPE cache — a persistent, per-user/layer,
         # block-cyclic ND-sharded key cache written by update_padded_kv_cache and scored by
         # indexer_score_dsa's block-cyclic reader. The rope is always the interleaved on-device INDEXED op
@@ -603,6 +608,7 @@ class TtIndexerBase:
                 cluster_axis=self.sp_axis,
                 seq_subshard_axis=seq_subshard_axis,
                 rotary_dim=64,
+                **self._rope_slab_kwargs(),
             )
         # DeepSeek's half-split permutation retains the established path.
         h, n = x.shape[1], x.shape[2]
@@ -623,6 +629,7 @@ class TtIndexerBase:
                 metadata[1],  # actual_start = kv_actual_global (1-element tensor)
                 cluster_axis=self.sp_axis,
                 seq_subshard_axis=seq_subshard_axis,
+                **self._rope_slab_kwargs(),
             )
         else:
             pe = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
@@ -633,6 +640,7 @@ class TtIndexerBase:
                 kv_actual_global=kv_actual_global,
                 cluster_axis=self.sp_axis,
                 seq_subshard_axis=seq_subshard_axis,
+                **self._rope_slab_kwargs(),
             )
         out = ttnn.concat([pe, nope], dim=-1)
         ttnn.deallocate(pe)
