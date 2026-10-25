@@ -62,6 +62,7 @@
 #include "impl/program/program_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -841,7 +842,7 @@ bool verify_rt_args(
     const auto device_id = mesh_device.get_device_ids()[0];
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     auto noc_xy = (core_type == HalProgrammableCoreType::ACTIVE_ETH || core_type == HalProgrammableCoreType::IDLE_ETH)
-                      ? mesh_device.get_devices()[0]->ethernet_core_from_logical_core(logical_core)
+                      ? mesh_device.impl().get_devices()[0]->ethernet_core_from_logical_core(logical_core)
                       : mesh_device.worker_core_from_logical_core(logical_core);
     std::vector<uint32_t> args_readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device_id, noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
@@ -1491,7 +1492,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
         GTEST_SKIP() << "Skipping test as this test requires 2 active ethernet cores";
     }
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->impl().get_devices()[0]->get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
                 log_info(
                     tt::LogTest,
@@ -1522,7 +1523,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
             distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        for (const auto& eth_core : mesh_device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : mesh_device->impl().get_devices()[0]->get_active_ethernet_cores(true)) {
             auto program = tt::tt_metal::CreateProgram();
             auto primary = CreateKernel(
                 program,
@@ -1568,7 +1569,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->impl().get_devices()[0]->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -1598,7 +1599,7 @@ TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovem
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_active_ethernet_cores(true)) {
+        for (const auto& eth_core : device->impl().get_devices()[0]->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -1618,7 +1619,7 @@ TEST_F(UnitMeshCQFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCore
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(UnitMeshCQFixture, DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
     for (const auto& device : devices_) {
-        for (const auto& eth_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+        for (const auto& eth_core : device->impl().get_devices()[0]->get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
             DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
@@ -2104,7 +2105,7 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
 TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
     GTEST_SKIP() << "Mesh device does not support logical / relative coordinates on Eth";
     for (const auto& device : devices_) {
-        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
+        if (!does_device_have_active_eth_cores(device->impl().get_devices()[0])) {
             GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }
         const auto erisc_count =
@@ -2925,7 +2926,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }
@@ -2959,7 +2960,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }
@@ -2989,7 +2990,7 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestPrograms) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
     }
-    for (const auto& device : device_->get_devices()) {
+    for (const auto& device : device_->impl().get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
             GTEST_SKIP() << "Skipping test because device does not have any active ethernet cores";
         }

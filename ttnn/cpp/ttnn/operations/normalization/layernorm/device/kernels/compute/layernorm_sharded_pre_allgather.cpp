@@ -326,6 +326,16 @@ void kernel_main() {
         reduce_uninit();
         DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
             .push_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
+        if (dfb_reduction_out == dfb_out) {
+            // The statistics leave the device through the all-gather, not a kernel: compute is the only
+            // producer and consumer of the output DFB (self-loop), so pop what it just pushed. dummy_unpack
+            // orders the pop after the wait on Quasar (nothing unpacks this buffer).
+            const uint32_t num_out_tiles = num_tiles_per_partial_result * num_tiles_per_allgather_worker;
+            DataflowBuffer dfb_out_obj(dfb_out);
+            dfb_out_obj.wait_front(num_out_tiles);
+            dummy_unpack(dfb_out);
+            dfb_out_obj.pop_front(num_out_tiles);
+        }
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index throughout the global reduce above without being popped. Pop it once here, inside
         // the same guard that gated the wait, so the buffer is left balanced on every core.
