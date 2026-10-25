@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+import torch
 from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation
+from helpers.llk_params import DestAccumulation, format_dict
+from helpers.utils import result_tensor
 
 
 @pytest.mark.parametrize(
@@ -46,3 +48,26 @@ def test_dest_mode_conversion_without_dest_acc(in_fmt, out_fmt, valid):
         is_valid_quasar_dest_mode_conversion(in_fmt, out_fmt, DestAccumulation.No)
         == valid
     )
+
+
+@pytest.mark.parametrize("output_format", [DataFormat.Float16_b, DataFormat.Float32])
+def test_result_tensor_dtype(output_format):
+    res = result_tensor([1.0, 2.5, -3.0], output_format)
+    assert res.dtype == format_dict[output_format]
+    assert res.tolist() == [1.0, 2.5, -3.0]
+
+
+def test_result_tensor_without_golden_skips_length_check():
+    assert result_tensor([1.0, 2.0], DataFormat.Float32).numel() == 2
+
+
+def test_result_tensor_matching_golden_length():
+    golden = torch.zeros(3)
+    assert result_tensor([1.0, 2.0, 3.0], DataFormat.Float32, golden).numel() == 3
+
+
+def test_result_tensor_rejects_length_mismatch():
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError, match="result has 2 datums, golden has 3"
+    ):
+        result_tensor([1.0, 2.0], DataFormat.Float32, torch.zeros(3))

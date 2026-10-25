@@ -42,7 +42,7 @@ from dataclasses import dataclass
 import pytest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
@@ -123,7 +123,6 @@ def test_tilize_polluter_matmul(
     if not do_restore and formats.input_format != formats.output_format:
         pytest.skip("negative control requires matching input/output formats")
 
-    torch_format = format_dict[formats.output_format]
     mm_dimensions = [32, 32]
 
     # Independent, regular 32x32 matmul operands (run 1 reads these tilized).

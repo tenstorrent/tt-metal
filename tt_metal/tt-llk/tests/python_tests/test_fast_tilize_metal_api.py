@@ -6,11 +6,10 @@ Replicates ttnn tilize compute kernel flow (compute_kernel_hw_startup +
 fast_tilize_init/block/uninit) through the LLK test infra.
 """
 
-import torch
 from conftest import blackhole_only
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -22,7 +21,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     generate_input_dim,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 TILE_R = 32
 TILE_C = 32
@@ -76,6 +75,5 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
     )
 
     res = cfg.run().result
-    assert len(res) == len(golden)
-    res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res, formats.output_format, golden)
     assert passed_test(golden, res_tensor, formats.output_format)

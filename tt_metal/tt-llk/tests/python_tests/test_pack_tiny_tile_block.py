@@ -12,7 +12,6 @@ Tile32x32 DEST slots, and _llk_pack_block_contiguous_ performs the
 sparse-to-dense packing into a contiguous L1 block.
 """
 
-import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
@@ -146,17 +145,13 @@ def test_pack_tiny_tile_block(
     tile_dims,
     num_tiles,
 ):
-    configuration, golden_tensor, torch_format = _make_config(
+    configuration, golden_tensor, _ = _make_config(
         tile_dims, num_tiles, formats, dest_acc
     )
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Length mismatch: got {len(res_from_L1)}, expected {len(golden_tensor)}"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
     assert passed_test(golden_tensor, res_tensor, formats.output_format)
 
 

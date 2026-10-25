@@ -17,7 +17,7 @@ corrupts the datacopy.
 
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -41,7 +41,6 @@ def test_unpack_tilizeA_B_uninit_restore(
     dest_acc,
     face_r_dim,
 ):
-    torch_format = format_dict[formats.output_format]
     input_dimensions = [face_r_dim, 32]
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
