@@ -25,6 +25,7 @@ are run by hand, so CI never collects them.
 """
 
 import heapq
+import os
 import time
 from types import SimpleNamespace
 
@@ -153,7 +154,76 @@ _KIMI_K27_REAL_COUNTS = {
 # The real cells Kimi K2.7 runs on (8, 4), named by MoE layer and chunk.
 _REAL_CELLS = tuple(_KIMI_K27_REAL_COUNTS)
 # Timed replays per program; the mean wall time per replay is reported.
-_PERF_ITERS = 5
+_PERF_ITERS = int(os.environ.get("HRE_ITERS", "5"))
+
+# R0 harness knobs (moe-expert campaign). All default to the upstream behaviour.
+#   HRE_COUNTS     routing override, see _counts_override.
+#   HRE_THRESHOLD  hybrid threshold override (0 = every expert unified; max_tokens-1 = every expert fused).
+#   HRE_RUN        comma list of programs the perf test times: re, combine, overlap (default all three).
+_HRE_GOLDEN_NPY = os.environ.get("HRE_GOLDEN_NPY", "/scratch/moconnor/campaign/analysis/expert_counts.npy")
+
+
+def _even_split(total, n):
+    base, extra = divmod(total, n)
+    return [base + (1 if i < extra else 0) for i in range(n)]
+
+
+def _counts_override(group_experts, num_groups, group_total):
+    """Parse HRE_COUNTS. Returns None, ("group", counts per group-expert) replicated over every group, or
+    ("mesh", counts per global expert) spread whole-mesh.
+
+    group-level specs (each group's counts must sum to group_total = chips*seq*topk_per_group):
+      uniform                 every expert group_total/group_experts
+      hot:<n>[:<k>]           k experts (default 1) on chip 0 get n each, the rest share evenly
+      chip:<v0,..,v7>         chip c's 8 experts each get v_c tokens (sum*8 must be group_total)
+      chiphot:<v0,..,v7>      chip c gets 8*v_c tokens all on its local expert 0 (others 0)
+      experts:<c0,..,c63>     explicit per-group-expert counts
+    mesh-level:
+      colfrac:<f0,..,f3>      column g's experts take f_g percent of all picks (even within the column)
+      golden:<layer>:<chunk>  the vLLM golden routing counts of that MoE layer/chunk (256 global experts)
+    """
+    spec = os.environ.get("HRE_COUNTS")
+    if not spec:
+        return None
+    kind, _, arg = spec.partition(":")
+    epc = group_experts // 8
+    if kind == "uniform":
+        counts = _even_split(group_total, group_experts)
+    elif kind == "hot":
+        parts = [int(v) for v in arg.split(":")]
+        n, k = parts[0], (parts[1] if len(parts) > 1 else 1)
+        counts = [n] * k + _even_split(group_total - n * k, group_experts - k)
+    elif kind in ("chip", "chiphot"):
+        per_chip = [int(v) for v in arg.split(",")]
+        assert len(per_chip) * epc == group_experts, f"{len(per_chip)} chips x {epc} for {group_experts} experts"
+        if kind == "chip":
+            counts = [v for v in per_chip for _ in range(epc)]
+        else:
+            counts = [x for v in per_chip for x in [v * epc] + [0] * (epc - 1)]
+    elif kind == "experts":
+        counts = [int(v) for v in arg.split(",")]
+    elif kind == "colfrac":
+        # Whole-mesh routing where mesh column (dispatch group) g takes f_g percent of all picks, spread
+        # evenly over its experts: the column send volume that drives dispatch/combine time.
+        fracs = [float(v) for v in arg.split(",")]
+        assert len(fracs) == num_groups, f"{len(fracs)} fractions for {num_groups} groups"
+        total = group_total * num_groups
+        per_group = [int(round(total * f / sum(fracs))) for f in fracs]
+        per_group[-1] = total - sum(per_group[:-1])
+        mesh = [c for g in range(num_groups) for c in _even_split(per_group[g], group_experts)]
+        return ("mesh", tuple(mesh))
+    elif kind == "golden":
+        import numpy as np
+
+        layer, chunk = (int(v) for v in arg.split(":"))
+        mesh = np.load(_HRE_GOLDEN_NPY)[layer - 3, chunk]
+        assert mesh.size == group_experts * num_groups, f"golden has {mesh.size} experts"
+        return ("mesh", tuple(int(v) for v in mesh))
+    else:
+        raise ValueError(f"unknown HRE_COUNTS {spec!r}")
+    assert len(counts) == group_experts, f"{len(counts)} counts for {group_experts} experts"
+    assert sum(counts) == group_total, f"HRE_COUNTS {spec!r} sums to {sum(counts)}, need {group_total}"
+    return ("group", tuple(counts))
 
 
 def _scaled_model(mesh, model_id):
@@ -291,6 +361,24 @@ def _spread_indices_from_counts(counts, chips, seq, topk):
     return rows.reshape(chips, seq, topk)
 
 
+# HRE_SPECS runs many routings in one session; the expert weights do not depend on the routing, so they are
+# converted and uploaded once.
+_TT_EXPERT_CACHE = {}
+
+
+def _make_tt_expert(mesh_device, experts_per_chip, tt_idx_slice, emb_dim, hidden_dim, max_tokens, num_devices, w):
+    return TtRoutedExpert(
+        mesh_device=mesh_device,
+        experts_per_chip=experts_per_chip,
+        global_expert_idx_table=tt_idx_slice,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=max_tokens,
+        torch_weights=[w] * (num_devices * experts_per_chip),
+        activation=ttnn.RoutedExpertActivation.Silu,
+    )
+
+
 def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=False):
     """One seq-640 layer of `model_id` on `mesh_device`: its inputs, and the three ways to run it.
 
@@ -343,7 +431,16 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     )
     # Replay the measured routing rather than the draw initialize_test_inputs made; x and the gate weights
     # it produced are kept.
-    if threshold_id in _REAL_CELLS:
+    override = _counts_override(
+        num_routed_experts // num_dispatch_groups,
+        num_dispatch_groups,
+        dispatch_group_size * _SEQ_LEN_PER_CHIP * (num_experts_per_tok // num_dispatch_groups),
+    )
+    if override is not None and override[0] == "mesh":
+        indices = _spread_indices_from_counts(
+            override[1], dispatch_group_size, _SEQ_LEN_PER_CHIP, num_experts_per_tok
+        )
+    elif threshold_id in _REAL_CELLS:
         assert tuple(mesh_device.shape) == _FULL_MESH, "a real cell is whole-mesh routing"
         assert model_id == "kimi-k27", "only Kimi K2.7 has real cells"
         indices = _spread_indices_from_counts(
@@ -356,7 +453,7 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         # same counts, same tokens, same order -- and the meshes differ only in their links. Group g owns experts
         # g * group_experts onward, laid out chip for chip like (8, 1)'s, and each token takes its share of the
         # top-k from every group.
-        group_counts = _CAPTURED_COUNTS[model_id][threshold_id]
+        group_counts = override[1] if override is not None else _CAPTURED_COUNTS[model_id][threshold_id]
         group_experts = len(group_counts)
         assert (
             group_experts * num_dispatch_groups == num_routed_experts
@@ -404,9 +501,24 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     # Both cases run the crossover the model ships. Balanced leaves every expert under it, so the fused
     # pass takes them all -- which is what production does at this chunk size; the hot expert is the one
     # the threshold lifts into the unified pass.
-    threshold = model.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD
+    threshold = int(os.environ.get("HRE_THRESHOLD", model.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD))
     assert threshold < max_dispatched_tokens_per_expert
     hot = int(counts.argmax())
+    # Per-chip loads in mesh order, with the physical ids the device profiler reports, so a profile can be
+    # joined to the routing: expert e lives on mesh (row (e % group) // epc, col e // group).
+    _ids = list(mesh_device.get_device_ids())
+    _cols = tuple(mesh_device.shape)[1]
+    # expert_token_counts is (groups, rows, experts), replicated over rows; expert e of group g sits on chip
+    # (e % group_experts) // experts_per_chip.
+    _group_experts = num_routed_experts // num_dispatch_groups
+    for _g in range(num_dispatch_groups):
+        for _c in range(dispatch_group_size):
+            _base = _g * _group_experts + _c * experts_per_chip
+            _ex = [int(expert_token_counts[_g, 0, _base + _e]) for _e in range(experts_per_chip)]
+            logger.warning(
+                f"HRE_LOAD dev={_ids[_c * _cols + _g]} row={_c} col={_g} load={sum(_ex)} "
+                f"max={max(_ex)} unified={sum(v > threshold for v in _ex)} experts={_ex}"
+            )
     logger.info(
         f"{num_routed_experts=} {num_experts_per_tok=} {experts_per_chip=} {max_dispatched_tokens_per_expert=} "
         f"{threshold=} fused experts={(counts <= threshold).sum().item()}/{counts.numel()} "
@@ -416,9 +528,19 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
     ep_mapper = get_ep_mesh_mapper(mesh_device)
     counts_mapper = get_expert_token_counts_mesh_mapper(mesh_device)
     # ROW_MAJOR bf16: the tilized path is the one that writes the bf8 tiles combine reads.
-    tt_x = ttnn.from_torch(
-        dispatched_buffer, mesh_mapper=ep_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
-    )
+    # fp8wire: HRE_X=bf8 hands the routed expert TILE bfloat8_b tiles, as the fp8 dispatch wire's DQ1 does.
+    if os.environ.get("HRE_X", "bf16") == "bf8":
+        tt_x = ttnn.from_torch(
+            dispatched_buffer, mesh_mapper=ep_mapper, layout=ttnn.TILE_LAYOUT, device=mesh_device, dtype=ttnn.bfloat8_b
+        )
+    else:
+        tt_x = ttnn.from_torch(
+            dispatched_buffer,
+            mesh_mapper=ep_mapper,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+        )
     tt_metadata = _int_tensor(dispatched_metadata, mesh_device, ep_mapper)
     # UINT32, which the routed expert requires and combine also takes.
     # (1, experts) per device: the routed expert takes 1D or 2D, combine reads the last two dims.
@@ -451,16 +573,15 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
         "up_proj": torch.randn(hidden_dim, emb_dim) * 0.02,
         "down_proj": torch.randn(emb_dim, hidden_dim) * 0.02,
     }
-    tt_expert = TtRoutedExpert(
-        mesh_device=mesh_device,
-        experts_per_chip=experts_per_chip,
-        global_expert_idx_table=tt_idx_slice,
-        emb_dim=emb_dim,
-        hidden_dim=hidden_dim,
-        max_tokens=max_dispatched_tokens_per_expert,
-        torch_weights=[expert_weights] * (num_devices * experts_per_chip),
-        activation=ttnn.RoutedExpertActivation.Silu,
-    )
+    _expert_key = (model_id, tuple(mesh_device.shape), id(mesh_device))
+    tt_expert = _TT_EXPERT_CACHE.get(_expert_key) if os.environ.get("HRE_SPECS") else None
+    if tt_expert is None:
+        tt_expert = _make_tt_expert(
+            mesh_device, experts_per_chip, tt_idx_slice, emb_dim, hidden_dim, max_dispatched_tokens_per_expert,
+            num_devices, expert_weights,
+        )
+        if os.environ.get("HRE_SPECS"):
+            _TT_EXPERT_CACHE[_expert_key] = tt_expert
 
     def routed_expert(**overlap):
         return ttnn.experimental.deepseek_prefill.hybrid_routed_expert_moe(
@@ -693,32 +814,77 @@ def test_hybrid_routed_expert_combine_overlap_perf(mesh_device, device_params, t
     """
     if variant == "8x1-submesh":
         mesh_device = mesh_device.create_submesh(ttnn.MeshShape(8, 1))
+    # HRE_SPECS="specA;specB;..." times every routing spec in one device session (each spec as HRE_COUNTS;
+    # "-" keeps the case's own routing). Device profiler buffers are flushed after each spec.
+    specs = os.environ.get("HRE_SPECS")
+    if specs:
+        base_threshold = os.environ.get("HRE_THRESHOLD")
+        for spec in specs.split(";"):
+            # "spec@T" runs that spec at hybrid threshold T.
+            spec, _, thr = spec.partition("@")
+            if thr:
+                os.environ["HRE_THRESHOLD"] = thr
+            elif base_threshold is not None:
+                os.environ["HRE_THRESHOLD"] = base_threshold
+            else:
+                os.environ.pop("HRE_THRESHOLD", None)
+            if spec == "-":
+                os.environ.pop("HRE_COUNTS", None)
+            else:
+                os.environ["HRE_COUNTS"] = spec
+            logger.warning(f"HRE_SPEC_BEGIN {spec}@{os.environ.get('HRE_THRESHOLD', '-')}")
+            _perf_one(mesh_device, device_params, threshold_id, model_id, variant)
+            ttnn.synchronize_device(mesh_device)
+            # Cached programs hold combine's L1 and the case's semaphores; the next case's solo routed expert
+            # sizes its arena to the whole L1 bank, so drop them (kernel binaries stay in the JIT cache).
+            mesh_device.clear_program_cache()
+            if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+                ttnn.ReadDeviceProfiler(mesh_device)
+            logger.warning(f"HRE_SPEC_END {spec}@{os.environ.get('HRE_THRESHOLD', '-')}")
+        return
+    _perf_one(mesh_device, device_params, threshold_id, model_id, variant)
+
+
+def _perf_one(mesh_device, device_params, threshold_id, model_id, variant):
     case = _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=variant == "dg0-only")
 
-    case.solo_routed_expert()
-    re_trace, traced_re_out = _capture(mesh_device, case.solo_routed_expert)
-    try:
-        traced_re_us = _replay_us(mesh_device, re_trace, _PERF_ITERS)
-    finally:
-        ttnn.release_trace(mesh_device, re_trace)
+    run = set(os.environ.get("HRE_RUN", "re,combine,overlap").split(","))
+    traced_re_us = traced_combine_us = traced_overlap_us = float("nan")
+    if run & {"re", "combine"}:
+        case.solo_routed_expert()
+        re_trace, traced_re_out = _capture(mesh_device, case.solo_routed_expert)
+        try:
+            traced_re_us = _replay_us(mesh_device, re_trace, _PERF_ITERS)
+        finally:
+            ttnn.release_trace(mesh_device, re_trace)
 
-    # The widening sits outside the combine trace, so the trace is combine alone.
-    widened = ttnn.typecast(traced_re_out, ttnn.bfloat16)
-    case.combine(widened, widen=False)
-    combine_trace, combine_out = _capture(mesh_device, lambda: case.combine(widened, widen=False))
-    try:
-        traced_combine_us = _replay_us(mesh_device, combine_trace, _PERF_ITERS)
-    finally:
-        ttnn.release_trace(mesh_device, combine_trace)
-        del traced_re_out, widened, combine_out
+    if "combine" in run:
+        # The widening sits outside the combine trace, so the trace is combine alone.
+        widened = ttnn.typecast(traced_re_out, ttnn.bfloat16)
+        case.combine(widened, widen=False)
+        combine_trace, combine_out = _capture(mesh_device, lambda: case.combine(widened, widen=False))
+        try:
+            traced_combine_us = _replay_us(mesh_device, combine_trace, _PERF_ITERS)
+        finally:
+            ttnn.release_trace(mesh_device, combine_trace)
+            del widened, combine_out
+    if run & {"re", "combine"}:
+        del traced_re_out
 
-    case.overlapped()
-    overlap_trace, overlap_out = _capture(mesh_device, case.overlapped)
-    try:
-        traced_overlap_us = _replay_us(mesh_device, overlap_trace, _PERF_ITERS)
-    finally:
-        ttnn.release_trace(mesh_device, overlap_trace)
-        del overlap_out
+    if "overlap" in run:
+        case.overlapped()
+        overlap_trace, overlap_out = _capture(mesh_device, case.overlapped)
+        try:
+            traced_overlap_us = _replay_us(mesh_device, overlap_trace, _PERF_ITERS)
+        finally:
+            ttnn.release_trace(mesh_device, overlap_trace)
+            del overlap_out
+    logger.warning(
+        f"HRE_PERF x={os.environ.get('HRE_X', 'bf16')} counts={os.environ.get('HRE_COUNTS', threshold_id)} threshold={os.environ.get('HRE_THRESHOLD', '-')} "
+        f"re_us={traced_re_us:.1f} combine_us={traced_combine_us:.1f} overlap_us={traced_overlap_us:.1f}"
+    )
+    if run != {"re", "combine", "overlap"} or os.environ.get("HRE_SPECS"):
+        return
 
     traced_sequential_us = traced_re_us + traced_combine_us
     traced_saved_us = traced_sequential_us - traced_overlap_us
