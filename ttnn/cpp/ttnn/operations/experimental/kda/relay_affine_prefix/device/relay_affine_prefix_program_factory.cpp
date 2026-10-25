@@ -109,13 +109,20 @@ tt::tt_metal::ProgramDescriptor build_program(
         .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_affine_prefix.cpp",
         .core_ranges = head_set,
         .compile_time_args = std::move(reader_ct),
-        .config = tt::tt_metal::ReaderConfigDescriptor{},
+        // The head cores' reader takes NoC 1 and their writer NoC 0, the reverse of the reader/writer default: the
+        // first rank's reader streams the initial state from DRAM while the output gate beside the relay streams its
+        // operands from DRAM over NoC 0, and sharing that NoC slowed the whole gate by ~11 us (SP8xTP4).
+        .config =
+            tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1},
     };
     tt::tt_metal::KernelDescriptor writer{
         .kernel_source = std::string(kernel_dir) + "dataflow/writer_relay_affine_prefix.cpp",
         .core_ranges = head_set,
         .compile_time_args = std::move(writer_ct),
-        .config = tt::tt_metal::WriterConfigDescriptor{},
+        .config =
+            tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0},
     };
     tt::tt_metal::KernelDescriptor compute{
         .kernel_source = std::string(kernel_dir) + "compute/relay_affine_prefix.cpp",
@@ -128,8 +135,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         .kernel_source = std::string(kernel_dir) + "dataflow/sender_relay_affine_prefix.cpp",
         .core_ranges = sender_set,
         .compile_time_args = std::move(sender_ct),
-        // NoC 0, away from the head writers' DRAM copies (the writer default, NoC 1): the relay's hops are latency
-        // bound.
+        // NoC 0 (the sender cores run nothing else).
         .config =
             tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0},
