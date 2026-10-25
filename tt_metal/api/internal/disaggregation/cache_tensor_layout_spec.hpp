@@ -159,12 +159,6 @@ using DeviceChunkSize = ttsl::StrongType<uint32_t, struct DeviceChunkSizeTag>;
 using KChunkSize = ttsl::StrongType<uint32_t, struct KChunkSizeTag>;
 // Number of DRAM banks a single head/group fans out over (BLOCK / CYCLIC height-sharding).
 using BanksPerHead = ttsl::StrongType<uint32_t, struct BanksPerHeadTag>;
-// Origin offset of the first sequence-shard (CP) device on the mesh axis.
-using SpOrigin = ttsl::StrongType<uint32_t, struct SpOriginTag>;
-// index_k column-split degree (BLOCK_CYCLIC): how many devices a sparse-index row is split across.
-using IdxCp = ttsl::StrongType<uint32_t, struct IdxCpTag>;
-// GQA group index -> mesh ROW block (BLOCK K/V per-group placement).
-using GqaGroup = ttsl::StrongType<uint32_t, struct GqaGroupTag>;
 
 // Tile / dtype facts (tt::constants::TILE_WIDTH, tt::tile_size, tt::datum_size) and the DRAM bank
 // count / NOC-optimal order (the SoC arch descriptor) are NOT re-declared here — the implementation
@@ -199,12 +193,10 @@ struct GenerationPolicy {
     std::optional<DeviceChunkSize> device_chunk_size;
     BanksPerHead banks_per_head{0};              // BLOCK/CYCLIC per-head fan-out; 0 => num_dram_banks(arch)
     uint32_t num_blocks = 0;                     // OPTIMAL indexer permutation block count; 0 => num_dram_banks(arch)
-    SpOrigin sp_origin{0};                       // CP device origin on the seq-shard mesh axis
-    IdxCp idx_cp{1};                             // index_k column-split (BLOCK_CYCLIC)
-    std::optional<GqaGroup> group;               // GQA group -> mesh ROW block (BLOCK K/V)
-    // num_banks and the mesh geometry (sp_dim / mesh cols/rows / head-shard axis / device coords) are
-    // NOT fields here: num_banks is a device fact (dram grid), the geometry is read from the tensor's
-    // TensorTopology, and the seq axis + feature width from its NdShardSpec.
+    // num_banks and the mesh geometry (seq/head shard axes, device coords) are NOT fields here: num_banks
+    // is a device fact (dram grid), placement is read from the tensor's TensorTopology (its mesh_coords
+    // list the devices in shard order, so a rotated seq-shard origin or a one-row GQA group is a topology
+    // fact), and the seq axis + feature width from its NdShardSpec.
 };
 
 // Bytes for one chunk of `tokens_per_chunk` tokens. The feature width and dtype sizing are read from

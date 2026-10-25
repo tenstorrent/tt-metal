@@ -134,8 +134,147 @@ RefLoc gptoss_reference(
     return {bank_id, noc, 0};
 }
 
+// --- Reference: MiniMax-M3 K/V kv_chunk_location (minimax_m3.py) ---
+RefLoc m3_kv_reference(
+    uint32_t position, uint32_t slot, uint64_t base, uint32_t bph, uint32_t st_pb, uint32_t row_bytes) {
+    static constexpr std::array<uint32_t, 8> kOrder = {1, 3, 2, 0, 5, 7, 6, 4};
+    const uint32_t block_size = 128;
+    const uint32_t chunk = position / block_size;
+    const uint32_t bank_slice = chunk % bph;
+    const uint32_t within = (chunk / bph) * (block_size / kTileLocal) + (position % block_size) / kTileLocal;
+    const uint64_t noc =
+        base + static_cast<uint64_t>(slot) * st_pb * row_bytes + static_cast<uint64_t>(within) * row_bytes;
+    return {kOrder[bank_slice], noc, 0};
+}
+
+// --- Reference: MiniMax-M3 index_k idx_k_chunk_location (minimax_m3.py); owner = idx_cp column ---
+RefLoc m3_index_reference(
+    uint32_t position, uint32_t slot, uint64_t base, uint32_t per_dev_seq_kv, uint32_t idx_cp, uint32_t idx_row_bytes) {
+    static constexpr std::array<uint32_t, 8> kOrder = {1, 3, 2, 0, 5, 7, 6, 4};
+    const uint32_t block_size = 128;
+    const uint32_t n_blocks = per_dev_seq_kv / block_size;
+    const uint32_t n_blocks_dev = (n_blocks + idx_cp - 1) / idx_cp;
+    const uint32_t num_banks = std::min(8u, n_blocks_dev);
+    const uint32_t blocks_per_bank = n_blocks_dev / num_banks;
+    const uint32_t gb = position / block_size;
+    const uint32_t dev = gb % idx_cp;
+    const uint32_t local_position = (gb / idx_cp) * block_size + position % block_size;
+    const uint32_t global_block = slot * blocks_per_bank * num_banks + local_position / block_size;
+    const uint32_t local_block = global_block / num_banks;
+    const uint32_t tile_row = (local_block * block_size + local_position % block_size) / kTileLocal;
+    return {kOrder[global_block % num_banks], base + static_cast<uint64_t>(tile_row) * idx_row_bytes, dev};
+}
+
+// --- MiniMax-M3 K/V: one config per (k|v, GQA group); group g lives on mesh row g, replicated over columns ---
+TEST(ToChunkMap, CPU_M3KvMatchesReference) {
+    const uint32_t mesh_rows = 4;
+    const uint32_t mesh_cols = 2;
+    const uint32_t head_dim = 128;
+    const uint32_t max_seq_len = 2048;
+    const uint32_t num_slots = 4;
+    const uint32_t bph = 8;
+    const uint32_t row_bytes = (head_dim / kTileLocal) * kBfp8TileBytesLocal;
+    const uint32_t st_pb = (max_seq_len / kTileLocal) / bph;
+
+    GenerationPolicy policy;
+    policy.bank_scheme = BankScheme::Cyclic;
+    policy.bank_order = BankOrder::Optimal;
+    policy.k_chunk_size = KChunkSize{128};
+    policy.banks_per_head = BanksPerHead{bph};
+
+    std::vector<CacheConfig> configs;
+    for (uint32_t cfg = 0; cfg < 2 * mesh_rows; ++cfg) {
+        const uint32_t group = cfg % mesh_rows;
+        KvLayoutSpec spec{
+            .tensor = make_bfp8_ndshard_spec(Shape{num_slots, max_seq_len, head_dim}, Shape{1, kTileLocal, head_dim}),
+            .temporal = temporal::Dense{},
+            .arch = tt::ARCH::BLACKHOLE};
+        std::vector<MeshCoordinate> coords;
+        for (uint32_t c = 0; c < mesh_cols; ++c) {
+            coords.emplace_back(group, c);
+        }
+        TensorTopology topology(MeshShape{mesh_cols}, {MeshMapperConfig::Replicate{}}, coords);
+        configs.push_back(CacheConfig{
+            .spec = spec, .topology = topology, .policy = policy, .base_addr = 0x20000ull + cfg * 0x100000ull});
+    }
+    MapGeometry geom{.num_layers = 1, .num_slots = num_slots, .max_seq_len = max_seq_len, .position_step = kTileLocal};
+
+    auto table = to_chunk_map(configs, tt::tt_fabric::MeshId{0}, MeshShape{mesh_rows, mesh_cols}, geom);
+
+    uint32_t checked = 0;
+    for (uint32_t cfg = 0; cfg < configs.size(); ++cfg) {
+        const uint32_t group = cfg % mesh_rows;
+        for (uint32_t slot = 0; slot < num_slots; ++slot) {
+            for (uint32_t pos = 0; pos < max_seq_len; pos += kTileLocal) {
+                const RefLoc ref = m3_kv_reference(pos, slot, configs[cfg].base_addr, bph, st_pb, row_bytes);
+                const KvCacheLocation loc = table.lookup(0, pos, slot, cfg);
+                EXPECT_EQ(addr_channel(loc.noc_addr), ref.bank_id) << "cfg=" << cfg << " pos=" << pos;
+                EXPECT_EQ(addr_local(loc.noc_addr), static_cast<uint32_t>(ref.offset & 0xFFFFFFFFull))
+                    << "cfg=" << cfg << " pos=" << pos;
+                const auto& grp = table.get_device_group(loc.device_group_index);
+                ASSERT_EQ(grp.fabric_node_ids.size(), mesh_cols);
+                for (uint32_t c = 0; c < mesh_cols; ++c) {
+                    EXPECT_EQ(grp.fabric_node_ids[c].chip_id, group * mesh_cols + c);
+                }
+                ++checked;
+            }
+        }
+    }
+    EXPECT_GT(checked, 0u);
+}
+
+// --- MiniMax-M3 index_k: sequence blocks split over the 2 mesh columns (idx_cp == 2), replicated over rows ---
+TEST(ToChunkMap, CPU_M3IndexKMatchesReference) {
+    const uint32_t mesh_rows = 4;
+    const uint32_t mesh_cols = 2;
+    const uint32_t idx_dim = 128;
+    const uint32_t max_seq_len = 2048;
+    const uint32_t num_slots = 4;
+    const uint64_t base = 0x20000ull;
+    const uint32_t idx_row_bytes = (idx_dim / kTileLocal) * kBfp8TileBytesLocal;
+
+    KvLayoutSpec spec{
+        .tensor = make_bfp8_ndshard_spec(Shape{num_slots, max_seq_len, idx_dim}, Shape{1, kTileLocal, idx_dim}),
+        .temporal = temporal::Dense{},
+        .arch = tt::ARCH::BLACKHOLE};
+    ttsl::SmallVector<MeshMapperConfig::Placement> placements = {
+        MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{.dim = 1}};
+    TensorTopology topology(MeshShape{mesh_rows, mesh_cols}, placements, row_major_coords(mesh_rows, mesh_cols));
+
+    GenerationPolicy policy;
+    policy.bank_scheme = BankScheme::BlockCyclic;
+    policy.bank_order = BankOrder::Optimal;
+    policy.k_chunk_size = KChunkSize{128};
+    policy.device_chunk_size = DeviceChunkSize{128};
+    policy.banks_per_head = BanksPerHead{8};
+
+    CacheConfig config{.spec = spec, .topology = topology, .policy = policy, .base_addr = base};
+    MapGeometry geom{.num_layers = 1, .num_slots = num_slots, .max_seq_len = max_seq_len, .position_step = kTileLocal};
+
+    auto table = to_chunk_map({config}, tt::tt_fabric::MeshId{0}, MeshShape{mesh_rows, mesh_cols}, geom);
+
+    uint32_t checked = 0;
+    for (uint32_t slot = 0; slot < num_slots; ++slot) {
+        for (uint32_t pos = 0; pos < max_seq_len; pos += kTileLocal) {
+            const RefLoc ref = m3_index_reference(pos, slot, base, max_seq_len, mesh_cols, idx_row_bytes);
+            const KvCacheLocation loc = table.lookup(0, pos, slot, 0u);
+            EXPECT_EQ(addr_channel(loc.noc_addr), ref.bank_id) << "slot=" << slot << " pos=" << pos;
+            EXPECT_EQ(addr_local(loc.noc_addr), static_cast<uint32_t>(ref.offset & 0xFFFFFFFFull))
+                << "slot=" << slot << " pos=" << pos;
+            const auto& grp = table.get_device_group(loc.device_group_index);
+            ASSERT_EQ(grp.fabric_node_ids.size(), mesh_rows);
+            for (uint32_t r = 0; r < mesh_rows; ++r) {
+                EXPECT_EQ(grp.fabric_node_ids[r].chip_id, r * mesh_cols + ref.owner);
+            }
+            ++checked;
+        }
+    }
+    EXPECT_GT(checked, 0u);
+}
+
 // --- MLA (DeepSeek-V3 / Kimi) ---
-TEST(ToChunkMap, CPU_MlaShardMatchesMigrationReference) {
+// `sp_origin` rotates which mesh row owns the first sequence shard; the topology lists the rows in shard order.
+void check_mla_shard(uint32_t sp_origin) {
     const uint64_t F = 576;  // kv_lora_rank 512 + qk_rope 64
     const uint32_t sp_dim = 4;
     const uint32_t mesh_cols = 2;
@@ -161,7 +300,13 @@ TEST(ToChunkMap, CPU_MlaShardMatchesMigrationReference) {
     // Topology: 4x2 mesh, seq (tensor dim 2) sharded on mesh axis 0, replicated across mesh axis 1.
     ttsl::SmallVector<MeshMapperConfig::Placement> placements = {
         MeshMapperConfig::Shard{.dim = 2}, MeshMapperConfig::Replicate{}};
-    TensorTopology topology(MeshShape{sp_dim, mesh_cols}, placements, row_major_coords(sp_dim, mesh_cols));
+    std::vector<MeshCoordinate> coords;
+    for (uint32_t s = 0; s < sp_dim; ++s) {
+        for (uint32_t c = 0; c < mesh_cols; ++c) {
+            coords.emplace_back((s + sp_origin) % sp_dim, c);
+        }
+    }
+    TensorTopology topology(MeshShape{sp_dim, mesh_cols}, placements, coords);
 
     GenerationPolicy policy;
     policy.bank_scheme = BankScheme::MlaShard;
@@ -172,13 +317,13 @@ TEST(ToChunkMap, CPU_MlaShardMatchesMigrationReference) {
     CacheConfig config{.spec = spec, .topology = topology, .policy = policy, .base_addr = base};
     MapGeometry geom{.num_layers = 1, .num_slots = num_slots, .max_seq_len = max_seq_len, .position_step = chunk_n_tokens};
 
-    auto table = to_chunk_map({config}, tt::tt_fabric::MeshId{0}, geom);
+    auto table = to_chunk_map({config}, tt::tt_fabric::MeshId{0}, MeshShape{sp_dim, mesh_cols}, geom);
 
     uint32_t checked = 0;
     for (uint32_t slot = 0; slot < num_slots; ++slot) {
         for (uint32_t pos = 0; pos < max_seq_len; pos += chunk_n_tokens) {
             const RefLoc ref = mla_reference(
-                pos, slot, base, F, per_dev, chunk_n_tokens, sp_dim, k_chunk, device_chunk_size, 0);
+                pos, slot, base, F, per_dev, chunk_n_tokens, sp_dim, k_chunk, device_chunk_size, sp_origin);
             const KvCacheLocation loc = table.lookup(0, pos, slot, 0u);
             EXPECT_EQ(addr_channel(loc.noc_addr), ref.bank_id) << "pos=" << pos << " slot=" << slot;
             EXPECT_EQ(addr_local(loc.noc_addr), static_cast<uint32_t>(ref.offset & 0xFFFFFFFFull))
@@ -195,6 +340,10 @@ TEST(ToChunkMap, CPU_MlaShardMatchesMigrationReference) {
     }
     EXPECT_GT(checked, 0u);
 }
+
+TEST(ToChunkMap, CPU_MlaShardMatchesMigrationReference) { check_mla_shard(0); }
+
+TEST(ToChunkMap, CPU_MlaShardRotatedOriginMatchesMigrationReference) { check_mla_shard(1); }
 
 // --- gpt-oss GQA (CYCLIC dense layer) ---
 TEST(ToChunkMap, CPU_GqaCyclicMatchesReference) {
@@ -236,7 +385,7 @@ TEST(ToChunkMap, CPU_GqaCyclicMatchesReference) {
     CacheConfig config{.spec = spec, .topology = topology, .policy = policy, .base_addr = base};
     MapGeometry geom{.num_layers = 1, .num_slots = num_slots, .max_seq_len = max_seq_len, .position_step = kTileLocal};
 
-    auto table = to_chunk_map({config}, tt::tt_fabric::MeshId{0}, geom);
+    auto table = to_chunk_map({config}, tt::tt_fabric::MeshId{0}, MeshShape{1, n_kv_heads}, geom);
 
     const bool cyclic = true;
     uint32_t checked = 0;
