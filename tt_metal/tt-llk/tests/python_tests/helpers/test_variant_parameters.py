@@ -105,13 +105,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
     def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
-        from helpers.matmul_prod_keys import main_form_cell, m2_row_mop
+        from helpers.matmul_prod_keys import forced_r_cell, main_form_cell, m2_row_mop
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
         if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
+            return []
+        if dest_sync == DestSync.Half and forced_r_cell(
+            math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
+        ):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
@@ -324,15 +328,16 @@ class MATMUL_FORM_KEYS(TemplateParameter):
     still holds them, as the variant hash reads it."""
 
     def __init__(
-        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False, unfused_post: bool = False
+        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False, unfused_post: bool = False, force_form: str = ""
     ):
         self.kt_per_section = kt_per_section
         self.output_format = output_format
         self.row_le_8 = row_le_8
         self.unfused_post = unfused_post
+        self.force_form = force_form
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', force ' + self.force_form if self.force_form else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -341,6 +346,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
             + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
             + ("\n#define MATMUL_UNFUSED_POST" if self.unfused_post else "")
+            + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
         )
 
     @staticmethod
@@ -385,9 +391,13 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             return [MATMUL_FORM_KEYS(2, DataFormat.Float32, True)]
         # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
         if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
-            from helpers.matmul_prod_keys import main_form_cell
+            from helpers.matmul_prod_keys import forced_r_cell, main_form_cell
 
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+            if dest_sync == DestSync.Half and forced_r_cell(
+                math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
+            ):
+                return [MATMUL_FORM_KEYS(1, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, "R")]
             if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
@@ -397,7 +407,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
                 formats.output_format,
                 0 < max(ct_dim, rt_dim) <= 8,
                 # Bfp8_b input to a Float32 output at half sync reads slower with the fused post and DEST flip than main's separate stalls:
-                # at HiFi2 on one k step blocks with a 16-bit DEST (and the one tile block with a 32-bit one), at HiFi3 and HiFi4 on the
+                # at HiFi2 on one k step blocks with a 16-bit DEST (and the one tile block with a 32-bit one), at HiFi3 on the
                 # one k step blocks of up to five tiles that are not four rows tall
                 unfuse_one_tile
                 and dest_sync == DestSync.Half
@@ -407,7 +417,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
                 and (
                     (math_fidelity == MathFidelity.HiFi2 and (dest_acc == DestAccumulation.No or (ct_dim, rt_dim) == (1, 1)))
                     or (
-                        math_fidelity in (MathFidelity.HiFi3, MathFidelity.HiFi4)
+                        math_fidelity == MathFidelity.HiFi3
                         and dest_acc == DestAccumulation.No
                         and ct_dim * rt_dim <= 5
                         and rt_dim < 4

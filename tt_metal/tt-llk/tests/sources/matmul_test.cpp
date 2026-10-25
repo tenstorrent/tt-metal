@@ -39,6 +39,8 @@ constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_
 #if defined(MATMUL_FORCE_FORM)
 // math MOP kind (0 tile, 1 rows, 2 row) and hoisted unpack of the cell, whatever the forms table says: MATMUL_FORCE_FORM = 2 * kind + hoist
 constexpr bool matmul_hoist_rows = (MATMUL_FORCE_FORM % 2) == 1;
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
+constexpr bool matmul_hoist_rows = MATMUL_FORCE_FORM_CHAR == 'h' || MATMUL_FORCE_FORM_CHAR == 'R';
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
 #elif defined(ARCH_BLACKHOLE)
@@ -210,6 +212,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_matmul.h"
 #if defined(MATMUL_FORCE_FORM)
 constexpr bool matmul_tile_mop = (MATMUL_FORCE_FORM / 2) == 0;
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
+constexpr bool matmul_tile_mop = !(MATMUL_FORCE_FORM_CHAR == 'r' || MATMUL_FORCE_FORM_CHAR == 'R');
 #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
 constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
 #else

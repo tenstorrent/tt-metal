@@ -15,20 +15,27 @@ from helpers.llk_params import MathFidelity
 _HEADER = (Path(__file__).resolve().parents[3] / "tt_llk_blackhole/llk_lib/llk_matmul_forms.h").read_text()
 _TABLE = re.findall(r'"([.rRh]{5})"', _HEADER)
 # matmul_main_form_cells of the header: cells whose keyed forms read slower than main's, which keep main's form
-_MAIN_CELLS = {
-    (fid, k1 == "true", acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(sync or -1)): (
-        several_ok == "true",
-        int(min_row or 0),
-        int(max_row or 0xFFFF),
-        int(min_k or 0),
-        int(max_k or 0xFFFF),
-    )
-    for fid, k1, acc, i, o, p, several_ok, min_row, max_row, sync, min_k, max_k in re.findall(
-        r"\{MathFidelity::(\w+), (true|false), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), (true|false)"
-        r"(?:, (\d+))?(?:, (\d+))?(?:, (\d+))?(?:, (\d+))?(?:, (\d+))?\},",
-        _HEADER,
-    )
-}
+_NUM = r"(0x[0-9A-Fa-f]+|\d+)"
+_CELL = (
+    r"\{MathFidelity::(\w+), (true|false), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), (true|false)"
+    + (r"(?:, " + _NUM + r")?") * 6
+    + r"\},"
+)
+
+
+def _cells(text: str) -> dict:
+    out = {}
+    for fid, k1, acc, i, o, p, several_ok, *rest in re.findall(_CELL, text):
+        n = [int(x, 0) if x else d for x, d in zip(rest, (0, 0xFFFF, -1, 0, 0xFFFF, 0))]
+        out[(fid, k1 == "true", acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], n[2])] = (several_ok == "true", n[0], n[1], n[3], n[4], n[5])
+    return out
+
+
+_MAIN_PART, _, _FORCED_PART = _HEADER.partition("matmul_forced_r_cells[]")
+# matmul_main_form_cells of the header: cells whose keyed forms read slower than main's, which keep main's form
+_MAIN_CELLS = _cells(_MAIN_PART)
+# matmul_forced_r_cells: cells that take the hoisted rows form 'R' whatever the table says
+_FORCED_R_CELLS = _cells(_FORCED_PART.split("};")[0])
 _FMT = {
     DataFormat.Float16_b: 0,
     DataFormat.Float16: 1,
@@ -73,13 +80,22 @@ def lg_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pack_format, in1_forma
     )
 
 
-def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False) -> bool:
-    """matmul_main_form_cell_selected of llk_matmul_forms.h for equal in0 and in1 formats."""
+def _cell_hit(cells, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side):
     for sync in ((1,) if full_sync else (-1, 0)):
-        cell = _MAIN_CELLS.get((fidelity.name, kb == 1, fp32_dest, in_format, out_format, pack_format, sync))
-        if cell is not None and not (cell[0] and several_blocks) and cell[1] <= row_tiles <= cell[2] and cell[3] <= kb <= cell[4]:
+        cell = cells.get((fidelity.name, kb == 1, fp32_dest, in_format, out_format, pack_format, sync))
+        if cell is not None and not (cell[0] and several_blocks) and cell[1] <= row_tiles <= cell[2] and cell[3] <= kb <= cell[4] and min_side >= cell[5]:
             return True
     return False
+
+
+def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99) -> bool:
+    """matmul_main_form_cell_selected of llk_matmul_forms.h for equal in0 and in1 formats."""
+    return _cell_hit(_MAIN_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
+
+
+def forced_r_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99) -> bool:
+    """matmul_forced_r_cell_selected of llk_matmul_forms.h: the cell takes the hoisted rows form 'R'."""
+    return _cell_hit(_FORCED_R_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
 
 
 MAIN_FORM = (("tile", False), None)  # main's form: tile MOP, per-row unpack, unknown format key
