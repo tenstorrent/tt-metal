@@ -19,6 +19,8 @@ Env knobs (all optional):
   DB_DIRECT     1 = run the direct dispatch variants (default 1)
   DB_FAB2D      1 = also time dispatch_fabric2d (payload >= 12352 only) and probe repeated trace replays
   DB_FAB2D_REPLAYS  replays for the fab2d probe (default 4)
+  DB_FAB2D_FP8  1 = dispatch_fabric2d with fp8_output (FP8_E4M3 rows; needs the fp8-wire op), no torch check
+  DB_FAB2D_CHECK  1 = torch-reference check of dispatch_fabric2d outputs (bf16 only)
   DB_AG         1 = time an axis-0 all_gather of x as a link-bandwidth reference
   DB_HEARTBEAT  path touched after every step (for an external hang watchdog)
 """
@@ -311,7 +313,10 @@ def test_dispatch_bench(mesh_device, device_params):
                 f_counts = shard(c2[:, 0:1, :], (None, 0), ttnn.int32)
                 f_region = shard(r2[:, 0:1, :], (None, 0), ttnn.int32)
 
-                def fab_one(spec=spec, f_idx=f_idx, f_offs=f_offs, f_counts=f_counts, f_region=f_region):
+                fp8 = os.environ.get("DB_FAB2D_FP8", "0") == "1"
+                fp8_kw = {"fp8_output": True} if fp8 else {}
+
+                def fab_one(spec=spec, f_idx=f_idx, f_offs=f_offs, f_counts=f_counts, f_region=f_region, fp8=fp8, fp8_kw=fp8_kw):
                     def run2():
                         return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
                             f_x,
@@ -331,15 +336,55 @@ def test_dispatch_bench(mesh_device, device_params):
                             topology=ttnn.Topology.Ring,
                             memory_config=ttnn.DRAM_MEMORY_CONFIG,
                             subdevice_id=ttnn.SubDeviceId(0),
+                            **fp8_kw,
                         )
 
                     outs = run2()
                     ttnn.synchronize_device(mesh_device)
+                    _beat(f"fab2d {spec} eager")
+                    if os.environ.get("DB_FAB2D_CHECK", "0") == "1" and not fp8:
+                        offs, counts, region, _ = get_gate_outputs(
+                            indices, H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=table
+                        )
+                        ref = TorchDispatchModule(
+                            dispatch_group_size=H,
+                            experts_per_chip=experts_per_chip,
+                            num_routed_experts=E,
+                            num_experts_per_tok=TOPK,
+                            metadata_len=3,
+                            max_dispatched_tokens_per_expert=max_per_expert,
+                            max_dispatch_buffer_token_size=max_buf,
+                            seq_len_per_chip=SEQ,
+                            emb_dim=EMB,
+                            num_dispatch_groups=G,
+                            expert_dispatch_table=table,
+                        )
+                        ref_buf, ref_meta = ref(x, torch.zeros(H, SEQ, TOPK), indices, offs)
+                        comp = get_ep_mesh_composer(mesh_device)
+                        got_buf = ttnn.to_torch(outs[0], mesh_composer=comp, dtype=torch.float32)
+                        got_meta = ttnn.to_torch(outs[1], mesh_composer=comp)
+                        rb = validate_dispatch_buffer(
+                            ref_buf, got_buf, region, counts, table, G, H, experts_per_chip, verbose=False
+                        )
+                        rm = validate_dispatch_metadata(
+                            ref_meta, got_meta, region, counts, table, G, H, experts_per_chip, verbose=False
+                        )
+                        logger.info(f"[dbench] CHECK fab2d {spec}: buffer={rb.passed} metadata={rm.passed}")
+                        assert rb.passed and rm.passed, f"fab2d {spec} output mismatch"
                     for o in outs:
                         ttnn.deallocate(o)
-                    _beat(f"fab2d {spec} eager")
+                    if os.environ.get("DB_PROFILE", "0") == "1":
+                        # Device-profiler mode: a few synced eager launches, then dump zones (no trace).
+                        ttnn.ReadDeviceProfiler(mesh_device)
+                        for _ in range(3):
+                            for o in run2():
+                                ttnn.deallocate(o)
+                            ttnn.synchronize_device(mesh_device)
+                        ttnn.ReadDeviceProfiler(mesh_device)
+                        _beat(f"fab2d {spec} profiled")
+                        return 0.0
                     return _time_trace(
-                        mesh_device, run2, k, int(os.environ.get("DB_FAB2D_REPLAYS", "4")), f"fab2d payload{payload} {spec}"
+                        mesh_device, run2, k, int(os.environ.get("DB_FAB2D_REPLAYS", "4")), f"fab2d{'-fp8' if fp8 else ''} payload{payload} {spec}"
                     )
 
                 guarded(f"fab2d_{spec}", fab_one)
