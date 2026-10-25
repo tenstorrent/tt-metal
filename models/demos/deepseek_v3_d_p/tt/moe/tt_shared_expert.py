@@ -18,11 +18,16 @@ from typing import Optional
 import torch
 from loguru import logger
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+# glue track: workers per link for the shared-expert TP reduce-scatter (0 = op default).
+_GLUE_SHARED_RS_WORKERS = int(os.environ.get("GLUE_SHARED_RS_WORKERS", "0")) or None
 
 # GLU activations this module can run over its gate/up pair. Spelled as the HF ``hidden_act``
 # and as the torch reference (reference/tt/moe/expert.py), so a model config's string maps across
@@ -634,6 +639,7 @@ class TtSharedExpert(LightweightModule):
                 topology=self.topology,
                 cluster_axis=1,
                 subdevice_id=self.subdevice_id,
+                num_workers_per_link=_GLUE_SHARED_RS_WORKERS,
             )
             # Keep the (fresh-per-iter) RS input alive until the next forward so the concurrent
             # dispatch cannot reuse its slot mid-flight. (The intermediate is kept alive by the cache.)

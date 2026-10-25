@@ -1305,4 +1305,33 @@ def test_glue_r0(mesh_device, variant, config_only):
         timer("N2 wkv_b2(DRAM) + concat + a2a cols", lambda: cols_path(DRAM))
         timer("N3 wkv_b2(L1) + concat(L1) + a2a cols", lambda: cols_path(L1))
 
+    # ======================= O. shared-expert reduce-scatter [640,6144] -> [640,1536] (alone, no dispatch) =========
+    if want("o"):
+        se_out = mk(mesh, torch.randn(1, 1, S, H), mem=DRAM)
+        se_out8 = mk(mesh, torch.randn(1, 1, S, H), ttnn.bfloat8_b, mem=DRAM)
+
+        def rs_topo(x, topology, workers=None):
+            return ttnn.experimental.reduce_scatter_minimal_async(
+                x, persistent_output_buffers=None, dim=3,
+                multi_device_global_semaphore=tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                num_links=2, memory_config=DRAM, topology=topology, cluster_axis=1, num_workers_per_link=workers,
+            )
+
+        try:
+            a = rs_topo(se_out, ttnn.Topology.Linear)
+            b = rs_topo(se_out, ttnn.Topology.Ring)
+            cmp("O shared RS Ring vs Linear", b, a)
+            c = rs_topo(se_out, ttnn.Topology.Linear, 8)
+            cmp("O shared RS Linear 8w vs Linear", c, a)
+            _free([a, b, c])
+        except Exception as e:
+            log(f"FAIL O pcc: {type(e).__name__}: {str(e)[:300]}")
+        for topo_name, topology in (("Linear", ttnn.Topology.Linear), ("Ring", ttnn.Topology.Ring)):
+            for w in (None, 4, 8):
+                timer(f"O shared RS {topo_name} workers={w} bf16", lambda topology=topology, w=w: rs_topo(se_out, topology, w))
+        timer("O shared RS Linear bfp8 in (Pareto)", lambda: rs_topo(se_out8, ttnn.Topology.Linear))
+        timer("O shared RS Ring bfp8 in (Pareto)", lambda: rs_topo(se_out8, ttnn.Topology.Ring))
+        _free([se_out, se_out8])
+
     log("DONE")
