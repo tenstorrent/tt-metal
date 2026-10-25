@@ -1711,3 +1711,15 @@ At no reads (XRD_SKIP GU_NOREAD DN_NOREAD; 386 / 436 us at M 96 / 160) the forwa
   themselves cost <= 15 us: not a real-run lever. The real run is bound by the three read streams together (any one
   off: ~434 at M 160, DRAM 75% with all three); the on-chip side only shows once one stream is gone.
 Logs: dd_*, wf_*, r_xnoc1*.
+
+### Read mix per bank: MPFE port weights; down weights through the DRISC (2026-10-25, GLM-5.3 E 8)
+MIMO_FL_DRISC_MPFE=w,o,x (the DRISC port, NOC0 endpoint = down reads, NOC1 endpoint = x reads), us M 96 / 128 / 160
+(base 459 / 500 / 522), no hang: 0,0,3 461 / 490 / 526; 0,3,0 459 / 502 / 527; 3,0,0 463 / 499 / 530; 0,3,3 459 /
+491 / 528. Only M 128 gains (-2%, x's port favoured); M 160 +1%. Not a lever.
+Down weights through the DRISC: there is no such path (MIMO_FL_DRISC_RD_DOWN only reuses freed reader cells as down
+cores). Not worth building: a DRISC tile forwards ~12-16 GB/s in this op (DRISC_PROF ~1000 cycles a 9.2 KB unit, the
+~28 GB/s ceiling at best), so all 21.2 MB of an expert over the 16 tiles is >= ~50-88 us an expert against 65 today;
+the ceiling of any change to the down stream is DN_NOREAD 433 at M 160.
+So GLM-5.3 E 8 sits at ~75% DRAM with three read streams per bank; every on-chip and port knob tried moves it < 2%.
+The measured lever left is fewer x bytes (block-fp8 x rows, -30..-40 us at M 160; parked by the user: no quantization).
+Logs: rm_*.
