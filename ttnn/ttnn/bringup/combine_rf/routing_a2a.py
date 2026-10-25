@@ -197,7 +197,7 @@ constexpr uint32_t S = __S__, K = __K__, EPC = __EPC__, R = __R__, C = __C__, N 
 constexpr uint32_t A = __A__, L = __L__, P = __P__, TPP = __TPP__, M = __M__, NG = N * EPC, E0 = ME * EPC;
 constexpr uint32_t HBP = __HBP__, BB = __BB__, BBP = __BBP__, PCAP = __PCAP__, NPORT = __NPORT__;
 constexpr uint32_t ROWS_CAP = __ROWS_CAP__, ENT_CAP = __ENT_CAP__;  // (ENT_CAP: an instance's entries, worst case)
-constexpr uint32_t INST_ROWS = ENT_CAP + 32 * EPC;  // (an instance's rows: its entries, each expert padded to 32)
+constexpr uint32_t INST_ROWS = ENT_CAP + 32 * EPC < ROWS_CAP ? ENT_CAP + 32 * EPC : ROWS_CAP;  // (an instance's rows)
 constexpr uint32_t ROWB = 4 * K, PB = TPP * ROWB, PSZ = (PB + 63) / 64 * 64, NPG = S / TPP;
 constexpr uint32_t NOWN = (A + M - 1) / M;  // accumulators a core owns at most
 constexpr uint32_t al16(uint32_t v) { return (v + 15) / 16 * 16; }
@@ -665,8 +665,9 @@ def routing_a2a_sizes(*, N, S, K, EPC, A, rows_cap, M=None, TPP=32, port_dests=N
     NOWN = (A + M - 1) // M
     TSM = NOWN * ((S + A - 1) // A)
     BBP = _al16(2 * (EPC + 1))
-    IC = inst_cap(N, S, K, EPC, M)  # (an instance's entries and rows: worst case, rows_cap only sizes DRAM)
-    IR = IC + 32 * EPC
+    # (an instance's entries and rows: the worst case - or rows_cap when a caller knows its routing's rows (a harness))
+    IC = min(inst_cap(N, S, K, EPC, M), rows_cap)
+    IR = min(IC + 32 * EPC, rows_cap)
     plan_l1 = (
         _al64((S // TPP) * _al64(TPP * 4 * K))
         + _al64(4 * M * N)
@@ -831,8 +832,7 @@ def routing_a2a_planner_prepare(
 
     sz = routing_a2a_sizes(N=N, S=S, K=K, EPC=EPC, A=A, rows_cap=rows_cap, M=M, TPP=TPP)
     assert sz["fits"], sz["why"]
-    ENT_CAP = sz["inst_cap"]  # (an instance's entries, the worst case: packed routing never drops a row)
-    assert rows_cap >= worst_rows(N, S, K, EPC), f"rows_cap {rows_cap} < the worst case {worst_rows(N, S, K, EPC)}"
+    ENT_CAP = sz["inst_cap"]  # (an instance's entries: the worst case, or rows_cap when smaller - a caller's routing)
     pl_bytes = sz["plan_l1"]
 
     def build(rt_t):

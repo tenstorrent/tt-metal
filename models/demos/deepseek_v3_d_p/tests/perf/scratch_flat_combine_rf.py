@@ -388,6 +388,31 @@ def test_flat_combine_closeout_perf(mesh_device, device_params, model, mode, a_m
     _run(mesh_device, c)
 
 
+# landing ring depth D per model (the combine's pool = D slots a source chip), at each model's Galaxy 8x4 per-chip load
+# on this mesh: D forced through FC.ring_depth (None: the planner's choice here); A and everything else the planners'
+# defaults. (The Galaxy 8x4 plans D: GLM-5.3 2, GLM-5.3-Flash 4, M3 2, K3 5, DSv4.1-Flash 3 at chunk 5120.)
+_DEPTHS = (None, 1, 2, 3, 4, 6, 8)
+_DEPTH_MODELS = ("k3", "glm53_flash", "glm53", "m3", "dsv41_flash")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, depth, mesh",
+    [
+        pytest.param(*_mesh_params(mesh, fabric_payload(MODELS[m]["H"])), m, d, mesh, id=f"{m}-D{d or 'auto'}-{mesh}")
+        for m in _DEPTH_MODELS
+        for d in _DEPTHS
+        for mesh in ("2x4", "1x4ring")
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(3600)
+def test_flat_combine_depth(mesh_device, device_params, model, depth, mesh):
+    """Combine alone, flat alone and fused (pipelined) at a forced landing ring depth D."""
+    c = closeout_cfg(model, 5120, mesh, routings=("uniform",), timing=True, pipe=True, ITERS=12, ring_depth=depth)
+    logger.info(f"depth {model} D {depth} on {mesh}: {c}")
+    _run(mesh_device, c)
+
+
 _TRACED = [
     pytest.param(
         _mesh_params(mesh, fabric_payload(MODELS[m]["H"]))[0],
@@ -705,7 +730,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         assert (
             len(fused.cells["accs"]) == n_acc
         ), f"combine has {len(fused.cells['accs'])} accumulators, the planner {n_acc} ({len(cells)} free cells)"
-    if auto is not None:  # (combine_auto's layout is the combine's)
+    if auto is not None and c.ring_depth is None:  # (combine_auto's layout is the combine's - unless D is forced)
         assert fused.pool == auto["layout"]["PSL"], (fused.pool, auto["layout"]["PSL"])
     # (combine alone: the same cells in the same roles and ring depth - the arena's cumulative counters are shared; with
     # accumulators on the ports (L1 hand-off only) there is no alone variant)

@@ -1852,3 +1852,26 @@ chunks fits - worst K3 4x4 16384: planner core 748 KB L1, port core 456 KB, slot
 Left: hot experts split over planner cores (by token residue, with a per-(expert, token block) exchange); the NCRISC
 (or the TRISCs, for the pure-L1 count / place passes) on the planner cores; merging into the head program; the
 K3 token-split block still gathers.
+
+## 2026-10-25: landing ring depth D vs the overlap (test_flat_combine_depth, bh-lb-09 2x4)
+Hypothesis to test: the Galaxy's poor overlap (GLM-5.3-Flash 4x4: fused 695 vs flat alone 392 us) comes from its
+shallower landing rings (Galaxy 8x4 5120 plans D: GLM-5.3 2, GLM-Flash 4, M3 2, K3 5, V4.1 3). Each model at its Galaxy
+8x4 per-chip load (chunk 5120) on the 2x4, pure DRISC flat (the plan default), A / everything else the planners'
+defaults, D forced through FC.ring_depth (pool = D (N - 1) slots); pipelined, uniform routing.
+
+| model | D | combine alone | flat alone | fused | hidden | combine / floor |
+|---|---|---|---|---|---|---|
+| K3 (floor 378) | 1 / 2 / 3 / 4 / 6 / 8 | 885 / 565 / 511 / 499 / 495 / 503 | 1178 | 1220 / 1202 / 1202 / 1202 / 1201 / 1203 | 95-96 % | 2.34 / 1.49 / 1.35 / 1.32 / 1.31 / 1.33 |
+| GLM-5.3-Flash (223) | 1 / 2 / 3 / 4 / 6 / 8 | 531 / 358 / 331 / 316 / 305 / 305 | 363 | 607 / 425 / 398 / 396 / 394 / 394 | 54 / 83 / 90 / 89 / 90 / 90 % | 2.38 / 1.60 / 1.48 / 1.42 / 1.37 / 1.37 |
+| GLM-5.3 (319) | 1 / 2 / 3 / 4 / 6 / 8 | 644 / 525 / 475 / 458 / 461 / 459 | 494-502 | 760 / 626 / 581 / 564 / 561 / 557 | 60 / 75 / 83 / 86 / 86 / 86 % | 2.02 / 1.65 / 1.49 / 1.44 / 1.45 / 1.44 |
+| M3 (171) | 1 / 2 / 3 / 4 / 6 / 8 | 356 / 291 / 270 / 258 / 257 / 256 | 388 | 501 / 437 / 419 / 418 / 421 / 421 | 68 / 83 / 88 / 88 / 88 / 87 % | 2.09 / 1.70 / 1.59 / 1.51 / 1.50 / 1.50 |
+| DSv4.1-Flash (205) | 1 / 2 / 3 / 4 / 6 / 8 | 433 / 369 / 334 / 326 / 319 / 318 | 574 | 627 / 604 / 602 / 604 / 603 / 601 | 88-92 % | 2.11 / 1.80 / 1.63 / 1.59 / 1.56 / 1.55 |
+
+(the planner's own D here: 8 for every model - 7 sources.) Per sender (SPC_TPROF, one call, mean over 40 senders):
+fused, the senders are idle 140-660 us (waiting for the flat's rows) and wait 23-85 us on landing credits (full home
+rings) at any D; alone, credit waits fall with D (GLM-5.3 38 -> 17 us at D 2 -> 8, V4.1 23 -> 14 at 3 -> 8) while
+fabric-slot waits rise (36 -> 120: more in flight). Conclusion: D alone does not reproduce the Galaxy's loss - at the
+Galaxy's D the 2x4 hides 75-95 % (fused / flat: K3 1.02, GLM-Flash 1.09 at D 4, GLM-5.3 1.26 at D 2, M3 1.13 at D 2,
+V4.1 1.05 at D 3); only D 1 comes near GLM-Flash's 1.77 (1.67). Each model is fully hidden from D 3; D 2 costs GLM-5.3 /
+M3 / GLM-Flash 10-15 % of the combine, D 1 30-45 %; K3 and V4.1 stay hidden at any D (their flat is the long pole).
+The Galaxy's other factors (31 sources, torus multi-hop forwarding on each link, possibly 14 Gbps GDDR) are next.
