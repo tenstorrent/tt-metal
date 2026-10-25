@@ -1685,3 +1685,29 @@ Logs: /localdev/mstaletovic/flat_glm53/ (pad_*, sk_nh2, sk_tzskip, sk_xs48, zs_s
   what binds; above it sit the weight forwards (+80 us at no reads) and the read interference (+87). Not fixed: a
   posted-write forwarder (no ack round trip) is estimated at ~0 in the real run on this evidence.
 Logs: sk_mt4, sk_p2d6, sk_p4d12, nm_mt4, r_d12, nr_d12.
+
+### Forward depth 12 as a default? No: +0.3..0.8% at the larger Galaxy M (2026-10-25, bh-lb-09, one chip)
+us a call, base -> MIMO_FL_X_FWD_DEPTH=12: GLM-5.3 E 8 M 96 / 128 / 160 459 / 500 / 522 -> 459 / 499 / 526; GLM-5.3-
+Flash E 9 M 96 / 142 / 192 347 / 381 / 417 -> 347 / 383 / 420; K3 E 28 (situ) M 64 / 91 / 128 1171 / 1233 / 1314 ->
+1170 / 1235 / 1307; K2.7 E 12 M 80 / 107 / 160 757 / 807 / 874 -> 759 / 809 / 877. Repeat-run noise here is ~1 us
+(GLM-5.3 M 160 base 521 / 522 / 522), so +3-4 us at GLM-5.3 160 / GLM-Flash 192 / K2.7 160 is real if small; only K3
+M 128 gains (-0.5%). Default stays 3 (the skeleton's -29 us does not reach the real run).
+
+### The weight forwards (DRISC -> gate/up L1): what the +80 us at no reads is (2026-10-25, GLM-5.3 E 8)
+At no reads (XRD_SKIP GU_NOREAD DN_NOREAD; 386 / 436 us at M 96 / 160) the forwards cost 137 / 83 us (W_NOFWD 249 /
+353), but in the real run only 15 / 5 (W_NOFWD with reads 444 / 517 vs 459 / 522).
+| no reads, one variable | M 96 / 160 |
+|---|---|
+| base | 386 / 436 |
+| no forwards (W_NOFWD) | 249 / 353 |
+| DRISC 14 units in flight / LEAN 1 / free slots once sent | 384 / 433 ; 384 / 435 ; 383 / 434 |
+| DRISC job 1 on NOC1 / on NOC0 | 381 / 429 ; 386 / 435 |
+| DRISC NOC1 0 (tile 2's half on NOC0 too) | 412 / 473 |
+| x snake on NOC1 (MIMO_FL_X_CHAIN_NOC=1) | 342 / 376 |
+| real run, x snake on NOC1 (y bit-exact) / + x reads on NOC0 | 457 / 495 / 530 ; 471 / 503 / 546 (M 96 / 128 / 160) |
+- The DRISC loop is not the cost (its in-flight / register / free-on-sent knobs change nothing); the weight writes slow
+  the x snake where they share NOC0 links (more weights on NOC0: +26 / +37; the snake moved to NOC1: -44 / -60).
+- With the DRAM reads on, that recovery vanishes (the snake on NOC1 meets the x reads' NOC1 traffic) and the forwards
+  themselves cost <= 15 us: not a real-run lever. The real run is bound by the three read streams together (any one
+  off: ~434 at M 160, DRAM 75% with all three); the on-chip side only shows once one stream is gone.
+Logs: dd_*, wf_*, r_xnoc1*.
