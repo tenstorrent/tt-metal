@@ -1,0 +1,27 @@
+cell        loop's non-pow2 multiplies (N/S, -O3)
+  p0m0      []
+  p0m1      [17]
+  p1m0      []
+  p1m1      [17]
+  p1nat     [144]
+  p1nat_m1  [17, 144]
+
+run_main_loop under each cold edit vs the cell's own build (W NS 1D VC1); same/moved = unchanged code
+p0m0      O3  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: moved moved moved moved
+p0m0      O2  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: moved moved moved moved
+p0m0      Os  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: same same same same
+p0m1      O3  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: moved moved moved moved
+p0m1      O2  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: moved moved moved moved
+p0m1      Os  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: same same same same
+p1m0      O3  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1m0      O2  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1m0      Os  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: same same same same
+p1m1      O3  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1m1      O2  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1m1      Os  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: same same same same
+p1nat     O3  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1nat     O2  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1nat     Os  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: same same same same
+p1nat_m1  O3  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1nat_m1  O2  coldmul: DIFF DIFF DIFF moved | init: moved moved moved same | templates: DIFF DIFF DIFF same | os: DIFF DIFF DIFF moved
+p1nat_m1  Os  coldmul: moved moved moved moved | init: moved moved moved same | templates: same same same same | os: same same same same

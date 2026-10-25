@@ -5864,6 +5864,9 @@ VC1 (full `vc1_split.yaml`, capture armed) finishes 34/34 at -Os, -O2 and -O3 fo
   function, not a steering trick: no attributes, pinning or hints. If a toolchain stops sharing that cache, the rule is
   harmless. If a toolchain adds another unit-global cache like it, cold edits could move the loop again; the v3t2-style
   edit test (offline, `fncmp.py`) is what catches that.
+  **Superseded by §96 and §97 (the 2x2: multiplies have no effect; per-round work out of line is the insulation):** with the loop in its own function, a `t * 17` put back into the loop did not move under
+  any of seven edits, and the hardware jitter band is noise on the means. The multiply rule is a documented gotcha,
+  not a rule.
 
 **Channel-trimming replay hangs on the tree's v1 too** (job 282, `trimdiag_runs.sh`).
 - Setup:
@@ -5911,6 +5914,151 @@ VC1 (full `vc1_split.yaml`, capture armed) finishes 34/34 at -Os, -O2 and -O3 fo
   - The firmware value stays available. Pass 0 to `set_eth_txq_seq_update_timeout`, or leave the builder's default.
   - Not covered: Wormhole (left at the firmware value), and long runs with firmware interaction (§16's caveat).
     Every study run since §16 used 1000, and the VC1 runs repeat at it.
+
+## 96. The jitter band: ordinary edits move v3tk by noise on the means; the multiply rule is not needed
+
+**Why** (user, 2026-10-25):
+- The rule "no constant multiplies in the loop" (§95) would apply to nearly all router code, since every per-packet
+  path is inlined into the loop.
+- Many multiplies are implicit: array indexing, GCC rewriting shift/or as a multiply, division by a constant.
+- A codegen-identity gate would block toolchain updates that every kernel shares.
+- So no team rules or gates. Measure instead how much ordinary edits move the lead, at -O3 and -Os.
+
+**Edits** (`consolidation/jitter_edits.py`, variants in `variants/v3tk_jit/`). Eight changes a contributor makes
+without expecting a performance effect; none changes per-packet work:
+- `reorder`, `statefield` (`perturb.py`): swap two fields of E0's channel state; add an unused field to each state struct.
+- `hb`: both heartbeats every 128 rounds instead of 64.
+- `coldmul`: an init-time helper with constant multiplies and a division.
+- `rxreorder`: swap two fields of E1's channel state.
+- `cursorfield`: one more field in E1's downstream cursor (32 → 40 B).
+- `init`, `templates`: two of v3r2's six cleanups (§94).
+
+Offline, at -O3, in the hot configs:
+
+| Effect on the hot loops | Edits |
+| --- | --- |
+| loop code identical, same address | `reorder`, `rxreorder`, `templates` |
+| identical code, loop moved | `coldmul`, `init` |
+| E0's loop code changes | `statefield`, `hb` |
+| E1's loop code changes in the N/S config | `cursorfield` (field offsets; no multiply, the cursor index is compile-time everywhere) |
+
+Each ERISC's config count changed by an edit runs from 20 (`rxreorder`, E1) to all 536 (`coldmul`, `init`).
+
+**Runs** (jobs 285, 286; `jitter_runs.sh O3|Os`, `jitter_compare.py`).
+- All benchmark suites pass. v3tk runs first and last in each job, which gives the run-to-run noise.
+- Change of each suite's mean vs v3tk, in cycles/packet:
+
+| | 4352 | mix | flushmix | 1D | flushmix4 (4 rows, noisy) |
+| --- | --- | --- | --- | --- | --- |
+| run-to-run, -O3 / -Os | +0.02 / −0.01 | +0.01 / −0.01 | +0.01 / −0.06 | +0.01 / −0.09 | +1.24 / +0.10 |
+| 8 edits, -O3 | −0.10 .. +0.08 | −0.01 .. +0.19 | −0.03 .. +0.04 | −0.07 .. +0.36 | +0.51 .. +2.55 |
+| 8 edits, -Os | −0.28 .. 0.00 | −0.01 .. +0.02 | −0.36 .. +0.03 | −0.31 .. +0.07 | −0.18 .. +1.13 |
+
+- Single rows (608 row results per level):
+
+| | median \|change\| | 90th percentile | largest |
+| --- | --- | --- | --- |
+| -O3 | 0.06 | 0.25 | 6 |
+| -Os | 0.06 | 0.31 | 3 (outside two bimodal rows) |
+
+- -O3: 9 row results moved by at least 1 cycle.
+  - 1D scatter and half-ring rows moved by 3 to 6, under `coldmul` and `init`, which only move the loops: an
+    alignment effect.
+  - The heartbeat edit moved two forwarded rows by 2.5 to 2.8.
+- -Os: the larger moves are on two flushmix N/S chunk-8 rows that were bimodal between the two v3tk runs (5 cycles
+  apart), plus improvements of 1 to 3 on 3-hop scatter.
+
+**The multiply gotcha, tested directly.**
+- `cursorfield` did not put a multiply in any E1 loop: at -Os no config's loop gained a `mul`. The cursors are
+  indexed with compile-time indices.
+- So the deferred atomic's value was written back in its old form, `0x100 | (t << 4) | t` (edit `trid17`). GCC makes
+  that `t * 17` in the W and N/S loops (optimized GIMPLE).
+- Then seven edits were applied on top: `coldmul` (which itself multiplies by 17 in init), `init`, `templates`, `hb`,
+  `statefield`, `reorder`, `rxreorder`. Results over W, N/S and 1D at -O3 and -Os (42 cases):
+  - The loop code was identical, or identical but moved, in 39.
+  - The other 3 are `rxreorder` at -Os. It reorders the loop's own state struct and changes the loop with or without
+    the multiply.
+- The mechanism is real: V3E1_NOTES §11.1 traced one case to it in the RTL dumps (the `templates` edit, W config,
+  -O3: `x * 17` expanded as `mul` in one build and shift + add in the other).
+  - But the evidence for "a function boundary is not enough" was confounded. The boundary-only draft (`vA`) still had
+    its multiplies (×17, ×0x01010101, four ×144) and also the per-round work (termination check, heartbeat,
+    context-switch handshake) inside the loop function. v3t changed both at once.
+  - `vA`'s heartbeat edit changes code that was inside its loop, so that one is not a multiply effect at all.
+  - With the loop in its own function and the per-round work out of line, the multiply did not fire in anything tried
+    here.
+- The insulation that matters is the function boundary, an ordinary structural choice. A ban on multiplies is not
+  needed.
+
+**Conclusions**
+- **v3tk's jitter band is noise on the suite means**: within ±0.4 cycles/packet at both levels, the same as run to run.
+  - Before v3t, two of these same edits (`init`, `templates`) were among v3r2's six, which moved the inlined-loop design
+    by +1 to +2 on means and +4 to +6 on scatter rows (§94).
+- **What is left is rows, not means.** A few rows move by up to 6 when code only shifts address (alignment). No
+  source rule controls that.
+  - For perf tracking: a band of about ±0.5 on suite means and about ±6 on single rows (or ±4%).
+- **-Os is not more stable than -O3.** The bands match, and -Os costs +2.8 to +5.3 on the means (v3tk -Os vs -O3).
+  It is not worth using -Os for stability.
+- **Team guidance**:
+  - Keep each ERISC's main loop a function of its own, with once-per-round and rare work in separate small functions
+    (as E1 is now; §97 shows this is what insulates the loop).
+  - The synth_mult effect is a documented gotcha (§95, V3E1_NOTES §11.1) with a diagnosis method (`rtlfirst.py`),
+    not a rule.
+  - No gates.
+
+## 97. The 2x2: per-round work out of line is what insulates E1's loop; constant multiplies play no part
+
+**Question** (user, 2026-10-25): §95 credited v3t's stability partly to removing constant multiplies from the loop.
+§96 found that the evidence was confounded:
+- The boundary-only draft also kept the per-round work inside the loop function.
+- v3t changed both at once.
+
+So this test varies each factor separately, offline (`consolidation/twobytwo.py`; cells in `variants/v3tk_2x2/`;
+report in `results/twobytwo_report.txt`).
+
+**Design**, on v3tk:
+- **P, per-round work** (termination check, heartbeat, context-switch handshake): out of line, as in v3t (P0), or
+  inlined into the loop with `FORCE_INLINE` (P1).
+- **M, a non-power-of-two constant multiply in the loop:** none (M0), or the deferred atomic's `t * 17` (M1).
+- Inlining the per-round work also brings the termination check's mailbox index (`launch[rd]`, 144-byte entries) into
+  the loop. So the P1 cells read the 8-entry mailbox through an offset table, with no multiply.
+- Two cells keep the natural code: `p1nat` (with its `* 144`) and `p1nat_m1` (`* 144` and `* 17`, close to draft vA).
+- Each cell gets four cold edits: `coldmul`, v3r2's `init`, `templates` and `os`.
+- Builds: the hot E1 configs (W, N/S, 1D, VC1) at -O3, -O2 and -Os, 90 builds in all.
+- Check: `run_main_loop`'s code, against the cell's own build.
+- The loop's non-power-of-two multiplies (N/S, -O3 GIMPLE) are as designed:
+  - none in p0m0 and p1m0;
+  - 17 in p0m1 and p1m1;
+  - 144 in p1nat;
+  - 17 and 144 in p1nat_m1.
+
+**Result.** Loop code changed by at least one of the 4 cold edits, in the W, N/S and 1D configs:
+
+| | M0: no multiply | M1: `t * 17` | natural: `* 144` | natural + `t * 17` |
+| --- | --- | --- | --- | --- |
+| **P0: per-round work out of line** | never (all levels) | never (all levels) | | |
+| **P1: per-round work inlined** | 3 of 4 edits at -O3 and -O2; none at -Os | same | same | same |
+
+- In P0, every edit leaves the loop's code identical, at the same or a moved address.
+- In P1, `coldmul`, `templates` and `os` change it in the W, N/S and 1D configs; VC1 only moves.
+- `init` never changes it.
+- The P1 changes are whole-function re-layouts: about 1,860 differing lines in a loop of about 1,130 instructions.
+  The three edits give the same result: N/S p1m0, 1136 → 1132 instructions.
+- The set of out-of-line functions is unchanged apart from `coldmul`'s new helper, so no inlining decision flipped.
+- The mechanism is not identified. It is neither multiplies nor inlining.
+
+**Conclusions**
+- **The multiply factor has no effect in any cell.** The loop with no multiply at all (p1m0) is exactly as sensitive
+  as the ones with `* 17` or `* 144`, and with per-round work out of line the multiply makes no difference.
+  - The synth_mult case traced in V3E1_NOTES §11.1 (v3sb, `templates`, W, -O3) is a real instance of how a cold edit
+    can reach the loop. It is not why v3t is stable.
+  - The "no constant multiplies" rule is withdrawn entirely, not just downgraded. §95's attribution was wrong.
+- **What insulates E1's loop is that once-per-round and rare work lives in its own small functions**
+  (`termination_requested`, `end_round`, `intermesh_egress_slot`), so the loop function holds only per-packet code.
+  - That is ordinary structure, not a rule about what code may be written.
+  - It holds at every level.
+  - -Os was immune in all cells, but the hardware band (§96) showed -O3 is just as stable once the structure is right.
+- **v3t's cycle gains are separate**, from the per-path changes (§95). They were never attributed to the multiply
+  removal.
 
 ## Reproducing
 

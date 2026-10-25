@@ -774,7 +774,12 @@ It holds the builds `gt_*` (v3t), `fb_*` (v3tb) and `sb_*` (v3sb), and these too
    | `index * 3` | the intermesh direction table |
    | `i * 40` | runtime-indexed `DownstreamCursor`s |
 
-So insulation needs both a function boundary and no constant multiplications inside the function. With the boundary
+So insulation needs both a function boundary and no constant multiplications inside the function. (Revised in RESULTS §96. The boundary-only draft also kept the per-round work, the termination check, heartbeat and
+context-switch handshake, inside the loop function, so it did not isolate the multiplies. On the final v3t, with
+`t * 17` put back into the loop, seven edits including cold multiplies left the loop code unchanged. What matters is
+the function boundary plus per-round work out of line; the multiply effect is a gotcha, not a rule.) (RESULTS §97, the 2x2: the multiply has no effect in any cell; with the
+per-round work inlined, cold edits re-lay out even a loop with no multiplies. Per-round work out of line is the
+insulation.) With the boundary
 alone (a measured draft), the loop function still changed under `templates`, `os` and `heartbeat`. sender_erisc's loop
 has no such multiplication, which is consistent with E0 not moving under v3r2.
 

@@ -82,6 +82,11 @@ Suite means decide, not single rows; a design within about a cycle of the best a
   the Blackhole block of `compute_mesh_router_builder.cpp`); `TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT` remains as a study
   override only. Job scripts: `KA_ENV=` drops the override.
 - Trimming replay hangs with the tree's v1 too (job 282): not the v3 router's.
+- Jitter band (§96, jobs 285-286; user: no team rules or gates): 8 ordinary edits move v3tk's suite means by ±0.4
+  at -O3 and -Os (noise); a few rows up to 6 (alignment). -Os is not more stable. The multiply rule is dropped: the
+  loop's own function is the insulation; synth_mult is a documented gotcha.
+- 2x2 (§97, offline): constant multiplies have no effect; per-round work (termination, heartbeat, context switch)
+  out of the loop function is what insulates E1's loop. The multiply rule is withdrawn.
 
 ## Known defects in the tree's v2 (`fabric_erisc_router_v2.cpp`), left as is (user, 2026-10-25)
 Both come from the study's own changes; main's router has neither. v3 (v3e1b's E1 onward, v3r's generic loop) fixes
