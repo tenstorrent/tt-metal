@@ -208,3 +208,18 @@
   d*7040.. (own row block left 0), i.e. the prefix layout is right; the remaining error is the streaming kernel's bf16
   scores / running sums (fp32 dest not allowed on the kv_actual_isl path).
 - Re-run: `bfw job check --task C.attn_moe.attention --gate-only`.
+
+## C.attn_moe.router (layer 5): PASS
+
+- Same `tt/router.py` `Router` and hook `_router_component` as layer 1. The first gate failed only on the `mixed` probe:
+  1 row selected 9 experts. The `choice >= kth` mask selects every entry equal to the 8th value, so an exact fp32 tie
+  there adds an expert. (The breadcrumb above warned about this; layer 5 hits it.)
+- Fix: new setting `ROUTER_MASK` "scatter" (default) or "kth". "scatter" builds the mask as `ttnn.scatter(zeros bf16
+  [R, 256], -1, topk idx, ones bf16 [R, 8])` -> typecast fp32, so every row has exactly 8. bf16 ROW/TILE scatter works;
+  fp32 TILE scatter is TT_FATAL. The zeros and ones are load-time constants (max_rows 640), sliced only when R < 640.
+  Do not deallocate a full-size slice: `ttnn.slice` with the full extent returns the constant itself (the first try
+  freed it, and the next call failed with `input_tensor.is_allocated()`).
+- Gate: PCC 0.999157, overlap vs CPU / golden 0.99856, matched-row rel vs CPU 1.5e-4, mixed overlap 0.99985 (no count
+  mismatch), auto_margin_min 3.16, 10 ops, host FLOPs 0. C.sliding_moe.router re-gated with the scatter mask: PASS,
+  margin 3.06 (unchanged).
+- Re-run: `bfw job check --task C.attn_moe.router --gate-only`.

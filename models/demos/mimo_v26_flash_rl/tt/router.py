@@ -9,13 +9,14 @@ group input):
     -> logits = x @ gate^T  (gate [256, 4096] bf16 replicated; HiFi4, fp32 accumulation, fp32 out)
     -> scores = sigmoid(logits) fp32
     -> choice = scores + (bias - c) fp32   (c: a bf16 constant near the bias mean; top-k is shift invariant)
-    -> the 8th largest choice per row (topk, sorted) -> mask = choice >= it
+    -> topk(8) indices -> mask = scatter(zeros, idx, ones) (bf16 0 / 1, exactly 8 per row) -> fp32
     -> routing = scores * mask / sum(scores * mask)   [1, 1, 640, 256] fp32, zero off the selected experts
 
 Precision (known issues "A large correction bias makes noaux_tc top-k selection precision-bound" and
 "moe_grouped_topk selects on TF32 keys"): the bias is 1.7..2.2, so the choice score is fp32 and recentred; the
-fused moe_grouped_topk (TF32 keys) is not used. The dense output comes from a mask on the 8th value rather than a
-scatter (no fp32 TILE scatter in ttnn); the weights are the unbiased sigmoid scores, renormalised.
+fused moe_grouped_topk (TF32 keys) is not used. The dense output comes from a bf16 0 / 1 mask scattered at topk's
+indices (no fp32 TILE scatter in ttnn; a mask on the 8th value selects 9 on an exact tie, ROUTER_MASK "kth"); the
+weights are the unbiased sigmoid scores, renormalised.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from .settings import settings
 
 
 class Router:
-    def __init__(self, mesh, ck, layer_idx: int):
+    def __init__(self, mesh, ck, layer_idx: int, max_rows: int = 640):
         cfg = ck.config
         assert cfg["scoring_func"] == "sigmoid" and cfg["topk_method"] == "noaux_tc"
         assert cfg["n_group"] == 1 and cfg["topk_group"] == 1, "group-limited routing not implemented"
@@ -60,6 +61,11 @@ class Router:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=rep,
         )
+        self.mask_mode = settings.get("ROUTER_MASK")
+        if self.mask_mode == "scatter":  # load-time constants, sliced per call
+            bf = dict(dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self.zeros = ttnn.from_torch(torch.zeros(1, 1, max_rows, self.n_experts), mesh_mapper=rep, **bf)
+            self.ones = ttnn.from_torch(torch.ones(1, 1, max_rows, self.top_k), mesh_mapper=rep, **bf)
         self.mm_cfg = ttnn.init_device_compute_kernel_config(
             mesh.arch(),
             math_fidelity=getattr(ttnn.MathFidelity, settings.get("ROUTER_FIDELITY")),
@@ -85,12 +91,30 @@ class Router:
         logits.deallocate(True)
         choice = ttnn.add(scores, self.bias, dtype=ttnn.float32, memory_config=dram)
         vals, idx = ttnn.topk(choice, k=self.top_k, dim=-1, largest=True, sorted=True, memory_config=dram)
-        idx.deallocate(True)
-        kth = ttnn.slice(vals, [0, 0, 0, self.top_k - 1], [1, 1, vals.shape[2], self.top_k], memory_config=dram)
-        vals.deallocate(True)
-        mask = ttnn.ge(choice, kth, dtype=ttnn.float32, memory_config=dram)
-        choice.deallocate(True)
-        kth.deallocate(True)
+        if self.mask_mode == "scatter":
+            # exactly top_k ones per row at topk's indices (a tie at the 8th value cannot select 9)
+            vals.deallocate(True)
+            choice.deallocate(True)
+            rows = idx.shape[2]
+            part = rows != self.zeros.shape[2]  # a full-size slice returns the constant itself: keep it
+            zeros, ones = self.zeros, self.ones
+            if part:
+                zeros = ttnn.slice(zeros, [0, 0, 0, 0], [1, 1, rows, self.n_experts], memory_config=dram)
+                ones = ttnn.slice(ones, [0, 0, 0, 0], [1, 1, rows, self.top_k], memory_config=dram)
+            mask_bf = ttnn.scatter(zeros, -1, idx, ones, memory_config=dram)
+            if part:
+                zeros.deallocate(True)
+                ones.deallocate(True)
+            idx.deallocate(True)
+            mask = ttnn.typecast(mask_bf, ttnn.float32, memory_config=dram)
+            mask_bf.deallocate(True)
+        else:
+            idx.deallocate(True)
+            kth = ttnn.slice(vals, [0, 0, 0, self.top_k - 1], [1, 1, vals.shape[2], self.top_k], memory_config=dram)
+            vals.deallocate(True)
+            mask = ttnn.ge(choice, kth, dtype=ttnn.float32, memory_config=dram)
+            choice.deallocate(True)
+            kth.deallocate(True)
         sel = ttnn.multiply(scores, mask, dtype=ttnn.float32, memory_config=dram)
         scores.deallocate(True)
         mask.deallocate(True)

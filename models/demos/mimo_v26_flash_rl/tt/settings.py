@@ -116,6 +116,12 @@ TABLE = {
     "ROUTER_FP32_ACC": Setting(
         True, (True, False), "fp32 dest for the router gate matmul: fp32 logits (C.sliding_moe.router)"
     ),
+    "ROUTER_MASK": Setting(
+        "scatter",
+        ("scatter", "kth"),
+        "router selection mask: scatter ones at topk's indices (exactly k per row) or choice >= the k-th value "
+        "(selects k+1 on an exact tie) (C.attn_moe.router)",
+    ),
     "EXPERTS_FIDELITY": Setting(
         "HiFi4",
         ("HiFi4", "HiFi3", "HiFi2", "LoFi"),
