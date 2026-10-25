@@ -52,12 +52,12 @@ _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
 # core and default-sub-device gather, column-major untilize cores), SD1 = the rest (the x all-gather's workers)},
 # loaded after the gate (so the gate's axis-1 all-gather is done: two programs on one fabric axis must never overlap,
 # notes/pipeline/deadlock-matrix.md) and cleared before the indices copy and Q1, which need the whole grid.
-# The clear drains both sub-devices = the join. GLM_MOE_PRELUDE_OVERLAP=1 enables it.
-_PRELUDE_OVERLAP = os.environ.get("GLM_MOE_PRELUDE_OVERLAP", "0") == "1"
+# The clear drains both sub-devices = the join. On by default (fork=topk); GLM_MOE_PRELUDE_OVERLAP=0 disables.
+_PRELUDE_OVERLAP = os.environ.get("GLM_MOE_PRELUDE_OVERLAP", "1") == "1"
 _PRELUDE_SPLIT = int(os.environ.get("GLM_MOE_PRELUDE_SPLIT", "8"))
 # Where the prelude forks: "routing" (after the gate: masked_bincount onwards) or "topk" (inside the gate, after the
 # logits' all-gather + reduce, so grouped_topk is on the routing side too; DEVICE_FP32 gate only).
-_PRELUDE_FORK = os.environ.get("GLM_MOE_PRELUDE_FORK", "routing")
+_PRELUDE_FORK = os.environ.get("GLM_MOE_PRELUDE_FORK", "topk")
 _prelude_managers: dict = {}
 
 
