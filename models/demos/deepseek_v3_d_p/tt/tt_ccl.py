@@ -114,6 +114,7 @@ class TT_CCL:
         if peer is None:
             peer = TT_CCL.__new__(TT_CCL)
             peer.__dict__["_is_stream_peer"] = True
+            peer.__dict__["_parent"] = self
             TT_CCL.__init__(peer, d["mesh_device"])
             d["_peer"] = peer
             logger.info(f"TT_CCL: created stream-1 peer for {sorted(_PIPE_STREAM_LOCAL)}")
@@ -495,12 +496,22 @@ class TT_CCL:
         if self.sparse_kv_push is None:
             from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
 
-            l1_small = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
-            buffer_type = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
-            sems = [
-                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0, buffer_type) for _ in range(2)
-            ]
-            ttnn.synchronize_device(self.mesh_device)
+            parent = self.__dict__.get("_parent") if self.__dict__.get("_is_stream_peer", False) else None
+            if parent is not None:
+                # Stream-1 peer: own planner (compact buffers per parity, prefetched-plan state), but the two push
+                # semaphores are shared: the two streams' pushes never run at the same time (attention phases of
+                # the two streams do not overlap), and L1_SMALL has no room for another pair.
+                parent_push = object.__getattribute__(parent, "__dict__").get("sparse_kv_push")
+                assert parent_push is not None, "stream 1 reached the sparse push before stream 0 created it"
+                sems = list(parent_push[1:])
+            else:
+                l1_small = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
+                buffer_type = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
+                sems = [
+                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0, buffer_type)
+                    for _ in range(2)
+                ]
+                ttnn.synchronize_device(self.mesh_device)
             peer_kwargs = (
                 {"l1_front_bytes_per_core": 0}
                 if self.__dict__.get("_is_stream_peer", False) and os.environ.get("PIPE_PEER_PUSH_L1", "0") != "1"
