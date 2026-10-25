@@ -584,24 +584,24 @@ Several DMs can share a txn id's batch, so a DM's own share can be complete whil
 | `txn_idx` | index into `txn_ids[]` of the current batch |
 | `share_pos` | STRIDED side: entries of the current op issued so far |
 
-The host only accepts batches that cover whole round-robin rounds of a DM's counters, so every batch starts back at counter 0. `loop` and `pos` therefore fix what each of the DM's counters is owed (`dfb_implicit_expected_for_slot`).
+The host only accepts batches that cover whole round-robin rounds of a DM's counters, so every batch starts back at counter 0. `loop` and `pos` therefore fix what each of the DM's counters is owed (`dfb_dm0_flush_side`).
 
 **Kernel DM (DM2–7), `dfb_dm_kernel_exit`.** The DFBs it is bound to come from `g_dfb_bound_mask`.
 
 1. For each implicit-sync DFB, wait until its reads and writes on the DFB's txn ids have completed (`TR_ACK` and `WR_SENT` 0 on every txn id), so tiles-to-process counts all of them. Then zero the progress for the next launch.
-2. Write `loop`/`pos`/`share` for each such DFB to its exit record (`g_dfb_exit_record[hart][lowest txn id of the side]`), then set its run state (its `subordinate_sync` byte) to `RUN_SYNC_MSG_DFB_FINISHING`.
+2. Write `loop`/`pos`/`share` for each such DFB to its exit record (`g_dfb_exit_record[hart][lowest txn id of the side]`), then set its run state (its `subordinate_sync` byte) to `RUN_SYNC_MSG_DFB_DRAINING` (watcher shows `E`).
 3. Wait for its implicit-sync writes to land, per DFB txn id.
 4. Drain.
 
-`DFB_FINISHING` is separate from `DONE` because the drain in step 4 can depend on DM0's flush. For example, a producer's drain waits for its consumer to pop everything, and that consumer can be waiting for the producer's last batch, which DM0 credits only once the producer has reached `DFB_FINISHING`.
+`DFB_DRAINING` is separate from `DONE` because the drain in step 4 can depend on DM0's flush. For example, a producer's drain waits for its consumer to pop everything, and that consumer can be waiting for the producer's last batch, which DM0 credits only once the producer has reached `DFB_DRAINING`.
 
-**DM0, `wait_subordinates_and_finish_dfbs`.** While it waits for all harts, DM0 reads the DMs' run states (the `subordinate_sync` word it already polls). It flushes each implicit-sync DFB side once every DM issuing on it has reached `DFB_FINISHING` or `DONE`. The side's issuing DMs come from the txn descriptor. A side is flushed as soon as its own issuers are ready.
+**DM0, `wait_subordinates_and_finish_dfbs`.** While it waits for all harts, DM0 reads the DMs' run states (the `subordinate_sync` word it already polls). Whenever that word changes, it flushes each implicit-sync DFB side whose issuing DMs have all reached `DFB_DRAINING` or `DONE`. The txn descriptor gives the side's issuing DMs and its number of txn ids; a side's txn ids are one ascending block, so its lowest pending txn id and that count give the whole side.
 
 By then every issuer's transactions have completed, so each txn id's last batch is final: a full one has raised its interrupt-pending bit, and a partial one never will. `dfb_dm0_flush_side`:
 
 1. masks the ISR. If any of the side's pending bits is set, it unmasks so the ISR credits that batch, then checks again.
 2. tops up each issuer's counters to `expected − actual`. `expected` comes from the exit record; `actual` is the live counter, which already includes every batch the ISR credited.
-3. clears the side's tiles-to-process counts so the ISR can never credit them again, then unmasks.
+3. clears the side's tiles-to-process counts and its pending bits, so the ISR can never credit them again, then unmasks. Clearing a count does not clear its pending bit, and a bit set after step 1 belongs to a batch step 2 already credited.
 
 **Compute TRISC (pack/unpack), `dfb_trisc_kernel_exit`.** Drains every DFB the Neo is bound to. Unpack skips counters another TRISC of the Neo owns.
 

@@ -2,12 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Kernel-exit DFB finish (Quasar firmware).
+// Kernel-exit DFB finish
 //
 //   Kernel DM (DM2-7), dfb_dm_kernel_exit:
 //     1. For each implicit-sync DFB, wait until this DM's reads and writes on the DFB's txn ids have
 //        completed (and so are counted in tiles_to_process), then hand its progress to DM0.
-//     2. Set its run state to RUN_SYNC_MSG_DFB_FINISHING, which tells DM0 its records are written.
+//     2. Set its run state to RUN_SYNC_MSG_DFB_DRAINING, which tells DM0 its records are written.
 //     3. Wait for its implicit-sync writes to land, then drain: every counter it uses must reach
 //        posted == acked.
 //   DM0, dfb_dm0_flush_ready_sides, called while it waits for the kernels to finish:
@@ -27,16 +27,6 @@
 
 #ifndef COMPILE_FOR_TRISC
 
-// A tile counter read the way an implicit-sync side credits it: posted for a producer, acked for a
-// consumer.
-inline uint16_t dfb_read_side_counter(dfb::PackedTileCounter ptc, bool is_producer) {
-    const uint8_t tensix_id = dfb::get_tensix_id(ptc);
-    const uint8_t tc_id = dfb::get_counter_id(ptc);
-    return static_cast<uint16_t>(
-        is_producer ? overlay::fast_llk_intf_read_posted(tensix_id, tc_id)
-                    : overlay::fast_llk_intf_read_acked(tensix_id, tc_id));
-}
-
 // Waits until every counter this DM uses for DFB `intf` has posted == acked.
 inline void dfb_dm_drain(const LocalDFBInterface& intf) {
     bool all_acked = false;
@@ -54,15 +44,13 @@ inline void dfb_dm_drain(const LocalDFBInterface& intf) {
     }
 }
 
-// Kernel DM (DM2-7), after the kernel returns and before it reports done. `run_state` is this DM's
-// subordinate_sync byte.
-inline void __attribute__((noinline)) dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_state) {
+// Kernel DM (DM2-7), from dmk.cc after the kernel returns and before it reports done. `run_state` is
+// this DM's subordinate_sync byte.
+FORCE_INLINE void dfb_dm_kernel_exit(uint32_t hartid, volatile uint8_t* run_state) {
     const uint32_t dfb_mask = g_dfb_bound_mask;
 
     // 1. For each implicit-sync DFB, wait until this DM's reads and writes on its txn ids have completed,
-    // so tiles_to_process counts all of them, and gather what to hand to DM0. The uncached stores come
-    // after the loop: an uncached store in flight blocks this core's cached misses, and the loop reads
-    // cached TLS.
+    // so tiles_to_process counts all of them, and gather what to hand to DM0.
     WAYPOINT("DXW");
     uint32_t records[NUM_DFB_POOL_TXN_IDS];
     uint32_t record_mask = 0;    // bit per pool txn id that has a record
@@ -93,7 +81,7 @@ inline void __attribute__((noinline)) dfb_dm_kernel_exit(uint32_t hartid, volati
         progress = {};
     }
 
-    // 2. Hand the records to DM0, then move to DFB_FINISHING. DM0 flushes a side once all its issuers have
+    // 2. Hand the records to DM0, then move to DFB_DRAINING. DM0 flushes a side once all its issuers have
     // reached it. This is separate from DONE because the drain below can wait on DM0's flush of a side.
     volatile uint32_t* record_out =
         dfb_l1_uncached_u32_ptr(reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hartid - dfb::FIRST_KERNEL_DM_HART][0]));
@@ -102,7 +90,7 @@ inline void __attribute__((noinline)) dfb_dm_kernel_exit(uint32_t hartid, volati
         record_out[slot] = records[slot];
     }
     asm volatile("fence w, w" ::: "memory");
-    *run_state = RUN_SYNC_MSG_DFB_FINISHING;
+    *run_state = RUN_SYNC_MSG_DFB_DRAINING;
     WAYPOINT("DXD");
 
     // 3. Implicit sync credits a write once its data has left L1, so nothing else waits for it to land.
@@ -124,32 +112,6 @@ inline void __attribute__((noinline)) dfb_dm_kernel_exit(uint32_t hartid, volati
     WAYPOINT("AAD");
 }
 
-// DM0: credits one counter of an issuer is owed for everything the issuer did: `loop` full txn-id batches
-// plus `pos` entries into the next, mod 2^16 like the counter. A batch covers whole round-robin rounds of
-// the issuer's counters, so the partial one starts back at counter 0. Ops are spread the way
-// commit_implicit_* spreads them: broadcast puts every op on all counters, split gives each counter
-// 1/num_tcs of every op, otherwise ops go round-robin, `share` entries at a time.
-inline uint16_t dfb_implicit_expected_for_slot(
-    uint16_t loop, uint8_t pos, uint8_t share, uint8_t slot, uint8_t num_tcs, uint8_t flags, uint16_t per_tc) {
-    if (flags & DFB_DM0_FINISH_FLAG_BROADCAST) {
-        return static_cast<uint16_t>(loop * per_tc * num_tcs + pos);
-    }
-    if (flags & DFB_DM0_FINISH_FLAG_SPLIT) {
-        return static_cast<uint16_t>(loop * per_tc + pos / num_tcs);
-    }
-    uint32_t tail = 0;
-    if (pos != 0) {
-        const uint32_t round = static_cast<uint32_t>(num_tcs) * share;
-        const uint32_t rem = pos % round;
-        const uint32_t start = static_cast<uint32_t>(slot) * share;
-        tail = (pos / round) * share;
-        if (rem > start) {
-            tail += (rem - start > share) ? share : rem - start;
-        }
-    }
-    return static_cast<uint16_t>(loop * per_tc + tail);
-}
-
 // DM0: the per-trid interrupt-pending bits of `trids`, producer txn ids in the upper half of IP_1,
 // consumer txn ids in the lower half of IP_2.
 inline uint32_t dfb_dm0_pending_trids(uint32_t trids, bool is_producer) {
@@ -162,28 +124,35 @@ inline uint32_t dfb_dm0_pending_trids(uint32_t trids, bool is_producer) {
     return static_cast<uint32_t>(ip) & trids;
 }
 
-// DM0: finish one implicit-sync DFB side, the txn ids in `side_trids`, once all of its issuers are ready.
-// Every issuer's transactions have completed, so each txn id's last batch is final: a full one has raised
-// its interrupt, a partial one never will. Let the ISR take any full batch still pending, then with the
-// ISR masked top up each issuer's counters to what it issued, and clear the partial counts so the ISR can
-// never credit them again. The ISR runs on this hart, so it is never part-way through while this runs.
-inline void __attribute__((noinline)) dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
-    const uint32_t first_trid = static_cast<uint32_t>(__builtin_ctz(side_trids));
-    const volatile TxnDFBDescriptor& desc = g_txn_dfb_descriptor[first_trid];
-
+// DM0: finish one implicit-sync DFB side, the txn ids in `side_trids`, once all of its issuers are
+// draining. Every issuer's transactions have completed, so each txn id's last batch is final: a full one
+// has raised its interrupt, a partial one never will. Let the ISR take any full batch still pending, then
+// with the ISR masked top up each issuer's counters to what it issued, and clear the partial counts so the
+// ISR can never credit them again. The ISR runs on this hart, so it is never part-way through while this
+// runs.
+inline void dfb_dm0_flush_side(uint32_t side_trids, bool is_producer) {
     while (true) {
         disable_dfb_tile_isr();
         if (dfb_dm0_pending_trids(side_trids, is_producer) == 0) {
             break;
         }
-        enable_dfb_tile_isr();  // the ISR takes the pending batch right here, then this checks again
+        // The ISR takes the pending batch, possibly a few cycles after unmasking; until it has, the bit stays set
+        // and this checks again.
+        enable_dfb_tile_isr();
     }
     asm volatile("fence" ::: "memory");
 
+    // Producers credit a counter's posted count, consumers its acked count.
+    const uint64_t read_reg = is_producer ? TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_POSTED_REG_ADDR
+                                          : TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__READ_ACKED_REG_ADDR;
+    const uint64_t inc_reg = is_producer ? TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__POSTED_REG_ADDR
+                                         : TT_OVERLAY_LLK_TILE_COUNTERS_TT_LLK_INTERFACE_TILE_COUNTERS_0__ACKED_REG_ADDR;
+    const uint32_t first_trid = static_cast<uint32_t>(__builtin_ctz(side_trids));
+    const volatile TxnDFBDescriptor& desc = g_txn_dfb_descriptor[first_trid];
     const uint8_t issuer_mask = desc.finish.issuer_hart_mask;
     ASSERT(issuer_mask != 0);
-    const uint8_t num_tcs = static_cast<uint8_t>(desc.num_counters / __builtin_popcount(issuer_mask));
-    const uint16_t per_tc = desc.tiles_to_post;
+    const uint32_t num_tcs = desc.num_counters / static_cast<uint32_t>(__builtin_popcount(issuer_mask));
+    const uint32_t per_tc = desc.tiles_to_post;
     const uint8_t flags = desc.finish.flags;
     const uint32_t record_slot = first_trid - DFB_TXN_ID_BASE;
     uint8_t counter = 0;
@@ -191,22 +160,40 @@ inline void __attribute__((noinline)) dfb_dm0_flush_side(uint32_t side_trids, bo
         const uint32_t hart = static_cast<uint32_t>(__builtin_ctz(h));
         const uint32_t rec = *dfb_l1_uncached_u32_ptr(
             reinterpret_cast<uintptr_t>(&g_dfb_exit_record[hart - dfb::FIRST_KERNEL_DM_HART][record_slot]));
-        const uint16_t loop = static_cast<uint16_t>(rec);
-        const uint8_t pos = static_cast<uint8_t>(rec >> 16);
-        const uint8_t share = static_cast<uint8_t>(rec >> 24);
-        for (uint8_t slot = 0; slot < num_tcs; slot++, counter++) {
+        const uint32_t loop = rec & 0xFFFFu;
+        const uint32_t pos = (rec >> 16) & 0xFFu;
+        const uint32_t share = rec >> 24;
+        // What each of the issuer's counters is owed: `loop` full txn-id batches plus `pos` entries into the
+        // next, mod 2^16 like the counters. Ops are spread the way commit_implicit_* spreads them: broadcast
+        // puts every op on all counters, split gives each counter 1/num_tcs of every op, otherwise ops go
+        // round-robin `share` entries at a time. A batch covers whole rounds, so the last partial round
+        // (`rr_rem` entries) starts back at the issuer's first counter.
+        uint32_t owed = loop * per_tc;
+        uint32_t rr_rem = 0;
+        if (flags & DFB_DM0_FINISH_FLAG_BROADCAST) {
+            owed = owed * num_tcs + pos;
+        } else if (flags & DFB_DM0_FINISH_FLAG_SPLIT) {
+            owed += pos / num_tcs;
+        } else if (pos != 0) {
+            const uint32_t round = num_tcs * share;
+            owed += (pos / round) * share;
+            rr_rem = pos % round;
+        }
+        for (uint32_t slot = 0; slot < num_tcs; slot++, counter++) {
+            uint32_t expected = owed;
+            if (rr_rem != 0) {
+                const uint32_t n = rr_rem < share ? rr_rem : share;
+                expected += n;
+                rr_rem -= n;
+            }
             const dfb::PackedTileCounter ptc = desc.tile_counters[counter];
-            const uint16_t expected = dfb_implicit_expected_for_slot(loop, pos, share, slot, num_tcs, flags, per_tc);
-            const uint16_t actual = dfb_read_side_counter(ptc, is_producer);
+            const uint64_t tc_base = dfb::get_tensix_id(ptc) * LLK_REG_SIZE +
+                                     dfb::get_counter_id(ptc) * COUNTER_REG_SIZE;
+            const uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_reg_read(tc_base + read_reg));
             // Modular: negative means the counter is behind what this issuer moved.
-            if (static_cast<int16_t>(actual - expected) < 0) {
-                const uint8_t tensix_id = dfb::get_tensix_id(ptc);
-                const uint8_t tc_id = dfb::get_counter_id(ptc);
-                if (is_producer) {
-                    overlay::fast_llk_intf_inc_posted(tensix_id, tc_id, static_cast<uint16_t>(expected - actual));
-                } else {
-                    overlay::fast_llk_intf_inc_acked(tensix_id, tc_id, static_cast<uint16_t>(expected - actual));
-                }
+            const uint16_t behind = static_cast<uint16_t>(expected - actual);
+            if (static_cast<int16_t>(behind) > 0) {
+                overlay::fast_llk_reg_write(tc_base + inc_reg, behind);
             }
         }
     }
@@ -220,26 +207,34 @@ inline void __attribute__((noinline)) dfb_dm0_flush_side(uint32_t side_trids, bo
         }
         asm volatile("nop");  // must give time for the clear to propagate (hw bug, this is needed)
     }
+    // A batch may raise its pending bit after the check above. The top-up already credited it, and clearing
+    // the count does not clear the bit, so clear the side's bits (W0C) here or the ISR would credit it again.
+    if (is_producer) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            OVERLAY_RD_CMD_BUF,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_1_REG_OFFSET / 8,
+            ~(static_cast<uint64_t>(side_trids) << 32));
+    } else {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            OVERLAY_WR_CMD_BUF,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_PER_TR_ID_IP_2_REG_OFFSET / 8,
+            ~static_cast<uint64_t>(side_trids));
+    }
     enable_dfb_tile_isr();
 }
 
 // DM0: flushes every DFB side in `pending` (txn ids not yet flushed, of one role) whose issuers are all
-// finishing, given `ready` (bit per DM hart), and drops those txn ids from `pending`. The txn ids of one side
-// share a descriptor, so the side's first counter identifies them.
+// draining, given `ready` (bit per DM hart), and drops those txn ids from `pending`. A side's txn ids are one
+// ascending block, so its lowest pending txn id and its descriptor's count give the whole side.
 inline void __attribute__((noinline)) dfb_dm0_flush_ready_sides(uint32_t& pending, uint8_t ready, bool is_producer) {
-    uint32_t unvisited = pending;
-    while (unvisited != 0) {
+    for (uint32_t unvisited = pending; unvisited != 0;) {
         const uint32_t first_trid = static_cast<uint32_t>(__builtin_ctz(unvisited));
-        const dfb::PackedTileCounter side_tc = g_txn_dfb_descriptor[first_trid].tile_counters[0];
-        uint32_t side_trids = 0;
-        for (uint32_t m = unvisited; m != 0; m &= m - 1) {
-            const uint32_t trid = static_cast<uint32_t>(__builtin_ctz(m));
-            if (g_txn_dfb_descriptor[trid].tile_counters[0] == side_tc) {
-                side_trids |= 1u << trid;
-            }
-        }
+        const volatile dfb_dm0_finish_info_t& finish = g_txn_dfb_descriptor[first_trid].finish;
+        const uint8_t issuers = finish.issuer_hart_mask;
+        const uint8_t num_txn_ids = finish.num_txn_ids;
+        ASSERT(num_txn_ids != 0);
+        const uint32_t side_trids = ((1u << num_txn_ids) - 1u) << first_trid;
         unvisited &= ~side_trids;
-        const uint8_t issuers = g_txn_dfb_descriptor[first_trid].finish.issuer_hart_mask;
         if ((ready & issuers) == issuers) {
             dfb_dm0_flush_side(side_trids, is_producer);
             pending &= ~side_trids;

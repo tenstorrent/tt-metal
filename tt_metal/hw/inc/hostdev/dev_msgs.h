@@ -114,7 +114,7 @@ constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
 constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
 constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
 // Quasar kernel DM: the kernel has returned and its DFB exit records are written; it is now draining.
-constexpr uint32_t RUN_SYNC_MSG_DFB_FINISHING = 0x4;
+constexpr uint32_t RUN_SYNC_MSG_DFB_DRAINING = 0x4;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_INIT = 0x40404040;

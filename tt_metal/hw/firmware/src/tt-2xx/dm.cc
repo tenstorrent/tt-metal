@@ -252,41 +252,45 @@ inline void wait_subordinates() {
     WAYPOINT("NTD");
 }
 
-// Waits for every subordinate like wait_subordinates, and meanwhile finishes each implicit-sync DFB side
-// as soon as the DMs issuing on it are ready (dataflow_buffer_finish.h). A DM marks itself ready before it
-// reports done, so one more pass after the wait catches any side whose last issuer finished just then.
-// Bit per kernel DM whose run state is DFB_FINISHING or DONE, i.e. whose DFB exit records are written.
-inline uint8_t dfb_dm0_finishing_harts(uint64_t all_dms) {
+// Bit per kernel DM whose run state is DFB_DRAINING or DONE, i.e. whose DFB exit records are written.
+inline uint8_t dfb_dm0_draining_harts(uint64_t all_dms) {
     uint8_t ready = 0;
     for (uint32_t hart = dfb::FIRST_KERNEL_DM_HART; hart < 8; hart++) {
         const uint8_t state = static_cast<uint8_t>(all_dms >> (8 * (hart - 1)));
-        if (state == RUN_SYNC_MSG_DFB_FINISHING || state == RUN_SYNC_MSG_DONE) {
+        if (state == RUN_SYNC_MSG_DFB_DRAINING || state == RUN_SYNC_MSG_DONE) {
             ready |= static_cast<uint8_t>(1u << hart);
         }
     }
     return ready;
 }
 
-inline void dfb_dm0_flush(DfbImplicitSyncTxnMasks& pending) {
-    const uint8_t ready = dfb_dm0_finishing_harts(subordinate_sync->allDMs);
-    if (pending.producer != 0) {
-        dfb_dm0_flush_ready_sides(pending.producer, ready, /*is_producer=*/true);
-    }
-    if (pending.consumer != 0) {
-        dfb_dm0_flush_ready_sides(pending.consumer, ready, /*is_producer=*/false);
-    }
-}
-
+// Waits for all subordinates. Whenever a DM's run state changes, flushes each implicit-sync DFB side whose
+// issuing DMs are all draining (dataflow_buffer_finish.h).
 inline void wait_subordinates_and_finish_dfbs(DfbImplicitSyncTxnMasks pending) {
     WAYPOINT("NTW");
     subordinate_sync->padding = 0;
-    while (!subordinates_done()) {
-        if ((pending.producer | pending.consumer) != 0) {
-            dfb_dm0_flush(pending);
-            // Polling flags other cores are about to write slows those cores down; pause between polls.
-            for (uint32_t i = 0; i < 20; i++) {
-                asm volatile("nop; nop; nop; nop; nop");
+    uint64_t seen_dms = RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT;
+    while (true) {
+        const uint64_t dms = subordinate_sync->allDMs;
+        if (dms == RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE && subordinates_done()) {
+            break;
+        }
+        if ((pending.producer | pending.consumer) == 0) {
+            continue;
+        }
+        if (dms != seen_dms) {
+            seen_dms = dms;
+            const uint8_t ready = dfb_dm0_draining_harts(dms);
+            if (pending.producer != 0) {
+                dfb_dm0_flush_ready_sides(pending.producer, ready, /*is_producer=*/true);
             }
+            if (pending.consumer != 0) {
+                dfb_dm0_flush_ready_sides(pending.consumer, ready, /*is_producer=*/false);
+            }
+        }
+        // Polling flags other cores are about to write slows those cores down; pause briefly between polls.
+        for (uint32_t i = 0; i < 4; i++) {
+            asm volatile("nop; nop; nop; nop; nop");
         }
     }
     WAYPOINT("NTD");
@@ -586,8 +590,6 @@ extern "C" uint32_t _start1() {
 
             record_stack_usage(stack_free);
         }
-        // Finish every DFB this DM is bound to before reporting done (dataflow_buffer_finish.h).
-        dfb_dm_kernel_exit(hartid, (volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1);
         WAYPOINT("D1");
         DEVICE_PRINT_KERNEL_FINISHED();
 
