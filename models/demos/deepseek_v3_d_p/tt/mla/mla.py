@@ -47,6 +47,8 @@ _GLUE_SEQQ_RS_WORKERS = int(os.environ.get("GLUE_SEQQ_RS_WORKERS", "0")) or None
 # cache write + prefix push/gather, so the [1, H, S/(sp*tp), 576] Q buffer can live in L1 for its short life
 # (wkv_b1 -> in-place RoPE -> untilize to DRAM) without clashing with later static CBs.
 _GLUE_Q_DEFER_L1 = os.environ.get("GLUE_Q_DEFER_L1", "1") == "1"
+# ... and on full (indexer) layers too: Q built after the top-k || gather region (GLUE_Q_DEFER_FULL, opt-in).
+_GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "0") == "1"
 
 
 class _DeferredQ:
@@ -1985,8 +1987,8 @@ class ttMLA:
         elif self._seq_q:
             # Only this TP rank's row quarter of the latent (see _q_a_latent_seq).
             q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local // self.tp_factor)
-            if self._q_defer_l1 and indexer_indices is not None:
-                # Deferred Q (shared layer): qr outlives the kv stem and the push; keep it out of L1.
+            if self._q_defer_l1 and (indexer_indices is not None or _GLUE_Q_DEFER_FULL):
+                # Deferred Q: qr outlives the kv stem and the push / top-k || gather region; keep it out of L1.
                 q_norm_mem_config = ttnn.DRAM_MEMORY_CONFIG
             qr, kv_a = self._q_a_latent_seq(hidden_states, seq_len_local, q_norm_mem_config), None
         elif self._merge_qkv_a:
@@ -2036,7 +2038,7 @@ class ttMLA:
                 metadata=metadata,
             )
 
-        if self._seq_q and self._q_defer_l1 and selection_state is None and indexer_indices is not None:
+        if self._seq_q and self._q_defer_l1 and (indexer_indices is not None or _GLUE_Q_DEFER_FULL):
             # Built inside _finish_sparse_chunked_attn, after the KV write and the prefix push/gather.
             tt_q = _DeferredQ(
                 lambda qr=qr: self._q_stem_seq(qr, rope_tensors, kv_actual_isl, metadata=metadata, out_l1=True)
