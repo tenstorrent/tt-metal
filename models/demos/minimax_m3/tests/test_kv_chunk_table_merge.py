@@ -11,16 +11,28 @@ single-member per-head device groups vs the full-row index_k replica group, and 
 row) bank-walk restart, and the index_k rows limited to the MSA layers. The ``dedup_table`` cases rebuild
 it with index_k TP-deduped (``index_k_tp_axis``): index_k stays one config but every chip owns a distinct
 stripe, addressed by a single-chip group and its own bank walk, while K / V are unchanged.
+test_paged_stage_addressing gives the second stage a paged pool: each 32-token chunk of it must sit where the slot
+walk puts the same page of a pool built as a slot cache (one slot per page). The fixed page table must run each slot's
+pages in position order and export strided. test_stage_is_paged, test_paging_mismatch_raises and
+test_runtime_passes_the_fixed_table_of_paged_stages check how the runtime decides, checks and passes a stage's paging.
 """
 
 import os
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 import ttnn
 from models.demos.common.prefill.runners.migration import validate_stage_layout_contiguous
-from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+from models.demos.minimax_m3.tt import tt_prefill_runtime
+from models.demos.minimax_m3.tt.attention.kv_cache import (
+    NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
+    PAGE_SIZE,
+    fixed_page_table,
+    fixed_pool_pages,
+    page_owner,
+)
 from models.demos.minimax_m3.tt.runners.kv_chunk_table import _chunk_size_bytes, build_and_serialize_kv_chunk_table
 
 SP = 2
@@ -66,9 +78,9 @@ def _stage_layouts():
     return layouts
 
 
-def _stub_cache(num_layers, seq_len=SEQ_LEN, index_k_tp_axis=None):
+def _stub_cache(num_layers, num_users, seq_len=SEQ_LEN, index_k_tp_axis=None):
     def t(dtype, rows):
-        return SimpleNamespace(shape=(NUM_USERS * num_layers, 1, rows, HEAD_DIM), dtype=dtype)
+        return SimpleNamespace(shape=(num_users * num_layers, 1, rows, HEAD_DIM), dtype=dtype)
 
     ik_rows = seq_len if index_k_tp_axis is None else seq_len // COLS
     # Migration requires a bf8 index_k (the decode peer's dtype); the builder rejects bf16.
@@ -81,24 +93,33 @@ def _stub_cache(num_layers, seq_len=SEQ_LEN, index_k_tp_axis=None):
 
 
 def _build(
-    tmp_path, stage_layouts, *, index_k_layers=None, seq_len=SEQ_LEN, chunk_size=CHUNK_SIZE, index_k_tp_axis=None
+    tmp_path,
+    stage_layouts,
+    *,
+    index_k_layers=None,
+    seq_len=SEQ_LEN,
+    chunk_size=CHUNK_SIZE,
+    index_k_tp_axis=None,
+    num_users=NUM_USERS,
+    stage_page_table=None,
 ):
     path = os.path.join(str(tmp_path), "m3_merge_table.pb")
     # num_layers is THIS rank's stage count (rank 0 builds), used only for the local shape assert.
     return build_and_serialize_kv_chunk_table(
         mesh_device=None,
-        kv_cache=_stub_cache(STAGE_COUNTS[0], seq_len=seq_len, index_k_tp_axis=index_k_tp_axis),
+        kv_cache=_stub_cache(STAGE_COUNTS[0], num_users, seq_len=seq_len, index_k_tp_axis=index_k_tp_axis),
         seq_len=seq_len,
         num_layers=STAGE_COUNTS[0],
         mesh_shape=(SP, COLS),
         sp_axis=0,
-        num_users=NUM_USERS,
+        num_users=num_users,
         chunk_size=chunk_size,
         num_kv_heads=COLS,
         head_dim=HEAD_DIM,
         path=path,
         stage_layouts=stage_layouts,
         index_k_layers=index_k_layers,
+        stage_page_table=stage_page_table,
     )
 
 
@@ -332,3 +353,190 @@ def test_dedup_index_k_rows_limited_to_msa_layers(dedup_table, tmp_path):
                     assert _ids(filtered.get_device_group(got.device_group_index).fabric_node_ids) == _ids(
                         dedup_table.get_device_group(want.device_group_index).fabric_node_ids
                     ), f"config {cfg_id} slot {slot} layer {layer} pos {pos} changed device group"
+
+
+# Two pages per rank per chunk, two chunks per slot; stage 1 (layers 2-4) holds a paged pool, all MSA as on M3.
+PAGED_CHUNK_SIZE = 2 * PAGE_SIZE * SP
+PAGED_SEQ_LEN = 2 * PAGED_CHUNK_SIZE
+PAGED_INDEX_K_LAYERS = {2, 3, 4}
+
+
+def _one_to_one_table(seed):
+    """A [NUM_USERS, pages] table giving every slot's pages a shuffled, distinct page of its rank's pool."""
+    pages = PAGED_SEQ_LEN // PAGE_SIZE
+    owner = [page_owner(q, chunk_local=PAGED_CHUNK_SIZE // SP, sp=SP) for q in range(pages)]
+    num_pages = fixed_pool_pages(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP)
+    gen = torch.Generator().manual_seed(seed)
+    free = [torch.randperm(num_pages, generator=gen).tolist() for _ in range(SP)]
+    return torch.tensor([[free[owner[q]].pop() for q in range(pages)] for _ in range(NUM_USERS)])
+
+
+def test_paged_stage_addressing(tmp_path):
+    """Stage 1 holds a paged pool (stage 0 keeps slots), mapped by a shuffled one-to-one table. Oracle: the pool is a
+    slot cache of one slot per page and PAGE_SIZE rows per chip, so the slot walk over it places page p of rank r at
+    slot p, positions [r * PAGE_SIZE, (r + 1) * PAGE_SIZE). Every 32-token chunk of the paged stage, on every config,
+    must sit at its page's oracle entry, and stage 0's entries must equal a slots-only table's; index_k rows are
+    published on the MSA layers only, as the runtime asks."""
+    imp = ttnn.experimental.disaggregation.import_from_protobuf_file
+    layouts = _stage_layouts()
+    for name in ("paged", "slots", "pool"):
+        (tmp_path / name).mkdir()
+    table = _one_to_one_table(seed=3)
+    sizes = dict(seq_len=PAGED_SEQ_LEN, chunk_size=PAGED_CHUNK_SIZE, index_k_layers=PAGED_INDEX_K_LAYERS)
+    paged = imp(
+        _build(
+            tmp_path / "paged",
+            layouts,
+            stage_page_table=lambda first, count: table.tolist() if first > 0 else None,
+            **sizes,
+        )
+    )
+    slots = imp(_build(tmp_path / "slots", layouts, **sizes))
+    num_pages = fixed_pool_pages(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP)
+    pool = imp(
+        _build(
+            tmp_path / "pool",
+            layouts,
+            seq_len=PAGE_SIZE * SP,
+            chunk_size=PAGE_SIZE * SP,
+            num_users=num_pages,
+            index_k_layers=PAGED_INDEX_K_LAYERS,
+        )
+    )
+    chunk_local = PAGED_CHUNK_SIZE // SP
+    total = sum(STAGE_COUNTS)
+    checked = 0
+    for cfg in range(2 * COLS + 1):
+        for slot in range(NUM_USERS):
+            for position in range(0, PAGED_SEQ_LEN, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+                rank = page_owner(position // PAGE_SIZE, chunk_local=chunk_local, sp=SP)
+                page = int(table[slot, position // PAGE_SIZE])
+                for layer in range(total):
+                    got = paged.lookup(layer, position, slot, cfg)
+                    if layer < STAGE_COUNTS[0]:
+                        want, oracle = slots.lookup(layer, position, slot, cfg), slots
+                    else:
+                        want, oracle = pool.lookup(layer, rank * PAGE_SIZE + position % PAGE_SIZE, page, cfg), pool
+                    assert (got.noc_addr, got.size_bytes) == (want.noc_addr, want.size_bytes), (
+                        f"config {cfg} slot {slot} layer {layer} position {position}: "
+                        f"{got.noc_addr:#x} != {want.noc_addr:#x}"
+                    )
+                    assert _ids(paged.get_device_group(got.device_group_index).fabric_node_ids) == _ids(
+                        oracle.get_device_group(want.device_group_index).fabric_node_ids
+                    )
+                    checked += 1
+    assert checked == (2 * COLS + 1) * NUM_USERS * total * PAGED_SEQ_LEN // NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
+
+
+def test_fixed_page_table_runs_in_position_order():
+    """The fixed table gives slot u pages [u * n, (u + 1) * n) of every rank's pool in position order: one to one,
+    and periodic per row, so the published table exports strided."""
+    table = fixed_page_table(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP, chunk_size=PAGED_CHUNK_SIZE)
+    per_slot = fixed_pool_pages(num_users=1, max_seq_len=PAGED_SEQ_LEN, sp=SP)
+    for rank in range(SP):
+        owned = [q for q in range(table.shape[1]) if page_owner(q, chunk_local=PAGED_CHUNK_SIZE // SP, sp=SP) == rank]
+        for slot in range(NUM_USERS):
+            assert table[slot, owned].tolist() == list(range(slot * per_slot, (slot + 1) * per_slot)), f"rank {rank}"
+
+
+def test_fixed_page_table_exports_strided(tmp_path):
+    """Over enough chunks for a row period to show, a paged stage under the fixed table exports every config strided
+    (a scattered table would unroll, and at 1M tokens x 4 slots outgrow the protobuf limit)."""
+    seq_len = 8 * PAGED_CHUNK_SIZE
+    table = fixed_page_table(num_users=NUM_USERS, max_seq_len=seq_len, sp=SP, chunk_size=PAGED_CHUNK_SIZE).tolist()
+    exported = ttnn.experimental.disaggregation.import_from_protobuf_file(
+        _build(
+            tmp_path,
+            _stage_layouts(),
+            seq_len=seq_len,
+            chunk_size=PAGED_CHUNK_SIZE,
+            stage_page_table=lambda first, count: table if first > 0 else None,
+        )
+    )
+    strided = ttnn.experimental.disaggregation.ChunkCompression.STRIDED_ROWS
+    assert all(exported.compression(cfg) == strided for cfg in range(exported.num_configs()))
+
+
+# Six layers, MSA on 3-5 (dense 0-2, as on M3); a second config has a dense layer after the MSA layers.
+_HF_CONFIG = SimpleNamespace(
+    sparse_attention_config={"use_sparse_attention": True, "sparse_attention_freq": [0, 0, 0, 1, 1, 1]},
+    num_key_value_heads=COLS,
+    head_dim=HEAD_DIM,
+)
+_HF_CONFIG_DENSE_TAIL = SimpleNamespace(
+    sparse_attention_config={"use_sparse_attention": True, "sparse_attention_freq": [0, 0, 0, 1, 1, 0]}
+)
+
+
+@pytest.mark.parametrize(
+    "hf_config, enabled, first, count, paged",
+    [
+        (_HF_CONFIG, False, 3, 2, False),
+        (_HF_CONFIG, True, 3, 2, True),
+        (_HF_CONFIG, True, 2, 2, False),
+        (_HF_CONFIG, True, 2, 1, False),
+        (_HF_CONFIG, True, 0, 6, False),
+        (_HF_CONFIG_DENSE_TAIL, True, 3, 3, False),
+    ],
+    ids=["off", "msa_stage", "dense_layer", "dense_only", "whole_model", "dense_tail"],
+)
+def test_stage_is_paged(monkeypatch, hf_config, enabled, first, count, paged):
+    """Only a stage whose layers are all MSA is paged, and only with PAGED_KV_CACHE on."""
+    monkeypatch.setattr(tt_prefill_runtime, "PAGED_KV_CACHE", enabled)
+    assert tt_prefill_runtime.stage_is_paged(hf_config, first, count) == paged
+
+
+def _runtime():
+    """A device-free TtPrefillRuntime owning layers 3-4 of _HF_CONFIG, enough for the migration methods."""
+    runtime = object.__new__(tt_prefill_runtime.TtPrefillRuntime)
+    runtime.hf_config = _HF_CONFIG
+    runtime.mesh_device = None
+    runtime.config = SimpleNamespace(
+        first_layer_idx=3,
+        num_layers=2,
+        num_users=NUM_USERS,
+        max_seq_len=PAGED_SEQ_LEN,
+        sp_factor=SP,
+        sp_axis=0,
+        mesh_shape=(SP, COLS),
+        chunk_size=PAGED_CHUNK_SIZE,
+    )
+    return runtime
+
+
+def _stage_cache(num_pages=None):
+    """A stub of this stage's cache: a slot cache, or a paged pool of num_pages pages."""
+    t = SimpleNamespace(buffer_address=lambda: 0)
+    return SimpleNamespace(k=t, v=t, index_k=t, page_table=None if num_pages is None else object(), num_pages=num_pages)
+
+
+def test_paging_mismatch_raises(monkeypatch, expect_error, tmp_path):
+    """Every rank's kv_migration_stages and rank 0's build_kv_chunk_table reject a cache of the wrong kind or pool
+    size for its layers, either way the constant is set: rank 0 would publish wrong addresses for it."""
+    path = str(tmp_path / "table.pb")
+    fixed = fixed_pool_pages(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP)
+    for enabled, cache, match in (
+        (False, _stage_cache(num_pages=fixed), "paged KV cache"),
+        (True, _stage_cache(), "slot KV cache"),
+        (True, _stage_cache(num_pages=fixed + 1), "pool of"),
+    ):
+        monkeypatch.setattr(tt_prefill_runtime, "PAGED_KV_CACHE", enabled)
+        with expect_error(ValueError, match):
+            _runtime().kv_migration_stages(cache)
+        with expect_error(ValueError, match):
+            _runtime().build_kv_chunk_table(cache, path)
+
+
+def test_runtime_passes_the_fixed_table_of_paged_stages(monkeypatch, tmp_path):
+    """With the constant on, the runtime hands rank 0's builder the fixed table for a stage of MSA layers and none for
+    a stage holding a dense layer."""
+    from models.demos.minimax_m3.tt.runners import kv_chunk_table
+
+    monkeypatch.setattr(tt_prefill_runtime, "PAGED_KV_CACHE", True)
+    captured = {}
+    monkeypatch.setattr(kv_chunk_table, "build_and_serialize_kv_chunk_table", lambda **kwargs: captured.update(kwargs))
+    fixed = fixed_pool_pages(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP)
+    _runtime().build_kv_chunk_table(_stage_cache(num_pages=fixed), str(tmp_path / "table.pb"))
+    want = fixed_page_table(num_users=NUM_USERS, max_seq_len=PAGED_SEQ_LEN, sp=SP, chunk_size=PAGED_CHUNK_SIZE)
+    assert captured["stage_page_table"](3, 2) == want.tolist()
+    assert captured["stage_page_table"](0, 3) is None

@@ -127,17 +127,40 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Allocate M3's regular TP-head-sharded triple KV cache (K / V / index_k), one shared cache of
         num_users * num_layers user-major slots. The engine owns the returned object and passes it into
-        every runtime call."""
-        from models.demos.minimax_m3.tt.attention import allocate_kv_caches
+        every runtime call.
 
-        return allocate_kv_caches(
+        A pipeline stage whose layers are all MSA gets a paged pool instead when the runtime's PAGED_KV_CACHE is on
+        (``stage_is_paged``), with the fixed page table (``attention.kv_cache.fixed_page_table``) installed once: it
+        maps each slot to pages of its own. A stage holding a dense layer keeps slot caches: its ring_joint attention
+        reads slots."""
+        from models.demos.minimax_m3.tt.attention.kv_cache import (
+            allocate_kv_caches,
+            fixed_page_table,
+            fixed_pool_pages,
+            set_page_table,
+        )
+        from models.demos.minimax_m3.tt.tt_prefill_runtime import stage_is_paged
+
+        paged = stage_is_paged(hf_config, params.first_layer_idx, params.num_layers)
+        logger.info(
+            f"[minimax_m3] layers [{params.first_layer_idx}, {params.first_layer_idx + params.num_layers}): "
+            f"{'paged KV pool' if paged else 'slot KV caches'}"
+        )
+        sizes = dict(num_users=params.num_users, max_seq_len=params.max_seq_len, sp=params.sp_factor)
+        # Built first: its geometry asserts run before the pools are allocated.
+        table = fixed_page_table(chunk_size=params.chunk_size, **sizes) if paged else None
+        kv_cache = allocate_kv_caches(
             mesh_device,
             num_layers=params.num_layers,
             max_seq_len=params.max_seq_len,
             sp_axis=params.sp_axis,
             num_users=params.num_users,
             head_dim=hf_config.head_dim,
+            num_pages=fixed_pool_pages(**sizes) if paged else None,
         )
+        if paged:
+            set_page_table(kv_cache, table)
+        return kv_cache
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         """Construct the M3 model and return the runtime. Weights load from the tilized cache when it is
