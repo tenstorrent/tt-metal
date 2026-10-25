@@ -399,7 +399,16 @@ class TtDecoderLayer:
         return self._rm_reshape(out, [1, 1, B, H * vd])
 
     def forward_cached(self, hidden_states, position_embeddings, kv_cache, mode, batch, seq_len, cur_pos=None):
-        hs = self._fp32(hidden_states)
+        hs = hidden_states
+        if isinstance(hs, torch.Tensor):
+            hs = ttnn.from_torch(
+                hs.to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+            )
+        if hs.dtype != ttnn.bfloat16:
+            hs = ttnn.typecast(hs, ttnn.bfloat16)
         if hs.layout != ttnn.TILE_LAYOUT:
             hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT)
         N = hs.shape[-2]
@@ -429,7 +438,7 @@ class TtDecoderLayer:
         out = ttnn.add(hs2, mlp_out)
         ttnn.deallocate(hs2)
         ttnn.deallocate(mlp_out)
-        return ttnn.typecast(out, ttnn.bfloat16)
+        return out
 
     def __call__(self, hidden_states, **kwargs):
         if kwargs.get("kv_cache") is not None:
