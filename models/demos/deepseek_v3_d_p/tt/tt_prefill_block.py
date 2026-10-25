@@ -11,6 +11,7 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_yield
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
@@ -721,6 +722,7 @@ class TtPrefillBlock(LightweightModule):
         )
 
         if kv_only:
+            pipeline_yield("attn_end")
             kv_cache = ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device) if return_kv_cache else None
             if return_indexer_indices:
                 return None, kv_cache, None
@@ -728,6 +730,9 @@ class TtPrefillBlock(LightweightModule):
 
         x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mla_out)
+        # Two-chunk pipeline switch point (utils/pipeline.py): the other stream may now issue the second half of its
+        # previous layer (routed expert ... reduce) or its own attention; no-op without an active TwoStreamRunner.
+        pipeline_yield("attn_end")
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_mla = time.perf_counter()
@@ -757,6 +762,7 @@ class TtPrefillBlock(LightweightModule):
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
+            pipeline_yield("moe_window_open")  # dense layers: keep the pipe policy's 3-segment rhythm
 
         ttnn.deallocate(ffn_norm_out)
         if fold_residual:

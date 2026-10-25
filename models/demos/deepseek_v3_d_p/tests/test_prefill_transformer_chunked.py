@@ -71,6 +71,7 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.deepseek_v3_d_p.utils.pipeline import TwoStreamRunner
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     cache_half_pccs,
@@ -2269,6 +2270,57 @@ def run_chunked_transformer_updated(
         # check_pcc would compare the warm pass's (correct) KV. Fail instead of reporting that.
         assert trace_controller.num_segments > 0, "use_trace captured 0 segments — nothing to replay"
 
+        # Two-chunk pipeline (E3, TT_GLM_PIPELINE=stub|pipe): capture a PAIR forward -- chunk c (stream 0) and chunk
+        # c+1 (stream 1) issued interleaved by TwoStreamRunner -- with its own input / metadata tensors, and replay it
+        # per pair; an odd last chunk replays the single capture above.
+        pipe_policy = os.environ.get("TT_GLM_PIPELINE", "off").lower()
+        if pipe_policy not in ("", "0", "off") and n_chunks >= 2:
+            pipe_input_b = ttnn.from_torch(
+                chunk_tok_host[1],
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+            pipe_metadata_b = ChunkMetadata(
+                _meta1(0),
+                _meta1(preload_isl + CHUNK),
+                _meta1(preload_isl + 2 * CHUNK),
+                _llama4_scale_buffer(transformer, CHUNK),
+            )
+
+            def _fwd_meta_b():
+                return transformer.forward(
+                    pipe_input_b,
+                    tt_kvpe_cache,
+                    actual_isl=CHUNK,
+                    actual_start=None,
+                    actual_end=None,
+                    cache_user_id=0,
+                    return_intermediates=False,
+                    metadata=pipe_metadata_b,
+                    index_kv_cache=tt_index_kv_cache,
+                )
+
+            pipe_controller = SubDeviceTraceController(mesh_device)
+            transformer.set_trace_controller(pipe_controller)
+            warm_runner = TwoStreamRunner(pipe_policy)
+            warm_runner.run(_fwd_meta, _fwd_meta_b)  # eager warm-up: compiles the stream-1 resources / programs
+            ttnn.synchronize_device(mesh_device)
+            pipe_controller.begin_capture()
+            cap_runner = TwoStreamRunner(pipe_policy)
+            cap_runner.run(_fwd_meta, _fwd_meta_b)
+            pipe_controller.end_capture()
+            ttnn.synchronize_device(mesh_device)
+            transformer.set_trace_controller(trace_controller)
+            logger.info(
+                f"[pipeline] policy={pipe_policy}: captured pair forward = {pipe_controller.num_segments} segments, "
+                f"{cap_runner.switches} stream switches; single forward = {trace_controller.num_segments} segments"
+            )
+        else:
+            pipe_controller = None
+
         # Capture cost chunk 0 two EXTRA forwards (the warm/compile pass and the recorded pass).
         # For a KV cache that is idempotent -- same positions, same tokens, same values. For a
         # RECURRENT carry it is not: every forward advances it, so by the measured loop the carry
@@ -2293,6 +2345,32 @@ def run_chunked_transformer_updated(
         chunk_times: list[float] = []
         for c in range(n_chunks):
             kv_actual = preload_isl + c * CHUNK
+            if use_trace and pipe_controller is not None and c % 2 == 1:
+                continue  # replayed with chunk c-1 as its pair
+            if use_trace and pipe_controller is not None and c + 1 < n_chunks:
+                for tok, meta, start in ((host_tok[c], trace_input, kv_actual), (host_tok[c + 1], pipe_input_b, kv_actual + CHUNK)):
+                    ttnn.copy_host_to_device_tensor(tok, meta)
+                for meta, start in ((trace_metadata, kv_actual), (pipe_metadata_b, kv_actual + CHUNK)):
+                    write_chunk_metadata(
+                        meta,
+                        (0, start, start + CHUNK),
+                        hf_config=config,
+                        mesh_device=mesh_device,
+                        chunk_size_global=CHUNK,
+                        sp_axis=sp_axis,
+                    )
+                pair_start = time.time()
+                pipe_controller.replay()
+                ttnn.synchronize_device(mesh_device)
+                pair_seconds = time.time() - pair_start
+                chunk_times.extend([pair_seconds / 2, pair_seconds / 2])
+                logger.info(f"[pair timing] iter={it} chunks={c},{c + 1} {pair_seconds * 1000:.2f} ms")
+                for cc in (c, c + 1):
+                    logger.info(f"[chunk timing] iter={it} chunk={cc} {pair_seconds * 500:.2f} ms")
+                continue
+            if use_trace and pipe_controller is not None:
+                # odd last chunk: the single capture under its own controller
+                pass
             if use_trace:
                 ttnn.copy_host_to_device_tensor(host_tok[c], trace_input)
                 # One call: on Mistral this also refreshes the llama4 scale buffer the replay reads.
@@ -2402,6 +2480,13 @@ def run_chunked_transformer_updated(
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
+
+    # E3 correctness surface: PIPE_CACHE_DUMP=<path> saves the final KVPE cache (natural order) so a pipelined run can
+    # be compared bit-for-bit with a sequential one (same chunks, same positions).
+    if os.environ.get("PIPE_CACHE_DUMP"):
+        cache_dump, _ = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)
+        torch.save(cache_dump, os.environ["PIPE_CACHE_DUMP"])
+        logger.info(f"[pipeline] KVPE cache {tuple(cache_dump.shape)} saved to {os.environ['PIPE_CACHE_DUMP']}")
 
     if determinism_check:
         assert not det_failures, "captured-trace replay is not deterministic: " + "; ".join(
@@ -2611,6 +2696,8 @@ def run_chunked_transformer_updated(
     # PASSES and the process still exits 139, which reads as a red CI job. Same failure the runner
     # hit (see TtPrefillRuntime.release_trace); the trace path needs the release wherever it lives.
     if trace_controller is not None:
+        if pipe_controller is not None:
+            pipe_controller.release()
         trace_controller.release()
         transformer.set_trace_controller(None)
     finish_transformer(transformer)
