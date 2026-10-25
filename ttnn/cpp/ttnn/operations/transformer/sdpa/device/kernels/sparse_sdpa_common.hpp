@@ -137,6 +137,7 @@ enum : uint32_t {
     CB_KREQ,
     CB_KACK,
     SPLIT_K,
+    Q_TILED,  // q is [1,H,S,K_DIM] TILE: gather each token's face rows (2 x 32 B per tile) into cb_q_rm
     END,
 };
 }  // namespace reader_ct_arg
@@ -174,6 +175,7 @@ enum : uint32_t {
     CB_RECV_MAX,
     CB_RECV_SUM,
     CB_MERGE_CTRL,
+    OUT_TILED,  // output is [1,H,S,v_dim] TILE: write each token's face rows out of cb_out_im's tiles
     END,
 };
 }  // namespace writer_ct_arg
@@ -226,6 +228,7 @@ enum : uint32_t {
     CB_MMAX,
     CB_CORR2,
     KDEQ_BATCH,
+    OUT_TILED,
     END,
 };
 }  // namespace compute_ct_arg

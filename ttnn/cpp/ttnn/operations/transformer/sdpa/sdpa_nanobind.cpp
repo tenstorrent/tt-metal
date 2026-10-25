@@ -470,7 +470,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("push_batch_slot_layer_idx") = 0,
         nb::arg("kv_spill") = nb::none(),
         nb::arg("push_output_spill") = nb::none(),
-        nb::arg("push_hot_table") = nb::none());
+        nb::arg("push_hot_table") = nb::none(),
+        nb::arg("output_layout") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.transformer.">(
         mod,

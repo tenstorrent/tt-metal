@@ -95,6 +95,10 @@ ttnn::Tensor sparse_sdpa(
     const std::optional<ttnn::Tensor>& kv_spill = std::nullopt,
     const std::optional<ttnn::Tensor>& push_output_spill = std::nullopt,
     // Optional sparse_push_hot table of this chip: the fused push multicasts its hot rows.
-    const std::optional<ttnn::Tensor>& push_hot_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& push_hot_table = std::nullopt,
+    // Output layout: ROW_MAJOR (default for a ROW_MAJOR q) or TILE (default for a TILE q). A TILE q / TILE output
+    // ([1,H,S,*] head-major tiles, bf16, S % 32 == 0) moves the head<->token transpose into the dataflow kernels
+    // (32-B face-row reads/writes), so the caller needs no untilize/tilize around the op.
+    std::optional<ttnn::Layout> output_layout = std::nullopt);
 
 }  // namespace ttnn::transformer

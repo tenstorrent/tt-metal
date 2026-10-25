@@ -48,6 +48,9 @@ struct SparseSDPAParams {
     // Worker cores: sub_core_grids, or all cores of the first subdevice.
     tt::tt_metal::CoreRangeSet worker_core_grid;
     std::optional<SparseSDPAFusedPush> fused_push = std::nullopt;
+    // ROW_MAJOR or TILE output (see transformer::sparse_sdpa).
+    Layout output_layout = Layout::ROW_MAJOR;
+    bool tile_output() const { return output_layout == Layout::TILE; }
 };
 
 struct SparseSDPAInputs {

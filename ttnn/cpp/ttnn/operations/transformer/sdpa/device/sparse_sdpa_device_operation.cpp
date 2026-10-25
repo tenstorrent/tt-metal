@@ -54,8 +54,21 @@ void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& 
     }
 
     // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded (row-major paged-accessor assumptions).
+    // q may be TILE (head-major [1,H,S,K_DIM] tiles; the reader gathers each token's face rows), indices are ROW_MAJOR.
+    TT_FATAL(idx.layout() == Layout::ROW_MAJOR, "sparse_sdpa indices must be ROW_MAJOR");
+    if (q.layout() == Layout::TILE) {
+        TT_FATAL(q.dtype() == DataType::BFLOAT16, "sparse_sdpa TILE q must be bf16");
+        TT_FATAL(q.logical_shape()[2] % tt::constants::TILE_HEIGHT == 0, "sparse_sdpa TILE q needs S % 32 == 0");
+    } else {
+        TT_FATAL(q.layout() == Layout::ROW_MAJOR, "sparse_sdpa q must be ROW_MAJOR or TILE");
+    }
+    if (attrs.tile_output()) {
+        TT_FATAL(q.dtype() == DataType::BFLOAT16, "sparse_sdpa TILE output needs bf16 q (output dtype follows q)");
+        TT_FATAL(q.logical_shape()[2] % tt::constants::TILE_HEIGHT == 0, "sparse_sdpa TILE output needs S % 32 == 0");
+    } else {
+        TT_FATAL(attrs.output_layout == Layout::ROW_MAJOR, "sparse_sdpa output_layout must be ROW_MAJOR or TILE");
+    }
     for (const Tensor* tp : {&q, &idx}) {
-        TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
         TT_FATAL(tp->memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa q/indices must be in DRAM");
         TT_FATAL(!tp->memory_config().is_sharded(), "sparse_sdpa q/indices must be interleaved");
         TT_FATAL(tp->padded_shape() == tp->logical_shape(), "sparse_sdpa q/indices must not be padded");
@@ -251,7 +264,7 @@ SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_spe
     const tt::tt_metal::MemoryConfig out_mem{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     return tt::tt_metal::TensorSpec(
-        shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+        shape, tt::tt_metal::TensorLayout(t.q.dtype(), tt::tt_metal::PageConfig(attrs.output_layout), out_mem));
 }
 
 SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_tensors(
@@ -280,6 +293,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.compute_kernel_config,
         t.q.logical_shape(),
         t.q.dtype(),
+        t.q.layout(),
+        attrs.output_layout,
         t.kv.dtype(),
         // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
         // interleaved one, so they must be distinct programs.
@@ -349,7 +364,8 @@ Tensor sparse_sdpa(
     const std::optional<Tensor>& push_batch_index_tensor,
     const std::optional<Tensor>& kv_spill,
     const std::optional<Tensor>& push_output_spill,
-    const std::optional<Tensor>& push_hot_table) {
+    const std::optional<Tensor>& push_hot_table,
+    Layout output_layout) {
     using OperationType = ttnn::prim::SparseSDPAOperation;
     if (fused_push.has_value()) {
         TT_FATAL(
@@ -383,6 +399,7 @@ Tensor sparse_sdpa(
             .block_cyclic = block_cyclic,
             .worker_core_grid = worker_core_grid,
             .fused_push = fused_push,
+            .output_layout = output_layout,
         },
         OperationType::tensor_args_t{
             .q = q,

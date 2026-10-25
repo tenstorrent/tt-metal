@@ -86,6 +86,7 @@ Tensor sparse_sdpa(
     const std::optional<Tensor>& push_batch_index_tensor = std::nullopt,
     const std::optional<Tensor>& kv_spill = std::nullopt,
     const std::optional<Tensor>& push_output_spill = std::nullopt,
-    const std::optional<Tensor>& push_hot_table = std::nullopt);
+    const std::optional<Tensor>& push_hot_table = std::nullopt,
+    Layout output_layout = Layout::ROW_MAJOR);
 
 }  // namespace ttnn::prim
