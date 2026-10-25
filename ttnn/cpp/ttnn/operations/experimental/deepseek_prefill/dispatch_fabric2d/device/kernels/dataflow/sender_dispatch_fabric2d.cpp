@@ -243,6 +243,17 @@ void kernel_main() {
     pump_stream(fabric);
     // Even on a stream that sent no token, the launch credit is on the cable.
     drain_fabric(fabric);
+    // Last packet of the stream: the end marker the downstream reader waits for (dspf2d::STREAM_DONE_MARK).
+    // flush=true, so it lands only after every earlier write of this stream has committed on that chip.
+    {
+        volatile PACKET_HEADER_TYPE* hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(ct.pkt_hdr_signal_addr);
+        hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            get_noc_addr(ct.downstream_noc_x, ct.downstream_noc_y, ct.fwd_sem_addr),
+            dspf2d::STREAM_DONE_MARK,
+            /*flush=*/true});
+        fabric.wait_for_empty_write_slot();
+        fabric.send_payload_flush_blocking_from_address((uint32_t)hdr, sizeof(PACKET_HEADER_TYPE));
+    }
 
     noc_async_writes_flushed();
     fabric_connections.close();

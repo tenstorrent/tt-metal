@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     extract_mesh_config,
+    moe_transport_arg,
     routed_expert_combine_overlap_arg,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -518,6 +519,9 @@ class TtPrefillBlock(LightweightModule):
             max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
             # Only configs that opt in (Kimi K2.7, GLM 5.3) overlap the routed expert with combine_fabric2d.
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
+            # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
+            moe_transport=moe_transport_arg(model_cfg),
+            combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -795,7 +799,7 @@ class TtPrefillBlock(LightweightModule):
         cache_user_id: int = 0,
         residual: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE.
+        """MoE FFN path: 4D TILE → 3D TILE → MoE → 3D TILE → 4D TILE.
 
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
