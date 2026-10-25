@@ -140,11 +140,15 @@ class MoEOptions:
     # the fused head's router logits: on the engine's cores at the start, on their own router cores, or "auto" (the
     # head's cost model: tt/fused_head.py router_placement - the router's FLOPs a core vs the SE path)
     router: Literal["auto", "engine", "router_cores"] = "auto"
+    # the fused head's layout (tt/head_plan.py HeadLayout: engine GY, MT, chunks, K step, the logits on the engine):
+    # None the planner's (its cost model's best that fits L1); given - A/B sweeps
+    head_layout: object = None
     # the routed experts' gate / up weight readers: the DRAM cores (DRISC, the default) or Tensix readers (A/B)
     experts_drisc: bool = True
-    # the tail (latent models): "fused" one program a chip (tt/tail_engine.py: the latent all-gather into the engine's
-    # L1, rms norm, up projection, + the shared expert; the combine's rows tilized there); "ops" its ops; "auto": fused
-    # where it is built (with the fused head, 640 rows a mesh row)
+    # the tail: "fused" one program a chip - latent models: tt/tail_engine.py (the latent all-gather into the engine's
+    # L1, rms norm, up projection, + the shared expert; the combine's rows tilized there); else tt/tail_a2a.py (the
+    # combine's rows tilized, + the shared expert's owner rows, the TP all-to-all into the output); "ops" its ops;
+    # "auto": fused where it is built
     tail: Literal["auto", "fused", "ops"] = "auto"
 
 
@@ -386,6 +390,7 @@ class MoEBlock(LightweightModule):
                     deterministic=options.deterministic,
                     accumulators=acc,
                     router=options.router,
+                    layout=options.head_layout,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -420,7 +425,7 @@ class MoEBlock(LightweightModule):
         # (the resolved plan in one line: what was picked and why - the generality map reads it)
         self.summary = (
             f"head {self.head_mode}{'' if fits is True else f' (fused: {fits})'}{self.fused.describe() if self.fused else ''}; tail "
-            f"{'fused' if self.tail else 'ops'}{'' if tfits is True or model.latent_dim is None else f' (fused: {tfits})'}"
+            f"{'fused' if self.tail else 'ops'}{'' if tfits is True else f' (fused: {tfits})'}"
         )
         logger.info(
             f"MoEBlock: mesh {g.sp}x{g.tp}, chunk {g.chunk_tokens} ({g.tokens_per_row} rows a mesh row, "
@@ -833,12 +838,24 @@ class FusedHead:
     def fits(g: Geometry, model: MoEModel, dtypes: MoEDtypes):
         """True, or why not."""
         act = model.shared_expert_activation
-        from models.demos.moe_block.tt.fused_head import head_layouts
+        from models.demos.moe_block.tt.head_plan import HeadShape, head_layouts
 
-        if not head_layouts(g.tokens_per_row, g.tp, num_links=g.links):
-            return f"{g.tokens_per_row} rows a mesh row: no engine layout (row chunks of whole owner blocks)"
         if model.shared_expert_hidden_dim is None:
             return "no shared expert"
+        shape = HeadShape(
+            rows=g.tokens_per_row,
+            H=model.emb_dim,
+            I=model.shared_expert_hidden_dim // g.tp,
+            G=g.tp,
+            E=model.num_experts * model.router.fold,
+            K=model.top_k,
+            latent=model.latent_dim,
+            fold=model.router.fold,
+            links=g.links,
+            ring=g.tp_wraps,
+        )
+        if not head_layouts(shape):
+            return f"{g.tokens_per_row} rows a mesh row: no engine layout (row chunks of whole owner blocks)"
         if act.kind == "situ" and (act.beta, act.linear_beta) != (4.0, 25.0):
             return "situ: only Kimi's (beta 4, linear beta 25)"
         if act.kind not in ("silu", "situ"):
@@ -864,6 +881,7 @@ class FusedHead:
         deterministic=False,
         accumulators=12,
         router="auto",
+        layout=None,
     ):
         from ttnn.bringup.combine_rf.lin2d import glu_weight
 
@@ -873,9 +891,15 @@ class FusedHead:
         H, Is, latent = model.emb_dim, model.shared_expert_hidden_dim, model.latent_dim
         E, K, N = model.num_experts, model.top_k, g.chips
         grid = mesh.compute_with_storage_grid_size()
+        if layout is not None:  # (a given layout: its logits placement too)
+            router = "engine" if layout.on_engine else "router_cores"
         self.head = HeadSE3(
             mesh,
             GX=min(11, grid.x - 1),  # (the engine's columns: the last for the movers - a harvested grid has fewer)
+            GY=layout.GY if layout is not None else None,
+            MT=layout.MT if layout is not None else None,
+            KB=layout.KB if layout is not None else None,
+            compact=layout.compact if layout is not None else None,
             rows=g.tokens_per_row,
             H=H,
             I=Is // g.tp,
@@ -925,7 +949,8 @@ class FusedHead:
         h = self.head
         GY, MT, NCH = h._lay
         on = h.router is not None and h.router.on_engine
-        return f" (engine {h.eng.GX}x{GY} cores, MT {MT}, {NCH} chunk{'s' if NCH > 1 else ''}, router {'on the engine' if on else f'on {len(h.router.cores)} router cores'})"
+        pred = f", KB {h.eng.KB}, predicted {h.planned.t:.0f} us" if h.planned is not None else f", KB {h.eng.KB}"
+        return f" (engine {h.eng.GX}x{GY} cores, MT {MT}, {NCH} chunk{'s' if NCH > 1 else ''}, router {'on the engine' if on else f'on {len(h.router.cores)} router cores'}{pred})"
 
     def attach(self, exchange):
         """The planner writes the exchange's plan tensors (its combine baked their addresses)."""
@@ -951,15 +976,19 @@ class FusedHead:
 
 
 class FusedTail:
-    """K3's tail as one program a chip (tt/tail_engine.py TailEngine): the latent all-gather over TP into the engine's
-    L1, the combine's own rows tilized there, rms norm (folded: g into W_up, 1 / rms on the fp32 sums), the up
-    projection split by columns, + the shared expert's output -> [S/SP, H/TP]."""
+    """The tail as one program a chip. K3 (a latent - tt/tail_engine.py TailEngine): the latent all-gather over TP into
+    the engine's L1, the combine's own rows tilized there, rms norm (folded: g into W_up, 1 / rms on the fp32 sums), the
+    up projection split by columns, + the shared expert's output -> [S/SP, H/TP]. No latent (tt/tail_a2a.py TailA2A):
+    the combine's own rows tilized, + the shared expert's owner rows, the TP all-to-all straight into [S/SP, H/TP]."""
 
     @staticmethod
     def fits(g: Geometry, model: MoEModel, head_mode):
-        """True, or why not. Either head: both land the shared expert's output width split ([S/SP, H/TP])."""
+        """True, or why not. Either head: both land the shared expert's output width split ([S/SP, H/TP]) with a latent,
+        its owner rows ([S/N, H]) without."""
         if model.latent_dim is None:
-            return "no latent"
+            if (model.emb_dim // g.tp) % 32 or g.tokens_per_chip % 32:
+                return "whole tiles of H / TP and of a chip's owned rows"
+            return True
         if g.links != 2:
             return f"{g.links} links (a link a K half)"
         if (model.emb_dim // g.tp) % 32 or model.latent_dim % 64:
@@ -969,6 +998,12 @@ class FusedTail:
     def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, topology, dtypes: MoEDtypes = MoEDtypes()):
         from models.demos.moe_block.tt.tail_engine import TailEngine
 
+        self.a2a = None
+        if model.latent_dim is None:
+            from models.demos.moe_block.tt.tail_a2a import TailA2A
+
+            self.a2a = TailA2A(mesh, rows=g.tokens_per_row, H=model.emb_dim, topology=topology, num_links=g.links)
+            return
         H, Hr, tp = model.emb_dim, model.latent_dim, g.tp
         self.eng = TailEngine(
             mesh,
@@ -987,7 +1022,10 @@ class FusedTail:
         self.w = self.eng.upload([up.T[:, (d % tp) * Ho : (d % tp + 1) * Ho].contiguous() for d in range(g.chips)], gn)
 
     def __call__(self, y_rm, se):
-        """y_rm: the combine's row-major output [1, 1, S/N, Hr]; se [1, 1, S/SP, H/TP] TILE -> [1, 1, S/SP, H/TP]."""
+        """y_rm: the combine's row-major output [1, 1, S/N, Hr]; se [1, 1, S/SP, H/TP] TILE (no latent: [1, 1, S/N, H]
+        or None) -> [1, 1, S/SP, H/TP]."""
+        if self.a2a is not None:
+            return self.a2a.run(y_rm, se)
         return self.eng.run(y_rm, self.w, se)
 
 

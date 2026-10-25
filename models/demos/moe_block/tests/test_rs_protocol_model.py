@@ -15,6 +15,24 @@ import pytest
 from models.demos.moe_block.tt.se_rs import DIRS, LogitsPlan, RsPlan
 
 
+def _zone_write(plan, q, c, d, h, slot, b, live):
+    """The port's write into core c's direction-d zone on chip q, addressed as x_gather3's rs_send does (P-tile slots,
+    or compact: the sum of the core's tiles of the unit's prefix-mask blocks, from its counts word): must be the
+    core's own slot offset (zone_slots), inside the zone, and overlap no other slot written this chunk (live)."""
+    n = plan.count(*c, b)
+    if not plan.compact:
+        off = slot * plan.P
+    else:
+        cnts, pm = plan.counts_word(*c), plan.prefix_mask(q, h, d, slot)
+        off = sum((cnts >> (8 * j)) & 0xFF for j in range(4) if (pm >> j) & 1)
+    zo, zn = plan.zone_slots(q, *c, d)[slot]
+    assert off == zo and n <= zn, ("the port's zone offset is not the core's slot", q, c, d, slot, off, zo, n, zn)
+    assert off + n <= plan.zone_tiles(d), ("a zone write past the zone", q, c, d, slot, off, n)
+    for o2, n2 in live:
+        assert off + n <= o2 or o2 + n2 <= off, ("zone writes overlap", q, c, d, slot, (off, n), (o2, n2))
+    live.append((off, n))
+
+
 def _run(plan, seed):
     rnd = random.Random(seed)
     G, GX, GY = plan.G, plan.GX, plan.GY
@@ -22,6 +40,7 @@ def _run(plan, seed):
     # state
     part = {}  # (p, cx, cy, e) -> frozenset (the sub-block's sum; tiles share it)
     zone = {}  # (p, cx, cy, d, slot) -> frozenset
+    zlive = {}  # (p, c, d) -> [(tile offset, tiles)] written into the zone
     ctr = {(p, c, d): 0 for p in range(G) for c in cores for d in DIRS}
     fin = {}
     mbox = {(p, d, l, c): 0 for p in range(G) for d in DIRS for l in range(plan.nv) for c in cores}
@@ -122,6 +141,7 @@ def _run(plan, seed):
                 slot = s1 if h else s0
                 key = (q, c[0], c[1], d, slot)
                 assert key not in zone, ("zone slot written twice", key)
+                _zone_write(plan, q, c, d, h, slot, b, zlive.setdefault((q, c, d), []))
                 zone[key] = part[(p, c[0], c[1], e)]
                 ctr[(q, c, d)] += 1
                 st["i"] += 1
@@ -224,6 +244,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
     readers = {(p, c): len(plan.finb_readers(p, *c)) for p in range(G) for c in cores}
     finb = {}  # (p, c, e) -> (chunk, set): the exchanged sub-block (start / relay)
     zone = {}  # (p, c, d, slot) -> [chunk, set, read]
+    zlive = {}  # (p, c, d, chunk) -> [(tile offset, tiles)] written into the zone
     ctr = {(p, c, d): 0 for p in range(G) for c in cores for d in DIRS}
     fin = {}
     mbox = {(p, d, l, c): 0 for p in range(G) for d in DIRS for l in range(plan.nv) for c in cores}
@@ -364,6 +385,7 @@ def _run_chunks(plan, seed, nch, zone_credit=True, finb_credit=True):
                 v = finb[(p, c, e)]
                 assert v[0] == m, ("FINB of another chunk read", p, c, e, v[0], m)
                 key = (q, c, d, s1 if h else s0)
+                _zone_write(plan, q, c, d, h, s1 if h else s0, b, zlive.setdefault((q, c, d, m), []))
                 old = zone.get(key)
                 assert old is None or (old[2] and old[0] < m), ("a zone slot overwritten before it was read", key)
                 zone[key] = [m, v[1], False]
@@ -442,3 +464,30 @@ def test_rs_chunks_model_catches_missing_credit(what):
         except AssertionError:
             return
     raise AssertionError(f"the model accepted the chunks without the {what} credit")
+
+
+@pytest.mark.parametrize("compact", [True, False], ids=["compact", "slots"])
+@pytest.mark.parametrize("ring", [False, True], ids=["line", "ring"])
+@pytest.mark.parametrize("seed", range(3))
+def test_rs_protocol_zones(compact, ring, seed):
+    """Compact arrival zones (the rows scatter's default) vs P-tile slots, one call and chunked: the ports' offsets are
+    the cores' slots, inside the zone, never overlapping (K2.7's 640-row shape: H 7168, GY 10 x MT 2; GY 4 x MT 1)."""
+    for GY, MT, nch in ((10, 2, 1), (4, 1, 3)):
+        plan = RsPlan(G=4, ring=ring, GX=11, GY=GY, MT=MT, NTH=224, scatter=-2, nv=2, pwmax=8 // MT, compact=compact)
+        if nch == 1:
+            _run(plan, seed)
+        else:
+            _run_chunks(plan, seed, nch)
+
+
+def test_rs_model_catches_bad_zone_offset():
+    """A port whose prefix mask drops a block writes over another slot: the model must catch it."""
+    plan = RsPlan(G=4, ring=False, GX=11, GY=10, MT=2, NTH=224, scatter=-2, nv=2, pwmax=4)
+    orig = plan.prefix_mask
+    plan.prefix_mask = lambda q, h, d, slot: orig(q, h, d, slot) & ~(1 << 3)
+    try:
+        _run(plan, 0)
+    except AssertionError as err:
+        assert "zone" in str(err)
+        return
+    raise AssertionError("the model accepted a wrong zone offset")

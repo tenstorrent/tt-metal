@@ -34,10 +34,16 @@ def _split(n, parts):
 class RsPlan:
     """The down tiling and the transport schedule of the fused head's SE reduce-scatter (module docstring).
     G chips (positions 0 .. G - 1 along the TP line / ring), engine GX x GY cores of MT row tiles (one chunk of CR = GY MT
-    row tiles), NTH output tile columns, scatter -1 (width) / -2 (rows), nv links, pwmax tiles a down pass row."""
+    row tiles), NTH output tile columns, scatter -1 (width) / -2 (rows), nv links, pwmax tiles a down pass row.
+    compact (default: the rows scatter): a core's arrival zone holds only the tiles it gets - each slot at the sum of the
+    core's earlier slots' tiles - not a P-tile slot per arrival of its (half, direction) (rows: a core's MT rows fall in
+    one or two blocks, so a direction's arrivals are at most P tiles; G - 1 slots of P each took 3x the L1 - K2.7 at
+    H 7168, 640 rows: 504 KB of zones forced 5 row chunks)."""
 
-    def __init__(self, *, G, ring, GX, GY, MT, NTH, scatter, nv, pwmax):
+    def __init__(self, *, G, ring, GX, GY, MT, NTH, scatter, nv, pwmax, compact=None):
         self.G, self.GX, self.GY, self.MT, self.NTH, self.scatter, self.nv = G, GX, GY, MT, NTH, scatter, nv
+        # (the ports' offsets come from a core's counts word: a byte a block, G <= 4)
+        self.compact = (scatter == -2 and G <= 4) if compact is None else compact
         self.CR = GY * MT
         self.kind = rs_kind(G, ring)
         self.chips, self.slots = plan_transport(G, self.kind)
@@ -182,7 +188,8 @@ class RsPlan:
 
     def compute_args(self, p, cx, cy):
         """The RS compute tables: [nops] + ops (kind | idx << 8; kind 0 pass, 1 hand, 2 fin) + per pass [width, bases]
-        + per entry [tiles, mode (1 fwd arrival, 2 bwd, 4 fin -> output), fwd slot, bwd slot, HOLD off, FINB off]."""
+        + per entry [tiles, mode (1 fwd arrival, 2 bwd, 4 fin -> output), fwd / bwd zone offsets, HOLD off, FINB off].
+        """
         kinds = {"pass": 0, "hand": 1, "fin": 2}
         ops = self.ops(p, cx, cy)
         out = [len(ops)] + [kinds[k] | (i << 8) for k, i in ops]
@@ -192,6 +199,7 @@ class RsPlan:
         ents = self.entries(p, h)
         hold, _ = self.hold_offs(p, cx, cy)
         arr = self.arrivals(p, cx, cy)
+        zs = {dd: self.zone_slots(p, cx, cy, dd) for dd in DIRS}
         for e, b in enumerate(ents):
             d, _ = self.role(p, b, h)
             sl = {dd: [s_ for e_, s_, _ in arr[dd] if e_ == e] for dd in DIRS}
@@ -199,8 +207,8 @@ class RsPlan:
             out += [
                 self.count(cx, cy, b),
                 mode,
-                sl["fwd"][0] if sl["fwd"] else 0,
-                sl["bwd"][0] if sl["bwd"] else 0,
+                zs["fwd"][sl["fwd"][0]][0] if sl["fwd"] else 0,
+                zs["bwd"][sl["bwd"][0]][0] if sl["bwd"] else 0,
                 hold.get(e, 0),
                 self.finb_off(p, cx, cy, e),
             ]
@@ -331,8 +339,32 @@ class RsPlan:
             return 0, self.NTH, 1  # (no tile of the own block here)
         return (cy * self.MT + r0 - p * self.RB) * self.NTH + self.n0[cx], self.NTH, self.pn[cx]
 
+    def zone_slots(self, p, cx, cy, d):
+        """[(tile offset, tiles)] of core (cx, cy)'s direction-d zone slots on chip p, in slot order (the tiles its
+        NCRISC credits for the slot; not compact: P-tile slots)."""
+        lst = self.chips[p]["arrivals"].get((self.half(self.k(cx, cy)), d), [])
+        if not self.compact:
+            return [(s * self.P, self.P) for s in range(len(lst))]
+        out, o = [], 0
+        for b in lst:
+            n = self.count(cx, cy, b)
+            out.append((o, n))
+            o += n
+        return out
+
+    def prefix_mask(self, q, h, d, slot):
+        """The blocks of chip q's (half h, direction d) slots before `slot` (a bit a block): a port's compact offset of
+        a core's slot is the sum of the core's tiles of these blocks (its counts word)."""
+        m = 0
+        for b in self.chips[q]["arrivals"].get((h, d), [])[:slot]:
+            m |= 1 << b
+        return m
+
     def zone_tiles(self, d):
-        return self.slots[d] * self.P
+        if not self.compact:
+            return self.slots[d] * self.P
+        cores = [(cx, cy) for cy in range(self.GY) for cx in range(self.GX)]
+        return max(sum(n for _, n in self.zone_slots(p, cx, cy, d)) for p in range(self.G) for cx, cy in cores)
 
 
 class LogitsPlan(RsPlan):
@@ -346,6 +378,7 @@ class LogitsPlan(RsPlan):
         self.kind = rs_kind(G, ring)
         self.chips, self.slots = plan_transport(G, self.kind)
         self.ncores, self.P, self.scatter = RB, ET, 0
+        self.compact = False
 
     def count(self, cx, cy, b):
         return self.ET

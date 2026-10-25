@@ -277,7 +277,8 @@ _RS_SENDER = r"""
 // (down + reduce-scatter) my units' chunks, the reader's walk: one fabric packet each into the downstream chip's same
 // core, its zone slot of this direction (slot by the core's half); a core's last chunk carries the fused increment of
 // its arrival counter. Pops at the reader's batch boundaries. args at r0: as the reader's, then the zone base, the
-// arrival counter's address, P (zone slot tiles)
+// arrival counter's address, P (zone slot tiles; 0: compact zones - a core's slot at the sum of its tiles of the
+// blocks in the unit's prefix mask for the core's half, w0 bits 20 + 4 half)
 template <typename C, typename H, typename L>
 FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rpos, uint32_t m) {
     const uint32_t nu = get_arg_val<uint32_t>(r0), u0 = r0 + 1, nc = get_arg_val<uint32_t>(u0 + 2 * nu);
@@ -313,7 +314,17 @@ FORCE_INLINE void rs_send(uint32_t r0, C& conn, H* hdrs, L&& lpoll, uint32_t& rp
             const uint32_t cnt = (cnts >> (8 * b)) & 0xFF, hf = (cw >> 16) & 1;
             if (!((mask >> hf) & 1) || cnt == 0) continue;
             const uint32_t x = cw & 0xFF, y = (cw >> 8) & 0xFF;
-            const uint32_t dst0 = zb + (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P * 2048;
+            uint32_t zo;
+            if (P) {
+                zo = (hf ? (w1 >> 16) : (w1 & 0xFFFF)) * P;
+            } else {
+                const uint32_t pm = (w0 >> (20 + 4 * hf)) & 0xF;
+                zo = 0;
+                for (uint32_t j = 0; j < 4; ++j) {
+                    if ((pm >> j) & 1) zo += (cnts >> (8 * j)) & 0xFF;
+                }
+            }
+            const uint32_t dst0 = zb + zo * 2048;
             const uint64_t ctr = get_noc_addr(x, y, actr);
             for (uint32_t t0 = 0; t0 < cnt; t0 += RP) {
                 HWW(24, 0xC1000000u | un << 8 | i); HWW(25, t0); HWW(26, u); HWW(27, rpos);
@@ -865,7 +876,14 @@ class XGather3:
         virt = lambda cx, cy: self.mesh.worker_core_from_logical_core(ttnn.CoreCoord(e.cx0 + cx, cy))  # noqa: E731
         units = plan.port_units(p, d) if plan.down(p, d) is not None else []
         cores = plan.port_cores(v) if units else []
-        out = [len(units)] + [w for eu, b, m, s0, s1 in units for w in (eu | b << 8 | m << 16, s0 | s1 << 16)]
+        q = plan.down(p, d)
+        # (compact zones: each half's prefix mask - the blocks of the downstream's slots before this unit's)
+        pm = lambda b, h, s_: plan.prefix_mask(q, h, d, s_) if plan.compact else 0  # noqa: E731
+        out = [len(units)] + [
+            w
+            for eu, b, m, s0, s1 in units
+            for w in (eu | b << 8 | m << 16 | pm(b, 0, s0) << 20 | pm(b, 1, s1) << 24, s0 | s1 << 16)
+        ]
         out += [len(cores)]
         for cx, cy in cores:
             c, k = virt(cx, cy), plan.k(cx, cy)
@@ -884,7 +902,7 @@ class XGather3:
         return (
             out
             + plan.entries(p)
-            + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], plan.P]
+            + [rs["finb"], rs["mbox"], rs["zone"][i], rs["arr"][i], 0 if plan.compact else plan.P]
             + [rs["ffree"], rs["zcred"], rs["zfree"], zneed, zexp]
         )
 

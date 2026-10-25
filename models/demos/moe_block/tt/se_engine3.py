@@ -475,8 +475,9 @@ void kernel_main() {
     uint32_t nf[NWS] = {};
     while (ws < NR && blk(ws) % GY != cy) ++ws;  // (skip rounds I do not hold)
 #ifdef SE_RS
-    // (down + reduce-scatter) arrivals per direction in zone-slot order: slot i credited (P pages pushed) once my
-    // arrival counter reached its threshold (0: nothing comes - a block I hold no tile of); the fin sub-block to y
+    // (down + reduce-scatter) arrivals per direction in zone-slot order: slot i credited (its pages pushed - the arg's
+    // high half: P, or with compact zones my tiles of its block) once my arrival counter reached its threshold (the
+    // low half; 0: nothing comes - a block I hold no tile of); the fin sub-block to y
     const uint32_t t0r = ord0 + get_arg_val<uint32_t>(ys0 + GY + 2);
     const uint32_t q0 = t0r + 3 + 2 * get_arg_val<uint32_t>(t0r);  // (past the tail)
     const uint32_t naf = get_arg_val<uint32_t>(q0), af0 = q0 + 1, nab = get_arg_val<uint32_t>(af0 + naf), ab0 = af0 + naf + 1;
@@ -495,9 +496,17 @@ void kernel_main() {
 #else
     constexpr uint32_t CHX = NCH > 1 ? NCH + 4 : 0, NFF = NCH > 1 ? NCH - 1 : 0;
 #endif
-    uint32_t nfmax = 0, nbmax = 0;
-    for (uint32_t i = 0; i < naf; ++i) nfmax = get_arg_val<uint32_t>(af0 + i) > nfmax ? get_arg_val<uint32_t>(af0 + i) : nfmax;
-    for (uint32_t i = 0; i < nab; ++i) nbmax = get_arg_val<uint32_t>(ab0 + i) > nbmax ? get_arg_val<uint32_t>(ab0 + i) : nbmax;
+    uint32_t nfmax = 0, nbmax = 0, zuf = 0, zub = 0;  // (the thresholds' max; the zone pages my slots take)
+    for (uint32_t i = 0; i < naf; ++i) {
+        const uint32_t a = get_arg_val<uint32_t>(af0 + i);
+        nfmax = (a & 0xFFFF) > nfmax ? (a & 0xFFFF) : nfmax;
+        zuf += a >> 16;
+    }
+    for (uint32_t i = 0; i < nab; ++i) {
+        const uint32_t a = get_arg_val<uint32_t>(ab0 + i);
+        nbmax = (a & 0xFFFF) > nbmax ? (a & 0xFFFF) : nbmax;
+        zub += a >> 16;
+    }
     uint32_t zsf = 0, zsb = 0, ff = 0;  // (zone-free signals sent a direction; FINB-free credits pushed)
     const uint32_t zpf = NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH - 1) : 0, zpb = NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH) : 0;
     const uint32_t zfa = NCH > 1 ? get_arg_val<uint32_t>(f0 + 6 + NCH + 1) : 0;
@@ -602,22 +611,24 @@ void kernel_main() {
             const uint32_t sl = af % naf, mc = af / naf;
             if (NCH > 1 && sl == 0 && mc > zsf) {  // (chunk mc's first slot: chunk mc - 1's zone all read (popped) -
                 // +1 on the zone-free word of the port facing my fwd upstream: it credits the upstream's sends)
-                if (cb_pages_reservable_at_back(SE_ARRF, SE_ZSF * SE_P)) {
+                if (cb_pages_reservable_at_back(SE_ARRF, SE_ZF)) {
                     // (only a core something lands on signals: one with only "nothing comes" slots runs ahead of
                     // the credit - its signals would count for a slower one's)
                     if (nfmax) noc_semaphore_inc(get_noc_addr(zpf & 0xFFFF, zpf >> 16, zfa), 1);
                     ++zsf;
                 }
             } else {
-                const uint32_t thr = get_arg_val<uint32_t>(af0 + sl);
+                const uint32_t a = get_arg_val<uint32_t>(af0 + sl), thr = a & 0xFFFF, pz = a >> 16;
                 if (thr == 0 || *arrf >= mc * nfmax + thr) {
-                    cb_reserve_back(SE_ARRF, SE_P);
-                    cb_push_back(SE_ARRF, SE_P);
+                    if (pz) {
+                        cb_reserve_back(SE_ARRF, pz);
+                        cb_push_back(SE_ARRF, pz);
+                    }
                     ++af;
-                    if (NCH > 1 && sl + 1 == naf && SE_ZSF > naf) {  // (the chunk padded to the whole zone: the
+                    if (NCH > 1 && sl + 1 == naf && SE_ZF > zuf) {  // (the chunk padded to the whole zone: the
                         // compute pops it all, the next chunk's slots from the zone's start again)
-                        cb_reserve_back(SE_ARRF, (SE_ZSF - naf) * SE_P);
-                        cb_push_back(SE_ARRF, (SE_ZSF - naf) * SE_P);
+                        cb_reserve_back(SE_ARRF, SE_ZF - zuf);
+                        cb_push_back(SE_ARRF, SE_ZF - zuf);
                     }
                 }
             }
@@ -625,19 +636,21 @@ void kernel_main() {
         if (ab < NCH * nab) {
             const uint32_t sl = ab % nab, mc = ab / nab;
             if (NCH > 1 && sl == 0 && mc > zsb) {
-                if (cb_pages_reservable_at_back(SE_ARRB, SE_ZSB * SE_P)) {
+                if (cb_pages_reservable_at_back(SE_ARRB, SE_ZB)) {
                     if (nbmax) noc_semaphore_inc(get_noc_addr(zpb & 0xFFFF, zpb >> 16, zfa), 1);
                     ++zsb;
                 }
             } else {
-                const uint32_t thr = get_arg_val<uint32_t>(ab0 + sl);
+                const uint32_t a = get_arg_val<uint32_t>(ab0 + sl), thr = a & 0xFFFF, pz = a >> 16;
                 if (thr == 0 || *arrb >= mc * nbmax + thr) {
-                    cb_reserve_back(SE_ARRB, SE_P);
-                    cb_push_back(SE_ARRB, SE_P);
+                    if (pz) {
+                        cb_reserve_back(SE_ARRB, pz);
+                        cb_push_back(SE_ARRB, pz);
+                    }
                     ++ab;
-                    if (NCH > 1 && sl + 1 == nab && SE_ZSB > nab) {
-                        cb_reserve_back(SE_ARRB, (SE_ZSB - nab) * SE_P);
-                        cb_push_back(SE_ARRB, (SE_ZSB - nab) * SE_P);
+                    if (NCH > 1 && sl + 1 == nab && SE_ZB > zub) {
+                        cb_reserve_back(SE_ARRB, SE_ZB - zub);
+                        cb_push_back(SE_ARRB, SE_ZB - zub);
                     }
                 }
             }
@@ -1035,9 +1048,10 @@ void kernel_main() {
                 const uint32_t sf = get_arg_val<uint32_t>(e6 + 2), sb = get_arg_val<uint32_t>(e6 + 3);
                 const uint32_t ho = get_arg_val<uint32_t>(e6 + 4), fbo = get_arg_val<uint32_t>(e6 + 5);
                 cb_wait_front(SE_PSYNC, npass);
-                if (mode & 1) cb_wait_front(SE_ARRF, (sf + 1) * SE_P);
-                if (mode & 2) cb_wait_front(SE_ARRB, (sb + 1) * SE_P);
-                const uint32_t a1 = (mode & 1) ? SE_ARRF : SE_ARRB, s1 = ((mode & 1) ? sf : sb) * SE_P;
+                // (sf / sb: the arrivals' zone offsets, tiles - every slot before them pushed with them)
+                if (mode & 1) cb_wait_front(SE_ARRF, sf + cnt);
+                if (mode & 2) cb_wait_front(SE_ARRB, sb + cnt);
+                const uint32_t a1 = (mode & 1) ? SE_ARRF : SE_ARRB, s1 = (mode & 1) ? sf : sb;
                 const uint32_t ocb = (mode & 4) ? SE_OUTF : SE_FINB;
                 pack_reconfig_data_format(ocb);
                 for (uint32_t i0 = 0, n = 0; i0 < cnt; i0 += n) {
@@ -1052,7 +1066,7 @@ void kernel_main() {
                         reconfig_data_format(SE_HOLD, SE_ARRB);
                         add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(SE_ARRB);
                         for (uint32_t j = 0; j < n; ++j)
-                            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(SE_ARRB, sb * SE_P + i0 + j, j);
+                            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(SE_ARRB, sb + i0 + j, j);
                     }
                     tile_regs_commit();
                     if (mode & 4) cb_reserve_back(SE_OUTF, n);
@@ -1077,12 +1091,12 @@ void kernel_main() {
             uint32_t mf = 0;
             for (uint32_t e = 0; e < G; ++e) mf |= get_arg_val<uint32_t>(et0 + 6 * e + 1);
             if (mf & 1) {
-                cb_wait_front(SE_ARRF, SE_ZSF * SE_P);
-                cb_pop_front(SE_ARRF, SE_ZSF * SE_P);
+                cb_wait_front(SE_ARRF, SE_ZF);
+                cb_pop_front(SE_ARRF, SE_ZF);
             }
             if (mf & 2) {
-                cb_wait_front(SE_ARRB, SE_ZSB * SE_P);
-                cb_pop_front(SE_ARRB, SE_ZSB * SE_P);
+                cb_wait_front(SE_ARRB, SE_ZB);
+                cb_pop_front(SE_ARRB, SE_ZB);
             }
         }
         }
@@ -1201,8 +1215,10 @@ class SeEngine3:
         latent=None,
         prep=False,
         router=None,
+        arena_max=None,
     ):
-        """prep: the dispatch prep's owned rows (pieces(prep=...)): x own's rows of the chip's owned tokens (or, with a
+        """arena_max: host planning (mesh_device None) - size the arena against this cap and stop (no device state).
+        prep: the dispatch prep's owned rows (pieces(prep=...)): x own's rows of the chip's owned tokens (or, with a
         latent, their latent) untilized by the compute after its last pass, written row-major by the NCRISC.
         latent (tiles): K3's latent down on the gathered x - the chip's column slice [H, latent tiles], extra plain
         passes after gate / up (fp32 partials between shards, bf16 out) - and its all-to-all to the owners (with rs).
@@ -1220,7 +1236,7 @@ class SeEngine3:
         self.KB = KB or 16  # (fewer, larger rounds: K3 403 -> 341 us at 640 rows; GLM-Flash neutral)
         self.NSG = self.KT // self.KB
         assert self.KT % self.KB == 0 and self.NSG % 2 == 0
-        self.arena_max = arena_cap(mesh_device, self.KB)
+        self.arena_max = arena_max if arena_max is not None else arena_cap(mesh_device, self.KB)
         assert self.NSG % shards == 0 and (self.NSG // shards) % 2 == 0, "even K steps a shard"
         self.SPS = self.NSG // shards
         nf = self.NSG // 2
@@ -1362,7 +1378,14 @@ class SeEngine3:
                 assert self.ETC * self.RG <= 8, "the router logits on the engine: ETC x MT rows in DEST"
                 KTO = router["KTO"]
                 # (K chunk: x / W_r^T rounds, two buffers - two rounds (KTO / 2) where the region fits past the
-                # words, else more, smaller rounds behind the receivers' acks: the largest that fits)
+                # words, else more, smaller rounds behind the receivers' acks: the largest that fits. The region may
+                # grow the arena by what compact RS zones gave back - its K chunk as with P-tile slots: not grown,
+                # K2.7's KC went 28 -> 14 at 128 rows, +8% on its chain-bound head)
+                zgrow = (
+                    sum((rs.slots[d] * rs.P - rs.zone_tiles(d)) * 2048 for d in ("fwd", "bwd"))
+                    if rs is not None and rs.compact
+                    else 0
+                )
                 t0 = off[rsr[0][0]] if rsr else o
                 kcs = sorted((d for d in range(1, KTO + 1) if KTO % d == 0 and KTO // d >= 2), reverse=True)
                 for self.KC in kcs:
@@ -1373,12 +1396,14 @@ class SeEngine3:
                     ]
                     need = sum(al(v) for _, v in rsz)
                     if (
-                        o - t0 >= need
+                        t0 + need <= min(o + zgrow, max(o, self.arena_max))
                         or self.KC == kcs[-1]
                         or (self.KC == kcs[0] and KTO // self.KC == 2 and o + need <= self.arena_max)
                     ):
                         break
-                if o - t0 < need:
+                if o - t0 < need and t0 + need <= min(o + zgrow, max(o, self.arena_max)):
+                    o = t0 + need
+                elif o - t0 < need:
                     hall = off["xin"] - off["hall"]
                     t0 = off["hall"] if down and hall >= need else o
                     if t0 == o:
@@ -1388,6 +1413,9 @@ class SeEngine3:
             self.off, self.arena_bytes = off, o
             if o <= self.arena_max:
                 break
+        # (each region's bytes, in arena order - overlays share their host's)
+        ends = sorted(set(off.values()) | {o})
+        self.sizes = {k: next(e for e in ends if e > v) - v if v < o else 0 for k, v in off.items()}
         if o > self.arena_max:
             sizes = {
                 k: (off[k2] if i + 1 < len(off) else o) - off[k]
@@ -1397,6 +1425,11 @@ class SeEngine3:
                 f"se_engine3: arena {o // 1024} KB > {self.arena_max // 1024} KB of L1 (KB {self.KB}): "
                 + ", ".join(f"{k} {v // 1024}" for k, v in sizes.items())
             )
+        self.groups = {}
+        for c in range(GX):
+            self.groups.setdefault((tuple(self.wg[c]), tuple(self.wd[c])), []).append(c)
+        if mesh_device is None:  # (host planning: sized)
+            return
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx0, 0), ttnn.CoreCoord(cx0 + GX - 1, GY - 1))])
         self.crs = cores
         if router is not None:  # (the router phase's words, zero; re-armed by their owners each call)
@@ -1413,9 +1446,6 @@ class SeEngine3:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
         self.alloc_arena()
-        self.groups = {}
-        for c in range(GX):
-            self.groups.setdefault((tuple(self.wg[c]), tuple(self.wd[c])), []).append(c)
 
     def _rs_regions(self):
         rs, G = self.rs, self.rs.G
@@ -1746,7 +1776,7 @@ class SeEngine3:
             nd += "#define SE_RS\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RS_CB.items())
             if self._fin_rows():
                 nd += "#define SE_FIN_ROWS\n"
-            nd += f"#define SE_P {self.rs.P}\n#define SE_ZSF {self.rs.slots['fwd']}\n#define SE_ZSB {self.rs.slots['bwd']}\n"
+            nd += f"#define SE_P {self.rs.P}\n#define SE_ZF {self.rs.zone_tiles('fwd')}\n#define SE_ZB {self.rs.zone_tiles('bwd')}\n"
         if self.LT:
             assert self.rs is not None, "the latent's all-to-all rides the reduce-scatter's ports and args"
             nd += f"#define SE_LAT {LAT_CB}\n#define SE_NGU {self.NGU}\n#define SE_LWMAX {self.LWMAX}\n"
@@ -2042,12 +2072,14 @@ class SeEngine3:
             return []
         rs = self.rs
         a = rs.arrivals(p, cx, cy)
+        zs = {d: rs.zone_slots(p, cx, cy, d) for d in ("fwd", "bwd")}
         y0, stride, w = rs.fin_map(p, cx, cy)
+        # (a slot's word: its threshold | the zone pages it takes << 16)
         out = (
             [len(a["fwd"])]
-            + [t for _, _, t in a["fwd"]]
+            + [t | zs["fwd"][sl][1] << 16 for _, sl, t in a["fwd"]]
             + [len(a["bwd"])]
-            + [t for _, _, t in a["bwd"]]
+            + [t | zs["bwd"][sl][1] << 16 for _, sl, t in a["bwd"]]
             + [rs.count(cx, cy, p), y0, stride, w, arr[0], arr[1]]
         )
         if self.NCH == 1:

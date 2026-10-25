@@ -29,6 +29,7 @@ from models.demos.moe_block.moe_block import (
     GLM_53,
     GLM_53_FLASH,
     KIMI_K3,
+    KIMI_K27,
     MINIMAX_M3,
     MoEBlock,
     MoEModel,
@@ -47,19 +48,27 @@ from models.demos.moe_block.tests.test_moe_block import (
     replay_device_times,
 )
 
-BASE = {"k3": KIMI_K3, "glm53_flash": GLM_53_FLASH, "glm53": GLM_53, "m3": MINIMAX_M3, "dsv41_flash": DSV41_FLASH}
+BASE = {
+    "k3": KIMI_K3,
+    "k27": KIMI_K27,
+    "glm53_flash": GLM_53_FLASH,
+    "glm53": GLM_53,
+    "m3": MINIMAX_M3,
+    "dsv41_flash": DSV41_FLASH,
+}
 ROUTINGS = ("uniform", "zipf_spread", "zipf_packed", "one_hot", "empty_experts", "zero_chip", "ties")
 EPC_MAX = 64  # (the flat op's experts a chip)
+GALAXY_EPC = {"k3": 28, "k27": 12}  # (a Galaxy chip's experts: the router folded to them)
 
 
 def mesh_model(name: str, chips: int) -> MoEModel:
-    """The model on this mesh: K3 at a Galaxy chip's load (28 experts a chip, its router at E 896 folded), the others
-    at their real experts unless more than EPC_MAX a chip (then folded to fit)."""
+    """The model on this mesh: K3 / K2.7 at a Galaxy chip's load (GALAXY_EPC experts a chip, the router at its real E
+    folded), the others at their real experts unless more than EPC_MAX a chip (then folded to fit)."""
     m = BASE[name]
     E = m.num_experts
-    epc = 28 if name == "k3" else E // chips
+    epc = GALAXY_EPC.get(name, E // chips)
     F = 1
-    while E // F // chips > EPC_MAX or (name == "k3" and E // F // chips > epc):
+    while E // F // chips > EPC_MAX or (name in GALAXY_EPC and E // F // chips > epc):
         F *= 2
     assert E % (F * chips) == 0, f"{name}: {E} experts over {chips} chips, fold {F}"
     if F == 1:
@@ -319,3 +328,73 @@ def test_moe_block_first_call(mesh_device, device_params, builds):
         block.close()
         del block
         gc.collect()
+
+
+# head layout A/Bs (MoEOptions.head_layout): (model, rows a mesh row, [(GY, MT, NCH, KB, on the engine), ...]) - the
+# planner's choice against the alternatives it ranked near it
+AB = {
+    "glm53-640": ("glm53", 640, [(10, 2, 1, 12, True), (10, 2, 1, 8, True), (10, 2, 1, 6, True)]),
+    "glm53-512": ("glm53", 512, [(8, 2, 1, 12, True), (8, 2, 1, 8, True)]),
+    "glmf-640": ("glm53_flash", 640, [(10, 2, 1, 16, True), (10, 2, 1, 8, True)]),
+    "k27-640": ("k27", 640, [(10, 2, 1, 7, True), (10, 2, 1, 4, True), (10, 2, 1, 7, False)]),
+    "k27-768": ("k27", 768, [(8, 1, 3, 14, True), (8, 1, 3, 14, False), (6, 2, 2, 7, True)]),
+    "glmf-1280": ("glm53_flash", 1280, [(8, 1, 5, 8, True), (4, 2, 5, 4, False)]),
+    # (the RS zones: P-tile slots vs compact, the same layout - the 6th field)
+    "zones-glm53-512": ("glm53", 512, [(8, 2, 1, 8, True, False), (8, 2, 1, 8, True, True)]),
+    "zones-glm53-640": ("glm53", 640, [(10, 2, 1, 8, True, False), (10, 2, 1, 8, True, True)]),
+    "zones-glmf-640": ("glm53_flash", 640, [(10, 2, 1, 16, True, False), (10, 2, 1, 16, True, True)]),
+    # (the same with the ops tail: no fused tail's L1 - P-tile slots fit GLM-5.3 at KB 8 again)
+    "zonesops-glm53-512": ("glm53", 512, [(8, 2, 1, 8, True, False), (8, 2, 1, 8, True, True)], "ops"),
+    "zonesops-glm53-640": ("glm53", 640, [(10, 2, 1, 8, True, False), (10, 2, 1, 8, True, True)], "ops"),
+}
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, ab",
+    [
+        pytest.param(
+            (R, C),
+            _fab(
+                fabric_payload_size=fabric_payload(BASE[AB[k][0]].routed_width),
+                l1_small_size=0,
+                trace_region_size=TRACE_REGION,
+            ),
+            k,
+            id=f"ab-{k}",
+        )
+        for k in AB
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(36000)
+def test_head_layout_ab(mesh_device, device_params, ab):
+    """Each layout of AB[ab] in turn (a block each, closed before the next), traced replays timed (the profiler)."""
+    import gc
+
+    from models.demos.moe_block.moe_block import MoEOptions
+    from models.demos.moe_block.tt.head_plan import HeadLayout
+
+    name, rows, lays, *tail = AB[ab]
+    tail = tail[0] if tail else "auto"
+    m = mesh_model(name, R * C)
+    w = scenario_weights(m, "uniform", R * C)
+    for GY, MT, NCH, KB, on, *zc in lays:
+        lay = HeadLayout(GY=GY, MT=MT, NCH=NCH, KB=KB, on_engine=on, compact=bool(zc and zc[0]))
+        try:
+            block = MoEBlock(
+                mesh_device,
+                m,
+                rows * R,
+                w,
+                WeightCache(path=None, layer=0),
+                options=MoEOptions(head="fused", head_layout=lay, tail=tail),
+            )
+        except (AssertionError, ValueError, RuntimeError) as e:
+            logger.warning(f"AB {ab} {lay}: does not build: {' '.join(str(e).split())[:200]}")
+            continue
+        tag = f"ab-{ab}-{GY}x{MT}x{NCH}-kb{KB}-{'eng' if on else 'rc'}{'-compact' if lay.compact else ''}"
+        stats = run_checked(mesh_device, block, m, w, tag, eager=1, replays=12)
+        logger.info(f"AB_RESULT {tag}: PCC min {min(stats['pcc']):.5f}; {block.summary}")
+        block.close()
+        del block
+        gc.collect()  # (its global semaphores go with their last reference: before the next block's L1)

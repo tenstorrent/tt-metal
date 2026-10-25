@@ -113,6 +113,7 @@ class HeadSE3:
         GY=None,
         MT=None,
         KB=None,
+        compact=None,
         num_links=2,
         fidelity=ttnn.MathFidelity.HiFi2,
         rs_dim=None,
@@ -152,7 +153,26 @@ class HeadSE3:
         if self.rs_mode == "mrs":
             self._warm_rs(rows, H, I)
         grid_y = mesh_device.compute_with_storage_grid_size().y
-        # (the engine's layout: given, or head_layouts' first whose arena fits L1 - at a K step, the largest first)
+        # (the engine's layout: given; with the fused RS and the router chain the planner's (tt/head_plan.py: every
+        # layout / K step / router placement whose L1 fits, by its cost model), tried in its order - the device's L1
+        # may still refuse one; else head_layouts' first whose arena fits L1 - at a K step, the largest first)
+        self.planned = None
+        planned = []
+        if GY is None and self.rs_mode == "fused" and router is not None:
+            from models.demos.moe_block.tt.head_plan import HeadShape, describe, plan
+
+            shape = HeadShape(
+                rows=rows, H=H, I=I, G=G, E=router.E, K=router.K, latent=latent, fold=router.fold,
+                links=num_links, ring=self._ring(), grid=(GX + 1, grid_y),
+            )  # fmt: skip
+            from models.demos.moe_block.tt.se_engine3 import arena_cap
+
+            planned = [
+                p_
+                for p_ in plan(shape, arena_max=lambda kb: arena_cap(mesh_device, kb))
+                if (router.on_engine is None or p_.lay.on_engine == router.on_engine) and (not KB or p_.lay.KB == KB)
+            ]
+            assert planned, f"HeadSE3: the planner has no layout for {rows} rows ({shape})"
         layouts = (
             [(GY, MT, None)]
             if GY is not None
@@ -162,6 +182,8 @@ class HeadSE3:
         kbs = [KB] if KB else sorted((d for d in range(1, 17) if klt % d == 0 and (klt // d) % 2 == 0), reverse=True)
         last_err = None
         self._GX, self._dims = GX, dict(H=H, I=I, G=G, rows=rows)
+        self._on = None  # (the planned router placement)
+        self._compact = compact  # (the RS zones: the planner's; None - se_rs's default)
 
         def build(GY, MT, kb):  # (the RS plan and the engine at one layout and K step; False: its arena does not fit)
             nonlocal last_err
@@ -179,6 +201,7 @@ class HeadSE3:
                     scatter=rs_dim,
                     nv=num_links,
                     pwmax=8 // MT,
+                    compact=self._compact,
                 )
             try:
                 self.eng = SeEngine3(
@@ -210,20 +233,40 @@ class HeadSE3:
                 last_err = err
                 return False
 
-        # (auto placement: the logits on the engine only at the preferred layout - else the router cores there,
-        # not a costlier layout for the engine's sake - self._rc_only)
-        auto = router is not None and router.on_engine is None
-        for self._rc_only in (False, True)[: 2 if auto else 1]:
-            lays = layouts[:1] if auto and not self._rc_only else layouts
-            if any(build(GY, MT, kb) for (GY, MT, _) in lays for kb in kbs):
-                break
+        self._rc_only = False
+        MX = GX  # (the mover column: ports, watcher, router cores - the engine may be narrower, the planner's GX)
+        if planned:
+            for p_ in planned:
+                self._on = p_.lay.on_engine
+                self._compact = p_.lay.compact
+                GX = p_.lay.GX
+                self._GX = GX
+                if build(p_.lay.GY, p_.lay.MT, p_.lay.KB):
+                    self.planned = p_
+                    from loguru import logger
+
+                    logger.info(
+                        f"HeadSE3: {rows} rows, planned {describe(p_)}; arena {self.eng.arena_bytes // 1024} KB of "
+                        f"{self.eng.arena_max // 1024} KB (the device's cap)"
+                    )
+                    break
+            else:
+                raise ValueError(f"HeadSE3: no planned layout fits the device's L1 at {rows} rows ({last_err})")
         else:
-            raise ValueError(f"HeadSE3: no layout / K step fits L1 at {rows} rows ({last_err})")
+            # (auto placement: the logits on the engine only at the preferred layout - else the router cores there,
+            # not a costlier layout for the engine's sake - self._rc_only)
+            auto = router is not None and router.on_engine is None
+            for self._rc_only in (False, True)[: 2 if auto else 1]:
+                lays = layouts[:1] if auto and not self._rc_only else layouts
+                if any(build(GY, MT, kb) for (GY, MT, _) in lays for kb in kbs):
+                    break
+            else:
+                raise ValueError(f"HeadSE3: no layout / K step fits L1 at {rows} rows ({last_err})")
         GY, MT = self._lay[:2]
         holes = list(l1_hole or [])
         if holes:  # (the arena placed: what this head keeps from here on lands in the hole, above it)
             ttnn.deallocate(holes.pop(0))
-        movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(GX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+        movers = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(MX, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         if self.rs_mode == "mrs":
             ttnn.deallocate(self.eng.arena)
         # (the mover column: ports at the top; with the router chain the watcher sits right below them and the router
@@ -235,13 +278,16 @@ class HeadSE3:
         self.rcores = None
         if router is not None:
             if nrt + 2 * num_links + 1 <= grid.y:
-                self.rcores = [ttnn.CoreCoord(GX, cy) for cy in range(grid.y - nrt, grid.y)]
-                watcher = ttnn.CoreCoord(GX, grid.y - nrt - 1)
+                self.rcores = [ttnn.CoreCoord(MX, cy) for cy in range(grid.y - nrt, grid.y)]
+                watcher = ttnn.CoreCoord(MX, grid.y - nrt - 1)
             else:
-                if not (GY < grid.y and nrt <= GX):
-                    raise ValueError(f"HeadSE3: no cells for {nrt} router cores (a free core row: GY {GY} < {grid.y})")
-                self.rcores = [ttnn.CoreCoord(c, GY) for c in range(nrt)]
-                watcher = ttnn.CoreCoord(GX, grid.y - 1)
+                # (a free core row under the engine; with the logits on the engine - no W_r multicast over them - the
+                # free rows under it)
+                free = [ttnn.CoreCoord(c, y) for y in range(GY, grid.y) for c in range(GX)]
+                if not (nrt <= GX or (self.router_on_engine(router, latent) and nrt <= len(free))):
+                    raise ValueError(f"HeadSE3: no cells for {nrt} router cores (free core rows: GY {GY} < {grid.y})")
+                self.rcores = free[:nrt]
+                watcher = ttnn.CoreCoord(MX, grid.y - 1)
         else:
             watcher = None
         self.xg = XGather3(
@@ -249,7 +295,7 @@ class HeadSE3:
             self.eng,
             num_links=num_links,
             sub_core_grid=movers,
-            placement="simple" if grid.x - GX < 4 else "auto",
+            placement="simple" if grid.x - MX < 4 else "auto",
             watcher=watcher,
         )
         self.eng.ring_dir = self.xg.ring_dir  # (the latent's multi-hop sends: the gather's ring directions)
@@ -453,6 +499,8 @@ class HeadSE3:
         bound it). An engine layout that does not fit L1: the router cores (self._rc_only)."""
         if router.on_engine is not None:
             return router.on_engine
+        if self._on is not None:  # (the planner's)
+            return self._on
         if self._rc_only:
             return False
         GY, MT, NCH = self._lay
