@@ -806,10 +806,11 @@ class ttMLA:
         # S/sp rows) and partitions the rows afterwards, isolating the reduce-scatter summation order.
         self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
         # MLA_SEQQ_L1=1: the tilized sparse_sdpa output (~87 KB/core, wkv_b2's in0) lives in L1, only for the wkv_b2
-        # matmul (R0, bit-exact: tilize + wkv_b2 115 -> 84 us). The rope output must NOT go to L1: it is built before
+        # matmul (R0, bit-exact: tilize + wkv_b2 115 -> 84 us). Default on (MLA_SEQQ_L1=0 disables). The rope output
+        # must NOT go to L1: it is built before
         # the kv stem and lives through the KVPE gather / top-k overlap region, and on best its 98 KB/core clashed with
         # the gather/push programs' static CBs (grid rows 0-1), eager and traced (seqq-l1-b6-4).
-        self._seq_q_l1 = self._seq_q and os.getenv("MLA_SEQQ_L1", "0") not in ("", "0")
+        self._seq_q_l1 = self._seq_q and os.getenv("MLA_SEQQ_L1", "1") not in ("", "0")
         assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
         if self._seq_q:
             self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
