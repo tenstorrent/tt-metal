@@ -307,6 +307,8 @@ def test_math_matmul(
                 matmul_config.tile_dimensions.ct_dim,
                 matmul_config.tile_dimensions.rt_dim,
                 matmul_config.dest_sync,
+                throttle,
+                matmul_config.tile_dimensions.kt_dim,
             ),
             *MATMUL_STREAM_Z.for_block(
                 formats,

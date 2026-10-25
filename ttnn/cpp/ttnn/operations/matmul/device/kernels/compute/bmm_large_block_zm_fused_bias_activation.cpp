@@ -239,7 +239,9 @@ void kernel_main() {
         in1_format,
         out_subblock_w,
         out_subblock_h,
-        DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[out_dfb_id] == (uint8_t)DataFormat::Float32);
+        DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[out_dfb_id] == (uint8_t)DataFormat::Float32,
+        MM_THROTTLE != 0 || (DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[out_dfb_id] == (uint8_t)DataFormat::Float32 && in0_block_w == 1) ||
+        !(unpack_tile_r_dim[in0_dfb_id] == 32 && unpack_tile_c_dim[in0_dfb_id] == 32 && unpack_tile_r_dim[in1_dfb_id] == 32 && unpack_tile_c_dim[in1_dfb_id] == 32));
     // one tile in one section for the whole kernel: the row MOP's init is not repaid (HiFi4 bf16 1x1 reads 6 to 14 ns slower than main)
     constexpr bool bmm_single_tile_kernel =
         out_subblock_num_tiles == 1 && !get_batch_from_reader &&

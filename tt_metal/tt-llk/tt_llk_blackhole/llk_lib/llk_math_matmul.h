@@ -369,6 +369,9 @@ inline void matmul_configure_mop(
 
     const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    // two rows in the two banks of the held source: the tile MOP ends without clearing the streamed source, _llk_math_matmul_ does
+    constexpr bool two_row = matmul_two_row<reuse_dir>();
+    static_assert(!two_row || (!high_fidelity && !load_only), "the two-row scheme is LoFi");
 
     const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
@@ -397,7 +400,7 @@ inline void matmul_configure_mop(
         ckernel::math::replay_buf_offset,
         endfold ? replay_buf_len - 1 : replay_buf_len,
         // Lambda function to load reply buffer
-        [high_fidelity, reuse_a, partial_face, is_in1_32x16, in1_alt, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim]
+        [high_fidelity, reuse_a, partial_face, is_in1_32x16, in1_alt, is_in0_16x32, is_in0_32x16, is_in1_16x32, t_dim, two_row]
         {
             if (is_in1_32x16)
             {
@@ -488,7 +491,11 @@ inline void matmul_configure_mop(
             }
             else
             {
-                if (reuse_a)
+                if constexpr (two_row)
+                {
+                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0);
+                }
+                else if (reuse_a)
                 {
                     TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0); // B3A3 or B3A2 // reset srca/srcb/dest, increment phase (addr_mod_5), clear src A
                 }
@@ -1017,7 +1024,9 @@ inline void matmul_configure_mop_throttled(
         matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face),
         "MM throttling only enabled for full 32x32 tile size");
 
-    const bool reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    constexpr bool two_row    = matmul_two_row<reuse_dir>();
+    static_assert(!two_row || !high_fidelity, "the two-row scheme is LoFi");
 
     const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
@@ -1068,7 +1077,7 @@ inline void matmul_configure_mop_throttled(
             {
                 tmp.set_last_inner_loop_instr(TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0));
             }
-            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B, 0, ADDR_MOD_5, 0));
+            tmp.set_last_outer_loop_instr(TT_OP_MVMUL(two_row ? p_setrwc::CLR_NONE : (reuse_a ? p_setrwc::CLR_A : p_setrwc::CLR_B), 0, ADDR_MOD_5, 0));
         }
     }
 
@@ -1247,6 +1256,83 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
     LLK_ASSERT(reuse_a == math_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
+
+    if constexpr (matmul_two_row<reuse_dir>())
+    {
+        static_assert(!matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>(), "the two-row scheme is LoFi");
+        LLK_ASSERT((t_dim % 2) == 0, "matmul: the two-row scheme needs an even held dimension");
+        // With the clear of the held source disabled, a clear of it only flips the bank: the two held rows sit in its two banks. The flag is
+        // set around each call, so no other op sees it.
+        if (reuse_a)
+        {
+            TTI_SETC16(CLR_DVALID_SrcB_Disable_ADDR32, CLR_DVALID_SrcB_Disable_MASK);
+        }
+        else
+        {
+            TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, CLR_DVALID_SrcA_Disable_MASK);
+        }
+        for (std::uint32_t t = 0; t < t_dim; t += 2)
+        {
+            for (std::uint32_t rut = 0; rut < rut_dim; rut++)
+            {
+                const bool last = rut == (rut_dim - 1);
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index + (reuse_a ? ct_dim * t + rut : t + rut * ct_dim));
+                ckernel_template::run();
+                if (reuse_a)
+                {
+                    if (last)
+                    {
+                        TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+                    }
+                    else
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    }
+                }
+                else
+                {
+                    if (last)
+                    {
+                        TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
+                    }
+                    else
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    }
+                }
+                math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(
+                    dst_index + (reuse_a ? ct_dim * (t + 1) + rut : t + 1 + rut * ct_dim));
+                ckernel_template::run();
+                if (reuse_a)
+                {
+                    if (last)
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_A, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                        TTI_CLEARDVALID(p_setrwc::CLR_B, 0);
+                    }
+                    else
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    }
+                }
+                else
+                {
+                    if (last)
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                        TTI_CLEARDVALID(p_setrwc::CLR_A, 0);
+                    }
+                    else
+                    {
+                        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
+                    }
+                }
+            }
+        }
+        TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+        math::reset_counters(p_setrwc::SET_ABD_F);
+        return;
+    }
 
     if constexpr (row_mop && THROTTLE_LEVEL == 0)
     {
