@@ -870,4 +870,58 @@ def test_seqq_r0(mesh_device, variant, config_only):
         timer("B q_b full [auto] bfp8 out", lambda: qb(None, dtype=ttnn.bfloat8_b))
         _free([ref, qr_loc, tw])
 
+    # ======================= C. q_b full: speed AND accuracy vs an fp32 torch reference =======================
+    if want("c"):
+        torch.manual_seed(3)
+        x_host = torch.randn(1, 1, SQ * SP * TP, Q_LORA).to(torch.bfloat16)  # distinct rows per device
+        w_host = (torch.randn(Q_LORA, NH * (NOPE + ROPE)) * (1 / Q_LORA**0.5)).to(torch.bfloat16)
+        xt = ttnn.from_torch(
+            x_host.reshape(SP, TP, SQ, Q_LORA),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=L1,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, 1)),
+        )
+        wt = mk(mesh, w_host, ttnn.bfloat8_b)
+        w_deq = ttnn.to_torch(ttnn.get_device_tensors(wt)[0]).float()  # the bfp8-quantized weight, exactly
+        hifi2f = ck(ttnn.MathFidelity.HiFi2, True)
+        devs = (0, 13, 31)
+        truth = {d: x_host.reshape(SP * TP, SQ, Q_LORA)[d].float() @ w_deq for d in devs}
+
+        def qb(pc, cks):
+            kw = {"program_config": pc} if pc is not None else {}
+            return ttnn.linear(xt, wt, memory_config=L1, dtype=ttnn.bfloat16, compute_kernel_config=cks, **kw)
+
+        cands = [
+            ("N5K8 (current)", pc1d(5, 8), hifi2),
+            ("auto", None, hifi2),
+            ("N6K1", pc1d(6, 1), hifi2),
+            ("N6K2", pc1d(6, 2), hifi2),
+            ("N5K2", pc1d(5, 2), hifi2),
+            ("N6K2 g12", pc1d(6, 2, grid=(12, 10)), hifi2),
+            ("N5K8 fp32acc sub1", pc1d(5, 8, sub_w=1), hifi2f),
+            ("N6K2 fp32acc sub3", pc1d(6, 2, sub_w=3), hifi2f),
+            ("N6K4 fp32acc sub3", pc1d(6, 4, sub_w=3), hifi2f),
+            ("N6K8 fp32acc sub3", pc1d(6, 8, sub_w=3), hifi2f),
+            ("N8K8 fp32acc sub4", pc1d(8, 8, sub_w=4), hifi2f),
+            ("N8K4 fp32acc sub4", pc1d(8, 4, sub_w=4), hifi2f),
+            ("N5K4 fp32acc sub1", pc1d(5, 4, sub_w=1), hifi2f),
+        ]
+        for tag, pc, cks in cands:
+            us = timer(f"C q_b full [{tag}]", lambda pc=pc, cks=cks: qb(pc, cks))
+            try:
+                o = qb(pc, cks)
+                errs, pccs = [], []
+                for d in devs:
+                    a = dev_torch(o, d).reshape(SQ, -1)
+                    b = truth[d]
+                    errs.append(((a - b).norm() / b.norm()).item())
+                    pccs.append(pcc(a, b))
+                _free(o)
+                log(f"ACC C q_b full [{tag}] vs fp32 truth: rel_l2={max(errs):.3e} pcc_min={min(pccs):.7f} time={us}")
+            except Exception as e:
+                log(f"FAIL C acc [{tag}]: {type(e).__name__}: {str(e)[:300]}")
+        _free([xt, wt])
+
     log("DONE")
