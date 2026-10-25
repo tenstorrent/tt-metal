@@ -101,11 +101,16 @@ _PIPE_STREAM_LOCAL = frozenset(
     n.strip()
     for n in os.environ.get(
         "PIPE_STREAM_LOCAL",
-        "sparse_kv_push,get_sparse_kv_push,"
-        # CCL semaphore pools and the shared-expert RS buffers: once a stream's CCL runs on the comm sub-device next to
-        # the other stream's work, the two must never hold the same handle / persistent buffer / keepalive slot.
-        "get_and_cycle_ag_semaphore_handles,get_and_cycle_rs_semaphore_handles,get_and_cycle_barrier_semaphore_handle,"
-        "get_shared_rs_intermediate,shared_rs_intermediate,set_shared_rs_input_keepalive,shared_rs_input_keepalive",
+        "sparse_kv_push,get_sparse_kv_push"
+        # PIPE_STREAM_LOCAL_EXT=1 adds the CCL semaphore pools and the shared-expert RS buffers (needed once a stream's
+        # CCL runs on the comm sub-device next to the other stream's work). NOT default: with it, pipe2 ran 14.7%
+        # slower and not bit-identical (runs/20261025T053030Z-pipe-e3b-6.log, cause not found yet).
+        + (
+            ",get_and_cycle_ag_semaphore_handles,get_and_cycle_rs_semaphore_handles,get_and_cycle_barrier_semaphore_handle,"
+            "get_shared_rs_intermediate,shared_rs_intermediate,set_shared_rs_input_keepalive,shared_rs_input_keepalive"
+            if os.environ.get("PIPE_STREAM_LOCAL_EXT", "0") == "1"
+            else ""
+        ),
     ).split(",")
     if n.strip()
 )
