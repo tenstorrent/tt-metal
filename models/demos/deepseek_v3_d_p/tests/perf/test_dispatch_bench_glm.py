@@ -292,59 +292,78 @@ def test_dispatch_bench(mesh_device, device_params):
         x4 = x.unsqueeze(1).expand(H, G, SEQ, EMB).contiguous()
         f_x = shard(x4, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         f_table = shard(t2.unsqueeze(1), (None, 0), ttnn.int32)
-        mgr2 = _sub_device_split(mesh_device, 2)
-        mesh_device.load_sub_device_manager(mgr2)
-        try:
-            for spec in [v for v in os.environ.get("DB_FAB2D_ROUTINGS", "uniform").split(",") if v]:
-                indices = _routing(spec, table)
-                ind4 = indices.long().unsqueeze(0).expand(G, -1, -1, -1).contiguous()
-                o2 = torch.zeros(G, H, E, dtype=torch.int32)
-                c2 = torch.zeros(G, H, E, dtype=torch.int32)
-                r2 = torch.zeros(G, H, E, dtype=torch.int32)
-                for gi in range(G):
-                    o, c, rr, _ = get_gate_outputs(
-                        ind4[gi], H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=t2[gi : gi + 1]
-                    )
-                    o2[gi], c2[gi], r2[gi] = o[0].to(torch.int32), c[0].to(torch.int32), rr[0].to(torch.int32)
-                f_idx = shard(ind4.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
-                f_offs = shard(o2, (None, 0), ttnn.int32)
-                f_counts = shard(c2[:, 0:1, :], (None, 0), ttnn.int32)
-                f_region = shard(r2[:, 0:1, :], (None, 0), ttnn.int32)
+        def _fab2d_layout(mgr2, layout):
+            mesh_device.load_sub_device_manager(mgr2)
+            try:
+                for spec in [v for v in os.environ.get("DB_FAB2D_ROUTINGS", "uniform").split(",") if v]:
+                    indices = _routing(spec, table)
+                    ind4 = indices.long().unsqueeze(0).expand(G, -1, -1, -1).contiguous()
+                    o2 = torch.zeros(G, H, E, dtype=torch.int32)
+                    c2 = torch.zeros(G, H, E, dtype=torch.int32)
+                    r2 = torch.zeros(G, H, E, dtype=torch.int32)
+                    for gi in range(G):
+                        o, c, rr, _ = get_gate_outputs(
+                            ind4[gi], H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=t2[gi : gi + 1]
+                        )
+                        o2[gi], c2[gi], r2[gi] = o[0].to(torch.int32), c[0].to(torch.int32), rr[0].to(torch.int32)
+                    f_idx = shard(ind4.permute(1, 0, 2, 3).to(torch.int32).to(torch.int16), (0, 1), ttnn.uint16)
+                    f_offs = shard(o2, (None, 0), ttnn.int32)
+                    f_counts = shard(c2[:, 0:1, :], (None, 0), ttnn.int32)
+                    f_region = shard(r2[:, 0:1, :], (None, 0), ttnn.int32)
 
-                def fab_one(spec=spec, f_idx=f_idx, f_offs=f_offs, f_counts=f_counts, f_region=f_region):
-                    def run2():
-                        return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
-                            f_x,
-                            f_idx,
-                            f_offs,
-                            f_table,
-                            f_counts,
-                            f_region,
-                            experts_per_chip=experts_per_chip,
-                            num_routed_experts=E,
-                            num_experts_per_tok=TOPK,
-                            metadata_len=3,
-                            max_dispatch_buffer_token_size=max_buf,
-                            seq_len_per_chip=SEQ,
-                            cluster_axis=0,
-                            num_links=NUM_LINKS,
-                            topology=ttnn.Topology.Ring,
-                            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                            subdevice_id=ttnn.SubDeviceId(0),
+                    def fab_one(spec=spec, f_idx=f_idx, f_offs=f_offs, f_counts=f_counts, f_region=f_region):
+                        def run2():
+                            return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
+                                f_x,
+                                f_idx,
+                                f_offs,
+                                f_table,
+                                f_counts,
+                                f_region,
+                                experts_per_chip=experts_per_chip,
+                                num_routed_experts=E,
+                                num_experts_per_tok=TOPK,
+                                metadata_len=3,
+                                max_dispatch_buffer_token_size=max_buf,
+                                seq_len_per_chip=SEQ,
+                                cluster_axis=0,
+                                num_links=NUM_LINKS,
+                                topology=ttnn.Topology.Ring,
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                                subdevice_id=ttnn.SubDeviceId(0),
+                            )
+
+                        outs = run2()
+                        ttnn.synchronize_device(mesh_device)
+                        for o in outs:
+                            ttnn.deallocate(o)
+                        _beat(f"fab2d {spec} eager")
+                        return _time_trace(
+                            mesh_device,
+                            run2,
+                            k,
+                            int(os.environ.get("DB_FAB2D_REPLAYS", "4")),
+                            f"fab2d {layout} payload{payload} {spec}",
                         )
 
-                    outs = run2()
-                    ttnn.synchronize_device(mesh_device)
-                    for o in outs:
-                        ttnn.deallocate(o)
-                    _beat(f"fab2d {spec} eager")
-                    return _time_trace(
-                        mesh_device, run2, k, int(os.environ.get("DB_FAB2D_REPLAYS", "4")), f"fab2d payload{payload} {spec}"
-                    )
+                    guarded(f"fab2d_{layout}_{spec}", fab_one)
+            finally:
+                mesh_device.clear_loaded_sub_device_manager()
+                mesh_device.remove_sub_device_manager(mgr2)
 
-                guarded(f"fab2d_{spec}", fab_one)
-        finally:
-            mesh_device.clear_loaded_sub_device_manager()
-            mesh_device.remove_sub_device_manager(mgr2)
+        # DB_FAB2D_LAYOUT (pipeline E1b): rows2 = the production 2-row dispatch sub-device (default); col11 = the
+        # persistent manager's comm column x = grid.x - 1 (10 cores); comma list runs each.
+        for layout in [v for v in os.environ.get("DB_FAB2D_LAYOUT", "rows2").split(",") if v]:
+            if layout == "rows2":
+                mgr2 = _sub_device_split(mesh_device, 2)
+            elif layout == "col11":
+                g = mesh_device.compute_with_storage_grid_size()
+                col = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(g.x - 1, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+                rest = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 2, g.y - 1))})
+                mgr2 = mesh_device.create_sub_device_manager([ttnn.SubDevice([col]), ttnn.SubDevice([rest])], 0)
+            else:
+                raise ValueError(f"DB_FAB2D_LAYOUT {layout!r}")
+            _fab2d_layout(mgr2, layout)
 
     logger.info(f"[dbench] SUMMARY payload={payload}: {results}")
+

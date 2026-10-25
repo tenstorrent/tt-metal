@@ -550,17 +550,15 @@ class TtMoe(LightweightModule):
             # routed_x is TILE, so dispatch_fabric2d untilizes it on row 1, under its senders on row 0
             # next to the ethernet cores.
             dispatch_sd_rows = 2 if moe_transport == "fabric2d" else 1
-            # Under the persistent manager the region still spans the whole device grid (the op-grid override
-            # does not apply to it), so dispatch and the shared expert run exactly the programs they run without it.
-            grid = (
-                mesh_device.device_compute_with_storage_grid_size()
-                if psd is not None
-                else mesh_device.compute_with_storage_grid_size()
-            )
+            grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
+            # Under an op-grid override (persistent manager) the dispatch rows keep the device's full width, so
+            # dispatch_fabric2d keeps the senders it has without the override (the worker nearest an eth core can be
+            # in the column past the override); the shared expert's matmuls must fit the op grid, so it stays inside.
+            dispatch_x = mesh_device.device_compute_with_storage_grid_size().x if psd is not None else grid_x
             assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
             dispatch_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dispatch_sd_rows - 1))}
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dispatch_x - 1, dispatch_sd_rows - 1))}
             )
             shared_cores = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}

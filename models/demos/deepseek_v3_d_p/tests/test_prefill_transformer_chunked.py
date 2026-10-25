@@ -484,6 +484,9 @@ def _record_indexer_k_cache_pcc(
     a golden are skipped. GLM DSA variants only."""
     logger.info("Device indexer-K cache vs golden dsa/indexer_k:")
     cache_full, stripes = gather_cache_natural(tt_index_kv_cache, mesh_device, tp_shard_kv)  # [slots, T, D]
+    if _E1_HASH:
+        for slot in range(cache_full.shape[0]):
+            logger.info(f"[e1hash] indexer-k slot {slot} {_sha(cache_full[slot])}")
     layers = [i for i in range(num_layers) if (trace_dir / "dsa" / f"indexer_k_layer_{i}").exists()]
     if not layers:
         logger.info("  (no indexer_k golden layers present -- skipping)")
@@ -2358,6 +2361,8 @@ def run_chunked_transformer_updated(
                         continue
                     # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); [0] -> [CHUNK, emb].
                     out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+                    if _E1_HASH:  # bit-exactness probe across trees/configs (pipeline E1)
+                        logger.info(f"[e1hash] chunk {c} layer {i} {_sha(out_flat)}")
                     natural = torch.zeros(CHUNK, emb_dim, dtype=torch.float32)
                     natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order
                     ref = _ref_layer_slice(trace_dir, layout_layer_pcc, i, kv_actual, kv_actual + CHUNK)

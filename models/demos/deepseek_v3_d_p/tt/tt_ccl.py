@@ -54,7 +54,12 @@ class SparseMlaOverlapResources:
 _SPARSE_MLA_OVERLAP_PROFILE_GRIDS = {
     "loudbox_rows2": (12, 10),
     "qb2_rows2": (11, 10),
+    # Pipeline (TT_GLM_PERSISTENT_SD, tt/persistent_sd.py): the 11x10 op grid of a 12x10 chip. The sparse KV push
+    # needs 24 cores (16 senders + 8 fabric muxes) but two 11-core rows hold 22, so the gather grid also takes the
+    # first two cores of row 2; top-k (and sparse_sdpa) get the other 86.
+    "pipe_rows2": (11, 10),
 }
+_SPARSE_MLA_OVERLAP_MIN_GATHER_CORES = {"pipe_rows2": 24}
 # A Galaxy has the LoudBox's 12x10 grid, so it takes the same profile.
 _SPARSE_MLA_OVERLAP_PROFILE_ALIASES = {"galaxy_rows2": "loudbox_rows2"}
 _SPARSE_MLA_OVERLAP_GATHER_ROWS = 2
@@ -276,6 +281,9 @@ class TT_CCL:
         """
         profile = profile.lower()
         profile = _SPARSE_MLA_OVERLAP_PROFILE_ALIASES.get(profile, profile)
+        if profile == "auto" and self.mesh_device.get_compute_grid_override() is not None:
+            # An op-grid override (pipeline) on a bigger chip: the 11x10 grid is not a QB2's, and the push must fit.
+            profile = "pipe_rows2"
         if profile == "auto":
             grid = self.mesh_device.compute_with_storage_grid_size()
             profile = {
@@ -310,12 +318,15 @@ class TT_CCL:
             )
 
         rows = _SPARSE_MLA_OVERLAP_GATHER_ROWS
-        gather_core_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, rows - 1))]
-        )
-        topk_core_grid = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
-        )
+        extra = max(0, _SPARSE_MLA_OVERLAP_MIN_GATHER_CORES.get(profile, 0) - rows * grid.x)
+        assert extra < grid.x, f"profile {profile}: {extra} extra gather cores do not fit in row {rows}"
+        gather_ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, rows - 1))]
+        topk_ranges = [ttnn.CoreRange(ttnn.CoreCoord(0, rows + (1 if extra else 0)), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+        if extra:
+            gather_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(extra - 1, rows)))
+            topk_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(extra, rows), ttnn.CoreCoord(grid.x - 1, rows)))
+        gather_core_grid = ttnn.CoreRangeSet(gather_ranges)
+        topk_core_grid = ttnn.CoreRangeSet(topk_ranges)
 
         manager_id = self.mesh_device.create_sub_device_manager(
             [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
