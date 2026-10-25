@@ -13,11 +13,9 @@ after an idle pause. Results go to stdout as a KDA_POWER= line and to KDA_POWER_
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import statistics
-import threading
 import time
 from pathlib import Path
 
@@ -25,6 +23,7 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.perf.telemetry import Telemetry
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
     _GALAXY_ACTUAL_START,
     _L1_SMALL_SIZE,
@@ -37,77 +36,9 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 
 _SECONDS = float(os.environ.get("KDA_POWER_SECONDS", "4"))
 _BLOCK = int(os.environ.get("KDA_POWER_BLOCK", "10"))
-_PERIOD_S = 0.01
 _SINGLES = 10
 _IDLE_S = 0.5
 _OUT = Path(os.environ.get("KDA_POWER_OUT", "generated/kda_power.json"))
-
-
-def _read_int(path: str) -> int | None:
-    try:
-        with open(path) as file:
-            return int(file.read())
-    except (OSError, ValueError):
-        return None
-
-
-class _Telemetry(threading.Thread):
-    """Samples every Blackhole chip's AI clock (MHz), power (W) and temperature (C) until stopped."""
-
-    def __init__(self) -> None:
-        super().__init__(daemon=True)
-        self.clocks = sorted(glob.glob("/sys/class/tenstorrent/tenstorrent!*/tt_aiclk"))
-        self.hwmons = [
-            path for path in sorted(glob.glob("/sys/class/hwmon/hwmon*")) if _read_text(f"{path}/name") == "blackhole"
-        ]
-        self.samples: list[tuple[float, list, list, list]] = []
-        self._done = threading.Event()
-
-    def run(self) -> None:
-        while not self._done.is_set():
-            self.samples.append(
-                (
-                    time.perf_counter(),
-                    [_read_int(path) for path in self.clocks],
-                    [_scaled(_read_int(f"{path}/power1_input"), 1e6) for path in self.hwmons],
-                    [_scaled(_read_int(f"{path}/temp1_input"), 1e3) for path in self.hwmons],
-                )
-            )
-            time.sleep(_PERIOD_S)
-
-    def stop(self) -> None:
-        self._done.set()
-        self.join()
-
-    def window(self, start: float, end: float) -> dict:
-        rows = [row for row in self.samples if start <= row[0] <= end]
-        if not rows:
-            return {}
-        clocks = [value for row in rows for value in row[1] if value is not None]
-        powers = [sum(value for value in row[2] if value is not None) for row in rows]
-        return {
-            "samples": len(rows),
-            "aiclk_mean_mhz": statistics.fmean(clocks),
-            "aiclk_min_mhz": min(clocks),
-            "aiclk_per_chip_mean_mhz": [
-                statistics.fmean(row[1][chip] for row in rows) for chip in range(len(self.clocks))
-            ],
-            "power_total_mean_w": statistics.fmean(powers),
-            "power_chip_max_w": max(value for row in rows for value in row[2] if value is not None),
-            "temp_max_c": max(value for row in rows for value in row[3] if value is not None),
-        }
-
-
-def _read_text(path: str) -> str | None:
-    try:
-        with open(path) as file:
-            return file.read().strip()
-    except OSError:
-        return None
-
-
-def _scaled(value: int | None, unit: float) -> float | None:
-    return None if value is None else value / unit
 
 
 @pytest.mark.parametrize(
@@ -124,8 +55,8 @@ def _scaled(value: int | None, unit: float) -> float | None:
 )
 def test_layer_power(mesh_device: ttnn.MeshDevice, device_params: dict) -> None:
     """Report the sustained wall per call with the clock and power it ran at."""
-    telemetry = _Telemetry()
-    if not telemetry.clocks or not telemetry.hwmons:
+    telemetry = Telemetry()
+    if not telemetry.available:
         pytest.skip("no Blackhole sysfs telemetry on this host")
     case = make_synthetic_kimi_k3_test_case(sequence=PREFILL_CHUNK_TOKENS)
     layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
