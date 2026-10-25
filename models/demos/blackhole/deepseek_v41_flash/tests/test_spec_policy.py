@@ -45,8 +45,12 @@ def test_explicit_off():
 
 
 def test_explicit_fixed_and_adapt_overrides():
-    c = R(16, {"DSV41_SPEC": "3"})
-    assert (c.mode, c.k, c.ring_rows, c.explicit) == ("fixed", 3, 288, True)
+    c = R(16, {"DSV41_SPEC": "3"})  # adaptive end to end: an explicit k only switches speculation on
+    assert (c.mode, c.ks, c.ring_rows, c.explicit) == ("adaptive", [1, 3, 5], 288, True)
+    c = R(4, {"DSV41_SPEC": "5"})
+    assert (c.mode, c.ks) == ("adaptive", [3, 5])
+    c = R(4, {"DSV41_SPEC": "3", "DSV41_SPEC_ADAPT": "0"})  # developer fixture only
+    assert (c.mode, c.k) == ("fixed", 3)
     c = R(8, {"DSV41_SPEC": "5", "DSV41_SPEC_ADAPT": "1", "DSV41_SPEC_SET": "0,3,5"})
     assert (c.mode, c.ks, c.k) == ("adaptive", [0, 3, 5], 5)
     c = R(16, {"DSV41_SPEC_SET": "1,3"})
@@ -65,7 +69,8 @@ def test_b64_opt_in():
     assert (c.mode, c.ks) == ("adaptive", [0, 1, 3])
     c = R(64, {"DSV41_SPEC": "3", "DSV41_SPEC_ADAPT": "1", "DSV41_SPEC_SET": "0,1,3", "DSV41_SPEC_ROWS": "1"})
     assert (c.mode, c.ks) == ("adaptive", [0, 1, 3])
-    assert R(64, {"DSV41_SPEC": "1"}).k == 1
+    c = R(64, {"DSV41_SPEC": "1"})  # adaptive too: DSV41_SPEC only opts in
+    assert c.mode == "adaptive" and c.ks == [0, 1, 3]
 
 
 def test_b128():
@@ -73,7 +78,7 @@ def test_b128():
     assert c.mode == "plain" and "ignored" in c.reason
     assert R(128, {"DSV41_SPEC_ADAPT": "1"}).mode == "plain"
     c = R(128, {"DSV41_SPEC_B128": "1", "DSV41_SPEC_ROWS": "1", "DSV41_SPEC": "3"})
-    assert (c.mode, c.k, c.rows, c.ring_rows) == ("fixed", 3, True, 288)
+    assert (c.mode, c.rows, c.ring_rows) == ("adaptive", True, 288) and c.on
 
 
 def test_context_fallback():

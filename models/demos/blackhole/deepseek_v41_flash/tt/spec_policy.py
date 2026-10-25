@@ -10,7 +10,8 @@ Default (no DSV41_SPEC* variable set), U = users per mesh row = ceil(batch / mes
   B = 4 (U=1) adaptive {3,5} | B = 8 (U=2), 16 (U=4) adaptive {1,3,5} | B = 32 (U=8) adaptive {0,1,3} (0 = plain rounds, the remedy where spec loses at low acceptance)
   B >= 64: plain decode (opt-in: DSV41_SPEC=<k>, DSV41_SPEC_ADAPT=1, DSV41_SPEC_SET or DSV41_SPEC_ROWS=1; B >= 128 additionally needs DSV41_SPEC_B128=1)
   contexts too long for the spec runners' DRAM (or the matmul indexer backend): plain, with a loud log line.
-Explicit variables always win: DSV41_SPEC=0 -> plain (no spec runner, ring rows untouched), DSV41_SPEC=<k> -> fixed k (adaptive with DSV41_SPEC_ADAPT=1), DSV41_SPEC_SET, DSV41_SPEC_ROWS.
+Explicit variables always win: DSV41_SPEC=0 -> plain (no spec runner, ring rows untouched), DSV41_SPEC=<k> -> ADAPTIVE speculative decode with the default candidate set of the batch (the value only switches
+speculation on; every run is adaptive, there is no fixed-k serving mode), DSV41_SPEC_SET, DSV41_SPEC_ROWS. A fixed k exists only as a developer fixture behind an explicit DSV41_SPEC_ADAPT=0.
 """
 
 import os
@@ -150,11 +151,25 @@ def resolve(batch, mesh_rows=4, max_seq_len=None, env=None):
             return SpecChoice("plain", reason="DSV41_SPEC_SET has only 0", explicit=True)
     else:
         k = int(raw)
-        if adapt == "1":
-            ks = parse_ks(sset, ",".join(map(str, default_ks(U, rows))))
-            c = SpecChoice("adaptive", max(ks), ks, rows, f"explicit DSV41_SPEC={k} DSV41_SPEC_ADAPT=1", True)
-        else:
-            c = SpecChoice("fixed", k, [], rows, f"explicit DSV41_SPEC={k}", True)
+        if (
+            adapt != "0"
+        ):  # adaptive end to end: DSV41_SPEC=<k> only switches speculation on, the candidate set stays the batch's default (or DSV41_SPEC_SET)
+            dks = default_ks(U, rows)
+            if U >= 8:
+                dks = [
+                    0
+                ] + dks  # same candidate set as the default (plain rounds as an option where spec loses at low acceptance)
+            ks = parse_ks(sset, ",".join(map(str, dks)))
+            c = SpecChoice(
+                "adaptive",
+                max(ks),
+                ks,
+                rows,
+                f"explicit DSV41_SPEC={k} (adaptive: DSV41_SPEC only switches speculation on)",
+                True,
+            )
+        else:  # developer fixture only (explicit DSV41_SPEC_ADAPT=0), never used by a run script, spec or the server
+            c = SpecChoice("fixed", k, [], rows, f"explicit DSV41_SPEC={k} DSV41_SPEC_ADAPT=0", True)
     c.ring_rows = RING_ROWS_SPEC
     if not c.explicit and max_seq_len is not None:
         lim = spec_max_ctx(U, env)
