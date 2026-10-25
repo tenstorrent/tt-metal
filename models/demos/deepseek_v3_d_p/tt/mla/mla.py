@@ -62,6 +62,9 @@ _GLUE_WKVB2_OUT_L1 = os.environ.get("GLUE_WKVB2_OUT_L1", "1") == "1"
 # (notes/pipeline/deadlock-matrix.md). The manager clear is the join; the rest of the Q stem (head split, wkv_b1,
 # in-place RoPE: full-grid ops) follows it. GLM_QPUSH_OVERLAP=1 enables it.
 _QPUSH_OVERLAP = os.environ.get("GLM_QPUSH_OVERLAP", "0") == "1"
+# Fallback (GLM_QPUSH_QB_DRAM=1): the region's q_b output in DRAM instead of L1 (if an L1 one ever clashes with the
+# push's static CBs, which the enqueue check reports as a TT_FATAL).
+_QPUSH_QB_DRAM = os.environ.get("GLM_QPUSH_QB_DRAM", "0") == "1"
 
 
 class _DeferredQ:
@@ -3032,7 +3035,7 @@ class ttMLA:
             kw["dtype"],
             ttnn.TILE_LAYOUT,
             self.mesh_device,
-            kw["memory_config"],
+            ttnn.DRAM_MEMORY_CONFIG if _QPUSH_QB_DRAM else kw["memory_config"],
         )
         q_b_out.update_tensor_topology(qr.tensor_topology())
         trace_controller = getattr(self, "_trace_controller", None)
