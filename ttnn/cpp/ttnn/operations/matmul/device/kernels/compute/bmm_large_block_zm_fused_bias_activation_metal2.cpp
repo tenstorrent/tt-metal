@@ -8,6 +8,12 @@
 #include <cstdint>
 
 #include "api/compute/matmul.h"
+#if defined(MM_TS) && defined(PROFILE_KERNEL) && defined(TRISC_UNPACK)
+#include "api/debug/kernel_profiler.hpp"
+#define MM_TS_MARK(name, v) DeviceTimestampedData(name, v)
+#else
+#define MM_TS_MARK(name, v)
+#endif
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack.h"  // pack_init: Quasar re-programs the pack BFD on pack-output-operand switch (§7)
 #include "api/compute/pack_untilize.h"
@@ -512,8 +518,10 @@ void kernel_main() {
                     }
 #endif
 
+                    MM_TS_MARK("CW", (block << 4) | 0);
                     in0_dfb.wait_front(in0_block_num_tiles);
                     in1_dfb.wait_front(in1_block_num_tiles);
+                    MM_TS_MARK("CW", (block << 4) | 1);
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {

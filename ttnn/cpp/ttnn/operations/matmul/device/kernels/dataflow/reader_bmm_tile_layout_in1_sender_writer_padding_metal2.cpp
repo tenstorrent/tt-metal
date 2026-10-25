@@ -60,6 +60,12 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#if defined(MM_TS) && defined(PROFILE_KERNEL)
+#include "api/debug/kernel_profiler.hpp"
+#define MM_TS_MARK(name, v) DeviceTimestampedData(name, v)
+#else
+#define MM_TS_MARK(name, v)
+#endif
 
 #ifdef ENABLE_PREFETCHER_PIPE
 // Pipe delivery reaches every worker directly, so in1 is never multicast; publish_in1_block_from_pipe
@@ -520,7 +526,9 @@ void kernel_main() {
                         noc.async_read_barrier();
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
+                        MM_TS_MARK("I1", (block << 4) | 0);
                         dfb_in1.reserve_back(in1_block_num_tiles);
+                        MM_TS_MARK("I1", (block << 4) | 1);
                         uint32_t in1_write_offset = 0;
                         const uint64_t in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
@@ -553,11 +561,13 @@ void kernel_main() {
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB / IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
 #ifndef SKIP_MCAST
+                        MM_TS_MARK("I1", (block << 4) | 2);
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
                         sender_sem.wait(in1_mcast_num_dests);
                         sender_sem.set(0);
+                        MM_TS_MARK("I1", (block << 4) | 3);
 
                         // Now we have the block in the buffer's address, we can mcast to dests!
                         const MulticastEndpoint mcast_dst;
@@ -594,6 +604,7 @@ void kernel_main() {
                             in1_mcast_dest_noc_end_x,
                             in1_mcast_dest_noc_end_y,
                             in1_mcast_num_cores);
+                        MM_TS_MARK("I1", (block << 4) | 4);
 #endif  // SKIP_MCAST
 
 #if !defined(ENABLE_PREFETCHER_PIPE) && !defined(IN1_SHARDED)

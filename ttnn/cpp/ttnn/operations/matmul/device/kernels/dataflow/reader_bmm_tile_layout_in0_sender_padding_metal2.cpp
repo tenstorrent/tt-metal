@@ -24,6 +24,12 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#if defined(MM_TS) && defined(PROFILE_KERNEL)
+#include "api/debug/kernel_profiler.hpp"
+#define MM_TS_MARK(name, v) DeviceTimestampedData(name, v)
+#else
+#define MM_TS_MARK(name, v)
+#endif
 #include "api/debug/assert.h"
 #include "hostdevcommon/common_values.hpp"
 #ifdef FUSE_OP
@@ -307,7 +313,9 @@ void kernel_main() {
 
                         // Operand 0
                         // Common for sharded and interleaved paths
+                        MM_TS_MARK("I0", (block << 4) | 0);
                         dfb_in0.reserve_back(in0_block_num_tiles);
+                        MM_TS_MARK("I0", (block << 4) | 1);
 #ifndef IN0_SHARDED
 
                         uint32_t in0_write_offset = 0;
@@ -416,11 +424,13 @@ void kernel_main() {
 #endif  // IN0_SHARDED
 
 #ifndef SKIP_MCAST
+                        MM_TS_MARK("I0", (block << 4) | 2);
                         // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
                         sender_sem.wait(in0_mcast_num_dests);
                         sender_sem.set(0);
+                        MM_TS_MARK("I0", (block << 4) | 3);
 
                         // Now we have the block in the buffer's address, we can mcast to dests!
                         const MulticastEndpoint mcast_dst;
@@ -456,6 +466,7 @@ void kernel_main() {
                             in0_mcast_dest_noc_end_x,
                             in0_mcast_dest_noc_end_y,
                             in0_mcast_num_cores);
+                        MM_TS_MARK("I0", (block << 4) | 4);
 #endif  // SKIP_MCAST
 
                         // Common for sharded and interleaved paths
