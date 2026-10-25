@@ -48,6 +48,7 @@ inline void _llk_math_fast_tilize_init_([[maybe_unused]] const std::uint32_t unp
     // bank pointer but does NOT return the bank to Unpackers, causing a livelock
     // when the Unpacker runs out of free banks.
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
+    math::reset_counters(p_setrwc::SET_ABD_F);
 
     // srca incr=8 (contiguous SrcA), dest incr=16 (8 data + 8 gap in DEST for pack stride-16)
     addr_mod_t {
