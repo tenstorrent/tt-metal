@@ -1163,6 +1163,7 @@ class TtMoe(LightweightModule):
         # Outside the sub-device window below: the down-projection feeds dispatch, so it cannot
         # overlap it. x stays full-width for the shared expert, which reads the pre-projection hidden.
         routed_x = self.latent_projections.to_latent(x) if self.use_latent_moe else x
+        pipeline_yield("prelude_end")  # pipe5: the other stream's post-combine reduce may follow here
         if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
 
@@ -1374,6 +1375,7 @@ class TtMoe(LightweightModule):
         )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
+        pipeline_yield("rs_issued")  # pipe5: the other stream's prelude runs inside this RS's (straggler) wait
 
         # ========================================
         # Step 5b: LatentMoE -- project back out of the latent space (Kimi-K3 only)

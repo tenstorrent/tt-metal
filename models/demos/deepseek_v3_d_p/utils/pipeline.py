@@ -74,7 +74,25 @@ def policy_pipe(stream: int, tag: str, state: dict) -> bool:
     return True
 
 
-POLICIES = {"stub": policy_stub, "pipe": policy_pipe}
+PIPE5_TAGS = ("attn_end", "prelude_end", "moe_window_open", "rs_issued", "layer_end")
+
+
+def policy_pipe5(stream: int, tag: str, state: dict) -> bool:
+    """Five segments per layer: attn | pre1 (ffn_norm .. MoE x all-gather) | pre2 (fence, dispatch on the comm SD,
+    shared expert) | post1 (fence, routed expert, combine, reduce, post-combine RS on the comm SD) | post2 (fence,
+    adds). Every segment end hands over except stream 0's first two, giving
+    A.attn0 A.pre1_0 A.pre2_0 | B.attn0 | A.post1_0 | B.pre1_0 | A.post2_0 | B.pre2_0 | A.attn1 | B.post1_0 | A.pre1_1 ...
+    so each stream's attention sits in the other's dispatch window and each stream's prelude sits in the other's
+    post-combine RS window (the straggler wait). Needs PIPE_RS_COMM=1 (RS on the comm SD) to pay off."""
+    if tag not in PIPE5_TAGS:
+        return False
+    if stream == 0 and state.get("s0_skipped", 0) < 2:
+        state["s0_skipped"] = state.get("s0_skipped", 0) + 1
+        return False
+    return True
+
+
+POLICIES = {"stub": policy_stub, "pipe": policy_pipe, "pipe5": policy_pipe5}
 
 
 class TwoStreamRunner:

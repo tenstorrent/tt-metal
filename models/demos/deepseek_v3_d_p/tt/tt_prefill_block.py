@@ -761,8 +761,10 @@ class TtPrefillBlock(LightweightModule):
                 residual=x if fold_residual else None,
             )
         else:
+            pipeline_yield("prelude_end")  # dense layers: keep the pipe policies' segment rhythm
             ffn_out = self._dense_ffn_path(ffn_norm_out)
-            pipeline_yield("moe_window_open")  # dense layers: keep the pipe policy's 3-segment rhythm
+            pipeline_yield("moe_window_open")
+            pipeline_yield("rs_issued")
 
         ttnn.deallocate(ffn_norm_out)
         if fold_residual:
