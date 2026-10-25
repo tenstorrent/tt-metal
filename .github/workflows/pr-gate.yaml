@@ -497,10 +497,12 @@ jobs:
     needs: [build-docker-images, find-changed-files]
     # TEMP(clang-tidy-23 shadow): draft bypass, revert before real review
     # (was: github.event_name == 'pull_request' && !...pull_request.draft).
+    # workflow_dispatch added so both scans can be re-run on demand (cache
+    # warming) without pushing a new commit; revert alongside the rest.
     if: >-
       ${{
         needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
-        (github.event_name == 'pull_request' || github.event_name == 'merge_group')
+        (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
       }}
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
@@ -519,10 +521,11 @@ jobs:
   code-analysis-shadow-clang-tidy-23:
     needs: [build-docker-images, find-changed-files]
     # TEMP(clang-tidy-23 shadow): draft bypass, see code-analysis above.
+    # workflow_dispatch added for on-demand cache-warming re-runs.
     if: >-
       ${{
         needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
-        github.event_name == 'pull_request'
+        (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch')
       }}
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
