@@ -194,7 +194,7 @@ def received_inputs(
     singularity, inside the op's claim, inside a tracked issue's lanes -- have to ask it
     of this value, not of the one generated.
     """
-    from helpers.sfpu_domains import _dest_acc_flag
+    from helpers.data_format_inference import _dest_acc_flag
 
     if (
         input_format != DataFormat.Float32
@@ -236,8 +236,7 @@ def _unpack_format(input_format: DataFormat, output_format=None, dest_acc=None):
     *output_format* and *dest_acc*, the input's own."""
     if output_format is None or dest_acc is None:
         return input_format
-    from helpers.data_format_inference import infer_unpack_out
-    from helpers.sfpu_domains import unpacks_to_dest
+    from helpers.data_format_inference import infer_unpack_out, unpacks_to_dest
 
     return infer_unpack_out(
         input_format,
@@ -271,8 +270,8 @@ def dest_holds(
     past 65504 answered by NaN or by the golden's sign in the Dest's top binade, or a
     flush at the 2**-14 boundary (one side zero, the other at most 2**-14). Any other
     answer -- wrong-signed, or more than 2x short of the edge -- is the op's."""
+    from helpers.data_format_inference import _dest_acc_flag
     from helpers.llk_params import format_dict
-    from helpers.sfpu_domains import _dest_acc_flag
 
     holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
     # A 32-bit Dest at dest_acc=Yes, and a bf16 one (fp32's exponent range), hold

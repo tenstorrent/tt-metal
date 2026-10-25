@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, FrozenSet, List, Optional, Tuple, Union
 
+from .data_format_inference import _dest_acc_flag, _two_state_flag, unpacks_to_dest
 from .format_config import MX_FORMAT_MAX_NORMAL, DataFormat
 from .llk_params import MathOperation
 from .sfpu_dispatch_constants import (
@@ -113,32 +114,6 @@ def narrowest_range_format(*formats: Optional[DataFormat]) -> DataFormat:
         candidates,
         key=lambda fmt: _FORMAT_MAX_MAGNITUDE.get(fmt, _BF16_MAX_MAGNITUDE),
     )
-
-
-def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) -> bool:
-    """Normalise a two-state Enum-or-bool test flag to a plain bool.
-
-    DestAccumulation and ApproximationMode wrap True and False, so ``bool(member)`` is True
-    for *both* — ``.No`` included, which silently selects the True branch. Read ``.value``
-    for an enum, take a bool as-is, reject anything else.
-
-    *enum_name* is checked too, because both enums' ``.Yes`` wraps True and duck-typing on
-    ``.value`` would accept the wrong one. Matched on class name so this module needs no
-    llk_params import beyond MathOperation.
-    """
-    flag = getattr(value, "value", value)
-    if not isinstance(flag, bool):
-        raise TypeError(
-            f"{param} must be a bool or a {enum_name} member, got "
-            f"{value!r} ({type(value).__name__})"
-        )
-    if isinstance(value, Enum) and type(value).__name__ != enum_name:
-        raise TypeError(
-            f"{param} must be a bool or a {enum_name} member, got the "
-            f"{type(value).__name__} member {value!r} -- both wrap a bool, so this would "
-            f"otherwise select a branch silently"
-        )
-    return flag
 
 
 def _approx_mode_flag(approx_mode: Union[bool, Enum]) -> bool:
@@ -2020,22 +1995,6 @@ SPECIALS_READY_OPS: FrozenSet[MathOperation] = frozenset(
 # ISA ruling, so the right outcome needs an owner.
 
 
-def _dest_acc_flag(dest_acc: Union[bool, Enum]) -> bool:
-    """Normalise a 32-bit-destination flag to a plain bool.
-
-    DestAccumulation is an Enum whose two members wrap True and False, so ``bool(member)``
-    is True for *both* of them -- ``DestAccumulation.No`` included, which would evaluate
-    every triple as the 32-bit-dest case and silently flip specials on and off for whole
-    rows of the matrix.
-
-    Read ``.value`` when handed the enum, take a bool as-is, and reject anything else
-    rather than guessing. The enum itself is not imported here: this module carries no
-    llk_params test-side types beyond MathOperation, and duck-typing on ``.value`` keeps it
-    that way.
-    """
-    return _two_state_flag(dest_acc, "dest_acc", "DestAccumulation")
-
-
 def specials_safe(
     input_format: DataFormat,
     output_format: DataFormat,
@@ -2075,14 +2034,6 @@ def specials_safe(
         return False
 
     return True
-
-
-def unpacks_to_dest(input_format: DataFormat, dest_acc: Union[bool, Enum]) -> bool:
-    """Does the unpack write *input_format* straight into Dest, rather than through
-    SrcA and the datacopy? A 32-bit input at dest_acc=Yes. One rule for the ULP sweep
-    driver's TestConfig, the sweep's input masks and :func:`negative_zero_delivered`,
-    so the three cannot drift apart."""
-    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
 
 
 def negative_zero_delivered(
