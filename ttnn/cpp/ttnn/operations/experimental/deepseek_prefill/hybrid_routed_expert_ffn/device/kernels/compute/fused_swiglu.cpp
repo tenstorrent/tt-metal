@@ -70,7 +70,9 @@
 // DEST section and the packed (bf16 partials) format, instead of the defaults (main's per-tile forms). Init and
 // execute must agree, so every matmul_block_init / matmul_block of this kernel goes through re_mm_init<kt> / re_mm<kt>.
 // The row-MOP init reprograms the math ADDR_MOD_3/6/7 that SFPU code uses, so the activations are re-inited after it.
-#if !defined(MM_RE_NO_FORMS) && defined(ARCH_BLACKHOLE)
+// OFF by default (best-v10 L78: +1.5 KB of trisc1 text pushed the HRE program next to the 70656 B kernel-config
+// ring, so its launch waited for the previous program: +25 us per MoE layer, more than the ~8 us it saves).
+#if defined(MM_RE_FORMS) && defined(ARCH_BLACKHOLE)
 #define RE_MM_FORMS 1
 template <uint32_t kt>
 ALWI void re_mm_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt_dim) {
