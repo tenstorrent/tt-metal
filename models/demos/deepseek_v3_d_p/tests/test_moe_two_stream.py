@@ -10,7 +10,8 @@ captures ONE trace that alternates the two streams back to back:
 
     for L in moe_layers:  out[A][L] = moe_L(x_A, stream=0) ; out[B][L] = moe_L(x_B, stream=1)
 
-and a second trace with the same calls all on stream 0 (today's single-stream path). Both traces are replayed and
+a second trace with the same calls all on stream 0 (today's single-stream path), and a third issuing each stream from
+its own thread with no explicit stream (the E3 runner's style: the stream is thread-local). Every trace is replayed and
 every (layer, stream) output must be bitwise identical to the single-stream trace and to the eager single-stream
 forward (PCC is logged too). Inputs are two different chunks of the golden trace's hidden states (RMS-normalised),
 each with its own chunk metadata tensors, as the pipeline will have.
@@ -22,6 +23,7 @@ Run with MLA_SEQ_SHARDED_Q=1 (best-v6 config).
 import copy
 import hashlib
 import os
+import threading
 
 import pytest
 import torch
@@ -45,6 +47,7 @@ from models.demos.deepseek_v3_d_p.tests.test_prefill_transformer_chunked import 
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt import tt_ccl as tt_ccl_module
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import all_tt_ccls, get_tt_ccl, per_axis_topology, prepare_ccl_streams
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import SubDeviceTraceController
@@ -113,7 +116,9 @@ def _digest(t: torch.Tensor) -> str:
 @pytest.mark.parametrize("variant", ["glm_5_3"], indirect=True, ids=["glm53"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops are Blackhole-only")
 @pytest.mark.timeout(0)
-def test_glm_moe_two_stream(variant, config_only, mesh_device, device_params, weight_cache_path, num_links):
+def test_glm_moe_two_stream(
+    variant, config_only, mesh_device, device_params, weight_cache_path, num_links, monkeypatch
+):
     if weight_cache_path is None:
         pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
     num_layers = int(os.environ.get("MOE2S_LAYERS", "10"))
@@ -215,12 +220,38 @@ def test_glm_moe_two_stream(variant, config_only, mesh_device, device_params, we
         )
         return out
 
+    # "runner": the E3 two-stream runner's style -- each stream issues from its own thread, no explicit stream
+    # argument; the stream comes from a thread-local (utils.pipeline.current_stream on the E3 branch, patched here).
+    runner_tls = threading.local()
+    monkeypatch.setattr(tt_ccl_module, "_pipeline_current_stream", lambda: getattr(runner_tls, "stream", 0))
+
+    def in_stream_thread(stream, fn):
+        out = {}
+
+        def body():
+            runner_tls.stream = stream
+            try:
+                out["value"] = fn()
+            except BaseException as e:  # re-raised in the caller
+                out["error"] = e
+
+        t = threading.Thread(target=body)
+        t.start()
+        t.join()
+        if "error" in out:
+            raise out["error"]
+        return out["value"]
+
     def run_all(stream_of):
-        """One forward per (layer, data stream) in pipeline order: layer-major, A then B."""
+        """One forward per (layer, data stream) in pipeline order: layer-major, A then B. stream_of(s) = "thread"
+        issues chunk s from a thread whose runner stream is s, with stream=None."""
         outs = {}
         for i, moe in moes:
             for s in range(NUM_STREAMS):
-                outs[(i, s)] = moe_call(moe, s, stream_of(s))
+                if stream_of(s) == "thread":
+                    outs[(i, s)] = in_stream_thread(s, lambda: moe_call(moe, s, None))
+                else:
+                    outs[(i, s)] = moe_call(moe, s, stream_of(s))
         return outs
 
     def to_host(outs):
@@ -273,7 +304,7 @@ def test_glm_moe_two_stream(variant, config_only, mesh_device, device_params, we
         ttnn.synchronize_device(mesh_device)
 
         single_r0 = None
-        for name, stream_of in (("single", lambda s: 0), ("alternating", lambda s: s)):
+        for name, stream_of in (("single", lambda s: 0), ("alternating", lambda s: s), ("runner", lambda s: "thread")):
             controller.release()
             controller = SubDeviceTraceController(mesh_device)
             transformer.set_trace_controller(controller)
@@ -294,7 +325,7 @@ def test_glm_moe_two_stream(variant, config_only, mesh_device, device_params, we
                 check(f"trace {name} r{r} vs eager", eager, got)
                 if name == "single" and r == 0:
                     single_r0 = got
-                elif name == "alternating":
+                else:
                     check(f"trace {name} r{r} vs trace single r0", single_r0, got)
                 del got
             for v in outs.values():
