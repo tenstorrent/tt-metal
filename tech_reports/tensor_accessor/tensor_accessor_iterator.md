@@ -9,7 +9,7 @@ The pages iterator allows you to iterate over pages in a tensor within a given r
 - If `start_page_id` >= `end_page_id` or `start_page_id` >= tensor_accessor.dspec().tensor_volume(), TA.pages(...).begin() == TA.pages(...).end().
 
 ### Performance Considerations 🚀
-- For interleaved tensors, performance is identical to just iterating over page IDs and calling `TA.get_noc_addr(...)` for each of them.
+- For interleaved tensors, the iterator keeps the current page's bank and its address in that bank, so a step is an add and a bank wrap rather than the divide by the bank count that `TA.get_noc_addr(page_id)` does per page. On Blackhole, issuing 16 consecutive FP32 tile reads from L1 costs about 41 cycles per read through `pages()` against 50 through page ids (`models/demos/deepseek_v3_d_p/tests/kda/perf/test_page_read_issue.py`).
 - For sharded tensors, performance is better with the iterator since its state allows skipping some expensive address computations.
 
 ### Creation ⚙️

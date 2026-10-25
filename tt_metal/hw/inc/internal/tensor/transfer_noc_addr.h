@@ -44,6 +44,20 @@ struct TransferAccess {
     static constexpr uint32_t bank_base(const Accessor& accessor) {
         return accessor.bank_base_address;
     }
+    // Interleaved accessors only: the (bank, address in bank) split of a page, and the NoC address of such a location
+    // (see the interleaved TensorAccessor's transfer_page_location).
+    template <typename Accessor>
+    static void page_location(const Accessor& accessor, uint32_t page_id, uint32_t& bank, uint32_t& bank_row_addr) {
+        accessor.transfer_page_location(page_id, bank, bank_row_addr);
+    }
+    template <typename Accessor>
+    static uint64_t bank_noc_addr(const Accessor& accessor, uint32_t bank, uint32_t bank_row_addr, uint8_t noc) {
+        return accessor.transfer_bank_noc_addr(bank, bank_row_addr, noc);
+    }
+    template <typename Accessor>
+    static uint32_t bank_page_stride(const Accessor& accessor) {
+        return accessor.transfer_bank_page_stride();
+    }
 };
 // The NoC address of a page (or shard), for a library transfer path that records its own exact access for op-to-op R/W
 // inference (api/dataflow/buf_rw_note.h): the Noc API traits, the page iterators, the legacy page/shard free functions.
