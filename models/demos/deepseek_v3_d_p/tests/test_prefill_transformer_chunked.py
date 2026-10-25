@@ -2337,6 +2337,23 @@ def run_chunked_transformer_updated(
     det_baseline = None
     det_failures = []
 
+    # E-series replay watchdog (operator 05:45): PIPE_REPLAY_WATCHDOG_S=<s> kills the process (exit 124) when one traced
+    # replay + synchronize takes longer, so a device hang costs seconds instead of the job timeout.
+    _wd_deadline = [None]
+    _wd_s = float(os.environ.get("PIPE_REPLAY_WATCHDOG_S", "0") or 0)
+    if _wd_s > 0 and use_trace:
+        import threading as _threading
+
+        def _wd_loop():
+            while True:
+                time.sleep(0.25)
+                d = _wd_deadline[0]
+                if d is not None and time.monotonic() > d:
+                    logger.error(f"[watchdog] traced replay exceeded {_wd_s:.0f} s -> device hang; exiting 124")
+                    os._exit(124)
+
+        _threading.Thread(target=_wd_loop, daemon=True).start()
+
     profiler.start("tt_forward")
     for it in range(num_iters):
         # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
@@ -2363,8 +2380,10 @@ def run_chunked_transformer_updated(
                         sp_axis=sp_axis,
                     )
                 pair_start = time.time()
+                _wd_deadline[0] = time.monotonic() + _wd_s if _wd_s > 0 else None
                 pipe_controller.replay()
                 ttnn.synchronize_device(mesh_device)
+                _wd_deadline[0] = None
                 pair_seconds = time.time() - pair_start
                 chunk_times.extend([pair_seconds / 2, pair_seconds / 2])
                 logger.info(f"[pair timing] iter={it} chunks={c},{c + 1} {pair_seconds * 1000:.2f} ms")
@@ -2388,8 +2407,10 @@ def run_chunked_transformer_updated(
                     sp_axis=sp_axis,
                 )
                 chunk_start = time.time()
+                _wd_deadline[0] = time.monotonic() + _wd_s if _wd_s > 0 else None
                 trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
+                _wd_deadline[0] = None
                 chunk_seconds = time.time() - chunk_start
                 chunk_times.append(chunk_seconds)
                 # Per-(iter, chunk) sample. print_duration_table only reports the median over
