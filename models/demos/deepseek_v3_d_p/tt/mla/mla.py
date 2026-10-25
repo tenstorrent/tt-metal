@@ -72,6 +72,10 @@ _QPUSH_OVERLAP = os.environ.get("GLM_QPUSH_OVERLAP", "0") == "1"
 # Fallback (GLM_QPUSH_QB_DRAM=1): the region's q_b output in DRAM instead of L1 (if an L1 one ever clashes with the
 # push's static CBs, which the enqueue check reports as a TT_FATAL).
 _QPUSH_QB_DRAM = os.environ.get("GLM_QPUSH_QB_DRAM", "0") == "1"
+# Full layers (GLM_QPUSH_FULL=1, needs GLM_QPUSH_OVERLAP=1): after the top-k || gather region a full layer plans its
+# successor's push (sparse_push_plan 120 cores -> the plan tables' full-mesh all-gather -> sparse_push_hot 120 cores);
+# the deferred q_b runs next to that all-gather, on the same manager and sub-devices as on shared layers.
+_QPUSH_FULL = os.environ.get("GLM_QPUSH_FULL", "0") == "1"
 
 
 class _DeferredQ:
@@ -913,7 +917,7 @@ class ttMLA:
         if (
             _QPUSH_OVERLAP
             and self._q_defer_l1
-            and self._indexer_reuse
+            and (self._indexer_reuse or (_QPUSH_FULL and _GLUE_Q_DEFER_FULL and self._push_prefetch is not None))
             and self._sparse_kv_push
             and requested_overlap_profile is not None
             and self.sp_factor > 1
@@ -2409,7 +2413,9 @@ class ttMLA:
             return (planner.push_buffer(layer_idx % 2, rows, dense), None), page_bytes
         return (front, planner.spill_buffer(layer_idx % 2, rows, dense, page_bytes)), page_bytes
 
-    def _sparse_push_plan(self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx, metadata=None):
+    def _sparse_push_plan(
+        self, indices, kvpe_cache, seq_len_local, kv_actual_isl, layer_idx, metadata=None, run_gather=None
+    ):
         """The (cached) push plan for `indices` and the compact buffer of `layer_idx`'s parity."""
         planner = self.tt_ccl.get_sparse_kv_push(self.ccl_num_links)[0]
         push_buffer, page_bytes = self._sparse_push_buffer(planner, kvpe_cache, layer_idx)
@@ -2421,6 +2427,7 @@ class ttMLA:
             chunk_start=kv_actual_isl or 0,
             # Metadata path: the chunk start (global, = kv_actual_global) is read on device, not frozen at capture.
             chunk_start_tensor=metadata[1] if metadata is not None else None,
+            run_gather=run_gather,
         )
         return plan, push_buffer
 
@@ -2652,8 +2659,18 @@ class ttMLA:
         # rows during this layer's sparse_sdpa.
         overlap = None
         if self._push_prefetch is not None and self._sparse_kv_push:
+            # GLM_QPUSH_FULL: the deferred q_b runs next to the plan tables' all-gather (see _qpush_region).
+            run_gather = None
+            if self._qpush is not None and isinstance(tt_q, _DeferredQ) and self._qpush_fits(tt_q):
+                run_gather = lambda gather: self._qpush_region(tt_q, gather)
             plan, _ = self._sparse_push_plan(
-                indices, kvpe_cache, seq_len_local, kv_actual_isl, self.layer_idx + 1, metadata=metadata
+                indices,
+                kvpe_cache,
+                seq_len_local,
+                kv_actual_isl,
+                self.layer_idx + 1,
+                metadata=metadata,
+                run_gather=run_gather,
             )
             overlap = self._next_layer_prefetch(plan, kvpe_cache, cache_batch_idx, metadata=metadata)
         output = self._finish_sparse_chunked_attn(
