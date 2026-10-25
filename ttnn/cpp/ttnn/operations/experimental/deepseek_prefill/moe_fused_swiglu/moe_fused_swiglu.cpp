@@ -105,10 +105,14 @@ ttnn::Tensor moe_fused_swiglu(
         const auto lowest = device->lowest_occupied_compute_l1_address();
         const uint32_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
         if (lowest.has_value() && *lowest > base) {
-            // A few KB of slack for per-CB alignment, which the blocking's byte count does not include.
+            // A few KB of slack for per-CB alignment, which the blocking's byte count does not include, and a 16 KB
+            // granule so small changes in what else is allocated do not each cost a program-cache miss.
             constexpr uint32_t kCbAlignmentSlack = 4 * 1024;
+            constexpr uint32_t kBudgetGranule = 16 * 1024;
             const uint32_t free_below = static_cast<uint32_t>(*lowest) - base;
-            l1_budget_bytes = free_below > kCbAlignmentSlack ? (free_below - kCbAlignmentSlack) & ~63u : 64u;
+            l1_budget_bytes = free_below > kCbAlignmentSlack + kBudgetGranule
+                                  ? ((free_below - kCbAlignmentSlack) / kBudgetGranule) * kBudgetGranule
+                                  : 64u;
         }
     }
 
