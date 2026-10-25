@@ -49,6 +49,10 @@ _GLUE_SEQQ_RS_WORKERS = int(os.environ.get("GLUE_SEQQ_RS_WORKERS", "0")) or None
 _GLUE_Q_DEFER_L1 = os.environ.get("GLUE_Q_DEFER_L1", "1") == "1"
 # ... and on full (indexer) layers too: Q built after the top-k || gather region (GLUE_Q_DEFER_FULL, opt-in).
 _GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "0") == "1"
+# glue track (stem): kv stem intermediates (reduce split -> norm -> rope -> fp8 fields) in L1, freed right after
+# the cache write (GLUE_KV_L1, opt-in); nlp_concat_heads output (o_proj in0) in L1 (GLUE_CONCAT_L1, opt-in).
+_GLUE_KV_L1 = os.environ.get("GLUE_KV_L1", "0") == "1"
+_GLUE_CONCAT_L1 = os.environ.get("GLUE_CONCAT_L1", "0") == "1"
 
 
 class _DeferredQ:
@@ -1399,6 +1403,11 @@ class ttMLA:
             per_core_N=n_t,
         )
 
+    def _kv_l1(self) -> bool:
+        """KV stem intermediates in L1 (glue, GLUE_KV_L1): sparse path only, where the fields are consumed by the cache
+        write and freed right after it (_prepare_sparse_kv_prefix)."""
+        return _GLUE_KV_L1 and self._has_indexer
+
     def _pad_wkv_b1_weight(self) -> ttnn.Tensor:
         """[.., nope, kv_lora_rank] bfp8 -> [.., nope, kv_lora_rank + rope] with zero rope columns. Whole
         tiles are appended along N, so the bfp8 -> bf16 -> bfp8 round trip keeps every block exact."""
@@ -1695,7 +1704,7 @@ class ttMLA:
                 tt_kv,
                 dim=1,
                 split_output_width=self.kv_lora_rank,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG if self._kv_l1() else ttnn.DRAM_MEMORY_CONFIG,
                 compute_kernel_config=self.hifi4_fp32_compute_kernel_config,
             )
             # tt_kv aliases model-owned gather scratch; keep that buffer alive.
@@ -1715,7 +1724,7 @@ class ttMLA:
             tt_kv_nope,
             weight=self.kv_a_layernorm_weight,
             epsilon=self.config.rms_norm_eps,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if self._kv_l1() else ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
@@ -1879,7 +1888,9 @@ class ttMLA:
         v_out = (
             attn_out
             if self._seq_q and self._seq_q_out == "cols"
-            else ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else ttnn.experimental.nlp_concat_heads(
+                attn_out, memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_CONCAT_L1 else ttnn.DRAM_MEMORY_CONFIG
+            )
         )
         if self._use_gate:
             assert hidden_states is not None, "gated MLA needs hidden_states to compute g_proj"
@@ -2383,6 +2394,10 @@ class ttMLA:
             # captured kv_actual_isl (None -> 0), stacking all chunks on top of chunk 0's KV region.
             metadata=metadata,
         )
+        if self._kv_l1():
+            # glue: the L1 KV fields are dead once written; free them before the push / gather region.
+            for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
+                ttnn.deallocate(value)
         # The write above is clamped to the chunk's real tokens, so on the last chunk KV is populated to
         # ceil32(actual_end), not the padded window. The gather needs only that prefix — top-k indices never
         # address the unwritten suffix, the indexer being bounded by the same prefix.
@@ -2414,7 +2429,8 @@ class ttMLA:
     ):
         """Consume joined/finalized branch outputs on the restored default full-grid manager."""
         for value in tt_kvpe if isinstance(tt_kvpe, tuple) else (tt_kvpe,):
-            ttnn.deallocate(value)
+            if value.is_allocated():
+                ttnn.deallocate(value)
         if isinstance(tt_q, _DeferredQ):
             tt_q = tt_q()  # glue: Q built now, after the KV write and the prefix push/gather (L1 Q buffer)
 
