@@ -53,13 +53,17 @@ void ExpectMeshAnswersLike(
     }
 }
 
-// Restores the process-global legacy state touched by configure_mock_mode() so the default context is not left
-// bound to a mock cluster for later tests in this binary.
-struct LegacyMockModeCleanup {
-    ~LegacyMockModeCleanup() {
-        experimental::disable_mock_mode();
+// The legacy default context keeps its cluster open until atexit; releasing it lets later tests in this binary
+// open their own cluster. Ownership is released before mock mode is switched off so teardown sees the config the
+// context was created under.
+struct LegacyContextCleanup {
+    bool disable_mock_mode = false;
+    ~LegacyContextCleanup() {
         if (MetalContext::instance_exists()) {
             tt::tt_metal::detail::ReleaseOwnership();
+        }
+        if (disable_mock_mode) {
+            experimental::disable_mock_mode();
         }
     }
 };
@@ -80,7 +84,7 @@ TEST(MeshDeviceProperties, CPU_ExplicitEnvMock) {
 }
 
 TEST(MeshDeviceProperties, CPU_LegacyMock) {
-    LegacyMockModeCleanup cleanup;
+    LegacyContextCleanup cleanup{.disable_mock_mode = true};
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, /*num_chips=*/2);
 
     auto mesh = distributed::MeshDevice::create(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
@@ -146,14 +150,13 @@ TEST(MeshDeviceProperties, ExplicitEnv) {
 }
 
 TEST(MeshDeviceProperties, Legacy) {
+    LegacyContextCleanup cleanup;
     auto mesh =
         distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::SystemMesh::instance().shape()));
     ASSERT_GT(mesh->num_devices(), 0u);
     ExpectMeshAnswersLike(MetalContext::instance().get_env().get_device_properties(), *mesh, "silicon legacy");
 
-    // The legacy context keeps the cluster open until atexit; release it so a later physical MetalEnv can open.
     mesh->close();
-    tt::tt_metal::detail::ReleaseOwnership();
 }
 
 }  // namespace tt::tt_metal
