@@ -39,6 +39,12 @@ _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
 _GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
+# sparse_sdpa knobs (default off; see _sparse_mla):
+#   MLA_SPARSE_KCHUNK_L1=<k>  k-chunk for L1-resident (compact-front) KV layers, where the op is compute-bound. NOTE: with
+#                            the per-chunk K rebuild (needs 4 % (k/32) == 0) any k > 128 turns that rebuild off.
+#   MLA_SPARSE_LOFI=1         LoFi matmuls in sparse_sdpa (faster, lower PCC: op 0.99995 -> 0.9984). Pareto option.
+_SPARSE_KCHUNK_L1 = int(os.environ.get("MLA_SPARSE_KCHUNK_L1", "0") or 0)
+_SPARSE_LOFI = os.environ.get("MLA_SPARSE_LOFI", "0") == "1"
 # glue track: seqq q_a norm on its 160 rows width-sharded over this many cores (0 = interleaved rms_norm, 5 cores).
 _GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "32"))
 # glue track: workers per link for the seqq q_a reduce-scatter over rows; 0 = op default.
@@ -2997,6 +3003,24 @@ class ttMLA:
         )
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
+        if (
+            _SPARSE_KCHUNK_L1
+            and kvpe.storage.memory_config().buffer_type == ttnn.BufferType.L1
+            and idx.shape[-1] % _SPARSE_KCHUNK_L1 == 0
+        ):
+            k_chunk = _SPARSE_KCHUNK_L1
+        sdpa_cfg = {}
+        if _SPARSE_LOFI:
+            if getattr(self, "_sparse_lofi_cfg", None) is None:
+                # The op's default (HiFi2, approx exp, fp32 dest for the fp8 KV) with LoFi matmul fidelity.
+                self._sparse_lofi_cfg = ttnn.init_device_compute_kernel_config(
+                    self.mesh_device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                )
+            sdpa_cfg["compute_kernel_config"] = self._sparse_lofi_cfg
         sdpa = lambda **grid: ttnn.transformer.sparse_sdpa(
             q_rm,
             kvpe.storage,
@@ -3017,6 +3041,7 @@ class ttMLA:
             ),
             cache_batch_idx=cache_batch_idx,
             kv_spill=kv_spill,
+            **sdpa_cfg,
             **grid,
         )
         # `overlap`: the next layer's prefix push, fused into this sparse_sdpa program (see _next_layer_prefetch).
