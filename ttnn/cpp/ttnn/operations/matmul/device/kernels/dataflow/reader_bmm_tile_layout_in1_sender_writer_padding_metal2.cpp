@@ -508,6 +508,8 @@ void kernel_main() {
                         for (uint32_t h = 0; h < in1_block_h; ++h) {
                             uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                // MM_ABL_SKIP_IN1_DRAM (mm experiment): time the op without the in1 DRAM reads (garbage)
+#ifndef MM_ABL_SKIP_IN1_DRAM
                                 if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
                                     noc.async_read(
                                         s1,
@@ -516,6 +518,7 @@ void kernel_main() {
                                         {.page_id = in1_tensor_tile_id},
                                         {.offset_bytes = in1_write_offset});
                                 }
+#endif
                                 in1_write_offset += in1_aligned_tile_size_bytes;
                                 in1_tensor_tile_id += in1_tensor_stride_w;
                             }

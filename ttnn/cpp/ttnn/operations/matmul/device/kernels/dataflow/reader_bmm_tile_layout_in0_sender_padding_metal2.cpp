@@ -322,6 +322,8 @@ void kernel_main() {
                         for (uint32_t h = 0; h < in0_block_h; ++h) {
                             uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                             for (uint32_t w = 0; w < in0_block_w; ++w) {
+                                // MM_ABL_SKIP_IN0_DRAM (mm experiment): time the op without the in0 DRAM reads (garbage)
+#ifndef MM_ABL_SKIP_IN0_DRAM
                                 if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
                                     noc.async_read(
                                         s0,
@@ -330,6 +332,7 @@ void kernel_main() {
                                         {.page_id = in0_tensor_tile_id},
                                         {.offset_bytes = in0_write_offset});
                                 }
+#endif
 
                                 // Zero out padded regions for the very last tile
                                 if constexpr (in0_last_ktile_w > 0) {
