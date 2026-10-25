@@ -1,0 +1,46 @@
+{
+  "status": "completion_failure_refuted_with_retained_advisories",
+  "check_exit_code": 1,
+  "component_exit_codes": {
+    "context": 0,
+    "agentic": 1,
+    "degeneracy": 0
+  },
+  "source_commit": "0ae60620d22022d98222455075c77f33675ebda2",
+  "accepted_manifests": {
+    "selected_b1_command.json": {
+      "max_model_len": 262144,
+      "matching_source_hashes": 44
+    },
+    "after_b8_command.json": {
+      "max_model_len": 262144,
+      "matching_source_hashes": 44
+    },
+    "after_b16_command.json": {
+      "max_model_len": 262144,
+      "matching_source_hashes": 44
+    },
+    "after_b32_performance_command.json": {
+      "max_model_len": 262144,
+      "matching_source_hashes": 44
+    },
+    "after_b32_tracked_command.json": {
+      "max_model_len": 262144,
+      "matching_source_hashes": 44
+    }
+  },
+  "weight_copy_advisories": [
+    "in_norm",
+    "post_norm",
+    "gate",
+    "up",
+    "gateup",
+    "norm_shards"
+  ],
+  "pool_tokens": 786432,
+  "planning_required_tokens": 1048576,
+  "additional_dense_pool_bytes_per_device": 4744806400,
+  "recorded_free_bytes_per_device": 4731160064,
+  "limitation": "32 x 32768 multi-turn traffic remains unmeasured; pool-layout bound is not a universal hardware limit.",
+  "reproduction_log": "/home/mvasiljev/agentic-research-data/experiment-26/bringup-logs/qwen38-27b/20261023-astra-medium-exp26-clean/10-optimized-vllm.advisory-reproduction.log"
+}

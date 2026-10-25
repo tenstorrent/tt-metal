@@ -13,6 +13,16 @@ sampled IDs and subsequent state; full real-vLLM mixed traffic validates the
 adapter path. Decoder math, native262144 context, non-aligned prompt support,
 precision, cache ownership and trace signatures are unchanged.
 
+## Runner advisory recheck
+
+The requested checker was reproduced: **exit 1, advisory**, with context and
+degeneracy components both exiting 0. The completion-failure interpretation is
+refuted in `work_log.md` under attempt `324904ee-c02d-4ce7-a174-6b2a14ee5d8a`;
+`advisory_recheck.json` records source-hash checks and memory arithmetic. The
+explained weight copies and configured pool shortfall remain real advisories.
+32 simultaneous 32768-token multi-turn conversations remain unmeasured. This is
+not a claim of a zero-exit checker or of meeting that planning workload.
+
 ## Measurement contract
 
 All headline and CI performance runs use the real TT plugin and

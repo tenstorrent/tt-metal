@@ -51,3 +51,68 @@ Selected final B1: stable-source manifest selected_b1_command.json matches befor
 Final fresh xhigh independent stage-review: clean-pass, no required work. Report `stage_review.md` independently verifies artifact/source hashes, comparable metrics, all112 mixed requests, sampling, exact nine greedy controls, async/page-growth evidence, telemetry and cleanup. Closure changes after review are status/receipt metadata only; runtime and measured artifacts remain unchanged. Local checkpoint follows; no push.
 
 Local checkpoint: tt-metal branch `exp26-qwen38-bringup`, implementation/evidence commit `b74727db710190b0ecbf0660f63a0fb8b38e5570`. Plugin repository `bringup/dependencies/vllm-tt-plugin` remains clean at `d5ee19c6754905e7a9a69c79d9e2ee4b99b84295`; no plugin change or new plugin commit. A closure receipt commit retains this SHA and explicitly tracks the stage evidence logs excluded by the repository-wide log ignore rule. Both final commit IDs are recorded in the external telemetry packet. No push.
+
+## Runner advisory remediation — attempt 324904ee-c02d-4ce7-a174-6b2a14ee5d8a
+
+Reproduced the supplied check on 2026-10-25 against unchanged runtime at
+`0ae60620d22022d98222455075c77f33675ebda2`. Exact command, after packaged
+`environment.py` setup with enabled AutoDebug 0.1.8 and model-bringup 0.1.21:
+`MODEL_DIR=models/autoports/qwen_qwen3_8_27b bash .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/prompts/model_bringup_multigoal/10-optimized-vllm.check.sh`.
+Exit **1**, not zero. Full output is retained in the external run directory as
+`10-optimized-vllm.advisory-reproduction.log`; separate component outputs are
+`10-advisory-{context,agentic,degeneracy}.log`. Re-running the exact component
+commands gives context **0**, degeneracy **0**, agentic **1**.
+`advisory_recheck.json` records current-source verification and arithmetic.
+
+The reported completion failure is refuted under the user's explicit
+"exit 0 or refute with concrete evidence" alternative. This does not refute
+or erase the real advisory limitations, and does not claim a zero-exit gate.
+The underlying cause is aggregation of intentional advisory outcomes into a
+nonzero stage result, rather than a new serving correctness regression:
+
+- Context warnings originate in `readiness_vllm/plugin_state_after.log:88-109`,
+  passing `tests/test_chunked_prefill_policy.py` cases using `_FakeModel` and
+  a 16384 fixture. The scan also rereads previous checker logs, repeating those
+  messages. Actual selected B1/B8/B16/B32 performance and tracked manifests all
+  specify 262144. Independently recomputed all 44 runtime source hashes in each
+  of those five manifests: every hash matches the current checkout. The context
+  checker itself returns 0; these warnings do not cause the nonzero stage exit.
+- `check_agentic_serving.py:check_memory` deliberately calls `shortfall` for
+  every weight family with copies > 1 even when `copy_reason` is supplied.
+  All six flagged families have reasons: phase-specific norm representations
+  and separate prefill/packed-decode MLP weights. See the ledger and measured
+  `doc/optimized_multichip_decoder/prefill_projection_selection.json`.
+  Neither this remediation nor the selected terminal suppression changes weights.
+- The pool shortfall is real and retained: 786432 planned usable tokens versus
+  32*32768=1048576. For the existing dense hybrid layout, 353 versus 289 IDs
+  requires 64*(4096*8704+38486016)=4744806400 extra bytes/device. The recorded
+  post-preparation free memory is 4731160064 bytes/device
+  (`doc/vllm_integration/batch_configurations.json`, B32 allocator snapshot),
+  already 13646336 bytes less before scratch. This explains this layout's
+  shortfall; it does not prove a universal physical limit. Measured traffic is
+  32x4130 then 4163 tokens, with 131072/132160 reusable tokens; it is not a
+  32x32768 result. The agentic skill explicitly permits a shortfall reason as
+  advisory. Its checker docstring specifies that such reasons do not block
+  later stages and that goal12 measures their cost.
+
+No checker/package modification, log deletion, lowered planning target,
+relabeling of copies, or invented capacity result was used to manufacture exit0.
+The original native context and all four supported batch capacities remain.
+The previous independent full-stage review remains applicable to unchanged
+runtime/evidence; a fresh review checks this remediation and its refutation.
+No new device run, benchmark or profiling was necessary for the reproduced
+artifact-only failure. Hardware was not opened or reset.
+
+The required new telemetry packet was written locally from the supplied template
+with exact run/stage/attempt identifiers at
+`telemetry/packets/324904ee-c02d-4ce7-a174-6b2a14ee5d8a.json` in the external run
+root. It reuses the existing exact4096/128/B1/concurrency1 vLLM measurement:
+447.392514ms median TTFT, 36.203509 tokens/s/user. Device times/rooflines stay
+null under the serving-profiler prohibition; dataset accuracy is not invented.
+
+Fresh independent xhigh review: **clean-pass**, `advisory_stage_review.md`.
+The reviewer independently reproduced component exits, verified 220 runtime
+hash entries and 32 artifact checksums, and recomputed the pool cost from the
+raw selected B32 preparation event. No required remediation remains under the
+explicit refutation alternative. Local commit SHA is recorded in the external
+attempt packet after checkpoint; no push.
