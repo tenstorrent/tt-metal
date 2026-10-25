@@ -11,6 +11,8 @@ from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+
+_MLA_LOFI = {w.strip() for w in __import__("os").environ.get("MLA_LOFI", "").split(",") if w.strip()}
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     NullIndexer,
     ReuseIndexer,
@@ -971,6 +973,25 @@ class ttMLA:
         tuned config sets ``fp32_dest_acc``. Pinned either way -- a program_config with no explicit
         compute config silently drops the matmul to LoFi.
         """
+        kwargs = self._get_mm_kwargs_base(weight_name, seq_len_local)
+        # PARETO OPTION (accuracy-for-speed, off by default): MLA_LOFI=<comma list of weight names> runs those
+        # matmuls at LoFi fidelity instead of HiFi2 (bfp8 weights unchanged). Reported as a separate alternative.
+        if weight_name in _MLA_LOFI:
+            kwargs = dict(kwargs, compute_kernel_config=self._lofi_compute_kernel_config())
+        return kwargs
+
+    def _lofi_compute_kernel_config(self):
+        if getattr(self, "_lofi_cfg", None) is None:
+            self._lofi_cfg = ttnn.init_device_compute_kernel_config(
+                self.mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        return self._lofi_cfg
+
+    def _get_mm_kwargs_base(self, weight_name: str, seq_len_local: int) -> dict:
         cfg = self._resolve_mm_cfg(weight_name, seq_len_local)
         if cfg is None:
             if weight_name in self._BATCHED_MM_DIMS:
