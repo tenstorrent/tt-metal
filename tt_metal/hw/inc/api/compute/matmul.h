@@ -9,6 +9,9 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "llk_assert.h"
 #include "sanitizer/api.h"
+#if defined(MM_THROTTLE_PROBE) && defined(PROFILE_KERNEL)
+#include "api/debug/kernel_profiler.hpp"
+#endif
 #ifdef TRISC_MATH
 #include "llk_math_matmul_api.h"
 #endif
@@ -30,6 +33,11 @@ volatile tt_l1_ptr std::uint32_t* throttle_ptr =
     reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(MEM_L1_ARC_FW_SCRATCH);
 // tracks the state of the currently programmed matmul MOP (0: default throttle level, 1: max throttle level)
 static std::uint32_t throttled_mop_status = 0;
+#if defined(MM_THROTTLE_PROBE) && defined(PROFILE_KERNEL)
+// Experiment probe (glm53-prefill mm agent): record the FW throttle word at the first matmul_block of a kernel and at
+// every switch to the throttled MOP, as profiler TS_DATA markers MMTHR_FIRST / MMTHR_ON.
+static std::uint32_t mm_throttle_probe_calls = 0;
+#endif
 
 // clang-format off
 /**
@@ -64,7 +72,16 @@ ALWI void matmul_block_math_dynamic_throttle(
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
     // Check firmware-controlled throttle enable flag (even = no throttle, odd = throttle)
-    const std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
+    const std::uint32_t mm_throttle_raw = *(throttle_ptr);
+    const std::uint32_t mm_throttle_en = mm_throttle_raw % 2;
+#if defined(MM_THROTTLE_PROBE) && defined(PROFILE_KERNEL)
+    if (mm_throttle_probe_calls++ == 0) {
+        DeviceTimestampedData("MMTHR_FIRST", mm_throttle_raw);
+    }
+    if (mm_throttle_en && throttled_mop_status != 1) {
+        DeviceTimestampedData("MMTHR_ON", mm_throttle_raw);
+    }
+#endif
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
             MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX, false, true, in1_order>(
