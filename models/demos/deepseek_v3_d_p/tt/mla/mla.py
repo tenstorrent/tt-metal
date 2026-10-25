@@ -314,6 +314,7 @@ class ttMLA:
         sparse_mla_overlap_profile: Optional[str] = None,
         tp_shard_kv: Optional[bool] = None,
         sparse_kv_push: Optional[bool] = None,
+        seq_sharded_q: Optional[bool] = None,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -800,6 +801,22 @@ class ttMLA:
             self._attention = self._sparse_chunked_attn
         else:
             self._attention = self._dense_chunked_attn if self.is_chunked else self._dense_single_attn
+
+        # Sequence-sharded absorbed Q (see _q_stem_seq). Resolved last (it needs the rope binding), after the
+        # weights load, because it swaps the head-sharded q_b / wkv_b1 / wkv_b2 for TP-replicated copies.
+        self._seq_q = self._resolve_seq_sharded_q(seq_sharded_q)
+        self._seq_q_out = os.getenv("MLA_SEQQ_OUT", "heads")
+        assert self._seq_q_out in ("heads", "cols"), f"MLA_SEQQ_OUT must be heads or cols, got {self._seq_q_out}"
+        # Debug/reference: MLA_SEQQ_QA=allreduce keeps the head-sharded path's q_a stem (all-reduce + norm of all
+        # S/sp rows) and partitions the rows afterwards, isolating the reduce-scatter summation order.
+        self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
+        assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
+        if self._seq_q:
+            self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
+            self.wkv_b1_weight = self._replicate_over_tp(self.wkv_b1_weight, dim=1)
+            self.wkv_b2_weight = self._replicate_over_tp(self.wkv_b2_weight, dim=1)
+        if os.getenv("MLA_MEMLOG") and layer_idx in (0, layer_num - 2, layer_num - 1):
+            self._log_dram(f"after MLA layer {layer_idx} weights (seq_q={self._seq_q})")
 
     def release_sparse_mla_overlap_manager(self) -> None:
         """Forward shared sparse-MLA overlap teardown to the model-wide TT_CCL owner."""
@@ -1811,7 +1828,12 @@ class ttMLA:
         The gate multiply sits after nlp_concat_heads so g needs no head split, and cannot move before
         wkv_b2: it acts in v_head_dim space, and g*(attn @ W_b2) != (g*attn) @ W_b2.
         """
-        v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Sequence-sharded Q with MLA_SEQQ_OUT=cols hands over [1, 1, S, heads*v], already concatenated.
+        v_out = (
+            attn_out
+            if self._seq_q and self._seq_q_out == "cols"
+            else ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
         if self._use_gate:
             assert hidden_states is not None, "gated MLA needs hidden_states to compute g_proj"
             g = self._output_gate(hidden_states, seq_len_local)
@@ -1898,6 +1920,10 @@ class ttMLA:
                 kvpe_cache.format == self.sparse_kv_cache_format
             ), f"MLA configured for {self.sparse_kv_cache_format}, got {kvpe_cache.format} cache"
 
+        if os.getenv("MLA_MEMLOG") and not getattr(ttMLA, "_memlog_forward_done", False):
+            ttMLA._memlog_forward_done = True  # once per process: everything (weights, caches) is allocated by now
+            self._log_dram(f"first forward (layer {self.layer_idx})")
+
         # Preserve profiler region labels without duplicating them through Python logging.
         ttnn.tracy_message("`TT_SIGNPOST: MLA_START`")
 
@@ -1906,7 +1932,15 @@ class ttMLA:
         q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local)
         # Compute the q_a latent once and share it: the DSA indexer reads it for its queries, then
         # _q_stem consumes it for q_b_proj — so the sparse path does not recompute the q_a stem.
-        if self._merge_qkv_a:
+        if self._seq_q and self._seq_q_qa == "allreduce":
+            qr_all = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
+            qr, kv_a = ttnn.mesh_partition(qr_all, dim=2, cluster_axis=self.tp_axis), None
+            ttnn.deallocate(qr_all)
+        elif self._seq_q:
+            # Only this TP rank's row quarter of the latent (see _q_a_latent_seq).
+            q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local // self.tp_factor)
+            qr, kv_a = self._q_a_latent_seq(hidden_states, seq_len_local, q_norm_mem_config), None
+        elif self._merge_qkv_a:
             qr, kv_a = self._qkv_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
         else:
             qr, kv_a = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config), None
@@ -1953,7 +1987,10 @@ class ttMLA:
                 metadata=metadata,
             )
 
-        tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata)
+        if self._seq_q:
+            tt_q = self._q_stem_seq(qr, rope_tensors, kv_actual_isl, metadata=metadata)
+        else:
+            tt_q = self._q_stem(qr, rope_tensors, kv_actual_isl, seq_len_local, metadata=metadata)
         tt_kvpe, tt_kv_nope, kv_intermediates = self._kv_stem(
             hidden_states,
             rope_tensors,
@@ -2342,6 +2379,9 @@ class ttMLA:
         # sp==1 non-dedup route did produce a genuinely transient slice; with the SP-only gather gone
         # there is no transient buffer here any more.
         ttnn.deallocate(tt_q)
+        if self._seq_q:
+            # All heads of this TP quarter's rows: project, then restore the head-sharded layout.
+            return self._seq_to_heads(self._apply_wkv_b2(attn_out, attn_out.shape[2]))
         return self._apply_wkv_b2(attn_out, seq_len_local)
 
     def _select_and_gather_overlapped(
@@ -2390,7 +2430,7 @@ class ttMLA:
                 metadata=metadata,
             )
             q_seq = None
-            if q is not None and self._needs_head_to_seq_reshard:
+            if q is not None and self._needs_head_to_seq_reshard and not self._seq_q:
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_Q_RESHARD`")
                 q_seq = self._sparse_q_seq(q, subdevice_id=resources.gather_subdevice_id)
         except Exception:
@@ -2618,6 +2658,159 @@ class ttMLA:
         heads_local = self.num_heads // self.tp_factor
         return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
 
+    # ----------------------------------------------------------------------------------------
+    # Sequence-sharded absorbed Q (MLA_SEQ_SHARDED_Q=1 / config.mla_seq_sharded_q / seq_sharded_q=).
+    #
+    # The head-sharded path builds Q for this chip's S/sp rows x H/tp heads, then all-to-alls heads -> sequence
+    # over TP for sparse_sdpa (which needs H % 32 == 0) and back again before wkv_b2. Here each chip builds Q
+    # for its own S/(sp*tp) TP-quarter rows x ALL heads straight away (q_b / wkv_b1 / wkv_b2 replicated over
+    # TP), exactly like the indexer's own Q: the q_a latent is reduce-scattered over rows instead of
+    # all-reduced, so no chip ever holds the other quarters' rows. sparse_sdpa then runs on Q as built, wkv_b2
+    # runs on all heads of those rows, and one all-to-all of the v_head_dim-wide (bfp8) result restores the
+    # head-sharded [S/sp, H/tp * v] layout o_proj consumes. The heads -> sequence all-to-all is gone and the
+    # sequence -> heads one moves the 256-wide bfp8 output instead of the 512-wide bf16 latent. Same FLOPs;
+    # costs the replicated weights (+3/4 of q_b, wkv_b1, wkv_b2 per layer).
+    # ----------------------------------------------------------------------------------------
+
+    def _resolve_seq_sharded_q(self, requested: Optional[bool]) -> bool:
+        if requested is None:
+            env = os.getenv("MLA_SEQ_SHARDED_Q")
+            requested = (
+                env not in (None, "", "0") if env is not None else getattr(self.config, "mla_seq_sharded_q", False)
+            )
+        if not requested:
+            return False
+        reasons = []
+        if not self._has_indexer:
+            reasons.append("dense MLA")
+        if self.kv_only:
+            reasons.append("kv-only layer")
+        if not self._needs_head_to_seq_reshard:
+            reasons.append("head shard already fat enough for sparse_sdpa")
+        if self._merge_qkv_a or self._use_gate or self._llama4_beta is not None or not self._use_indexed_rope:
+            reasons.append("merged qkv_a / output gate / llama4 scale / non-indexed rope")
+        if (self.sp_axis, self.tp_axis) != (0, 1) or self.active_seq_len_local % (self.tp_factor * ttnn.TILE_SIZE):
+            reasons.append("needs sp_axis=0, tp_axis=1 and whole-tile TP row quarters")
+        if reasons:
+            logger.debug(f"MLA layer {self.layer_idx}: sequence-sharded Q off ({'; '.join(reasons)})")
+            return False
+        return True
+
+    def _replicate_over_tp(self, w: ttnn.Tensor, dim: int) -> ttnn.Tensor:
+        """TP-replicated copy of a TP-sharded weight, by an on-device all_gather along the TP axis (a tile copy, so
+        bit-identical to uploading the full weight). Frees the sharded input."""
+        shape = list(w.shape)
+        lead = 4 - len(shape)
+        w4 = ttnn.reshape(w, [1] * lead + shape) if lead else w
+        gathered = ttnn.all_gather(
+            w4,
+            dim=dim + lead if dim >= 0 else dim,
+            cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
+            topology=ttnn.Topology.Linear,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(w)
+        if lead:
+            shape[dim] *= self.tp_factor
+            gathered = ttnn.reshape(gathered, shape)
+        return gathered
+
+    def _log_dram(self, what: str) -> None:
+        mv = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.DRAM)
+        print(
+            f"MLA_MEMLOG {what}: DRAM banks={mv.num_banks} total/bank={mv.total_bytes_per_bank / 2**20:.1f} MiB "
+            f"allocated/bank={mv.total_bytes_allocated_per_bank / 2**20:.1f} MiB free/bank="
+            f"{mv.total_bytes_free_per_bank / 2**20:.1f} MiB largest_free/bank="
+            f"{mv.largest_contiguous_bytes_free_per_bank / 2**20:.1f} MiB",
+            flush=True,
+        )
+
+    def _q_a_latent_seq(
+        self, hidden_states: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
+    ) -> ttnn.Tensor:
+        """q_a projection + TP reduce-scatter over ROWS + q_a_layernorm: this chip's [1, 1, S/(sp*tp), q_lora] rows
+        of the q_a latent (rows [r*S/(sp*tp), (r+1)*S/(sp*tp)) of its SP slab at TP rank r, the same rows
+        mesh_partition(dim=2) over TP selects). Replaces all-reduce + norm of all S/sp rows: both consumers (the
+        indexer and _q_stem_seq) read only these rows."""
+        qr = ttnn.linear(
+            hidden_states,
+            self.q_a_proj_weight,
+            **self._get_mm_kwargs("q_a_proj", seq_len_local),
+        )
+        qr_rows = ttnn.experimental.reduce_scatter_minimal_async(
+            qr,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.tp_ccl_topology,
+            cluster_axis=self.tp_axis,
+        )
+        ttnn.deallocate(qr)
+        out = self._q_a_norm(qr_rows, norm_memory_config)
+        ttnn.deallocate(qr_rows)
+        return out
+
+    def _q_stem_seq(
+        self,
+        qr: ttnn.Tensor,
+        rope_tensors: dict,
+        kv_actual_isl: Optional[int],
+        metadata: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """Absorbed-Q stem over this chip's TP-quarter rows and ALL heads: [1, H, S/(sp*tp), kv_lora + rope]."""
+        q_rows = qr.shape[2]
+        tt_q = ttnn.linear(qr, self.q_b_proj_weight, **self._get_mm_kwargs("q_b_proj", q_rows))
+        ttnn.deallocate(qr)
+        tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
+            tt_q,
+            num_heads=self.num_heads,
+            split_head_dim=self.qk_nope_head_dim,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(tt_q)
+        tt_q_nope_abs = ttnn.linear(tt_q_nope, self.wkv_b1_weight, **self._get_mm_kwargs("wkv_b1", q_rows))
+        ttnn.deallocate(tt_q_nope)
+        # The rows are this TP rank's quarter of the SP slab: seq_subshard_axis adds that window to the rotated
+        # block-cyclic offset (the indexer ropes its TP-partitioned queries the same way).
+        tt_q = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+            tt_q_rope,
+            rope_tensors["cos_matrix"],
+            rope_tensors["sin_matrix"],
+            rope_tensors["trans_matrix"],
+            kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
+            cluster_axis=self.sp_axis,
+            seq_subshard_axis=self.tp_axis,
+            concat_prefix=tt_q_nope_abs,
+        )
+        ttnn.deallocate(tt_q_nope_abs)
+        ttnn.deallocate(tt_q_rope)
+        return tt_q
+
+    def _seq_to_heads(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """[1, H, S/(sp*tp), v] (this TP quarter's rows, all heads) -> the head-sharded layout the epilogue takes.
+        MLA_SEQQ_OUT=heads (default): one all-to-all to [1, H/tp, S/sp, v]; =cols: concat heads first and
+        all-to-all [1, 1, S/(sp*tp), H*v] -> [1, 1, S/sp, H/tp*v] (the epilogue then skips its concat)."""
+        if self._seq_q_out == "cols":
+            cat = ttnn.experimental.nlp_concat_heads(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(t)
+            t, in_dim, out_dim = cat, 2, 3
+        else:
+            in_dim, out_dim = 2, 1
+        out = ttnn.experimental.all_to_all_async_generic(
+            t,
+            in_dim=in_dim,
+            out_dim=out_dim,
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=self.tp_axis,
+        )
+        ttnn.deallocate(t)
+        return out
+
     def indexer_indices_shape(self) -> tuple:
         rows = self.active_seq_len // self.sp_factor
         if self._needs_head_to_seq_reshard:
@@ -2668,7 +2861,9 @@ class ttMLA:
         # The indexer emits matching TP sequence shards directly. The partition fallback below also
         # accepts SP-only or globally replicated indices from callers using the older output contract.
         transpose_head_to_seq = self._needs_head_to_seq_reshard
-        # A full layer reshards q inside its overlap region (see _select_and_gather_overlapped).
+        # A full layer reshards q inside its overlap region (see _select_and_gather_overlapped). Sequence-sharded Q
+        # (_q_stem_seq) is built TP-sequence-sharded with all heads: _sparse_q_seq passes it through, and the
+        # caller (_finish_sparse_chunked_attn) restores heads after wkv_b2 instead of here.
         q_seq_sharded = self._sparse_q_seq(q) if q_seq is None else q_seq
         q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
         if q_seq_sharded is not q:
@@ -2724,7 +2919,7 @@ class ttMLA:
         ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
         ttnn.deallocate(out)
 
-        if transpose_head_to_seq:
+        if transpose_head_to_seq and not self._seq_q:
             # Invert the redistribution so the result matches the head-sharded
             # [1, H/tp, S/sp, v_dim] consumed by the epilogue.
             head_sharded = ttnn.experimental.all_to_all_async_generic(
@@ -2742,7 +2937,7 @@ class ttMLA:
     def _sparse_q_seq(self, q, subdevice_id=None):
         """q sequence-sharded over TP for sparse_sdpa when the per-chip head shard is too thin (else q itself).
         Optionally on one sub-device."""
-        if not self._needs_head_to_seq_reshard:
+        if not self._needs_head_to_seq_reshard or self._seq_q:
             return q
         return ttnn.experimental.all_to_all_async_generic(
             q,

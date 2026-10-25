@@ -176,6 +176,26 @@ MLA_MATMUL_CONFIG = {
     },
     # tt_q @ q_b_proj_weight (after layernorm)
     "q_b_proj": {
+        # GLM-5.3 sequence-sharded Q (ttMLA._q_stem_seq): this chip's 160 TP-quarter rows x all 64 heads against the
+        # TP-replicated weight, [160, 2048] x [2048, 16384]. M = 5 tiles: multicast the whole M slab to N-parallel
+        # cores (the indexer's wq_b shape, 4x wider); weight-read bound (35.6 MB bfp8).
+        160: {
+            **_GLM_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=8,
+                out_subblock_h=1,
+                out_subblock_w=5,
+                per_core_M=5,
+                per_core_N=5,
+                fuse_batch=True,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+            "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
         640: [
             {
                 "num_heads": 64,
@@ -292,6 +312,22 @@ MLA_MATMUL_CONFIG = {
     },
     # tt_q_nope @ wkv_b1_weight
     "wkv_b1": {
+        # GLM-5.3 sequence-sharded Q: 64 heads x [160, 192] x [192, 512]. Same per-core block as the 640 entry
+        # (64 blocks of 5 x 16 tiles: heads x M-blocks 64 x 1 instead of 16 x 4).
+        160: {
+            **_GLM_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=6,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=5,
+                per_core_N=16,
+            ),
+            "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat16,
+        },
         640: [
             {
                 "num_heads": 64,
@@ -515,6 +551,22 @@ MLA_MATMUL_CONFIG = {
     },
     # tt_v_latent_post_repeat @ wkv_b2_weight
     "wkv_b2": {
+        # GLM-5.3 sequence-sharded Q: 64 heads x [160, 512] x [512, 256], same 5 x 8-tile block as the 640 entry.
+        # Output feeds the sequence -> heads all-to-all (ttMLA._seq_to_heads).
+        160: {
+            **_GLM_TAGS,
+            "program_config": ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=COMPUTE_GRID,
+                in0_block_w=2,
+                out_subblock_h=1,
+                out_subblock_w=8,
+                per_core_M=5,
+                per_core_N=8,
+            ),
+            "act_mem_config": ttnn.L1_MEMORY_CONFIG,
+            "out_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+            "out_dtype": ttnn.bfloat8_b,
+        },
         640: [
             {
                 "num_heads": 64,
