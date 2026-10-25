@@ -26,6 +26,8 @@ constexpr uint32_t cb_chron = 4;
 constexpr uint32_t cb_stage = 5;
 // On the head cores: the sender releases a head once it has read the head's last column.
 constexpr uint32_t ack_semaphore_id = 0;
+// On the head cores: the previous head on the link has read its A block, so this one reads now.
+constexpr uint32_t read_turn_semaphore_id = 1;
 // On the sender cores, ids 0, 1, ...: per head the sender serves, the head's finished columns.
 constexpr uint32_t first_notify_semaphore_id = 0;
 constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/relay_affine_prefix/device/kernels/";
@@ -75,6 +77,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     };
     desc.semaphores.push_back(
         tt::tt_metal::SemaphoreDescriptor{.id = ack_semaphore_id, .core_ranges = head_set, .initial_value = 0});
+    desc.semaphores.push_back(
+        tt::tt_metal::SemaphoreDescriptor{.id = read_turn_semaphore_id, .core_ranges = head_set, .initial_value = 0});
     for (uint32_t k = 0; k < heads_per_link; ++k) {
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = first_notify_semaphore_id + k, .core_ranges = sender_set, .initial_value = 0});
@@ -84,6 +88,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> reader_ct = {cb_a, cb_b, cb_ein, cb_chron};
     reader_ct.insert(reader_ct.end(), chronology.begin(), chronology.end());
     reader_ct.push_back(kt);
+    reader_ct.push_back(read_turn_semaphore_id);
     for (const auto* tensor : {&in.packed, &in.initial_state, &in.actual_start}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
     }
@@ -139,6 +144,13 @@ tt::tt_metal::ProgramDescriptor build_program(
         reader_rt.push_back(in.actual_start.buffer());
         reader_rt.push_back(h);
         reader_rt.push_back(arrival_address);
+        // The heads take their DRAM reads in turn per link, in the order the sender streams them.
+        const bool has_next = h + attrs.num_links < batch_heads;
+        const auto next = mesh->worker_core_from_logical_core(head_cores[has_next ? h + attrs.num_links : h]);
+        reader_rt.push_back(static_cast<uint32_t>(h >= attrs.num_links));
+        reader_rt.push_back(static_cast<uint32_t>(has_next));
+        reader_rt.push_back(static_cast<uint32_t>(next.x));
+        reader_rt.push_back(static_cast<uint32_t>(next.y));
         reader.emplace_runtime_args(core, reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
         writer_rt.push_back(entry.buffer());

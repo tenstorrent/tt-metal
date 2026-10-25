@@ -83,6 +83,16 @@ void kernel_main() {
     const uint32_t stage = get_write_ptr(cb_stage);
     const auto start = TensorAccessor(start_args, start_address);
     noc_async_read(start.get_noc_addr(0), stage, sizeof(uint32_t));
+
+    // Open the fabric connection while the chronology word is in flight: on the first rank the relay starts here.
+    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[headers];
+    for (uint32_t i = 0; i < headers; ++i) {
+        hdrs[i] = PacketHeaderPool::allocate_header();
+        route_one_hop(hdrs[i], dst_chip_id, dst_mesh_id);
+    }
+    conn.open();
+
     noc_async_read_barrier();
     const auto topology =
         kda_chronology::derive(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[0], sp_rank, sp_size, local_rows);
@@ -91,14 +101,6 @@ void kernel_main() {
     const uint32_t landing = last ? final_landing : ein_landing;
     const uint32_t landed_semaphore = last ? final_semaphore : arrival_semaphore;
     const uint32_t ack_semaphore = get_semaphore(ack_semaphore_id);
-
-    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[headers];
-    for (uint32_t i = 0; i < headers; ++i) {
-        hdrs[i] = PacketHeaderPool::allocate_header();
-        route_one_hop(hdrs[i], dst_chip_id, dst_mesh_id);
-    }
-    conn.open();
 
     // A head's state is kt tile columns stored column-major, at the same address on its head core and (its landing)
     // on the successor's. Each column goes out as column_packets packets ("pieces"). A piece's tiles are read out of
