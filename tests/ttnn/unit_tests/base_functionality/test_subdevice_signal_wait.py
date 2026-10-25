@@ -173,6 +173,27 @@ class Harness:
         else:
             raise ValueError(tok)
 
+    WAIT_TOKENS = ("W", "Wt", "w")
+
+    def prime(self, orders_cqs, credit=False):
+        """Load every program of the variant once with the waits left out, then reset. In eager mode the FIRST
+        enqueue of a program writes its binary to DRAM, and a buffer write waits for every sub-device in the stall
+        group: a first-time program issued between a wait and its signal therefore deadlocks the CQ (seen in
+        e2-gate4). Trace replays do no such writes. Waits/signals themselves are loaded by an S-then-W pair."""
+        for order, cq in orders_cqs:
+            with ttnn.command_queue(cq):
+                toks = [t for t in order.split() if t not in self.WAIT_TOKENS]
+                for tok in toks:
+                    self.op(tok, 0, 2, credit=True)  # nrounds=2, rnd 0: "s" is issued, "w" skipped anyway
+        ttnn.synchronize_device(self.mesh)
+        if self.sem_fwd is not None:  # load the wait programs: signal first, so the wait returns at once
+            with ttnn.command_queue(0):
+                self.op("S")
+                self.op("W")
+                self.op("s", 0, 2)
+                self.op("w", 1, 2)
+            ttnn.synchronize_device(self.mesh)
+
     def body(self, order, nrounds=1):
         for r in range(nrounds):
             for tok in order.split():
@@ -182,8 +203,9 @@ class Harness:
         """Returns a dict with violation counts per device and state checks."""
         res = {"variant": name, "order": order, "rounds": nrounds, "replays": replays, "ndev": self.ndev}
         with Watchdog(timeout_s, f"{name} eager"):
+            self.prime([(order, 0)])
             self.reset_state()
-            self.body(order, nrounds)  # eager pass: compiles everything, and is itself a test
+            self.body(order, nrounds)  # eager pass with the waits: itself a test
             ttnn.synchronize_device(self.mesh)
             if eager_check:
                 v = self.read(self.viol)
@@ -236,6 +258,7 @@ class Harness:
                         self.op(tok, r, nrounds, credit=True)
 
         with Watchdog(timeout_s, f"{name} eager"):
+            self.prime([(prod, 0), (cons, 1)])
             self.reset_state(bwd_credit=1)
             body(prod, 0)
             body(cons, 1)
@@ -311,7 +334,8 @@ def profile_replays(mesh, label_lists):
             uid = p.program_execution_uid
             if uid.trace_id is None or uid.trace_id >= (1 << 63):
                 continue
-            fw = p.program_analyses_results.get("DEVICE FW DURATION [ns]")
+            res = p.program_analyses_results
+            fw = res.get("DEVICE FW DURATION [ns]") or res.get("DEVICE KERNEL DURATION [ns]")
             if fw is None:
                 continue
             by_trace.setdefault(uid.trace_id, {}).setdefault(uid.trace_id_counter, []).append(
@@ -351,13 +375,13 @@ def summarize_gaps(replays_by_chip, mhz=1350.0):
     vals = {}
     for chip, replays in replays_by_chip.items():
         for rec in replays:
-            if "A" not in rec:
-                continue
-            a_end = rec["A"][1]
-            for lab, (st, en) in rec.items():
+            a_end = rec["A"][1] if "A" in rec else None
+            for lab, val in rec.items():
                 if lab == "_all":
                     continue
-                vals.setdefault(f"start({lab})-end(A)", []).append((st - a_end) / mhz)
+                st, en = val
+                if a_end is not None:
+                    vals.setdefault(f"start({lab})-end(A)", []).append((st - a_end) / mhz)
                 vals.setdefault(f"dur({lab})", []).append((en - st) / mhz)
             # round-to-round period for multi-round chains: start of the same label in consecutive rounds
             seq = {}
@@ -447,9 +471,12 @@ def main():
                 name, order = parts[0], parts[1]
                 nr = int(parts[2]) if len(parts) > 2 else 1
                 out.append(h.run_variant(name, order, a.replays, nrounds=nr, timeout_s=a.timeout_s))
-            except Exception:
+            except Exception as ex:
                 traceback.print_exc()
                 rc = 1
+                if "TIMEOUT" in str(ex) or "hang" in str(ex):
+                    log("device timeout: stopping (exit 124 -> NEEDS_RESET)")
+                    os._exit(124)
     finally:
         h.close()
         ttnn.close_mesh_device(mesh)
