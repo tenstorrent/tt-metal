@@ -35,10 +35,17 @@ constexpr uint32_t kIdxAlign = 16;
 uint32_t round_up(uint32_t x, uint32_t m) { return (x + m - 1) / m * m; }
 
 // Rank ranges: whole owner rounds (block b belongs to b % num_devices), 16-block aligned for the L1 transfers.
-uint32_t range_blocks(uint32_t num_devices) {
+// A finer KV layout (fixed slab, GLM_KV_SLAB_TOKENS) has more, shorter blocks for the same cache: widen the range by
+// whole steps until every range has a core (the kernel holds one range per core in its scratch). Unchanged whenever the
+// base width already fits, i.e. for every layout that worked before.
+uint32_t range_blocks(uint32_t num_devices, uint32_t num_blocks, uint32_t cores) {
     uint32_t blocks = 2 * num_devices;
     while (blocks % 16 != 0) {
         blocks += num_devices;
+    }
+    const uint32_t step = blocks;
+    while ((num_blocks + blocks - 1) / blocks > cores) {
+        blocks += step;
     }
     return blocks;
 }
@@ -100,7 +107,7 @@ tt::tt_metal::ProgramDescriptor SparsePushHotDeviceOperation::create_descriptor(
     const CoreRangeSet all_cores(CoreRange(CoreCoord(0, 0), CoreCoord(grid.x - 1, core_rows - 1)));
     const uint32_t total_idx = rows * topk;
     const uint32_t per_core = round_up((total_idx + cores - 1) / cores, kIdxAlign);
-    const uint32_t blocks_per_range = range_blocks(attrs.num_devices);
+    const uint32_t blocks_per_range = range_blocks(attrs.num_devices, layout.num_blocks, cores);
     const uint32_t max_ranges = (layout.num_blocks + blocks_per_range - 1) / blocks_per_range;
     TT_FATAL(max_ranges <= cores, "sparse push hot: {} rank ranges exceed {} cores", max_ranges, cores);
     TT_FATAL(cores > attrs.num_devices, "sparse push hot needs more than {} cores", attrs.num_devices);
