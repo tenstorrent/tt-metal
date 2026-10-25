@@ -1730,6 +1730,10 @@ class ttMLA:
                 kvpe_cache.format == self.sparse_kv_cache_format
             ), f"MLA configured for {self.sparse_kv_cache_format}, got {kvpe_cache.format} cache"
 
+        if os.getenv("MLA_MEMLOG") and not getattr(ttMLA, "_memlog_forward_done", False):
+            ttMLA._memlog_forward_done = True  # once per process: everything (weights, caches) is allocated by now
+            self._log_dram(f"first forward (layer {self.layer_idx})")
+
         # Preserve profiler region labels without duplicating them through Python logging.
         ttnn.tracy_message("`TT_SIGNPOST: MLA_START`")
 
