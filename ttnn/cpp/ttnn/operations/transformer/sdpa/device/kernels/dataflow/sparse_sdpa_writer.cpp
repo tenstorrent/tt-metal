@@ -76,6 +76,17 @@ void kernel_main() {
     constexpr uint32_t latent_row_bytes = vDHt * tt::constants::TILE_WIDTH;
     constexpr uint32_t scale_blocks = sparse_sdpa::scale_block_count(latent_row_bytes);
     const auto kv = TensorAccessor(kv_args, kv_addr);
+    // Optional DRAM spill of kv (see the reader); chained after the attention-sink accessor.
+    constexpr auto sink_args =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto spill_args =
+        TensorAccessorArgs<sink_args.next_compile_time_args_offset(), sink_args.next_common_runtime_args_offset()>();
+    const auto kv_spill =
+        TensorAccessor(spill_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_SPILL_ADDRESS));
+    const sparse_sdpa::KvSpill kv_spill_rows{
+        get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_FRONT_PAGES),
+        get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_SPILL_ROWS),
+        get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::KV_SPILL_ROW_STRIDE)};
     experimental::CB idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
 
@@ -106,10 +117,8 @@ void kernel_main() {
 
     if constexpr (use_attention_sink) {
         if (tok_count > 0) {
-            constexpr auto sink_args = TensorAccessorArgs<
-                kv_args.next_compile_time_args_offset(),
-                kv_args.next_common_runtime_args_offset()>();
-            const auto sink = TensorAccessor(sink_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS));
+            const auto sink = TensorAccessor(
+                sink_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::ATTENTION_SINK_ADDRESS));
             experimental::CB sink_cb(cb_attention_sink), scratch(cb_sink_scratch);
             constexpr uint32_t sink_bytes = H * sizeof(uint16_t);
             constexpr uint32_t tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
@@ -165,7 +174,17 @@ void kernel_main() {
                     bc_shard_stride_gap,
                     bc_slab_stride_gap,
                     sparse_sdpa::SCALED_K_TRID_RING>(
-                    noc, kv, dst_l1, idx_ptr, base, 0, split, packed_row_bytes, kv_batch_page_offset);
+                    noc,
+                    kv,
+                    kv_spill,
+                    kv_spill_rows,
+                    dst_l1,
+                    idx_ptr,
+                    base,
+                    0,
+                    split,
+                    packed_row_bytes,
+                    kv_batch_page_offset);
                 sparse_sdpa::scatter_packed_scales<scale_blocks>(
                     dst_l1, scale_dst_l1, 0, split, packed_row_bytes, latent_row_bytes);
             } else {
@@ -176,7 +195,17 @@ void kernel_main() {
                     bc_shard_stride_gap,
                     bc_slab_stride_gap,
                     sparse_sdpa::K_TRID_RING>(
-                    noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset);
+                    noc,
+                    kv,
+                    kv_spill,
+                    kv_spill_rows,
+                    dst_l1,
+                    idx_ptr,
+                    base,
+                    0,
+                    split,
+                    k_row_bytes,
+                    kv_batch_page_offset);
             }
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);

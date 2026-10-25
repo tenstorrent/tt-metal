@@ -46,11 +46,18 @@ class SparseMlaOverlapResources:
     data_valid_semaphore: object
 
 
+# Tensix grid each profile requires. Every profile gives the KV gather the two worker rows right below the Ethernet
+# row (logical rows 0..1, the full width) and top-k the other eight rows. Blackhole has all its Ethernet cores in one
+# row and harvests only columns, so those two rows hold a core directly below every Ethernet core on every chip,
+# whichever links the fabric routes through: the fabric CCL senders sit one NoC hop from their links. A column strip
+# (the previous 80/40 split) forced them across the chip (QuietBox, standalone: 1.7-2x slower KV gather).
 _SPARSE_MLA_OVERLAP_PROFILE_GRIDS = {
-    "galaxy_80_40": (12, 10),
-    "loudbox_80_40": (12, 10),
-    "qb2_80_30": (11, 10),
+    "loudbox_rows2": (12, 10),
+    "qb2_rows2": (11, 10),
 }
+# A Galaxy has the LoudBox's 12x10 grid, so it takes the same profile.
+_SPARSE_MLA_OVERLAP_PROFILE_ALIASES = {"galaxy_rows2": "loudbox_rows2"}
+_SPARSE_MLA_OVERLAP_GATHER_ROWS = 2
 
 
 def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
@@ -176,6 +183,10 @@ class TT_CCL:
         # exclusively to the SP KV-prefix gather branch and is never shared with the TP index gather.
         self.sparse_mla_overlap_resources: SparseMlaOverlapResources | None = None
 
+        # Sparse KVPE push: one planner (its plan is reused by every layer fed the same indices) and one
+        # caller-owned ready/done semaphore pair, created on first use (the warm pass, before any capture).
+        self.sparse_kv_push = None
+
         # The routed expert / combine_fabric2d overlap's fwd_arrived, final_arrived and expert_go, shared by every
         # MoE layer. Created on first use; see get_combine_overlap_semaphores.
         self.combine_overlap_semaphores = None
@@ -257,18 +268,19 @@ class TT_CCL:
         return buffer
 
     def get_sparse_mla_overlap_resources(self, profile: str) -> SparseMlaOverlapResources:
-        """Create or return the exact 80/40 production or 80/30 QB2 overlap profile.
+        """Create or return the sparse-MLA overlap profile: KV gather on the top two worker rows, top-k on the rest.
 
         Resource creation happens outside the hot forward path. Semaphore allocation is followed by a
         mesh-wide synchronization so every participating device observes the zero initialization before
         the first Fabric atomic increment.
         """
         profile = profile.lower()
+        profile = _SPARSE_MLA_OVERLAP_PROFILE_ALIASES.get(profile, profile)
         if profile == "auto":
             grid = self.mesh_device.compute_with_storage_grid_size()
             profile = {
-                (11, 10): "qb2_80_30",
-                (12, 10): "loudbox_80_40",
+                (11, 10): "qb2_rows2",
+                (12, 10): "loudbox_rows2",
             }.get((grid.x, grid.y))
             if profile is None:
                 raise ValueError(
@@ -278,7 +290,7 @@ class TT_CCL:
         if profile not in _SPARSE_MLA_OVERLAP_PROFILE_GRIDS:
             raise ValueError(
                 f"unknown sparse MLA overlap profile {profile!r}; expected one of "
-                f"{sorted(_SPARSE_MLA_OVERLAP_PROFILE_GRIDS)}"
+                f"{sorted([*_SPARSE_MLA_OVERLAP_PROFILE_GRIDS, *_SPARSE_MLA_OVERLAP_PROFILE_ALIASES])}"
             )
         existing = self.sparse_mla_overlap_resources
         if existing is not None:
@@ -297,11 +309,13 @@ class TT_CCL:
                 f"Tensix grid, got {grid.x}x{grid.y}"
             )
 
-        topk_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))])
-        gather_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 9))])
-        assert topk_core_grid.num_cores() == 80
-        expected_gather_cores = 40 if grid.x == 12 else 30
-        assert gather_core_grid.num_cores() == expected_gather_cores
+        rows = _SPARSE_MLA_OVERLAP_GATHER_ROWS
+        gather_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, rows - 1))]
+        )
+        topk_core_grid = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+        )
 
         manager_id = self.mesh_device.create_sub_device_manager(
             [ttnn.SubDevice([topk_core_grid]), ttnn.SubDevice([gather_core_grid])],
@@ -443,6 +457,20 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_sparse_kv_push(self, links: int):
+        """(planner, ready_semaphore, done_semaphore) for the sparse KVPE push; layers run serially and share them."""
+        if self.sparse_kv_push is None:
+            from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPlanner
+
+            l1_small = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.L1_SMALL).total_bytes_per_bank > 0
+            buffer_type = ttnn.BufferType.L1_SMALL if l1_small else ttnn.BufferType.L1
+            sems = [
+                ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0, buffer_type) for _ in range(2)
+            ]
+            ttnn.synchronize_device(self.mesh_device)
+            self.sparse_kv_push = (SparseKvPushPlanner(self.mesh_device, links), *sems)
+        return self.sparse_kv_push
 
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
         """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.

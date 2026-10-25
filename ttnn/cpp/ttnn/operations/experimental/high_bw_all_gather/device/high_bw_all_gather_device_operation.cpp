@@ -105,8 +105,6 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         args.axis_num_devices,
         args.num_devices,
         args.num_links,
-        args.mesh_rows,
-        args.mesh_cols,
         args.packet_size,
         device->shape(),
         fabric_nodes,
@@ -134,6 +132,9 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        args.push_stripe_chunk,
+        args.push_max_rows,
+        args.push_part,
         tensor_args);
 }
 
@@ -247,15 +248,45 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     validate_batch_index_metadata(args, tensor_args);
     validate_gathered_prefix_metadata(args, tensor_args);
     validate_slot_extent_control_mix(args, tensor_args);
+    if (tensor_args.has_push_table()) {
+        const auto& table = *tensor_args.push_table;
+        TT_FATAL(args.linearized_mesh_ring, "the sparse KV push is full-mesh only (cluster_axis=None)");
+        TT_FATAL(
+            args.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY,
+            "the sparse KV push needs a 2D torus fabric (FABRIC_2D_TORUS_XY), got {}",
+            args.fabric_config);
+        TT_FATAL(
+            table.dtype() == DataType::UINT32 && table.layout() == Layout::ROW_MAJOR &&
+                table.memory_config().buffer_type() == BufferType::DRAM,
+            "push_table must be a UINT32 ROW_MAJOR DRAM tensor");
+        TT_FATAL(
+            args.push_stripe_chunk > 0 && args.push_max_rows > 0,
+            "the sparse KV push needs push_stripe_chunk and push_max_rows");
+        TT_FATAL(args.push_part == 0 || args.push_part == 2, "push_part must be 0 (all rows) or 2 (remainder)");
+        TT_FATAL(!tensor_args.has_gathered_prefix_metadata(), "push_table replaces the gathered extent controls");
+        if (tensor_args.push_hot_table.has_value()) {
+            const auto& hot = *tensor_args.push_hot_table;
+            TT_FATAL(
+                hot.dtype() == DataType::UINT32 && hot.layout() == Layout::ROW_MAJOR &&
+                    hot.memory_config().buffer_type() == BufferType::DRAM &&
+                    hot.padded_shape()[2] * args.num_devices == table.padded_shape()[2],
+                "push_hot_table must be this chip's UINT32 ROW_MAJOR DRAM sparse_push_hot table");
+        }
+        if (tensor_args.push_spill.has_value()) {
+            const auto& spill = *tensor_args.push_spill;
+            TT_FATAL(
+                spill.memory_config().buffer_type() == BufferType::DRAM && !spill.memory_config().is_sharded(),
+                "push_spill must be an interleaved DRAM tensor");
+        }
+    }
 
     // Constraints on input tensor
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in buffers on device!");
     validate_external_semaphores(args, input_tensor);
 
-    // Constraints on other inputs
-    int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
-    TT_FATAL(args.dim >= -rank && args.dim < rank, "Invalid gather dim {} for {}D input tensor", args.dim, rank);
+    // Constraints on other inputs (args.dim is already normalised to [0, rank))
+    const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
     TT_FATAL(
         args.num_devices > 1,
         "high_bw_all_gather collective will only work for num_devices > 1, got {}",
@@ -295,6 +326,13 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.layout() == ttnn::ROW_MAJOR_LAYOUT || input_tensor.layout() == ttnn::TILE_LAYOUT,
         "high_bw_all_gather requires row-major or tile-layout input");
+    // The program moves whole pages, so every page of the output must come from one rank: a ROW_MAJOR gather along the
+    // innermost dim (each rank owns part of every output row) is not supported.
+    TT_FATAL(
+        input_tensor.layout() != ttnn::ROW_MAJOR_LAYOUT || args.dim != rank - 1,
+        "high_bw_all_gather cannot gather a ROW_MAJOR tensor along its innermost dim {} (each output page would mix "
+        "ranks); gather a TILE_LAYOUT tensor or another dim",
+        args.dim);
     TT_FATAL(input_tensor.buffer()->is_dram(), "high_bw_all_gather requires DRAM input");
     {
         const auto& output_tensor = tensor_args.output_tensor;
@@ -371,6 +409,13 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
             }
             expected_output_shape[0] = 1;
         }
+        // The sparse push writes a compact buffer, not the gathered shape: it may be taller (each owner's run is
+        // padded to whole packet units) or, as an L1 front with a DRAM push_spill, shorter and with its rows padded
+        // to DRAM-aligned pages. Only the row page size has to match (checked by the push factory).
+        if (tensor_args.has_push_table() && output_shape.rank() == expected_output_shape.rank()) {
+            expected_output_shape[args.dim] = output_shape[args.dim];
+            expected_output_shape[-1] = output_shape[-1];
+        }
         TT_FATAL(
             output_shape == expected_output_shape,
             "Output tensor shape must be the worst-case gathered shape {}, got {}",
@@ -392,9 +437,11 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
         }
     }
 
+    // The sparse push may write an L1 front (spilling to DRAM); the gathers write interleaved DRAM.
     TT_FATAL(
-        args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-            args.output_mem_config.buffer_type() == BufferType::DRAM,
+        (args.output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+         args.output_mem_config.buffer_type() == BufferType::DRAM) ||
+            (tensor_args.has_push_table() && tensor_args.push_spill.has_value()),
         "high_bw_all_gather requires interleaved DRAM output");
 }
 
@@ -435,9 +482,7 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_hit(
             input_shape[0]);
     }
     if (args.gathered_dim_size.has_value()) {
-        const int32_t rank = static_cast<int32_t>(input_shape.rank());
-        const int32_t gather_dim = args.dim < 0 ? args.dim + rank : args.dim;
-        const uint32_t max_gathered = input_shape[gather_dim] * args.num_devices;
+        const uint32_t max_gathered = input_shape[args.dim] * args.num_devices;
         TT_FATAL(
             *args.gathered_dim_size > 0 && *args.gathered_dim_size <= max_gathered &&
                 *args.gathered_dim_size % args.num_devices == 0,
@@ -470,8 +515,11 @@ HighBwAllGatherDeviceOperation::tensor_return_value_t HighBwAllGatherDeviceOpera
 }
 
 HighBwAllGatherDeviceOperation::program_factory_t HighBwAllGatherDeviceOperation::select_program_factory(
-    const HighBwAllGatherParams&, const HighBwAllGatherInputs&) {
-    return program_factory_t{HighBwAllGatherUnicastFactory{}};
+    const HighBwAllGatherParams&, const HighBwAllGatherInputs& tensor_args) {
+    if (tensor_args.has_push_table()) {
+        return program_factory_t{HighBwSparsePushFactory{}};
+    }
+    return program_factory_t{HighBwAllGatherFabricFactory{}};
 }
 
 std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_build_operation_args(
@@ -490,7 +538,13 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    const std::optional<Tensor>& push_table,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows,
+    uint32_t push_part,
+    const std::optional<Tensor>& push_spill,
+    const std::optional<Tensor>& push_hot_table) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
     // so we include it in HighBwAllGatherParams.
@@ -544,8 +598,9 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
 
     // Resolve negative gather dim
-    uint32_t rank = input_tensor.logical_shape().rank();
-    int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+    const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());
+    TT_FATAL(dim >= -rank && dim < rank, "Invalid gather dim {} for {}D input tensor", dim, rank);
+    const int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
     const auto subdevice_manager_id = mesh_device->get_active_sub_device_manager_id();
     const auto selected_subdevice_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -578,11 +633,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .axis_num_devices = axis_num_devices,
             .num_devices = num_devices,
             .num_links = num_links,
-            .mesh_rows = linearized_mesh_ring ? mesh_shape[0] : 0,
-            .mesh_cols = linearized_mesh_ring ? mesh_shape[1] : 0,
             .packet_size = packet_size,
             .subdevice_id = subdevice_id,
-            .sub_core_grid = sub_core_grid,
             .subdevice_manager_id = subdevice_manager_id,
             .resolved_worker_core_grid = resolved_worker_core_grid,
             .ready_semaphore = ready_semaphore,
@@ -591,12 +643,18 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .gathered_dim_size = gathered_dim_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
-            .gathered_slab_global = gathered_slab_global},
+            .gathered_slab_global = gathered_slab_global,
+            .push_stripe_chunk = push_stripe_chunk,
+            .push_max_rows = push_max_rows,
+            .push_part = push_part},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
             .input_batch_index_tensor = input_batch_index_tensor,
-            .gathered_prefix_tensor = gathered_prefix_tensor}};
+            .gathered_prefix_tensor = gathered_prefix_tensor,
+            .push_table = push_table,
+            .push_spill = push_spill,
+            .push_hot_table = push_hot_table}};
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
@@ -619,7 +677,13 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
     const std::optional<GlobalSemaphore>& ready_semaphore,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore) {
+    const std::optional<GlobalSemaphore>& data_valid_semaphore,
+    const std::optional<Tensor>& push_table,
+    uint32_t push_stripe_chunk,
+    uint32_t push_max_rows,
+    uint32_t push_part,
+    const std::optional<Tensor>& push_spill,
+    const std::optional<Tensor>& push_hot_table) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
         output_tensor,
@@ -636,7 +700,13 @@ Tensor high_bw_all_gather(
         gathered_prefix_tensor,
         gathered_slab_global,
         ready_semaphore,
-        data_valid_semaphore);
+        data_valid_semaphore,
+        push_table,
+        push_stripe_chunk,
+        push_max_rows,
+        push_part,
+        push_spill,
+        push_hot_table);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);
 }

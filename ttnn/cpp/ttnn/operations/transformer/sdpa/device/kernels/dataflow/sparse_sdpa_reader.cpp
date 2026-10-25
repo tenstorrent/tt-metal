@@ -69,6 +69,9 @@ void kernel_main() {
         TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
     constexpr auto idx_args =
         TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    // Optional DRAM spill of kv: pages >= KV_FRONT_PAGES are read from it (kv then holds only the front).
+    constexpr auto spill_args =
+        TensorAccessorArgs<idx_args.next_compile_time_args_offset(), idx_args.next_common_runtime_args_offset()>();
 
     const uint32_t q_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::Q_ADDRESS);
     const uint32_t kv_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_ADDRESS);
@@ -92,6 +95,12 @@ void kernel_main() {
     const auto q = TensorAccessor(q_args, q_addr);
     const auto kv = TensorAccessor(kv_args, kv_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
+    const auto kv_spill =
+        TensorAccessor(spill_args, get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_SPILL_ADDRESS));
+    const sparse_sdpa::KvSpill kv_spill_rows{
+        get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_FRONT_PAGES),
+        get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_SPILL_ROWS),
+        get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_SPILL_ROW_STRIDE)};
     // Reader-internal scratch for one token's index row (reserved once, reused).
     idx_cb.reserve_back(1);
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
@@ -175,7 +184,17 @@ void kernel_main() {
                         bc_shard_stride_gap,
                         bc_slab_stride_gap,
                         sparse_sdpa::SCALED_K_TRID_RING>(
-                        noc, kv, k_write_ptr, idx_ptr, slab_base, split, rows, packed_row_bytes, kv_batch_page_offset);
+                        noc,
+                        kv,
+                        kv_spill,
+                        kv_spill_rows,
+                        k_write_ptr,
+                        idx_ptr,
+                        slab_base,
+                        split,
+                        rows,
+                        packed_row_bytes,
+                        kv_batch_page_offset);
                     // Expand the scale rows from the reader's gathered half while the writer handles its
                     // own half. The two RISCs write disjoint rows of the same FP32 broadcast tiles.
                     sparse_sdpa::scatter_packed_scales<scale_blocks>(
@@ -223,7 +242,17 @@ void kernel_main() {
                     bc_shard_stride_gap,
                     bc_slab_stride_gap,
                     sparse_sdpa::K_TRID_RING>(
-                    noc, kv, k_write_ptr, idx_ptr, base, half, valid, k_row_bytes, kv_batch_page_offset);
+                    noc,
+                    kv,
+                    kv_spill,
+                    kv_spill_rows,
+                    k_write_ptr,
+                    idx_ptr,
+                    base,
+                    half,
+                    valid,
+                    k_row_bytes,
+                    kv_batch_page_offset);
                 kack_cb.wait_front(1);  // writer's half landed in cb_k_rm L1
                 kack_cb.pop_front(1);
                 // Zero-fill the sentinel suffix: masked-key scores become a defined 0 (compute adds -inf).

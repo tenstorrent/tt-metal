@@ -151,7 +151,10 @@ class MlaKvCache:
             raise ValueError(f"{self.format} cache must use {dtype}, got {self.storage.dtype}")
         if self.storage.layout != layout:
             raise ValueError(f"{self.format} cache must use {layout}, got {self.storage.layout}")
-        if self.storage.shape[-1] != width:
+        # Scaled FP8 rows may be padded to whole 64-byte pages (the sparse push's L1 front: its rows must match the
+        # DRAM cache's aligned pages).
+        padded = -(-width // 64) * 64 if self.format == MlaKvCacheFormat.SCALED_FP8 else width
+        if self.storage.shape[-1] not in (width, padded):
             raise ValueError(f"{self.format} cache width must be {width}, got {self.storage.shape[-1]}")
 
     def pack(
