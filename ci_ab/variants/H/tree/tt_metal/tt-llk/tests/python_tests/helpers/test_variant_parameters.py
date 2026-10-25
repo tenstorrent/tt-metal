@@ -101,6 +101,20 @@ class MATMUL_ROW_MOP(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return "#define MATMUL_ROW_MOP"
 
+    @staticmethod
+    def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int) -> list:
+        """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
+        the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
+        from helpers.matmul_prod_keys import main_form_cell, m2_row_mop
+
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE or dest_sync != DestSync.Half:
+            return []
+        fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+        out_format = formats.output_format
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim)):
+            return []
+        return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
+
 
 # Operand formats of 8 bits per datum or less (_llk_unpack_AB_matmul_narrow_format_).
 MATMUL_NARROW_STREAM_FORMATS = (
@@ -174,6 +188,17 @@ class MATMUL_STREAM_Z(TemplateParameter):
         return [MATMUL_STREAM_Z()] if formats.input_format in MATMUL_DENSE_STREAM_FORMATS else []
 
 
+def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, throttle: int) -> bool:
+    """One Float16_b tile row of four k steps at HiFi2, full sync and a static throttle of 5: the k loop and the keyed forms read a cycle slower than main's, so it keeps main's."""
+    return (
+        throttle >= 5
+        and math_fidelity == MathFidelity.HiFi2
+        and dest_sync == DestSync.Full
+        and formats.input_format == formats.output_format == DataFormat.Float16_b
+        and (ct_dim, rt_dim, kt_dim) == (1, 1, 4)
+    )
+
+
 @dataclass
 class MATMUL_K_LOOP(TemplateParameter):
     """Blackhole matmul unpack of the whole inner dimension in one _llk_unpack_AB_matmul_k_ call."""
@@ -193,9 +218,13 @@ class MATMUL_K_LOOP(TemplateParameter):
         in0_c_dim: int = 32,
         in1_r_dim: int = 32,
         in1_c_dim: int = 32,
+        dest_sync=None,
+        throttle: int = 0,
     ) -> list:
         """[MATMUL_K_LOOP()] for 32x32 tiles of one 16-bit, bfp8 or float32 format, where the unpack call per k step bounds the block: 1x1 at LoFi and HiFi2 from kt 4, 2x1 at LoFi from kt 8, 1x2 and 2x2 at LoFi from kt 16, else []."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        if _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim, rt_dim, kt_dim, throttle):
             return []
         if (in0_r_dim, in0_c_dim, in1_r_dim, in1_c_dim) != (32, 32, 32, 32):
             return []
@@ -215,6 +244,13 @@ class MATMUL_K_LOOP(TemplateParameter):
             and (((rt_dim, ct_dim) == (2, 1) and kt_dim >= 8) or ((rt_dim, ct_dim) in ((1, 2), (2, 2)) and kt_dim >= 16))
         )
         return [MATMUL_K_LOOP()] if key else []
+
+
+class MATMUL_UNPACK_TTSYNC_EXCL(TemplateParameter):
+    """Blackhole matmul ttsync unpack of a kernel whose only unpack calls are ttsync matmul rows: no context-count post and get."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_UNPACK_TTSYNC_EXCL"
 
 
 @dataclass
@@ -255,14 +291,15 @@ class MATMUL_FORM_KEYS(TemplateParameter):
     still holds them, as the variant hash reads it."""
 
     def __init__(
-        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False
+        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False, unfused_post: bool = False
     ):
         self.kt_per_section = kt_per_section
         self.output_format = output_format
         self.row_le_8 = row_le_8
+        self.unfused_post = unfused_post
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -270,10 +307,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             f"constexpr std::uint32_t MATMUL_KT_PER_SECTION = {self.kt_per_section};\n"
             f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
             + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
+            + ("\n#define MATMUL_UNFUSED_POST" if self.unfused_post else "")
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None) -> list:
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
@@ -286,14 +324,120 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             and formats.output_format == DataFormat.Float32
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        if _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim, rt_dim, kt_dim, throttle):
+            return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        # 32-bit input at LoFi and full sync with four k steps: the 1x2 block with a 32-bit DEST and 16-bit or bfp8 output, and the 2x1 block
+        # with a Float16_b output and a 16-bit DEST, read slower with the row forms: the unknown-k key, which is the tile form
+        if (
+            kt_dim == 4
+            and math_fidelity == MathFidelity.LoFi
+            and dest_sync == DestSync.Full
+            and formats.input_format == DataFormat.Float32
+            and (
+                ((ct_dim, rt_dim) == (1, 2) and dest_acc == DestAccumulation.Yes and formats.output_format in (DataFormat.Float16_b, DataFormat.Bfp8_b))
+                or ((ct_dim, rt_dim) == (2, 1) and dest_acc == DestAccumulation.No and formats.output_format == DataFormat.Float16_b)
+            )
+        ):
+            return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
+        if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
+            from helpers.matmul_prod_keys import main_form_cell
+
+            fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
+                return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
             MATMUL_FORM_KEYS(
                 1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
                 formats.output_format,
                 0 < max(ct_dim, rt_dim) <= 8,
+                # Bfp8_b input to a Float32 output at HiFi2 and half sync reads slower with the fused post and DEST flip: main's separate stalls
+                # for one tile, and for any one k step block with a 16-bit DEST
+                unfuse_one_tile
+                and math_fidelity == MathFidelity.HiFi2
+                and dest_sync == DestSync.Half
+                and formats.input_format == DataFormat.Bfp8_b
+                and formats.output_format == DataFormat.Float32
+                and (kt_dim == 1 and (dest_acc == DestAccumulation.No or (ct_dim, rt_dim) == (1, 1)))
             )
         ]
+
+
+class MATMUL_PHASE_ELIDE(TemplateParameter):
+    """Blackhole matmul that runs the fidelity phases its operand formats can use (matmul_phase_fidelity in llk_matmul_forms.h)."""
+
+    def __init__(self, in0: DataFormat, in1: DataFormat):
+        self.in0 = in0
+        self.in1 = in1
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PHASE_ELIDE({self.in0.name}, {self.in1.name})"
+
+    def convert_to_cpp(self) -> str:
+        return (
+            "#define MATMUL_PHASE_ELIDE\n"
+            f"constexpr DataFormat MATMUL_IN0_FORMAT = DataFormat::{self.in0.name};\n"
+            f"constexpr DataFormat MATMUL_IN1_FORMAT = DataFormat::{self.in1.name};"
+        )
+
+    @staticmethod
+    def fidelity(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None):
+        """The fidelity the elided matmul runs, the same rule as matmul_phase_fidelity."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return math_fidelity
+        if formats.input_format != formats.input_format_B or transpose == Transpose.Yes:
+            return math_fidelity
+        # Bfp8_b x Bfp8_b HiFi3/HiFi4 with a 32-bit output or DEST runs faster on main's own forms (measured).
+        if (
+            formats.input_format == formats.input_format_B == DataFormat.Bfp8_b
+            and math_fidelity in (MathFidelity.HiFi3, MathFidelity.HiFi4)
+            and throttle == 0
+            and (formats.output_format == DataFormat.Float32 or dest_acc == DestAccumulation.Yes)
+        ):
+            return math_fidelity
+        lo_a_zero = formats.input_format_B == DataFormat.Bfp4_b
+        lo_b_zero = formats.input_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+        if lo_a_zero and lo_b_zero:
+            return MathFidelity.LoFi
+        if lo_b_zero:
+            return MathFidelity.LoFi if math_fidelity == MathFidelity.LoFi else MathFidelity.HiFi2
+        if lo_a_zero and math_fidelity == MathFidelity.HiFi2:
+            return MathFidelity.LoFi
+        return math_fidelity
+
+    @staticmethod
+    def for_block(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None) -> list:
+        """[MATMUL_PHASE_ELIDE(in0, in1)] where the elided fidelity is lower than the requested one, else []."""
+        if MATMUL_PHASE_ELIDE.fidelity(formats, math_fidelity, dest_acc, throttle, transpose) == math_fidelity:
+            return []
+        return [MATMUL_PHASE_ELIDE(formats.input_format, formats.input_format_B)]
+
+
+@dataclass
+class MATMUL_PROD_KEYS(TemplateParameter):
+    """The forms of a cell are the ones the ttnn kernels select (helpers/matmul_prod_keys.py): no fused post flip, which ttnn does not run."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_PROD_KEYS"
+
+
+@dataclass(init=False, repr=False, eq=False)
+class MATMUL_FORCE_FORM(TemplateParameter):
+    """The math MOP kind (0 tile MOP, 1 rows MOP of the default form, 2 row MOP: also pass MATMUL_ROW_MOP) and the hoisted unpack
+    of a cell, whatever the forms table says. Measures every form of a cell so any key can be judged without another run.
+
+    No report column (the fields stay out of the dataclass); the repr holds them, as the variant hash reads it."""
+
+    def __init__(self, kind: int = 0, hoist: bool = False):
+        self.kind = kind
+        self.hoist = hoist
+
+    def __repr__(self) -> str:
+        return f"MATMUL_FORCE_FORM({self.kind}, {self.hoist})"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_FORCE_FORM {2 * self.kind + int(self.hoist)}"
 
 
 @dataclass
@@ -305,19 +449,37 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
 
     @staticmethod
     def for_block(formats, dest_acc, math_fidelity, ct_dim: int, rt_dim: int, kt_dim: int, dest_sync=None) -> list:
-        """[MATMUL_UNPACK_TTSYNC()] for LoFi 1x1 and 1x2 blocks of at most 4 k steps that the K loop entry does not take, else [].
-
-        Measured: the GPR form beats the context poll where one call is a few tiles at LoFi and loses from kt 32 and on 2x2."""
+        """[MATMUL_UNPACK_TTSYNC()] for the blocks of up to 2x2 tiles that the K loop entry does not take and where the GPR form measured 0 slower than the context poll."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-            return []
-        if math_fidelity != MathFidelity.LoFi or rt_dim != 1 or ct_dim > 2 or kt_dim > 4:
             return []
         if MATMUL_K_LOOP.for_block(formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim):
             return []
-        # 32-bit input at half sync with one k step is hand-off bound and loses about 1 percent
-        if formats.input_format == DataFormat.Float32 and dest_sync == DestSync.Half and kt_dim == 1:
-            return []
-        return [MATMUL_UNPACK_TTSYNC()]
+        # the cells below measured 0 slower than the context poll over 1440 small-block rows (ABBA, both orders) and are the
+        # same cells bmm_unpack_auto_ttsync takes in the metal2 matmul kernel
+        half = dest_sync == DestSync.Half
+        fid = math_fidelity
+        one = rt_dim == 1 and ct_dim == 1
+        f32_acc = dest_acc == DestAccumulation.Yes
+        in_f, out_f = formats.input_format, formats.output_format
+        if kt_dim >= 5:
+            take = one and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
+        elif kt_dim >= 2:
+            take = (one and (fid in (MathFidelity.HiFi2, MathFidelity.LoFi) or (fid == MathFidelity.HiFi3 and half)) and not (
+                fid == MathFidelity.HiFi3 and in_f == DataFormat.Float16_b and out_f == DataFormat.Float32 and not f32_acc
+            )) or (fid == MathFidelity.LoFi and half and rt_dim <= 2 and ct_dim <= 2)
+            if fid == MathFidelity.LoFi and rt_dim == 1 and ct_dim == 2 and in_f == DataFormat.Float32 and out_f == DataFormat.Float16_b:
+                take = False
+            if rt_dim == 2 and ct_dim == 2 and in_f == DataFormat.Float32:
+                take = False
+        else:
+            take = (
+                one
+                and half
+                and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
+                and not (in_f == DataFormat.Float32 and out_f == DataFormat.Float32 and not f32_acc)
+                and not (fid == MathFidelity.HiFi2 and in_f == DataFormat.Bfp8_b and out_f == DataFormat.Float32 and f32_acc)
+            )
+        return [MATMUL_UNPACK_TTSYNC()] if take else []
 
 
 @dataclass

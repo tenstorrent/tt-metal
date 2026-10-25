@@ -32,6 +32,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import convert_to_l1_view, generate_face_matmul_data
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_INDEX,
     DEST_SYNC,
@@ -279,12 +280,14 @@ def test_math_matmul(
         )
     num_blocks = 1 if dest_straddles_half else 4
 
+
     configuration = TestConfig(
         "sources/math_matmul_test.cpp",
         formats,
         templates=[
             STOCHASTIC_ROUNDING(matmul_config.stochastic_rnd),
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces),
             THROTTLE_LEVEL(throttle),
             DEST_SYNC(matmul_config.dest_sync),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),

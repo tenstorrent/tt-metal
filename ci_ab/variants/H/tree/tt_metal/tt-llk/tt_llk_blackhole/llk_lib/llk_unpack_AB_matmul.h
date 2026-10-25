@@ -427,7 +427,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
 template <
     std::uint32_t kernel_broadcast_a = 0,
     std::uint32_t kernel_broadcast_b = 0,
-    bool auto_ttsync                 = false,
+    std::uint32_t auto_ttsync                 = false,
     bool stream_narrow               = false,
     std::uint32_t stream_z           = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
@@ -568,7 +568,7 @@ constexpr bool unpack_AB_matmul_hoist_rows()
 template <
     std::uint32_t kernel_broadcast_a = 0,
     std::uint32_t kernel_broadcast_b = 0,
-    bool auto_ttsync                 = false,
+    std::uint32_t auto_ttsync                 = false,
     std::uint32_t dest_max_tiles     = 16,
     bool hoist_rows                  = true,
     std::uint32_t max_row_tiles      = dest_max_tiles,
@@ -636,7 +636,10 @@ inline void _llk_unpack_AB_matmul_(
             LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
             LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
             // still counted for the context poll of the kernel's other unpack calls; the SEMGET below releases it
-            semaphore_post(semaphore::UNPACK_SYNC);
+            if constexpr (auto_ttsync != 2)
+            {
+                semaphore_post(semaphore::UNPACK_SYNC);
+            }
             // Auto TTSync holds these stores until the previous row's WRCFGs have read the GPRs
             regfile[p_gpr_unpack::MATMUL_ROW_ADDR_B] = address_b;
             regfile[p_gpr_unpack::MATMUL_ROW_ADDR_A] = address_a;
@@ -719,7 +722,10 @@ inline void _llk_unpack_AB_matmul_(
         }
 
         // T6::SEMGET for context release
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        if constexpr (auto_ttsync != 2)
+        {
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+        }
 
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);

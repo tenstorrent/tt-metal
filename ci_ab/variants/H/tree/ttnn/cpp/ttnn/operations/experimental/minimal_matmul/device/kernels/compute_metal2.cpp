@@ -398,7 +398,15 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
-template <bool row_mop, uint32_t kt_per_section, DataFormat out_format, typename In0Tok, typename In1Tok, typename OutTok>
+template <
+    bool row_mop,
+    uint32_t kt_per_section,
+    DataFormat out_format,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    typename In0Tok,
+    typename In1Tok,
+    typename OutTok>
 void matmul_blocks(
     const In0Tok in0_dfb,
     const In1Tok in1_dfb,
@@ -421,7 +429,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop, false, kt_per_section, out_format>(
+                matmul_block<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format>(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -467,6 +475,8 @@ template <
     bool row_mop,
     uint32_t kt_per_section,
     DataFormat out_format,
+    DataFormat in0_format,
+    DataFormat in1_format,
     typename In0Tok,
     typename In1Tok,
     typename IntermTok,
@@ -492,7 +502,7 @@ void matmul_blocks_swiglu(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop, false, kt_per_section, out_format>(
+                matmul_block<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format>(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -517,7 +527,7 @@ void matmul_blocks_swiglu(
                     }
                 }
                 reconfig_data_format_srca(interm_dfb, in1_dfb);
-                matmul_block_init<row_mop, false, kt_per_section, out_format>(
+                matmul_block_init<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format>(
                     in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
             }
             tile_regs_commit();
@@ -561,15 +571,34 @@ void kernel_main() {
     constexpr auto N_blocks_per_core = get_arg(args::N_blocks_per_core);
     constexpr auto subblock_h = get_arg(args::subblock_h);
     constexpr auto subblock_w = get_arg(args::subblock_w);
+#ifdef ARCH_BLACKHOLE
+    // cells where the keyed forms read slower than main's on the tt-llk sweep keep main's form (llk_matmul_forms.h)
+#if defined(UCK_CHLKC_PACK)
+    constexpr bool mm_main_cell = false;
+#else
+    constexpr bool mm_main_cell = ckernel::matmul_main_form_cell_selected<
+        MATH_FIDELITY,
+        K_block_tiles,
+        DST_ACCUM_MODE,
+        static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in0)]),
+        static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in1)]),
+        static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::out)]),
+        static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]),
+        (K_num_blocks > 1),
+        (subblock_w > subblock_h ? subblock_w : subblock_h),
+        (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0)>();
+#endif
+#endif
 #if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
     // not with a fused activation: its SFPU init runs once, before the matmul inits that rewrite ADDR_MOD_3, 6 and 7
-    constexpr bool row_mop = subblock_h * subblock_w >= 8 && K_block_tiles > 1;
+    constexpr bool row_mop = !mm_main_cell && subblock_h * subblock_w >= 8 && K_block_tiles > 1;
 #else
     constexpr bool row_mop = false;
 #endif
 #ifdef ARCH_BLACKHOLE
     // each DEST section is packed to the intermediate buffer
-    constexpr DataFormat mm_pack_format = static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]);
+    constexpr DataFormat mm_pack_format =
+        mm_main_cell ? DataFormat::Invalid : static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]);
 #else
     constexpr DataFormat mm_pack_format = DataFormat::Invalid;
 #endif
@@ -608,7 +637,15 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    matmul_init(dfb::in0, dfb::in1);
+#ifdef ARCH_BLACKHOLE
+    // operand formats for the fidelity phases they cannot use (matmul_phase_fidelity)
+    constexpr DataFormat mm_in0_format = static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in0)]);
+    constexpr DataFormat mm_in1_format = static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in1)]);
+#else
+    constexpr DataFormat mm_in0_format = DataFormat::Invalid;
+    constexpr DataFormat mm_in1_format = DataFormat::Invalid;
+#endif
+    matmul_init<mm_in0_format, mm_in1_format>(dfb::in0, dfb::in1);
     if constexpr (swiglu_in_k_loop) {
         PACK((minimal_matmul_swiglu_tile_init()));  // once: nothing else on the pack thread reprograms the SFPU
     }
@@ -644,7 +681,7 @@ void kernel_main() {
             reconfig_data_format(dfb::in1, dfb::in0);
             pack_reconfig_data_format(dfb::intermediate);
             retarget_packer(dfb::intermediate);
-            matmul_block_init<row_mop, false, K_block_tiles, mm_pack_format>(
+            matmul_block_init<row_mop, false, K_block_tiles, mm_pack_format, 0, mm_in0_format, mm_in1_format>(
                 dfb::in0,
                 dfb::in1,
                 false /*transpose*/,
@@ -666,7 +703,7 @@ void kernel_main() {
                     pack_reconfig_data_format(dfb::out);
                     // SwiGLU collapses the interleaved gate/up block to half its N width.
                     dfb_out.reserve_back(out_block_num_tiles >> 1);
-                    matmul_blocks_swiglu<swiglu_block_float_output, row_mop, K_block_tiles, mm_pack_format>(
+                    matmul_blocks_swiglu<swiglu_block_float_output, row_mop, K_block_tiles, mm_pack_format, mm_in0_format, mm_in1_format>(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,
@@ -683,7 +720,7 @@ void kernel_main() {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
                 } else {
-                    matmul_blocks<row_mop, K_block_tiles, mm_pack_format>(
+                    matmul_blocks<row_mop, K_block_tiles, mm_pack_format, mm_in0_format, mm_in1_format>(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,

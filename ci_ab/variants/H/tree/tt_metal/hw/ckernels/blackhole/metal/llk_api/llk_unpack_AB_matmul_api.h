@@ -16,7 +16,7 @@
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
 // runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
-template <bool auto_ttsync = false, bool stream_narrow = false>
+template <std::uint32_t auto_ttsync = false, bool stream_narrow = false>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -43,7 +43,7 @@ inline void llk_unpack_AB_matmul_init_impl(
 
 // kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
 // unknown.
-template <bool auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
+template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -96,7 +96,7 @@ constexpr bool llk_unpack_AB_matmul_kernel_has_narrow_format() {
     return false;
 }
 
-template <bool auto_ttsync = false>
+template <std::uint32_t auto_ttsync = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -182,7 +182,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     }
 }
 
-template <bool auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
+template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
