@@ -826,7 +826,17 @@ void kernel_main() {
                     wd_buf.wait_front(WD_RESIDENT_TILES);
                     matmul_block_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
                     const MatmulShape row_shape = MatmulShape::of(1, 1, 1, down_ec, HID_T, 1);
+                    // Rows past the block's real tile-rows (m_rows < m_eff = M_BLOCK on a tail block, e.g. 5 of 8 at
+                    // 160 tokens) are padding the writer never stores. They still arrive and are still pushed, so
+                    // every CB moves exactly as before, but their [1,HID_T]x[HID_T,ec] matmul is skipped.
+                    const uint32_t real_rows = wd_mgroup ? down_rows : (m_rows < down_rows ? m_rows : down_rows);
                     for (uint32_t r = 0; r < down_rows; ++r) {
+                        if (r >= real_rows) {
+                            h_buf.wait_front(HID_T);
+                            h_buf.pop_front(HID_T);
+                            out_tiles_buf.push_back(out_ec_max);
+                            continue;
+                        }
                         matmul_row_major<
                             /*init_matmul=*/false,
                             /*retain_in0=*/false,
