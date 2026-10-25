@@ -1636,3 +1636,27 @@ the 16-tile rewrite of every kernel is not worth it on this evidence. The on-chi
 core (~32 GB/s through the snake, every core takes all of x, padded to 64-row sub-blocks: M 160's third sub-block of
 32 rows ships 64); the real run is that floor (no reads 434) + the read interference (~87 us): lever 2 next.
 Logs: /localdev/mstaletovic/flat_glm53/ (ab_*, r_*, nr*, xs_*, zs_sk, zw_sk, sk_xbf16, ub2_glm53, dprof).
+
+### Lever 2 (x off the DRISC tile's port): retest with the unicast snakes (2026-10-25, bh-lb-09, GLM-5.3 E 8)
+x path today: the 4 relays (BRISC) gather x rows from the row-major bf16 dispatch buffer in DRAM (2 KB segments, NOC1
+reads -> each bank's NOC1 endpoint = DRISC tile 1, which also DMAs half the bank's gate/up weights in switch mode),
+tilize to bfp8 (TRISC), and their NCRISC unicasts each super-block to one snake head per gate/up rectangle; the
+gate/up cores forward it down the snake (NCRISC, NOC0, 4 pieces, 3 in flight). No multicast, fabric not involved.
+Ports: tile 0 (NOC0 endpoint) = the down cores' weight reads; tile 1 (NOC1 endpoint) = x reads + DRISC job; tile 2 =
+the other DRISC job. One variable a run, us a call M 96 / 128 / 160 (base 459 / 500 / 522), no hang in any:
+| variant | us | note |
+|---|---|---|
+| x reads on NOC0 (MIMO_FL_XRD_NOC=0: sender to NOC1) | 470 / 499 / 546 | y bit-exact vs base; x on tile 0 beside the down weights |
+| down weight reads on NOC1 (DN_NOC0=1: down weights on tile 1 beside the DRISC job and x) | 508 / 545 / 615 | |
+| both: x alone on tile 0's port, down weights on tile 1 | 460 / 495 / 553 | x isolated from every DRISC port: no gain |
+| x reads of 2 / 6 segments (XRD_BIG, same bytes) | 459 / 495 / 534 ; 503 / 565 / 611 | bigger requests hurt |
+| XRD_BATCH 4 | 460 / 499 / 540 | |
+| half the x bytes, same requests (XRD_HALF, garbage x) | 430 / 462 / 481 | recovers 70 / 100 / 50% of x's cost |
+| no x reads (XRD_SKIP) | 418 / 425 / 437 | x's cost: 41 / 75 / 85 us (its bytes: ~31 us at M 160) |
+Takeaway: the port is not the mechanism - x on a port of its own (tile 0, down weights moved) costs as much as on
+tile 1. x's cost follows its bytes (half the bytes, half the cost), i.e. GDDR contention from ~16 MB of 2 KB row
+gathers a call next to the 170 MB weight streams. The lever left is fewer x bytes: block-fp8 rows from the dispatch
+(one exponent per 16 consecutive columns = exactly the bfp8 tile's per-face-row groups, so no accuracy change vs
+today's tilize; 1.0625 B / element) with a relay-side rearrange into bfp8 tiles: estimate -30..-40 us at M 160
+(XRD_HALF), dispatch + relay work. Landing x in L1 instead does not fit: M_total 1280 x 6144 bf16 = 15.7 MB a chip.
+Logs: /localdev/mstaletovic/flat_glm53/ (x0_glm53, l2_*).
