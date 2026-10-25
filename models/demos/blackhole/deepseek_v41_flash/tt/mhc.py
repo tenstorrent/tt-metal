@@ -66,8 +66,20 @@ def _slice_rows(t, T, dim):
     return ttnn.slice(t, [0, 0, 0, 0], end)
 
 
+def _taware():
+    """T-aware kernels (default): the mixes / collapse+norm / expand programs take the true token count T = 1..8 (absent token rows read as zero, only T rows are written):
+    no pad before and no slice after any of them. DSV41_MHC_TAWARE=0 restores the pad-to-4 / pad-to-8 wrappers."""
+    return os.environ.get("DSV41_MHC_TAWARE", "1") == "1"
+
+
+def _fused_cn_ok(T):
+    return (T <= 8 and _taware()) or T in (4, 16, 32)
+
+
 def _odd_t(T):
     """T = 5..7 token rows (B=4 spec drafter: 5 rows per user) run on the T=8 kernels: the partial 4-token group of the collapse / expand kernels is not exact there."""
+    if _taware():
+        return None
     return 8 if 5 <= T <= 7 and os.environ.get("DSV41_MHC_PAD8", "1") == "1" else None
 
 
@@ -155,6 +167,13 @@ class DSV41MHC:
         """x [T,1,n,C] fp32 -> (pre [T,1,1,n], post [T,1,n,1], comb [T,1,n,n]) fp32."""
         T = x.shape[0]
         if _flag("DSV41_MHC_MIXES_V2", "1"):
+            if _taware() and T <= 8:
+                # T-aware: T = 1..3 run the T=4 program, T = 5..8 the two 4-token groups (= the T=4 program per group, bit-identical rows), on the true token rows
+                Ti = 4 if T <= 4 else 8
+                tg = 4 if Ti == 8 and os.environ.get("DSV41_MHC_MIXES_T4", "1") == "1" else 8
+                plan = proj_plan(Ti, self.dim, self.device, tg, T)
+                part = mhc_proj2(x, self._wt(plan), self.mix_col, plan)
+                return mhc_post2(part, self.consts9, plan, self._w.iters, self._w.eps, self.sq_eps, self.post_fidelity)
             if (
                 T % 8 and T != 4
             ):  # T=12/20 give wrong mixes in the packed kernel (pad to a multiple of 8); T<4 pads to 4; T=5..7 (B=4 spec: drafter 5 rows) pads to 8
@@ -202,7 +221,7 @@ class DSV41MHC:
             h = self.collapse_norm(_pad_rows(x, T, 8, 0), _pad_rows(pre, T, 8, 0), w, eps)
             return _slice_rows(h, T, 2)
         w4 = self._norm_weight(w, x.shape[0])
-        if _flag("DSV41_MHC_CN_FUSED", "1") and x.shape[0] in (4, 16, 32):
+        if _flag("DSV41_MHC_CN_FUSED", "1") and _fused_cn_ok(x.shape[0]):
             return mhc_collapse_norm(x, pre, w4, eps)
         h, part = mhc_collapse(x, pre)
         return mhc_norm_apply(h, part, w4, eps)
@@ -215,7 +234,7 @@ class DSV41MHC:
             h, h_tok = self.collapse_norm_rm(_pad_rows(x, T, 8, 0), _pad_rows(pre, T, 8, 0), w, eps)
             return _slice_rows(h, T, 2), _slice_rows(h_tok, T, 0)
         w4 = self._norm_weight(w, x.shape[0])
-        if _flag("DSV41_MHC_CN_FUSED", "1") and x.shape[0] in (4, 16, 32):
+        if _flag("DSV41_MHC_CN_FUSED", "1") and _fused_cn_ok(x.shape[0]):
             return mhc_collapse_norm(x, pre, w4, eps, emit_rm=True)
         h, part = mhc_collapse(x, pre)
         return mhc_norm_apply(h, part, w4, eps, emit_rm=True)

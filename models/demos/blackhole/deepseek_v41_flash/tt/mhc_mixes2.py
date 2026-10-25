@@ -28,9 +28,13 @@ def _grid_cores(mesh, n):
 class ProjPlan:
     """Work split of the projection for T token rows per device."""
 
-    def __init__(self, T, D=5120, max_cores=100, tg=8):
+    def __init__(self, T, D=5120, max_cores=100, tg=8, tv=None):
         assert T % 4 == 0 and T <= 32
         self.T, self.D = T, D
+        self.tv = (
+            T if tv is None else tv
+        )  # valid token rows (<= T): the kernels read / write only these (T-aware: no pad / slice around the mixes)
+        assert 1 <= self.tv <= T
         # tokens per core group (4 rows per token must fit one 32-row tile). tg=4 on a T=8 block (verify rows padded to 8) makes every group exactly the T=4 program: the packed partials hold
         # PPT = 8 partials per page like T=4, so the fp32 sums (and the Sinkhorn comb that amplifies their last bits) are bit-identical to the T=1 / T=4 decode rows
         self.TG = min(T, tg)
@@ -51,15 +55,15 @@ class ProjPlan:
 _PLANS = {}
 
 
-def proj_plan(T, D=5120, mesh=None, tg=8):
-    key = (T, D, tg)
+def proj_plan(T, D=5120, mesh=None, tg=8, tv=None):
+    key = (T, D, tg, tv)
     p = _PLANS.get(key)
     if p is None:
         mc = 100
         if mesh is not None:
             g = mesh.compute_with_storage_grid_size()
             mc = int(g.x) * int(g.y)
-        p = _PLANS[key] = ProjPlan(T, D, mc, tg)
+        p = _PLANS[key] = ProjPlan(T, D, mc, tg, tv)
     return p
 
 
@@ -68,7 +72,7 @@ def mhc_proj2(x, wt, ncol, plan):
     page g*PGPG + r//PPT, row (r%PPT)*TG + tl = column-range-r partial of token g*TG+tl (columns 0..mix_hc-1 projection, column ncol
     its sum of squares)."""
     T, _, n, D = (int(v) for v in x.shape)
-    assert n == 4 and T == plan.T and D == plan.D
+    assert n == 4 and T == plan.tv and D == plan.D
     TG, G, S, TPJ, PPT, PGPG = plan.TG, plan.G, plan.S, plan.TPJ, plan.PPT, plan.PGPG
     assert int(wt.shape[0]) == S and int(wt.shape[2]) == 4 * TPJ * 32
     mesh = x.device()
@@ -81,7 +85,7 @@ def mhc_proj2(x, wt, ncol, plan):
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for c, (cx, cy) in enumerate(cores):
         g, r = divmod(c, S)
-        rrt[cx][cy] = [r, g * TG]
+        rrt[cx][cy] = [r, g * TG, max(0, min(TG, plan.tv - g * TG))]
         wrt[cx][cy] = [g * PGPG + r // PPT, (r % PPT) * TG]
         crt[cx][cy] = []
     X, W, ONES, SEL, SQ, Z, Q, P = range(8)
@@ -122,24 +126,26 @@ def mhc_proj2(x, wt, ncol, plan):
         ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
     )
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
-    prog.custom_program_hash = _hash(0x5B1, T, D, S, TPJ, G, ncol, tuple(_acc(x)), tuple(_acc(wt)), tuple(_acc(part)))
+    prog.custom_program_hash = _hash(
+        0x5B1, T, plan.T, D, S, TPJ, G, ncol, tuple(_acc(x)), tuple(_acc(wt)), tuple(_acc(part))
+    )
     ttnn.generic_op([x, wt, part], prog)
     return part
 
 
 def mhc_post2(part, consts, plan, iters, eps, ss_eps, fidelity=ttnn.MathFidelity.HiFi4):
     """part [NPG,1,32,32] fp32 (from mhc_proj), consts [9,32,32] fp32 (see DSV41MHC) -> pre [T,1,1,4], post [T,1,4,1], comb [T,1,4,4]."""
-    T = plan.T
+    T, TV = plan.T, plan.tv
     mesh = part.device()
     NPG, G, PGPG = plan.NPG, plan.G, plan.PGPG
     NCONST = int(consts.shape[0])
     mk = lambda shape: ttnn.allocate_tensor_on_device(
         ttnn.Shape(shape), f32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
     )
-    pre, post, comb = mk([T, 1, 1, 4]), mk([T, 1, 4, 1]), mk([T, 1, 4, 4])
+    pre, post, comb = mk([TV, 1, 1, 4]), mk([TV, 1, 4, 1]), mk([TV, 1, 4, 4])
     core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     CONSTS, Q, SSEL, RAW, MIXES, PP, COMB, OUT, LOG, SKIN = 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
-    TB = min(T, 8)
+    TB = min(TV, 8)
     cbs = [
         _cb(core_set, CONSTS, NCONST, 4096, f32),
         _cb(core_set, Q, NPG, 4096, f32),
@@ -164,7 +170,7 @@ def mhc_post2(part, consts, plan, iters, eps, ss_eps, fidelity=ttnn.MathFidelity
     writer = _kernel(
         "mhc_post2_writer.cpp",
         core_set,
-        [PP, COMB, OUT, T] + _acc(pre) + _acc(post) + _acc(comb),
+        [PP, COMB, OUT, TV] + _acc(pre) + _acc(post) + _acc(comb),
         empty,
         None,
         ttnn.WriterConfigDescriptor(),
@@ -183,6 +189,7 @@ def mhc_post2(part, consts, plan, iters, eps, ss_eps, fidelity=ttnn.MathFidelity
         0x5B2,
         str(fidelity),
         T,
+        TV,
         NPG,
         iters,
         _bits(eps),

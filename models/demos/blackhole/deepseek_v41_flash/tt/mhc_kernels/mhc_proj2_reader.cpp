@@ -26,6 +26,8 @@ void kernel_main() {
 
     const uint32_t r = get_arg_val<uint32_t>(0);
     const uint32_t tok0 = get_arg_val<uint32_t>(1);
+    const uint32_t nv =
+        get_arg_val<uint32_t>(2);  // valid tokens of this core's group (<= TG): rows of absent tokens stay zero
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
 
@@ -42,7 +44,7 @@ void kernel_main() {
         DeviceZoneScopedN("PR_zerodone");
     }
     for (uint32_t j = 0; j < TPJ; ++j) {
-        for (uint32_t tl = 0; tl < TG; ++tl) {
+        for (uint32_t tl = 0; tl < nv; ++tl) {
             const uint32_t page = (tok0 + tl) * NT + r * TPJ + j;
             noc.async_read(
                 x_acc, cbx, 256, {.page_id = page, .offset_bytes = 0}, {.offset_bytes = j * TILE + RO(4 * tl)});

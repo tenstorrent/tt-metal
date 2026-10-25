@@ -72,9 +72,19 @@ void kernel_main() {
     }
     noc.async_write_zeros(cba, G * TILE, {.offset_bytes = 0});
     noc.async_write_zeros(cbtot, TILE, {.offset_bytes = 0});
-    if constexpr (T % 8 != 0) {  // last group: rows 4*(T%8) .. 31 unused (T == 4: faces 2 and 3)
+    if constexpr (T % 8 != 0) {  // last group: rows R0 = 4*(T%8) .. 31 unused (T == 4: faces 2 and 3): zero them
+                                 // (absent tokens must read as 0, never garbage)
+        constexpr uint32_t R0 = 4 * (T % 8);
         for (uint32_t gi = 0; gi < GPC; ++gi) {
-            noc.async_write_zeros(cbx, 2048, {.offset_bytes = (gi * G + G - 1) * TILE + 2048});
+            const uint32_t tb = (gi * G + G - 1) * TILE;
+            if constexpr (R0 < 16) {  // rows R0..15 of faces 0/1, and faces 2/3 entirely
+                noc.async_write_zeros(cbx, 1024 - R0 * 64, {.offset_bytes = tb + R0 * 64});
+                noc.async_write_zeros(cbx, 1024 - R0 * 64, {.offset_bytes = tb + 1024 + R0 * 64});
+                noc.async_write_zeros(cbx, 2048, {.offset_bytes = tb + 2048});
+            } else {  // rows R0..31 are in faces 2/3
+                noc.async_write_zeros(cbx, 1024 - (R0 - 16) * 64, {.offset_bytes = tb + 2048 + (R0 - 16) * 64});
+                noc.async_write_zeros(cbx, 1024 - (R0 - 16) * 64, {.offset_bytes = tb + 3072 + (R0 - 16) * 64});
+            }
         }
     }
     noc.write_zeros_l1_barrier();

@@ -205,12 +205,12 @@ def mhc_norm_apply(h, part, w4, eps, n_cores=32, emit_rm=False):
 def mhc_collapse_norm(x, pre, w4, eps, emit_rm=False):
     """ONE generic_op: out = bf16(bf16(sum_i pre_i x_i) * rsqrt(sum h^2 + D*eps) * w4) (w4 = weight*sqrt(D), rows replicated
     [1,1,T,D] fp32). x [T,1,4,D] fp32 TILE, pre [T,1,1,4] fp32 TILE -> out bf16 [1,1,T,D] (and, if emit_rm, the bf16 row-major
-    [T,1,1,D] copy).  32 cores (4x8 worker rectangle) exchange their partial sums of squares through L1 writes. T in {4, 8, 16, 32}.
+    [T,1,1,D] copy).  32 cores (4x8 worker rectangle) exchange their partial sums of squares through L1 writes. T in {1..8, 16, 32}.
     """
     import struct
 
     T, _, n, D = (int(v) for v in x.shape)
-    assert n == 4 and T in (4, 8, 16, 32) and x.dtype == ttnn.float32 and pre.dtype == ttnn.float32
+    assert n == 4 and (T <= 8 or T in (16, 32)) and x.dtype == ttnn.float32 and pre.dtype == ttnn.float32
     nt = D // 32
     # worker columns 0..3 are contiguous in physical NOC coordinates (logical x = 7 jumps to physical 10); NC <= 32 (one R tile)
     NC, GX, GY = 32, 4, 8
