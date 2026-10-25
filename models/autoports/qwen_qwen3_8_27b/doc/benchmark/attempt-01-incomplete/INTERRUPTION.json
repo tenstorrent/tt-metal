@@ -1,0 +1,6 @@
+{
+  "reason": "Independent AutoDebug identified phase-transition ownership errors; abort before accepting performance accounting, retain partial accuracy unchanged.",
+  "initial_budget_seconds": 7200,
+  "runner_elapsed_seconds": 939.9638572169933,
+  "partial_responses": 5
+}

@@ -1,5 +1,4 @@
 {
-  "started_utc": "2026-10-25T14:21:00Z",
   "configured_batches": [
     1,
     8,
@@ -14,5 +13,15 @@
   "context_contract_sha256": "9ccc4b1d6aae95b8e05d614706beb710981357db84618697657ad7247a88690d",
   "inputs_sha256": "0af9da0ac0df7a870a06020f67fd5da7703ce2a1f80526190c27a4a0ff80ad11",
   "initial_source_commit": "78dd15ceacf11a789487bde65dca2d87ff272c6d",
-  "setup_work": "Client venvs, pinned vLLM0.26 empty installation, frozen GPQA subset and verified mirror, host phase collector and server hook, read-only device listing. No server launched before runner."
+  "setup_work": "Client venvs, pinned vLLM0.26 empty installation, frozen GPQA subset and verified mirror, host phase collector and server hook, read-only device listing. No server launched before runner.",
+  "setup_commit": "d84c5effaba",
+  "first_observed_setup_command_utc": "2026-10-25T14:22:26Z",
+  "runner_config_written_utc": "2026-10-25T14:36:33.983720+00:00",
+  "setup_elapsed_seconds": null,
+  "setup_timing_note": "No full setup stopwatch was running. Frozen config timestamp is immediately after benchmark_stage internal monotonic start; summary.json records timed client duration.",
+  "vllm_client_commit": "568afb3a13806beb53bb2e6bd518269357b237c0",
+  "vllm_client_version": "0.26.0+empty",
+  "accuracy_harness_version": "0.4.13",
+  "stage_deadline_unix": 1792946193.9837196,
+  "attempt_01": "attempt-01-incomplete"
 }

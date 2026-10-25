@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "status": "failed",
+  "accuracy": {},
+  "performance": {},
+  "accuracy_execution": "shared",
+  "concurrencies": [
+    32,
+    16,
+    8,
+    1
+  ],
+  "accuracy_concurrency": 32,
+  "error": "InterruptedError: benchmark interrupted by signal 15",
+  "elapsed_seconds": 939.9638572169933
+}

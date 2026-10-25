@@ -1,0 +1,70 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "base_url": "http://127.0.0.1:8000",
+  "manifest": "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/benchmark/subset/manifest.json",
+  "tasks": [
+    "gpqa_diamond_cot_zeroshot"
+  ],
+  "concurrencies": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "budget_seconds": 5761,
+  "output_tokens": 128,
+  "accuracy_execution": "shared",
+  "generation": {
+    "gpqa_diamond_cot_zeroshot": {
+      "max_gen_toks": 16384,
+      "do_sample": true,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.0,
+      "presence_penalty": 0.0,
+      "repetition_penalty": 1.0,
+      "until": [],
+      "chat_template_kwargs": {
+        "enable_thinking": true,
+        "reasoning_effort": "xhigh",
+        "preserve_thinking": true
+      }
+    }
+  },
+  "metrics": {
+    "gpqa_diamond_cot_zeroshot": [
+      "exact_match,strict-match",
+      "exact_match,flexible-extract"
+    ]
+  },
+  "references": {
+    "gpqa_diamond_cot_zeroshot": {
+      "exact_match,flexible-extract": {
+        "score": 89.2,
+        "source_url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+        "protocol_notes": "Published exact-model GPQA Diamond score; local10/198 zero-shot lm-eval variant and output cap may differ. Published complete evaluation recipe not established from model card."
+      }
+    }
+  },
+  "performance_server_command": [
+    "env",
+    "PYTHONPATH=",
+    "python3",
+    "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/benchmark_server.py"
+  ],
+  "roofline_command": [
+    "/home/mvasiljev/tt-metal/.cache/benchmark-client/bin/python",
+    "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/benchmark_roofline.py"
+  ],
+  "benchmark_command": [
+    "env",
+    "PYTHONPATH=",
+    "python3",
+    "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/benchmark_client.py"
+  ],
+  "not_covered": {
+    "swe_bench_verified": "Requires repository/tool-using agent harness, outside lm-evaluation-harness; belongs to goal12.",
+    "terminal_bench_2": "Requires terminal/environment agent harness, outside lm-evaluation-harness; belongs to goal12."
+  }
+}

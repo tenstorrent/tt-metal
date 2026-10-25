@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import threading
 import time
 
 
@@ -28,6 +29,9 @@ def install(model):
     serial = [0]
     current = [None]
     scheduled = {}
+    schedule_records = {}
+    context_owners = {}
+    local = threading.local()
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -49,7 +53,9 @@ def install(model):
                  precision=model.model.precision_config, mesh=[1,4],
                  hooks=['execute_model','_forward_with_model_input','_finish_front_packed_sync_impl',
                         'submit_async_decode','complete_decode_step',
-                        'AsyncTTModelRunnerOutput._get_output_impl'])
+                        'AsyncTTModelRunnerOutput._get_output_impl','schedule','add_request',
+                        'update_from_output','build_model_input','wait_for_all_pending_async_steps',
+                        'enqueue_completed_decode_step','apply_completed_decode_step'])
     path.with_suffix('.ready.json').write_text(json.dumps(ready,indent=2)+'\n')
 
     def wrap(cls, name, wrapper):
@@ -61,6 +67,8 @@ def install(model):
             serial[0] += 1
             start=scheduled.get(id(scheduler_output),time.perf_counter())
             scheduled[id(scheduler_output)]=(start,serial[0])
+            if id(scheduler_output) in schedule_records:
+                schedule_records[id(scheduler_output)]['step']=serial[0]
             current[0] = dict(step=serial[0], start=start,
                               scheduled=dict(scheduler_output.num_scheduled_tokens))
             return original(runner, scheduler_output)
@@ -69,19 +77,99 @@ def install(model):
     def schedule(original):
         def call(scheduler, *args, **kwargs):
             start=time.perf_counter()
+            before = scheduler_state(scheduler)
             result=original(scheduler,*args,**kwargs)
+            end=time.perf_counter()
+            event=dict(event='schedule',start=start,end=end,scheduled=dict(result.num_scheduled_tokens),
+                       before=before,after=scheduler_state(scheduler),
+                       finished=list(getattr(result,'finished_req_ids',())))
+            events.append(event)
             if result.num_scheduled_tokens:
                 scheduled[id(result)]=start
+                schedule_records[id(result)]=event
+            return result
+        return call
+
+    def scheduler_state(scheduler):
+        return {kind:[r.request_id for r in getattr(scheduler,kind,())]
+                for kind in ('running','waiting')}
+
+    def admission(original):
+        def call(scheduler, request):
+            start=time.perf_counter()
+            result=original(scheduler,request)
+            events.append(dict(event='admitted',request=request.request_id,start=start,
+                end=time.perf_counter(),after=scheduler_state(scheduler)))
             return result
         return call
 
     def consume(original):
         def call(scheduler, scheduler_output, model_runner_output):
+            start=time.perf_counter()
             result=original(scheduler,scheduler_output,model_runner_output)
+            end=time.perf_counter()
+            finished=set()
+            published={}
+            for batch in result.values():
+                finished.update(getattr(batch,'finished_requests',None) or ())
+                for output in batch.outputs:
+                    published[output.request_id]=len(output.new_token_ids)
+                    if output.finish_reason is not None:
+                        finished.add(output.request_id)
             timing=scheduled.pop(id(scheduler_output),None)
+            schedule_records.pop(id(scheduler_output),None)
             if isinstance(timing,tuple):
-                events.append(dict(event='consumed',step=timing[1],end=time.perf_counter(),
-                    requests=list(scheduler_output.num_scheduled_tokens)))
+                events.append(dict(event='consumed',step=timing[1],start=start,end=end,
+                    requests=list(scheduler_output.num_scheduled_tokens),after=scheduler_state(scheduler),
+                    finished=sorted(finished),published_tokens=published))
+            return result
+        return call
+
+    def build(original):
+        def call(runner, scheduler_output, grammar_output):
+            start=time.perf_counter()
+            result=original(runner,scheduler_output,grammar_output)
+            events.append(dict(event='build_input',step=current[0]['step'],start=start,
+                end=time.perf_counter(),phase=None if result is None else
+                ('decode' if result.prompt_lens is None else 'prefill')))
+            return result
+        return call
+
+    def drain(original):
+        def call(controller):
+            start=time.perf_counter()
+            owners={r['step']:r['phase'] for r in tuple(pending.values())}
+            result=original(controller)
+            events.append(dict(event='drain',step=None if current[0] is None else current[0]['step'],
+                start=start,end=time.perf_counter(),origin_steps=list(owners),
+                origin_phases=list(owners.values())))
+            return result
+        return call
+
+    def enqueue(original):
+        def call(controller, completed):
+            key=id(completed.context)
+            owner=context_owners.get(key) or getattr(local,'sync_owner',None)
+            if owner is not None:
+                context_owners[key]=dict(step=owner['step'],phase=owner['phase'])
+            events.append(dict(event='state_enqueued',step=None if owner is None else owner['step'],
+                phase=None if owner is None else owner['phase'],time=time.perf_counter(),
+                requests=list(completed.context.req_ids)))
+            return original(controller,completed)
+        return call
+
+    def apply_state(original):
+        def call(controller, completed, **kwargs):
+            start=time.perf_counter()
+            owner=context_owners.get(id(completed.context))
+            result=original(controller,completed,**kwargs)
+            events.append(dict(event='state_apply',step=None if owner is None else owner['step'],
+                phase=None if owner is None else owner['phase'],
+                enclosing_step=None if current[0] is None else current[0]['step'],
+                start=start,end=time.perf_counter(),requests=list(completed.context.req_ids),
+                suppressed=list(kwargs.get('suppress_output_req_ids') or ()),
+                skipped_state=list(kwargs.get('skip_state_req_ids') or ())))
+            context_owners.pop(id(completed.context),None)
             return result
         return call
 
@@ -124,7 +212,12 @@ def install(model):
     def sync_finish(original):
         def call(runner, grammar_output, *, fwd):
             record = pending.pop(id(fwd), None)
-            result = original(runner, grammar_output, fwd=fwd)
+            previous=getattr(local,'sync_owner',None)
+            local.sync_owner=record
+            try:
+                result = original(runner, grammar_output, fwd=fwd)
+            finally:
+                local.sync_owner=previous
             if record is not None:
                 record.update(event='phase',end=time.perf_counter(),completion='sync_sample_and_runner_output')
                 events.append(record)
@@ -137,6 +230,7 @@ def install(model):
             result = original(controller, inputs, **kwargs)
             # The context is immutable and is retained by the async wrapper.
             pending[id(result._context)] = record
+            context_owners[id(result._context)]=dict(step=record['step'],phase=record['phase'])
             return result
         return call
 
@@ -162,9 +256,14 @@ def install(model):
 
     wrap(TTModelRunner,'execute_model',execute)
     wrap(TTScheduler,'schedule',schedule)
+    wrap(TTScheduler,'add_request',admission)
     wrap(TTScheduler,'update_from_output',consume)
+    wrap(TTModelRunner,'build_model_input',build)
     wrap(TTModelRunner,'_forward_with_model_input',sync_forward)
     wrap(TTModelRunner,'_finish_front_packed_sync_impl',sync_finish)
     wrap(TTAsyncDecodeController,'submit_async_decode',submit)
     wrap(TTAsyncDecodeController,'complete_decode_step',complete)
+    wrap(TTAsyncDecodeController,'wait_for_all_pending_async_steps',drain)
+    wrap(TTAsyncDecodeController,'enqueue_completed_decode_step',enqueue)
+    wrap(TTAsyncDecodeController,'apply_completed_decode_step',apply_state)
     wrap(AsyncTTModelRunnerOutput,'_get_output_impl',output_complete)
