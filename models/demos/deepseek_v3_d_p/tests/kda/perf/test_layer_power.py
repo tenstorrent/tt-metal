@@ -9,10 +9,13 @@ layer for KDA_POWER_SECONDS in blocks of KDA_POWER_BLOCK calls while a thread re
 temperature from the kernel driver's sysfs and hwmon files. It reports the steady-state ms per call (second half of
 the run) with the mean and minimum AI clock and the mean power over the same window, plus the wall of single calls
 after an idle pause. Results go to stdout as a KDA_POWER= line and to KDA_POWER_OUT as JSON.
+KDA_POWER_DELAY=point:delay_us:chips[:kind] (see delay_injection.DelayConfig) measures the layer with that delay or
+work injected.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import statistics
@@ -23,6 +26,7 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.perf.delay_injection import DelayConfig
 from models.demos.deepseek_v3_d_p.tests.kda.perf.telemetry import Telemetry
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
     _GALAXY_ACTUAL_START,
@@ -39,6 +43,37 @@ _BLOCK = int(os.environ.get("KDA_POWER_BLOCK", "10"))
 _SINGLES = 10
 _IDLE_S = 0.5
 _OUT = Path(os.environ.get("KDA_POWER_OUT", "generated/kda_power.json"))
+_DELAY = os.environ.get("KDA_POWER_DELAY")
+
+
+def sustained_run(
+    mesh_device: ttnn.MeshDevice, trace_id: int, telemetry: Telemetry, seconds: float, block: int
+) -> dict:
+    """Idle for _IDLE_S, then replay the trace back to back in blocks of ``block`` calls for ``seconds``. The steady
+    state is the run's second half: its median ms per call and the telemetry over it; the idle telemetry is the pause's.
+    """
+    time.sleep(_IDLE_S)
+    blocks = []
+    run_start = time.perf_counter()
+    while time.perf_counter() - run_start < seconds:
+        start = time.perf_counter()
+        for _ in range(block):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        end = time.perf_counter()
+        blocks.append((start, end, (end - start) * 1e3 / block))
+    half = run_start + seconds / 2
+    steady = [ms for start, _, ms in blocks if start >= half]
+    return {
+        "block_calls": block,
+        "seconds": seconds,
+        "first_blocks_ms_per_call": [ms for _, _, ms in blocks[:3]],
+        "steady_ms_per_call": statistics.median(steady),
+        "steady_blocks": len(steady),
+        "steady_telemetry": telemetry.window(half, blocks[-1][1]),
+        "idle_telemetry": telemetry.window(run_start - _IDLE_S + 0.05, run_start),
+        "ms_per_call_by_block": [round(ms, 4) for _, _, ms in blocks],
+    }
 
 
 @pytest.mark.parametrize(
@@ -61,45 +96,24 @@ def test_layer_power(mesh_device: ttnn.MeshDevice, device_params: dict) -> None:
     case = make_synthetic_kimi_k3_test_case(sequence=PREFILL_CHUNK_TOKENS)
     layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
     actual_start, actual_end = _GALAXY_ACTUAL_START, _GALAXY_ACTUAL_START + PREFILL_CHUNK_TOKENS
-    trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end)
-    telemetry.start()
-    try:
-        singles_ms = []
-        for _ in range(_SINGLES):
-            time.sleep(_IDLE_S)
-            start = time.perf_counter()
-            ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            singles_ms.append((time.perf_counter() - start) * 1e3)
-
-        time.sleep(_IDLE_S)
-        blocks = []
-        run_start = time.perf_counter()
-        while time.perf_counter() - run_start < _SECONDS:
-            start = time.perf_counter()
-            for _ in range(_BLOCK):
+    # The injected program's tensors must outlive the trace, so the trace lives inside the injection context.
+    with DelayConfig.parse(_DELAY).inject(layer) if _DELAY else contextlib.nullcontext():
+        trace = _capture_layer_trace(mesh_device, layer, hidden, actual_start, actual_end)
+        telemetry.start()
+        try:
+            singles_ms = []
+            for _ in range(_SINGLES):
+                time.sleep(_IDLE_S)
+                start = time.perf_counter()
                 ttnn.execute_trace(mesh_device, trace.trace_id, cq_id=0, blocking=False)
-            ttnn.synchronize_device(mesh_device)
-            end = time.perf_counter()
-            blocks.append((start, end, (end - start) * 1e3 / _BLOCK))
-    finally:
-        telemetry.stop()
-        _release_layer_trace(mesh_device, trace)
+                ttnn.synchronize_device(mesh_device)
+                singles_ms.append((time.perf_counter() - start) * 1e3)
+            result = {"delay": _DELAY, "single_call_ms": statistics.median(singles_ms)}
+            result.update(sustained_run(mesh_device, trace.trace_id, telemetry, _SECONDS, _BLOCK))
+        finally:
+            telemetry.stop()
+            _release_layer_trace(mesh_device, trace)
 
-    half = run_start + _SECONDS / 2
-    steady = [ms for start, _, ms in blocks if start >= half]
-    first = [ms for _, _, ms in blocks[:3]]
-    result = {
-        "block_calls": _BLOCK,
-        "seconds": _SECONDS,
-        "single_call_ms": statistics.median(singles_ms),
-        "first_blocks_ms_per_call": first,
-        "steady_ms_per_call": statistics.median(steady),
-        "steady_blocks": len(steady),
-        "steady_telemetry": telemetry.window(half, blocks[-1][1]),
-        "idle_telemetry": telemetry.window(run_start - _IDLE_S + 0.05, run_start),
-        "ms_per_call_by_block": [round(ms, 4) for _, _, ms in blocks],
-    }
     print("KDA_POWER=" + json.dumps({key: value for key, value in result.items() if key != "ms_per_call_by_block"}))
     _OUT.parent.mkdir(parents=True, exist_ok=True)
     _OUT.write_text(json.dumps(result))

@@ -37,13 +37,13 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.perf.telemetry import Telemetry as _Telemetry
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
     _GALAXY_ACTUAL_START,
     _L1_SMALL_SIZE,
     _capture_layer_trace,
     _release_layer_trace,
 )
-from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_power import _Telemetry
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     deallocate_state,
     make_kimi_k3_device_case,
