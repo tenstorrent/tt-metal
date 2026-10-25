@@ -1576,7 +1576,12 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
 @pytest.mark.parametrize(
     "n_chunks, preload_isl",
-    [(1, 10 * CHUNK), (11, 0)],
+    # warm: one chunk at depth 51200 (rounded to CHUNK); cold: 11 * 5120 tokens from 0, or GLM_TEST_COLD_TOKENS
+    # (smallchunk agent: equal token coverage across chunk sizes). Both identical to the originals at CHUNK == 5120.
+    [
+        (1, (10 * PREFILL_CHUNK_TOKENS // CHUNK) * CHUNK),
+        (int(os.environ.get("GLM_TEST_COLD_TOKENS", 11 * PREFILL_CHUNK_TOKENS)) // CHUNK, 0),
+    ],
     ids=["warm_cache", "cold_cache"],
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
@@ -1650,7 +1655,9 @@ def test_glm_prefill_transformer_chunked(
         check_layer_pcc=not use_trace,  # per-layer PCC needs a host readback, impossible under capture
         use_trace=use_trace,
         kv_pcc_threshold=KV_CACHE_PCC_THRESHOLD_SCALED_FP8,
-        seq_cache=SEQ_CACHE,  # golden-trace length; changing it moves the indexer's key width
+        # golden-trace length; changing it moves the indexer's key width. Rounded down to a CHUNK multiple
+        # (rope/cache need cache % chunk == 0): unchanged at 5120 and 1024, 55296 at 2048.
+        seq_cache=(SEQ_CACHE // CHUNK) * CHUNK,
         kv_cache_format=GLM_KV_CACHE_FORMAT,
     )
 
