@@ -42,7 +42,8 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val, bool unco
 }
 
 template <uint32_t cb_id, uint32_t clear_value_cb_id, typename DFB, typename ClearDFB>
-ALWI void clear_out_tiles(Noc noc, DFB cb, ClearDFB clear_cb) {
+ALWI void clear_out_tiles(Noc noc, DFB& cb, ClearDFB& clear_cb) {
+    ASSERT(cb.get_id() == cb_id);
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_pages = get_local_cb_interface(cb_id).fifo_num_pages;
     // QSR: get_local_cb_interface(cb_id).fifo_page_size is stale for Metal-2.0 DFBs; read the entry
@@ -59,7 +60,8 @@ ALWI void clear_out_tiles(Noc noc, DFB cb, ClearDFB clear_cb) {
 }
 
 template <uint32_t clear_value_cb_id, typename DstDFB, typename ClearDFB>
-ALWI void clear_out_tiles(Noc noc, DstDFB dst_cb, ClearDFB clear_value_cb, uint32_t num_tiles) {
+ALWI void clear_out_tiles(Noc noc, DstDFB& dst_cb, ClearDFB& clear_value_cb, uint32_t num_tiles) {
+    ASSERT(clear_value_cb.get_id() == clear_value_cb_id);
     constexpr uint32_t tile_size = get_tile_size(clear_value_cb_id);
 
     UnicastEndpoint self_ep;
@@ -74,7 +76,8 @@ ALWI void clear_out_tiles(Noc noc, DstDFB dst_cb, ClearDFB clear_value_cb, uint3
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id, typename DFB>
-ALWI void zero_out_tiles(Noc noc, DFB cb) {
+ALWI void zero_out_tiles(Noc noc, DFB& cb) {
+    ASSERT(cb.get_id() == cb_id);
     constexpr uint32_t tile_size = get_tile_size(cb_id);
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
     noc.async_write_zeros(cb, tile_size * num_tiles);
@@ -87,7 +90,7 @@ template <
     uint32_t tensor_args_index,
     uint32_t cb_reader_index,
     typename DFB>
-ALWI void load_config_tensor_if_in_dram(Noc noc, DFB reader_cb, uint32_t core_index) {
+ALWI void load_config_tensor_if_in_dram(Noc noc, DFB& reader_cb, uint32_t core_index) {
     constexpr auto config_tensor_args = TensorAccessorArgs<tensor_args_index>();
     const auto config_accessor = TensorAccessor(config_tensor_args, config_dram_addr);
 
@@ -98,7 +101,7 @@ ALWI void load_config_tensor_if_in_dram(Noc noc, DFB reader_cb, uint32_t core_in
 
 template <bool one_scalar_per_core, uint32_t in_scalar_cb_id, uint32_t reader_nindices, typename DFB>
 ALWI void fill_scalar(
-    DFB scalar_cb,
+    DFB& scalar_cb,
     uint32_t& scalar_start,
     uint32_t& scalar_end,
     uint32_t& scalar_value,
@@ -133,7 +136,7 @@ ALWI void fill_scalar(
 }
 
 template <typename DFB>
-ALWI void zero_out_page(Noc noc, DFB cb) {
+ALWI void zero_out_page(Noc noc, DFB& cb) {
     // QSR: read the DFB entry size from the object, not the stale legacy CB interface (LLK guidance).
     const uint32_t page_size = cb.get_entry_size();
     noc.async_write_zeros(cb, page_size);
