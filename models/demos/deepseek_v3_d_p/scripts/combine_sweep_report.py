@@ -9,12 +9,13 @@ import argparse
 import bisect
 import csv
 import os
-import re
 import statistics
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
+RINGS = ("ring8", "ring4")
+CHUNKS = ("2.5k", "5k", "10k")
 TRAFFIC = ("balanced", "hot_expert")
 LAYOUT = (("row_major", "row major"), ("tile", "tiled"))
 
@@ -23,7 +24,6 @@ def parse_args():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", type=Path)
     ap.add_argument("--score", type=Path, help="write 'score: <pass fraction>' here, which robo_test reads")
-    ap.add_argument("--baseline", type=Path, metavar="RUN")
     ap.add_argument("--device-from", type=Path, metavar="RUN")
     return ap.parse_args()
 
@@ -84,19 +84,28 @@ def load(run):
     return [r[1] for r in rows if len(r) > 1], outcome, measured, device_spread(run)
 
 
+def table(head, body):
+    """One markdown table, every column as wide as its widest cell. The first two are row labels."""
+    width = [max(3, *(len(row[i]) for row in [head] + body)) for i in range(len(head))]
+    rule = [":" + "-" * (width[0] - 1), ":" + "-" * (width[1] - 1)] + ["-" * (w - 1) + ":" for w in width[2:]]
+    return [
+        "| " + " | ".join(x.ljust(width[i]) if i < 2 else x.rjust(width[i]) for i, x in enumerate(row)) + " |"
+        for row in [head, rule] + body
+    ]
+
+
 def main():
     args = parse_args()
     phases, outcome, measured, device = load(run_dir())
     if args.device_from:
         *_, device = load(args.device_from)
-    *_, base = load(args.baseline) if args.baseline else (None, None, None, {})
 
-    def metric(model, traffic, layout, which):
-        name = next((p for p in phases if re.fullmatch(rf"{model}-{traffic}-{layout}-cmb_\w+", p)), None)
-        if name is None:
+    def metric(model, version, ring, chunk, traffic, layout, which):
+        name = f"{model}-{ring}-{chunk}-{traffic}-{layout}-cmb_{version}"
+        if name not in outcome:
             return ""
-        if outcome.get(name) != "pass":
-            return outcome.get(name, "?") if which == "dev" else ""
+        if outcome[name] != "pass":
+            return outcome[name] if which == "dev" else ""
         span = device.get(name)
         if which == "dev":
             return f"{span[0]:.0f} - {span[1]:.0f}" if span else "-"
@@ -105,51 +114,100 @@ def main():
             return "-"
         if not span:
             return f"{float(value):.0f}"
-        # Not a bare "|": that is the table's own column separator, and a cell holding one splits into
-        # two, leaving the row wider than its header.
+        # Not a bare "|": that is the table's own column separator, and a cell holding one splits
+        # into two, leaving the row wider than its header.
         return f"{float(value):.0f} ({float(value) / span[1] - 1:+.0%})"
 
-    def alloc_mb(model):
+    def field(which, **where):
+        """The distinct values of a recorded field over the phases matching the given name parts."""
+        return sorted(
+            {
+                f[which]
+                for p, f in measured.items()
+                if which in f and all(part in p.split("-") for part in where.values())
+            },
+            key=lambda v: int(v) if v.isdigit() else v,
+        )
+
+    def alloc_mb(model, version, ring, layout):
+        """One figure when the row's cells agree, a range when they do not.
+
+        A phase that reuses a cached program allocates nothing of its own and records a zero, so
+        those are dropped rather than widening every range down to nothing.
+        """
         mb = sorted(
             {
                 int(f["op_alloc_bytes"]) / 1000**2
                 for p, f in measured.items()
-                if p.startswith(f"{model}-") and f.get("op_alloc_bytes", "0") != "0"
+                if p.startswith(f"{model}-{ring}-")
+                and p.endswith(f"-{layout}-cmb_{version}")
+                and f.get("op_alloc_bytes") != "0"
             }
         )
         return "" if not mb else f"{mb[0]:.0f}" if round(mb[0]) == round(mb[-1]) else f"{mb[0]:.0f} - {mb[-1]:.0f}"
 
-    models = list(dict.fromkeys(p.split("-")[0] for p in phases))
-    cases = [(t, l, label) for t in TRAFFIC for l, label in LAYOUT if any(metric(m, t, l, "dev") for m in models)]
+    parts = [p.split("-") for p in phases]
+    models = list(dict.fromkeys(p[0] for p in parts))
+    versions = list(dict.fromkeys(p[5].removeprefix("cmb_") for p in parts if len(p) > 5))
+    rings = [r for r in RINGS if any(p[1] == r for p in parts)]
     counts = Counter(outcome.values())
-    failed = counts["FAIL"] + counts["HANG"] + counts["?"]
-    factors = {f["fwd_reduction"] for f in measured.values() if "fwd_reduction" in f}
+    failed = counts["FAIL"] + counts["HANG"] + counts["unrun"] + counts["?"]
 
     report = [
         f"{counts['pass']} pass, {counts['unsup']} unsup, {failed} failed",
         "",
-        f"target reduction factor {', '.join(sorted(f + 'x' for f in factors)) if factors else 'unknown'}",
-        "",
-        "dev is the device op time per chip, min - max over the 32 chips. ht and hu are the host wall",
+        "dev is the device op time per chip, min - max over the chips. ht and hu are the host wall",
         "clock per launch, traced and untraced, in us, each with what it adds over the slowest chip.",
         "",
+        "Chunk is the tokens per dispatch group, so a chip carries chunk/ring of them. The forwarding",
+        "buffer is held fixed across chunks by scaling the reduction factor with that per-chip share.",
     ]
-    head = ["model", ""] + [f"{t} {label}" for t, _, label in cases] + ["op alloc MB"]
-    body = [
-        row
-        for m in models
-        for row in (
-            [m, "dev"] + [metric(m, t, l, "dev") for t, l, _ in cases] + [alloc_mb(m)],
-            ["", "ht"] + [metric(m, t, l, "ht") for t, l, _ in cases] + [""],
-            ["", "hu"] + [metric(m, t, l, "hu") for t, l, _ in cases] + [""],
+    # Chunk and traffic make the columns; everything else crosses with the model to make the rows,
+    # which keeps the table narrow enough to read however many axes the run swept.
+    cases = [
+        (c, t)
+        for c in CHUNKS
+        for t in TRAFFIC
+        if any(
+            metric(m, v, r, c, t, layout, "dev")
+            for m in models
+            for v in versions
+            for r in rings
+            for layout, _ in LAYOUT
         )
     ]
-    width = [max(3, *(len(row[i]) for row in [head] + body)) for i in range(len(head))]
-    rule = [":" + "-" * (width[0] - 1), ":" + "-" * (width[1] - 1)] + ["-" * (w - 1) + ":" for w in width[2:]]
-    report += [
-        "| " + " | ".join(x.ljust(width[i]) if i < 2 else x.rjust(width[i]) for i, x in enumerate(row)) + " |"
-        for row in [head, rule] + body
+    groups = [
+        (m, v, r, layout, label)
+        for m in models
+        for r in rings
+        for layout, label in LAYOUT
+        for v in versions
+        if any(metric(m, v, r, c, t, layout, "dev") for c, t in cases)
     ]
+    for ring in rings:
+        chips = field("chips", ring=ring)
+        experts = field("experts_per_chip", ring=ring)
+        reductions = field("fwd_reduction", ring=ring)
+        spread = " - ".join(dict.fromkeys([experts[0], experts[-1]])) if experts else "?"
+        report += [
+            "",
+            f"{ring}: {' / '.join(chips) or '?'} chips, {spread} experts per chip across these models, "
+            f"reduction factor {', '.join(r + 'x' for r in reductions) or 'unknown'}",
+        ]
+    report.append("")
+    head = ["case", ""] + [f"{c} {t}" for c, t in cases] + ["op alloc MB"]
+    body = [
+        row
+        for m, v, r, layout, label in groups
+        for row in (
+            [" ".join([m, r, label] + ([v] if len(versions) > 1 else [])), "dev"]
+            + [metric(m, v, r, c, t, layout, "dev") for c, t in cases]
+            + [alloc_mb(m, v, r, layout)],
+            ["", "ht"] + [metric(m, v, r, c, t, layout, "ht") for c, t in cases] + [""],
+            ["", "hu"] + [metric(m, v, r, c, t, layout, "hu") for c, t in cases] + [""],
+        )
+    ]
+    report += table(head, body)
 
     blind = [p for p in phases if outcome.get(p) == "pass" and p not in device]
     if blind:
