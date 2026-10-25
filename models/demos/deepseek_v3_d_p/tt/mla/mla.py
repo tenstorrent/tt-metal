@@ -488,6 +488,10 @@ class ttMLA:
         # dense gather (a reference for tests).
         if sparse_kv_push is None:
             sparse_kv_push = self._has_indexer and sparse_kv_push_supported(mesh_device)
+            # longctx A/B knob (default unchanged): GLM_SPARSE_KV_PUSH=0 forces the dense prefix gather on shared
+            # layers too, to measure push vs gather at depth.
+            if os.environ.get("GLM_SPARSE_KV_PUSH") == "0":
+                sparse_kv_push = False
         assert not sparse_kv_push or sparse_kv_push_supported(mesh_device), (
             f"the sparse KV push needs FABRIC_2D_TORUS_XY on a mesh of at least 3x3, got {ttnn.get_fabric_config()} "
             f"on {tuple(mesh_device.shape)}"
