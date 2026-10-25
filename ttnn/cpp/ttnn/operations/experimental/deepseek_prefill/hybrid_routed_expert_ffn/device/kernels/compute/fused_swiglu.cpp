@@ -573,6 +573,68 @@ FORCE_INLINE void matmul_phase_fused_gu(
         PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
         const uint32_t n_strips = x_block_tiles / in0_block_w;
+#ifdef URE_X_FP8
+        // fp8wire: x is the fp8 dispatch wire's packed rows. Per strip (one tile-row of this K-block): tilize the
+        // e4m3 values (unpacked through the 32-bit DEST) into x_tilized_cb as bf8, then multiply each tile by its
+        // 1x128 block's scale tile (row r = row r's pow2 scale, built by the reader) and pack the bf8 result into
+        // URE_CB_X_DQ, which the owner's reader multicasts. A pow2 scale times an e4m3 value is exact, so the tiles
+        // are the ones per_token_cast_back would have written.
+        static_assert(in0_block_w % 4 == 0, "an fp8 x K-block must be whole 1x128 scale blocks");
+        constexpr uint32_t SCALES_PER_STRIP = in0_block_w / 4;
+        constexpr uint32_t SCALE_TILES_MAX = (X_BLOCK_TILES_MAX / in0_block_w) * SCALES_PER_STRIP;
+        CircularBuffer x_rm_cb(x_rm_cb_id);
+        CircularBuffer x_q_cb(x_tilized_cb_id);
+        CircularBuffer x_dq_cb(URE_CB_X_DQ);
+        CircularBuffer x_scale_cb(URE_CB_X_SCALE);
+        x_scale_cb.wait_front(SCALE_TILES_MAX);
+        x_dq_cb.reserve_back(X_BLOCK_TILES_MAX);
+        for (uint32_t strip = 0; strip < n_strips; ++strip) {
+            reconfig_data_format_srca(x_rm_cb_id);
+            pack_reconfig_data_format(x_tilized_cb_id);
+            tilize_init(x_rm_cb_id, in0_block_w, x_tilized_cb_id);
+            x_rm_cb.wait_front(in0_block_w);
+            x_q_cb.reserve_back(in0_block_w);
+            tilize_block(x_rm_cb_id, in0_block_w, x_tilized_cb_id);
+            x_q_cb.push_back(in0_block_w);
+            x_rm_cb.pop_front(in0_block_w);
+            tilize_uninit(x_rm_cb_id, x_tilized_cb_id);
+
+            reconfig_data_format(x_tilized_cb_id, URE_CB_X_SCALE);
+            pack_reconfig_data_format(URE_CB_X_DQ);
+            mul_init(x_tilized_cb_id, URE_CB_X_SCALE);
+            x_q_cb.wait_front(in0_block_w);
+            for (uint32_t j = 0; j < in0_block_w; j += 4) {
+                tile_regs_acquire();
+                for (uint32_t k = 0; k < 4; ++k) {
+                    mul_tiles(x_tilized_cb_id, URE_CB_X_SCALE, j + k, strip * SCALES_PER_STRIP + j / 4, k);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t k = 0; k < 4; ++k) {
+                    pack_tile<true>(k, URE_CB_X_DQ, strip * in0_block_w + j + k);
+                }
+                tile_regs_release();
+            }
+            x_q_cb.pop_front(in0_block_w);
+        }
+        // Constant CB block sizes: settle the per_core_M remainder with pointer-only bumps.
+        {
+            const uint32_t x_pad = X_BLOCK_TILES_MAX - x_block_tiles;
+            if (x_pad > 0) {
+                x_rm_cb.wait_front(x_pad);
+                x_rm_cb.pop_front(x_pad);
+            }
+        }
+        x_dq_cb.push_back(X_BLOCK_TILES_MAX);
+        x_scale_cb.pop_front(SCALE_TILES_MAX);
+        reconfig_data_format_srca(gate_cb_id);
+        matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+        pack_reconfig_data_format(URE_CB_X_DQ, partials_gu_cb_id);
+#ifdef PACKER_L1_ACC
+        PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
+#endif
+        return;
+#endif
         compute_kernel_lib::tilize<
             in0_block_w,
             x_rm_cb_id,

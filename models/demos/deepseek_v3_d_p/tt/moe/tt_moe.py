@@ -63,6 +63,12 @@ _GLM_FP8_DISPATCH_SD_ROWS = int(os.environ.get("GLM_FP8_DISPATCH_SD_ROWS", "1"))
 # With the fp8 wire the dispatch rows finish well before the shared-expert chain, which then bounds the window: run
 # post_combine_reduce's weights reshape (depends only on the scores) on the dispatch rows after dispatch instead.
 _GLM_FP8_PCRW_SD0 = os.environ.get("GLM_FP8_PCRW_SD0", "0") == "1"
+# fp8wire: the overlapped routed expert reads the fp8 wire's packed rows itself (each half dequantizes as it tilizes),
+# so DQ1 (per_token_cast_back) leaves the critical path. Unpacking e4m3 needs the routed expert's 32-bit DEST
+# (HYB_FP32_DEST, read once by the op), so this sets it before the first hybrid program is built.
+_GLM_FP8_RE_X = os.environ.get("GLM_FP8_RE_X", "0") == "1"
+if _GLM_FP8_RE_X:
+    os.environ.setdefault("HYB_FP32_DEST", "1")
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
@@ -1282,7 +1288,10 @@ class TtMoe(LightweightModule):
         # an untraced prefill host-bound; a trace replays it for free. A traced model attaches its controller
         # before the warm-up forward, so the warm-up compiles the same programs the capture records.
         overlap_combine = self.overlap_routed_expert_with_combine and self._trace_controller is not None
-        if self.dispatch_fp8:
+        if self.dispatch_fp8 and overlap_combine and _GLM_FP8_RE_X:
+            # The overlapped routed expert dequantizes the packed rows itself: no DQ1.
+            pass
+        elif self.dispatch_fp8:
             # DQ1 on the full grid, for the valid prefix of each local expert's region only. The overlapped program
             # takes bf8 tiles (half the bytes of bf16 rows, and the routed expert then needs no tilize); the separate
             # routed expert keeps the bf16 rows.
