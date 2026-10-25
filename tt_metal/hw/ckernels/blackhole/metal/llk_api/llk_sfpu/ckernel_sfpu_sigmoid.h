@@ -43,33 +43,109 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x, const ExpConstants& exp_
 }
 
 // The BF16-grade sigmoid of _sfpu_sigmoid_<false> (exp_21f of -x, then one Newton step of the reciprocal of
-// 1 + exp(-x)), with its constants in registers the caller loads once per call, so its loop reloads no FP32 constant.
+// 1 + exp(-x)), as computed by _sfpu_sigmoid_bf16_rows_ below.
 // (-x) / ln2 is formed as x * -(1 / ln2): the product is the same, sign included. The exponent is clamped at 254
 // rather than 255, so exp(-x) stays finite (below 2**128) and the reciprocal needs no NaN guard: from 2**126 up its
 // estimate is 0 and the Newton step keeps it 0, the result the guarded step gives for an infinite exp(-x).
+//
+// exp_21f splits the clamped t = x * -(1/ln2) + 127, in [0, 254], into its integer part n (the result's exponent) and
+// its fraction, scaled by 2**23 for the polynomial. Here n = trunc(t) is one round-to-zero SFPSTOCHRND and the
+// fraction t - n one exact subtraction, instead of shifting t's mantissa into an integer and splitting that again
+// (six instructions down to three). The polynomial takes the unscaled fraction with c1 and c2 scaled by 2**23 and
+// 2**46 instead: Horner's steps then compute 2**23 times, and finally exactly, the values of the scaled form, so each
+// rounds the same. Both splits agree wherever t >= 1. Below 1 (and at the three inputs for which round-to-zero
+// SFPSTOCHRND rounds up, 0x3f7ffffe, 0x3f7fffff and 0x3fffffff), exp(-x) is below 2**-124 in either form, so
+// 1 + exp(-x) rounds to 1 in both.
+// The Newton step forms y * (2 - d * y) directly: 2 - d * y is -(d * y - 2) exactly, and y * (2 - d * y) is never
+// -0 (y >= +0, and 2 - d * y is 2 where y is 0), so adding no -0 leaves it unchanged.
+// Constants: -(1/ln2), the exponent bias 127, c0, c1 (EXP_21F_BF16_C1 * 2**23), c2 (EXP_21F_BF16_C2 * 2**46), and
+// the clamp's upper bound t_max = 254.
+constexpr float EXP_21F_BF16_C1_UNSCALED = EXP_21F_BF16_C1 * 0x1p23f;
+constexpr float EXP_21F_BF16_C2_UNSCALED = EXP_21F_BF16_C2 * 0x1p46f;
+
+// -(1/ln2), which _sfpu_sigmoid_bf16_rows_'s caller loads once before its row loop, and the clamp's upper bound.
 struct SigmoidBf16Constants {
     sfpi::vFloat neg_one_ln2 = -1.4426950216293334961f;
-    sfpi::vFloat exp_bias = 127.f;
-    sfpi::vFloat c0 = EXP_21F_BF16_C0;
-    sfpi::vFloat c1 = EXP_21F_BF16_C1;
-    sfpi::vFloat c2 = EXP_21F_BF16_C2;
+    static constexpr float t_max = 254.0f;
 };
 
-template <typename Constants>
-sfpi_inline sfpi::vFloat _sfpu_sigmoid_bf16_preloaded_(sfpi::vFloat x, const Constants& k) {
-    sfpi::vFloat xlog2 = sfpi::clamp(x * k.neg_one_ln2 + k.exp_bias, 0.0f, 254.0f);
-    sfpi::vFloat z = sfpi::as<sfpi::vFloat>(_float_to_int32_for_exp_21f_(xlog2));
-    sfpi::vInt exponential_part = sfpi::exexp(z, sfpi::ExponentMode::Biased);
-    sfpi::vMag fractional_part = sfpi::exman(z);
-    sfpi::vFloat frac = sfpi::convert<sfpi::vFloat>(fractional_part, sfpi::RoundMode::Nearest);
-    frac = PolynomialEvaluator::eval(frac, k.c0, k.c1, k.c2);
-    sfpi::vFloat exp_neg_x = sfpi::setexp(frac, exponential_part);
-    return sfpu_reciprocal_iter<1, /*normalized=*/true>(1.0f + exp_neg_x);
+// _sfpu_sigmoid_bf16_preloaded_ of N independent rows, step by step across the rows: the single-row chain stalls on
+// nearly every dependent MAD-unit result (two-cycle latency), so the second row fills those cycles. The same
+// operations as _sfpu_sigmoid_bf16_preloaded_ on each row, so the result is bit-identical. Two rows leave no lregs to
+// keep the constants in, so each but -(1/ln2) (the eighth lreg, which the caller loads once before its row loop) is
+// loaded where it is used, one load serving both rows. With constants_in_cregs the clamp bound t_max and c2 come from
+// vConstFloatPrgm1 and vConstFloatPrgm2 (silu_init). Requires vConstFloatPrgm0 = 2.0.
+template <bool constants_in_cregs, int N>
+sfpi_inline void _sfpu_sigmoid_bf16_rows_(sfpi::vFloat (&x)[N], const SigmoidBf16Constants& constants) {
+    static_assert(N == 1 || N == 2, "two rows use the eight lregs");
+    using K = SigmoidBf16Constants;
+    sfpi::vFloat t[N], f[N];
+    sfpi::vUInt8 n[N];
+    sfpi::vFloat c = 127.f;
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        t[i] = x[i] * constants.neg_one_ln2 + c;
+    }
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        if constexpr (constants_in_cregs) {
+            t[i] = sfpi::min(t[i], sfpi::vFloat(sfpi::vConstFloatPrgm1));
+        } else {
+            t[i] = sfpi::min(t[i], sfpi::vFloat(K::t_max));
+        }
+    }
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        t[i] = sfpi::max(t[i], 0.0f);
+    }
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        n[i] = sfpi::convert<sfpi::vUInt8>(t[i], sfpi::RoundMode::Zero);
+    }
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        f[i] = t[i] - sfpi::convert<sfpi::vFloat>(sfpi::as<sfpi::vSMag>(n[i]), sfpi::RoundMode::Nearest);
+    }
+    // c0 + f * (c1 + f * c2), as PolynomialEvaluator::eval.
+    c = EXP_21F_BF16_C1_UNSCALED;
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        if constexpr (constants_in_cregs) {
+            t[i] = f[i] * sfpi::vConstFloatPrgm2 + c;
+        } else {
+            t[i] = f[i] * EXP_21F_BF16_C2_UNSCALED + c;
+        }
+    }
+    c = EXP_21F_BF16_C0;
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        t[i] = c + f[i] * t[i];
+    }
+    // d = 1 + exp(-x) (into f), y = its reciprocal estimate refined by one Newton step (into x).
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        f[i] = sfpi::setexp(t[i], sfpi::as<sfpi::vInt>(n[i])) + 1.0f;
+    }
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        x[i] = sfpi::approx_recip(f[i]);
+    }
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        t[i] = sfpi::vConstFloatPrgm0 - f[i] * x[i];
+    }
+#pragma GCC unroll 2
+    for (int i = 0; i < N; i++) {
+        x[i] = x[i] * t[i];
+    }
 }
 
 // The constant of _sfpu_sigmoid_fp32_rows_ its caller loads once before the row loop (the eighth lreg).
 struct SigmoidFp32Constants {
     sfpi::vFloat neg_one_ln2 = -ExpFp32Constants::one_ln2;
+    // The bound of |x|, and the bits of 1.5 * 2**23 + 127, which j + 127 lands in.
+    static constexpr float clamp = 88.0f;
+    static constexpr std::uint32_t exp2_bias_bits = 0x4B400000U + 127U;
 };
 
 // sigmoid(x) = 1 / (1 + exp(-x)) of N independent rows, step by step across the rows, so each row's dependent
@@ -90,8 +166,10 @@ struct SigmoidFp32Constants {
 // - 2 - d * y is formed directly (rounded to nearest, it is -(d * y - 2) exactly), and y * (2 - d * y) is never -0,
 //   so the Newton steps add +0 rather than load -0.
 // A +NaN x clamps to 88, giving 1; a -NaN x gives NaN (the unclamped form gives 0 for either NaN).
-// Requires vConstFloatPrgm0 = 2.0 (sigmoid_init).
-template <int N>
+// Requires vConstFloatPrgm0 = 2.0 (sigmoid_init). With constants_in_cregs, the clamp bound 88 and the 2**j bias come
+// from vConstFloatPrgm1 and vConstFloatPrgm2 (sigmoid_init) rather than SFPLOADIs: four instructions fewer per pair
+// of rows, as the swap against a constant register leaves the bound in place, where it overwrites a loaded one.
+template <bool constants_in_cregs, int N>
 sfpi_inline void _sfpu_sigmoid_fp32_rows_(sfpi::vFloat (&x)[N], const SigmoidFp32Constants& constants) {
     static_assert(N == 1 || N == 2, "two rows use seven of the eight lregs");
     using C = ExpFp32Constants;
@@ -103,7 +181,11 @@ sfpi_inline void _sfpu_sigmoid_fp32_rows_(sfpi::vFloat (&x)[N], const SigmoidFp3
     }
 #pragma GCC unroll 2
     for (int n = 0; n < N; n++) {
-        j[n] = sfpi::min(j[n], sfpi::vFloat(88.0f));
+        if constexpr (constants_in_cregs) {
+            j[n] = sfpi::min(j[n], sfpi::vFloat(sfpi::vConstFloatPrgm1));
+        } else {
+            j[n] = sfpi::min(j[n], sfpi::vFloat(SigmoidFp32Constants::clamp));
+        }
     }
 #pragma GCC unroll 2
     for (int n = 0; n < N; n++) {
@@ -138,10 +220,17 @@ sfpi_inline void _sfpu_sigmoid_fp32_rows_(sfpi::vFloat (&x)[N], const SigmoidFp3
     }
 
     // 2**j: j + 127 lands in the low mantissa bits of j + (1.5 * 2**23 + 127); shifted into the exponent field.
-    k = Converter::as_float(0x4B400000U + 127U);
+    if constexpr (constants_in_cregs) {
 #pragma GCC unroll 2
-    for (int n = 0; n < N; n++) {
-        s[n] = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(j[n] + k) << 23);
+        for (int n = 0; n < N; n++) {
+            s[n] = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(j[n] + sfpi::vConstFloatPrgm2) << 23);
+        }
+    } else {
+        k = Converter::as_float(SigmoidFp32Constants::exp2_bias_bits);
+#pragma GCC unroll 2
+        for (int n = 0; n < N; n++) {
+            s[n] = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(j[n] + k) << 23);
+        }
     }
 
     // exp(f) on [-ln2/2, ln2/2], the degree-6 minimax of _sfpu_exp_fp32_accurate_ in the same Horner order.
@@ -204,13 +293,21 @@ sfpi_inline void _sfpu_sigmoid_fp32_rows_(sfpi::vFloat (&x)[N], const SigmoidFp3
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sigmoid() {
     if constexpr (!APPROXIMATION_MODE && !is_fp32_dest_acc_en) {
+        // The BF16-grade sigmoid, two rows at a time. Each result is rounded to BF16 as a vFloat, so the store keeps
+        // the destination's format.
         const SigmoidBf16Constants constants;
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++) {
-            sfpi::vFloat result = _sfpu_sigmoid_bf16_preloaded_(sfpi::dst_reg[0], constants);
-            // Rounded to BF16 as a vFloat, so the store keeps the destination's format.
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
-            sfpi::dst_reg[0] = result;
+#pragma GCC unroll 4
+        for (int d = 0; d < ITERATIONS / 2; d++) {
+            sfpi::vFloat rows[2] = {sfpi::dst_reg[0], sfpi::dst_reg[1]};
+            _sfpu_sigmoid_bf16_rows_</*constants_in_cregs=*/false>(rows, constants);
+            sfpi::dst_reg[0] = sfpi::vFloat(sfpi::convert<sfpi::vFloat16b>(rows[0], sfpi::RoundMode::Nearest));
+            sfpi::dst_reg[1] = sfpi::vFloat(sfpi::convert<sfpi::vFloat16b>(rows[1], sfpi::RoundMode::Nearest));
+            sfpi::dst_reg += 2;
+        }
+        if constexpr (ITERATIONS % 2 != 0) {
+            sfpi::vFloat row[1] = {sfpi::dst_reg[0]};
+            _sfpu_sigmoid_bf16_rows_</*constants_in_cregs=*/false>(row, constants);
+            sfpi::dst_reg[0] = sfpi::vFloat(sfpi::convert<sfpi::vFloat16b>(row[0], sfpi::RoundMode::Nearest));
             sfpi::dst_reg++;
         }
     } else if constexpr (!APPROXIMATION_MODE) {
@@ -219,14 +316,14 @@ inline void calculate_sigmoid() {
 #pragma GCC unroll 4
         for (int d = 0; d < ITERATIONS / 2; d++) {
             sfpi::vFloat rows[2] = {sfpi::dst_reg[0], sfpi::dst_reg[1]};
-            _sfpu_sigmoid_fp32_rows_(rows, constants);
+            _sfpu_sigmoid_fp32_rows_</*constants_in_cregs=*/true>(rows, constants);
             sfpi::dst_reg[0] = rows[0];
             sfpi::dst_reg[1] = rows[1];
             sfpi::dst_reg += 2;
         }
         if constexpr (ITERATIONS % 2 != 0) {
             sfpi::vFloat row[1] = {sfpi::dst_reg[0]};
-            _sfpu_sigmoid_fp32_rows_(row, constants);
+            _sfpu_sigmoid_fp32_rows_</*constants_in_cregs=*/true>(row, constants);
             sfpi::dst_reg[0] = row[0];
             sfpi::dst_reg++;
         }
@@ -240,6 +337,9 @@ inline void sigmoid_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     if constexpr (!APPROXIMATION_MODE) {
         sfpu_reciprocal_init<false>();
+        // The FP32 path's constants (_sfpu_sigmoid_fp32_rows_<true>); the BF16 path uses neither.
+        sfpi::vConstFloatPrgm1 = SigmoidFp32Constants::clamp;
+        sfpi::vConstFloatPrgm2 = Converter::as_float(SigmoidFp32Constants::exp2_bias_bits);
     } else {
         sigmoid_appx_init();
     }
