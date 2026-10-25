@@ -57,6 +57,10 @@ def _routing(spec):
 
 
 def _time_trace(mesh_device, fn, k, r, label):
+    # Warm-up: a trace capture cannot compile a program that is not in the program cache yet.
+    for o in fn():
+        ttnn.deallocate(o)
+    ttnn.synchronize_device(mesh_device)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for _ in range(k):
         outs = fn()
