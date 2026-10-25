@@ -345,6 +345,25 @@ void py_module(nb::module_& mod) {
                 return ttnn::CoreGrid(sz.x, sz.y);
             })
         .def(
+            "set_compute_grid_override",
+            &MeshDevice::set_compute_grid_override,
+            nb::arg("grid").none(),
+            R"doc(
+           Experimental op-grid override: make compute_with_storage_grid_size() (and core_grid) return `grid`
+           (anchored at (0, 0)) instead of the device grid, so ops that size their work from it stay inside it.
+           The cores outside stay usable by sub-devices (tt-metal internals keep the device grid). Set it before
+           any program is built; None restores the device grid. Also settable at open with
+           TT_METAL_MESH_COMPUTE_GRID_OVERRIDE=<x>x<y>.
+       )doc")
+        .def(
+            "get_compute_grid_override",
+            &MeshDevice::get_compute_grid_override,
+            R"doc(The op-grid override (CoreCoord), or None when unset.)doc")
+        .def(
+            "device_compute_with_storage_grid_size",
+            &MeshDevice::device_compute_with_storage_grid_size,
+            R"doc(The device compute grid, ignoring the op-grid override.)doc")
+        .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,
             R"doc(
@@ -472,6 +491,13 @@ void py_module(nb::module_& mod) {
                Args:
                    sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to load.
            )doc")
+        .def(
+            "is_sub_device_manager_active",
+            [](const MeshDevice& self, SubDeviceManagerId sub_device_manager_id) {
+                return self.get_active_sub_device_manager_id() == sub_device_manager_id;
+            },
+            nb::arg("sub_device_manager_id"),
+            R"doc(Whether `sub_device_manager_id` is the loaded sub-device manager.)doc")
         .def(
             "clear_loaded_sub_device_manager",
             &MeshDevice::clear_loaded_sub_device_manager,

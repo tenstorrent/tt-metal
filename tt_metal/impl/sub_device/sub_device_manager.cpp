@@ -5,6 +5,7 @@
 #include <allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include <device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <host_api.hpp>
 #include <sub_device.hpp>
 #include <sub_device_types.hpp>
@@ -194,7 +195,8 @@ void SubDeviceManager::validate_sub_devices() const {
         sub_devices_.size(),
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     // Validate sub device cores fit inside the device grid
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
+    // The device grid, not a MeshDevice op-grid override: sub-devices may use the cores outside the override.
+    const auto compute_grid_size = distributed::device_compute_with_storage_grid_size(*device_);
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
     const Hal& hal = MetalContext::instance(context_id_).hal();
 
@@ -351,7 +353,8 @@ void SubDeviceManager::populate_noc_data() {
         has_noc_mcast_txns_[i] = sub_devices_[i].impl()->has_core_type(HalProgrammableCoreType::TENSIX);
     }
 
-    const auto& compute_grid_size = device_->compute_with_storage_grid_size();
+    // The device grid, not a MeshDevice op-grid override: sub-devices may use the cores outside the override.
+    const auto compute_grid_size = distributed::device_compute_with_storage_grid_size(*device_);
     CoreRange device_worker_cores = CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1});
 
     std::vector<std::pair<CoreRangeSet, uint32_t>> core_go_message_mapping;

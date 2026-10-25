@@ -42,6 +42,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutin
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE, TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.persistent_sd import (
+    barrier_target,
+    get_persistent_sub_devices,
+    moe_dispatch_on_comm,
+    restore_base_manager,
+)
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # glue track: workers per link for the MoE x all-gather over TP; "0" = op default.
@@ -524,11 +530,33 @@ class TtMoe(LightweightModule):
         # When overlap is disabled, both ops run sequentially on the full grid and no
         # sub-device manager is created.
         # ========================================
-        if self.overlap_shared_expert_with_dispatch:
+        # Persistent {main, comm} manager (TT_GLM_PERSISTENT_SD=1, tt/persistent_sd.py): either keep the region
+        # manager below and swap persistent -> region -> persistent (default), or (TT_GLM_MOE_DISPATCH_SD=comm) run
+        # dispatch on the comm column (SD1) and the shared expert on the main grid (SD0) with no swap; the join
+        # after them is then a persistent-manager barrier (twin swap) until an in-trace wait op exists.
+        psd = get_persistent_sub_devices(mesh_device)
+        self._dispatch_on_comm = False
+        if self.overlap_shared_expert_with_dispatch and psd is not None and moe_dispatch_on_comm():
+            self._dispatch_on_comm = True
+            self.sd_manager_id = None
+            self.dispatch_sd_id = psd.comm_sd_id
+            self.shared_sd_id = psd.main_sd_id
+            self.shared_sd_cores = psd.main_cores
+            logger.debug(
+                f"Sub-devices: persistent manager, dispatch on comm ({psd.comm_cores.num_cores()} cores), "
+                f"shared expert on main ({psd.main_cores.num_cores()} cores)"
+            )
+        elif self.overlap_shared_expert_with_dispatch:
             # routed_x is TILE, so dispatch_fabric2d untilizes it on row 1, under its senders on row 0
             # next to the ethernet cores.
             dispatch_sd_rows = 2 if moe_transport == "fabric2d" else 1
-            grid = mesh_device.compute_with_storage_grid_size()
+            # Under the persistent manager the region still spans the whole device grid (the op-grid override
+            # does not apply to it), so dispatch and the shared expert run exactly the programs they run without it.
+            grid = (
+                mesh_device.device_compute_with_storage_grid_size()
+                if psd is not None
+                else mesh_device.compute_with_storage_grid_size()
+            )
             grid_x, grid_y = grid.x, grid.y
             assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
             dispatch_cores = ttnn.CoreRangeSet(
@@ -775,6 +803,15 @@ class TtMoe(LightweightModule):
                 self.seq_len_per_chip,
                 self.row_num_links,
             )
+
+    def _persistent_barrier(self):
+        """Full SD0/SD1 join under the persistent manager: no in-trace wait op yet, so swap to the manager's twin,
+        which drains and resets both sub-devices (a trace-segment boundary under capture, like a load/clear)."""
+        target = barrier_target(self.mesh_device)
+        if self._trace_controller is not None:
+            self._trace_controller.sub_device_load(target)
+        else:
+            self.mesh_device.load_sub_device_manager(target)
 
     def release_sub_device_manager(self):
         """Remove the overlap sub-device manager this MoE created (no-op if overlap is off). Call
@@ -1093,7 +1130,11 @@ class TtMoe(LightweightModule):
             indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_start`")
-        if self.overlap_shared_expert_with_dispatch:
+        if self._dispatch_on_comm:
+            # Dispatch on SD1 must not start before its inputs (all-gathered x, indices, offsets) are written on SD0:
+            # programs on different sub-devices do not wait for each other.
+            self._persistent_barrier()
+        elif self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_load(self.sd_manager_id)
             else:
@@ -1164,11 +1205,14 @@ class TtMoe(LightweightModule):
                 sub_core_grids=self.shared_expert.subdevice_cores,
             )
 
-        if self.overlap_shared_expert_with_dispatch:
+        if self._dispatch_on_comm:
+            # Join dispatch (SD1) with the main grid (SD0) before the routed expert reads its output.
+            self._persistent_barrier()
+        elif self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
             else:
-                self.mesh_device.clear_loaded_sub_device_manager()
+                restore_base_manager(self.mesh_device)
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it

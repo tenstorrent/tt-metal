@@ -107,6 +107,16 @@ CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCo
     return closest;
 }
 
+uint32_t get_worker_to_eth_core_noc_hops(
+    const IDevice& device, const CoreCoord& logical_worker, const CoreCoord& logical_eth_core, NOC noc) {
+    const auto& dev = concrete_device(device);
+    return noc_hop_distance(
+        dev.physical_worker_core_from_logical_core(logical_worker),
+        dev.physical_eth_core_from_logical_core(logical_eth_core),
+        device.grid_size(),
+        noc);
+}
+
 CoreCoord worker_core_from_logical_core(
     distributed::MeshDevice& mesh_device,
     const distributed::MeshCoordinate& mesh_coord,

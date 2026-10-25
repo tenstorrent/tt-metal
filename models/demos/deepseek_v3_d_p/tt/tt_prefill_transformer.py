@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_row_of_position,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.persistent_sd import load_base_manager, release_persistent_sub_devices
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
@@ -202,6 +203,9 @@ class TtPrefillTransformer(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        # TT_GLM_PERSISTENT_SD=1: load the persistent {main 11x10, comm column} manager before anything is built
+        # (sets the op-grid override if the process did not); no-op otherwise. See tt/persistent_sd.py.
+        load_base_manager(mesh_device)
         self.seq_len = seq_len
         self.padding_side = padding_side
         self.is_chunked = is_chunked
@@ -446,6 +450,7 @@ class TtPrefillTransformer(LightweightModule):
         self.mesh_device.clear_loaded_sub_device_manager()
         for layer in self._trace_blocks():
             layer.release_sub_device_managers()
+        release_persistent_sub_devices(self.mesh_device)
         if self._mtp_sp_rank is not None:
             ttnn.deallocate(self._mtp_sp_rank)
             self._mtp_sp_rank = None

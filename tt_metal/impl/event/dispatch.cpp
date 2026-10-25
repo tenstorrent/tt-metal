@@ -14,6 +14,7 @@
 #include "allocator/allocator.hpp"
 #include "core_coord.hpp"
 #include "device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include "device/device_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/kernels/cq_commands.hpp"
@@ -37,8 +38,8 @@ namespace tt::tt_metal::event_dispatch {
 
 namespace {
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
-    const uint32_t num_workers =
-        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    const CoreCoord grid = distributed::device_compute_with_storage_grid_size(*device);
+    const uint32_t num_workers = grid.x * grid.y;
     return std::max<uint32_t>(num_workers, device->num_hw_cqs());
 }
 }  // namespace

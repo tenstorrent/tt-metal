@@ -54,6 +54,12 @@ struct CoreAtNocHops {
 // This API is experimental and may evolve into a stable Device API in the future
 CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
 
+// Returns the hop count on `noc` from the logical worker `logical_worker` to `logical_eth_core`, measured the same
+// way as get_closest_worker_to_eth_core.
+// This API is experimental and may evolve into a stable Device API in the future
+uint32_t get_worker_to_eth_core_noc_hops(
+    const IDevice& device, const CoreCoord& logical_worker, const CoreCoord& logical_eth_core, NOC noc);
+
 // Returns the virtual NoC coordinate of a logical worker core on the device at `mesh_coord`.
 // Unlike MeshDevice::worker_core_from_logical_core, this does not require every device in the mesh
 // to share a logical-to-virtual mapping, so it is exact on a heterogeneously harvested mesh.

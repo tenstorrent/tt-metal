@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d {
 
@@ -175,16 +176,47 @@ StreamPlacements decide_device_placement(
 
     for (const StreamId stream : order) {
         const auto& candidate = candidates.at(stream);
-        // Refused: cores outside allowed_cores belong to other work on the chip, so a nearest core
-        // outside it means the caller's core set is wrong.
-        TT_FATAL(
-            contains(allowed_rows, candidate.worker),
-            "dispatch_fabric2d {}: the worker nearest stream {}'s eth core is {}, which is outside the "
-            "{} cores this op was given. Widen the subdevice_id's core set to include it.",
-            self_node,
-            stream,
-            candidate.worker,
-            num_allowed);
+        if (!contains(allowed_rows, candidate.worker)) {
+            // The nearest worker belongs to other work on the chip (e.g. a comm sub-device that is a core
+            // column, not the rows under the eth cores): take the free allowed core with the fewest NOC_1 hops
+            // to this stream's eth core, ties to the lower row then the lower column. Senders off their eth
+            // core's column pay -x hops on NOC_1 and share the column's -y links with the other streams there.
+            std::optional<tt::tt_metal::CoreCoord> best;
+            uint32_t best_hops = 0;
+            for (const auto& [y, row] : allowed_rows) {
+                for (const auto& core : row) {
+                    if (taken.contains(core)) {
+                        continue;
+                    }
+                    const uint32_t hops = tt::tt_metal::experimental::Device::get_worker_to_eth_core_noc_hops(
+                        *dev, core, eth_core_of.at(stream), SENDER_NOC);
+                    if (!best.has_value() || hops < best_hops) {
+                        best = core;
+                        best_hops = hops;
+                    }
+                }
+            }
+            TT_FATAL(
+                best.has_value(),
+                "dispatch_fabric2d {}: every one of the {} cores this op was given is taken; stream {} has nowhere "
+                "to go",
+                self_node,
+                num_allowed,
+                stream);
+            log_debug(
+                tt::LogOp,
+                "dispatch_fabric2d {}: stream {}'s nearest worker {} is outside the {} cores given; placed on {} "
+                "({} NOC_1 hops vs {})",
+                self_node,
+                stream,
+                candidate.worker,
+                num_allowed,
+                *best,
+                best_hops,
+                candidate.noc_hops);
+            assign(stream, candidate, *best);
+            continue;
+        }
         if (!taken.contains(candidate.worker)) {
             assign(stream, candidate, candidate.worker);
             continue;

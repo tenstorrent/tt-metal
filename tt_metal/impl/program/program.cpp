@@ -2631,7 +2631,8 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 }
 
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
-    auto grid_size = device->compute_with_storage_grid_size();
+    // The device grid, not a MeshDevice op-grid override: a program may run on a sub-device outside the override.
+    auto grid_size = distributed::device_compute_with_storage_grid_size(*device);
     // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
     // core. Mirrors validate_circular_buffer_region.
     const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();

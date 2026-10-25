@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import sparse_kv_push_supported
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
+from models.demos.deepseek_v3_d_p.tt.persistent_sd import restore_base_manager
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
@@ -2441,7 +2442,8 @@ class ttMLA:
                 if trace_controller is not None:
                     trace_controller.sub_device_clear()
                 else:
-                    self.mesh_device.clear_loaded_sub_device_manager()
+                    # The default manager, or the persistent one under TT_GLM_PERSISTENT_SD=1.
+                    restore_base_manager(self.mesh_device)
                 ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_END`")
             if failed:
                 self.tt_ccl.reset_sparse_mla_overlap_semaphores()

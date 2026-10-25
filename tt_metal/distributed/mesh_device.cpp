@@ -24,6 +24,8 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <iterator>
 #include <memory>
 #include <optional>
@@ -1010,6 +1012,38 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
+    if (compute_grid_override_.has_value()) {
+        return *compute_grid_override_;
+    }
+    return device_compute_with_storage_grid_size();
+}
+
+void MeshDeviceImpl::set_compute_grid_override(const std::optional<CoreCoord>& grid) {
+    if (grid.has_value()) {
+        const CoreCoord full = device_compute_with_storage_grid_size();
+        TT_FATAL(
+            grid->x > 0 && grid->y > 0 && grid->x <= full.x && grid->y <= full.y,
+            "MeshDevice compute grid override {}x{} must be non-empty and within the device grid {}x{}",
+            grid->x,
+            grid->y,
+            full.x,
+            full.y);
+    }
+    if (program_cache_ && program_cache_->num_entries() > 0) {
+        log_warning(
+            tt::LogMetal,
+            "MeshDevice compute grid override set with {} programs already cached: they keep the grid they were "
+            "built with. Set the override before any program is built.",
+            program_cache_->num_entries());
+    }
+    log_info(
+        tt::LogMetal,
+        "MeshDevice compute grid override: {}",
+        grid.has_value() ? fmt::format("{}x{}", grid->x, grid->y) : std::string("cleared"));
+    compute_grid_override_ = grid;
+}
+
+CoreCoord MeshDeviceImpl::device_compute_with_storage_grid_size() const {
     if (mesh_properties_.has_value()) {
         return mesh_properties_->compute_with_storage_grid_size;
     }
@@ -1843,7 +1877,8 @@ bool MeshDeviceImpl::initialize_impl(
     establish_device_property_caches();
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
-    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    // The default sub-device spans the whole device grid, whatever the op-grid override.
+    const auto compute_grid_size = this->device_compute_with_storage_grid_size();
     auto sub_devices = {
         SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
 
@@ -1895,6 +1930,17 @@ bool MeshDeviceImpl::initialize_impl(
     // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
     if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
+    }
+
+    // Op-grid override from the environment, applied after the default sub-device so that one keeps the device grid.
+    if (const char* env = std::getenv("TT_METAL_MESH_COMPUTE_GRID_OVERRIDE"); env != nullptr && *env != '\0') {
+        unsigned gx = 0, gy = 0;
+        char sep = 0;
+        TT_FATAL(
+            std::sscanf(env, "%u%c%u", &gx, &sep, &gy) == 3 && (sep == 'x' || sep == 'X' || sep == ','),
+            "TT_METAL_MESH_COMPUTE_GRID_OVERRIDE='{}': expected <x>x<y>, e.g. 11x10",
+            env);
+        set_compute_grid_override(CoreCoord{gx, gy});
     }
 
     is_internal_state_initialized = true;
@@ -2241,6 +2287,20 @@ bool MeshDevice::is_inactive_ethernet_core(CoreCoord logical_core) const {
     return pimpl_->is_inactive_ethernet_core(logical_core);
 }
 CoreCoord MeshDevice::compute_with_storage_grid_size() const { return pimpl_->compute_with_storage_grid_size(); }
+void MeshDevice::set_compute_grid_override(const std::optional<CoreCoord>& grid) {
+    pimpl_->set_compute_grid_override(grid);
+}
+std::optional<CoreCoord> MeshDevice::get_compute_grid_override() const { return pimpl_->get_compute_grid_override(); }
+CoreCoord MeshDevice::device_compute_with_storage_grid_size() const {
+    return pimpl_->device_compute_with_storage_grid_size();
+}
+
+CoreCoord device_compute_with_storage_grid_size(const IDevice& device) {
+    if (const auto* mesh = dynamic_cast<const MeshDevice*>(&device)) {
+        return mesh->device_compute_with_storage_grid_size();
+    }
+    return device.compute_with_storage_grid_size();
+}
 CoreRangeSet MeshDevice::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     return pimpl_->worker_cores(core_type, sub_device_id);
 }

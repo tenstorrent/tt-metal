@@ -168,8 +168,16 @@ DevicePlacement decide_device_placement(
             nbr_node,
             num_links);
         for (uint32_t k = 0; k < num_links; k++) {
-            const auto [worker, noc_hops] = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
+            auto [worker, noc_hops] = tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(
                 *dev, tt::tt_fabric::get_forwarding_eth_core(*mesh, self_node, nbr_node, k), SENDER_NOC);
+            // The chip's nearest worker can lie outside a MeshDevice op-grid override (the cores past it may be
+            // another sub-device's). Start from the override's edge on the same row instead and let the
+            // not-nearest path below move along the row.
+            const auto op_grid = mesh->compute_with_storage_grid_size();
+            if (worker.x >= op_grid.x || worker.y >= op_grid.y) {
+                worker = tt::tt_metal::CoreCoord{std::min(worker.x, op_grid.x - 1), std::min(worker.y, op_grid.y - 1)};
+                noc_hops = SENDER_NOC_MIN_ETH_HOPS + 1;
+            }
             candidates.emplace(make_stream_id(k, delta == 1), WorkerCandidate{worker, noc_hops, *nbr, nbr_node});
         }
     }

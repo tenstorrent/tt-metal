@@ -153,6 +153,19 @@ public:
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     CoreCoord compute_with_storage_grid_size() const override;
+    // Op-grid override (experimental; GLM prefill pipeline). While set, compute_with_storage_grid_size() -- the
+    // grid ttnn ops and models size and place their work from, anchored at (0, 0) -- returns `grid` instead of
+    // the device's grid, so every op that builds its core set from it stays inside (0, 0)..(grid - 1). The cores
+    // outside it stay usable: tt-metal internals (sub-device validation, go-message resets, CB core-range checks,
+    // the default sub-device) keep the device grid (device_compute_with_storage_grid_size()), so a sub-device
+    // manager can still put a sub-device there and ops called with that sub-device's id run on it.
+    // Set it before any program is built: a cached program keeps the grid it was built with (a warning is logged
+    // when the program cache is not empty). std::nullopt restores the device grid.
+    // Also set at open from TT_METAL_MESH_COMPUTE_GRID_OVERRIDE="<x>x<y>" (e.g. "11x10").
+    void set_compute_grid_override(const std::optional<CoreCoord>& grid);
+    std::optional<CoreCoord> get_compute_grid_override() const;
+    // The device's compute grid, ignoring the override.
+    CoreCoord device_compute_with_storage_grid_size() const;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;
@@ -371,6 +384,11 @@ public:
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);
+
+// The compute grid of `device` ignoring any MeshDevice op-grid override (MeshDevice::set_compute_grid_override):
+// device_compute_with_storage_grid_size() for a MeshDevice, compute_with_storage_grid_size() otherwise. For tt-metal
+// internals that size device-wide state (sub-device validation, go-message resets, CB core-range checks).
+CoreCoord device_compute_with_storage_grid_size(const IDevice& device);
 
 }  // namespace distributed
 

@@ -683,8 +683,8 @@ uint32_t finalize_kernel_bins(
 }
 
 uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
-    const uint32_t num_workers =
-        device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    const CoreCoord grid = distributed::device_compute_with_storage_grid_size(*device);
+    const uint32_t num_workers = grid.x * grid.y;
     return std::max<uint32_t>(num_workers, device->num_hw_cqs());
 }
 
@@ -3642,7 +3642,8 @@ static HostMemDeviceCommand build_set_core_go_message_mapping_on_device(
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     HostMemDeviceCommand command_sequence(metal_ctx, cmd_sequence_sizeB);
 
-    const auto& compute_grid_size = device->compute_with_storage_grid_size();
+    // Every Tensix core of the device, not a MeshDevice op-grid override.
+    const auto compute_grid_size = distributed::device_compute_with_storage_grid_size(*device);
 
     CoreRange all_core_range_logical{{0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}};
     CoreCoord virtual_start =

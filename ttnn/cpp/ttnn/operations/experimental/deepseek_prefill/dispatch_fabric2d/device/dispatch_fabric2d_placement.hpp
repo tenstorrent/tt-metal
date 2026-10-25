@@ -47,10 +47,11 @@ using MeshPlacement = std::map<ttnn::MeshCoordinate, StreamPlacements>;
 // sender's arguments name the worker serving the same stream on the downstream chip.
 //
 // `allowed_cores` is every core the op may use: the caller's sub-device, or the whole compute grid when no
-// sub-device manager is loaded. A stream goes on the worker nearest its eth core, and the op refuses if
-// that core is not in allowed_cores. If another stream already has it, the stream moves to a free core in the
-// same row: first the nearest to its right, then from column 0; only a full row sends it to the next row.
-// Cores outside allowed_cores belong to other work on the chip.
+// sub-device manager is loaded. A stream goes on the worker nearest its eth core. If that core is not in
+// allowed_cores (e.g. a comm sub-device that is one core column), the stream takes the free allowed core with
+// the fewest NOC_1 hops to its eth core instead. If another stream already has its nearest core, the stream
+// moves to a free core in the same row: first the nearest to its right, then from column 0; only a full row
+// sends it to the next row. Cores outside allowed_cores belong to other work on the chip.
 MeshPlacement decide_placement(
     ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, const tt::tt_metal::CoreRangeSet& allowed_cores);
 

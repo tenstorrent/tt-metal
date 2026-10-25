@@ -367,6 +367,17 @@ def _ref_layer_slice(trace_dir: Path, layout: str, layer: int, start: int, end: 
     return _load_layer_rows(trace_dir, layout, "hidden_states", layer, f"decoder_output_layer_{layer}", start, end)
 
 
+# TT_GLM_E1_HASH=1: log a sha1 of every per-layer output and KV cache slot, for bit-exactness checks across trees and
+# configurations (pipeline track E1).
+_E1_HASH = os.getenv("TT_GLM_E1_HASH", "0") == "1"
+
+
+def _sha(t):
+    import hashlib
+
+    return hashlib.sha1(t.contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()[:16]
+
+
 def _record_kv_cache_pcc(
     trace_dir,
     layout,
@@ -406,6 +417,9 @@ def _record_kv_cache_pcc(
     the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
     cache_full, stripes = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
+    if _E1_HASH:
+        for slot in range(cache_full.shape[0]):
+            logger.info(f"[e1hash] kvpe slot {slot} {_sha(cache_full[slot])}")
     p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
     cache_min_pcc = {}
     slots = list(range(num_layers)) if slot_layer_ids is None else list(range(len(slot_layer_ids)))
@@ -832,6 +846,8 @@ def run_chunked_transformer_padded(
         for i in range(num_layers):
             # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); index [0] -> [CHUNK, emb].
             out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+            if _E1_HASH:  # bit-exactness probe across trees/configs (pipeline E1)
+                logger.info(f"[e1hash] chunk {c} layer {i} {_sha(out_flat)}")
 
             natural = torch.zeros(isl, emb_dim, dtype=torch.float32)
             natural[dst] = out_flat[src]  # un-rotate valid rows -> natural order [kv_actual, valid_end)
@@ -1101,6 +1117,8 @@ def run_chunked_transformer(
         for i in range(num_layers):
             # host snapshot [1, CHUNK, emb] (SP-seq + TP-hidden concatenated); index [0] -> [CHUNK, emb].
             out_flat = layer_outputs[f"layer_{i}"][0].to(torch.float32)
+            if _E1_HASH:  # bit-exactness probe across trees/configs (pipeline E1)
+                logger.info(f"[e1hash] chunk {c} layer {i} {_sha(out_flat)}")
 
             natural = torch.zeros(CHUNK, emb_dim, dtype=torch.float32)
             natural[local_pos] = out_flat  # un-rotate block-cyclic -> natural chunk order

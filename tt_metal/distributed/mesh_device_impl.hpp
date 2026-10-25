@@ -185,6 +185,8 @@ private:
         std::set<CoreCoord> ethernet_cores;
     };
     std::optional<MeshProperties> mesh_properties_;
+    // Op-grid override, see MeshDevice::set_compute_grid_override. Written only before programs are built.
+    std::optional<CoreCoord> compute_grid_override_;
     // Submesh keeps the parent mesh alive. Parent_mesh_ is null if the current mesh is the parent mesh.
     std::shared_ptr<MeshDevice> parent_mesh_;
     std::vector<std::weak_ptr<MeshDevice>> submeshes_;
@@ -345,6 +347,9 @@ public:
     std::vector<CoreCoord> get_ethernet_sockets(ChipId connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
     CoreCoord compute_with_storage_grid_size() const override;
+    void set_compute_grid_override(const std::optional<CoreCoord>& grid);
+    std::optional<CoreCoord> get_compute_grid_override() const { return compute_grid_override_; }
+    CoreCoord device_compute_with_storage_grid_size() const;
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     const std::unique_ptr<Allocator>& allocator() const override;

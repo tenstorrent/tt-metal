@@ -286,6 +286,8 @@ private:
 
     friend experimental::Device::CoreAtNocHops experimental::Device::get_closest_worker_to_eth_core(
         const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
+    friend uint32_t experimental::Device::get_worker_to_eth_core_noc_hops(
+        const IDevice& device, const CoreCoord& logical_worker, const CoreCoord& logical_eth_core, NOC noc);
 
     friend class experimental::DispatchContext;
 };

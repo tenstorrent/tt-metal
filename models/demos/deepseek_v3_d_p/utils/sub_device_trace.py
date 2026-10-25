@@ -34,6 +34,7 @@ referenced across the end/begin split; trace replay reproduces them at the same 
 """
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.persistent_sd import restore_base_manager
 
 
 class SubDeviceTraceController:
@@ -78,6 +79,9 @@ class SubDeviceTraceController:
     def begin_capture(self):
         """Open the first trace segment. The next forward() will be recorded and auto-split."""
         assert not self._capturing, "already capturing"
+        # Start from the base manager so replay() (which starts there too) runs every segment under the manager it
+        # was captured under: a forward may end on another manager (the persistent manager's barrier twin).
+        restore_base_manager(self.mesh_device)
         self._program = []
         self._capturing = True
         self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
@@ -104,7 +108,9 @@ class SubDeviceTraceController:
         if self._capturing:
             self._split(self._CLEAR, None)
         else:
-            self.mesh_device.clear_loaded_sub_device_manager()
+            # Back to the base manager: the default one, or the persistent {main, comm} manager under
+            # TT_GLM_PERSISTENT_SD=1 (tt/persistent_sd.py).
+            restore_base_manager(self.mesh_device)
 
     def layer_ack(self, *layer_ids):
         """MLA finished this layer's KV write (post zero-pad). Capturing -> split + record the ack
@@ -166,7 +172,7 @@ class SubDeviceTraceController:
         if kind == self._LOAD:
             self.mesh_device.load_sub_device_manager(payload)
         elif kind == self._CLEAR:
-            self.mesh_device.clear_loaded_sub_device_manager()
+            restore_base_manager(self.mesh_device)
         # kind == _ACK: no host action at capture time (the ack fires at replay, between segments).
         self._program.append((kind, payload))
         self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
@@ -186,6 +192,7 @@ class SubDeviceTraceController:
         This replaces the old block-every-segment (which serialized dispatch for no reason but the ack)."""
         assert not self._capturing, "still capturing"
         assert self._program, "nothing captured"
+        restore_base_manager(self.mesh_device)  # the capture started there (begin_capture)
         self._replay_steps(self._program, variant)
         ttnn.synchronize_device(self.mesh_device)
 
@@ -196,7 +203,7 @@ class SubDeviceTraceController:
             elif kind == self._LOAD:
                 self.mesh_device.load_sub_device_manager(payload)
             elif kind == self._CLEAR:
-                self.mesh_device.clear_loaded_sub_device_manager()
+                restore_base_manager(self.mesh_device)
             elif kind == self._VARIANTS:
                 assert variant in payload, f"replay(variant={variant!r}): the capture recorded {sorted(payload)}"
                 self._replay_steps(payload[variant], variant)
@@ -241,17 +248,19 @@ class SubDeviceTraceController:
                     self.mesh_device.load_sub_device_manager(payload)
                     manager_loaded = True
                 elif kind == self._CLEAR:
-                    self.mesh_device.clear_loaded_sub_device_manager()
+                    restore_base_manager(self.mesh_device)
                     manager_loaded = False
                 elif kind == self._VARIANTS:
                     for sub in payload.values():
                         release_steps(sub)
 
         try:
+            if self._program:
+                restore_base_manager(self.mesh_device)  # the capture started there (begin_capture)
             release_steps(self._program)
         finally:
             if manager_loaded:
-                self.mesh_device.clear_loaded_sub_device_manager()
+                restore_base_manager(self.mesh_device)
             self._program = []
 
 
