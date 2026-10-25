@@ -485,6 +485,32 @@ def test_dispatch_bench(mesh_device, device_params):
             assert ok, "masked_bincount histogram mismatch"
             ttnn.deallocate(h)
 
+            # offset_cumsum against the unit test's reference, per device (row r of group c holds hist ref[c, r]).
+            def ref_cumsum(hist):
+                cum = torch.cumsum(hist, 0)
+                tot = cum[-1:]
+                al = (tot.reshape(-1, experts_per_chip) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+                reg = (torch.cumsum(al, -1) - al).reshape(1, E)
+                return cum - hist + reg, tot, reg
+
+            outs = cumsum()
+            per_dev = [ttnn.get_device_tensors(o) for o in outs]
+            cok = True
+            for dev_idx in range(H * G):
+                r, c = divmod(dev_idx, G)
+                ref_rows, ref_tot, ref_reg = ref_cumsum(ref[c])
+                refs4 = (ref_rows[r : r + 1], ref_tot, ref_reg, ref_rows)
+                for k, want in enumerate(refs4):
+                    have = ttnn.to_torch(per_dev[k][dev_idx]).to(torch.int64)
+                    have = have.reshape(-1, have.shape[-1])[:, :E]
+                    if not torch.equal(have, want):
+                        cok = False
+                        logger.info(f"[dbench] CHECK offset_cumsum mismatch dev {dev_idx} output {k}")
+            logger.info(f"[dbench] CHECK offset_cumsum {spec}: exact={cok}")
+            for o in outs:
+                ttnn.deallocate(o)
+            assert cok, "offset_cumsum mismatch"
+
         for name, fn in [("grouped_topk", topk), ("masked_bincount", bincount), ("offset_cumsum", cumsum)]:
 
             def one(name=name, fn=fn):
