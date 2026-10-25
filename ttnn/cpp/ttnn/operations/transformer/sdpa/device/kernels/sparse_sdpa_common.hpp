@@ -160,8 +160,20 @@ enum : uint32_t {
     PACKED_ROW_BYTES,
     USE_ATTENTION_SINK,
     CB_ATTENTION_SINK,
+    KDEQ_BATCH,
     END,
 };
 }  // namespace compute_ct_arg
+
+#if !defined(KERNEL_BUILD)
+// Host: batched (per-chunk) K reconstruct for L1-resident KV -- the compact front of the sparse KV push, where the
+// op is compute-bound. cb_k_rm then holds KDEQ_SLABS 32-row slabs. SPARSE_SDPA_KDEQ_BATCH=0 disables.
+constexpr uint32_t KDEQ_SLABS = 4;
+// SPARSE_SDPA_KDEQ_BATCH: unset/1 = L1-resident KV only, 0 = never, 2 = always (tests: exercises the path on DRAM KV).
+inline uint32_t kdeq_batch_mode() {
+    const char* v = std::getenv("SPARSE_SDPA_KDEQ_BATCH");
+    return v == nullptr ? 1u : static_cast<uint32_t>(std::strtoul(v, nullptr, 0));
+}
+#endif
 
 }  // namespace sparse_sdpa
