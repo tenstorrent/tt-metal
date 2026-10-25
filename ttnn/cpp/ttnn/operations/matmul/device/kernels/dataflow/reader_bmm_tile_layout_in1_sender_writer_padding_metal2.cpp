@@ -427,17 +427,38 @@ void kernel_main() {
                             if (i == 0) {
                                 shard_base_offset += dram_tensor_start_offset;
                             }
+#ifdef IN1_DRAM_WS_MERGE
+                            // This worker's tiles of one K-row of a shard are contiguous in DRAM and in the L1
+                            // block, so each K-row slice goes out as ONE any-length request (1D mcast_in0 path).
+                            noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE + 1>(
+                                dram_bank,
+                                in1_single_tile_size_bytes,
+                                {.bank_id = shard_bank_id, .offset_bytes = shard_base_offset});
+#else
                             noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                                 dram_bank,
                                 in1_single_tile_size_bytes,
                                 {.bank_id = shard_bank_id, .offset_bytes = shard_base_offset},
                                 NocOptVals{.vc = vc});
+#endif
 
                             uint32_t l1_read_addr_in1 = l1_read_addr_in1_offset;
                             uint32_t l1_write_addr_in1 = dfb_in1.get_write_ptr() + l1_write_addr_in1_offset;
                             uint32_t in1_block_w_dram =
                                 get_vararg(next_bank_id_and_dram_stride_index) / in1_single_tile_size_bytes;
 
+#ifdef IN1_DRAM_WS_MERGE
+                            for (uint32_t m = 0; m < in1_block_h; ++m) {
+                                noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE + 1>(
+                                    dram_bank,
+                                    CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                                    in1_block_w_dram * in1_single_tile_size_bytes,
+                                    {.bank_id = shard_bank_id, .offset_bytes = shard_base_offset + l1_read_addr_in1},
+                                    {});
+                                l1_read_addr_in1 += in1_block_w_dram_bytes;
+                                l1_write_addr_in1 += in1_block_w_bytes;
+                            }
+#else
                             for (uint32_t m = 0; m < in1_block_h; ++m) {
                                 uint32_t l1_read_addr_in1_temp = l1_read_addr_in1;
                                 uint32_t l1_write_addr_in1_temp = l1_write_addr_in1;
@@ -456,6 +477,7 @@ void kernel_main() {
                                 l1_read_addr_in1 += in1_block_w_dram_bytes;
                                 l1_write_addr_in1 += in1_block_w_bytes;
                             }
+#endif  // IN1_DRAM_WS_MERGE
                             l1_write_addr_in1_offset += get_vararg(next_bank_id_and_dram_stride_index);
                             next_bank_id_and_dram_stride_index += 2;
                         }
