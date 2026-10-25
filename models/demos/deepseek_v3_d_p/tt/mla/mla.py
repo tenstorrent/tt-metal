@@ -54,18 +54,31 @@ _GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "1") == "1"
 _GLUE_KV_L1 = os.environ.get("GLUE_KV_L1", "1") == "1"
 _GLUE_CONCAT_L1 = os.environ.get("GLUE_CONCAT_L1", "0") == "1"
 _GLUE_WKVB2_OUT_L1 = os.environ.get("GLUE_WKVB2_OUT_L1", "1") == "1"
+# Q-stem || push overlap (overlap agent, 2026-10-25): on shared (reuse) layers the deferred Q stem's q_b matmul needs
+# nothing from the sparse KV prefix push that precedes it, so both run at once on the sparse-MLA overlap manager:
+# the push on its gather sub-device (rows 0-1: the same 24 cores, right below the Ethernet row, it uses today) and
+# q_b on the top-k sub-device (rows 2-9) with its grid anchored at (0, 2) (allowed_worker_cores, 11x8 = 88 cores,
+# per_core_N 5 -> 6). q_b is compute only, so no two programs of the region share a fabric router
+# (notes/pipeline/deadlock-matrix.md). The manager clear is the join; the rest of the Q stem (head split, wkv_b1,
+# in-place RoPE: full-grid ops) follows it. GLM_QPUSH_OVERLAP=1 enables it.
+_QPUSH_OVERLAP = os.environ.get("GLM_QPUSH_OVERLAP", "0") == "1"
 
 
 class _DeferredQ:
-    """A Q stem whose ops are issued only when the attention consumes it (glue track, GLUE_Q_DEFER_L1)."""
+    """A Q stem whose ops are issued only when the attention consumes it (glue track, GLUE_Q_DEFER_L1).
 
-    __slots__ = ("_build",)
+    `qr` (the q_a latent) is kept so that a caller can issue the q_b matmul early (Q-stem || push overlap) and hand
+    its output to the rest of the stem through `q_b_out`."""
 
-    def __init__(self, build):
+    __slots__ = ("_build", "qr", "q_b_out")
+
+    def __init__(self, build, qr=None):
         self._build = build
+        self.qr = qr
+        self.q_b_out = None
 
     def __call__(self):
-        return self._build()
+        return self._build(self.q_b_out)
 
 
 class ttMLA:
@@ -880,6 +893,20 @@ class ttMLA:
                 self._wkv_b1_padded_pc_seq = self._padded_wkv_b1_program_config(cfg["program_config"])
                 self._q_rope_inplace_seq = True
                 self._q_defer_l1 = _GLUE_Q_DEFER_L1 and self._has_indexer and not self.kv_only
+        # Q-stem || push overlap (GLM_QPUSH_OVERLAP): (overlap resources, offset q_b program config) on shared layers.
+        self._qpush = None
+        if (
+            _QPUSH_OVERLAP
+            and self._q_defer_l1
+            and self._indexer_reuse
+            and self._sparse_kv_push
+            and requested_overlap_profile is not None
+            and self.sp_factor > 1
+        ):
+            resources = self.tt_ccl.get_sparse_mla_overlap_resources(requested_overlap_profile)
+            pc = self._qpush_q_b_program_config(resources)
+            if pc is not None:
+                self._qpush = (resources, pc)
         if os.getenv("MLA_MEMLOG") and layer_idx in (0, layer_num - 2, layer_num - 1):
             self._log_dram(f"after MLA layer {layer_idx} weights (seq_q={self._seq_q})")
 
@@ -2083,7 +2110,10 @@ class ttMLA:
         if self._seq_q and self._q_defer_l1 and (indexer_indices is not None or _GLUE_Q_DEFER_FULL):
             # Built inside _finish_sparse_chunked_attn, after the KV write and the prefix push/gather.
             tt_q = _DeferredQ(
-                lambda qr=qr: self._q_stem_seq(qr, rope_tensors, kv_actual_isl, metadata=metadata, out_l1=True)
+                lambda q_b_out, qr=qr: self._q_stem_seq(
+                    qr, rope_tensors, kv_actual_isl, metadata=metadata, out_l1=True, q_b_out=q_b_out
+                ),
+                qr=qr,
             )
         elif self._seq_q:
             tt_q = self._q_stem_seq(qr, rope_tensors, kv_actual_isl, metadata=metadata)
@@ -2298,12 +2328,13 @@ class ttMLA:
         # only the remainder: this chunk's own rows, just written above.
         prefetched = planner.prefetched.pop(self.layer_idx, None) is plan
         front, spill = push_buffer
-        compact = ttnn.experimental.high_bw_all_gather(
+        push = lambda subdevice_id=None: ttnn.experimental.high_bw_all_gather(
             storage,
             dim=2,
             output_tensor=front,
             push_spill=spill,
             cluster_axis=None,
+            subdevice_id=subdevice_id,
             num_links=self.ccl_num_links,
             **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
             push_table=plan.table,
@@ -2314,6 +2345,10 @@ class ttMLA:
             data_valid_semaphore=done_sem,
             push_hot_table=plan.hot_table,
         )
+        if self._qpush is not None and isinstance(tt_q, _DeferredQ) and self._qpush_fits(tt_q):
+            compact = self._qpush_region(tt_q, push)
+        else:
+            compact = push()
         kvpe_dev = MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry)
         return self._finish_sparse_chunked_attn(
             tt_q=tt_q,
@@ -2933,6 +2968,100 @@ class ttMLA:
         ttnn.deallocate(o)
         return out
 
+    def _qpush_q_b_program_config(self, resources):
+        """q_b's 1D mcast_in0 program config moved onto the overlap profile's top-k sub-device (Q-stem || push
+        overlap): the same blocking (in0_block_w, per_core_M), the grid anchored at the sub-device's first row through
+        allowed_worker_cores, at most as wide as today's (11 columns) and per_core_N widened to fit the fewer cores
+        (5 -> 6 tiles: 86 of 88 cores). Each output tile accumulates K in the same order, so the result is bit-identical
+        to the full-grid q_b. None when q_b has no 1D mcast_in0 config at this chunk's rows."""
+        rows = self.active_seq_len_local // self.tp_factor
+        pc = self._seq_qb_ws_pc if (self._seq_qb_ws_pc is not None and rows == self._seq_qb_ws_rows) else None
+        if pc is None:
+            cfg = self._resolve_mm_cfg("q_b_proj", rows)
+            pc = cfg["program_config"] if cfg is not None else None
+        if not (isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig) and pc.mcast_in0):
+            return None
+        box = resources.topk_core_grid.bounding_box()
+        gx = min(pc.compute_with_storage_grid_size.x, box.end.x - box.start.x + 1)
+        gy = box.end.y - box.start.y + 1
+        n_tiles = self.q_b_proj_weight.shape[-1] // ttnn.TILE_SIZE
+        per_core_n = -(-n_tiles // (gx * gy))
+        sub_h = pc.out_subblock_h
+        sub_w = max(w for w in range(1, 9) if per_core_n % w == 0 and w * sub_h <= 8)
+        self._qpush_rows = rows
+        logger.info(
+            f"[qpush overlap] layer {self.layer_idx}: q_b on {gx}x{gy} at ({box.start.x},{box.start.y}), "
+            f"per_core_N {pc.per_core_N} -> {per_core_n} ({-(-n_tiles // per_core_n)} cores), push on "
+            f"{resources.gather_core_grid.num_cores()} gather cores"
+        )
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(gx, gy),
+            in0_block_w=pc.in0_block_w,
+            out_subblock_h=sub_h,
+            out_subblock_w=sub_w,
+            per_core_M=pc.per_core_M,
+            per_core_N=per_core_n,
+            fuse_batch=pc.fuse_batch,
+            fused_activation=pc.fused_activation,
+            mcast_in0=True,
+            allowed_worker_cores=ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(box.start.x, box.start.y),
+                        ttnn.CoreCoord(box.start.x + gx - 1, box.start.y + gy - 1),
+                    )
+                ]
+            ),
+        )
+
+    def _qpush_fits(self, tt_q: "_DeferredQ") -> bool:
+        return tt_q.qr is not None and tt_q.q_b_out is None and tt_q.qr.shape[2] == self._qpush_rows
+
+    def _qpush_region(self, tt_q: "_DeferredQ", push):
+        """Q-stem || push overlap: issue `push` on the gather sub-device, then the deferred Q stem's q_b on the top-k
+        sub-device; the manager clear joins them. Returns push's result; the q_b output goes to tt_q.q_b_out.
+
+        The q_b output is allocated BEFORE the region on purpose: the push program's static CBs (rows 0-1) are then
+        checked against it when the push is enqueued, whereas an L1 buffer allocated inside the region is checked only
+        against q_b's own cores and could land on L1 the running push still uses. Nothing is freed inside the region."""
+        resources, pc = self._qpush
+        qr = tt_q.qr
+        kw = self._get_mm_kwargs("q_b_proj", qr.shape[2])
+        q_b_out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, qr.shape[2], self.q_b_proj_weight.shape[-1]]),
+            kw["dtype"],
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            kw["memory_config"],
+        )
+        q_b_out.update_tensor_topology(qr.tensor_topology())
+        trace_controller = getattr(self, "_trace_controller", None)
+        if trace_controller is not None:
+            trace_controller.sub_device_load(resources.manager_id)
+        else:
+            self.mesh_device.load_sub_device_manager(resources.manager_id)
+        try:
+            ttnn.tracy_message("`TT_SIGNPOST: QPUSH_OVERLAP_START`")
+            compact = push(resources.gather_subdevice_id)
+            ttnn.linear(
+                qr,
+                self.q_b_proj_weight,
+                program_config=pc,
+                dtype=kw["dtype"],
+                compute_kernel_config=kw["compute_kernel_config"],
+                optional_output_tensor=q_b_out,
+            )
+        finally:
+            if trace_controller is not None:
+                trace_controller.sub_device_clear()
+            else:
+                self.mesh_device.clear_loaded_sub_device_manager()
+            ttnn.tracy_message("`TT_SIGNPOST: QPUSH_OVERLAP_END`")
+        ttnn.deallocate(qr)
+        tt_q.qr = None
+        tt_q.q_b_out = q_b_out
+        return compact
+
     def _q_stem_seq(
         self,
         qr: ttnn.Tensor,
@@ -2940,14 +3069,19 @@ class ttMLA:
         kv_actual_isl: Optional[int],
         metadata: Optional[ttnn.Tensor] = None,
         out_l1: bool = False,
+        q_b_out: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
-        """Absorbed-Q stem over this chip's TP-quarter rows and ALL heads: [1, H, S/(sp*tp), kv_lora + rope]."""
-        q_rows = qr.shape[2]
-        qb_kwargs = self._get_mm_kwargs("q_b_proj", q_rows)
-        if self._seq_qb_ws_pc is not None and q_rows == self._seq_qb_ws_rows:
-            qb_kwargs = dict(qb_kwargs, program_config=self._seq_qb_ws_pc)
-        tt_q = ttnn.linear(qr, self.q_b_proj_weight, **qb_kwargs)
-        ttnn.deallocate(qr)
+        """Absorbed-Q stem over this chip's TP-quarter rows and ALL heads: [1, H, S/(sp*tp), kv_lora + rope].
+        With `q_b_out` the q_b matmul has already run (Q-stem || push overlap) and `qr` is freed."""
+        if q_b_out is not None:
+            tt_q, q_rows = q_b_out, q_b_out.shape[2]
+        else:
+            q_rows = qr.shape[2]
+            qb_kwargs = self._get_mm_kwargs("q_b_proj", q_rows)
+            if self._seq_qb_ws_pc is not None and q_rows == self._seq_qb_ws_rows:
+                qb_kwargs = dict(qb_kwargs, program_config=self._seq_qb_ws_pc)
+            tt_q = ttnn.linear(qr, self.q_b_proj_weight, **qb_kwargs)
+            ttnn.deallocate(qr)
         inplace = self._q_rope_inplace_seq and q_rows == self.active_seq_len_local // self.tp_factor
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
