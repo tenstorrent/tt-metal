@@ -49,6 +49,8 @@ _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
 # glue track (GLUE_EPI_L1=1): the post-combine reduce-scatter output [S, emb/tp] goes to L1; the final add
 # reads it once. Read here, not in the shared TtReduceModule, so other models that use that module keep DRAM.
 _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "0") == "1"
+# glue track: build post_combine_reduce's [1, 1, S, k, 1] weights inside the dispatch || shared-expert window.
+_GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "0") == "1"
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
@@ -1172,6 +1174,18 @@ class TtMoe(LightweightModule):
                 residual,
                 sub_core_grids=self.shared_expert.subdevice_cores if self.overlap_shared_expert_with_dispatch else None,
             )
+        # glue track: post_combine_reduce wants the scores as [1, 1, S, k, 1] ROW_MAJOR; that unsqueeze is a real
+        # data-movement op (the RM page shrinks from k values to 1), ~9 us on the critical path before the reduce.
+        # Build it here on the shared-expert rows, hidden under dispatch, straight into DRAM (which also replaces the
+        # post-window scores -> DRAM copy).
+        pcr_weights = None
+        if _GLUE_PCR_WEIGHTS_IN_WINDOW and self.overlap_shared_expert_with_dispatch and not return_intermediates:
+            pcr_weights = ttnn.reshape(
+                scores,
+                (1, 1, scores.shape[-2], scores.shape[-1], 1),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                sub_core_grids=self.shared_expert.subdevice_cores,
+            )
 
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -1201,7 +1215,11 @@ class TtMoe(LightweightModule):
         x = ttnn.deallocate(x, force=True)
         if fold_residual:
             ttnn.deallocate(shared_rs_output)
-        scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
+        if pcr_weights is not None:
+            ttnn.deallocate(scores)
+            scores = pcr_weights
+        else:
+            scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_end`")
