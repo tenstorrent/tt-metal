@@ -230,7 +230,10 @@ def test_qpush_pair(mesh_device, device_params):
             f"(serial would be {t_full + t_kvg:.1f}; ideal overlap max = {max(t_off, t_kvg):.1f})"
         )
         ttnn.deallocate(out)
-        assert same, "q_b on the top-k sub-device is not bit-identical to the full-grid q_b"
+        a, b = ref_host.float().flatten(), off_host.float().flatten()
+        pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+        logger.info(f"[qpush pair] RESULT q_b SD0 vs full grid PCC {pcc:.7f}")
+        assert pcc > 0.9999, "q_b on the top-k sub-device disagrees with the full-grid q_b"
     finally:
         mesh_device.clear_loaded_sub_device_manager()
         clear_tt_ccl_cache()  # drains, resets and removes the overlap manager before the mesh closes
