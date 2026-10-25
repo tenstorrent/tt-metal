@@ -1333,6 +1333,10 @@ class TtMoEGatePrefill(LightweightModule):
             GateComputeMode.GPT_DEVICE,
         ):
             logits = self._device_matmul(x)
+            # Prelude overlap (tt_moe.py GLM_MOE_PRELUDE_FORK=topk): the caller forks here, after the logits'
+            # axis-1 all-gather + reduce, so the grouped top-k runs on the routing sub-device.
+            if getattr(self, "before_topk", None) is not None and mode == GateComputeMode.DEVICE_FP32:
+                self.before_topk()
         elif mode == GateComputeMode.HASH_HOST:
             pass  # the reference HashRouter computes logits from composed host x in Phase 2
         else:  # HOST_ALL
