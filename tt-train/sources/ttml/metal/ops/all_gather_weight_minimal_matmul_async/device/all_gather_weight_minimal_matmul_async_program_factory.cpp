@@ -467,7 +467,8 @@ AllGatherWeightMinimalMatmulAsyncProgramFactory::create_at(
     std::vector<tt::tt_metal::KernelHandle> send_writer_kernel_ids;
     const uint32_t num_links = operation_attributes.num_links;
     const uint32_t num_workers = operation_attributes.num_workers_per_link;
-    const RelayPlan plan = make_relay_plan(layout, ring_index, ring);
+    const uint32_t relay_parity_unit = num_links * num_workers;
+    const RelayPlan plan = make_relay_plan(layout, ring_index, ring, relay_parity_unit);
     const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_unicast_configuration(
         mesh_coordinate, forward_coord, backward_coord, device);
 

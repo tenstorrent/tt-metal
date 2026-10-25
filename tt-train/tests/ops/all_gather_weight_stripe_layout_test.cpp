@@ -36,12 +36,12 @@ void expect_layout_covers_every_tile_once(const StripeLayout& layout, uint32_t N
     }
 }
 
-void expect_relay_delivers_every_piece_once(const StripeLayout& layout, bool ring) {
+void expect_relay_delivers_every_piece_once(const StripeLayout& layout, bool ring, uint32_t parity_unit) {
     const uint32_t r = layout.ring_size;
     const uint32_t chains = layout.num_chains;
     std::vector<uint32_t> received(r * r * chains, 0);
     for (uint32_t d = 0; d < r; ++d) {
-        const RelayPlan plan = make_relay_plan(layout, d, ring);
+        const RelayPlan plan = make_relay_plan(layout, d, ring, parity_unit);
         for (const int32_t dir : {1, -1}) {
             for (const auto& seg : (dir > 0 ? plan.forward : plan.backward)) {
                 const int32_t to = static_cast<int32_t>(d) + dir;
@@ -92,11 +92,13 @@ TEST(AllGatherWeightStripeLayout, RelayDeliversEveryPieceOnce) {
             }
             for (const uint32_t chains : kChainCounts) {
                 for (const uint32_t stripe : kStripeTiles) {
-                    SCOPED_TRACE(
-                        testing::Message()
-                        << "ring=" << ring << " R=" << r << " chains=" << chains << " stripe=" << stripe);
-                    const StripeLayout layout = make_stripe_layout(stripe * r, r, 0, chains, kNBlockTiles, ring);
-                    expect_relay_delivers_every_piece_once(layout, ring);
+                    for (const uint32_t parity_unit : {1u, 2u, 6u}) {
+                        SCOPED_TRACE(
+                            testing::Message() << "ring=" << ring << " R=" << r << " chains=" << chains
+                                               << " stripe=" << stripe << " parity_unit=" << parity_unit);
+                        const StripeLayout layout = make_stripe_layout(stripe * r, r, 0, chains, kNBlockTiles, ring);
+                        expect_relay_delivers_every_piece_once(layout, ring, parity_unit);
+                    }
                 }
             }
         }

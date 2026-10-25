@@ -88,18 +88,19 @@ StripeLayout make_stripe_layout(
     return layout;
 }
 
-uint32_t relay_range(const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring) {
+uint32_t relay_range(
+    const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring, uint32_t parity_unit) {
     const uint32_t r = layout.ring_size;
     if (!ring) {
         return dir > 0 ? r - 1 - origin : origin;
     }
     const uint32_t half = (r - 1) / 2;
     const bool even = (r % 2) == 0;
-    const bool extended = even && ((dir > 0) == (c % 2 == 0));
+    const bool extended = even && ((dir > 0) == ((c / parity_unit) % 2 == 0));
     return extended ? half + 1 : half;
 }
 
-RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring) {
+RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring, uint32_t parity_unit) {
     const uint32_t r = layout.ring_size;
     RelayPlan plan;
     for (const int32_t dir : {1, -1}) {
@@ -113,7 +114,7 @@ RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool 
                 ((o % static_cast<int32_t>(r)) + static_cast<int32_t>(r)) % static_cast<int32_t>(r));
             RelaySegment seg{.stripe = origin, .distance = j, .pieces = {}};
             for (uint32_t c = 0; c < layout.num_chains; ++c) {
-                const uint32_t range = relay_range(layout, origin, c, dir, ring);
+                const uint32_t range = relay_range(layout, origin, c, dir, ring, parity_unit);
                 if (layout.chain_width(c) == 0 || j + 1 > range) {
                     continue;
                 }

@@ -47,7 +47,8 @@ struct RelayPlan {
     std::vector<RelaySegment> backward;
 };
 
-uint32_t relay_range(const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring);
+uint32_t relay_range(
+    const StripeLayout& layout, uint32_t origin, uint32_t c, int32_t dir, bool ring, uint32_t parity_unit);
 
-RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring);
+RelayPlan make_relay_plan(const StripeLayout& layout, uint32_t ring_index, bool ring, uint32_t parity_unit);
 }  // namespace ttml::metal::ops::all_gather_weight_minimal_matmul_async
