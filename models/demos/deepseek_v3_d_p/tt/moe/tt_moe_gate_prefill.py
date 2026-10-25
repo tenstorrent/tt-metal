@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -27,6 +28,8 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_co
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
+
+_GLUE_GATE_AR_HBAG = os.environ.get("GLUE_GATE_AR_HBAG", "1") == "1"
 
 
 
@@ -652,6 +655,13 @@ class TtMoEGatePrefill(LightweightModule):
         # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
         # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
         self.tt_ccl = get_tt_ccl(mesh_device)
+        self._ar_reduce_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
         self.fallback_mode = fallback_mode
         self.is_balanced = is_balanced
         # Memoization of the per-(actual_isl, padding_side, actual_start) padding_config built on HOST.
@@ -908,15 +918,41 @@ class TtMoEGatePrefill(LightweightModule):
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
 
+        tp_axis = self.config.ccl_config["TP_AXIS"]
+        tp = self.mesh_device.shape[tp_axis]
+        # glue track: all-reduce the TP partial logits as one high-bandwidth all-gather of the partials (dim 1,
+        # into a model-owned persistent buffer) + an fp32 fast_reduce_nc, instead of the composite RS + AG of
+        # all_reduce_async (glue R0: 24.8 vs 33.3 us at [640,256], same PCC). GLUE_GATE_AR_HBAG=0 restores it.
+        hbag_ar = tp > 1 and _GLUE_GATE_AR_HBAG and len(x.shape) == 2
         logits = ttnn.matmul(
             x,
             self.weight,
             compute_kernel_config=self.config.mm_configs["COMPUTE_CONFIG"],
             program_config=program_config,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            # high_bw_all_gather streams its source from DRAM
+            memory_config=ttnn.DRAM_MEMORY_CONFIG if hbag_ar else ttnn.L1_MEMORY_CONFIG,
         )
-        tp_axis = self.config.ccl_config["TP_AXIS"]
-        if self.mesh_device.shape[tp_axis] > 1:
+        if hbag_ar:
+            rows, n = logits.shape[-2], logits.shape[-1]
+            gathered = ttnn.experimental.high_bw_all_gather(
+                ttnn.reshape(logits, (1, 1, rows, n)),
+                dim=1,
+                output_tensor=self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                    name="gate_logits_partials", shape=[1, tp, rows, n], dtype=logits.dtype, layout=ttnn.TILE_LAYOUT
+                ),
+                cluster_axis=tp_axis,
+                num_links=self.config.ccl_config["NUM_LINKS"],
+            )
+            ttnn.deallocate(logits)
+            # gathered aliases the persistent buffer: do not free it.
+            summed = ttnn.experimental.fast_reduce_nc(
+                gathered,
+                dims=[1],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                compute_kernel_config=self._ar_reduce_kernel_config,
+            )
+            return ttnn.reshape(summed, (rows, n))
+        if tp > 1:
             # Pass persistent CCL semaphores (created once in TT_CCL) so all_reduce_async reuses them
             # instead of internally allocating+leaking global semaphores in main L1 every call. The
             # composite all-reduce needs barrier_semaphores of size 2 ([0]=reduce-scatter, [1]=all-gather),

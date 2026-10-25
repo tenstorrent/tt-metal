@@ -24,6 +24,9 @@ void kernel_main() {
     constexpr auto input_Wt = get_arg(args::input_Wt);
     constexpr auto rotary_offset_t = get_arg(args::rotary_offset_t);
     constexpr auto prefix_Wt = get_arg(args::prefix_Wt);
+    // Prefix channels this writer copies: prefix_Wt for concat_prefix, 0 when the prefix is already in a
+    // preallocated output (writes still land at output_row_page + prefix_Wt).
+    constexpr auto prefix_copy_Wt = get_arg(args::prefix_copy_Wt);
     constexpr auto output_Wt = get_arg(args::output_Wt);
     constexpr auto Ht = get_arg(args::Ht);
 
@@ -52,11 +55,11 @@ void kernel_main() {
                 const uint32_t row_index = (batch * n_heads + head) * Ht + row;
                 const uint32_t input_row_page = row_index * input_Wt;
                 const uint32_t output_row_page = row_index * output_Wt;
-                constexpr uint32_t copy_tiles = prefix_Wt + input_Wt - Wt;
+                constexpr uint32_t copy_tiles = prefix_copy_Wt + input_Wt - Wt;
                 if constexpr (copy_tiles > 0) {
                     // Fetch all passthrough tiles together while compute produces the rotary tiles.
                     uint32_t destination = 0;  // byte offset into the copy scratchpad
-                    for (uint32_t col = 0; col < prefix_Wt; ++col) {
+                    for (uint32_t col = 0; col < prefix_copy_Wt; ++col) {
                         noc.async_read(
                             concat_prefix,
                             copy,
@@ -78,7 +81,7 @@ void kernel_main() {
                 if constexpr (copy_tiles > 0) {
                     noc.async_read_barrier();
                     uint32_t copy_source = 0;  // byte offset into the copy scratchpad
-                    for (uint32_t col = 0; col < prefix_Wt; ++col) {
+                    for (uint32_t col = 0; col < prefix_copy_Wt; ++col) {
                         noc.async_write(
                             copy,
                             output,

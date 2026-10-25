@@ -18,6 +18,7 @@ This module produces TP-sharded output [seq_len, emb_dim / num_chips]
 ready for the next layer.
 """
 
+import os
 from typing import Optional
 
 from loguru import logger
@@ -135,6 +136,8 @@ class TtReduceModule(LightweightModule):
                 cluster_axis=self.cluster_axis,
                 num_links=self.num_links,
                 topology=self.topology,
+                # glue track (GLUE_EPI_L1=1): the [S, emb/tp] output is consumed at once by the final add.
+                **({"memory_config": ttnn.L1_MEMORY_CONFIG} if os.environ.get("GLUE_EPI_L1", "0") == "1" else {}),
             )
         else:
             output = summed
