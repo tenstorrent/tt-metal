@@ -564,6 +564,14 @@ class MATMUL_FORCE_FORM(TemplateParameter):
 
 
 @dataclass
+class MATMUL_MIXED_STRIDE(TemplateParameter):
+    """Blackhole matmul functional test with operands of different formats: operand A (in0) is strided by the tile size of unpacker 1."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_MIXED_STRIDE"
+
+
+@dataclass
 class MATMUL_UNPACK_TTSYNC(TemplateParameter):
     """Blackhole matmul unpack with the row base addresses written through GPRs and WRCFG under Auto TTSync."""
 

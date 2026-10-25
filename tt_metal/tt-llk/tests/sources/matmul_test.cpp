@@ -21,6 +21,16 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr std::uint32_t MAX_TILES_DEST = ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>();
+// the operand A buffer (in0) goes through unpacker 1, whose tile size is TILE_SIZE_UNPACK_B: a mixed-format functional test keeps A in the
+// format of unpacker 1 and strides it by that size (the perf rows keep the sizes by the python buffers)
+#ifdef MATMUL_MIXED_STRIDE
+#define MATMUL_TILE_SIZE_IN0 TILE_SIZE_UNPACK_B
+#define MATMUL_TILE_SIZE_IN1 TILE_SIZE_UNPACK_A
+#else
+#define MATMUL_TILE_SIZE_IN0 TILE_SIZE_UNPACK_A
+#define MATMUL_TILE_SIZE_IN1 TILE_SIZE_UNPACK_B
+#endif
+
 // reuse direction of the block (llk_matmul_forms.h matmul_reuse_dir), chosen by the test's python key from the operand formats
 #ifdef MATMUL_REUSE_DIR
 constexpr std::uint32_t matmul_reuse_dir_k = MATMUL_REUSE_DIR;
@@ -154,8 +164,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         addr_b,
                         0,
                         0,
-                        TILE_SIZE_UNPACK_A,
-                        TILE_SIZE_UNPACK_B,
+                        MATMUL_TILE_SIZE_IN0,
+                        MATMUL_TILE_SIZE_IN1,
                         /* partial face */ false,
                         /* partial face */ false,
                         CT_DIM,
@@ -194,8 +204,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         addr_b,
                         tile_a,
                         tile_b,
-                        TILE_SIZE_UNPACK_A,
-                        TILE_SIZE_UNPACK_B,
+                        MATMUL_TILE_SIZE_IN0,
+                        MATMUL_TILE_SIZE_IN1,
                         /* partial face */ false,
                         /* partial face */ false,
                         CT_DIM,
