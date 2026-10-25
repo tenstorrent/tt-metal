@@ -268,7 +268,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.indices.logical_shape(),
         t.indices.dtype(),
         t.attention_sink,
-        ::sparse_sdpa::split_k_enabled());
+        ::sparse_sdpa::split_k_enabled(),
+        ::sparse_sdpa::split_k_small_enabled());
 }
 
 Tensor sparse_sdpa(
