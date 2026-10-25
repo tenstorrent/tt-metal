@@ -724,6 +724,10 @@ class ttMLA:
         # Debug/reference: MLA_SEQQ_QA=allreduce keeps the head-sharded path's q_a stem (all-reduce + norm of all
         # S/sp rows) and partitions the rows afterwards, isolating the reduce-scatter summation order.
         self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
+        # MLA_SEQQ_L1=1: the seq-path Q (rope output and its ROW_MAJOR copy, ~98 KB/core) and the tilized sparse_sdpa
+        # output (~87 KB/core) live in L1 instead of DRAM (R0, bit-exact: rope 60->47, untilize 57->34, tilize+wkv_b2
+        # 115->84 us). Opt-in: the L1-resident Q must fit beside sparse_sdpa's CBs and any persistent L1 buffers.
+        self._seq_q_l1 = self._seq_q and os.getenv("MLA_SEQQ_L1", "0") not in ("", "0")
         assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
         if self._seq_q:
             self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
@@ -2407,6 +2411,7 @@ class ttMLA:
             rope_tensors["trans_matrix"],
             kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
             cluster_axis=self.sp_axis,
+            memory_config=ttnn.L1_MEMORY_CONFIG if self._seq_q_l1 else None,
             seq_subshard_axis=self.tp_axis,
             concat_prefix=tt_q_nope_abs,
         )
@@ -2495,7 +2500,10 @@ class ttMLA:
                 cluster_axis=self.tp_axis,
             )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
-        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
+        # the op is ROW_MAJOR-only; q comes in TILE
+        q_rm = ttnn.to_layout(
+            q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG if self._seq_q_l1 else None
+        )
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
 
@@ -2535,7 +2543,8 @@ class ttMLA:
         ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)
-        ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
+        # back to TILE for the downstream wkv_b2 linear
+        ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG if self._seq_q_l1 else None)
         ttnn.deallocate(out)
 
         if transpose_head_to_seq and not self._seq_q:
