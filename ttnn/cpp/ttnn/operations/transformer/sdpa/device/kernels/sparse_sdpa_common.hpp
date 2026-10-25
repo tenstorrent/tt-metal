@@ -244,6 +244,11 @@ inline bool split_k_enabled() {
     const char* v = std::getenv("SPARSE_SDPA_SPLITK");
     return v == nullptr || v[0] != '0';
 }
+// Host: split-K for S < cores (small chunks: each token over <= 2 cores); SPARSE_SDPA_SPLITK_SMALL=0 disables.
+inline bool split_k_small_enabled() {
+    const char* v = std::getenv("SPARSE_SDPA_SPLITK_SMALL");
+    return v == nullptr || v[0] != '0';
+}
 #endif
 
 }  // namespace sparse_sdpa
