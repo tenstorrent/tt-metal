@@ -178,6 +178,7 @@ void kernel_main() {
     constexpr uint32_t cb_mmax = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MMAX);
     constexpr uint32_t cb_corr2 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_CORR2);
     constexpr bool kdeq_batch = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::KDEQ_BATCH) != 0;
+    constexpr uint32_t pv_w = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::PV_W);
 
     constexpr uint32_t qsb =
         get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::QUERY_SUBBLOCK);  // query tile-rows per DST group
@@ -603,9 +604,9 @@ void kernel_main() {
                     // out[q,vd]=Σprobs·K, V = the latent feature cols. PV reads V into srcA and
                     // probs (cb_qk_im) into srcB (operands swap); set srcA=cb_k_in, srcB=cb_qk_im.
                     reconfig_data_format(cb_k_in, cb_qk_im);
-                    mm_no_mop_init_short(cb_qk_im, cb_k_in, /*transpose=*/false, 1, qsb, Skt);
-                    configure_row_pack_width(out_cur.get_cb_id(), 1);
-                    for (uint32_t vd = 0; vd < vDHt; ++vd) {
+                    mm_no_mop_init_short(cb_qk_im, cb_k_in, /*transpose=*/false, pv_w, qsb, Skt);
+                    configure_row_pack_width(out_cur.get_cb_id(), pv_w);
+                    for (uint32_t vd = 0; vd < vDHt; vd += pv_w) {
                         blocked_matmul_and_pack<false, /*in1_stride=*/scaled_kv ? vDHt : DHt, /*out_num_cols=*/vDHt>(
                             cb_qk_im,
                             cb_k_in,
@@ -614,7 +615,7 @@ void kernel_main() {
                             /*in1_index_start=*/vd,
                             /*row_subblock_idx=*/qg,
                             /*out_col_offset=*/vd,
-                            /*subblock_w=*/1,
+                            /*subblock_w=*/pv_w,
                             /*subblock_h=*/qsb,
                             /*inner_dim=*/Skt,
                             /*matmul_stride=*/KT_stride,

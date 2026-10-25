@@ -369,6 +369,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
          cb_mmax,
          cb_corr2});
     compute_ct.push_back(static_cast<uint32_t>(kdeq_batch));
+    {
+        const uint32_t dst_tiles = fp32_acc ? 4u : 8u;
+        const uint32_t want = ::sparse_sdpa::pv_w();
+        compute_ct.push_back((want == 2 && qsb * 2 <= dst_tiles && vDHt % 2 == 0) ? 2u : 1u);
+    }
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");
@@ -481,6 +486,11 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     if (const uint32_t dbg = ::sparse_sdpa::debug_mask(); dbg != 0) {
         for (auto* k : {&reader_desc, &writer_desc, &compute_desc}) {
             k->defines.emplace_back("SPARSE_SDPA_DBG", std::to_string(dbg));
+        }
+    }
+    if (const uint32_t trid = ::sparse_sdpa::trid_ring(); trid != 0) {
+        for (auto* k : {&reader_desc, &writer_desc}) {
+            k->defines.emplace_back("SPARSE_SDPA_TRID_RING", std::to_string(trid));
         }
     }
     desc.kernels.push_back(std::move(reader_desc));

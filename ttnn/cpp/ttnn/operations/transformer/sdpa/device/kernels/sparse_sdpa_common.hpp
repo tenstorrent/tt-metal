@@ -142,6 +142,17 @@ inline bool kdeq_batch_enabled() {
     const char* v = std::getenv("SPARSE_SDPA_KDEQ_BATCH");
     return v == nullptr || v[0] != '0';
 }
+// PV output subblock width (1 = base; 2 needs qsb*2 <= DST tiles). SPARSE_SDPA_PV_W.
+inline uint32_t pv_w() {
+    const char* v = std::getenv("SPARSE_SDPA_PV_W");
+    return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 1u;
+}
+// Scaled-KV gather reads in flight per RISC (trid ring depth, 2..15). 0 = kernel default (8). SPARSE_SDPA_TRID.
+inline uint32_t trid_ring() {
+    const char* v = std::getenv("SPARSE_SDPA_TRID");
+    const uint32_t n = v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
+    return (n >= 2 && n <= 15) ? n : 0u;
+}
 // Split-K work distribution (prototype): SPARSE_SDPA_SPLITK=1 enables, unset/0 keeps the whole-token split.
 inline bool split_k_enabled() {
     const char* v = std::getenv("SPARSE_SDPA_SPLITK");
@@ -267,6 +278,7 @@ enum : uint32_t {
     CB_MMAX,
     CB_CORR2,
     KDEQ_BATCH,
+    PV_W,
     END,
 };
 }  // namespace compute_ct_arg

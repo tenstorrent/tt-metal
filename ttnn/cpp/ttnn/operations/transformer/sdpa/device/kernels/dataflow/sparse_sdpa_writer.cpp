@@ -174,6 +174,18 @@ void kernel_main() {
     }
     const uint32_t head_segs = head_c0 != 0 ? 1u : 0u;
     const uint32_t n_segs = head_segs + tok_count + (tail_c1 != 0 ? 1u : 0u);
+    // Output rows of a finished segment are written lazily (polled between gather requests), so the next
+    // segment's K gather is not held behind the previous segment's compute tail + untilize.
+    constexpr uint32_t no_tok = 0xFFFFFFFFu;
+    uint32_t pending_tok = no_tok;
+    auto write_out = [&](uint32_t t) {
+        out_cb.wait_front(block_tiles);
+        for (uint32_t h = 0; h < H; ++h) {
+            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + t});
+        }
+        noc.async_write_barrier();
+        out_cb.pop_front(block_tiles);
+    };
     for (uint32_t seg = 0; seg < n_segs; ++seg) {
         const bool is_head = seg < head_segs;
         const uint32_t f = seg - head_segs;
@@ -184,6 +196,10 @@ void kernel_main() {
         bool last = false;
         bool empty = false;
         while (!last) {
+            if (pending_tok != no_tok && cb_pages_available_at_front(cb_out_rm, block_tiles)) {
+                write_out(pending_tok);
+                pending_tok = no_tok;
+            }
             kreq_cb.wait_front(1);
             uint32_t base, split, dst_l1, scale_dst_l1 = 0;
             {
@@ -293,12 +309,13 @@ void kernel_main() {
                 }
             }
         }
-        out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
-        for (uint32_t h = 0; h < H; ++h) {
-            // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
-            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+        // One untilized [H, V_DIM] block per FULL/TAIL segment; row h at byte offset h*row_bytes -> page h*S + tok.
+        if (pending_tok != no_tok) {
+            write_out(pending_tok);  // previous segment's block (compute is long past it by now)
         }
-        noc.async_write_barrier();
-        out_cb.pop_front(block_tiles);
+        pending_tok = tok;
+    }
+    if (pending_tok != no_tok) {
+        write_out(pending_tok);
     }
 }

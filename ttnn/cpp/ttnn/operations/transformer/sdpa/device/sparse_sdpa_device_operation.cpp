@@ -321,7 +321,9 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         ::sparse_sdpa::split_k_enabled(),
         ::sparse_sdpa::krm_slabs(),
         ::sparse_sdpa::split_k_slope(),
-        ::sparse_sdpa::kdeq_batch_enabled());
+        ::sparse_sdpa::kdeq_batch_enabled(),
+        ::sparse_sdpa::pv_w(),
+        ::sparse_sdpa::trid_ring());
 }
 
 SparseSDPAOperation::program_factory_t SparseSDPAOperation::select_program_factory(
