@@ -72,9 +72,9 @@ def test_pipe_pair_repro(mesh_device, device_params):
     ]
     if nomgr:
         sd_cores = [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})] * 2
-    mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([sd_cores[0]]), ttnn.SubDevice([sd_cores[1]])], 0)
-    if nomgr:
         mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([sd_cores[0]])], 0)
+    else:
+        mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([sd_cores[0]]), ttnn.SubDevice([sd_cores[1]])], 0)
     rep = ttnn.ReplicateTensorToMesh(mesh_device)
 
     def dev(shape, dtype=ttnn.bfloat16):
