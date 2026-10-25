@@ -68,8 +68,12 @@ REDUCE_TILE_DIMENSIONS = [
 
 
 def _fidelities_for_format(formats):
-    """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
-    if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
+    """LoFi fails for Float16/Float16_b/Float32 inputs — exclude at parametrize time."""
+    if formats.input_format in [
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Float32,
+    ]:
         return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
     return ALL_FIDELITIES
 
@@ -113,6 +117,7 @@ def _required_dest_acc_mode(formats):
 REDUCE_FORMATS = input_output_formats(
     [
         DataFormat.Float32,
+        DataFormat.Float16,
         DataFormat.Float16_b,
         DataFormat.Bfp8_b,
     ]
