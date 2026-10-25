@@ -1069,4 +1069,51 @@ def test_glue_r0(mesh_device, variant, config_only):
         timer("J1 seqq q chain in-place (heads DRAM, wkv_b1 N576 DRAM, rope in place)", lambda: inplace_chain(DRAM))
         timer("J1 seqq q chain in-place (heads L1, wkv_b1 N576 DRAM, rope in place)", lambda: inplace_chain(L1))
 
+    # ======================= K. seqq q_a norm on 160 rows: interleaved (5 cores) vs width-sharded =======================
+    if want("k"):
+        R = S // TP
+        g_q = torch.rand(Q_LORA) + 0.5
+        tg_q = mk(mesh, g_q.reshape(1, 1, -1, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
+        x160 = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=DRAM)
+
+        def base_norm():
+            return ttnn.rms_norm(x160, weight=tg_q, epsilon=EPS, memory_config=L1, compute_kernel_config=hifi2)
+
+        ref = base_norm()
+        tiles = Q_LORA // 32
+        for gx, gy in ((8, 1), (8, 2), (8, 4), (8, 8)):
+            n = gx * gy
+            bw = tiles // n
+            sw = max(w for w in (4, 3, 2, 1) if bw % w == 0)
+            try:
+                in_cfg = ttnn.create_sharded_memory_config(
+                    shape=(R, Q_LORA // n), core_grid=ttnn.CoreGrid(x=gx, y=gy), strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+                )
+                pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=[gx, gy], subblock_w=sw, block_h=R // 32, block_w=bw, inplace=False
+                )
+
+                def sh_norm(in_cfg=in_cfg, pc=pc, unshard=True):
+                    xs = ttnn.to_memory_config(x160, in_cfg)
+                    o = ttnn.rms_norm(xs, weight=tg_q, epsilon=EPS, program_config=pc, compute_kernel_config=hifi2)
+                    ttnn.deallocate(xs)
+                    if not unshard:
+                        return o
+                    oi = ttnn.sharded_to_interleaved(o, L1)
+                    ttnn.deallocate(o)
+                    return oi
+
+                o = sh_norm()
+                cmp(f"K width-sharded norm160 {n} cores vs interleaved", o, ref)
+                _free(o)
+                timer(f"K1 reshard + sharded norm160 ({gx}x{gy}={n} cores) + unshard L1", sh_norm)
+                timer(f"K2 reshard + sharded norm160 ({n} cores), no unshard", lambda f=sh_norm: f(unshard=False))
+                timer(f"K3 reshard only ({n} cores)", lambda in_cfg=in_cfg: ttnn.to_memory_config(x160, in_cfg))
+            except Exception as e:
+                log(f"FAIL K {gx}x{gy}: {type(e).__name__}: {str(e)[:300]}")
+                traceback.print_exc()
+        _free(ref)
+        timer("K0 interleaved rms_norm [160,2048] DRAM->L1 (seqq production)", base_norm)
+
     log("DONE")
