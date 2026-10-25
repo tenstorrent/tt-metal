@@ -53,6 +53,7 @@ _GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "0") == "1"
 # the cache write (GLUE_KV_L1, opt-in); nlp_concat_heads output (o_proj in0) in L1 (GLUE_CONCAT_L1, opt-in).
 _GLUE_KV_L1 = os.environ.get("GLUE_KV_L1", "1") == "1"
 _GLUE_CONCAT_L1 = os.environ.get("GLUE_CONCAT_L1", "0") == "1"
+_GLUE_WKVB2_OUT_L1 = os.environ.get("GLUE_WKVB2_OUT_L1", "0") == "1"
 
 
 class _DeferredQ:
@@ -1756,11 +1757,14 @@ class ttMLA:
 
         return tt_kvpe, tt_kv_nope, kv_intermediates
 
-    def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+    def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int, out_l1: bool = False) -> ttnn.Tensor:
+        kwargs = self._get_mm_kwargs("wkv_b2", seq_len_local)
+        if out_l1:
+            kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
         return ttnn.linear(
             t,
             self.wkv_b2_weight,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
+            **kwargs,
         )
 
     def _write_kvpe(self, kvpe_cache: MlaKvCache, tt_kvpe: ttnn.Tensor, cache_layer_idx: int) -> None:
@@ -2459,7 +2463,8 @@ class ttMLA:
         if self._seq_q:
             # All heads of this TP quarter's rows: project, then restore the head-sharded layout. attn_out is freed
             # before the all-to-all (under MLA_SEQQ_L1 it is an L1 buffer and must not outlive wkv_b2).
-            v = self._apply_wkv_b2(attn_out, attn_out.shape[2])
+            # glue (GLUE_WKVB2_OUT_L1): the bfp8 [1, H, rows, v] wkv_b2 output only feeds the seq->heads all-to-all.
+            v = self._apply_wkv_b2(attn_out, attn_out.shape[2], out_l1=_GLUE_WKVB2_OUT_L1)
             ttnn.deallocate(attn_out)
             return self._seq_to_heads(v)
         return self._apply_wkv_b2(attn_out, seq_len_local)
