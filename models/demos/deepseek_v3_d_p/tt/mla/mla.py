@@ -51,7 +51,7 @@ _GLUE_Q_DEFER_L1 = os.environ.get("GLUE_Q_DEFER_L1", "1") == "1"
 _GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "0") == "1"
 # glue track (stem): kv stem intermediates (reduce split -> norm -> rope -> fp8 fields) in L1, freed right after
 # the cache write (GLUE_KV_L1, opt-in); nlp_concat_heads output (o_proj in0) in L1 (GLUE_CONCAT_L1, opt-in).
-_GLUE_KV_L1 = os.environ.get("GLUE_KV_L1", "0") == "1"
+_GLUE_KV_L1 = os.environ.get("GLUE_KV_L1", "1") == "1"
 _GLUE_CONCAT_L1 = os.environ.get("GLUE_CONCAT_L1", "0") == "1"
 
 

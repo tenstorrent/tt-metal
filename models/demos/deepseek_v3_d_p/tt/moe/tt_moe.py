@@ -453,7 +453,7 @@ class TtMoe(LightweightModule):
         force_shared_expert_linear = (
             self.overlap_shared_expert_with_dispatch
             and self.col_topology == ttnn.Topology.Ring
-            and os.environ.get("GLUE_SHARED_RS_RING", "0") != "1"
+            and os.environ.get("GLUE_SHARED_RS_RING", "1") != "1"
         )
         self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
         if force_shared_expert_linear:
