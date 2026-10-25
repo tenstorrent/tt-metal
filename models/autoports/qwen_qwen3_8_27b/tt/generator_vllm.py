@@ -67,8 +67,10 @@ class Qwen38ForCausalLM:
     @classmethod
     def get_max_tokens_all_users(cls, *, max_model_len, max_num_seqs, **kwargs):
         # Worker adds per-request recurrent-group IDs and output reservations.
-        # Snapshot storage competes with token KV; report the measured pool bound.
-        return max_model_len
+        # Snapshot storage competes with token KV; optionally invert an explicit
+        # physical backing budget (not a measured transient memory bound).
+        from .vllm_cache_specs import bounded_token_budget
+        return bounded_token_budget(max_model_len, max_num_seqs)
 
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
@@ -77,13 +79,38 @@ class Qwen38ForCausalLM:
 
     def allocate_hybrid_kv_cache(self, config):
         from .serving_state import ServingStatePool
-        from .vllm_cache_specs import BLOCK_SIZE
-        self.scheduler_block_size=BLOCK_SIZE
+        from .vllm_cache_specs import (selected_block_size, physical_cache_budget,
+            physical_bytes_per_block, validate_budget_geometry, bounded_token_budget, MambaSpec)
+        block_sizes={group.kv_cache_spec.block_size for group in config.kv_cache_groups}
+        if block_sizes != {selected_block_size()}:
+            raise ValueError('Allocated cache groups must agree with selected checkpoint block size')
+        self.scheduler_block_size=block_sizes.pop()
+        budget=physical_cache_budget()
+        if budget is not None:
+            if self.mesh.get_num_devices()!=4:
+                raise ValueError('Physical cache budget assumes four-device tensor parallelism')
+            validate_budget_geometry([layer.layer_type for layer in self.model.layers],
+                self.model.config.num_key_value_heads,self.model.config.head_dim)
+            if (len(config.kv_cache_groups)!=4
+                    or sorted(len(group.layer_names) for group in config.kv_cache_groups)!=[16]*4):
+                raise ValueError('Bounded physical cache requires four16-layer groups')
+            recurrent_specs=[group.kv_cache_spec for group in config.kv_cache_groups
+                             if isinstance(group.kv_cache_spec,MambaSpec)]
+            if len(recurrent_specs)!=3 or any(spec.mamba_cache_mode!='align'
+                    or spec.num_speculative_blocks or spec.num_prefill_checkpoint_blocks
+                    for spec in recurrent_specs):
+                raise ValueError('Physical budget requires three align groups without extra checkpoints/speculation')
+            if any(layer.policy['kv_dtype']!='bfloat8_b' for layer in self.model.layers
+                   if layer.layer_type=='full_attention'):
+                raise ValueError('Physical cache budget assumes BFP8 attention KV')
+            bounded_token_budget(self.context_length,self.batch_size)
+            if config.num_blocks!=budget//physical_bytes_per_block(self.scheduler_block_size):
+                raise ValueError('Worker cache block count disagrees with explicit physical byte budget')
         self.cache_groups={}
         for group_index,group in enumerate(config.kv_cache_groups):
             for name in group.layer_names:
                 self.cache_groups[int(name.split('layers.')[1].split('.')[0])]=group_index
-        states=self.allocate_kv_cache((config.num_blocks*(BLOCK_SIZE//32),1,32,256),
+        states=self.allocate_kv_cache((config.num_blocks*(self.scheduler_block_size//32),1,32,256),
                                        torch.bfloat16,len(self.model.layers))
         self.state_pool=ServingStatePool(self.model,states,
             num_blocks_by_layer={index:config.num_blocks
@@ -91,7 +118,8 @@ class Qwen38ForCausalLM:
                 if layer.layer_type=='linear_attention'})
         memory=ttnn.get_memory_view(self.mesh,ttnn.BufferType.DRAM)
         self.allocation_evidence=dict(
-            scheduler_blocks=config.num_blocks,scheduler_block_size=BLOCK_SIZE,
+            scheduler_blocks=config.num_blocks,scheduler_block_size=self.scheduler_block_size,
+            physical_cache_budget_bytes_per_device=budget,
             group_count=len(config.kv_cache_groups),
             recurrent_snapshot_bytes_per_device=self.state_pool.allocated_bytes_per_device,
             attention_bytes_per_device=sum(2*int(state.key.shape[0])*8*1088
