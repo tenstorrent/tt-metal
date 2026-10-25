@@ -55,7 +55,9 @@ void kernel_main() {
     constexpr uint32_t GX =
         get_compile_time_arg_val(16);  // core grid: core (n, s) = logical (n % GX, (12 / GX) * s + n / GX)
     constexpr uint32_t NT = 12;
-    constexpr auto b_args = TensorAccessorArgs<17>();
+    constexpr uint32_t SEM_FA = get_compile_time_arg_val(17);
+    constexpr uint32_t SEM_FB = get_compile_time_arg_val(18);
+    constexpr auto b_args = TensorAccessorArgs<19>();
     constexpr auto w_args = TensorAccessorArgs<b_args.next_compile_time_args_offset()>();
     constexpr auto i_args = TensorAccessorArgs<w_args.next_compile_time_args_offset()>();
     constexpr auto r_args = TensorAccessorArgs<i_args.next_compile_time_args_offset()>();
@@ -144,6 +146,9 @@ void kernel_main() {
     cbo.reserve_back(1);
     const uint32_t g_rank = cbg.get_write_ptr();
     const uint32_t g_score = g_rank + NT * 128;
+    volatile tt_l1_ptr uint32_t* fa = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_FA));
+    volatile tt_l1_ptr uint32_t* fb = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_FB));
+    uint32_t row_idx = 0;
     for (uint32_t t = n + NT * s; t < T; t += NT * S) {
         const uint32_t ro = RO(t & 31);  // T <= 32: one tile row
         for (uint32_t c = 0; c < NT; ++c) {
@@ -160,6 +165,8 @@ void kernel_main() {
 
         volatile tt_l1_ptr uint32_t* rk = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_rank);
         volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_score);
+        volatile tt_l1_ptr uint32_t* cand = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_rank + 3072);
+        *fa = row_idx + 1;  // the reader kernel (other RISC) scans ranks 192..383
         uint32_t bk[K];
         uint32_t bi[K];
         for (uint32_t j = 0; j < K; ++j) {
@@ -168,7 +175,7 @@ void kernel_main() {
         }
         // strictly-greater insertion in ascending index order => lowest index wins ties; groups of 4 are skipped with
         // one comparison against the current K-th key
-        for (uint32_t c0 = 0; c0 < NT * 32; c0 += 4) {
+        for (uint32_t c0 = 0; c0 < 192; c0 += 4) {
             const uint32_t k0 = fkey(rk[c0]), k1 = fkey(rk[c0 + 1]), k2 = fkey(rk[c0 + 2]), k3 = fkey(rk[c0 + 3]);
             const uint32_t thr = bk[K - 1];
             if (__builtin_expect(k0 > thr || k1 > thr || k2 > thr || k3 > thr, 0)) {
@@ -188,6 +195,21 @@ void kernel_main() {
                 }
             }
         }
+        noc_semaphore_wait_min(fb, row_idx + 1);
+        for (uint32_t q = 0; q < K; ++q) {  // merge the second half's K best (in its list order)
+            const uint32_t key = cand[q];
+            if (key > bk[K - 1]) {
+                uint32_t p = K - 1;
+                while (p > 0 && key > bk[p - 1]) {
+                    bk[p] = bk[p - 1];
+                    bi[p] = bi[p - 1];
+                    --p;
+                }
+                bk[p] = key;
+                bi[p] = cand[8 + q];
+            }
+        }
+        ++row_idx;
         {
             DeviceZoneScopedN("RW_scanned");
         }
@@ -210,4 +232,6 @@ void kernel_main() {
         noc.async_write(cbo, i_acc, K * 2, {.offset_bytes = 64}, {.page_id = t, .offset_bytes = 0});
         noc.async_write_barrier();
     }
+    *fa = 0;
+    *fb = 0;
 }

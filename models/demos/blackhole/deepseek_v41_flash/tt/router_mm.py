@@ -26,7 +26,12 @@ GX, GY = (
     12,
     1,
 )  # the NT cores of a K slice: logical x 0..GX-1, rows GY*s .. (core n = (n % GX, GY*s + n // GX)); 6 x 2 also works
-SEM_PART, SEM_ROW = 0, 1  # partial arrivals, row arrivals
+SEM_PART, SEM_ROW, SEM_FA, SEM_FB = (
+    0,
+    1,
+    2,
+    3,
+)  # partial arrivals, row arrivals, intra-core scan hand-shake (writer <-> reader RISC)
 
 
 def relayout_weight(w, S):
@@ -108,7 +113,7 @@ def router_fused(
     reader = _kernel(
         "router_mm_reader.cpp",
         core_set,
-        [CX, CW, KS, B, XB, NT * S] + _acc(x) + _acc(wk),
+        [CX, CW, KS, B, XB, NT * S, T, CG, SEM_FA, SEM_FB, k] + _acc(x) + _acc(wk),
         rt_r,
         None,
         ttnn.ReaderConfigDescriptor(),
@@ -118,7 +123,27 @@ def router_fused(
     writer = _kernel(
         "router_fused_writer.cpp",
         core_set,
-        [CP, CR, CB, CK, CS, CG, CO, S, SEM_PART, SEM_ROW, T, k, _bits(eps), _bits(scale), int(dump), opage, gx]
+        [
+            CP,
+            CR,
+            CB,
+            CK,
+            CS,
+            CG,
+            CO,
+            S,
+            SEM_PART,
+            SEM_ROW,
+            T,
+            k,
+            _bits(eps),
+            _bits(scale),
+            int(dump),
+            opage,
+            gx,
+            SEM_FA,
+            SEM_FB,
+        ]
         + _acc(bias)
         + _acc(w_out)
         + _acc(i_out)
@@ -153,7 +178,7 @@ def router_fused(
         cc,
     )
     compute.defines = [("INP_FLOAT32", "1")]  # fp32 softplus polynomial (as ttnn defines it for fp32 inputs)
-    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(2)]
+    sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=0) for i in range(4)]
     prog = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=sems, cbs=cbs)
     prog.custom_program_hash = _hash(
         0x5B4,
