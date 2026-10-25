@@ -12,8 +12,9 @@ which lets larger k_blocks fit L1 (in1 holds 2 x k_block x out_block_w tiles). "
 (default true) set the compute config. Each case runs replicated on all 32 chips; the slowest chip's realtime-profiler
 duration is reported (median of KDA_MM_RUNS runs).
 
-"kind": "mmrs" runs the output projection fused with its TP reduce-scatter (ttnn.operations.matmul_reduce_scatter, as
-the layer calls it: scatter -1, Ring, balanced lines, ephemeral staging) on [M, K] @ [K, N], K split over the TP axis.
+"kind": "mmrs" runs the output projection fused with its TP reduce-scatter (ttnn.operations.matmul_reduce_scatter with the
+layer's settings: scatter -1, Ring, balanced lines, ephemeral staging; without the final-carry program the layer merges
+onto the idle cores, and on a near-empty L1, so its plan and power can differ from the layer's) on [M, K] @ [K, N], K split over the TP axis.
 Its "mrs" dict overrides the op's planning knobs (module constants of its program descriptor, e.g. {"KB_MAX": 32,
 "SUPER_BLOCK": 3}) for that case only; the plan it took is reported as "plan".
 
