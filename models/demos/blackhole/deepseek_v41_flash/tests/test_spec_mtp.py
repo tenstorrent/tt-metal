@@ -125,6 +125,12 @@ def test_spec_mtp(mesh_device):
         ttnn.copy_host_to_device_tensor(h(fr.to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT, 0), f_d)
 
     def run():
+        if (
+            os.environ.get("DSV41_MTP_BOTH", "1") == "1"
+        ):  # batched RoPE lookup of the verify rows and the draft rows (what SpecDecoder does)
+            st_v, st_d = dr.state.build_both(posv_d, f_d)
+            dr.write_main(hid_d, st_v)
+            return dr.draft(tok_d, f_d, st=st_d)
         dr.write_main(hid_d, dr.state.build_verify(posv_d))
         return dr.draft(tok_d, f_d)
 

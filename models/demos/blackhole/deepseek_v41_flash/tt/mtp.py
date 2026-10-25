@@ -511,18 +511,42 @@ class DraftState:
         sh = self._rows("S", idx, [1, T, 1, HEAD_DIM])
         return {"Ch": self._rows("C", idx, [1, T, 1, HEAD_DIM]), "Sh": sh, "nSh": ttnn.neg(sh)}, idx
 
-    def build_draft(self, f_rows):
-        """f_rows: int32 [T_d] row-major, the frontier position (position of the last verified input token) of every draft row's user."""
+    def build_both(self, pos_v, f_rows):
+        """``build_verify(pos_v)`` and ``build_draft(f_rows)`` with ONE batched compact-RoPE lookup for the two position sets (a column-sharded table costs ~100 us per lookup:
+        gather + all-gather + sum). -> (st_v, st_d); identical tensors to the two separate calls."""
+        if self.rope is None:
+            return self.build_verify(pos_v), self.build_draft(f_rows)
+        Tv, Td = self.T_v, self.T_d
+        q = self._draft_pos(f_rows)
+        idx_v = ttnn.typecast(ttnn.reshape(pos_v, [Tv, 1]), ttnn.uint32)
+        idx_d = ttnn.typecast(ttnn.reshape(q, [Td, 1]), ttnn.uint32)
+        (cv, sv), (cd, sd) = self.rope.lookup([idx_v, idx_d])
+        st = []
+        for T, c, sn in ((Tv, cv, sv), (Td, cd, sd)):
+            sh = self.rope.full("S", sn, [1, T, 1, HEAD_DIM])
+            st.append({"Ch": self.rope.full("C", c, [1, T, 1, HEAD_DIM]), "Sh": sh, "nSh": ttnn.neg(sh)})
+        return self._finish_verify(st[0], idx_v), self._finish_draft(st[1], f_rows)
+
+    def _draft_pos(self, f_rows):
         T = self.T_d
         ftile = ttnn.typecast(ttnn.to_layout(ttnn.reshape(f_rows, [1, 1, 1, T]), ttnn.TILE_LAYOUT), ttnn.float32)
-        q = ttnn.reshape(
+        return ttnn.reshape(
             ttnn.to_layout(ttnn.typecast(ttnn.add(ftile, self.off_d), ttnn.int32), ttnn.ROW_MAJOR_LAYOUT), [T]
         )
-        st, _ = self._gather(q, T)
+
+    def _finish_draft(self, st, f_rows):
+        T = self.T_d
         fidx = ttnn.typecast(ttnn.reshape(f_rows, [T, 1]), ttnn.uint32)
         m = self._rows("mask", fidx, [T, 1, 1, L_D])
         st["mask"] = ttnn.repeat(m, [1, 1, NH, 1])
         return st
+
+    def build_draft(self, f_rows):
+        """f_rows: int32 [T_d] row-major, the frontier position (position of the last verified input token) of every draft row's user."""
+        T = self.T_d
+        q = self._draft_pos(f_rows)
+        st, _ = self._gather(q, T)
+        return self._finish_draft(st, f_rows)
 
     def _i32_rows(self, e, T):
         v = ttnn.to_layout(ttnn.slice(e, [0, 0, 0], [T, 1, 1]), ttnn.TILE_LAYOUT)
@@ -531,8 +555,11 @@ class DraftState:
     def build_verify(self, pos_v):
         """pos_v: int32 [T_v] row-major (position of every verify row) -> RoPE rows + the per-j ring slot indices (``paged_update_cache`` RMWs whole
         tiles: rows of one user must write in separate calls, the others skip with -1)."""
+        st, idx = self._gather(pos_v, self.T_v)
+        return self._finish_verify(st, idx)
+
+    def _finish_verify(self, st, idx):
         T = self.T_v
-        st, idx = self._gather(pos_v, T)
         slot = self._i32_rows(ttnn.embedding(idx, self.t["ring"], layout=ttnn.ROW_MAJOR_LAYOUT), T)
         f1 = ttnn.add(
             ttnn.typecast(ttnn.to_layout(ttnn.reshape(slot, [1, 1, 1, T]), ttnn.TILE_LAYOUT), ttnn.float32), 1.0
@@ -735,12 +762,12 @@ class DSparkDrafter:
     # -- draft side --------------------------------------------------------------------------------------------------------
     stop = None  # timing breakdown: 'embed' | 'stage0..2' | 'stages' | 'head' | None (full)
 
-    def draft(self, tok_rows, f_rows):
+    def draft(self, tok_rows, f_rows, st=None):
         """tok_rows [T_d,1] uint32 row-major: draft block input ids (row i*U+u: t_u for i = 0, the noise id otherwise); f_rows [T_d] int32: frontier
         position per row. -> dict(tokens=[5 x [U,1] uint32 draft tokens d_1..d_5], logits=[5 x [1,1,U,V/cols] fp32 markov-biased], conf [1,1,T_d,32] fp32).
         """
         U, T = self.U, self.T_d
-        st = self.state.build_draft(f_rows)
+        st = st if st is not None else self.state.build_draft(f_rows)
         Tp = self.Tp
         if Tp:  # padded stream: embedding rows of the Tp token ids (pad rows = noise ids)
             emb = ttnn.embedding(
@@ -820,8 +847,18 @@ class DSparkDrafter:
         return {"tokens": toks, "logits": lgs, "conf": conf}
 
     # -- whole-batch entry points used by SpecDecoder (the chunked drafter implements the same two) ----------------------------
-    def write_main_full(self, hidden, pos):
-        self.write_main(hidden, self.state.build_verify(pos))
+    def write_main_full(self, hidden, pos, f_next=None):
+        """``f_next`` [U,1] int32 RM (the frontier of the draft that follows, given by SpecDecoder): both RoPE position sets are looked up together (``build_both``); the draft state is kept
+        for the next ``draft_full(t, f_next)`` of the SAME tensor."""
+        if f_next is None:
+            self.write_main(hidden, self.state.build_verify(pos))
+            return
+        st_v, st_d = self.state.build_both(pos, self._f_rows(f_next))
+        self._pending_d = (f_next, st_d)
+        self.write_main(hidden, st_v)
+
+    def _f_rows(self, f_next):
+        return ttnn.reshape(ttnn.concat([f_next] * BLOCK, dim=0), [BLOCK * self.U])
 
     def draft_full(self, t_next, f_next):
         """t_next [U,1] uint32 RM (the bonus token of every user), f_next [U,1] int32 RM (frontier position) -> (dict, drafts [5U,1] uint32 block-index-major)."""
@@ -836,8 +873,9 @@ class DSparkDrafter:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.md),
             )
         tok_rows = ttnn.concat([t_next, self._noise], dim=0)
-        f_rows = ttnn.reshape(ttnn.concat([f_next] * BLOCK, dim=0), [BLOCK * U])
-        d = self.draft(tok_rows, f_rows)
+        f_rows = self._f_rows(f_next)
+        pend, self._pending_d = getattr(self, "_pending_d", None), None
+        d = self.draft(tok_rows, f_rows, st=pend[1] if pend is not None and pend[0] is f_next else None)
         self.conf_q = self._conf_quant(d["conf"])
         return d, ttnn.concat(d["tokens"], dim=0)
 
@@ -888,7 +926,7 @@ class ChunkedDrafter:
         v.attn = [a for sub in v.subs for a in sub.attn]
         return v
 
-    def write_main_full(self, hidden, pos):
+    def write_main_full(self, hidden, pos, f_next=None):
         Tc = self.Uc * self.n
         for c, sub in enumerate(self.subs):
             h = ttnn.slice(hidden, [0, 0, c * Tc, 0], [1, 1, (c + 1) * Tc, hidden.shape[3]])

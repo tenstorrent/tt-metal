@@ -107,7 +107,9 @@ class SpecVerifier(DSV41Decoder):
 
 
 TAP_LAYERS = (37, 38, 39)  # dspark_target_layer_ids
-TOP2 = os.environ.get("DSV41_SPEC_TOP2", "0") == "1"  # per-round top-2 logits for the demo's near-tie diagnostics (off: the round does not compute them)
+TOP2 = (
+    os.environ.get("DSV41_SPEC_TOP2", "0") == "1"
+)  # per-round top-2 logits for the demo's near-tie diagnostics (off: the round does not compute them)
 
 
 class SpecDecoder(SpecVerifier):
@@ -370,7 +372,10 @@ class SpecDecoder(SpecVerifier):
         if hidden is None:
             hidden = self._hidden(taps, x, xs)
         dr = self.drafter
-        dr.write_main_full(hidden, self.pos)
+        f_i32 = ttnn.reshape(ttnn.typecast(ttnn.to_layout(f_next, rm), ttnn.int32), [U, 1])
+        dr.write_main_full(
+            hidden, self.pos, f_i32 if self.draft_on else None
+        )  # the drafter's RoPE lookups of the verify rows and the draft rows are batched
         if (
             not self.draft_on
         ):  # k = 0 'plain' round without drafting (adaptive scheduler's no-spec mode): rings stay current, pack = [a (T), m (U)]
@@ -380,7 +385,6 @@ class SpecDecoder(SpecVerifier):
                 self.logits = logits
             return self.pack
         t_u32 = ttnn.typecast(ttnn.to_layout(t_next, rm), ttnn.uint32)  # [U,1]
-        f_i32 = ttnn.reshape(ttnn.typecast(ttnn.to_layout(f_next, rm), ttnn.int32), [U, 1])
         d, drafts = dr.draft_full(t_u32, f_i32)  # drafts [5U,1] uint32 block-index-major
         self.draft_out = d
         m_u32 = ttnn.typecast(ttnn.to_layout(mcount, rm), ttnn.uint32)  # [U,1]
