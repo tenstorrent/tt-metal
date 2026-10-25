@@ -1130,4 +1130,123 @@ def test_glue_r0(mesh_device, variant, config_only):
             timer(f"L RS dim2 [640,2048]->[160,2048] workers={w}", lambda w=w: rs(qa_p, dim=2, workers=w))
         _free(qa_p)
 
+    # ======================= M. stem graph levers on best-v9 (seqq): L1 Q chain + untilize, kv chain L1, concat L1 ======
+    if want("m"):
+        from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+
+        hf = copy.deepcopy(config_only)
+        hf.max_seq_len = S * SP
+        rope_t = RotarySetup(hf, mesh, sp_axis=0).get_rope_tensors_indexed(S * SP, S * SP)
+        R = S // TP
+        NH = 64
+
+        def cfgR(key, rows=R):
+            e = MLA_MATMUL_CONFIG[key][rows]
+            return e[0] if isinstance(e, list) else e
+
+        qb_cfg, b1_cfg = cfgR("q_b_proj"), cfgR("wkv_b1")
+        qr_l1 = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=L1)
+        qr_d = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=DRAM)
+        tw_qb = mk(mesh, torch.randn(Q_LORA, NH * (NOPE + ROPE)) * (1 / Q_LORA**0.5), ttnn.bfloat8_b)
+        wb = mk(mesh, torch.randn(1, NH, NOPE, KV_LORA) * (1 / NOPE**0.5))
+        zr = mk(mesh, torch.zeros(1, NH, NOPE, ROPE))
+        cat = ttnn.concat([wb, zr], dim=-1)
+        tw_b1p = ttnn.typecast(cat, ttnn.bfloat8_b)
+        for t in (wb, zr, cat):
+            ttnn.deallocate(t)
+        b1pc = b1_cfg["program_config"]
+        pc_p = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(11, 10), in0_block_w=b1pc.in0_block_w, out_subblock_h=1, out_subblock_w=6,
+            per_core_M=b1pc.per_core_M, per_core_N=18,
+        )
+
+        def qchain(src, qmem, untilize=True):
+            q = ttnn.linear(src, tw_qb, program_config=qb_cfg["program_config"], memory_config=qb_cfg["out_mem_config"],
+                            dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+            qn, qp = ttnn.experimental.nlp_create_q_heads_split(q, num_heads=NH, split_head_dim=NOPE, memory_config=L1)
+            ttnn.deallocate(q)
+            out = ttnn.linear(qn, tw_b1p, program_config=pc_p, memory_config=qmem, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+            ttnn.deallocate(qn)
+            ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                qp, rope_t["cos_matrix"], rope_t["sin_matrix"], rope_t["trans_matrix"], kv_actual_global=0,
+                cluster_axis=0, seq_subshard_axis=1, output_tensor=out,
+            )
+            ttnn.deallocate(qp)
+            if not untilize:
+                return out
+            rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM)
+            ttnn.deallocate(out)
+            return rm
+
+        try:
+            a = qchain(qr_l1, DRAM)
+            b = qchain(qr_l1, L1)
+            c = qchain(qr_d, L1)
+            cmp("M Q chain L1 Q buffer vs DRAM", b, a)
+            cmp("M Q chain L1 Q + qr DRAM vs base", c, a)
+            _free([a, b, c])
+        except Exception as e:
+            log(f"FAIL M Q pcc: {type(e).__name__}: {str(e)[:300]}")
+            traceback.print_exc()
+        timer("M0 Q chain v9 (qr L1, Q DRAM) + untilize DRAM->DRAM", lambda: qchain(qr_l1, DRAM))
+        timer("M1 Q chain deferred (qr DRAM, Q L1) + untilize L1->DRAM", lambda: qchain(qr_d, L1))
+        timer("M1b Q chain (qr L1, Q L1) + untilize L1->DRAM", lambda: qchain(qr_l1, L1))
+        qd = qchain(qr_l1, DRAM, untilize=False)
+        ql = qchain(qr_l1, L1, untilize=False)
+        timer("M2 untilize [64,160,576] DRAM->DRAM", lambda: ttnn.to_layout(qd, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM))
+        timer("M2 untilize [64,160,576] L1->DRAM", lambda: ttnn.to_layout(ql, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM))
+        _free([qd, ql])
+
+        # kv chain (640 rows, after the TP all-gather of partials): fast_reduce split -> norm -> rope -> fp8 cast
+        kv_cfg = glm_cfg("kv_a_proj_with_mqa")
+        buf_kv = tt_ccl.get_mla_high_bw_all_gather_buffer(
+            name="kv_stem", shape=[1, TP, S, KV_LORA + ROPE], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )
+        tw_kv = mk(mesh, torch.randn(H, KV_LORA + ROPE) * (1 / H**0.5), ttnn.bfloat8_b, dims=(None, 0))
+        tg_kv = mk(mesh, (torch.rand(KV_LORA) + 0.5).reshape(1, 1, -1, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
+        kvp = ttnn.linear(x_l1, tw_kv, program_config=kv_cfg["program_config"], memory_config=DRAM, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+        kvg = hbag(kvp, buf_kv, dim=1)
+
+        def kvchain(mem):
+            kn, kr = ttnn.experimental.fast_reduce_nc_split(kvg, dim=1, split_output_width=KV_LORA, memory_config=mem, compute_kernel_config=hifi4f)
+            kn2 = ttnn.rms_norm(kn, weight=tg_kv, epsilon=EPS, memory_config=mem, compute_kernel_config=hifi2)
+            ttnn.deallocate(kn)
+            kr2 = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                kr, rope_t["cos_matrix"], rope_t["sin_matrix"], rope_t["trans_matrix"], kv_actual_global=0, cluster_axis=0
+            )
+            ttnn.deallocate(kr)
+            lat, sc = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(kn2, round_scale_to_power_of_two=True)
+            ttnn.deallocate(kn2)
+            return [lat, sc, kr2]
+
+        try:
+            a = kvchain(DRAM)
+            b = kvchain(L1)
+            for i, nm in ((2, "rope"), (1, "scales"), (0, "latent fp8")):
+                cmp(f"M kv chain L1 vs DRAM [{nm}]", b[i], a[i])
+            _free(a + b)
+        except Exception as e:
+            log(f"FAIL M kv pcc: {type(e).__name__}: {str(e)[:300]}")
+            traceback.print_exc()
+        timer("M3 kv chain DRAM (reduce split, norm, rope, fp8 cast)", lambda: kvchain(DRAM))
+        timer("M3 kv chain L1", lambda: kvchain(L1))
+
+        # epilogue: nlp_concat_heads (bfp8 [16,640,256]) -> o_proj
+        op_cfg = glm_cfg("o_proj")
+        att = mk(mesh, torch.randn(1, 16, S, 256), ttnn.bfloat8_b, mem=DRAM)
+        tw_o = mk(mesh, torch.randn(4096, H) * (1 / 64), ttnn.bfloat8_b)
+
+        def epi(cmem):
+            v = ttnn.experimental.nlp_concat_heads(att, memory_config=cmem)
+            o = ttnn.linear(v, tw_o, program_config=op_cfg["program_config"], memory_config=op_cfg["out_mem_config"], dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+            ttnn.deallocate(v)
+            return o
+
+        try:
+            cmp("M concat_heads L1 vs DRAM -> o_proj", epi(L1), epi(DRAM))
+        except Exception as e:
+            log(f"FAIL M epi: {type(e).__name__}: {str(e)[:300]}")
+        timer("M4 concat_heads DRAM + o_proj", lambda: epi(DRAM))
+        timer("M4 concat_heads L1 + o_proj", lambda: epi(L1))
+
     log("DONE")
