@@ -80,34 +80,39 @@ def block_cyclic_reorder(matrix: torch.Tensor, chunk_local: int, sp_factor: int,
     return torch.cat([blocks[b] for b in order], dim=seq_dim)
 
 
-def rotated_chip_positions(kv_actual_isl: int, sp: int, chunk_local: int) -> list[list[int]]:
+def slab_local_cache_offset(prefix: int, coord: int, factor: int, block: int) -> int:
+    """Local cache rows of chip ``coord`` holding positions < ``prefix`` in a block-cyclic layout of ``factor`` chips
+    and ``block`` rows per chip per slab: the KV writer's update_idxt (writer_update_padded_kv_cache.cpp)."""
+    slab = prefix // (factor * block)
+    boundary = (prefix // block) % factor
+    offset = prefix % block
+    return slab * block + (block if coord < boundary else (offset if coord == boundary else 0))
+
+
+def rotated_chip_positions(
+    kv_actual_isl: int, sp: int, chunk_local: int, slab_local: int | None = None
+) -> list[list[int]]:
     """Per-chip global position for each chip-local row after the server's KV-pad-aware rotation,
     mirroring the writer kernel EXACTLY. positions[c][r] is the global token position carried by
     chip c's r-th rotated row.
 
     Chunk-aware: each chip writes chunk_local rows starting at update_idxt, and the cache cell at
-    local row lr on chip c holds global position (lr // chunk_local)*chunk_size_global +
-    c*chunk_local + (lr % chunk_local). The union over all (c, r) tiles
-    [kv_actual_isl, kv_actual_isl + chunk_size_global) exactly, so the first new_actual_isl
-    positions are the contiguous valid range and the rest are pad (masked by causality) -- no
+    local row lr on chip c holds global position (lr // slab_local)*slab_global +
+    c*slab_local + (lr % slab_local), slab_global = sp*slab_local. The layout slab defaults to the chunk
+    (slab_local = chunk_local, today's layout); a smaller slab (GLM_KV_SLAB_TOKENS) must divide chunk_local.
+    The union over all (c, r) tiles [kv_actual_isl, kv_actual_isl + sp*chunk_local) exactly, so the first
+    new_actual_isl positions are the contiguous valid range and the rest are pad (masked by causality) -- no
     separate new_actual_isl plumbing needed.
     """
-    chunk_size_global = sp * chunk_local
-    split_chunk = kv_actual_isl // chunk_size_global
-    split_chip = (kv_actual_isl // chunk_local) % sp
-    split_offset = kv_actual_isl % chunk_local
-
+    slab_local = chunk_local if slab_local is None else slab_local
+    assert chunk_local % slab_local == 0, f"chunk_local {chunk_local} must be a multiple of slab_local {slab_local}"
+    slab_global = sp * slab_local
     positions = [[0] * chunk_local for _ in range(sp)]
     for c in range(sp):
-        if c < split_chip:
-            update_idxt = (split_chunk + 1) * chunk_local
-        elif c == split_chip:
-            update_idxt = split_chunk * chunk_local + split_offset
-        else:
-            update_idxt = split_chunk * chunk_local
+        update_idxt = slab_local_cache_offset(kv_actual_isl, c, sp, slab_local)
         for r in range(chunk_local):
             lr = update_idxt + r
-            positions[c][r] = (lr // chunk_local) * chunk_size_global + c * chunk_local + (lr % chunk_local)
+            positions[c][r] = (lr // slab_local) * slab_global + c * slab_local + (lr % slab_local)
     return positions
 
 
@@ -137,7 +142,9 @@ def llama4_scale_host(
     return scale.view(1, 1, sp * chunk_local, 1).expand(1, heads_local, -1, width)
 
 
-def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int, chunk_local: int) -> list[int]:
+def rotated_chip_real_token_counts(
+    kv_actual_isl: int, actual_isl: int, sp: int, chunk_local: int, slab_local: int | None = None
+) -> list[int]:
     """Per-chip count of REAL (non-pad) rows carried by a rotated chunk, keyed off
     rotated_chip_positions so it cannot drift from the writer kernel.
 
@@ -155,7 +162,7 @@ def rotated_chip_real_token_counts(kv_actual_isl: int, actual_isl: int, sp: int,
     valid_end = kv_actual_isl + actual_isl
     return [
         sum(1 for p in row if kv_actual_isl <= p < valid_end)
-        for row in rotated_chip_positions(kv_actual_isl, sp, chunk_local)
+        for row in rotated_chip_positions(kv_actual_isl, sp, chunk_local, slab_local)
     ]
 
 

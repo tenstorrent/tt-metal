@@ -366,7 +366,11 @@ class RotarySetup:
         return {"cos_matrix": cos_matrix, "sin_matrix": sin_matrix, "trans_matrix": trans_matrix}
 
     def get_rope_tensors_indexed(
-        self, cache_seq_len_global: int, chunk_size_global: int, tail_slack: bool = False
+        self,
+        cache_seq_len_global: int,
+        chunk_size_global: int,
+        tail_slack: bool = False,
+        slab_size_global: int | None = None,
     ) -> dict[str, ttnn.Tensor]:
         """Get whole-cache cos/sin/trans matrices for the KV-pad-aware *indexed* rotated path.
 
@@ -407,7 +411,14 @@ class RotarySetup:
             f"cache_seq_len_global ({cache_seq_len_global}) must be a multiple of "
             f"chunk_size_global ({chunk_size_global})"
         )
-        chunk_local = chunk_size_global // sp
+        # Fixed KV layout slab (GLM_KV_SLAB_TOKENS): the cache rows -- and so the table rows -- are keyed to the
+        # slab, while the tail slack stays one padded chunk. Default: the slab is the chunk (today's table).
+        slab_size_global = chunk_size_global if slab_size_global is None else slab_size_global
+        assert chunk_size_global % slab_size_global == 0 and slab_size_global % (ttnn.TILE_SIZE * sp) == 0, (
+            f"slab {slab_size_global} must divide the chunk {chunk_size_global} and be a multiple of "
+            f"TILE_SIZE * sp ({ttnn.TILE_SIZE * sp})"
+        )
+        chunk_local = slab_size_global // sp
         table_seq_len = cache_seq_len_global + (chunk_size_global if tail_slack else 0)
 
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config, num_positions=table_seq_len)

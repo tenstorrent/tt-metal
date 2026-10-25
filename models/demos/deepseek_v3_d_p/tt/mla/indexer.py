@@ -25,6 +25,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
+from models.demos.deepseek_v3_d_p.utils.chunk_config import kv_slab_tokens
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
 # module-level INDEXER_WEIGHT_NAMES alias is defined at the bottom of this file for back-compat.
@@ -366,6 +367,9 @@ class TtIndexerBase:
             self.active_seq_len % self.sp_factor == 0
         ), f"active_seq_len ({self.active_seq_len}) must divide SP factor ({self.sp_factor})"
         self.active_seq_len_local = self.active_seq_len // self.sp_factor
+        # Fixed KV layout slab (GLM_KV_SLAB_TOKENS; default = the chunk): see ttMLA.kv_slab_global.
+        self.kv_slab_global = kv_slab_tokens(self.active_seq_len)
+        self._kv_slab_mode = self.kv_slab_global != self.active_seq_len
         # Block-cyclic key-cache path: mirrors the MLA KVPE cache — a persistent, per-user/layer,
         # block-cyclic ND-sharded key cache written by update_padded_kv_cache and scored by
         # indexer_score_dsa's block-cyclic reader. The rope is always the interleaved on-device INDEXED op
@@ -742,6 +746,7 @@ class TtIndexerBase:
                 cluster_axis=self.sp_axis,
                 valid_global=metadata[2],  # actual_end tensor: real-token clamp, same as the dense path
                 tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
+                **({"kv_slab_global": self.kv_slab_global} if self._kv_slab_mode else {}),
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -754,6 +759,7 @@ class TtIndexerBase:
                 cluster_axis=self.sp_axis,
                 valid_global=actual_end,
                 tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
+                **({"kv_slab_global": self.kv_slab_global} if self._kv_slab_mode else {}),
             )
         ttnn.deallocate(k)
 
@@ -943,6 +949,13 @@ class TtIndexerBase:
             block_cyclic_chunk_local=q_dev.shape[2],
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
+            # Fixed KV layout slab: the key cache is striped in slab runs (S / mesh rows per device), finer than
+            # this chip's query rows; the op keys invP + causal geometry on the stripe and the extent on the chunk.
+            **(
+                {"block_cyclic_key_stripe": self.kv_slab_global // self.mesh_device.get_num_devices()}
+                if self._kv_slab_mode
+                else {}
+            ),
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1

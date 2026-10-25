@@ -178,18 +178,21 @@ class SparseKvPushPlanner:
         max_rows: int,
         chunk_start: int = 0,
         chunk_start_tensor: ttnn.Tensor | None = None,
+        current_rows: int | None = None,
     ) -> SparseKvPushPlan:
         """The plan for `indices`, cached on the indices buffer. Trace-safe with chunk_start_tensor (the metadata's
         kv_actual_global): the plan op reads the chunk start on device, so the cache key leaves its value out. Every
         layer that computes its own indices invalidate()s, so the key only has to tell calls within one forward apart.
         """
         start = chunk_start_tensor if chunk_start_tensor is not None else self.chunk_start(chunk_start)
-        key = (indices.buffer_address(), stripe_chunk, page_bytes, start.buffer_address())
+        # current_rows: rows of the current chunk per owner (default one stripe: chunk == layout slab).
+        current_rows = stripe_chunk if current_rows is None else current_rows
+        key = (indices.buffer_address(), stripe_chunk, page_bytes, start.buffer_address(), current_rows)
         if self._last is None or self._key != key:
-            self._key, self._last = key, self._build(indices, stripe_chunk, page_bytes, max_rows, start)
+            self._key, self._last = key, self._build(indices, stripe_chunk, page_bytes, max_rows, start, current_rows)
         return self._last
 
-    def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start):
+    def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start, current_rows):
         table, compact = ttnn.experimental.sparse_push_plan(
             indices,
             num_devices=self.mesh_device.get_num_devices(),
@@ -213,7 +216,7 @@ class SparseKvPushPlanner:
         )
         hot_table = None
         if self.hot:
-            assert 2 * stripe_chunk <= HOT_CURRENT_CAP, f"stripe_chunk {stripe_chunk} > HOT_CURRENT_CAP / 2"
+            assert 2 * current_rows <= HOT_CURRENT_CAP, f"current rows {current_rows} > HOT_CURRENT_CAP / 2"
             hot_table = ttnn.experimental.sparse_push_hot(
                 indices,
                 compact,
@@ -226,7 +229,7 @@ class SparseKvPushPlanner:
                 banks=self.banks,
                 threshold=HOT_THRESHOLD,
                 prefix_cap=HOT_PREFIX_CAP,
-                current_cap=2 * stripe_chunk,
+                current_cap=2 * current_rows,
                 chunk_start=chunk_start,
             )
         ttnn.deallocate(table)

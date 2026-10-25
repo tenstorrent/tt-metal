@@ -181,6 +181,11 @@ ttnn::Tensor ring_indexer_score_dsa(
     // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0);
+    uint32_t index_cache_layer_idx = 0,
+    // Fixed KV layout slab (full-mesh only): the key cache is striped over the mesh in runs of this many rows per
+    // device (S / mesh_size), finer than the query chunk block_cyclic_chunk_local (= Sq, C / mesh_size). The K
+    // invP remap and the causal geometry key on the stripe; the chunk extent (derived kv_len, gather extent)
+    // stays the query chunk. nullopt or == block_cyclic_chunk_local: today's layout (stripe == chunk).
+    std::optional<uint32_t> block_cyclic_key_stripe = std::nullopt);
 
 }  // namespace ttnn::experimental

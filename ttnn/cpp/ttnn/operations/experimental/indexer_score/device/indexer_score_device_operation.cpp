@@ -198,8 +198,13 @@ void validate_block_cyclic(const operation_attributes_t& attrs, const tensor_arg
         "global chunk {} (= sp*chunk_local) must divide T {} (the cache must be a whole number of global chunks)",
         chunk_global,
         T);
+    // Slab layout (query_chunk_local set): the causal geometry's block is the SP-level slab
+    // (stripe x mesh_cols split); a tile-aligned query run of Sq <= block + one tile crosses at most one slab
+    // boundary (its start offset within the block is at most block - TILE), so one straddle still describes it.
+    const uint32_t geom_block = chunk_local * attrs.key_compression_ratio * program::query_geometry_split(attrs);
     TT_FATAL(
-        Sq <= chunk_local * attrs.key_compression_ratio,
+        Sq <= chunk_local * attrs.key_compression_ratio ||
+            (attrs.query_chunk_local.has_value() && Sq <= geom_block + tt::constants::TILE_HEIGHT),
         "Sq ({}) must be <= block_cyclic_chunk_local ({}) query rows; a device's queries may cross at most one "
         "cache-slab "
         "boundary (one straddle). A coarser indexer SP (Sq > chunk_local) is not yet supported.",
@@ -462,6 +467,7 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         fused_mesh_cols,
         fused_route_plan_hash,
         attrs.key_stripe_split,  // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
+        attrs.query_chunk_local.value_or(0u),  // slab layout: chunk extent defines in the reader
         tensor_args);
 }
 
@@ -926,7 +932,8 @@ ttnn::Tensor launch_indexer_score(
     // layer terms below (see tensor_args_t::cache_batch_idx_tensor). nullopt = the scalar path.
     std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0) {
+    uint32_t index_cache_layer_idx = 0,
+    std::optional<uint32_t> block_cyclic_key_stripe = std::nullopt) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
@@ -987,6 +994,11 @@ ttnn::Tensor launch_indexer_score(
             *block_cyclic_sp_axis);
     }
     std::optional<BlockCyclicLayout> block_cyclic = std::nullopt;
+    std::optional<uint32_t> query_chunk_local_attr = std::nullopt;  // slab layout only (block_cyclic_key_stripe)
+    TT_FATAL(
+        !block_cyclic_key_stripe.has_value() || (full_mesh && block_cyclic_chunk_local.has_value()),
+        "indexer_score: block_cyclic_key_stripe is supported only on the fused full-mesh ring with "
+        "block_cyclic_chunk_local");
     uint32_t key_stripe_split = 1;  // >1 only for a TP-deduplicated (GLM-5.3) key cache; see below
     if (full_mesh && block_cyclic_chunk_local.has_value()) {
         const uint32_t sp = q.device()->get_view().shape().mesh_size();
@@ -1002,6 +1014,22 @@ ttnn::Tensor launch_indexer_score(
             query_chunk_local,
             key_compression_ratio);
         block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = query_chunk_local / key_compression_ratio};
+        if (block_cyclic_key_stripe.has_value() && *block_cyclic_key_stripe != query_chunk_local) {
+            // Fixed KV layout slab: K is striped in runs of key_stripe rows per device; the queries keep the chunk.
+            const uint32_t stripe = *block_cyclic_key_stripe;
+            TT_FATAL(
+                key_compression_ratio == 1,
+                "indexer_score: block_cyclic_key_stripe requires key_compression_ratio 1 (got {})",
+                key_compression_ratio);
+            TT_FATAL(
+                stripe > 0 && stripe % tt::constants::TILE_HEIGHT == 0 && query_chunk_local % stripe == 0,
+                "indexer_score: block_cyclic_key_stripe ({}) must be tile-aligned and divide block_cyclic_chunk_local "
+                "({})",
+                stripe,
+                query_chunk_local);
+            block_cyclic = BlockCyclicLayout{.sp = sp, .chunk_local = stripe};
+            query_chunk_local_attr = query_chunk_local;
+        }
     } else if (block_cyclic_sp_axis.has_value()) {
         const auto mesh_shape = q.device()->get_view().shape();
         const uint32_t sp_axis = *block_cyclic_sp_axis;
@@ -1090,7 +1118,8 @@ ttnn::Tensor launch_indexer_score(
     } else {
         const uint32_t T = k.logical_shape()[2];
         if (block_cyclic.has_value()) {
-            const uint32_t query_chunk = block_cyclic->sp * block_cyclic->chunk_local * key_compression_ratio;
+            const uint32_t query_chunk =
+                block_cyclic->sp * query_chunk_local_attr.value_or(block_cyclic->chunk_local) * key_compression_ratio;
             TT_FATAL(
                 static_cast<uint64_t>(T) * key_compression_ratio >= query_chunk,
                 "indexer_score: cannot deduce chunk_start_idx -- compressed T={} (ratio {}) is shorter than "
@@ -1157,6 +1186,7 @@ ttnn::Tensor launch_indexer_score(
     tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
+    operation_attributes.query_chunk_local = query_chunk_local_attr;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -1267,7 +1297,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& valid_end_tensor,
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
     uint32_t index_cache_num_layers,
-    uint32_t index_cache_layer_idx) {
+    uint32_t index_cache_layer_idx,
+    std::optional<uint32_t> block_cyclic_key_stripe) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -1378,7 +1409,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         valid_end_tensor,
         cache_batch_idx_tensor,
         index_cache_num_layers,
-        index_cache_layer_idx);
+        index_cache_layer_idx,
+        block_cyclic_key_stripe);
 }
 
 }  // namespace ttnn::experimental

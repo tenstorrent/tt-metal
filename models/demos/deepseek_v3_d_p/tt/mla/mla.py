@@ -21,6 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import sparse_kv_push_supported
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
+from models.demos.deepseek_v3_d_p.utils.chunk_config import kv_slab_tokens
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
@@ -503,6 +504,12 @@ class ttMLA:
             self.active_seq_len % self.sp_factor == 0
         ), f"active_seq_len ({self.active_seq_len}) must divide SP factor ({self.sp_factor})"
         self.active_seq_len_local = self.active_seq_len // self.sp_factor
+        # Fixed KV layout slab (GLM_KV_SLAB_TOKENS; default = the chunk, today's layout). The block-cyclic KV
+        # layout is keyed to the slab: the KV writes, the K stripe of the indexer and sparse_sdpa's invP remap and
+        # the push planner's stripe follow it; the chunk keeps the gather extents and the row counts.
+        self.kv_slab_global = kv_slab_tokens(self.active_seq_len)
+        self.kv_slab_local = self.kv_slab_global // self.sp_factor
+        self._kv_slab_mode = self.kv_slab_global != self.active_seq_len
 
         self.ccl_num_links = 2 if self._is_blackhole else 1  # Blackhole trains 2 fabric routing planes, others 1
         # Sparse layers fed another layer's top-k indices (GLM shared layers) receive only the KV rows those indices
@@ -1847,6 +1854,7 @@ class ttMLA:
                 tp_axis=tp_axis,
                 rope=rope,
                 scales=scales,
+                **self._kv_slab_kwargs(),
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -1861,7 +1869,12 @@ class ttMLA:
                 tp_axis=tp_axis,
                 rope=rope,
                 scales=scales,
+                **self._kv_slab_kwargs(),
             )
+
+    def _kv_slab_kwargs(self) -> dict:
+        """update_padded_kv_cache's layout slab: only when it differs from the chunk (default: today's programs)."""
+        return {"kv_slab_global": self.kv_slab_global} if self._kv_slab_mode else {}
 
     def _output_gate(self, hidden_states: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Kimi-K3 gated MLA: sigmoid(g_proj(hidden_states)), head-sharded to match concat_heads.
@@ -2362,7 +2375,10 @@ class ttMLA:
         push_buffer, page_bytes = self._sparse_push_buffer(planner, kvpe_cache, layer_idx)
         plan = planner.plan(
             indices,
-            stripe_chunk=seq_len_local // self.tp_factor,
+            # Rows per owner chip per layout slab (= per chunk without a slab); the current chunk still spans
+            # seq_len_local // tp rows on every owner (the hot region's current-part cap).
+            stripe_chunk=(self.kv_slab_local if self._kv_slab_mode else seq_len_local) // self.tp_factor,
+            current_rows=seq_len_local // self.tp_factor,
             page_bytes=page_bytes,
             max_rows=self._sparse_kv_gather_buffer.shape[2],
             chunk_start=kv_actual_isl or 0,
@@ -3116,7 +3132,8 @@ class ttMLA:
                 if compact
                 else dict(
                     block_cyclic_sp_axis=self.sp_axis,
-                    block_cyclic_chunk_local=block_cyclic_chunk_local,
+                    # The cache is laid out in slabs (per-SP-chip run kv_slab_local), not compute chunks.
+                    block_cyclic_chunk_local=self.kv_slab_local if self._kv_slab_mode else block_cyclic_chunk_local,
                     block_cyclic_cache_tp_sharded=True,
                 )
             ),

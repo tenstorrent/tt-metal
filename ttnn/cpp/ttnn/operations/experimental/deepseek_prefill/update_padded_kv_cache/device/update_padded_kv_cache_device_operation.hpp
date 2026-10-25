@@ -52,6 +52,10 @@ struct UpdatePaddedKvCacheDeviceOperation {
         // offset is a runtime arg. nullopt input_rows = every row from the offset on.
         uint32_t input_row_offset = 0;
         std::optional<uint32_t> input_rows;
+        // Fixed KV layout slab (GLM_KV_SLAB_TOKENS), in global tokens: the block-cyclic layout is keyed to this
+        // slab S instead of the written chunk C (a chunk of C = k*S tokens writes k slabs; each chip still
+        // writes C/(sp*tp) contiguous local rows). nullopt or == the chunk: today's layout. HASHED (kernel defines).
+        std::optional<uint32_t> kv_slab_global;
     };
 
     struct tensor_args_t {
@@ -148,6 +152,7 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope = std::nullopt,
     const std::optional<ttnn::Tensor>& scales = std::nullopt,
     uint32_t input_row_offset = 0,
-    std::optional<uint32_t> input_rows = std::nullopt);
+    std::optional<uint32_t> input_rows = std::nullopt,
+    std::optional<uint32_t> kv_slab_global = std::nullopt);
 
 }  // namespace ttnn::prim

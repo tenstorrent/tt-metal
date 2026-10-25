@@ -315,7 +315,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("valid_end_tensor") = nb::none(),
         nb::arg("cache_batch_idx_tensor") = nb::none(),
         nb::arg("index_cache_num_layers") = 1,
-        nb::arg("index_cache_layer_idx") = 0);
+        nb::arg("index_cache_layer_idx") = 0,
+        nb::arg("block_cyclic_key_stripe") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

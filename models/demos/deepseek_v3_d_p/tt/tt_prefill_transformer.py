@@ -48,6 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistribute
 from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.chunk_config import kv_slab_tokens
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
 
@@ -360,6 +361,7 @@ class TtPrefillTransformer(LightweightModule):
                 cache_seq_len_global=max_seq_len if max_seq_len is not None else seq_len,
                 chunk_size_global=seq_len,
                 tail_slack=is_chunked,
+                slab_size_global=kv_slab_tokens(seq_len),
             )
             if (is_chunked or self._has_indexer)
             else None

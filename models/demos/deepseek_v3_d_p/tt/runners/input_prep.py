@@ -20,6 +20,7 @@ import torch
 
 import ttnn
 from models.demos.common.prefill.runners.runner_utils import MTP_PAD_TOKEN_ID
+from models.demos.deepseek_v3_d_p.utils.chunk_config import kv_slab_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     mtp_lookahead_positions,
@@ -61,19 +62,28 @@ def prepare_prefill_input_tensor(
             flat.unsqueeze(0).unsqueeze(0).unsqueeze(-1), create_balanced_chunk_order(sp_factor), seq_dim=2
         )
         token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-    elif chunk_start % len(token_ids) == 0:
+    elif chunk_start % len(token_ids) == 0 and kv_slab_tokens(len(token_ids)) == len(token_ids):
         token_ids_sharded = flat.reshape(sp_factor, 1, isl_per_chip)
     else:
-        token_ids_sharded = flat[_rotation_index(chunk_start, sp_factor, isl_per_chip)].reshape(
+        # Rotated start, or a fixed KV layout slab (GLM_KV_SLAB_TOKENS) finer than the chunk: chip c carries the
+        # positions it owns in the slab layout.
+        slab_local = kv_slab_tokens(len(token_ids)) // sp_factor
+        token_ids_sharded = flat[_rotation_index(chunk_start, sp_factor, isl_per_chip, slab_local)].reshape(
             sp_factor, 1, isl_per_chip
         )
     return _upload_ids(token_ids_sharded, mesh_device, mesh_shape, sp_axis)
 
 
-def _rotation_index(chunk_start: int, sp_factor: int, isl_per_chip: int) -> torch.Tensor:
-    """Chip-major device row -> offset into the chunk's id list; ``arange`` when chunk-aligned."""
+def _rotation_index(
+    chunk_start: int, sp_factor: int, isl_per_chip: int, slab_local: int | None = None
+) -> torch.Tensor:
+    """Chip-major device row -> offset into the chunk's id list; ``arange`` when chunk-aligned (and no slab)."""
     return torch.tensor(
-        [p - chunk_start for row in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip) for p in row],
+        [
+            p - chunk_start
+            for row in rotated_chip_positions(chunk_start, sp_factor, isl_per_chip, slab_local)
+            for p in row
+        ],
         dtype=torch.long,
     )
 

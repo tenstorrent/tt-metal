@@ -67,7 +67,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, kv_slab_tokens
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_summary, render_table
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
@@ -85,6 +85,10 @@ from tests.ttnn.utils_for_testing import comp_pcc
 # 5120 tokens per chunk. GLM_TEST_CHUNK overrides it for small-chunk studies (smallchunk agent): the GLM sparse path
 # needs whole 32-row tiles per (SP chip, TP rank), i.e. chunk % (8 * 4 * 32) == 0 -> 1024, 2048, 3072, ... on 8x4.
 CHUNK = int(os.environ.get("GLM_TEST_CHUNK", PREFILL_CHUNK_TOKENS))
+# Fixed KV layout slab (layout agent): GLM_KV_SLAB_TOKENS lays the KV cache out in slabs of this many tokens
+# (default: CHUNK, today's layout). Every host-side layout map below (token -> chip permutation, preload, KV PCC)
+# follows it, as the model does.
+SLAB = kv_slab_tokens(CHUNK)
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Default KV cache for the no-PCC perf sweeps; callers needing a longer one pass run_chunked_transformer_
 # updated(seq_cache=...). Kept separate from SEQ_CACHE so the PCC tests (which assert against 55*1024)
@@ -412,7 +416,7 @@ def _record_kv_cache_pcc(
     the un-rotation runs over sp*tp stripes."""
     logger.info("Device KV cache vs golden kv_post_transform:")
     cache_full, stripes = gather_cache_natural(tt_kvpe_cache, mesh_device, tp_shard_kv)  # [layers, S, kvpe]
-    p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
+    p = blockcyclic_positions(stripes, SLAB, seq_len_cache)
     cache_min_pcc = {}
     slots = list(range(num_layers)) if slot_layer_ids is None else list(range(len(slot_layer_ids)))
     for slot in slots:
@@ -480,7 +484,7 @@ def _record_indexer_k_cache_pcc(
     if not layers:
         logger.info("  (no indexer_k golden layers present -- skipping)")
         return
-    p = blockcyclic_positions(stripes, CHUNK, seq_len_cache)
+    p = blockcyclic_positions(stripes, SLAB, seq_len_cache)
     rope = config.index_head_dim // 2  # [rope | nope]
     index_hadamard = normalized_hadamard_matrix(config.index_head_dim).float()
     idx_min_pcc = {}
@@ -595,7 +599,7 @@ def _preload_kvpe_prefix_from_trace(
             real = _load_layer_rows(trace_dir, layout, "kv_cache", i, f"kv_post_transform_layer_{i}", 0, real_len)
             real[:, kv_lora:] = interleave_pe(real[:, kv_lora:])
             kv_prior[:real_len] = real.to(torch.bfloat16)
-        bc = blockcyclic_cache_host(kv_prior, stripes, CHUNK, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
+        bc = blockcyclic_cache_host(kv_prior, stripes, SLAB, seq_len_cache, kvpe_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
             # linear chip order L=s*tp+t -> [tp, seq/tp]: reshape [sp,tp,local], move tp to front, flatten sp.
             cache_host[i] = _to_tp_stripe_major(bc, sp, tp, local, kvpe_dim, seq_len_cache)
@@ -678,7 +682,7 @@ def _preload_indexer_k_prefix_from_trace(
             idx_prior[:real_len] = real.to(torch.bfloat16)
         idx_prior = (idx_prior.float() @ index_hadamard).to(torch.bfloat16)
         slot = full_indexer_rank(config, i)
-        bc = blockcyclic_cache_host(idx_prior, stripes, CHUNK, seq_len_cache, index_head_dim)[0, 0]  # [seq, D]
+        bc = blockcyclic_cache_host(idx_prior, stripes, SLAB, seq_len_cache, index_head_dim)[0, 0]  # [seq, D]
         if tp_shard_kv:
             cache_host[slot] = _to_tp_stripe_major(bc, sp, tp, local, index_head_dim, seq_len_cache)
         else:
@@ -802,7 +806,7 @@ def run_chunked_transformer_padded(
         valid_end = kv_actual + isl
         ka += isl
 
-        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local, SLAB // sp)
         flat = [positions[ch][r] for ch in range(sp) for r in range(chunk_local)]  # global pos, len CHUNK
         gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
         chunk_tok = token_ids_full[gather_idx].clone()  # REORDER (block-cyclic gather)
@@ -1074,7 +1078,7 @@ def run_chunked_transformer(
     profiler.start("tt_forward")
     for c in range(n_chunks):
         kv_actual = preload_isl + c * CHUNK  # chunk-aligned -> rotation degenerates
-        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local, SLAB // sp)
         flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
         local_pos = flat - kv_actual  # permutation of [0, CHUNK)
 
@@ -2136,7 +2140,7 @@ def run_chunked_transformer_updated(
     chunk_local_pos = []
     for c in range(n_chunks):
         kv_actual = preload_isl + c * CHUNK
-        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local, SLAB // sp)
         flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
         chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
         chunk_local_pos.append(flat - kv_actual)  # permutation of [0, CHUNK)
@@ -3253,7 +3257,7 @@ def run_chunked_transformer_padded_trace(
     # Per-split padded token tile (block-cyclic gather; positions >= valid_end -> pad token 0) + scalars.
     def _padded_chunk_tok(kv_actual, isl):
         valid_end = kv_actual + isl
-        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local, SLAB // sp)
         flat = [positions[ch][r] for ch in range(sp) for r in range(chunk_local)]
         gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
         tok = token_ids_full[gather_idx].clone()
@@ -3415,7 +3419,7 @@ def run_chunked_transformer_padded_trace(
             isl = e - ks
             # Same rotated layout _padded_chunk_tok gathered with: recomputed here (cheap, host-side)
             # so the valid rows can be un-rotated back to natural order for the golden comparison.
-            positions = rotated_chip_positions(ks, sp, chunk_local)
+            positions = rotated_chip_positions(ks, sp, chunk_local, SLAB // sp)
             flat = [positions[ch][r] for ch in range(sp) for r in range(chunk_local)]
             valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < e]
             src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)

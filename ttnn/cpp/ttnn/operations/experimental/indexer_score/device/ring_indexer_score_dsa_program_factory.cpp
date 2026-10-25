@@ -76,7 +76,9 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
     if (args.key_stripe_split > 1) {
         return std::nullopt;
     }
-    const uint32_t chunk_local = args.block_cyclic->chunk_local;
+    // Whole QUERY chunks: under a fixed KV layout slab (query_chunk_local) the key stripe is finer than the chunk,
+    // but every rank still holds exactly chunk/sp rows per chunk, and the AG metadata path rounds the same way.
+    const uint32_t chunk_local = args.query_chunk_rows();
     const uint32_t chunk_global = args.block_cyclic->sp * chunk_local;
     const uint32_t valid_slabs = (*args.kv_len + chunk_global - 1) / chunk_global;
     const uint32_t valid_local_rows = valid_slabs * chunk_local;
@@ -474,6 +476,12 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_kernel.core_ranges = core_ranges;
     reader_kernel.compile_time_args = reader_ct;
     reader_kernel.config = ReaderConfigDescriptor{};
+    if (args.query_chunk_local.has_value()) {
+        // Fixed KV layout slab: the derived kv_len and the gathered-extent midpoint follow the QUERY chunk, not the
+        // (finer) key stripe the block-cyclic compile-time args carry.
+        reader_kernel.defines.emplace_back(
+            "INDEXER_QUERY_CHUNK_LOCAL_TILES", std::to_string(*args.query_chunk_local / tt::constants::TILE_HEIGHT));
+    }
 
     KernelDescriptor writer_kernel{};
     writer_kernel.kernel_source = kdir + "writer_indexer_score.cpp";
@@ -683,7 +691,7 @@ ProgramDescriptor build_ring_program_descriptor(
         /*kv_actual_isl=*/
         args.key_stripe_split > 1 ? std::optional<ttnn::Tensor>{} : tensors.chunk_start_idx_tensor,
         /*chunk_local_tiles=*/
-        has_meta ? args.block_cyclic->chunk_local / tt::constants::TILE_HEIGHT : 0,
+        has_meta ? args.query_chunk_rows() / tt::constants::TILE_HEIGHT : 0,
         /*kv_cache_num_layers=*/args.index_cache_num_layers,
         /*kv_cache_layer_idx=*/args.index_cache_layer_idx,
         // This consumer uses midpoint/completion readiness rather than diametric split forwarding.

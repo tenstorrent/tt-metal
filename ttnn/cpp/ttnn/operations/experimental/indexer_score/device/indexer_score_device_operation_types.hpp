@@ -132,6 +132,13 @@ struct operation_attributes_t {
     // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
     // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
     uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // Fixed KV layout slab (ring_indexer_score_dsa block_cyclic_key_stripe): block_cyclic->chunk_local is then the
+    // KEY stripe (S / mesh_size rows) and this is the per-device QUERY chunk (compressed rows, = Sq), which keeps the
+    // chunk extent (derived kv_len, gather extents). nullopt: the query chunk is block_cyclic->chunk_local. HASHED.
+    std::optional<uint32_t> query_chunk_local{std::nullopt};
+    uint32_t query_chunk_rows() const {
+        return query_chunk_local.value_or(block_cyclic.has_value() ? block_cyclic->chunk_local : 0);
+    }
     // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
     uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
     uint32_t key_stripe_chunk() const {

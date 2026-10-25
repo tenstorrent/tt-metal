@@ -108,7 +108,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 std::optional<uint32_t>,
                 std::optional<uint32_t>,
                 const std::optional<Tensor>&,
-                const std::optional<Tensor>&>(&update_padded_kv_cache),
+                const std::optional<Tensor>&,
+                std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
             nb::arg("slot_idx"),
@@ -119,7 +120,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("valid_global") = nb::none(),
             nb::arg("tp_axis") = nb::none(),
             nb::arg("rope").noconvert() = nb::none(),
-            nb::arg("scales").noconvert() = nb::none()),
+            nb::arg("scales").noconvert() = nb::none(),
+            nb::arg("kv_slab_global") = nb::none()),
         // Per-element-tensor form (traceable).
         ttnn::overload_t(
             nb::overload_cast<
@@ -135,6 +137,7 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
                 const std::optional<Tensor>&,
                 const std::optional<Tensor>&,
                 uint32_t,
+                std::optional<uint32_t>,
                 std::optional<uint32_t>>(&update_padded_kv_cache),
             nb::arg("cache").noconvert(),
             nb::arg("input").noconvert(),
@@ -148,7 +151,8 @@ void bind_update_padded_kv_cache(nb::module_& mod) {
             nb::arg("rope").noconvert() = nb::none(),
             nb::arg("scales").noconvert() = nb::none(),
             nb::arg("input_row_offset") = 0,
-            nb::arg("input_rows") = nb::none()));
+            nb::arg("input_rows") = nb::none(),
+            nb::arg("kv_slab_global") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::detail

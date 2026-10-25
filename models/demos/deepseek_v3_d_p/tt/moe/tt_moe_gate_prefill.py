@@ -1016,8 +1016,17 @@ class TtMoEGatePrefill(LightweightModule):
         pad_side = 0 if padding_side == "right" else 1
 
         padding_config = []
+        # Fixed KV layout slab (GLM_KV_SLAB_TOKENS): tokens sit on chips by slab, so the per-chip real counts follow
+        # the slab's rotated positions even for a chunk starting at 0.
+        from models.demos.deepseek_v3_d_p.utils.chunk_config import kv_slab_tokens
 
-        if actual_start:
+        slab_local = kv_slab_tokens(total_tokens) // sp_factor
+        if slab_local != seq_len_per_chip and not self.is_balanced and padding_side == "right":
+            for local_real_tokens in rotated_chip_real_token_counts(
+                actual_start or 0, actual_isl, sp_factor, seq_len_per_chip, slab_local
+            ):
+                padding_config.append([local_real_tokens, pad_side])
+        elif actual_start:
             # Rotated chunked prefill. Both branches below assume the sequential layout, so neither
             # is valid here; fail loudly rather than silently drop tokens. Rotation implies
             # is_balanced=False (ttMLA._chunked_attn asserts it) and produces right-padding WITHIN

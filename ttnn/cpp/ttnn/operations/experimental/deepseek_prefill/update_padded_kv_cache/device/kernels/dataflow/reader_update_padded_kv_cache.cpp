@@ -129,6 +129,23 @@ static void run_reader() {
     const uint32_t base =
         ((linear_coord % tp_factor) * chunk_local_t + start_in_stripe + input_Ht - start_in_window) % input_Ht;
     const uint32_t jump = chunk_local_t * (tp_factor - 1);  // skip the other TP stripes; 0 at tp_factor == 1
+#ifdef KV_SLAB_BLOCK_T
+    // Fixed KV layout slab: linear chip L = (c, t) writes rows u1 + j holding (block b per chip per slab)
+    // ((u1+j)/b)*S + L*b + (u1+j)%b; its SP group's window row of that position is ((u1+j)/b)*s + t*b + (u1+j)%b
+    // minus the group's own start uc (s = b*tp). Reduces to base + j (+ jump) when b == chunk_local_t.
+    constexpr uint32_t slab_b = KV_SLAB_BLOCK_T;
+    const uint32_t slab_s = slab_b * tp_factor;
+    const auto slab_offset = [](uint32_t prefix, uint32_t coord, uint32_t factor, uint32_t block) {
+        const uint32_t slab = prefix / (factor * block);
+        const uint32_t boundary = (prefix / block) % factor;
+        return slab * block + (coord < boundary ? block : (coord == boundary ? prefix % block : 0));
+    };
+    const uint32_t slab_u1 = slab_offset(start_t, linear_coord, linear_factor, slab_b);
+    const uint32_t slab_uc = slab_offset(start_t, linear_coord / tp_factor, sp_factor, slab_s);
+    const uint32_t slab_t_off = (linear_coord % tp_factor) * slab_b;
+    (void)base;  // the chunk-keyed map below is replaced (-Werror: unused)
+    (void)jump;
+#endif
 
     constexpr uint32_t onetile = 1;
     const auto s = TensorAccessor(src_args, src_addr);
@@ -139,7 +156,10 @@ static void run_reader() {
     const uint32_t num_blocks = HasRope ? num_pages : num_pages / Wt;
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const uint32_t j = core_blocks_written + block;
-#ifdef INPUT_ROW_STRIDE_T
+#if defined(KV_SLAB_BLOCK_T)
+        const uint32_t slab_lr = slab_u1 + j;
+        const uint32_t source_row = (slab_lr / slab_b) * slab_s + slab_t_off + slab_lr % slab_b - slab_uc;
+#elif defined(INPUT_ROW_STRIDE_T)
         const uint32_t window_row = base + j + (j + start_in_stripe >= chunk_local_t ? jump : 0);
         const uint32_t source_row =
             (window_row / input_Ht) * INPUT_ROW_STRIDE_T + input_row_offset_t + window_row % input_Ht;

@@ -64,12 +64,14 @@ ttnn::Tensor sparse_sdpa(
         const uint32_t sp = mesh_shape[sp_axis];
         const uint32_t tp = static_cast<uint32_t>(mesh_shape.mesh_size()) / sp;  // remaining (TP) device count
         const uint32_t chunk_local = block_cyclic_chunk_local.value();
-        // chunk_local is one of exactly two values: q's per-chip seq length (no head->seq reshard) or tp*q_isl
-        // (reshard slices q's seq across TP, leaving the cache's chunk_local unchanged). Anything else is a bug.
+        // chunk_local is q's per-chip seq length (no head->seq reshard) or tp*q_isl (reshard slices q's seq across
+        // TP, leaving the cache's chunk_local unchanged) -- or, under a fixed KV layout slab (GLM_KV_SLAB_TOKENS),
+        // the per-SP-chip slab, a divisor of tp*q_isl: the cache is laid out in slabs finer than the compute chunk.
+        // Indices are natural positions, so only the invP key remap sees it. Anything else is a bug.
         const uint32_t q_isl = q.logical_shape()[2];
         TT_FATAL(
-            chunk_local == q_isl || chunk_local == q_isl * tp,
-            "sparse_sdpa: block_cyclic_chunk_local ({}) must be q_isl ({}) or tp*q_isl ({})",
+            chunk_local == q_isl || chunk_local == q_isl * tp || (chunk_local > 0 && (q_isl * tp) % chunk_local == 0),
+            "sparse_sdpa: block_cyclic_chunk_local ({}) must be q_isl ({}), tp*q_isl ({}) or a slab dividing tp*q_isl",
             chunk_local,
             q_isl,
             q_isl * tp);

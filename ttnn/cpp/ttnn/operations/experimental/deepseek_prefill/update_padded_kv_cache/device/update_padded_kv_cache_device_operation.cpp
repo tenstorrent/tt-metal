@@ -492,6 +492,23 @@ void UpdatePaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
         written_seq,
         input_seq,
         tp_factor);
+    if (args.kv_slab_global.has_value()) {
+        const uint32_t sp_extent = ttnn::ccl::get_topological_dimension(cache, args.cluster_axis);
+        const uint32_t slab = *args.kv_slab_global;
+        const uint32_t chunk_global = sp_extent * input_seq;
+        TT_FATAL(
+            slab > 0 && chunk_global % slab == 0 && slab % (sp_extent * tp_factor * TILE_HEIGHT) == 0,
+            "kv_slab_global ({}) must divide the chunk ({} = sp {} x input_seq {}) and give every chip whole 32-row "
+            "blocks (multiple of sp*tp*32 = {})",
+            slab,
+            chunk_global,
+            sp_extent,
+            input_seq,
+            sp_extent * tp_factor * TILE_HEIGHT);
+        TT_FATAL(
+            !has_input_window(args, input_shape[-2]),
+            "kv_slab_global does not support an input row window");
+    }
 
     TT_FATAL(args.num_layers > 0, "num_layers must be positive");
     TT_FATAL(
@@ -576,7 +593,8 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         tensor_args.slot_idx.has_value() ? tensor_args.slot_idx->memory_config() : MemoryConfig{},
         // A window's row count shapes the work split; its offset is a runtime arg patched on cache hits.
         has_input_window(args, input.padded_shape()[-2]),
-        written_input_rows(args, input.padded_shape()[-2]));
+        written_input_rows(args, input.padded_shape()[-2]),
+        args.kv_slab_global.value_or(0u));
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
@@ -680,6 +698,11 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const uint32_t linear_factor = sp_factor * tp_factor;           // effective block-cyclic chip count
     const uint32_t linear_coord = sp_coord * tp_factor + tp_coord;  // this chip's position in that order
     const uint32_t chunk_local_t = window_Ht / tp_factor;           // tile-rows THIS chip actually writes
+    // Fixed KV layout slab: block-cyclic block per linear chip, in page-rows (0 = the written chunk, today).
+    const uint32_t slab_block_t =
+        (args.kv_slab_global.has_value() && *args.kv_slab_global != sp_factor * window_Ht * writer_tile_height)
+            ? *args.kv_slab_global / (sp_factor * tp_factor * writer_tile_height)
+            : 0u;
 
     // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == window_Ht at tp=1).
     const uint32_t num_blocks_of_work = input_shape[1] * chunk_local_t;
@@ -779,6 +802,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     reader_kernel.core_ranges = all_cores;
     reader_kernel.compile_time_args = std::move(reader_compile_args);
     reader_kernel.config = ReaderConfigDescriptor{};
+    if (slab_block_t != 0) {
+        reader_kernel.defines.emplace_back("KV_SLAB_BLOCK_T", std::to_string(slab_block_t));
+    }
 
     // Writer kernel descriptor. Compile args (uniform leading layout so the kernel offsets are fixed):
     // [0]=kSrcCbIndex, [1]=has_metadata, [2]=kMetaCbIndex (placeholder 0 on scalar path),
@@ -811,6 +837,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.core_ranges = all_cores;
     writer_kernel.compile_time_args = std::move(writer_compile_args);
     writer_kernel.config = WriterConfigDescriptor{};
+    if (slab_block_t != 0) {
+        writer_kernel.defines.emplace_back("KV_SLAB_BLOCK_T", std::to_string(slab_block_t));
+    }
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
     // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are
@@ -1011,7 +1040,8 @@ ttnn::Tensor update_padded_kv_cache(
     const std::optional<ttnn::Tensor>& rope,
     const std::optional<ttnn::Tensor>& scales,
     uint32_t input_row_offset,
-    std::optional<uint32_t> input_rows) {
+    std::optional<uint32_t> input_rows,
+    std::optional<uint32_t> kv_slab_global) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache::UpdatePaddedKvCacheDeviceOperation;
     auto attrs = OperationType::operation_attributes_t{
@@ -1024,6 +1054,7 @@ ttnn::Tensor update_padded_kv_cache(
         .tp_axis = tp_axis,
         .input_row_offset = input_row_offset,
         .input_rows = input_rows,
+        .kv_slab_global = kv_slab_global,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .cache = cache,

@@ -64,7 +64,9 @@ inline CausalGeometryTiles causal_geometry_tiles(
         const uint32_t loff = lr0 % chunk_local;           // its offset within the current slab
         const uint32_t logical_start = (lr0 / chunk_local) * chunk_global + device_index * chunk_local + loff;
         uint32_t straddle_q_tile = 0, straddle_jump_tiles = 0;
-        if (loff != 0 && loff + Sq > chunk_local) {  // this device's Sq rows cross a slab boundary
+        // this device's Sq rows cross a slab boundary. `loff != 0` was implied while Sq <= chunk_local was enforced;
+        // under a fixed KV layout slab Sq may exceed the SP-level block, so a run starting at loff == 0 straddles too.
+        if (loff + Sq > chunk_local) {
             straddle_q_tile = (chunk_local - loff) / TW;
             straddle_jump_tiles = (chunk_global - chunk_local) / TW;
         }

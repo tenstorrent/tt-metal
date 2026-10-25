@@ -769,9 +769,15 @@ void kernel_main() {
                         // TP-inner reconstructed cache (bc_sp > ring_size) gathers the full physical
                         // shard, so its midpoint must stay at half that shard as well.
                         if (bc_sp == gate->ring_size) {
-                            const uint32_t global_slab_tiles = bc_chunk_local * bc_sp;
+#ifdef INDEXER_QUERY_CHUNK_LOCAL_TILES
+                            // Fixed KV layout slab: gather extents count whole QUERY chunks (see the factory).
+                            constexpr uint32_t extent_chunk_tiles = INDEXER_QUERY_CHUNK_LOCAL_TILES;
+#else
+                            constexpr uint32_t extent_chunk_tiles = bc_chunk_local;
+#endif
+                            const uint32_t global_slab_tiles = extent_chunk_tiles * bc_sp;
                             const uint32_t valid_slabs = (kv_len_tiles + global_slab_tiles - 1) / global_slab_tiles;
-                            gathered_shard_tiles = std::min(valid_slabs * bc_chunk_local, gate->tiles_per_shard);
+                            gathered_shard_tiles = std::min(valid_slabs * extent_chunk_tiles, gate->tiles_per_shard);
                         }
                     }
                     // KEEP IN SYNC with the AG writer's row-aligned midpoint_prefix_pages() and the host's
@@ -837,7 +843,12 @@ void kernel_main() {
         // the AG reader's bounded_kv_actual_isl (start < T, then clamp), so a legitimate padded window
         // tripped this ASSERT under the watcher while the scalar path accepted it -- and it made the
         // kv_len_tiles clamp below dead code. Both readers of this word now fall back identically.
+#ifdef INDEXER_QUERY_CHUNK_LOCAL_TILES
+        // Fixed KV layout slab: the chunk spans sp x the QUERY chunk; bc_chunk_local is the finer key stripe.
+        constexpr uint32_t chunk_global_tiles = bc_sp * INDEXER_QUERY_CHUNK_LOCAL_TILES;
+#else
         constexpr uint32_t chunk_global_tiles = bc_sp * bc_chunk_local;
+#endif
         ASSERT(
             chunk_start_idx % iscore::kCausalTileWidth == 0 &&
             chunk_start_idx / iscore::kCausalTileWidth < k_len_tiles * key_compression_ratio);
