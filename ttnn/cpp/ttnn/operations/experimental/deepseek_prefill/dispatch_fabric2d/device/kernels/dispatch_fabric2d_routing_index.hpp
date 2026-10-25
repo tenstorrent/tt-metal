@@ -206,10 +206,15 @@ inline uint32_t bucket_of(const uint32_t* es, uint32_t expert) {
 
 // Pass 1: count my slice's picks per bucket, including those capacity will drop, since they still advance
 // the page counter.
+// Per-bucket counters live in this RISC's local memory during the passes (num_buckets() words), not in
+// volatile L1, and are published to L1 once at the end: every pick otherwise pays a volatile L1 load+store.
+constexpr uint32_t kLocalBuckets = ct.extent * ct.experts_per_chip;
+
 inline void count_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1) {
     const uint32_t n = num_buckets();
+    static uint32_t cnt[kLocalBuckets];  // RISC-local memory (static: the linker, not the stack, bounds it)
     for (uint32_t b = 0; b < n; b++) {
-        me.cnt[b] = 0u;
+        cnt[b] = 0u;
     }
     const uint32_t* es = frozen(c.expert_bucket);
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
@@ -223,8 +228,11 @@ inline void count_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t
             if (bucket >= n) {
                 continue;  // BUCKET_NOT_HERE, or a corrupt table entry; never index past this RISC's counters
             }
-            me.cnt[bucket] = me.cnt[bucket] + 1u;
+            cnt[bucket] = cnt[bucket] + 1u;
         }
+    }
+    for (uint32_t b = 0; b < n; b++) {
+        me.cnt[b] = cnt[b];
     }
 }
 
@@ -248,6 +256,13 @@ inline void fill_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1
     const uint32_t cap = ct.max_dispatch_buffer_token_size;
     const uint32_t n = num_buckets();
     const uint32_t* es = frozen(c.expert_bucket);
+    static uint32_t next_page[kLocalBuckets], next_record[kLocalBuckets];
+    for (uint32_t b = 0; b < n; b++) {
+        next_page[b] = me.next_page[b];
+        next_record[b] = me.next_record[b];
+    }
+    const uint32_t* const record_end = frozen(c.bucket_start) + 1;  // written before the tables-ready signal
+    volatile tt_l1_ptr uint32_t* const records = c.records;
     uint32_t idx_addr = reinterpret_cast<uint32_t>(c.indices) + t0 * ct.indices_pad_stride;
     for (uint32_t t = t0; t < t1; t++, idx_addr += ct.indices_pad_stride) {
         const uint16_t* idx = reinterpret_cast<const uint16_t*>(idx_addr);
@@ -258,23 +273,27 @@ inline void fill_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1
             if (bucket >= n) {
                 continue;  // as in count_pass
             }
-            const uint32_t page = me.next_page[bucket];
-            me.next_page[bucket] = page + 1u;
+            const uint32_t page = next_page[bucket];
+            next_page[bucket] = page + 1u;
             if (page >= cap) {
                 continue;  // dropped for want of capacity, with the counter already advanced
             }
-            const uint32_t at = me.next_record[bucket];
+            const uint32_t at = next_record[bucket];
             // Keeps an offsets table that disagrees with the indices from writing into the next bucket.
             // The ASSERT in merge_routing_index reports it, but only when the watcher is enabled.
-            if (at >= c.bucket_start[bucket + 1u]) {
+            if (at >= record_end[bucket]) {
                 continue;
             }
-            me.next_record[bucket] = at + 1u;
-            volatile tt_l1_ptr uint32_t* rec = c.records + at * dspf2d::record_words();
+            next_record[bucket] = at + 1u;
+            volatile tt_l1_ptr uint32_t* rec = records + at * dspf2d::record_words();
             rec[0] = t;
             rec[1] = page;
             rec[2] = k;
         }
+    }
+    for (uint32_t b = 0; b < n; b++) {
+        me.next_page[b] = next_page[b];
+        me.next_record[b] = next_record[b];
     }
 }
 
