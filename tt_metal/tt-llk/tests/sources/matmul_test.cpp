@@ -296,7 +296,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
                 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
                 #ifdef MATMUL_UNFUSED_POST
-                constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3);
+                constexpr bool fused_post_flip = false;
                 #else
                 constexpr bool fused_post_flip = !matmul_prod_keys && (static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b);
                 #endif
