@@ -33,6 +33,7 @@ from models.common.moe.tt_moe_gate import TTMoEGate
 # matmul (measured: tests/probe_matmul_gain.py) -> routed expert outputs come out ~1.14x too large (tests/
 # test_moe_compute_isolated.py). Until the kernel accumulates in fp32, the routing weights are divided by this gain.
 ROUTED_GAIN = float(os.environ.get("DSV41_ROUTED_GAIN", "1.0"))
+ROUTER_S = int(os.environ.get("DSV41_ROUTER_S", "4"))  # K slices per column tile of the fused2 router (160 % S == 0)
 
 
 class DSV41Gate(TTMoEGate):
@@ -142,6 +143,8 @@ class DSV41Gate(TTMoEGate):
         DSV41_ROUTER=kernel: the bf16 ``generalized_moe_gate`` op with the shifted-bias trick (faster, ~95% exact sets).
         """
         mode = os.environ.get("DSV41_ROUTER", "fused")
+        if mode == "fused2":
+            return self._forward_fused2(tt_x)
         if mode in ("exact2", "exact"):  # exact2 (default): same expert ids as exact_fast, ~40 us/call faster
             return self._forward_exact_fast2(tt_x)
         if mode == "fused":
@@ -293,6 +296,39 @@ class DSV41Gate(TTMoEGate):
             rank = ttnn.add(score, bias_rows, memory_config=L1)
             ttnn.deallocate(bias_rows)
         weights, indices = router_select(rank, score, k, 1e-20, self.scaling_factor / ROUTED_GAIN)
+        ttnn.deallocate(rank)
+        ttnn.deallocate(score)
+        return weights, indices
+
+    def _mm_consts(self, S):
+        """Weight pre-arranged per (column tile, K slice) core and the row-replicated bias tile of ``router_mm`` (built lazily)."""
+        c = self.__dict__.setdefault("_mm_cache", {})
+        if S not in c:
+            from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import bias_tile, relayout_weight
+
+            md = self._tt_b_lo.device()
+            w = ttnn.to_torch(ttnn.get_device_tensors(self._w_exact)[0]).reshape(-1, self._E)
+            b = ttnn.to_torch(ttnn.get_device_tensors(self._bias_exact)[0]).reshape(-1)[: self._E]
+            rep = ttnn.ReplicateTensorToMesh(md)
+            mk = lambda t, dt: ttnn.from_torch(
+                t, device=md, dtype=dt, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rep
+            )
+            c[S] = (mk(relayout_weight(w, S), ttnn.bfloat16), mk(bias_tile(b.float()), ttnn.float32))
+        return c[S]
+
+    def _forward_fused2(self, tt_x: ttnn.Tensor, S=None):
+        """DSV41_ROUTER=fused2: ``router_mm`` (split-K matmul + score + bias, one program) then ``router_select``; image rows
+        (``vl``) and T > 32 use ``_forward_fused``."""
+        from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import router_mm
+        from models.demos.blackhole.deepseek_v41_flash.tt.router_select import router_select
+
+        T = tt_x.shape[2]
+        if T > 32:
+            return self._forward_fused(tt_x)
+        S = S or ROUTER_S
+        wk, bt = self._mm_consts(S)
+        rank, score = router_mm(tt_x, wk, bt, S)
+        weights, indices = router_select(rank, score, self.k, 1e-20, self.scaling_factor / ROUTED_GAIN)
         ttnn.deallocate(rank)
         ttnn.deallocate(score)
         return weights, indices
