@@ -268,14 +268,14 @@ def test_fp8wire_bench(mesh_device, device_params):
             dq_t = dq1(fp8_buf, True)
             dq_r = dq1(fp8_buf, False)
             ttnn.synchronize_device(mesh_device)
-            # Every chip of mesh column 0 and column 2 (16 of 32; the host conversion of all 32 is slow).
             dev = {
                 name: ttnn.get_device_tensors(t)
                 for name, t in (("ref", ref_buf), ("t", dq_t), ("r", dq_r), ("mr", ref_meta), ("mf", fp8_meta))
             }
             rows_ref, rows_t, rows_r, meta_ok = [], [], [], True
-            for h in range(H):
-                for gi in (0, 2):
+            # 4 chips (column 0, rows 0, 3, 5, 7 -- the host conversion of a whole buffer is slow).
+            for h in (0, 3, 5, 7):
+                for gi in (0,):
                     d = h * G + gi
                     ref_d = ttnn.to_torch(dev["ref"][d]).float().reshape(-1, EMB)
                     t_d = ttnn.to_torch(dev["t"][d]).float().reshape(-1, EMB)
