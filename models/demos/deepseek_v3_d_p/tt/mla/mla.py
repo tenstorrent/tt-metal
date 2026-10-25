@@ -42,6 +42,9 @@ _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
 # mm track: GLM o_proj on the full 12x10 grid (see ttMLA._oproj_grid12). Off by default: mla_config.py keeps MLA on
 # 11x10 for di/dt / throttling, so this must be judged at L78 (interleaved ABAB), not at R0 / L10.
 _MLA_OPROJ_GRID12 = os.environ.get("MLA_OPROJ_GRID12", "0") == "1"
+# mm track: o_proj weight laid out DRAM WIDTH_SHARDED ([K, N/banks] per bank, device tile copy, bit-identical tiles) so
+# the 2D mcast in1 senders read it bank by bank (R0 12x10: 118.1 -> 115.1 us, 11x10: 128.0 -> 126.8 us).
+_MLA_OPROJ_WS = os.environ.get("MLA_OPROJ_WS", "0") == "1"
 # glue track: seqq q_a norm on its 160 rows width-sharded over this many cores (0 = interleaved rms_norm, 5 cores).
 _GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "32"))
 # glue track: workers per link for the seqq q_a reduce-scatter over rows; 0 = op default.
@@ -867,6 +870,11 @@ class ttMLA:
                     fused_activation=pc.fused_activation,
                     mcast_in0=True,
                 )
+        if _MLA_OPROJ_WS and self._is_blackhole and not kv_only:
+            o_cfg = self._resolve_mm_cfg("o_proj", self.active_seq_len_local)
+            o_pc = o_cfg["program_config"] if o_cfg is not None else None
+            if isinstance(o_pc, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
+                self.o_proj_weight = self._dram_width_shard(self.o_proj_weight)
         # glue track: in-place RoPE for the sequence-sharded Q stem too (see _q_stem_seq). The head-path padded
         # weight built above is unused once Q is sequence-sharded; rebuild it from the TP-replicated wkv_b1.
         self._q_rope_inplace_seq = False
