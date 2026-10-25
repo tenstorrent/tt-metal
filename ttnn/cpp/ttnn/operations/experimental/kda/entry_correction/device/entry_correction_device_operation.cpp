@@ -149,7 +149,11 @@ void EntryCorrectionOperation::validate_on_program_cache_miss(
             "{}: tail_landing_cores and the tail landing's semaphore need tail_landing",
             operation_name);
     }
-    kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
+    // The chunk outputs go through a TensorAccessor: interleaved, or ND-sharded for a consumer that reads its shard
+    // locally (such as the gated norm, one [1, 1, 32, V] chunk row per shard).
+    if (!attrs.output_mem_config.nd_shard_spec().has_value()) {
+        kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
+    }
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
     // Compute packs a K-tile row of each chunk output and of the final state out of DST.
     const uint32_t key_tiles = key_dim / tt::constants::TILE_WIDTH;

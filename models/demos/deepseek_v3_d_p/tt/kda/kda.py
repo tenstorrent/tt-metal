@@ -17,6 +17,7 @@ from ttnn.operations.matmul_reduce_scatter.matmul_reduce_scatter_program_descrip
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_ACCURATE_SIGMOID,
     KDA_CHUNK_SIZE,
     KDA_DECAY_L1_BYTES_PER_CORE,
     KDA_HISTORY_EXCHANGE_ROWS,
@@ -30,11 +31,12 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     block_projection_program_config,
     decay_projection_program_config,
     dram_width_sharded,
+    item_sharded_l1,
     l1_when_it_fits,
     matmul_grid,
     tuned_projection_matmul_configs,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import CarryProjection, KDARecurrence
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import CarryProjection, KDARecurrence, KeptGateActivation
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayOutputGate
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -292,6 +294,9 @@ class ttKDA:
         self.overlap_output_gate = program_config.overlap_output_gate and self.recurrence.uses_affine_relay
         self.carry_with_output_projection = self.overlap_output_gate
         self.input_projection_gate_columns = 0
+        # The kept gate heads' sigmoid beside the chunk summary (activate_kept_output_gate); the norm reads it activated.
+        self.activate_kept_output_gate = self.overlap_output_gate and program_config.activate_kept_output_gate
+        self._activated_gate_memory_config = None
         self.output_gate_weight = None
         self._output_gate_program_config = None
         self._output_projection_block_config = None
@@ -301,9 +306,19 @@ class ttKDA:
             hidden, width = tuple(fused.shape)[-2:]
             gate_start = self._convolution_width + self.config.head_k_dim
             gate_end = gate_start + self.config.v_dim
-            self.input_projection_gate_columns = self._input_projection_gate_tiles(mm_grid, program_config, width) * (
-                ttnn.TILE_SIZE
-            )
+            kept_tiles = self._input_projection_gate_tiles(mm_grid, program_config, width)
+            if self.activate_kept_output_gate:
+                # Whole heads only: the norm takes a head's gate either activated or not.
+                head_tiles = self.config.head_v_dim // ttnn.TILE_SIZE
+                kept_tiles -= kept_tiles % head_tiles
+                # The activated gate and the correction's outputs are item-sharded the same way, so each norm core
+                # reads both from its own L1 (head-first [heads, rows, V], one [1, 32, V] row tile of a head per
+                # shard, as the norm deals its items).
+                self._activated_gate_memory_config = item_sharded_l1(
+                    mesh_device, [1, ttnn.TILE_SIZE, config.head_v_dim]
+                )
+                self.recurrence.shard_outputs_by_item(mesh_device)
+            self.input_projection_gate_columns = kept_tiles * ttnn.TILE_SIZE
             kept_end = gate_start + self.input_projection_gate_columns
             self.output_gate_weight = dram_width_sharded(
                 mesh_device, ttnn.slice(fused, [0, kept_end], [hidden, gate_end])
@@ -317,8 +332,11 @@ class ttKDA:
             for tensor in (joined, leading, trailing, fused):
                 ttnn.deallocate(tensor)
             relay_cores = self.recurrence.affine_relay_cores
-            # The kept heads' gate columns are copied into the gate's output by the relay columns' spare cores.
+            # The kept heads' gate columns are copied into the gate's output by the relay columns' spare cores, unless
+            # they are activated beside the summary.
             self._gate_copy_cores = [c for c in self._relay_column_cores if c not in relay_cores]
+            if self.activate_kept_output_gate:
+                self._gate_copy_cores = []
             # The relay's head cores multiply while the gate runs, so they share the gate's max_matmul_cores.
             gate_columns = min(
                 min(c.x for c in self._relay_column_cores),
@@ -573,8 +591,10 @@ class ttKDA:
         output: ttnn.Tensor,
         output_gate: ttnn.Tensor,
         output_gate_offset: int,
+        activated_gate: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
-        """Apply the KDA gated RMSNorm epilogue."""
+        """Apply the KDA gated RMSNorm epilogue; ``activated_gate`` holds the first heads' sigmoid(g), and
+        ``output_gate`` the other heads' gate from ``output_gate_offset``."""
         config, weights = self.config, self.weights
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
@@ -586,6 +606,7 @@ class ttKDA:
             compute_kernel_config=self.norm_compute_config,
             output_dtype=self.gated_rms_output_dtype,
             gate_column_offset=output_gate_offset,
+            activated_gate=activated_gate,
         )
 
     def _project_output(
@@ -673,20 +694,32 @@ class ttKDA:
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
         output_gate = None
+        gate_activation = None
         if self.overlap_output_gate:
             # Its L1 output is allocated when the relay dispatches, so it is not live during chunk preparation; the
-            # heads the input projection kept are copied in by the relay columns' spare cores.
+            # heads the input projection kept are copied in by the relay columns' spare cores, or activated beside the
+            # summary into a tensor of their own.
+            copied = 0 if self.activate_kept_output_gate else self.input_projection_gate_columns // ttnn.TILE_SIZE
             output_gate = RelayOutputGate(
                 input=hidden_states,
                 weight=self.output_gate_weight,
                 program_config=self._output_gate_program_config,
                 compute_config=self.input_projection_compute_config,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                copy_source=inputs.projected,
+                copy_source=inputs.projected if copied else None,
                 copy_source_column=inputs.output_gate_offset // ttnn.TILE_SIZE,
-                copied_columns=self.input_projection_gate_columns // ttnn.TILE_SIZE,
+                copied_columns=copied,
                 copy_cores=self._gate_copy_cores,
             )
+            if self.activate_kept_output_gate and self.input_projection_gate_columns > 0:
+                gate_activation = KeptGateActivation(
+                    input=inputs.projected,
+                    column=inputs.output_gate_offset // ttnn.TILE_SIZE,
+                    columns=self.input_projection_gate_columns // ttnn.TILE_SIZE,
+                    activation=KDA_ACCURATE_SIGMOID,
+                    memory_config=self._activated_gate_memory_config,
+                    head_tiles=self.config.head_v_dim // ttnn.TILE_SIZE,
+                )
 
         result = self.recurrence(
             q=q,
@@ -701,6 +734,7 @@ class ttKDA:
             release_gate=True,
             output_gate=output_gate,
             defer_final_carry=self.carry_with_output_projection,
+            gate_activation=gate_activation,
         )
         # Chunk preparation was q, k and v's last reader. Freeing them before the norm and the output projection
         # removes the lowest L1 buffers at the projection's call (Galaxy SP8xTP4: its CB budget 906 -> 1088 KiB), so
@@ -711,8 +745,10 @@ class ttKDA:
             # The norm reads the relay's output gate: the projection's last readers (chunk preparation's beta and the
             # relay's gate copy) ran inside the recurrence, so its L1 is freed first and the norm output can take it.
             ttnn.deallocate(inputs.projected)
-            output = self._kda_rms_norm(result.output, result.output_gate, 0)
+            output = self._kda_rms_norm(result.output, result.output_gate, 0, result.activated_gate)
             ttnn.deallocate(result.output_gate)
+            if result.activated_gate is not None:
+                ttnn.deallocate(result.activated_gate)
         else:
             output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
             # The norm read the output gate, the projection's last columns in use.

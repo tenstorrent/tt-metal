@@ -43,6 +43,8 @@ KDA_HISTORY_EXCHANGE_SEMAPHORES = 3
 # The gated norm's output stays in interleaved L1 until the output projection reads it when each core's share fits
 # this budget (32 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep it in DRAM.
 KDA_NORM_OUTPUT_L1_BYTES_PER_CORE = 48 * 1024
+# The FP32-accurate sigmoid (vector mode RC, not the fast approximation): the sigmoid the gated norm computes itself.
+KDA_ACCURATE_SIGMOID = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0)
 # The output projection's partial sums stay in interleaved L1 until the TP reduce-scatter reads them when each core's
 # share fits this budget (75 KiB for Kimi-K3 on Galaxy SP8xTP4); larger geometries keep them in DRAM.
 KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE = 96 * 1024
@@ -61,6 +63,23 @@ def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConf
     """Interleaved L1 when ``nbytes`` spread over the worker grid fits ``bytes_per_core`` per core, else DRAM."""
     grid = device.compute_with_storage_grid_size()
     return ttnn.L1_MEMORY_CONFIG if nbytes <= bytes_per_core * grid.x * grid.y else ttnn.DRAM_MEMORY_CONFIG
+
+
+def item_sharded_l1(device, item_shape: list[int]) -> ttnn.MemoryConfig:
+    """L1 ND-sharded one ``item_shape`` shard (such as a [1, 32, V] row tile of one head) per shard, dealt round-robin
+    over the worker grid in row-major order: two head-first tensors sharded so put the same item on the same core,
+    where the gated norm, dealing its items the same way, reads it from its own L1."""
+    grid = device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=item_shape,
+            grid=cores,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
 
 
 def dram_width_sharded(device, tensor: ttnn.Tensor) -> ttnn.Tensor:
@@ -156,6 +175,10 @@ class KDAProgramConfig:
     # Output-gate tile columns per core the tuned input projection takes past its own width: they shorten the gate
     # matmul beside the SP relay, whose window is on the critical path.
     input_projection_extra_gate_tiles: int = 2
+    # With overlap_output_gate: the input projection keeps whole output-gate heads only, and their FP32 sigmoid is
+    # computed beside the chunk summary on the worker cores it leaves idle; the gated norm reads it activated and
+    # computes only the other heads' sigmoids, spread evenly over its cores.
+    activate_kept_output_gate: bool = False
     # Fuse the output projection with its TP reduce-scatter (ttnn.operations.matmul_reduce_scatter): each output
     # block's partial travels the TP ring while the next block is multiplied, and partials never touch DRAM.
     fused_output_reduce_scatter: bool = False
@@ -317,6 +340,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         output_projection_k_block=8,
         output_gate_k_block=16,
         input_projection_extra_gate_tiles=5,
+        # The 59 kept gate tiles round down to 14 whole heads (56 tiles, still 32 per core on the input projection),
+        # activated beside the summary; the gate beside the relay takes 40 tiles, still 5 per core on 8 columns.
+        activate_kept_output_gate=True,
         # The output gate beside the relay (and the projections on the matmul program) wherever the relay runs one
         # group per head (at T=1024, 2048 and 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms).
         overlap_output_gate=num_chunks <= _MAX_GROUP_CHUNKS,

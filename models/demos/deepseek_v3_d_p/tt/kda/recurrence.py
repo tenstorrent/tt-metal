@@ -26,6 +26,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_PREP_OUTPUT_BF16_MASK,
     KDA_PREPARATION_L1_BYTES_PER_CORE,
     KDARecurrenceProgramConfig,
+    item_sharded_l1,
     l1_when_it_fits,
     preparation_bytes,
 )
@@ -104,6 +105,34 @@ class RecurrenceResult:
     final_state: ttnn.Tensor | PendingFinalCarry
     # The output of the relay's RelayOutputGate, when one ran.
     output_gate: ttnn.Tensor | None = None
+    # The KeptGateActivation's output, when one ran.
+    activated_gate: ttnn.Tensor | None = None
+
+
+@dataclass(frozen=True)
+class KeptGateActivation:
+    """``activation`` of ``columns`` tile columns of ``input`` (from tile column ``column``): gate columns that exist
+    before the recurrence, activated beside the chunk summary on the worker cores it leaves idle (right after it, on
+    the whole grid, when it leaves none) into a ``dtype`` tensor of their own, allocated just before the summary so it
+    is not live during chunk preparation. With ``head_tiles`` the tensor is head-first, [heads, rows, 32 *
+    head_tiles] (as the recurrence's outputs), else [..., rows, 32 * columns]."""
+
+    input: ttnn.Tensor
+    column: int
+    columns: int
+    activation: ttnn.UnaryWithParam
+    dtype: ttnn.DataType = ttnn.float32
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG
+    head_tiles: int = 0
+
+    def allocate(self) -> ttnn.Tensor:
+        shape = [*tuple(self.input.shape)[:-1], self.columns * ttnn.TILE_SIZE]
+        if self.head_tiles:
+            rows = tuple(self.input.shape)[-2]
+            shape = [self.columns // self.head_tiles, rows, self.head_tiles * ttnn.TILE_SIZE]
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape), self.dtype, ttnn.TILE_LAYOUT, self.input.device(), self.memory_config
+        )
 
 
 @dataclass(frozen=True)
@@ -482,11 +511,27 @@ def _scan_sp_grouped_chunks(
     output_gate: RelayOutputGate | None = None,
     defer_final_carry: bool = False,
     correction: EntryCorrection | None = None,
+    gate_activation: KeptGateActivation | None = None,
 ) -> RecurrenceResult:
     grouped = _reshape_chunks_for_groups(
         prepared, geometry, group_heads=geometry.batch_heads * groups, summary_group_chunks=summary_group_chunks
     )
     correct = correction is not None and groups == 1 and affine_relay is not None
+    activated_gate = None
+    column_activation = {}
+    if gate_activation is not None:
+        if groups != 1:
+            raise ValueError("a kept gate activation needs the one-group-per-head summary")
+        activated_gate = gate_activation.allocate()
+        column_activation = dict(
+            column_activation_input=gate_activation.input,
+            column_activation_input_column=gate_activation.column,
+            column_activation_output=activated_gate,
+            column_activation_output_column=0,
+            column_activation_columns=gate_activation.columns,
+            column_activation=[gate_activation.activation],
+            column_activation_output_head_tiles=gate_activation.head_tiles,
+        )
     if groups == 1:
         # One group per head: the summary writes the packed transform the prefix gathers (the identity for a rank
         # without a head), and the group enters at the rank's own entry state. With the entry correction it also
@@ -502,6 +547,7 @@ def _scan_sp_grouped_chunks(
             packed_head=True,
             emit_outputs=correct,
             emit_memory_config=correction.terms_memory_config if correct else None,
+            **column_activation,
         )
         if correct:
             # The summary is the chunk terms' last reader: free their L1 before the relay and its companion.
@@ -599,12 +645,13 @@ def _scan_sp_grouped_chunks(
                 ),
             ),
             output_gate,
+            activated_gate,
         )
     if final_carry is not None:
         # The relay leaves the prefix's final state on the last chronological rank (and the first, without the entry
         # correction): without a split tail the last rank multicasts it, with one the tail's owner multicasts its own.
         final_state, _ = final_carry(rank_final, prefix_final_state, actual_start, actual_end, geometry.local_rows)
-        return RecurrenceResult(output, final_state, output_gate)
+        return RecurrenceResult(output, final_state, output_gate, activated_gate)
     # The device chooses the completed tail when split, or the prefix's final state when unsplit, at runtime: only
     # the owner of a separated tail sends its last group's state over the fabric.
     final_state = ttnn.experimental.kda.select_final_carry(
@@ -616,7 +663,7 @@ def _scan_sp_grouped_chunks(
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         sequence_parallel_axis=sequence_parallel_axis,
     )
-    return RecurrenceResult(output, final_state)
+    return RecurrenceResult(output, final_state, output_gate, activated_gate)
 
 
 class _RelayFinalCarry:
@@ -877,7 +924,11 @@ class KDARecurrence:
 
     @staticmethod
     def _finish(scan: RecurrenceResult, geometry: _RecurrenceGeometry) -> RecurrenceResult:
-        output = ttnn.reshape(scan.output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
+        # An ND-sharded output (the entry correction's, item-sharded for the norm) stays [BH, NC, 32, V], which the
+        # gated norm takes too: reshaping it would stage it through DRAM.
+        output = scan.output
+        if not output.memory_config().is_sharded():
+            output = ttnn.reshape(output, (geometry.batch_heads, geometry.local_rows, geometry.value_dim))
         shape = (geometry.batch, geometry.heads, geometry.key_dim, geometry.value_dim)
         if isinstance(scan.final_state, PendingFinalCarry):
             pending = scan.final_state
@@ -887,8 +938,8 @@ class KDARecurrence:
                 return ttnn.reshape(final_state, shape), projected
 
             inputs = dict(pending.inputs or {}, final_shape=shape)
-            return RecurrenceResult(output, PendingFinalCarry(run, inputs), scan.output_gate)
-        return RecurrenceResult(output, ttnn.reshape(scan.final_state, shape), scan.output_gate)
+            return RecurrenceResult(output, PendingFinalCarry(run, inputs), scan.output_gate, scan.activated_gate)
+        return RecurrenceResult(output, ttnn.reshape(scan.final_state, shape), scan.output_gate, scan.activated_gate)
 
     def __call__(
         self,
@@ -905,6 +956,7 @@ class KDARecurrence:
         release_gate: bool = False,
         output_gate: RelayOutputGate | None = None,
         defer_final_carry: bool = False,
+        gate_activation: KeptGateActivation | None = None,
     ) -> RecurrenceResult:
         """Execute the constructed graph using caller-owned state and chronology.
 
@@ -913,10 +965,11 @@ class KDARecurrence:
         With ``release_gate`` the recurrence takes ownership of ``gate`` and frees it once chunk preparation has
         read it. ``output_gate`` is a projection run in the SP relay's dispatch on the worker cores the relay leaves
         idle (``affine_relay_cores``); its output is the result's output_gate. With ``defer_final_carry`` (the relay
-        only) the result's final_state is a PendingFinalCarry the caller runs.
+        only) the result's final_state is a PendingFinalCarry the caller runs. ``gate_activation`` (the relay only)
+        runs beside the chunk summary; its output is the result's activated_gate.
         """
-        if (output_gate is not None or defer_final_carry) and not self.uses_affine_relay:
-            raise ValueError("the output gate and a deferred final carry need the SP relay")
+        if (output_gate is not None or defer_final_carry or gate_activation is not None) and not self.uses_affine_relay:
+            raise ValueError("the output gate, a gate activation and a deferred final carry need the SP relay")
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -930,7 +983,9 @@ class KDARecurrence:
             release_gate=release_gate,
         )
         if self.uses_affine_relay:
-            result = self._run_sp(prepared, state, actual_start, actual_end, output_gate, defer_final_carry)
+            result = self._run_sp(
+                prepared, state, actual_start, actual_end, output_gate, defer_final_carry, gate_activation
+            )
         else:
             result = self._execute(prepared, state, actual_start, actual_end)
         # Release the chunk terms as soon as the scan consumed them, so every call sees the same free memory (the
@@ -977,6 +1032,15 @@ class KDARecurrence:
             sequence_parallel_axis=self._sequence_parallel_axis,
         )
 
+    def shard_outputs_by_item(self, device) -> None:
+        """The entry correction writes its chunk outputs item-sharded (config.item_sharded_l1, one [1, 1, 32, V] chunk
+        row of a head per shard) and the result's output keeps their [BH, NC, 32, V] shape."""
+        if self._entry_correction is None:
+            raise ValueError("shard_outputs_by_item needs the entry correction")
+        self._entry_correction.output_memory_config = item_sharded_l1(
+            device, [1, 1, KDA_CHUNK_SIZE, self._geometry.value_dim]
+        )
+
     @property
     def uses_affine_relay(self) -> bool:
         return self._affine_relay is not None
@@ -1004,6 +1068,7 @@ class KDARecurrence:
         actual_end: ttnn.Tensor | None,
         output_gate: RelayOutputGate | None = None,
         defer_final_carry: bool = False,
+        gate_activation: KeptGateActivation | None = None,
     ) -> RecurrenceResult:
         return _scan_sp_grouped_chunks(
             prepared,
@@ -1022,4 +1087,5 @@ class KDARecurrence:
             output_gate=output_gate,
             defer_final_carry=defer_final_carry,
             correction=self._entry_correction,
+            gate_activation=gate_activation,
         )
