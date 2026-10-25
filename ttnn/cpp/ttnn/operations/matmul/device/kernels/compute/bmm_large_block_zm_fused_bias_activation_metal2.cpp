@@ -335,6 +335,17 @@ void kernel_main() {
     constexpr uint32_t in1_transpose_tile = false;
 #endif
 
+#ifdef IN1_MCAST_CHUNKS
+#ifdef ARCH_QUASAR
+#error "IN1_MCAST_CHUNKS waits for growing in1 prefixes, which Quasar's dataflow buffers do not allow"
+#endif
+    // in1 is delivered in IN1_MCAST_CHUNKS chunks of whole columns per K-block (see the in1 reader), each a
+    // whole number of output subblocks wide.
+    static_assert(in1_num_subblocks % IN1_MCAST_CHUNKS == 0, "an in1 chunk is a whole number of output subblocks");
+    constexpr uint32_t in1_chunk_subblocks = in1_num_subblocks / IN1_MCAST_CHUNKS;
+    constexpr uint32_t in1_chunk_num_tiles = in1_block_num_tiles / IN1_MCAST_CHUNKS;
+#endif
+
     constexpr bool spill = num_blocks_inner_dim > 1;
     // With packer L1 accumulation (and nothing else packing into the partials), the partials are reserved once per
     // output block and each subblock is packed in place at its slot, where the next K block accumulates onto it; they
@@ -447,7 +458,9 @@ void kernel_main() {
 #endif
 
                     in0_dfb.wait_front(in0_block_num_tiles);
+#ifndef IN1_MCAST_CHUNKS
                     in1_dfb.wait_front(in1_block_num_tiles);
+#endif
 #ifdef FUSE_BIAS_IN_DEST
                     // The reader pushes the bias after this output block's last in1 block, and only once
                     // when num_blocks_w_dim == 1 (the tiles then stay resident across bh/batch iterations).
@@ -470,6 +483,13 @@ void kernel_main() {
                             const uint32_t effective_subblock_w =
                                 is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
 
+#ifdef IN1_MCAST_CHUNKS
+                            // in1 arrives in column chunks of in1_chunk_subblocks output subblocks: before the
+                            // first row of subblocks reads a chunk, wait for it (the later rows find it there).
+                            if (in0_subblock == 0 && in1_subblock % in1_chunk_subblocks == 0) {
+                                in1_dfb.wait_front((in1_subblock / in1_chunk_subblocks + 1) * in1_chunk_num_tiles);
+                            }
+#endif
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_dfb_to_dst(

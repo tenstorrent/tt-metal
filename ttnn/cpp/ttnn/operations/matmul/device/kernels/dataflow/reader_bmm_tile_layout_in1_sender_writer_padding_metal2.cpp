@@ -19,6 +19,8 @@
 //   IN1_DRAM_HEIGHT_SHARDED   -- ditto, one complete [K, N] matrix per bank
 //   SPARSITY                  -- the sparsity operand (dfb::sparsity + tensor::sparsity) is bound
 //   OUT_SHARDED               -- output stays resident in dfb::out; the writer loop is compiled out
+//   IN1_MCAST_CHUNKS=<n>      -- (interleaved, multicast in1 only) each K-block is read, published and
+//                                multicast in n column chunks; receivers and compute must get the same n
 //
 // The DRAM-width-sharded path takes its per-bank list as runtime varargs, walked two at a time:
 // entry 2*k is bank k's stride in bytes, entry 2*k+1 is its bank id.
@@ -246,6 +248,31 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb::out);
+
+#ifdef IN1_MCAST_CHUNKS
+#if defined(SKIP_MCAST) || defined(IN1_SHARDED) || defined(IN1_DRAM_WIDTH_SHARDED) ||                   \
+    defined(IN1_DRAM_HEIGHT_SHARDED) || defined(ENABLE_GLOBAL_CB) || defined(ENABLE_PREFETCHER_PIPE) || \
+    defined(ARCH_QUASAR) || defined(FUSE_OP_ALL_GATHER) || defined(FUSE_OP_REDUCE_SCATTER)
+#error "IN1_MCAST_CHUNKS delivers interleaved, multicast in1 on Wormhole and Blackhole only"
+#endif
+    // Each K-block of in1 is read, published to this core's compute and multicast in in1_num_chunks chunks of
+    // in1_chunk_w whole columns (all in1_block_h K-rows of them), first columns first, so the compute kernels,
+    // which wait for each chunk before the output subblocks that read it, start on a block's first columns
+    // while the rest of it is still on its way. After a chunk is multicast, the receivers' semaphore is set to
+    // the number of chunks sent. Each chunk's reads carry their own transaction id, alternating between two, so
+    // the sender waits only for the chunk it is about to send while the next one is being read.
+    constexpr uint32_t in1_num_chunks = IN1_MCAST_CHUNKS;
+    static_assert(in1_num_chunks > 1 && in1_block_w % in1_num_chunks == 0, "a chunk is a whole number of columns");
+    constexpr uint32_t in1_chunk_w = in1_block_w / in1_num_chunks;
+    constexpr uint32_t in1_chunk_num_tiles = in1_chunk_w * in1_block_h;
+    constexpr uint32_t in1_chunk_row_size_bytes = in1_chunk_w * in1_aligned_tile_size_bytes;
+    // At most two chunks are in flight, one per id; each must fit the NIU's outstanding count for one id.
+    static_assert(
+        in1_chunk_num_tiles <= (NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2,
+        "a chunk's reads must fit the outstanding requests of one transaction id");
+    // Transaction ids 1 and 2; 0 stays the default tag of other reads.
+    constexpr uint32_t in1_chunk_trid_base = 1;
+#endif  // IN1_MCAST_CHUNKS
 
 //  READER
 #if defined(ENABLE_PREFETCHER_PIPE)
@@ -496,6 +523,136 @@ void kernel_main() {
 
                         // Barrier! make sure the reads are done
                         noc.async_read_barrier();
+#elif !defined(IN1_SHARDED) && defined(IN1_MCAST_CHUNKS)
+                        // Operand 1 - interleaved, read, published and multicast in column chunks (see
+                        // IN1_MCAST_CHUNKS above). Chunk c + 1's reads are issued before chunk c is
+                        // multicast, so they land while it is sent.
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        const uint32_t in1_start_address = dfb_in1.get_write_ptr();
+                        const uint32_t in1_valid_w =
+                            (bw < num_blocks_w_dim - 1 || last_block_w == in1_block_w) ? in1_block_w : last_block_w;
+
+                        // A column's K-rows are pages in1_tensor_stride_h apart. When that is a whole number of the
+                        // accessor's contiguous-page strides and the run reaches the block's last K-row (interleaved
+                        // in1 whose row width is a multiple of the bank count), they sit at a fixed step in one bank.
+                        const uint32_t in1_page_stride = s1.contiguous_page_stride();
+                        const uint32_t in1_first_tile = in1_tensor_current_inner_dim_block_start_tile_id;
+                        const bool in1_columns_contiguous =
+                            in1_tensor_stride_h % in1_page_stride == 0 &&
+                            s1.num_contiguous_pages(
+                                in1_first_tile, in1_first_tile + (in1_block_h - 1) * in1_tensor_stride_h + 1) >=
+                                (in1_block_h - 1) * (in1_tensor_stride_h / in1_page_stride) + 1;
+                        const uint32_t in1_column_src_step_bytes =
+                            (in1_tensor_stride_h / in1_page_stride) * s1.get_aligned_page_size();
+
+                        // Issues chunk `chunk`'s reads under its transaction id. The id is sticky command
+                        // buffer state, so it is set once per chunk rather than per read.
+                        auto read_in1_chunk = [&](const uint32_t chunk) __attribute__((always_inline)) {
+                            noc_async_read_set_trid(in1_chunk_trid_base + (chunk & 1), noc.get_noc_id());
+                            const uint32_t w_begin = chunk * in1_chunk_w;
+                            const uint32_t w_end =
+                                w_begin + in1_chunk_w < in1_valid_w ? w_begin + in1_chunk_w : in1_valid_w;
+                            uint32_t in1_tensor_row_start_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
+                            // Absolute L1 addresses: the per-chunk push_back below moves the write pointer that
+                            // a dfb_in1-relative offset would be taken from.
+                            const uint32_t l1_chunk_addr = in1_start_address + w_begin * in1_aligned_tile_size_bytes;
+                            if (in1_columns_contiguous) {
+                                // Each column's K-rows are slots of one bank at a fixed stride: one address
+                                // computation and read state per column, then a bare one-packet read per tile.
+                                static_assert(
+                                    in1_single_tile_size_bytes <= NOC_MAX_BURST_SIZE, "one tile per NoC packet");
+                                for (uint32_t w = w_begin; w < w_end; ++w) {
+                                    const uint64_t col_noc_addr = s1.get_noc_addr(
+                                        in1_tensor_current_inner_dim_block_start_tile_id + w * in1_tensor_stride_w);
+                                    noc_async_read_one_packet_set_state(
+                                        col_noc_addr, in1_single_tile_size_bytes, 0, noc.get_noc_id());
+                                    uint32_t src_addr = static_cast<uint32_t>(col_noc_addr);
+                                    uint32_t dst_addr = l1_chunk_addr + (w - w_begin) * in1_aligned_tile_size_bytes;
+#pragma GCC unroll 4
+                                    for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                        noc_async_read_one_packet_with_state(src_addr, dst_addr, 0, noc.get_noc_id());
+                                        src_addr += in1_column_src_step_bytes;
+                                        dst_addr += in1_block_w * in1_aligned_tile_size_bytes;
+                                    }
+                                }
+                            } else {
+                                uint32_t in1_tensor_row_start_tile_id =
+                                    in1_tensor_current_inner_dim_block_start_tile_id;
+                                uint32_t l1_row_addr = l1_chunk_addr;
+                                for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                    uint32_t in1_tensor_tile_id =
+                                        in1_tensor_row_start_tile_id + w_begin * in1_tensor_stride_w;
+                                    uint32_t l1_write_addr = l1_row_addr;
+                                    for (uint32_t w = w_begin; w < w_end; ++w) {
+                                        noc.async_read(
+                                            s1,
+                                            CoreLocalMem<uint32_t>(l1_write_addr),
+                                            in1_single_tile_size_bytes,
+                                            {.page_id = in1_tensor_tile_id},
+                                            {});
+                                        l1_write_addr += in1_aligned_tile_size_bytes;
+                                        in1_tensor_tile_id += in1_tensor_stride_w;
+                                    }
+                                    in1_tensor_row_start_tile_id += in1_tensor_stride_h;
+                                    l1_row_addr += in1_block_w * in1_aligned_tile_size_bytes;
+                                }
+                            }
+                        };
+
+                        const MulticastEndpoint mcast_dst;
+                        read_in1_chunk(0);
+                        for (uint32_t chunk = 0; chunk < in1_num_chunks; ++chunk) {
+                            if (chunk + 1 < in1_num_chunks) {
+                                read_in1_chunk(chunk + 1);
+                            }
+                            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = in1_chunk_trid_base + (chunk & 1)});
+                            // This core's own compute may start on the chunk now.
+                            dfb_in1.push_back(in1_chunk_num_tiles);
+                            if (chunk == 0) {
+                                // Receivers reserve the whole block before they signal, so wait for them once.
+                                sender_sem.wait(in1_mcast_num_dests);
+                                sender_sem.set(0);
+                            }
+#ifdef ARCH_BLACKHOLE
+                            // The local word the chunk count is multicast from is rewritten just below, and the
+                            // next block's reads land in the slot the previous block was multicast from: let every
+                            // earlier multicast leave L1 first (it was issued before this chunk's reads, so it
+                            // normally has).
+                            noc.async_writes_flushed();
+#else
+                            noc.async_write_barrier();
+#endif  // ARCH_BLACKHOLE
+                            receiver_sem.set(chunk + 1);
+                            // The chunk is one run of in1_chunk_w tiles in each K-row of the block.
+                            uint32_t in1_chunk_row_address =
+                                in1_start_address + chunk * in1_chunk_w * in1_aligned_tile_size_bytes;
+                            for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                // num_dests must not include source, since we are NOT really doing a local copy!
+                                noc.async_write_multicast(
+                                    CoreLocalMem<uint32_t>(in1_chunk_row_address),
+                                    mcast_dst,
+                                    in1_chunk_row_size_bytes,
+                                    in1_mcast_num_cores,
+                                    {},
+                                    {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                     .noc_y_start = in1_mcast_dest_noc_start_y,
+                                     .noc_x_end = in1_mcast_dest_noc_end_x,
+                                     .noc_y_end = in1_mcast_dest_noc_end_y,
+                                     .addr = in1_chunk_row_address},
+                                    true);
+                                in1_chunk_row_address += in1_block_w * in1_aligned_tile_size_bytes;
+                            }
+                            // Same NoC and VC as the chunk's data, so the count lands behind it. Receivers wait
+                            // for count chunk + 1 before they publish the chunk to their compute.
+                            receiver_sem.set_multicast(
+                                noc,
+                                in1_mcast_dest_noc_start_x,
+                                in1_mcast_dest_noc_start_y,
+                                in1_mcast_dest_noc_end_x,
+                                in1_mcast_dest_noc_end_y,
+                                in1_mcast_num_cores);
+                        }
+                        in1_tensor_current_inner_dim_block_start_tile_id += in1_tensor_next_block_stride;
 #elif !defined(IN1_SHARDED)
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
@@ -574,7 +731,7 @@ void kernel_main() {
                         noc.async_read_barrier();
 #endif  // ENABLE_PREFETCHER_PIPE / ENABLE_GLOBAL_CB / IN1_DRAM_WIDTH_SHARDED / IN1_DRAM_HEIGHT_SHARDED / IN1_SHARDED
 
-#ifndef SKIP_MCAST
+#if !defined(SKIP_MCAST) && !defined(IN1_MCAST_CHUNKS)
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
                         // (i.e. its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to
                         // zero for the next block
@@ -616,9 +773,9 @@ void kernel_main() {
                             in1_mcast_dest_noc_end_x,
                             in1_mcast_dest_noc_end_y,
                             in1_mcast_num_cores);
-#endif  // SKIP_MCAST
+#endif  // !SKIP_MCAST && !IN1_MCAST_CHUNKS
 
-#if !defined(ENABLE_PREFETCHER_PIPE) && !defined(IN1_SHARDED)
+#if !defined(ENABLE_PREFETCHER_PIPE) && !defined(IN1_SHARDED) && !defined(IN1_MCAST_CHUNKS)
                         dfb_in1.push_back(in1_block_num_tiles);
 #endif  // !ENABLE_PREFETCHER_PIPE && !IN1_SHARDED
 #ifdef ENABLE_GLOBAL_CB
@@ -727,6 +884,15 @@ void kernel_main() {
                         // zero for the next block
                         sender_sem.wait(in1_mcast_num_dests);
                         sender_sem.set(0);
+#ifdef IN1_MCAST_CHUNKS
+                        // The in1 chunks left the multicast word at their count; the bias is flagged VALID.
+#ifdef ARCH_BLACKHOLE
+                        noc.async_writes_flushed();
+#else
+                        noc.async_write_barrier();
+#endif  // ARCH_BLACKHOLE
+                        receiver_sem.set(VALID);
+#endif  // IN1_MCAST_CHUNKS
 
                         // Now we have the block in the buffer's address, we can mcast to dests!
                         const MulticastEndpoint mcast_dst;
@@ -883,6 +1049,11 @@ void kernel_main() {
     // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
     noc.async_atomic_barrier();
     noc.async_write_barrier();
+#ifdef IN1_MCAST_CHUNKS
+    // The read transaction id is sticky command buffer state: put back the default tag (0) rather than leak
+    // a chunk id to the next kernel on this RISC.
+    noc_async_read_set_trid(0, noc.get_noc_id());
+#endif  // IN1_MCAST_CHUNKS
 
 #ifdef IN1_DRAM_WIDTH_SHARDED
     // Restore only NCRISC read_cmd_buf NOC_CTRL VC to firmware default; a full set_async_read_state

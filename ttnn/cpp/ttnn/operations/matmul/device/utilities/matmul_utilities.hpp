@@ -386,6 +386,20 @@ void add_row_mop_define_if_supported(
     const tt::tt_metal::Tile& in1_tile,
     std::map<std::string, std::string>& mm_kernel_defines);
 
+/*
+ * The number of column chunks (IN1_MCAST_CHUNKS) in which a 2D-multicast matmul's in1 sender reads, publishes and
+ * multicasts each interleaved in1 K-block of in1_block_h x in1_block_w tiles, or 0 to send whole blocks. Each chunk
+ * is a whole number of out_subblock_w-wide output subblocks; compute waits for a chunk before the first row of
+ * output subblocks that reads it, so a core starts on a block's first columns while the rest is still arriving
+ * (the first K-block's wait is otherwise the read and multicast of a whole block), and the sender reads the next
+ * chunk while it multicasts the current one. Only the order in which in1 tiles arrive changes, so results are
+ * bit-identical. Blackhole only; by default 4 to 8 chunks of at most 128 tiles (two chunks' reads in flight under
+ * their own transaction ids) whose K-rows (one multicast each) are at least 4 KiB of in1_tile_bytes tiles. The env var
+ * TT_MM_IN1_CHUNKS=<n> uses n chunks where valid and whole blocks otherwise (0: whole blocks), for A/B timing.
+ */
+uint32_t in1_mcast_column_chunks(
+    tt::ARCH arch, uint32_t in1_block_h, uint32_t in1_block_w, uint32_t out_subblock_w, uint32_t in1_tile_bytes);
+
 }  // namespace ttnn::operations::matmul::utilities
 
 namespace ttnn::prim::dram_sharded_helpers {

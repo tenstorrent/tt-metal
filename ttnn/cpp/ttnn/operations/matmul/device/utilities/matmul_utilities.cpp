@@ -353,6 +353,35 @@ void add_row_mop_define_if_supported(
     mm_kernel_defines["MM_ROW_MOP"] = "1";
 }
 
+uint32_t in1_mcast_column_chunks(
+    tt::ARCH arch, uint32_t in1_block_h, uint32_t in1_block_w, uint32_t out_subblock_w, uint32_t in1_tile_bytes) {
+    constexpr uint32_t max_chunks = 8;
+    constexpr uint32_t min_default_chunks = 4;
+    constexpr uint32_t max_chunk_tiles = 128;
+    // Each K-row of a chunk is multicast separately: below this many bytes per row the extra multicasts cost
+    // more than the early start gains (e.g. 1x4 subblocks of bfloat4_b tiles at kb 16).
+    constexpr uint32_t min_chunk_row_bytes = 4096;
+    if (arch != tt::ARCH::BLACKHOLE || out_subblock_w == 0 || in1_block_w % out_subblock_w != 0) {
+        return 0;
+    }
+    const uint32_t num_subblocks = in1_block_w / out_subblock_w;
+    const auto fits = [&](uint32_t chunks) {
+        return chunks >= 2 && num_subblocks % chunks == 0 && (in1_block_w / chunks) * in1_block_h <= max_chunk_tiles;
+    };
+    const char* chunks_env = std::getenv("TT_MM_IN1_CHUNKS");
+    if (chunks_env != nullptr) {
+        // A chunk count to use instead, where valid (0: whole blocks).
+        const uint32_t chunks = static_cast<uint32_t>(std::strtoul(chunks_env, nullptr, 10));
+        return fits(chunks) ? chunks : 0;
+    }
+    for (uint32_t chunks = std::min(num_subblocks, max_chunks); chunks >= min_default_chunks; --chunks) {
+        if (fits(chunks) && (in1_block_w / chunks) * in1_tile_bytes >= min_chunk_row_bytes) {
+            return chunks;
+        }
+    }
+    return 0;
+}
+
 }  // namespace ttnn::operations::matmul::utilities
 
 namespace ttnn::prim::dram_sharded_helpers {
