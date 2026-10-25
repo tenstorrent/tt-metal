@@ -12,7 +12,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tests.test_router_v2 import CHAIN, chain_ms, d0, make_gate, up
 from models.demos.blackhole.deepseek_v41_flash.tt.moe_weights import load_moe_layer
-from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import router_mm
+from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import router_fused
 from models.demos.blackhole.deepseek_v41_flash.tt.router_select import router_select
 
 SS = [int(v) for v in os.environ.get("RMM_S", "1,2,4,5,8").split(",")]
@@ -48,7 +48,7 @@ def bits_eq(a, b):
 
 class Stat:
     def __init__(self):
-        self.rows = self.rank_bad = self.score_bad = self.id_bad = self.set_bad = 0
+        self.rows = self.rank_bad = self.score_bad = self.id_bad = self.set_bad = self.w_bad = 0
         self.rank_absmax = 0.0
 
     def add(self, T, ro, so, rn, sn, io, wo, i_n, wn):
@@ -56,6 +56,7 @@ class Stat:
         self.rank_bad += bits_eq(ro, rn)
         self.score_bad += bits_eq(so, sn)
         self.rank_absmax = max(self.rank_absmax, float((ro - rn).abs().max()))
+        self.w_bad += int((wo.float().view(torch.int32) != wn.float().view(torch.int32)).sum())
         io, i_n = io.long(), i_n.long()
         self.id_bad += int((io != i_n).any(-1).sum())
         self.set_bad += sum(set(a.tolist()) != set(b.tolist()) for a, b in zip(io, i_n))
@@ -63,7 +64,7 @@ class Stat:
     def __str__(self):
         return (
             f"rows {self.rows}: rank elems differing {self.rank_bad} (max|d| {self.rank_absmax:.2e}), score elems "
-            f"differing {self.score_bad}, rows with different ordered ids {self.id_bad}, different SETS {self.set_bad}"
+            f"differing {self.score_bad}, weights differing {self.w_bad}, rows with different ordered ids {self.id_bad}, different SETS {self.set_bad}"
         )
 
 
@@ -71,8 +72,7 @@ def run_pair(gate, h, S, T, st):
     wk, bt = gate._mm_consts(S)
     ro, so = old_chain(gate, h)
     wo, io = router_select(ro, so, gate.k, 1e-20, gate.scaling_factor)
-    rn, sn = router_mm(h, wk, bt, S)
-    wn, i_n = router_select(rn, sn, gate.k, 1e-20, gate.scaling_factor)
+    wn, i_n, rn, sn = router_fused(h, wk, bt, S, gate.k, 1e-20, gate.scaling_factor, dump=True)
     st.add(T, rows(ro, T), rows(so, T), rows(rn, T), rows(sn, T), d0(io, T), d0(wo, T), d0(i_n, T), d0(wn, T))
     for t in (ro, so, rn, sn, wo, io, wn, i_n):
         ttnn.deallocate(t)
@@ -102,7 +102,7 @@ def test_router_mm_exact(mesh_device):
                     run_pair(gate, h, S, T, st)
                     ttnn.deallocate(h)
                 print(f"RMM S={S} layer {L} random T={T}: {st}", flush=True)
-                for a in ("rows", "rank_bad", "score_bad", "id_bad", "set_bad"):
+                for a in ("rows", "rank_bad", "score_bad", "id_bad", "set_bad", "w_bad"):
                     setattr(tot, a, getattr(tot, a) + getattr(st, a))
                 tot.rank_absmax = max(tot.rank_absmax, st.rank_absmax)
         print(f"RMM S={S} RANDOM TOTAL: {tot}", flush=True)
@@ -142,23 +142,13 @@ def test_router_mm_exact(mesh_device):
 def test_router_mm_timing(mesh_device):
     md = mesh_device
     gate, _ = make_gate(md, 2, 8)
+    us = lambda fn: chain_ms(md, fn) * 1e3
     for T in (4, 8, 16):
         h = up(md, torch.randn(T, 5120))
-        print(
-            f"RMMT T={T:2d} old front end (mm+2 add) {chain_ms(md, lambda: old_chain(gate, h)) * 1e3:7.1f} us",
-            flush=True,
-        )
-        print(
-            f"RMMT T={T:2d} old full (fused)         {chain_ms(md, lambda: gate._forward_fused(h)) * 1e3:7.1f} us",
-            flush=True,
-        )
+        print(f"RMMT T={T:2d} old front end (mm+2 add) {us(lambda: old_chain(gate, h)):7.1f} us", flush=True)
+        print(f"RMMT T={T:2d} old full (fused)         {us(lambda: gate._forward_fused(h)):7.1f} us", flush=True)
         for S in SS:
             wk, bt = gate._mm_consts(S)
-            print(
-                f"RMMT T={T:2d} S={S} router_mm          {chain_ms(md, lambda: router_mm(h, wk, bt, S)) * 1e3:7.1f} us",
-                flush=True,
-            )
-            print(
-                f"RMMT T={T:2d} S={S} fused2 full        {chain_ms(md, lambda: gate._forward_fused2(h, S)) * 1e3:7.1f} us",
-                flush=True,
-            )
+            fu = lambda l1: router_fused(h, wk, bt, S, 6, 1e-20, 1.5, out_l1=l1)
+            print(f"RMMT T={T:2d} S={S} FUSED (dram out)   {us(lambda: fu(False)):7.1f} us", flush=True)
+            print(f"RMMT T={T:2d} S={S} FUSED (L1 out)     {us(lambda: fu(True)):7.1f} us", flush=True)

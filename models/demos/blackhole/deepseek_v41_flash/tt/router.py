@@ -33,7 +33,9 @@ from models.common.moe.tt_moe_gate import TTMoEGate
 # matmul (measured: tests/probe_matmul_gain.py) -> routed expert outputs come out ~1.14x too large (tests/
 # test_moe_compute_isolated.py). Until the kernel accumulates in fp32, the routing weights are divided by this gain.
 ROUTED_GAIN = float(os.environ.get("DSV41_ROUTED_GAIN", "1.0"))
-ROUTER_S = int(os.environ.get("DSV41_ROUTER_S", "4"))  # K slices per column tile of the fused2 router (160 % S == 0)
+ROUTER_S = int(
+    os.environ.get("DSV41_ROUTER_S", "1")
+)  # K slices per column tile of the fused2 router (160 % S == 0); 1 = bit-identical to fused, >1 changes the fp32 summation order
 
 
 class DSV41Gate(TTMoEGate):
@@ -135,6 +137,8 @@ class DSV41Gate(TTMoEGate):
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+        if os.environ.get("DSV41_ROUTER", "fused") == "fused2" and E == 384:
+            self._mm_consts(ROUTER_S)  # device constants of router_fused, built outside any trace capture
 
     def forward(self, tt_x: ttnn.Tensor):
         """``tt_x`` [1, 1, batch, hidden] -> (weights, indices), each [batch, 1, 1, k].
@@ -317,21 +321,26 @@ class DSV41Gate(TTMoEGate):
         return c[S]
 
     def _forward_fused2(self, tt_x: ttnn.Tensor, S=None):
-        """DSV41_ROUTER=fused2: ``router_mm`` (split-K matmul + score + bias, one program) then ``router_select``; image rows
-        (``vl``) and T > 32 use ``_forward_fused``."""
-        from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import router_mm
-        from models.demos.blackhole.deepseek_v41_flash.tt.router_select import router_select
+        """DSV41_ROUTER=fused2: ``router_fused`` (split-K matmul + score + bias + exact top-k in ONE program, outputs in the layouts
+        the MoE dispatch wants); T > 32 uses ``_forward_fused``.  Image rows (``vl``) call ``_forward_fused`` directly.
+        """
+        from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import router_fused
 
         T = tt_x.shape[2]
-        if T > 32:
+        if T > 32 or self._E != 384 or tt_x.shape[3] != 5120:
             return self._forward_fused(tt_x)
         S = S or ROUTER_S
         wk, bt = self._mm_consts(S)
-        rank, score = router_mm(tt_x, wk, bt, S)
-        weights, indices = router_select(rank, score, self.k, 1e-20, self.scaling_factor / ROUTED_GAIN)
-        ttnn.deallocate(rank)
-        ttnn.deallocate(score)
-        return weights, indices
+        return router_fused(
+            tt_x,
+            wk,
+            bt,
+            S,
+            self.k,
+            1e-20,
+            self.scaling_factor / ROUTED_GAIN,
+            out_l1=os.environ.get("DSV41_ROUTER_L1", "1") == "1",
+        )
 
     def _forward_exact(self, tt_x: ttnn.Tensor):
         logits = ttnn.matmul(tt_x, self.tt_gate_weight, compute_kernel_config=self._ckc_exact, dtype=ttnn.float32)

@@ -19,6 +19,56 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
+// the same SFPU functions as softplus_tile / sqrt_tile / add_binary_tile, but over faces 0 and 1 only (rows 0..15: T <=
+// 16)
+template <bool HALF>
+ALWI void softplus_tile_h(uint32_t idst, uint32_t beta, uint32_t beta_rcp, uint32_t thr) {
+    if constexpr (HALF) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_softplus,
+            (APPROX, DST_ACCUM_MODE),
+            idst,
+            VectorMode::R,
+            beta,
+            beta_rcp,
+            thr));
+    } else {
+        softplus_tile(idst, beta, beta_rcp, thr);
+    }
+}
+template <bool HALF>
+ALWI void sqrt_tile_h(uint32_t idst) {
+    if constexpr (HALF) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sqrt,
+            (APPROX, 8 /*ITERATIONS*/, DST_ACCUM_MODE, false),
+            idst,
+            VectorMode::R));
+    } else {
+        sqrt_tile(idst);
+    }
+}
+template <bool HALF>
+ALWI void add_binary_tile_h(uint32_t i0, uint32_t i1, uint32_t o) {
+    if constexpr (HALF) {
+        MATH((SFPU_BINARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_sfpu_binary,
+            (APPROX, ckernel::BinaryOp::ADD, 8 /* ITERATIONS */, DST_ACCUM_MODE, ckernel::DstRoundingMode::Default),
+            i0,
+            i1,
+            o,
+            VectorMode::R)));
+    } else {
+        add_binary_tile(i0, i1, o);
+    }
+}
+
 void kernel_main() {
     DeviceZoneScopedN("RC_ALL");
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
@@ -34,7 +84,7 @@ void kernel_main() {
     constexpr uint32_t BETA = get_compile_time_arg_val(10);
     constexpr uint32_t BETA_RCP = get_compile_time_arg_val(11);
     constexpr uint32_t THRESH = get_compile_time_arg_val(12);
-    constexpr uint32_t MODE = get_compile_time_arg_val(13);  // 0 normal, 1 copy only, 3 raw matmul out (debug, S == 1)
+    constexpr bool HALF = get_compile_time_arg_val(13) != 0;  // T <= 16: SFPU over rows 0..15 only
     const uint32_t reducer = get_arg_val<uint32_t>(0);
 
     compute_kernel_hw_startup(cb_x, cb_w, cb_part);
@@ -55,17 +105,6 @@ void kernel_main() {
         DeviceZoneScopedN("RC_mmdone");
     }
     tile_regs_wait();
-    if constexpr (MODE == 3) {
-        score.reserve_back(1);
-        rank.reserve_back(1);
-        pack_tile(0, cb_score);
-        pack_tile(0, cb_rank);
-        score.push_back(1);
-        rank.push_back(1);
-        tile_regs_release();
-        bias.wait_front(1);
-        return;
-    }
     part.reserve_back(1);
     pack_tile(0, cb_part);
     part.push_back(1);
@@ -88,27 +127,17 @@ void kernel_main() {
             for (uint32_t q = 0; q < S - 1; ++q) {
                 copy_tile(cb_red, q, 1);
                 add_binary_tile_init();
-                add_binary_tile(0, 1, 0);
+                add_binary_tile_h<HALF>(0, 1, 0);
             }
         }
-        if constexpr (MODE == 1) {
-            copy_tile(cb_part, 0, 2);
-        } else if constexpr (MODE == 4) {
-            softplus_tile_init();
-            softplus_tile(0, BETA, BETA_RCP, THRESH);
-        } else if constexpr (MODE == 5) {
-            sqrt_tile_init();
-            sqrt_tile(0);
-        } else {
-            softplus_tile_init();
-            softplus_tile(0, BETA, BETA_RCP, THRESH);
-            sqrt_tile_init();
-            sqrt_tile(0);
-            copy_init(cb_bias);
-            copy_tile(cb_bias, 0, 1);
-            add_binary_tile_init();
-            add_binary_tile(0, 1, 2);
-        }
+        softplus_tile_init();
+        softplus_tile_h<HALF>(0, BETA, BETA_RCP, THRESH);
+        sqrt_tile_init();
+        sqrt_tile_h<HALF>(0);
+        copy_init(cb_bias);
+        copy_tile(cb_bias, 0, 1);
+        add_binary_tile_init();
+        add_binary_tile_h<HALF>(0, 1, 2);
         tile_regs_commit();
         tile_regs_wait();
         score.reserve_back(1);
