@@ -276,7 +276,8 @@ def test_dispatch_bench(mesh_device, device_params):
 
         guarded("ag_axis0", ag_one)
 
-    if os.environ.get("DB_FAB2D", "0") == "1" and payload >= 12352:
+    fab2d_min_payload = 6400 if os.environ.get("DB_FAB2D_FP8", "0") == "1" else 12352  # token (+scales) + 64 B tail
+    if os.environ.get("DB_FAB2D", "0") == "1" and payload >= fab2d_min_payload:
         from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_dispatch_fabric2d import _expert_dispatch_table
 
         t2 = _expert_dispatch_table(E, H, G)
