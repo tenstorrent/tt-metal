@@ -460,10 +460,19 @@ void kernel_main() {
         DeviceZoneScopedN("dspf2d_index");
         // The TRISCs wait for the tables; once they are in, all four RISCs build the index together.
         routing_index::run_on_reader(c, [&] {
-            read_control_tables(c);
-            read_indices(c);
-            build_expert_buckets(c);
-            size_buckets(c);
+            {
+                DeviceZoneScopedN("idx_tables");
+                read_control_tables(c);
+            }
+            {
+                DeviceZoneScopedN("idx_indices");
+                read_indices(c);
+            }
+            {
+                DeviceZoneScopedN("idx_buckets");
+                build_expert_buckets(c);
+                size_buckets(c);
+            }
         });
         {
             // How long this RISC waits for the slowest of the other three: the imbalance of the split.
