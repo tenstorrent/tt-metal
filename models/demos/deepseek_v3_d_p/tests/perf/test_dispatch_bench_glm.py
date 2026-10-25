@@ -290,12 +290,21 @@ def test_dispatch_bench(mesh_device, device_params):
             )
 
         x4 = x.unsqueeze(1).expand(H, G, SEQ, EMB).contiguous()
-        f_x = shard(x4, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        # DB_FAB2D_XLAYOUT: tile (production: the op untilizes on its own cores) | rm (ROW_MAJOR input, no untilizers)
+        f_x_by = {
+            xl: shard(x4, (0, 1), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT if xl == "tile" else ttnn.ROW_MAJOR_LAYOUT)
+            for xl in [v for v in os.environ.get("DB_FAB2D_XLAYOUT", "tile").split(",") if v]
+        }
         f_table = shard(t2.unsqueeze(1), (None, 0), ttnn.int32)
-        def _fab2d_layout(mgr2, layout):
+        def _fab2d_layout(mgr2, layout0):
             mesh_device.load_sub_device_manager(mgr2)
             try:
-                for spec in [v for v in os.environ.get("DB_FAB2D_ROUTINGS", "uniform").split(",") if v]:
+                for spec, (xl, f_x) in [
+                    (sp, xf)
+                    for sp in [v for v in os.environ.get("DB_FAB2D_ROUTINGS", "uniform").split(",") if v]
+                    for xf in f_x_by.items()
+                ]:
+                    layout = f"{layout0}-{xl}"
                     indices = _routing(spec, table)
                     ind4 = indices.long().unsqueeze(0).expand(G, -1, -1, -1).contiguous()
                     o2 = torch.zeros(G, H, E, dtype=torch.int32)
@@ -311,7 +320,9 @@ def test_dispatch_bench(mesh_device, device_params):
                     f_counts = shard(c2[:, 0:1, :], (None, 0), ttnn.int32)
                     f_region = shard(r2[:, 0:1, :], (None, 0), ttnn.int32)
 
-                    def fab_one(spec=spec, f_idx=f_idx, f_offs=f_offs, f_counts=f_counts, f_region=f_region):
+                    def fab_one(
+                        spec=spec, f_idx=f_idx, f_offs=f_offs, f_counts=f_counts, f_region=f_region, f_x=f_x, layout=layout
+                    ):
                         def run2():
                             return ttnn.experimental.deepseek_prefill.dispatch_fabric2d(
                                 f_x,

@@ -14,6 +14,7 @@ Manager: {SD0 = x0..10, SD1 = x11} (the persistent pipeline layout). Ops (PAIR_A
   ag0r / ag0l  all_gather_async [1,1,640,1536] -> 6144 on axis 0 (the dispatch axis), Ring / Linear
   hb1          high_bw_all_gather [1,1,640,512] -> dim 3 x4 on axis 1 (the kv-stem / q_a gathers)
   mm           2D matmul [640,2048] x [2048,4096] on SD0 (no fabric; control)
+  none         nothing (the other op alone, PAIR_N times back to back)
 Example: PAIR_A=rs1l@1 PAIR_B=rs1r@0 pytest ... -k torus-xy-8x4
 """
 
@@ -175,6 +176,8 @@ def test_pipe_pair_repro(mesh_device, device_params):
                 return ttnn.matmul(a, b, program_config=cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG, sub_device_id=sd_id)
 
             return fn
+        if name == "none":  # control: the other op alone, back to back
+            return lambda: None
         raise ValueError(spec)
 
     mesh_device.load_sub_device_manager(mgr)
