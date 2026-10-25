@@ -21,6 +21,8 @@
 #include <utility>
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "api/tensor/noc_traits.h"
+#include "dev_mem_map.h"
+#include "risc_common.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -102,6 +104,63 @@ bool valid_targets(const bool direction) {
     }
 }
 }  // namespace detail
+
+// Debug instrumentation (quad task #2553, bugs b/c): per-core record of the fabric atomic increments this writer
+// handed to its fabric connection, kept in L1 so it can be read after a hang (tools/h3-hang-capture dump_ag_rta.py).
+// Region: MEM_LLK_DEBUG_BASE + 512, unused unless the LLK sanitizer (LLK_SAN_ENABLE) is built in.
+// Layout (uint32 words): [0] magic 0xA65E2553, [1] launches on this core, [2] data incs total, [3] barrier incs total,
+// [4..7] reserved, then an 8-entry ring indexed by (launch - 1) % 8, 12 words per entry:
+//   [0] launch seq, [1] state<<24 | ring_size<<16 | my_chip_id<<8 | direction (state 1 started, 2 slices done, 3 closed),
+//   [2] out_ready_sem L1 addr, [3] use_barrier<<17 | valid_targets<<16 | dst noc0 y<<8 | x, [4] data incs sent,
+//   [5] barrier incs sent, [6] slices forwarded, [7] slices expected, [8..9] start wall clock, [10..11] end wall clock.
+namespace sent_ctr {
+constexpr uint32_t base = MEM_LLK_DEBUG_BASE + 512;
+constexpr uint32_t magic = 0xA65E2553;
+constexpr uint32_t hdr_words = 8, entry_words = 12, ring = 8;
+static_assert(base + 4 * (hdr_words + ring * entry_words) <= MEM_LLK_DEBUG_BASE + MEM_LLK_DEBUG_SIZE);
+inline volatile tt_l1_ptr uint32_t* hdr() { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base); }
+volatile tt_l1_ptr uint32_t* entry = nullptr;
+inline void begin(uint32_t direction, uint32_t sem, uint32_t x, uint32_t y, bool valid, bool use_barrier) {
+    volatile tt_l1_ptr uint32_t* h = hdr();
+    if (h[0] != magic) {
+        for (uint32_t i = 0; i < hdr_words + ring * entry_words; i++) {
+            h[i] = 0;
+        }
+        h[0] = magic;
+    }
+    uint32_t seq = h[1] + 1;
+    h[1] = seq;
+    entry = h + hdr_words + ((seq - 1) % ring) * entry_words;
+    uint64_t t = get_timestamp();
+    entry[0] = seq;
+    entry[1] = (1u << 24) | ((ring_size & 0xff) << 16) | ((my_chip_id & 0xff) << 8) | (direction & 0xff);
+    entry[2] = sem;
+    entry[3] = (uint32_t(use_barrier) << 17) | (uint32_t(valid) << 16) | ((y & 0xff) << 8) | (x & 0xff);
+    entry[4] = 0;
+    entry[5] = 0;
+    entry[6] = 0;
+    entry[7] = 0;
+    entry[8] = uint32_t(t);
+    entry[9] = uint32_t(t >> 32);
+    entry[10] = 0;
+    entry[11] = 0;
+}
+inline void data_inc() {
+    entry[4] = entry[4] + 1;
+    hdr()[2] = hdr()[2] + 1;
+}
+inline void barrier_inc() {
+    entry[5] = entry[5] + 1;
+    hdr()[3] = hdr()[3] + 1;
+}
+inline void set_state(uint32_t st) { entry[1] = (entry[1] & 0x00ffffff) | (st << 24); }
+inline void end() {
+    uint64_t t = get_timestamp();
+    entry[10] = uint32_t(t);
+    entry[11] = uint32_t(t >> 32);
+    set_state(3);
+}
+}  // namespace sent_ctr
 void kernel_main() {
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -124,6 +183,13 @@ void kernel_main() {
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    sent_ctr::begin(
+        direction,
+        out_ready_sem,
+        out_ready_sem_noc0_x,
+        out_ready_sem_noc0_y,
+        detail::valid_targets(direction),
+        use_barrier_sem);
 #ifdef USE_WORKER_MUX
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
@@ -266,6 +332,7 @@ void kernel_main() {
                     fabric_direction_connection,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0});
+                sent_ctr::barrier_inc();
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
@@ -274,6 +341,7 @@ void kernel_main() {
                     fabric_direction_connection,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{opposite_direction_barrier_sem_noc_addr_in_pkt, 0});
+                sent_ctr::barrier_inc();
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
@@ -283,6 +351,7 @@ void kernel_main() {
                     fabric_direction_connection,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
+                sent_ctr::barrier_inc();
             } else {
                 ASSERT(false);
             }
@@ -446,6 +515,7 @@ void kernel_main() {
                         fabric_direction_connection,
                         pkt_hdr_sem_inc,
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    sent_ctr::data_inc();
                 }
             }
             noc_obj.async_writes_flushed();
@@ -458,6 +528,7 @@ void kernel_main() {
                     fabric_direction_connection,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                sent_ctr::data_inc();
             }
         }
 
@@ -508,6 +579,7 @@ void kernel_main() {
         }
     }
 
+    sent_ctr::entry[7] = writes_expected;
     while (slice_writes < writes_expected) {
         // Direction == backward
         // Did I get something from my left to send to my right?
@@ -631,6 +703,7 @@ void kernel_main() {
                         fabric_direction_connection,
                         pkt_hdr_sem_inc,
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                    sent_ctr::data_inc();
                 }
                 noc_obj.async_writes_flushed();
             }
@@ -641,6 +714,7 @@ void kernel_main() {
                     fabric_direction_connection,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0});
+                sent_ctr::data_inc();
             }
 
             num_channels_processed_in_current_batch++;
@@ -682,8 +756,10 @@ void kernel_main() {
             }
         }
         slice_writes++;
+        sent_ctr::entry[6] = slice_writes;
     }
 
+    sent_ctr::set_state(2);
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();
 #ifdef USE_WORKER_MUX
@@ -707,4 +783,5 @@ void kernel_main() {
     }
 #endif
     noc_obj.async_write_barrier();
+    sent_ctr::end();
 }
