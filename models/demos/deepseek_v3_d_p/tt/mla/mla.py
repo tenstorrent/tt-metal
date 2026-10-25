@@ -48,12 +48,12 @@ _GLUE_SEQQ_RS_WORKERS = int(os.environ.get("GLUE_SEQQ_RS_WORKERS", "0")) or None
 # (wkv_b1 -> in-place RoPE -> untilize to DRAM) without clashing with later static CBs.
 _GLUE_Q_DEFER_L1 = os.environ.get("GLUE_Q_DEFER_L1", "1") == "1"
 # ... and on full (indexer) layers too: Q built after the top-k || gather region (GLUE_Q_DEFER_FULL, opt-in).
-_GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "0") == "1"
+_GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "1") == "1"
 # glue track (stem): kv stem intermediates (reduce split -> norm -> rope -> fp8 fields) in L1, freed right after
 # the cache write (GLUE_KV_L1, opt-in); nlp_concat_heads output (o_proj in0) in L1 (GLUE_CONCAT_L1, opt-in).
 _GLUE_KV_L1 = os.environ.get("GLUE_KV_L1", "1") == "1"
 _GLUE_CONCAT_L1 = os.environ.get("GLUE_CONCAT_L1", "0") == "1"
-_GLUE_WKVB2_OUT_L1 = os.environ.get("GLUE_WKVB2_OUT_L1", "0") == "1"
+_GLUE_WKVB2_OUT_L1 = os.environ.get("GLUE_WKVB2_OUT_L1", "1") == "1"
 
 
 class _DeferredQ:
