@@ -41,6 +41,8 @@ _GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
 # glue track: seqq q_a norm on its 160 rows width-sharded over this many cores (0 = interleaved rms_norm, 5 cores).
 _GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "0"))
+# glue track: workers per link for the seqq q_a reduce-scatter over rows; 0 = op default.
+_GLUE_SEQQ_RS_WORKERS = int(os.environ.get("GLUE_SEQQ_RS_WORKERS", "0")) or None
 
 
 class ttMLA:
@@ -2770,6 +2772,7 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
+            num_workers_per_link=_GLUE_SEQQ_RS_WORKERS,
         )
         ttnn.deallocate(qr)
         if _GLUE_SEQQ_NORM_CORES:
