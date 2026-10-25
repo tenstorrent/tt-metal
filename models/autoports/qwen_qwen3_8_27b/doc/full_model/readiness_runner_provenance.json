@@ -1,0 +1,6 @@
+{
+  "upstream": ".codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_autoregressive.py",
+  "original_sha256": "8da9e8cbe9426a778ba9e8a5cf6ff65be0df090d72e6dd69780484fb7ebde46d",
+  "local_copy": "models/autoports/qwen_qwen3_8_27b/tests/readiness_autoregressive.py",
+  "change": "Preserve exact prompt bytes; whitespace-only input is still rejected. No other runner logic changed. Installed runtime restored unchanged."
+}

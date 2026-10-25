@@ -1,0 +1,88 @@
+{
+  "status": "complete_clean_pass",
+  "inherited_ledger_preserved": [
+    "../optimized_multichip_decoder/candidate_summary.csv",
+    "../optimized_multichip_decoder/topology_audit.md",
+    "../optimized_multichip_decoder/work_log.md"
+  ],
+  "entries": [
+    {
+      "candidate": "Sampling1D force_argmax",
+      "decision": "rejected",
+      "reason": "Semantically greedy but slower than common top-k at B1/B32; both select same unique maximum on failing saved logits.",
+      "evidence": [
+        "sampling_b1.json",
+        "sampling_b32.json",
+        "long_quality_sampler_only.json"
+      ]
+    },
+    {
+      "candidate": "unpacked B32 terminal users",
+      "decision": "rejected",
+      "reason": "Exact logit-equivalent packed terminal is substantially faster.",
+      "evidence": [
+        "terminal_packing_b32.json"
+      ]
+    },
+    {
+      "candidate": "host sampling as quality fix",
+      "decision": "rejected",
+      "reason": "Identical512-token output and loop to device sampler; host mode remains explicit test compatibility only.",
+      "evidence": [
+        "long_quality_decision.json"
+      ]
+    },
+    {
+      "candidate": "separate prefill MM then RS as production fallback",
+      "decision": "rejected",
+      "reason": "Diagnostic512 completion is coherent, but disables required native fused projection strategy.",
+      "evidence": [
+        "long_quality_eager.json"
+      ]
+    },
+    {
+      "candidate": "native outK4/downK4 together",
+      "decision": "rejected_for_quality",
+      "reason": "Reproduces original512-token copying loop.",
+      "evidence": [
+        "native_prefill_geometry.json"
+      ]
+    },
+    {
+      "candidate": "native outK16 only",
+      "decision": "rejected_for_quality",
+      "reason": "Reproduces original512-token copying loop.",
+      "evidence": [
+        "native_prefill_geometry.json"
+      ]
+    },
+    {
+      "candidate": "native outK4 only",
+      "decision": "selected_default_quality_and_clean_performance_verified",
+      "reason": "Fresh default all64 outputs exactly reproduce candidate; AIMEtop1=.99/top5=top100=1 in bothphases. Nearby4095 EOS and independent4096 facts verified against HF. Original delayed-answer limitation retained; clean B1 performance/native capacity verified; independent final review clean-pass.",
+      "evidence": [
+        "native_prefill_geometry.json",
+        "long_quality_cases_tt_out.json",
+        "default_geometry_reproduction.json",
+        "long_quality_cases_hf.json"
+      ]
+    },
+    {
+      "candidate": "native downK4 only",
+      "decision": "not_selected",
+      "reason": "Also escapes copying at512, but final closure pursued for narrow outK4 candidate while preserving inherited downK17.",
+      "evidence": [
+        "native_prefill_geometry.json"
+      ]
+    },
+    {
+      "candidate": "inherited native outK48/downK17 full-stack selection",
+      "decision": "reopened_for_quality",
+      "reason": "Short-layer PCC did not expose all64 repeated-context512 copy loop; earlier stage05 measurements and rejections remain unchanged.",
+      "evidence": [
+        "before_geometry/benchmark_b1_perf.json",
+        "AUTOFIX_repetition.md"
+      ]
+    }
+  ]
+}

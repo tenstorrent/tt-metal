@@ -1,0 +1,28 @@
+{
+  "basis": "stage05 complete-layer profiler device envelopes; estimates only, not full-model measurements",
+  "layer_counts": {
+    "linear_attention": 48,
+    "full_attention": 16
+  },
+  "batch1": {
+    "prefill_stack_us": 366740.32,
+    "decode_stack_us": 28012.16,
+    "decode_stack_tps_upper_bound": 35.69878224314012
+  },
+  "batch32": {
+    "prefill_stack_us": 13149884.639999999,
+    "decode_stack_us": 113863.68,
+    "decode_stack_tps_per_user_upper_bound": 8.782431764018167
+  },
+  "source": "doc/optimized_multichip_decoder/README.md and performance.json; exact4096input/128steps",
+  "omitted_full_model_costs": [
+    "embedding",
+    "final_norm",
+    "LM_head",
+    "sampling",
+    "feedback",
+    "trace_orchestration",
+    "caller_readback"
+  ],
+  "comparison_limit": "Prior layer profiling and fresh full-model timing may differ in instrumentation and cache regime; do not label their difference a measured terminal profile."
+}

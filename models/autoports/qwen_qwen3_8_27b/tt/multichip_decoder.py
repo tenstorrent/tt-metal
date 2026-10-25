@@ -9,6 +9,7 @@ from models.common.modules.tt_ccl import TT_CCL
 
 
 class MultichipDecoder(OptimizedDecoder):
+    supports_prepared_prefill = True
     @classmethod
     def from_state_dict(cls, state_dict, *, hf_config, layer_idx, mesh_device, policy=None, ccl_workspace=None):
         import torch
@@ -36,7 +37,9 @@ class MultichipDecoder(OptimizedDecoder):
              'prefill_chunk': 4096,
              'prefill_ccl_workers': 8,
              'prefill_native_rs': True,
-             'prefill_rs_geometry': {'grid': [11,8], 'out_k': 48, 'down_k': 17, 'block_h': 4, 'subh': 2, 'subw': 3},
+             # Full-stack long generation needs finer out-projection K grouping;
+             # retain native fusion and the measured down-projection geometry.
+             'prefill_rs_geometry': {'grid': [11,8], 'out_k': 4, 'down_k': 17, 'block_h': 4, 'subh': 2, 'subw': 3},
              'decode_rs_geometry': {'grid': [10,1], 'out_k': 6, 'down_k': 17, 'subh': 1, 'subw': 4},
              'packed_decode_rope_min_batch': 4,
              'packed_prefill_rope_min_batch': 8,
@@ -243,7 +246,11 @@ class MultichipDecoder(OptimizedDecoder):
             owner.abort()
             raise
 
-    def decode_forward(self,hidden_states,**kwargs):
+    def decode_forward(self,hidden_states,*,active_mask=None,**kwargs):
+        if active_mask is not None:
+            if tuple(active_mask.shape) != (hidden_states.shape[0], 1, 1):
+                raise ValueError("Decode active_mask must have shape [B,1,1]")
+            kwargs["active_mask"] = active_mask
         impl=self.decode_implementation(hidden_states.shape[0])
         if not (hidden_states.shape[-1]==1280 and impl is not self):
             impl=self
@@ -555,10 +562,12 @@ class MultichipDecoder(OptimizedDecoder):
         next_conv = windows[:,1:4]
         return qflat,kflat,vflat,next_conv
 
-    def _delta(self, x, state):
+    def _delta(self, x, state, *, prepared_metadata=None, active_mask=None):
         batch, length, _ = x.shape
+        if active_mask is not None and (length != 1 or prepared_metadata is not None):
+            raise ValueError("Decode active_mask requires a one-token non-prefill call")
         projected = self._linear(x, self.mix)
-        if self.policy.get('packed_decode_conv') and batch>=8 and length==1 and not self.policy.get('_prefill_phase'):
+        if prepared_metadata is None and self.policy.get('packed_decode_conv') and batch>=8 and length==1 and not self.policy.get('_prefill_phase'):
             qflat,kflat,vflat,next_conv=self._packed_decode_convolution(projected,state)
         else:
             physical_conv = ((length + 31) // 32) * 32
@@ -574,7 +583,16 @@ class MultichipDecoder(OptimizedDecoder):
                         math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
                 qs.append(cq[:, :length]); ks.append(ck[:, :length]); vs.append(cv[:, :length])
             qflat, kflat, vflat = [parts[0] if batch == 1 else ttnn.concat(parts, dim=0) for parts in (qs, ks, vs)]
-            if self.policy.get("history_tile_tail") and length >= 32 and length % 32 == 0:
+            if prepared_metadata is not None:
+                # Select the last three *logical* projected inputs, including
+                # incoming history for n=0/1/2. Indices vary as device data;
+                # shapes depend only on the physical prepared bucket.
+                projected_qkv = ttnn.to_layout(projected[..., :2560], ttnn.ROW_MAJOR_LAYOUT)
+                history_table = ttnn.reshape(ttnn.concat([state.conv, projected_qkv], dim=1),
+                                             [batch * (length + 3), 2560])
+                next_conv = ttnn.embedding(prepared_metadata["history_indices"], history_table,
+                                           layout=ttnn.ROW_MAJOR_LAYOUT)
+            elif self.policy.get("history_tile_tail") and length >= 32 and length % 32 == 0:
                 # Slice a complete tile before untilize, then select logical rows.
                 # Direct nonaligned tiled slicing would add an implicit retile.
                 tail = projected[:, length-32:length, :2560]
@@ -582,6 +600,13 @@ class MultichipDecoder(OptimizedDecoder):
             else:
                 next_conv = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)[:, length-3:length, :2560] if length >= 3 else ttnn.concat(
                     [state.conv[:, length:, :], ttnn.to_layout(projected[..., :2560], ttnn.ROW_MAJOR_LAYOUT)], dim=1)
+        if active_mask is not None:
+            # Row-major convolution carry is preserved for inactive decode slots.
+            # where uses tiled operands; round-trip only in this masked variant.
+            conv_active = ttnn.to_layout(active_mask, ttnn.TILE_LAYOUT)
+            next_conv = ttnn.to_layout(ttnn.where(conv_active,
+                ttnn.to_layout(next_conv, ttnn.TILE_LAYOUT),
+                ttnn.to_layout(state.conv, ttnn.TILE_LAYOUT)), ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy(next_conv, state.conv)
 
         def l2(t):
@@ -591,6 +616,15 @@ class MultichipDecoder(OptimizedDecoder):
         a = ttnn.typecast(projected[..., 4096:4108], ttnn.float32)
         decay = ttnn.multiply(self.neg_A, ttnn.softplus(ttnn.add(a, self.dt)))
         beta = ttnn.sigmoid(ttnn.typecast(projected[..., 4128:4140], ttnn.float32))
+        if prepared_metadata is not None or active_mask is not None:
+            # Mask after convolution and nonlinear gates: zero hidden padding
+            # alone leaves convolution carry and nonzero decay/beta behind.
+            valid = prepared_metadata["valid_mask"] if prepared_metadata is not None else ttnn.to_layout(active_mask, ttnn.TILE_LAYOUT)
+            qflat, kflat, vflat = (ttnn.multiply(t, ttnn.typecast(valid, t.dtype))
+                                  for t in (qflat, kflat, vflat))
+            valid_fp32 = ttnn.typecast(valid, ttnn.float32)
+            decay = ttnn.multiply(decay, valid_fp32)
+            beta = ttnn.multiply(beta, valid_fp32)
         if length > 1:
             physical = ((length + 31) // 32) * 32
             def padded(t):
@@ -612,6 +646,11 @@ class MultichipDecoder(OptimizedDecoder):
                 gate_column_offset=2560, epsilon=self.config.rms_norm_eps, output_dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,
                     math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
+            if prepared_metadata is not None:
+                # An entirely inactive row must preserve even the low FP32 bits
+                # that an all-zero GDN chunk's identity matmul could round.
+                active = ttnn.reshape(prepared_metadata["valid_mask"][:, :1, :], [batch, 1, 1, 1])
+                new_state = ttnn.where(active, new_state, state.recurrent)
             ttnn.copy(new_state, state.recurrent)
             return self._linear(ttnn.multiply(norm_gate[:, :length], projected[..., 2560:4096]), self.out)
         else:
@@ -628,12 +667,21 @@ class MultichipDecoder(OptimizedDecoder):
                 y_part, state_part = fp32_recurrence(
                     q[begin:end], k[begin:end], v[begin:end], decay[begin:end], beta[begin:end],
                     initial_state=state.recurrent[begin:end], output_final_state=True, compute_kernel_config=self.ckc,
-                    inplace_state=self.policy.get("inplace_recurrence", False),
+                    # Keep the original state available for inactive prepared
+                    # slots. The FP32 recurrence math is unchanged; only its
+                    # destination differs from the default in-place decode.
+                    inplace_state=(self.policy.get("inplace_recurrence", False)
+                                   and prepared_metadata is None and active_mask is None),
                 )
                 ys.append(y_part)
                 states.append(state_part)
             y = ttnn.concat(ys, dim=0) if len(ys) > 1 else ys[0]
             new_state = ttnn.concat(states, dim=0) if len(states) > 1 else states[0]
+        if prepared_metadata is not None or active_mask is not None:
+            row_active = (prepared_metadata["valid_mask"][:, :1, :] if prepared_metadata is not None
+                          else ttnn.to_layout(active_mask, ttnn.TILE_LAYOUT))
+            active = ttnn.reshape(row_active, [batch, 1, 1, 1])
+            new_state = ttnn.where(active, new_state, state.recurrent)
         if new_state.buffer_address() != state.recurrent.buffer_address():
             ttnn.copy(new_state, state.recurrent)
         y = self._norm(ttnn.typecast(y, ttnn.bfloat16), self.out_norm)
@@ -666,8 +714,11 @@ class MultichipDecoder(OptimizedDecoder):
         y=ttnn.permute(ttnn.reshape(y,[heads,batch,length,64]),(1,0,2,3))
         return ttnn.concat([y,tail],dim=-1,memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def _attention(self, x, state, *, page_table, cos, sin, current_pos=None, chunk_start=0):
+    def _attention(self, x, state, *, page_table, cos, sin, current_pos=None, chunk_start=0,
+                   prepared_metadata=None):
         batch, length, _ = x.shape
+        if prepared_metadata is not None:
+            chunk_start=prepared_metadata.get('start_alignment',0)
         projected = self._linear(x, self.mix)
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             projected[..., :2048], num_heads=6, num_kv_heads=1, transpose_key=False)
@@ -721,8 +772,17 @@ class MultichipDecoder(OptimizedDecoder):
             )
             y = reshape(y, [batch, 1, 1536])
         else:
-            fill_table = page_table[:, chunk_start // 32:]
-            for user in range(batch):
+            fill_table = (page_table[:, chunk_start // 32:] if prepared_metadata is None
+                          else prepared_metadata["fill_page_table"])
+            # Prefill is scheduled eagerly over prepared fixed-slot groups.
+            # Warming all rows prepares every slice/batch_idx program; selecting
+            # a subset here adds no signature and must not overwrite another
+            # group's KV pages. The mask/indices must describe the same rows.
+            active_rows = range(batch) if prepared_metadata is None else prepared_metadata.get("active_rows", range(batch))
+            active_rows = tuple(active_rows)
+            if len(set(active_rows)) != len(active_rows) or any(not 0 <= user < batch for user in active_rows):
+                raise ValueError("Prepared active_rows must contain distinct configured slot indices")
+            for user in active_rows:
                 ttnn.experimental.paged_fill_cache(state.key, ttnn.typecast(k[user:user + 1], state.key.dtype), fill_table, batch_idx=user)
                 ttnn.experimental.paged_fill_cache(state.value, ttnn.typecast(v[user:user + 1], state.value.dtype), fill_table, batch_idx=user)
             sdpa_options = {}
@@ -740,7 +800,8 @@ class MultichipDecoder(OptimizedDecoder):
                     q_chunk_size=qc, k_chunk_size=kc, exp_approx_mode=self.policy.get("prefill_sdpa_approx", False))
             y = ttnn.transformer.chunked_scaled_dot_product_attention(
                 q, state.key, state.value, page_table_tensor=page_table, chunk_start_idx=None,
-                chunk_start_idx_tensor=self.chunk_positions[chunk_start // self.chunk_size],
+                chunk_start_idx_tensor=(self.chunk_positions[chunk_start // self.chunk_size]
+                                        if prepared_metadata is None else prepared_metadata["chunk_start"]),
                 compute_kernel_config=self.ckc, **sdpa_options,
             )
             y = ttnn.transformer.concatenate_heads(y)

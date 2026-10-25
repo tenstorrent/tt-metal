@@ -1,0 +1,11 @@
+{
+  "status": "pass",
+  "tokens": 1024,
+  "token_ids_exact": true,
+  "completion_exact": true,
+  "evidence": [
+    "benchmark_b1_perf.json:throughput_fixture_qualitative_control",
+    "default_long_quality_cases.json:cases[0]"
+  ],
+  "scope": "Clean benchmark process reproduces independently reviewed final-default original long prompt completion"
+}

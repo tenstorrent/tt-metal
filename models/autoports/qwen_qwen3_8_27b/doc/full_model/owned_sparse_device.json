@@ -1,0 +1,43 @@
+{
+  "status": "pass",
+  "map_kind": "device",
+  "scope": "layers0/3,B8,context512",
+  "checks": {
+    "failure_restores_custom_map_binding_and_contents": true,
+    "owned_cache_reset_semantics_preserved": true,
+    "three_replays_use_bound_map_and_update_each_active_sample_only": true
+  },
+  "source_sha256": {
+    "tests/probe_owned_sparse_map.py": "7900653174e3f15ed324bbcc4938930ea2cd32c8b245e1503e70077ec8af89ce",
+    "tt/generator.py": "6a24b49785f02bef6dcd10a31f618a550fa53d87576a03a71de7f474eef46c5c"
+  },
+  "runtime": {
+    "torch": "2.11.0+cpu",
+    "ttnn": "unknown",
+    "trace_alloc_tracking": 1,
+    "trace_skip_program_cache": 0
+  },
+  "preparation_memory": {
+    "basis": "DRAM allocator checkpoints, not a peak measurement",
+    "before": {
+      "allocated_bytes_per_device": 1623988736,
+      "free_bytes_per_device": 32554742272
+    },
+    "scratch_specs": [],
+    "scratch_bound": {
+      "allocated_bytes_per_device": 1623989248,
+      "free_bytes_per_device": 32554741760
+    },
+    "warmed_before_capture": {
+      "allocated_bytes_per_device": 1630518272,
+      "free_bytes_per_device": 32548212736
+    },
+    "after": {
+      "allocated_bytes_per_device": 1632909824,
+      "free_bytes_per_device": 32545821184
+    }
+  },
+  "limitations": [
+    "Reduced layers; cache checks sample active/inactive rows, not complete pools."
+  ]
+}

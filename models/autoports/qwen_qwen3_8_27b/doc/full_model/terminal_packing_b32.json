@@ -1,0 +1,32 @@
+{
+  "scope": "Reduced real activation terminal-only comparison; not full-model performance",
+  "batch": 32,
+  "logits_pcc": 1.0,
+  "exact": true,
+  "results": {
+    "False": {
+      "host_wall_us_per_replay": 53104.30237092078,
+      "iterations": 100,
+      "output_shape": [
+        1,
+        1,
+        32,
+        62080
+      ],
+      "trace_output_exact": true
+    },
+    "True": {
+      "host_wall_us_per_replay": 1975.190460216254,
+      "iterations": 100,
+      "output_shape": [
+        1,
+        1,
+        32,
+        62080
+      ],
+      "trace_output_exact": true
+    }
+  },
+  "source": "terminal trace host-wall timings; no device-time claim",
+  "tracking": false
+}

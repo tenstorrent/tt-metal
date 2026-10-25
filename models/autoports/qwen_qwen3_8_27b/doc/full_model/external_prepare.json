@@ -1,0 +1,216 @@
+{
+  "status": "pass",
+  "batch": 8,
+  "context": 512,
+  "full_stack": false,
+  "checks": {
+    "failure_preserves_sampled_cache_map_request_and_rng": true,
+    "capture_end_failure_preserves_original_cache_map_request_and_rng": true,
+    "capture_end_failure_retains_original_exception_and_clears_trace_state": true,
+    "success_preserves_sampled_cache_map_request_and_rng": true,
+    "three_replays_update_original_active_cache_and_positions_without_recapture": true,
+    "three_replays_preserve_original_inactive_slots_and_unused_pages": true
+  },
+  "provenance": {
+    "started_utc": "2026-10-25T00:24:32.907422+00:00",
+    "python": "3.10.22",
+    "torch": "2.11.0+cpu",
+    "ttnn": "unknown",
+    "checkpoint": ".cache/qwen38-probe",
+    "git_head": "cdcf1091d55e793f68fd46acdbe80372337e1c34",
+    "trace_alloc_tracking": "1",
+    "trace_skip_program_cache": "0",
+    "source_sha256": {
+      "tests/probe_external_prepare.py": "c8152c296bc49ba044ab6de327e7fdca20345e2feb6adb05733f8582159c3b0d",
+      "tt/generator.py": "6a24b49785f02bef6dcd10a31f618a550fa53d87576a03a71de7f474eef46c5c",
+      "tt/model.py": "76fd9fa5b8eeef2b4d5f9929578e6925920f9e2234ef4501f9b3c3c98b65afcc",
+      "tt/multichip_decoder.py": "46b8d305f5c10e96dc7dc1aa404e3a92b29bb8469cd6d560ac6e61fb204cd24f",
+      "tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c"
+    }
+  },
+  "failure_memory": {
+    "basis": "DRAM allocator checkpoints, not a peak measurement",
+    "before": {
+      "allocated_bytes_per_device": 1620999680,
+      "free_bytes_per_device": 32557731328
+    },
+    "scratch_specs": [
+      {
+        "field": "conv",
+        "shape": [
+          8,
+          3,
+          2560
+        ],
+        "padded_shape": [
+          8,
+          3,
+          2560
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.ROW_MAJOR"
+      },
+      {
+        "field": "recurrent",
+        "shape": [
+          8,
+          12,
+          128,
+          128
+        ],
+        "padded_shape": [
+          8,
+          12,
+          128,
+          128
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE"
+      },
+      {
+        "field": "key",
+        "shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "padded_shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE"
+      },
+      {
+        "field": "value",
+        "shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "padded_shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE"
+      }
+    ],
+    "scratch_bound": {
+      "allocated_bytes_per_device": 1665575424,
+      "free_bytes_per_device": 32513155584
+    },
+    "after": {
+      "allocated_bytes_per_device": 1624218112,
+      "free_bytes_per_device": 32554512896
+    }
+  },
+  "capture_boundary_cleanup_errors": [
+    [
+      "end_trace_capture",
+      "RuntimeError"
+    ]
+  ],
+  "preparation_memory": {
+    "basis": "DRAM allocator checkpoints, not a peak measurement",
+    "before": {
+      "allocated_bytes_per_device": 1630747136,
+      "free_bytes_per_device": 32547983872
+    },
+    "scratch_specs": [
+      {
+        "field": "conv",
+        "shape": [
+          8,
+          3,
+          2560
+        ],
+        "padded_shape": [
+          8,
+          3,
+          2560
+        ],
+        "dtype": "DataType.BFLOAT16",
+        "layout": "Layout.ROW_MAJOR"
+      },
+      {
+        "field": "recurrent",
+        "shape": [
+          8,
+          12,
+          128,
+          128
+        ],
+        "padded_shape": [
+          8,
+          12,
+          128,
+          128
+        ],
+        "dtype": "DataType.FLOAT32",
+        "layout": "Layout.TILE"
+      },
+      {
+        "field": "key",
+        "shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "padded_shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE"
+      },
+      {
+        "field": "value",
+        "shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "padded_shape": [
+          128,
+          1,
+          32,
+          256
+        ],
+        "dtype": "DataType.BFLOAT8_B",
+        "layout": "Layout.TILE"
+      }
+    ],
+    "scratch_bound": {
+      "allocated_bytes_per_device": 1675175424,
+      "free_bytes_per_device": 32503555584
+    },
+    "warmed_before_capture": {
+      "allocated_bytes_per_device": 1675175424,
+      "free_bytes_per_device": 32503555584
+    },
+    "after": {
+      "allocated_bytes_per_device": 1633139200,
+      "free_bytes_per_device": 32545591808
+    }
+  },
+  "trace_ids": {
+    "False": "MeshTraceId(1)",
+    "True": "MeshTraceId(2)"
+  },
+  "limitations": [
+    "Cache checks sample active/inactive slots and physical pages on all devices, not the complete pool.",
+    "Allocator checkpoints are not peak working-set measurements.",
+    "No accuracy or performance claim."
+  ]
+}

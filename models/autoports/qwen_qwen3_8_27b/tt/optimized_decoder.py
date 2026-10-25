@@ -523,17 +523,25 @@ class OptimizedDecoder(LightweightModule):
         y = ttnn.multiply(projected[..., 8192:], y, input_tensor_a_activations=[ttnn.UnaryOpType.SIGMOID])
         return self._linear(y, self.out)
 
-    def decode_forward(self, hidden_states, *, state, page_table=None, current_pos=None, cos=None, sin=None):
+    def decode_forward(self, hidden_states, *, state, page_table=None, current_pos=None, cos=None, sin=None,
+                       active_mask=None):
         """One token per request; current_pos is a device INT32 tensor, never a host list."""
         assert hidden_states.shape[1] == 1
         h = self._norm(hidden_states, self.in_norm)
         if self.layer_type == "linear_attention":
-            y = self._delta(h, state)
+            if active_mask is None:
+                y = self._delta(h, state)
+            else:
+                if not getattr(self, "supports_prepared_prefill", False):
+                    raise NotImplementedError("Inactive decode rows require masked-state support")
+                y = self._delta(h, state, active_mask=active_mask)
         else:
+            # Paged update and SDPA already skip rows whose current_pos is -1.
             y = self._attention(h, state, page_table=page_table, current_pos=current_pos, cos=cos, sin=sin)
         return self._finish(hidden_states, y)
 
-    def prefill_forward(self, hidden_states, *, state, start_position=0, page_table=None, cos=None, sin=None):
+    def prefill_forward(self, hidden_states, *, state, start_position=0, page_table=None, cos=None, sin=None,
+                        prepared_metadata=None):
         """Chunked [B,S,H] prefill, all logical outputs returned; resume at a chunk boundary.
 
         cos/sin: [B,1,S,64] for absolute positions start_position..start_position+S.
@@ -544,6 +552,37 @@ class OptimizedDecoder(LightweightModule):
             raise ValueError("Invalid logical sequence extent")
         if start_position % self.chunk_size:
             raise ValueError("Prefill continuation starts at a chunk boundary; decode handles individual tokens")
+        if prepared_metadata is not None:
+            # The full-model owner pads one physical chunk and supplies logical
+            # validity as tensor data. No logical-length slices belong here.
+            if not getattr(self, "supports_prepared_prefill", False):
+                raise NotImplementedError("Prepared chunks require a decoder with masked-state support")
+            if length != 1 and (length % 32 or length > 4096):
+                raise ValueError("Prepared prefill expects physical length 1 or a 32-token bucket through4096")
+            required = ("valid_mask", "history_indices", "fill_page_table", "chunk_start")
+            if any(name not in prepared_metadata for name in required):
+                raise ValueError("Prepared prefill metadata is incomplete")
+            if tuple(prepared_metadata["valid_mask"].shape) != (batch, length, 1):
+                raise ValueError("Prepared validity mask must match physical [B,P,1]")
+            x = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT)
+            h = self._norm(x, self.in_norm)
+            if self.layer_type == "linear_attention":
+                y = self._delta(h, state, prepared_metadata=prepared_metadata)
+            else:
+                c, s = cos, sin
+                if length == 1:
+                    # Preserve the inherited one-token prefill algorithm. Its
+                    # attention kernel still owns a physical32-row query tile.
+                    h = ttnn.pad(h, [(0, 0), (0, 31), (0, 0)], value=0)
+                    c = ttnn.pad(c, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0)
+                    s = ttnn.pad(s, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0)
+                y = self._attention(h, state, page_table=page_table, cos=c, sin=s,
+                                    prepared_metadata=prepared_metadata)
+                if length == 1:
+                    y = y[:, :1, :]
+            if self.policy.get("prefill_l1"):
+                del h
+            return ttnn.to_memory_config(self._finish(x, y), ttnn.DRAM_MEMORY_CONFIG)
         outputs = []
         work_chunk = self.policy.get("prefill_chunk", self.chunk_size)
         for offset in range(0, length, work_chunk):

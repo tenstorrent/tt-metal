@@ -1,0 +1,90 @@
+{
+  "rows": [
+    {
+      "batch": 1,
+      "concurrency": 1,
+      "input_tokens_per_user": 4096,
+      "output_tokens_per_user": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 433.81215003319085,
+      "decode_tps_per_user": 35.186164937945414,
+      "decode_ms_per_step": 28.420261252216818,
+      "scope": "all64layers; end-to-end token-out; warmed; EOS disabled",
+      "tracking": "0",
+      "evidence": "benchmark_b1_perf.json",
+      "deterministic_across_repeats": true,
+      "steady_state_host_refreshes_zero": true
+    },
+    {
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens_per_user": 4096,
+      "output_tokens_per_user": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 3577.5702320970595,
+      "decode_tps_per_user": 20.978293842817315,
+      "decode_ms_per_step": 47.668318858179525,
+      "scope": "all64layers; end-to-end token-out; warmed; EOS disabled",
+      "tracking": "0",
+      "evidence": "benchmark_b8_perf.json",
+      "deterministic_across_repeats": true,
+      "steady_state_host_refreshes_zero": true
+    },
+    {
+      "batch": 16,
+      "concurrency": 16,
+      "input_tokens_per_user": 4096,
+      "output_tokens_per_user": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 7316.1202860064805,
+      "decode_tps_per_user": 13.701415173375233,
+      "decode_ms_per_step": 72.98516155785228,
+      "scope": "all64layers; end-to-end token-out; warmed; EOS disabled",
+      "tracking": "0",
+      "evidence": "benchmark_b16_perf.json",
+      "deterministic_across_repeats": true,
+      "steady_state_host_refreshes_zero": true
+    },
+    {
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens_per_user": 4096,
+      "output_tokens_per_user": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 14760.040499968454,
+      "decode_tps_per_user": 8.821637125404092,
+      "decode_ms_per_step": 113.35764391399098,
+      "scope": "all64layers; end-to-end token-out; warmed; EOS disabled",
+      "tracking": "0",
+      "evidence": "benchmark_b32_perf.json",
+      "deterministic_across_repeats": true,
+      "steady_state_host_refreshes_zero": true
+    },
+    {
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens_per_user": 32768,
+      "output_tokens_per_user": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 147101.6916811932,
+      "decode_tps_per_user": 7.4184083709828155,
+      "decode_ms_per_step": 134.79980475481923,
+      "scope": "all64layers; end-to-end token-out; warmed; EOS disabled",
+      "tracking": "0",
+      "evidence": "benchmark_b32_perf.json",
+      "deterministic_across_repeats": true,
+      "steady_state_host_refreshes_zero": true
+    }
+  ],
+  "device_time": null,
+  "missing_reasons": [
+    "All-layer device profiling is prohibited in this stage; reduced profiling cannot populate full-model device time or rooflines."
+  ],
+  "teacher_forcing_evidence": "benchmark_b1_perf.json:teacher_forcing_control",
+  "diagnostic_teacher_forcing_evidence": "teacher_forcing_performance.json"
+}

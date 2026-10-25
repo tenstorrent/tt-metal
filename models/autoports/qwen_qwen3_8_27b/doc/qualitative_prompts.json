@@ -1,0 +1,8 @@
+{
+  "source": "Repo-local shared suite established at stage06. Installed qualitative-check skill requires a shared suite but ships no prompt-suite asset; these identical messages are retained for later stages.",
+  "prompts": [
+    {"id": "explain", "messages": [{"role": "user", "content": "Explain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old."}]},
+    {"id": "structured", "messages": [{"role": "user", "content": "Alice has 7 apples and gives Bob 3. Return a JSON object with keys alice_apples and bob_apples containing the resulting counts. Do not use a markdown code fence."}]},
+    {"id": "code", "messages": [{"role": "user", "content": "Write a short Python function that removes duplicates from a list while preserving the original order. Show one example call."}]}
+  ]
+}

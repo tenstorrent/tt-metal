@@ -1,0 +1,15 @@
+{
+  "hf_model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "tokenizer": "Qwen2Tokenizer",
+  "prompt_source": "aime24",
+  "chat_template": true,
+  "generation_length": 100,
+  "top_k": 100,
+  "prompt_tokens": 203,
+  "command": "python -m models.autoports.qwen_qwen3_8_27b.tests.generate_hf_reference",
+  "dtype": "bfloat16",
+  "scope": "HF text-only path, exact text weights from multimodal checkpoint",
+  "seconds": 391.7307143469807,
+  "completion": "We need solve math problem. Need reason step by step. Let's parse carefully.\n\nProblem: Every morning Aya goes for a 9-km-long walk and stops at coffee shop afterwards. When she walks at constant speed s km/h, the walk takes her 4 hours, including t minutes spent in coffee shop. When she walks s+2 km/h, the walk takes her 2 hours and 24 minutes, including t minutes spent in coffee shop. Suppose Aya walks"
+}

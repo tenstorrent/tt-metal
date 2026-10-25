@@ -1,0 +1,32 @@
+{
+  "scope": "Reduced layers0/3 only; no full-model device-time claim",
+  "source": "decode_ops.csv",
+  "clock_mhz": 1350,
+  "basis": "Complete per-device firmware envelope for each trace, including all operations and gaps",
+  "trace_roles": {
+    "0": "model",
+    "1": "canonical sampler"
+  },
+  "traces": {
+    "0": {
+      "per_device_us": {
+        "0": 2540.742222222222,
+        "1": 2564.760740740741,
+        "2": 2539.1051851851853,
+        "3": 2639.160740740741
+      },
+      "maximum_device_us": 2639.160740740741,
+      "device_ops": 496
+    },
+    "1": {
+      "per_device_us": {
+        "0": 555.7762962962963,
+        "1": 532.7696296296297,
+        "2": 559.3488888888888,
+        "3": 451.6725925925926
+      },
+      "maximum_device_us": 559.3488888888888,
+      "device_ops": 60
+    }
+  }
+}

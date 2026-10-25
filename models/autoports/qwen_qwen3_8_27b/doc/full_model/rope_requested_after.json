@@ -1,0 +1,130 @@
+{
+  "mesh": [
+    1,
+    4
+  ],
+  "real_weights": true,
+  "recorded_activations": true,
+  "exact": true,
+  "checks": [
+    {
+      "batch": 8,
+      "working_sequence": 32,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 8,
+      "working_sequence": 32,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 8,
+      "working_sequence": 160,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 8,
+      "working_sequence": 160,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 32,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 32,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 160,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 16,
+      "working_sequence": 160,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 32,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 32,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 160,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 160,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 4096,
+      "group": "q",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    },
+    {
+      "batch": 32,
+      "working_sequence": 4096,
+      "group": "k",
+      "distinct_permuted_user_positions": true,
+      "all_four_devices_exact": true,
+      "tail192_exact": true
+    }
+  ],
+  "scope": "Packing identity under production requested HiFi4/FP32 rotary accumulation.",
+  "requested_config": true,
+  "provenance": {
+    "tests/probe_prefill_rope.py": "f2e018d4c0e046bcd331c59cd397c1b6e3464a1b96611ed039550991ea1ff2aa",
+    "tt/multichip_decoder.py": "46b8d305f5c10e96dc7dc1aa404e3a92b29bb8469cd6d560ac6e61fb204cd24f",
+    "tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c"
+  }
+}

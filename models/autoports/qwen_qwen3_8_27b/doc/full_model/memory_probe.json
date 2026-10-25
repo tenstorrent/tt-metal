@@ -1,0 +1,30 @@
+{
+  "scope": "Reduced layers0/3 allocator parser validation only; not full-model memory capacity",
+  "input_tokens_per_user": 4096,
+  "batch": 8,
+  "num_banks": 8,
+  "baseline_allocated_bytes_per_device": 1819801600,
+  "additional_peak_bytes_by_graph_device": {
+    "0": 2333384704
+  },
+  "peak_allocated_bytes_per_device_upper_bound": 4153186304,
+  "final_additional_live_bytes_by_graph_device": {
+    "0": 0
+  },
+  "allocator_after_bytes_per_device": 1819801600,
+  "mesh_allocator_id": 0,
+  "event_allocator_reconciliation_exact": true,
+  "allocation_event_count": 754,
+  "events_file": "memory_probe.allocations.json.gz",
+  "events_sha256": "557b879f198ccc57e5f82af99f1ec541c062f6d1cfa98db59784c687bc71f52e",
+  "basis": "C++ graph buffer_allocate/deallocate events; actual aligned_size_per_bank times DRAM bank count. Add maximum simultaneous new allocations to pre-audit allocator baseline. Trace replay reuses capture storage; eager decode bounds its scratch. No timings from this diagnostic enter performance.",
+  "trace_allocation": {
+    "trace_ids": [
+      "MeshTraceId(0)",
+      "MeshTraceId(1)",
+      "MeshTraceId(2)"
+    ],
+    "released_trace_bytes_per_device": 2392064,
+    "basis": "Allocator delta immediately before/after releasing every live trace, after all benchmark/audit work. No model/request tensors are released."
+  }
+}

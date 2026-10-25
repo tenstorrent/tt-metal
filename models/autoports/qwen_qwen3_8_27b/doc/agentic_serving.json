@@ -1,5 +1,5 @@
 {
-  "stage": "05-optimized-multichip-decoder",
+  "stage": "06-full-model",
   "workload": {
     "target_concurrency": 32,
     "working_set_tokens": 32768,
@@ -14,37 +14,28 @@
   ],
   "tested_batch_sizes": [
     1,
-    4,
     8,
     16,
     32
   ],
-  "status": "optimized_multichip_decoder_v5_clean_pass",
-  "stage_scope": "TP4 optimized decoder layers and two-layer stacks only; no full-model or serving execution",
+  "status": "implementation_in_progress",
+  "stage_scope": "Full text model; no vLLM",
   "memory_evidence": [
-    "optimized_multichip_decoder/memory_capacity_plan.json"
+    "full_model/memory_capacity_plan.json"
   ],
-  "performance_status": "final_default_device_profiles_complete",
+  "performance_status": "measured_for_recorded_batches",
   "batch_evidence": {
     "1": [
-      "optimized_multichip_decoder/final_accepted_l0.json",
-      "optimized_multichip_decoder/final_accepted_l3.json"
+      "full_model/benchmark_b1_perf.json"
     ],
     "8": [
-      "optimized_multichip_decoder/batch8_l0.json",
-      "optimized_multichip_decoder/batch8_l3.json"
+      "full_model/benchmark_b8_perf.json"
     ],
     "16": [
-      "optimized_multichip_decoder/batch16_l0.json",
-      "optimized_multichip_decoder/batch16_l3.json"
+      "full_model/benchmark_b16_perf.json"
     ],
     "32": [
-      "optimized_multichip_decoder/batch32_l0.json",
-      "optimized_multichip_decoder/batch32_l3.json"
-    ],
-    "4": [
-      "optimized_multichip_decoder/batch4_l0.json",
-      "optimized_multichip_decoder/batch4_l3.json"
+      "full_model/benchmark_b32_perf.json"
     ]
   },
   "previous_stages": {
@@ -289,36 +280,158 @@
       ],
       "performance_evidence": "multichip_decoder/performance.json",
       "review_evidence": "multichip_decoder/stage_review.md"
+    },
+    "05-optimized-multichip-decoder": {
+      "stage": "05-optimized-multichip-decoder",
+      "workload": {
+        "target_concurrency": 32,
+        "working_set_tokens": 32768,
+        "typical_context_tokens": 4096,
+        "source": "planning estimate; default batch set and agent long-prefix workload, not measured"
+      },
+      "batch_sizes": [
+        1,
+        8,
+        16,
+        32
+      ],
+      "tested_batch_sizes": [
+        1,
+        4,
+        8,
+        16,
+        32
+      ],
+      "status": "optimized_multichip_decoder_v5_clean_pass",
+      "stage_scope": "TP4 optimized decoder layers and two-layer stacks only; no full-model or serving execution",
+      "memory_evidence": [
+        "optimized_multichip_decoder/memory_capacity_plan.json"
+      ],
+      "performance_status": "final_default_device_profiles_complete",
+      "batch_evidence": {
+        "1": [
+          "optimized_multichip_decoder/final_accepted_l0.json",
+          "optimized_multichip_decoder/final_accepted_l3.json"
+        ],
+        "8": [
+          "optimized_multichip_decoder/batch8_l0.json",
+          "optimized_multichip_decoder/batch8_l3.json"
+        ],
+        "16": [
+          "optimized_multichip_decoder/batch16_l0.json",
+          "optimized_multichip_decoder/batch16_l3.json"
+        ],
+        "32": [
+          "optimized_multichip_decoder/batch32_l0.json",
+          "optimized_multichip_decoder/batch32_l3.json"
+        ],
+        "4": [
+          "optimized_multichip_decoder/batch4_l0.json",
+          "optimized_multichip_decoder/batch4_l3.json"
+        ]
+      },
+      "performance_note": "Headline B1 is4096+128, single request. Final B1/B32 device profiles use whole-layer envelopes. Other timing is explicitly host-wall traced latency. Never substitute host time for device rooflines.",
+      "state_memory": {
+        "linear_bytes_per_request_per_device": 801792,
+        "full_kv_bytes_per_token_per_device": 544,
+        "weight_representations": "Original packed gateup retained for decode and one-row prefill; R1 native DRAM-sharded gate/up each12,533,760 bytes,25,067,520 additional bytes/device/layer. Measured final setup deltas match exactly. No interleaved mix copy selected.",
+        "trace_region_size": 0,
+        "trace_allocation_mode": "dynamic DRAM",
+        "actual_trace_bytes": null,
+        "trace_memory_missing_reason": "Allocator snapshots include live tensors and test backups; no isolated full-stack trace peak measured.",
+        "scope": "TP4 layer measured; all-stack memory is a feasibility ledger.",
+        "shared_ar_l1_bytes_per_device": 1392640,
+        "shared_native_rs_l1_bytes_per_device": 11264000,
+        "shared_native_rs_dram_bytes_per_device": 16384000,
+        "workspace_scope": "One shared mesh-lifetime owner: AR slots, native decodeRS batches8..32, and4096-row BFP8 prefillRS out/down buffers, all allocated before capture.",
+        "residual_contract": "optimized_multichip_decoder/residual_contract.md",
+        "shared_prefill_rs_dram_bytes_per_device": 55705600,
+        "separate_prefill_weights_bytes_per_layer_per_device": 25067520
+      },
+      "trace_allocation_evidence": [
+        "optimized_multichip_decoder/validation_summary.json",
+        "optimized_multichip_decoder/final_workspace_lifetime.json",
+        "optimized_multichip_decoder/mixed_traces_l0.json",
+        "optimized_multichip_decoder/mixed_traces_l3.json",
+        "optimized_multichip_decoder/mixed_prefill_decode_traces.json"
+      ],
+      "performance_evidence": "optimized_multichip_decoder/performance.json",
+      "review_evidence": "optimized_multichip_decoder/stage_review.md",
+      "prefix_contract_evidence": "optimized_multichip_decoder/residual_contract.md",
+      "stage05_prefill_policy": {
+        "ccl_workers_per_link": 8,
+        "ccl_payload": "bfloat8_b",
+        "norm_stats": "bfloat16",
+        "mix_gateup_input": "bfloat8_b",
+        "row_projection_input": "bfloat16",
+        "larger_rows": "DRAM interleaved",
+        "extra_persistent_bytes": 55705600,
+        "context_change": 0,
+        "status": "v5 final67case/trace/watcher/context/reserve/profile acceptance and independent clean-pass complete",
+        "evidence": "optimized_multichip_decoder/prefill_projection_selection.json",
+        "full_attention_mix_l1_max_working_rows": 4096,
+        "fused_RS": {
+          "batch": 1,
+          "working_rows": 4096,
+          "output_dtype": "bfloat8_b",
+          "other_shapes": "Same TP4 hidden-sharded residual via separate matmul/RS",
+          "geometry": {
+            "out_k": 48,
+            "down_k": 17,
+            "block_h": 4,
+            "subblock": [
+              2,
+              3
+            ],
+            "compute_grid": [
+              11,
+              8
+            ],
+            "per_core_N": 15,
+            "out_block_w": 15
+          }
+        },
+        "shared_once_across_layers": true,
+        "ccl_workers_scope": "Standalone AG/RS uses8workers/link. Fused RS passes nullopt for workers/chunks/buffers; effective heuristic selects4workers/direction in4096-row prefill (20CCLcores),2 in physicalM32 decode (12CCLcores). Serialized wrapper worker1 is not consumed by factory.",
+        "separate_prefill_weights_bytes_per_layer_per_device": 25067520,
+        "extra_persistent_bytes_scope": "55,705,600 shared prefillRS bytes once; separate weights are layer-owned and separately accounted.",
+        "projection_geometry": {
+          "linear_mix_k": 16,
+          "full_mix_k": 4,
+          "gate_up_grid": [
+            11,
+            8
+          ],
+          "gate_up_k": 20,
+          "gate_up_out_h": 8,
+          "gate_up_subblock": [
+            8,
+            1
+          ],
+          "short_lengths": "outH divides runtime per_core_M; subH divides actual outH; padding and slicing remain internal"
+        },
+        "packed_rope": {
+          "decode_min_batch": 4,
+          "prefill_min_batch": 8,
+          "persistent_bytes_added": 0,
+          "decode_tables": "Transient L1 tables shared by Q/K within one call; final DRAM boundary unchanged. Logical user rows sliced before unpacking.",
+          "prefill": "Tile-aligned internal working rows folded with matching cos/sin; DRAM transpose/view; public padding/masking/slicing unchanged.",
+          "precision": "Original HiFi4/FP32-requested policy preserved; upstream rotary core-group default discrepancy documented in rope_optimization.md.",
+          "prefill_extra_transient_bound_bytes_per_device": 536870912,
+          "bound_basis": "Conservative512MiB scratch allowance for Q/K rotary permutations at B32/S4096, within existing12GiB activation/CCL reserve; not a measured full-stack peak. No new weights/cache/persistent buffers."
+        }
+      }
     }
   },
-  "performance_note": "Headline B1 is4096+128, single request. Final B1/B32 device profiles use whole-layer envelopes. Other timing is explicitly host-wall traced latency. Never substitute host time for device rooflines.",
-  "state_memory": {
-    "linear_bytes_per_request_per_device": 801792,
-    "full_kv_bytes_per_token_per_device": 544,
-    "weight_representations": "Original packed gateup retained for decode and one-row prefill; R1 native DRAM-sharded gate/up each12,533,760 bytes,25,067,520 additional bytes/device/layer. Measured final setup deltas match exactly. No interleaved mix copy selected.",
-    "trace_region_size": 0,
-    "trace_allocation_mode": "dynamic DRAM",
-    "actual_trace_bytes": null,
-    "trace_memory_missing_reason": "Allocator snapshots include live tensors and test backups; no isolated full-stack trace peak measured.",
-    "scope": "TP4 layer measured; all-stack memory is a feasibility ledger.",
-    "shared_ar_l1_bytes_per_device": 1392640,
-    "shared_native_rs_l1_bytes_per_device": 11264000,
-    "shared_native_rs_dram_bytes_per_device": 16384000,
-    "workspace_scope": "One shared mesh-lifetime owner: AR slots, native decodeRS batches8..32, and4096-row BFP8 prefillRS out/down buffers, all allocated before capture.",
-    "residual_contract": "optimized_multichip_decoder/residual_contract.md",
-    "shared_prefill_rs_dram_bytes_per_device": 55705600,
-    "separate_prefill_weights_bytes_per_layer_per_device": 25067520
-  },
+  "performance_note": "All-layer autoregressive token-out measurements only. Teacher-forcing and reduced profiler results are separate.",
   "trace_allocation_evidence": [
-    "optimized_multichip_decoder/validation_summary.json",
-    "optimized_multichip_decoder/final_workspace_lifetime.json",
-    "optimized_multichip_decoder/mixed_traces_l0.json",
-    "optimized_multichip_decoder/mixed_traces_l3.json",
-    "optimized_multichip_decoder/mixed_prefill_decode_traces.json"
+    "full_model/preparation_contract.json",
+    "full_model/mixed_slots.json",
+    "full_model/reduced_trace_contract.json"
   ],
-  "performance_evidence": "optimized_multichip_decoder/performance.json",
-  "review_evidence": "optimized_multichip_decoder/stage_review.md",
-  "prefix_contract_evidence": "optimized_multichip_decoder/residual_contract.md",
+  "performance_evidence": "full_model/performance.json",
+  "review_evidence": null,
+  "prefix_contract_evidence": "full_model/runtime_audit.md",
   "stage05_prefill_policy": {
     "ccl_workers_per_link": 8,
     "ccl_payload": "bfloat8_b",
@@ -380,6 +493,423 @@
       "precision": "Original HiFi4/FP32-requested policy preserved; upstream rotary core-group default discrepancy documented in rope_optimization.md.",
       "prefill_extra_transient_bound_bytes_per_device": 536870912,
       "bound_basis": "Conservative512MiB scratch allowance for Q/K rotary permutations at B32/S4096, within existing12GiB activation/CCL reserve; not a measured full-stack peak. No new weights/cache/persistent buffers."
+    }
+  },
+  "ledger": {
+    "status": "allocator_reconciled_for_recorded_batches",
+    "weights": [
+      {
+        "name": "in_norm",
+        "bytes_per_device": 20971520,
+        "copies": 2,
+        "copy_reason": "Inherited full and hidden-sharded norms support measured replicated B1-7 and native-RS B8-32 residual contracts. Bytes in each row count that representation only. See optimized_multichip_decoder/residual_contract.md."
+      },
+      {
+        "name": "post_norm",
+        "bytes_per_device": 20971520,
+        "copies": 2,
+        "copy_reason": "Inherited full and hidden-sharded norms support measured replicated B1-7 and native-RS B8-32 residual contracts. Bytes in each row count that representation only. See optimized_multichip_decoder/residual_contract.md."
+      },
+      {
+        "name": "gate",
+        "bytes_per_device": 802160640,
+        "copies": 2,
+        "copy_reason": "Inherited measured stage05 separate prefill plus packed decode/one-row weights. Bytes in each row count only that named representation; sum rows once. See optimized_multichip_decoder/prefill_projection_selection.json."
+      },
+      {
+        "name": "up",
+        "bytes_per_device": 802160640,
+        "copies": 2,
+        "copy_reason": "Inherited measured stage05 separate prefill plus packed decode/one-row weights. Bytes in each row count only that named representation; sum rows once. See optimized_multichip_decoder/prefill_projection_selection.json."
+      },
+      {
+        "name": "gateup",
+        "bytes_per_device": 1604321280,
+        "copies": 2,
+        "copy_reason": "Inherited measured stage05 separate prefill plus packed decode/one-row weights. Bytes in each row count only that named representation; sum rows once. See optimized_multichip_decoder/prefill_projection_selection.json."
+      },
+      {
+        "name": "down",
+        "bytes_per_device": 802160640,
+        "copies": 1
+      },
+      {
+        "name": "mix",
+        "bytes_per_device": 802160640,
+        "copies": 1
+      },
+      {
+        "name": "out",
+        "bytes_per_device": 283115520,
+        "copies": 1
+      },
+      {
+        "name": "l2_weight",
+        "bytes_per_device": 786432,
+        "copies": 1
+      },
+      {
+        "name": "neg_A",
+        "bytes_per_device": 196608,
+        "copies": 1
+      },
+      {
+        "name": "dt",
+        "bytes_per_device": 196608,
+        "copies": 1
+      },
+      {
+        "name": "out_norm",
+        "bytes_per_device": 393216,
+        "copies": 1
+      },
+      {
+        "name": "taps",
+        "bytes_per_device": 31457280,
+        "copies": 1
+      },
+      {
+        "name": "norm_shards",
+        "bytes_per_device": 10485760,
+        "copies": 2,
+        "copy_reason": "Inherited full and hidden-sharded norms support measured replicated B1-7 and native-RS B8-32 residual contracts. Bytes in each row count that representation only. See optimized_multichip_decoder/residual_contract.md."
+      },
+      {
+        "name": "gdn_constants",
+        "bytes_per_device": 1179648,
+        "copies": 1
+      },
+      {
+        "name": "q_norm",
+        "bytes_per_device": 262144,
+        "copies": 1
+      },
+      {
+        "name": "k_norm",
+        "bytes_per_device": 262144,
+        "copies": 1
+      },
+      {
+        "name": "embedding",
+        "bytes_per_device": 635699200,
+        "copies": 1
+      },
+      {
+        "name": "head",
+        "bytes_per_device": 635699200,
+        "copies": 1
+      },
+      {
+        "name": "final_norm",
+        "bytes_per_device": 327680,
+        "copies": 1
+      },
+      {
+        "name": "cos_table",
+        "bytes_per_device": 33554432,
+        "copies": 1
+      },
+      {
+        "name": "sin_table",
+        "bytes_per_device": 33554432,
+        "copies": 1
+      }
+    ],
+    "weight_scope": "Persistent model tensors, including untied embedding/head, RoPE and recurrence constants; physical tile payload, excluding bank padding. copies denotes representation multiplicity, not an extra byte multiplier.",
+    "kv_bytes_per_token_per_device": 8704,
+    "linear_state_bytes_per_request_per_device": 38486016,
+    "pool_tokens": 1056768,
+    "allocations": [
+      {
+        "batch": 1,
+        "context": 262144,
+        "pool_tokens": 262144,
+        "model_tensor_payload_bytes_per_device": 6522077184,
+        "request_tensor_payload_bytes_per_device": 27485684,
+        "kv_payload_bytes_per_device": 2281701376,
+        "recurrent_state_payload_bytes_per_device": 38486016,
+        "shared_CCL_DRAM_bytes_per_device": 72089600,
+        "allocator_before_preparation_bytes_per_device": 8993135104,
+        "allocator_after_preparation_bytes_per_device": 9189270016,
+        "unitemized_setup_bytes_per_device": 51295244,
+        "warmup_program_cache_trace_increment_bytes_per_device": 196134912,
+        "available_after_preparation_bytes_per_device": 24989460992,
+        "allocation_audit": {
+          "scope": "all64layer request reset, eager prefill, all-active/masked decode and common sampler allocation events; not device timing",
+          "input_tokens_per_user": 4096,
+          "batch": 1,
+          "num_banks": 8,
+          "baseline_allocated_bytes_per_device": 9189270016,
+          "additional_peak_bytes_by_graph_device": {
+            "0": 226852864
+          },
+          "peak_allocated_bytes_per_device_upper_bound": 9416122880,
+          "final_additional_live_bytes_by_graph_device": {
+            "0": 0
+          },
+          "allocator_after_bytes_per_device": 9189270016,
+          "mesh_allocator_id": 0,
+          "event_allocator_reconciliation_exact": true,
+          "allocation_event_count": 9736,
+          "events_file": "benchmark_b1_perf.allocations.json.gz",
+          "events_sha256": "0b31e33d15cc38232ed02d573128e482ec0ee93e803b4538dba97765d0268503",
+          "basis": "C++ graph buffer_allocate/deallocate events; actual aligned_size_per_bank times DRAM bank count. Add maximum simultaneous new allocations to pre-audit allocator baseline. Trace replay reuses capture storage; eager decode bounds its scratch. No timings from this diagnostic enter performance."
+        },
+        "trace_allocation": {
+          "trace_ids": [
+            "MeshTraceId(0)",
+            "MeshTraceId(1)"
+          ],
+          "released_trace_bytes_per_device": 25526272,
+          "basis": "Allocator delta immediately before/after releasing every live trace, after all benchmark/audit work. No model/request tensors are released."
+        },
+        "evidence": "benchmark_b1_perf.json"
+      },
+      {
+        "batch": 8,
+        "context": 32768,
+        "pool_tokens": 262144,
+        "model_tensor_payload_bytes_per_device": 6522077184,
+        "request_tensor_payload_bytes_per_device": 191723268,
+        "kv_payload_bytes_per_device": 2281701376,
+        "recurrent_state_payload_bytes_per_device": 307888128,
+        "shared_CCL_DRAM_bytes_per_device": 72089600,
+        "allocator_before_preparation_bytes_per_device": 9406323200,
+        "allocator_after_preparation_bytes_per_device": 9702118912,
+        "unitemized_setup_bytes_per_device": 30843644,
+        "warmup_program_cache_trace_increment_bytes_per_device": 295795712,
+        "available_after_preparation_bytes_per_device": 24476612096,
+        "allocation_audit": {
+          "scope": "all64layer request reset, eager prefill, all-active/masked decode and common sampler allocation events; not device timing",
+          "input_tokens_per_user": 4096,
+          "batch": 8,
+          "num_banks": 8,
+          "baseline_allocated_bytes_per_device": 9702118912,
+          "additional_peak_bytes_by_graph_device": {
+            "0": 2333384704
+          },
+          "peak_allocated_bytes_per_device_upper_bound": 12035503616,
+          "final_additional_live_bytes_by_graph_device": {
+            "0": 0
+          },
+          "allocator_after_bytes_per_device": 9702118912,
+          "mesh_allocator_id": 0,
+          "event_allocator_reconciliation_exact": true,
+          "allocation_event_count": 23238,
+          "events_file": "benchmark_b8_perf.allocations.json.gz",
+          "events_sha256": "7d81e5e062a0e21e6500668d527b2e4c2df01517f7da4f8aa0b05e7f72567317",
+          "basis": "C++ graph buffer_allocate/deallocate events; actual aligned_size_per_bank times DRAM bank count. Add maximum simultaneous new allocations to pre-audit allocator baseline. Trace replay reuses capture storage; eager decode bounds its scratch. No timings from this diagnostic enter performance."
+        },
+        "trace_allocation": {
+          "trace_ids": [
+            "MeshTraceId(0)",
+            "MeshTraceId(1)",
+            "MeshTraceId(2)"
+          ],
+          "released_trace_bytes_per_device": 72253440,
+          "basis": "Allocator delta immediately before/after releasing every live trace, after all benchmark/audit work. No model/request tensors are released."
+        },
+        "evidence": "benchmark_b8_perf.json"
+      },
+      {
+        "batch": 16,
+        "context": 32768,
+        "pool_tokens": 524288,
+        "model_tensor_payload_bytes_per_device": 6522077184,
+        "request_tensor_payload_bytes_per_device": 379456132,
+        "kv_payload_bytes_per_device": 4563402752,
+        "recurrent_state_payload_bytes_per_device": 615776256,
+        "shared_CCL_DRAM_bytes_per_device": 72089600,
+        "allocator_before_preparation_bytes_per_device": 12183796224,
+        "allocator_after_preparation_bytes_per_device": 12560821760,
+        "unitemized_setup_bytes_per_device": 30994300,
+        "warmup_program_cache_trace_increment_bytes_per_device": 377025536,
+        "available_after_preparation_bytes_per_device": 21617909248,
+        "allocation_audit": {
+          "scope": "all64layer request reset, eager prefill, all-active/masked decode and common sampler allocation events; not device timing",
+          "input_tokens_per_user": 4096,
+          "batch": 16,
+          "num_banks": 8,
+          "baseline_allocated_bytes_per_device": 12560821760,
+          "additional_peak_bytes_by_graph_device": {
+            "0": 5069381632
+          },
+          "peak_allocated_bytes_per_device_upper_bound": 17630203392,
+          "final_additional_live_bytes_by_graph_device": {
+            "0": 0
+          },
+          "allocator_after_bytes_per_device": 12560821760,
+          "mesh_allocator_id": 0,
+          "event_allocator_reconciliation_exact": true,
+          "allocation_event_count": 35014,
+          "events_file": "benchmark_b16_perf.allocations.json.gz",
+          "events_sha256": "c9c02b6684b8ffb8348c370b2bb8e59a2afdea79421e6714b79f4692292fd470",
+          "basis": "C++ graph buffer_allocate/deallocate events; actual aligned_size_per_bank times DRAM bank count. Add maximum simultaneous new allocations to pre-audit allocator baseline. Trace replay reuses capture storage; eager decode bounds its scratch. No timings from this diagnostic enter performance."
+        },
+        "trace_allocation": {
+          "trace_ids": [
+            "MeshTraceId(0)",
+            "MeshTraceId(1)",
+            "MeshTraceId(2)"
+          ],
+          "released_trace_bytes_per_device": 90734592,
+          "basis": "Allocator delta immediately before/after releasing every live trace, after all benchmark/audit work. No model/request tensors are released."
+        },
+        "evidence": "benchmark_b16_perf.json"
+      },
+      {
+        "batch": 32,
+        "context": 33024,
+        "pool_tokens": 1056768,
+        "model_tensor_payload_bytes_per_device": 6522077184,
+        "request_tensor_payload_bytes_per_device": 754922884,
+        "kv_payload_bytes_per_device": 9198108672,
+        "recurrent_state_payload_bytes_per_device": 1231552512,
+        "shared_CCL_DRAM_bytes_per_device": 72089600,
+        "allocator_before_preparation_bytes_per_device": 17810049024,
+        "allocator_after_preparation_bytes_per_device": 18297264128,
+        "unitemized_setup_bytes_per_device": 31298172,
+        "warmup_program_cache_trace_increment_bytes_per_device": 487215104,
+        "available_after_preparation_bytes_per_device": 15881466880,
+        "allocation_audit": {
+          "scope": "all64layer request reset, eager prefill, all-active/masked decode and common sampler allocation events; not device timing",
+          "input_tokens_per_user": 4096,
+          "batch": 32,
+          "num_banks": 8,
+          "baseline_allocated_bytes_per_device": 18297264128,
+          "additional_peak_bytes_by_graph_device": {
+            "0": 10138722304
+          },
+          "peak_allocated_bytes_per_device_upper_bound": 28435986432,
+          "final_additional_live_bytes_by_graph_device": {
+            "0": 0
+          },
+          "allocator_after_bytes_per_device": 18297264128,
+          "mesh_allocator_id": 0,
+          "event_allocator_reconciliation_exact": true,
+          "allocation_event_count": 54334,
+          "events_file": "benchmark_b32_perf.allocations.json.gz",
+          "events_sha256": "8f77217150dfc86c7711ba4deae1ff0e8a8c8e192c71fe6f2805100139d8c671",
+          "basis": "C++ graph buffer_allocate/deallocate events; actual aligned_size_per_bank times DRAM bank count. Add maximum simultaneous new allocations to pre-audit allocator baseline. Trace replay reuses capture storage; eager decode bounds its scratch. No timings from this diagnostic enter performance."
+        },
+        "trace_allocation": {
+          "trace_ids": [
+            "MeshTraceId(0)",
+            "MeshTraceId(1)",
+            "MeshTraceId(2)"
+          ],
+          "released_trace_bytes_per_device": 118456320,
+          "basis": "Allocator delta immediately before/after releasing every live trace, after all benchmark/audit work. No model/request tensors are released."
+        },
+        "evidence": "benchmark_b32_perf.json"
+      }
+    ],
+    "reserves_bytes_per_device": {
+      "activation_and_CCL_estimate": 12884901888,
+      "trace_estimate": 1073741824
+    },
+    "measured_transient_peak_bytes_per_device": 10138722304,
+    "measured_trace_bytes_per_device": 118456320,
+    "reconciliation": "Unitemized setup is scalar/helper/semaphore allocations and allocator bank padding not enumerated by tensor inventory. Warmup delta combines program-cache, trace and persistent allocations; it is not an isolated trace measurement. Shared DRAM workspace is counted once. Shared AR/native-RS L1 buffers are outside this DRAM ledger.",
+    "missing_reasons": [],
+    "reserve_comparison": {
+      "activation_estimate_minus_measured_peak_bytes_per_device": 2746179584,
+      "trace_estimate_minus_measured_trace_bytes_per_device": 955285504,
+      "basis": "Measured request reset/prefill/decode/sampling allocation peaks are additional to prepared allocator baseline, which already includes persistent CCL and traces. Trace bytes are separately isolated by release. Planning reserves are compared, not added again to measured peaks. Preparation checkpoints for external scratch are a separate scope."
+    },
+    "external_preparation": {
+      "status": "pass",
+      "batch": 32,
+      "context": 33024,
+      "allocator_checkpoints": {
+        "basis": "DRAM allocator checkpoints, not a peak measurement",
+        "before": {
+          "allocated_bytes_per_device": 17815070720,
+          "free_bytes_per_device": 16363660288
+        },
+        "scratch_specs": [
+          {
+            "field": "conv",
+            "shape": [
+              32,
+              3,
+              2560
+            ],
+            "padded_shape": [
+              32,
+              3,
+              2560
+            ],
+            "dtype": "DataType.BFLOAT16",
+            "layout": "Layout.ROW_MAJOR"
+          },
+          {
+            "field": "recurrent",
+            "shape": [
+              32,
+              12,
+              128,
+              128
+            ],
+            "padded_shape": [
+              32,
+              12,
+              128,
+              128
+            ],
+            "dtype": "DataType.FLOAT32",
+            "layout": "Layout.TILE"
+          },
+          {
+            "field": "key",
+            "shape": [
+              33024,
+              1,
+              32,
+              256
+            ],
+            "padded_shape": [
+              33024,
+              1,
+              32,
+              256
+            ],
+            "dtype": "DataType.BFLOAT8_B",
+            "layout": "Layout.TILE"
+          },
+          {
+            "field": "value",
+            "shape": [
+              33024,
+              1,
+              32,
+              256
+            ],
+            "padded_shape": [
+              33024,
+              1,
+              32,
+              256
+            ],
+            "dtype": "DataType.BFLOAT8_B",
+            "layout": "Layout.TILE"
+          }
+        ],
+        "scratch_bound": {
+          "allocated_bytes_per_device": 18546934784,
+          "free_bytes_per_device": 15631796224
+        },
+        "warmed_before_capture": {
+          "allocated_bytes_per_device": 18910966784,
+          "free_bytes_per_device": 15267764224
+        },
+        "after": {
+          "allocated_bytes_per_device": 18297559040,
+          "free_bytes_per_device": 15881171968
+        }
+      },
+      "evidence": "external_prepare_b32.json",
+      "scope": "Full-stack external-pool preparation capacity and preservation probe; checkpoints are not peak measurements."
     }
   }
 }

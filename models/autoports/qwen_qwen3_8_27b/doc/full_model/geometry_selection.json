@@ -1,0 +1,39 @@
+{
+  "status": "selected_verified_clean_pass",
+  "scope": "B1 physical4096 native fused prefill only; B8/B16/B32 and decode unaffected",
+  "before": {
+    "out_k": 48,
+    "down_k": 17
+  },
+  "after": {
+    "out_k": 4,
+    "down_k": 17
+  },
+  "preserved": [
+    "native matmul/reduce-scatter fusion",
+    "11x8 grid/blockH4/subblock2x3",
+    "TP4 ring/two links",
+    "BF4 weights/BF16 inputs/BF8 MM and CCL",
+    "LoFi/non-FP32 requested compute/packer-L1 enabled",
+    "KV dtype split",
+    "residual layout",
+    "decode strategy"
+  ],
+  "effective_accumulation": "outK48 has one K block and no partial spill; outK4 has12 K blocks and BF16 packer-L1 partial storage. Requested compute/dtype policy and final BF8 output are unchanged.",
+  "evidence": [
+    "native_prefill_geometry.json",
+    "long_quality_cases_tt_out.json",
+    "prefill_rs_matched_reduction.json",
+    "AUTOFIX_repetition.md",
+    "default_long_quality_cases.json",
+    "default_geometry_reproduction.json",
+    "long_quality_cases_hf.json",
+    "kernel_policy_audit.json",
+    "benchmark_b1_perf.json",
+    "stage_review_final.md"
+  ],
+  "limitations": [
+    "Original answer begins at887 versus HF214 and is truncated1024; no equal-budget parity claim."
+  ],
+  "source_sha256": "c81169d020ebcd4f15d539e3d6167f3b42f303814a77fcf692a081229f5f2a8f"
+}

@@ -1,0 +1,27 @@
+{
+  "status": "required_work",
+  "input_tokens": 4096,
+  "hf_output_tokens": 512,
+  "tt_output_tokens": 512,
+  "prompt_sha256": "ec5606540969599d781d96ad892b0cded3f605d8f000669886cfaad9411899e2",
+  "first_divergence": {
+    "index": 56,
+    "hf_token": 1,
+    "tt_token": 279
+  },
+  "tt_tail_period_tokens": 15,
+  "tt_tail_window_tokens": 320,
+  "exact_sentence_counts": {
+    "hf": 1,
+    "tt": 32
+  },
+  "eos_seen": {
+    "hf": false,
+    "tt": false
+  },
+  "evidence": [
+    "benchmark_hf_control_512.json",
+    "benchmark_b1_perf.json:throughput_fixture_qualitative_control"
+  ],
+  "verdict": "TT remains in repeated context quotation; HF reaches coherent answer. EOS mode cannot explain this difference."
+}

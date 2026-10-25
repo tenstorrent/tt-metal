@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Prove prefill user/sequence packing under uniform rotary FP16 accumulation.
 
-Production requested FP32 policy is tested separately by whole-layer PCC: the
-upstream rotary factory assigns different defaults to its two core groups.
+The default retains the historical uniform-FP16 packing control. Pass
+--requested-config to regress the production HiFi4/FP32 policy across core groups.
 """
 import argparse
 import hashlib
@@ -14,7 +14,7 @@ from safetensors.torch import load_file
 from transformers import AutoConfig
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
 from ..tt.multichip_decoder import MultichipDecoder
-p=argparse.ArgumentParser();p.add_argument('--output',required=True);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--output',required=True);p.add_argument('--requested-config',action='store_true');a=p.parse_args()
 assert not Path(a.output).exists()
 torch.set_num_threads(8);torch.manual_seed(719)
 root=Path(__file__).resolve().parents[1]
@@ -44,7 +44,8 @@ try:
         for kind,value,weight in [('q',q,impl.q_norm),('k',k,impl.k_norm)]:
             normalized=impl._norm(value,weight)
             original=impl.ckc
-            impl.ckc=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,math_approx_mode=False,fp32_dest_acc_en=False,packer_l1_acc=True)
+            if not a.requested_config:
+                impl.ckc=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,math_approx_mode=False,fp32_dest_acc_en=False,packer_l1_acc=True)
             try:
                 expected=impl._rope(normalized,ct,st)
                 actual=impl._packed_prefill_rope(normalized,tables,batch,length)
@@ -54,7 +55,8 @@ try:
             assert all(torch.equal(v[...,64:],n[...,64:]) for v,n in zip(ar,nr)),(batch,length,kind,'tail')
             rows.append(dict(batch=batch,working_sequence=length,group=kind,distinct_permuted_user_positions=True,all_four_devices_exact=True,tail192_exact=True))
     evidence=dict(mesh=[1,4],real_weights=True,recorded_activations=True,exact=True,checks=rows,
-        scope='Packing identity under explicit uniform FP16 rotary accumulation. Production precision unchanged; original-policy whole-layer PCC is separate evidence.',
+        scope=('Packing identity under production requested HiFi4/FP32 rotary accumulation.' if a.requested_config else 'Packing identity under explicit uniform FP16 rotary accumulation. Production precision unchanged; original-policy whole-layer PCC is separate evidence.'),
+        requested_config=a.requested_config,
         provenance={str(f.relative_to(root)):hashlib.sha256(f.read_bytes()).hexdigest() for f in (Path(__file__),root/'tt/multichip_decoder.py',root/'tt/optimized_decoder.py')})
     Path(a.output).write_text(json.dumps(evidence,indent=2)+'\n')
 finally:ttnn.close_mesh_device(mesh)

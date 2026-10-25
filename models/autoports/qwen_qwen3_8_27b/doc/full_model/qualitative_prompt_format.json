@@ -1,0 +1,22 @@
+{
+  "hf_model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "tokenizer": "Qwen2Tokenizer",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering": "AutoTokenizer.apply_chat_template(messages,tokenize=False,add_generation_prompt=True); encode without added special tokens",
+  "prompt_source": "../qualitative_prompts.json",
+  "generation": {
+    "do_sample": false,
+    "max_new_tokens": 128,
+    "tt_stop_on_eos": true,
+    "eos_ids": [
+      248044,
+      248046
+    ]
+  },
+  "hf_control": "qualitative/*_hf.json",
+  "tt_outputs": "qualitative/*_tt.json",
+  "main_reference": "../../readiness_aime24_chat.refpt.json",
+  "limitation": "Bounded128-token controls; explanation/code answers truncate in HF as well as TT."
+}

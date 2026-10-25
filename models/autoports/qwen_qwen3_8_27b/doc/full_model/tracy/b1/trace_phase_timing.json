@@ -1,0 +1,32 @@
+{
+  "scope": "Reduced real layers0/3, final outK4; synthetic continuation at4223, not full-model device-time evidence",
+  "source": "decode_ops.csv",
+  "clock_mhz": 1350,
+  "basis": "Complete per-device firmware envelope for each trace, including operations and gaps",
+  "trace_roles": {
+    "0": "model",
+    "1": "canonical sampler"
+  },
+  "traces": {
+    "0": {
+      "per_device_us": {
+        "0": 2535.282222222222,
+        "1": 2564.848148148148,
+        "2": 2538.702962962963,
+        "3": 2641.1162962962962
+      },
+      "maximum_device_us": 2641.1162962962962,
+      "device_ops": 496
+    },
+    "1": {
+      "per_device_us": {
+        "0": 558.194074074074,
+        "1": 530.0555555555555,
+        "2": 557.1925925925926,
+        "3": 451.98148148148147
+      },
+      "maximum_device_us": 558.194074074074,
+      "device_ops": 60
+    }
+  }
+}

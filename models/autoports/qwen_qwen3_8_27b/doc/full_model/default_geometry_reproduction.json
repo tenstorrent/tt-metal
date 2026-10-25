@@ -1,0 +1,36 @@
+{
+  "scope": "Fresh default-source full64 output compared to the read diagnostic candidate; exact identity, not new HF accuracy",
+  "candidate_artifact": "models/autoports/qwen_qwen3_8_27b/doc/full_model/long_quality_cases_tt_out.json",
+  "candidate_sha256": "2903aabf47c636b81235a385679ea4d93b7858a40c0ec00b98d406195c590867",
+  "default_artifact": "models/autoports/qwen_qwen3_8_27b/doc/full_model/default_long_quality_cases.json",
+  "default_sha256": "b80170f73acd10239aaecb69d0f7f5ffdfcf1be2b4960d8442c3c06648f7e8ae",
+  "cases": [
+    {
+      "name": "benchmark_question_4096",
+      "all_token_ids_exact": true,
+      "completion_text_exact": true,
+      "output_tokens": 1024,
+      "reasoning_closer": 887,
+      "ended_eos": false,
+      "facts_exact": null
+    },
+    {
+      "name": "benchmark_question_4095",
+      "all_token_ids_exact": true,
+      "completion_text_exact": true,
+      "output_tokens": 892,
+      "reasoning_closer": 325,
+      "ended_eos": true,
+      "facts_exact": null
+    },
+    {
+      "name": "distinct_records_4096",
+      "all_token_ids_exact": true,
+      "completion_text_exact": true,
+      "output_tokens": 47,
+      "reasoning_closer": null,
+      "ended_eos": true,
+      "facts_exact": true
+    }
+  ]
+}

@@ -1,0 +1,286 @@
+{
+  "scope": "Reduced real layers0/3, B8/context512; diagnostic, not stage acceptance",
+  "control": "uniform_fp16_rope",
+  "identical_prompt_stages": [
+    {
+      "name": "embedding",
+      "shape": [
+        8,
+        64,
+        1280
+      ],
+      "max_abs_slot_difference": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "name": "layer0",
+      "shape": [
+        8,
+        64,
+        1280
+      ],
+      "max_abs_slot_difference": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "name": "layer3",
+      "shape": [
+        8,
+        64,
+        1280
+      ],
+      "max_abs_slot_difference": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ]
+    },
+    {
+      "name": "terminal",
+      "shape": [
+        8,
+        1,
+        62080
+      ],
+      "max_abs_slot_difference": [
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      ]
+    }
+  ],
+  "phases": {
+    "prefill": {
+      "repeat_exact": true,
+      "permutation_exact": true,
+      "permutation_max_abs": 0.0,
+      "duplicate_pairs": [
+        {
+          "slots": [
+            0,
+            2
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        },
+        {
+          "slots": [
+            0,
+            7
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        },
+        {
+          "slots": [
+            1,
+            5
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        },
+        {
+          "slots": [
+            3,
+            6
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        }
+      ]
+    },
+    "decode": {
+      "repeat_exact": true,
+      "permutation_exact": true,
+      "permutation_max_abs": 0.0,
+      "duplicate_pairs": [
+        {
+          "slots": [
+            0,
+            2
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        },
+        {
+          "slots": [
+            0,
+            7
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        },
+        {
+          "slots": [
+            1,
+            5
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        },
+        {
+          "slots": [
+            3,
+            6
+          ],
+          "exact": true,
+          "max_abs": 0.0
+        }
+      ]
+    }
+  }
+}

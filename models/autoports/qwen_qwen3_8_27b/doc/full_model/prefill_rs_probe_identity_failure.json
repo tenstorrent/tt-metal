@@ -1,0 +1,52 @@
+{
+  "status": "fail",
+  "scope": "Real reduced layers0..3 prefix; operator comparison, not semantic quality/performance",
+  "layers": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "probe_layers": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "batch": 1,
+  "context": 262144,
+  "sequence": 4096,
+  "input_sha256": "ec5606540969599d781d96ad892b0cded3f605d8f000669886cfaad9411899e2",
+  "runtime": {
+    "cpp_library": "/workspace/build_Release/lib/_ttnncpp.so",
+    "cpp_library_sha256": "aca153162839c6b5134ac9b446dd32d1574441a9c58fd6bc9a6ffceec17028d4",
+    "build_provenance": "rotary_build_provenance.json"
+  },
+  "source_sha256": {
+    "/workspace/models/autoports/qwen_qwen3_8_27b/tests/probe_prefill_rs_same_operands.py": "d783b422710d99e70b55c8bc0c8b0ec4d9a47618584890be5e588bd7787b36f3",
+    "models/autoports/qwen_qwen3_8_27b/tt/generator.py": "6a24b49785f02bef6dcd10a31f618a550fa53d87576a03a71de7f474eef46c5c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd",
+    "models/autoports/qwen_qwen3_8_27b/tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": "46b8d305f5c10e96dc7dc1aa404e3a92b29bb8469cd6d560ac6e61fb204cd24f",
+    "models/autoports/qwen_qwen3_8_27b/tt/model.py": "76fd9fa5b8eeef2b4d5f9929578e6925920f9e2234ef4501f9b3c3c98b65afcc",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "models/autoports/qwen_qwen3_8_27b/tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "models/autoports/qwen_qwen3_8_27b/tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp": "01208dd19fc3e381ac169f9b1433a764183784a4742610de2170d774c7407bcc",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp": "4cbe93b95de85ed689cced08649fc2af3c3957723fbedd1fd02133e7dd4839e7",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.hpp": "992cfb5d5322224c40a0331af7e09dd56aebddf37cf6cd8c66c82a70abeab7ce",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp": "e11b12bdc4bb25fd1c2ce57df043bb1d62bab57a4a61c35ecc30d3f1fd64e6e8",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp": "b1ebe2dbd3d73a70457f4256c426c9bd1a24c3d5729863ddee247bd16601be0e",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp": "01ca32a9785e7bcfcec7ef7d6b22d7fca28efa025c5635f2c3966ab03df80bcb",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.hpp": "a437739048c234a6e294eb2be928770f7e9990768d29596150d633240ef7f637",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp": "7f3913b0330509cf47bbfdbc97995a027b453df42753b43c40e405409e949a6a",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp": "7f441bd75fb4ab62f4cce8f5fd465fb3f199ae2a3de6bb947e40ae11fb97890f",
+    "ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp": "98d911cd60ac5cbbec5ba9b13417c96cb5293efdab043732bc061ad7ee068093",
+    "ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.cpp": "23e3eca15f36eae913dca820d312d7bd535d33dacb46928fe0581ac5cb5d0e1c"
+  },
+  "comparisons": [],
+  "error_type": "AssertionError",
+  "error": ""
+}

@@ -1,0 +1,424 @@
+{
+  "scope": "HF BF16 exact common-history decision; CPU diagnostic, no performance claim",
+  "reference": "models/autoports/qwen_qwen3_8_27b/doc/full_model/benchmark_hf_control_512.json",
+  "reference_sha256": "68a9e8051711d4a65b883c48e6cc95e33bf2a88bb4358669a87ddc785606469d",
+  "input_sha256": "ec5606540969599d781d96ad892b0cded3f605d8f000669886cfaad9411899e2",
+  "output_index": 56,
+  "input_position": 4151,
+  "history_tokens": 56,
+  "selected_token": 1,
+  "compared_tokens": {
+    "1": {
+      "logit": 21.0,
+      "rank": 1
+    },
+    "279": {
+      "logit": 20.125,
+      "rank": 2
+    }
+  },
+  "top100": [
+    {
+      "token": 1,
+      "logit": 21.0
+    },
+    {
+      "token": 279,
+      "logit": 20.125
+    },
+    {
+      "token": 1149,
+      "logit": 17.375
+    },
+    {
+      "token": 20564,
+      "logit": 16.625
+    },
+    {
+      "token": 3158,
+      "logit": 16.25
+    },
+    {
+      "token": 1754,
+      "logit": 15.875
+    },
+    {
+      "token": 328,
+      "logit": 15.25
+    },
+    {
+      "token": 75530,
+      "logit": 15.125
+    },
+    {
+      "token": 321,
+      "logit": 14.8125
+    },
+    {
+      "token": 13,
+      "logit": 14.25
+    },
+    {
+      "token": 1518,
+      "logit": 14.1875
+    },
+    {
+      "token": 248046,
+      "logit": 14.0
+    },
+    {
+      "token": 318,
+      "logit": 13.8125
+    },
+    {
+      "token": 2423,
+      "logit": 13.8125
+    },
+    {
+      "token": 1076,
+      "logit": 13.75
+    },
+    {
+      "token": 498,
+      "logit": 13.75
+    },
+    {
+      "token": 198,
+      "logit": 13.625
+    },
+    {
+      "token": 561,
+      "logit": 13.375
+    },
+    {
+      "token": 42418,
+      "logit": 13.3125
+    },
+    {
+      "token": 7285,
+      "logit": 13.25
+    },
+    {
+      "token": 378,
+      "logit": 13.125
+    },
+    {
+      "token": 271,
+      "logit": 12.9375
+    },
+    {
+      "token": 5721,
+      "logit": 12.8125
+    },
+    {
+      "token": 50799,
+      "logit": 12.4375
+    },
+    {
+      "token": 15060,
+      "logit": 12.25
+    },
+    {
+      "token": 39981,
+      "logit": 11.8125
+    },
+    {
+      "token": 264,
+      "logit": 11.6875
+    },
+    {
+      "token": 11,
+      "logit": 11.5
+    },
+    {
+      "token": 1396,
+      "logit": 11.4375
+    },
+    {
+      "token": 421,
+      "logit": 11.4375
+    },
+    {
+      "token": 10029,
+      "logit": 11.375
+    },
+    {
+      "token": 1288,
+      "logit": 11.375
+    },
+    {
+      "token": 30,
+      "logit": 11.375
+    },
+    {
+      "token": 220,
+      "logit": 11.3125
+    },
+    {
+      "token": 424,
+      "logit": 11.3125
+    },
+    {
+      "token": 695,
+      "logit": 11.0625
+    },
+    {
+      "token": 58,
+      "logit": 11.0
+    },
+    {
+      "token": 5748,
+      "logit": 10.875
+    },
+    {
+      "token": 731,
+      "logit": 10.8125
+    },
+    {
+      "token": 2879,
+      "logit": 10.8125
+    },
+    {
+      "token": 9726,
+      "logit": 10.625
+    },
+    {
+      "token": 781,
+      "logit": 10.625
+    },
+    {
+      "token": 760,
+      "logit": 10.5
+    },
+    {
+      "token": 4961,
+      "logit": 10.5
+    },
+    {
+      "token": 907,
+      "logit": 10.375
+    },
+    {
+      "token": 1132,
+      "logit": 10.375
+    },
+    {
+      "token": 35643,
+      "logit": 10.3125
+    },
+    {
+      "token": 369,
+      "logit": 10.25
+    },
+    {
+      "token": 9646,
+      "logit": 10.1875
+    },
+    {
+      "token": 37431,
+      "logit": 10.1875
+    },
+    {
+      "token": 4241,
+      "logit": 10.1875
+    },
+    {
+      "token": 1070,
+      "logit": 10.1875
+    },
+    {
+      "token": 10574,
+      "logit": 10.125
+    },
+    {
+      "token": 828,
+      "logit": 10.125
+    },
+    {
+      "token": 3376,
+      "logit": 10.125
+    },
+    {
+      "token": 259,
+      "logit": 10.0625
+    },
+    {
+      "token": 13004,
+      "logit": 10.0625
+    },
+    {
+      "token": 4558,
+      "logit": 10.0
+    },
+    {
+      "token": 1719,
+      "logit": 10.0
+    },
+    {
+      "token": 641,
+      "logit": 10.0
+    },
+    {
+      "token": 487,
+      "logit": 9.9375
+    },
+    {
+      "token": 270,
+      "logit": 9.9375
+    },
+    {
+      "token": 29256,
+      "logit": 9.875
+    },
+    {
+      "token": 506,
+      "logit": 9.875
+    },
+    {
+      "token": 12742,
+      "logit": 9.8125
+    },
+    {
+      "token": 836,
+      "logit": 9.8125
+    },
+    {
+      "token": 18597,
+      "logit": 9.8125
+    },
+    {
+      "token": 471,
+      "logit": 9.6875
+    },
+    {
+      "token": 18205,
+      "logit": 9.625
+    },
+    {
+      "token": 22980,
+      "logit": 9.625
+    },
+    {
+      "token": 20862,
+      "logit": 9.625
+    },
+    {
+      "token": 1933,
+      "logit": 9.625
+    },
+    {
+      "token": 510,
+      "logit": 9.5625
+    },
+    {
+      "token": 11235,
+      "logit": 9.5625
+    },
+    {
+      "token": 26366,
+      "logit": 9.5625
+    },
+    {
+      "token": 303,
+      "logit": 9.5
+    },
+    {
+      "token": 26,
+      "logit": 9.5
+    },
+    {
+      "token": 14482,
+      "logit": 9.5
+    },
+    {
+      "token": 38593,
+      "logit": 9.5
+    },
+    {
+      "token": 1141,
+      "logit": 9.5
+    },
+    {
+      "token": 1868,
+      "logit": 9.4375
+    },
+    {
+      "token": 384,
+      "logit": 9.4375
+    },
+    {
+      "token": 763,
+      "logit": 9.375
+    },
+    {
+      "token": 8618,
+      "logit": 9.375
+    },
+    {
+      "token": 551,
+      "logit": 9.3125
+    },
+    {
+      "token": 5326,
+      "logit": 9.3125
+    },
+    {
+      "token": 440,
+      "logit": 9.3125
+    },
+    {
+      "token": 11988,
+      "logit": 9.3125
+    },
+    {
+      "token": 62804,
+      "logit": 9.3125
+    },
+    {
+      "token": 61946,
+      "logit": 9.3125
+    },
+    {
+      "token": 88827,
+      "logit": 9.25
+    },
+    {
+      "token": 10899,
+      "logit": 9.25
+    },
+    {
+      "token": 29865,
+      "logit": 9.25
+    },
+    {
+      "token": 449,
+      "logit": 9.25
+    },
+    {
+      "token": 59,
+      "logit": 9.25
+    },
+    {
+      "token": 175267,
+      "logit": 9.1875
+    },
+    {
+      "token": 1179,
+      "logit": 9.1875
+    },
+    {
+      "token": 8934,
+      "logit": 9.1875
+    },
+    {
+      "token": 42960,
+      "logit": 9.125
+    },
+    {
+      "token": 36188,
+      "logit": 9.125
+    }
+  ],
+  "source_sha256": "b8503ca9837414b27b0d8591c741787431ace14ec93bf0caafd52cb3529b97ec",
+  "torch_version": "2.11.0+cpu"
+}

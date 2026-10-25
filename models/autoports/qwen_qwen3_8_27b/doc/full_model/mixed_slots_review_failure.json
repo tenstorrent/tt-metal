@@ -1,0 +1,119 @@
+{
+  "scope": "reduced real layers0/3 plus real terminal, B8/context512",
+  "prepared_buckets": [
+    1,
+    64,
+    96,
+    128,
+    192,
+    256,
+    320,
+    384,
+    512
+  ],
+  "status": "fail",
+  "checks": {
+    "external_physical_page_map_alignment_validated": true,
+    "failed_prepare_restores_nonzero_external_cache_all_devices": true,
+    "prepare_restores_nonzero_external_cache_all_devices": true,
+    "all_active_first_trace_reuse": true,
+    "mixed_generation_inactive_zero_state": {
+      "inactive_slots": [
+        4,
+        5,
+        6,
+        7
+      ],
+      "all_four_devices_exact": true
+    },
+    "mixed_trace_reuse": true,
+    "mixed_outputs_repeat_exactly": true,
+    "mixed_repeat_trace_reuse": true,
+    "all_active_outputs_repeat_exactly": true,
+    "all_active_return_trace_reuse": true,
+    "masked_decode_preserves_nonzero_inactive_state": {
+      "inactive_slots": [
+        1,
+        3,
+        4,
+        6,
+        7
+      ],
+      "all_four_devices_exact": true
+    },
+    "low_level_external_cache_trace_reuse": true,
+    "prefill_groups_preserve_nonzero_inactive_state": {
+      "inactive_slots": [
+        0,
+        2,
+        4,
+        5,
+        7
+      ],
+      "all_four_devices_exact": true
+    },
+    "prefill_then_decode_trace_reuse": true,
+    "inplace_device_page_map_prefill_targets_exact_pages": true,
+    "continuation_uses_absolute_positions_and_runtime_page_offset": true,
+    "near_end_odd128_page_window_bounded": true,
+    "continuation_matches_whole_prefill": [
+      {
+        "prefix": 128,
+        "tail": 33,
+        "logits_pcc": 0.9999728798866272,
+        "state_pcc": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "prefix": 256,
+        "tail": 33,
+        "logits_pcc": 1.0,
+        "state_pcc": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {
+        "prefix": 384,
+        "tail": 127,
+        "logits_pcc": 0.9999141693115234,
+        "state_pcc": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      }
+    ]
+  },
+  "trace_allocation_tracking": true,
+  "program_cache_allocations_included": true,
+  "source_sha256": {
+    "tests/probe_mixed_slots.py": "49519f19fc3233049fb0cff4fdb6f3470888811aca4e094290558d4c433d7334",
+    "tt/generator.py": "babb8b76579a384d30c1f9ce5c7a9ce80b109f3b117be9bfc01aa85998581d00",
+    "tt/model.py": "76fd9fa5b8eeef2b4d5f9929578e6925920f9e2234ef4501f9b3c3c98b65afcc",
+    "tt/multichip_decoder.py": "46b8d305f5c10e96dc7dc1aa404e3a92b29bb8469cd6d560ac6e61fb204cd24f",
+    "tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c"
+  },
+  "error_type": "AssertionError",
+  "error": "('prefill', 'slot permutation', 0.0625)",
+  "elapsed_seconds": 61.019211871083826
+}

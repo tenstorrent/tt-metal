@@ -1,0 +1,49 @@
+{
+  "rows": [
+    {
+      "batch": 1,
+      "linear_layer_us": 445.78,
+      "full_layer_us": 359.46,
+      "estimated_stack_ms": 27.148799999999998,
+      "token_out_ms": 28.420261252216818,
+      "difference_ms": 1.2714612522168203,
+      "basis": "48linear+16full; inherited stage05 host trace medians at4096+128; includes per-layer replay overhead and predates rotary core-group correction; estimate, not directly subtractable device attribution",
+      "source": "../optimized_multichip_decoder/README.md",
+      "full_model_source": "benchmark_b1_perf.json"
+    },
+    {
+      "batch": 8,
+      "linear_layer_us": 777.06,
+      "full_layer_us": 631.97,
+      "estimated_stack_ms": 47.410399999999996,
+      "token_out_ms": 47.668318858179525,
+      "difference_ms": 0.2579188581795293,
+      "basis": "48linear+16full; inherited stage05 host trace medians at4096+128; includes per-layer replay overhead and predates rotary core-group correction; estimate, not directly subtractable device attribution",
+      "source": "../optimized_multichip_decoder/README.md",
+      "full_model_source": "benchmark_b8_perf.json"
+    },
+    {
+      "batch": 16,
+      "linear_layer_us": 1251.27,
+      "full_layer_us": 751.57,
+      "estimated_stack_ms": 72.08608,
+      "token_out_ms": 72.98516155785228,
+      "difference_ms": 0.8990815578522842,
+      "basis": "48linear+16full; inherited stage05 host trace medians at4096+128; includes per-layer replay overhead and predates rotary core-group correction; estimate, not directly subtractable device attribution",
+      "source": "../optimized_multichip_decoder/README.md",
+      "full_model_source": "benchmark_b16_perf.json"
+    },
+    {
+      "batch": 32,
+      "linear_layer_us": 2000.69,
+      "full_layer_us": 989.93,
+      "estimated_stack_ms": 111.872,
+      "token_out_ms": 113.35764391399098,
+      "difference_ms": 1.4856439139909838,
+      "basis": "48linear+16full; inherited stage05 host trace medians at4096+128; includes per-layer replay overhead and predates rotary core-group correction; estimate, not directly subtractable device attribution",
+      "source": "../optimized_multichip_decoder/README.md",
+      "full_model_source": "benchmark_b32_perf.json"
+    }
+  ],
+  "scope": "Host-wall comparison only. Negative differences can reflect combined-trace dispatch amortization. Terminal packing and common sampler comparisons are separately measured; reduced profiler gives device attribution."
+}

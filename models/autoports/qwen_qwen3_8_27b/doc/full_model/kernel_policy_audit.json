@@ -1,0 +1,95 @@
+{
+  "scope": "Selected fused MM/RS runtime attributes from reduced real layers0/3; not all64 profiling",
+  "records": [
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 4,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": true,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "b2a5133b3478f7633b141949fdfb5e7763dcbe9b2a196a4abc492c6163296e57"
+    },
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": true,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "b2a5133b3478f7633b141949fdfb5e7763dcbe9b2a196a4abc492c6163296e57"
+    },
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 4,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": true,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "b2a5133b3478f7633b141949fdfb5e7763dcbe9b2a196a4abc492c6163296e57"
+    },
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": true,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "b2a5133b3478f7633b141949fdfb5e7763dcbe9b2a196a4abc492c6163296e57"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 6,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": false,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "38be136093d9032489116e943f32904357dea28c716468b7428115444213b042"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": false,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "38be136093d9032489116e943f32904357dea28c716468b7428115444213b042"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 24,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": false,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "38be136093d9032489116e943f32904357dea28c716468b7428115444213b042"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "fp32_dest": false,
+      "output_bf8": false,
+      "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "38be136093d9032489116e943f32904357dea28c716468b7428115444213b042"
+    }
+  ],
+  "final_b1_native_prefill_geometry_verified": true,
+  "fidelity_basis": "Embedded matmul_struct.compute_kernel_config in fused-op ATTRIBUTES is LoFi/non-FP32. The generic CSV MATH FIDELITY summary column is not used to infer the inner matmul policy."
+}

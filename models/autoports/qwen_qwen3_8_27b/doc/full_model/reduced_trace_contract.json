@@ -1,0 +1,102 @@
+{
+  "scope": "reduced layers0/3; exact33-token prepared signature only",
+  "high_seed": 4294966783,
+  "high_seed_outputs": [
+    198,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220,
+    318
+  ],
+  "eos_stopped": [
+    198,
+    220
+  ],
+  "fixed_length_tokens": [
+    198,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220
+  ],
+  "eos_ids": [
+    248046
+  ],
+  "sampled_outputs": [
+    12,
+    220,
+    11,
+    220,
+    13,
+    318,
+    220,
+    12
+  ],
+  "greedy_outputs": [
+    198,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220
+  ],
+  "host_compatibility_outputs": [
+    198,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220
+  ],
+  "outputs": [
+    198,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220
+  ],
+  "page_remap_outputs": [
+    198,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220,
+    220
+  ],
+  "trace_ids": [
+    "MeshTraceId(0)",
+    "MeshTraceId(1)"
+  ],
+  "counters": {
+    "model_replays": 72,
+    "sampling_replays": 74,
+    "token_refreshes": 17,
+    "position_refreshes": 1,
+    "page_table_refreshes": 3,
+    "readbacks": 90,
+    "captures": 2,
+    "host_copies_total": 271
+  },
+  "final_positions": [
+    40
+  ],
+  "token_feedback": "same persistent allocation consumed before next sampler write",
+  "tracking": true,
+  "skip_program_cache": false,
+  "status": "pass"
+}

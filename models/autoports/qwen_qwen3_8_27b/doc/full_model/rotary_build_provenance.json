@@ -1,0 +1,12 @@
+{
+  "rotary_factory_sha256": "be0d9ed714cfd13cb8129985fe8f9a5a2b92cdbe184587cc38b6c545d72ba54c",
+  "extension": "/workspace/ttnn/ttnn/_ttnn.so",
+  "cpp_library": "/workspace/build_Release/lib/_ttnncpp.so",
+  "cpp_library_sha256": "aca153162839c6b5134ac9b446dd32d1574441a9c58fd6bc9a6ffceec17028d4",
+  "loaded_cpp_library": [
+    "/workspace/build_Release/lib/_ttnncpp.so"
+  ],
+  "build_command": "ninja -C build_Release -j8 _ttnn.so; cmake --install build_Release --component ttnn-runtime; cmake --install build_Release --component tt_pybinds",
+  "build_log": "rotary_build.log",
+  "install_log": "rotary_install.log"
+}

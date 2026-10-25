@@ -1,0 +1,2529 @@
+{
+  "status": "complete",
+  "scope": "Real reduced layers0..3 prefix; operator comparison, not semantic quality/performance",
+  "layers": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "probe_layers": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "batch": 1,
+  "context": 262144,
+  "sequence": 4096,
+  "input_sha256": "ec5606540969599d781d96ad892b0cded3f605d8f000669886cfaad9411899e2",
+  "runtime": {
+    "cpp_library": "/workspace/build_Release/lib/_ttnncpp.so",
+    "cpp_library_sha256": "aca153162839c6b5134ac9b446dd32d1574441a9c58fd6bc9a6ffceec17028d4",
+    "build_provenance": "rotary_build_provenance.json"
+  },
+  "source_sha256": {
+    "/workspace/models/autoports/qwen_qwen3_8_27b/tests/probe_prefill_rs_same_operands.py": "ac73cc070305b58bc39594f9dee819b3500c7ec465b3ecaf90a5024c7cbea2cf",
+    "models/autoports/qwen_qwen3_8_27b/tests/probe_gdn_same_operands.py": "eb99ecdd931ad402da078b54bd7664243e2e025a40776d1adf79c0c23cf54496",
+    "models/autoports/qwen_qwen3_8_27b/tt/generator.py": "6a24b49785f02bef6dcd10a31f618a550fa53d87576a03a71de7f474eef46c5c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd",
+    "models/autoports/qwen_qwen3_8_27b/tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": "46b8d305f5c10e96dc7dc1aa404e3a92b29bb8469cd6d560ac6e61fb204cd24f",
+    "models/autoports/qwen_qwen3_8_27b/tt/model.py": "76fd9fa5b8eeef2b4d5f9929578e6925920f9e2234ef4501f9b3c3c98b65afcc",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "models/autoports/qwen_qwen3_8_27b/tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "models/autoports/qwen_qwen3_8_27b/tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.hpp": "01208dd19fc3e381ac169f9b1433a764183784a4742610de2170d774c7407bcc",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp": "4cbe93b95de85ed689cced08649fc2af3c3957723fbedd1fd02133e7dd4839e7",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.hpp": "992cfb5d5322224c40a0331af7e09dd56aebddf37cf6cd8c66c82a70abeab7ce",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_nanobind.cpp": "e11b12bdc4bb25fd1c2ce57df043bb1d62bab57a4a61c35ecc30d3f1fd64e6e8",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation_types.hpp": "b1ebe2dbd3d73a70457f4256c426c9bd1a24c3d5729863ddee247bd16601be0e",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.cpp": "01ca32a9785e7bcfcec7ef7d6b22d7fca28efa025c5635f2c3966ab03df80bcb",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_program_factory.hpp": "a437739048c234a6e294eb2be928770f7e9990768d29596150d633240ef7f637",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.cpp": "7f3913b0330509cf47bbfdbc97995a027b453df42753b43c40e405409e949a6a",
+    "ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp": "7f441bd75fb4ab62f4cce8f5fd465fb3f199ae2a3de6bb947e40ae11fb97890f",
+    "ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.hpp": "98d911cd60ac5cbbec5ba9b13417c96cb5293efdab043732bc061ad7ee068093",
+    "ttnn/cpp/ttnn/operations/experimental/matmul/ccl_fusion/device/ccl_fusion_mcast_2d.cpp": "23e3eca15f36eae913dca820d312d7bd535d33dacb46928fe0581ac5cb5d0e1c"
+  },
+  "comparisons": [
+    {
+      "layer": 0,
+      "role": "out",
+      "input_shape": [
+        1,
+        4096,
+        1536
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0703125,
+            "rms": 0.00048096523114857004,
+            "pcc": 0.9998978483584948,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0625,
+            "rms": 0.00039566756331878587,
+            "pcc": 0.9999345932394259,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.000254191226602644,
+            "pcc": 0.9999415795643556,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.03125,
+            "rms": 0.0004911443902115879,
+            "pcc": 0.9997573211860035,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.0753026008605957,
+            "rms": 0.0005475040123759013,
+            "pcc": 0.9998760235997713,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.04520869255065918,
+            "rms": 0.00018680500019910471,
+            "pcc": 0.9999739559120763,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.04520869255065918,
+            "rms": 0.0003363811433481359,
+            "pcc": 0.9999227777038378,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.013273507356643677,
+            "rms": 0.0006719647790463311,
+            "pcc": 0.999803920710674,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.005461007356643677,
+            "rms": 0.00039484672886354625,
+            "pcc": 0.9998848927207235,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.15625,
+            "rms": 0.00035599484772834563,
+            "pcc": 0.9998998570685498,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.125,
+            "rms": 0.00028272924117556943,
+            "pcc": 0.999938028909952,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.00021324625717089517,
+            "pcc": 0.9999308288211102,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0078125,
+            "rms": 0.000495123433269829,
+            "pcc": 0.9997674564301968,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.037095069885253906,
+            "rms": 0.00042663043675324013,
+            "pcc": 0.9998961724948994,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.025404930114746094,
+            "rms": 0.00011377854478757526,
+            "pcc": 0.9999885962702646,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.03037208877503872,
+            "rms": 0.00028980504006933063,
+            "pcc": 0.9999129720479845,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.00846177339553833,
+            "rms": 0.0006911406652067122,
+            "pcc": 0.9998156268017104,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.00455552339553833,
+            "rms": 0.0004046302521449529,
+            "pcc": 0.99988595836269,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.25,
+            "rms": 0.001183320533026493,
+            "pcc": 0.9999780124309386,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.25,
+            "rms": 0.0010231023289641807,
+            "pcc": 0.9999776066892531,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0625,
+            "rms": 0.0007027550581221637,
+            "pcc": 0.9999908091340831,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.015625,
+            "rms": 0.0005102440894976112,
+            "pcc": 0.9997525547991842,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.20392608642578125,
+            "rms": 0.0014725155668156022,
+            "pcc": 0.9999555603200929,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.15396499633789062,
+            "rms": 0.0009045090065491994,
+            "pcc": 0.9999800601624134,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.15707969665527344,
+            "rms": 0.0011821909462398398,
+            "pcc": 0.9999685520195335,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.008720993995666504,
+            "rms": 0.0007104303342769003,
+            "pcc": 0.9998034191284295,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0041196346282958984,
+            "rms": 0.0004231847451247734,
+            "pcc": 0.9998816549445265,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.046875,
+            "rms": 0.00032826961611992294,
+            "pcc": 0.9998766791665807,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.046875,
+            "rms": 0.0002635331383357947,
+            "pcc": 0.9999226039342075,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.015625,
+            "rms": 0.00018843635226488853,
+            "pcc": 0.9999267496894819,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.5,
+            "rms": 0.0032417342263343844,
+            "pcc": 0.9999751440295919,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.03281581401824951,
+            "rms": 0.0003408962477526156,
+            "pcc": 0.9998714910368695,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.024082183837890625,
+            "rms": 0.00011415795178780421,
+            "pcc": 0.9999749614014444,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.024082183837890625,
+            "rms": 0.00023154260094168641,
+            "pcc": 0.9998943893217916,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.3505420684814453,
+            "rms": 0.005417031850887175,
+            "pcc": 0.9999460970224107,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.19144248962402344,
+            "rms": 0.004042440352478096,
+            "pcc": 0.9999589465208851,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    },
+    {
+      "layer": 0,
+      "role": "down",
+      "input_shape": [
+        1,
+        4096,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0390625,
+            "rms": 0.0002108273666458742,
+            "pcc": 0.9998630811743675,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.03125,
+            "rms": 0.0001948155201891587,
+            "pcc": 0.9998612601944001,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0078125,
+            "rms": 8.288907146499278e-05,
+            "pcc": 0.9999583164429559,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0078125,
+            "rms": 0.00042154900360793596,
+            "pcc": 0.9998311482148903,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.022728025913238525,
+            "rms": 0.00022717781562005054,
+            "pcc": 0.9998824959511184,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.011009275913238525,
+            "rms": 8.38836532025725e-05,
+            "pcc": 0.9999592814048225,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.014915525913238525,
+            "rms": 0.00012605518050771736,
+            "pcc": 0.9999147521467856,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.006755426526069641,
+            "rms": 0.0005765808980260875,
+            "pcc": 0.9998743742652682,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.002849176526069641,
+            "rms": 0.00032868369278514845,
+            "pcc": 0.9999080327330067,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.03125,
+            "rms": 0.0002927427451310363,
+            "pcc": 0.9998707297342465,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.03125,
+            "rms": 0.0002737971449726896,
+            "pcc": 0.999860980445172,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.01507568359375,
+            "rms": 0.00010206224847609238,
+            "pcc": 0.9999673902996213,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.009765625,
+            "rms": 0.0004315660917460755,
+            "pcc": 0.9998356827538016,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.01305776834487915,
+            "rms": 0.00027089921900085137,
+            "pcc": 0.9998903908077403,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.00915151834487915,
+            "rms": 0.0001096518746668012,
+            "pcc": 0.9999541782782002,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.01305776834487915,
+            "rms": 0.00015086567603579844,
+            "pcc": 0.9999179549762081,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.004920966923236847,
+            "rms": 0.0005792098077655579,
+            "pcc": 0.999880918865765,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.002273663878440857,
+            "rms": 0.0003277085389516875,
+            "pcc": 0.9999121103781523,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.03125,
+            "rms": 0.0001877019641398364,
+            "pcc": 0.9998808847346821,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.01953125,
+            "rms": 0.00017484755029254534,
+            "pcc": 0.9998758880308486,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 8.15849863893211e-05,
+            "pcc": 0.9999606948875013,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.03125,
+            "rms": 0.0004427478172549422,
+            "pcc": 0.9998286254259398,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.02008873224258423,
+            "rms": 0.00019901711609467368,
+            "pcc": 0.9998840525977079,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.006534665822982788,
+            "rms": 7.776368395053406e-05,
+            "pcc": 0.9999613131802436,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.010211735963821411,
+            "rms": 0.00011718861148467967,
+            "pcc": 0.9999180332308004,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.005056008696556091,
+            "rms": 0.0005978022759092858,
+            "pcc": 0.9998725696238827,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.002648457884788513,
+            "rms": 0.000345304723420513,
+            "pcc": 0.9999077354916883,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.015625,
+            "rms": 0.00010888255048083694,
+            "pcc": 0.9998790940337718,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.015625,
+            "rms": 0.00010281280900912809,
+            "pcc": 0.9998638252339691,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.00390625,
+            "rms": 4.100477988711116e-05,
+            "pcc": 0.9999658101136378,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.125,
+            "rms": 0.0006993511726394072,
+            "pcc": 0.9999027939428586,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.0071797966957092285,
+            "rms": 0.00014235713481353273,
+            "pcc": 0.9998761301168163,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.004425078630447388,
+            "rms": 5.3197434490475315e-05,
+            "pcc": 0.9999605805615501,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.004425078630447388,
+            "rms": 7.514586734465664e-05,
+            "pcc": 0.9999273062590175,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.05840349197387695,
+            "rms": 0.0011817870977845438,
+            "pcc": 0.9998337964846028,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.042061805725097656,
+            "rms": 0.0008682014105312667,
+            "pcc": 0.9998356729830563,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "role": "out",
+      "input_shape": [
+        1,
+        4096,
+        1536
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.1875,
+            "rms": 0.0008014157501085713,
+            "pcc": 0.9999091425959475,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.1875,
+            "rms": 0.0006569354080787433,
+            "pcc": 0.9999306342948878,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0625,
+            "rms": 0.000481265928264552,
+            "pcc": 0.9999554794656951,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0234375,
+            "rms": 0.0005856060489568852,
+            "pcc": 0.9997822740878758,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.13387775421142578,
+            "rms": 0.0008639950961362806,
+            "pcc": 0.9999104118617469,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.05362224578857422,
+            "rms": 0.0002701007949657486,
+            "pcc": 0.9999836655873515,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.05362224578857422,
+            "rms": 0.0005461789732444473,
+            "pcc": 0.9999379437320753,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.012046754360198975,
+            "rms": 0.0007573180117124279,
+            "pcc": 0.9997869554166192,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.007312864065170288,
+            "rms": 0.00046326039127311954,
+            "pcc": 0.9998722248664785,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.09375,
+            "rms": 0.00033030701728721973,
+            "pcc": 0.9998716917104816,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.078125,
+            "rms": 0.00027940612793199887,
+            "pcc": 0.9999036903282255,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.0001642105763641575,
+            "pcc": 0.9999460297368625,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.01171875,
+            "rms": 0.0006023634643137415,
+            "pcc": 0.9997935252148249,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.05080974102020264,
+            "rms": 0.00034635347510895493,
+            "pcc": 0.9998241248491454,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.017010211944580078,
+            "rms": 9.792013048899579e-05,
+            "pcc": 0.9999807928982383,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.024822711944580078,
+            "rms": 0.00019008719069944029,
+            "pcc": 0.9999296608908556,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.010769069194793701,
+            "rms": 0.0007992558940990602,
+            "pcc": 0.9997955082717388,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.008249253034591675,
+            "rms": 0.0004855345415874665,
+            "pcc": 0.9998729932926109,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0390625,
+            "rms": 0.0002690403673074449,
+            "pcc": 0.9998903018529869,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.03125,
+            "rms": 0.00024350980888230853,
+            "pcc": 0.9998929363901218,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.015625,
+            "rms": 0.00012381010939561967,
+            "pcc": 0.9999570054353785,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.015625,
+            "rms": 0.0006006946992384631,
+            "pcc": 0.9997758345814595,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.027928531169891357,
+            "rms": 0.0002702625476641608,
+            "pcc": 0.9998866168066018,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.008988380432128906,
+            "rms": 8.185107542201659e-05,
+            "pcc": 0.999976684821191,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.008194267749786377,
+            "rms": 0.00014029912285873787,
+            "pcc": 0.9999371849208958,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.008256971836090088,
+            "rms": 0.0008277944254653401,
+            "pcc": 0.9997847620128607,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.005002886056900024,
+            "rms": 0.0005032851621056874,
+            "pcc": 0.9998669668815399,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.015625,
+            "rms": 0.00016541085954929036,
+            "pcc": 0.9998626128726442,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.015625,
+            "rms": 0.00015744682710023454,
+            "pcc": 0.999842244639658,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.001953125,
+            "rms": 4.94410568594361e-05,
+            "pcc": 0.999973410825396,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.25,
+            "rms": 0.001759239669837369,
+            "pcc": 0.9999432286546539,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.009997516870498657,
+            "rms": 0.00024447317587710963,
+            "pcc": 0.9998278500523048,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0018260553479194641,
+            "rms": 6.326953537765701e-05,
+            "pcc": 0.999968829532262,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.0022314563393592834,
+            "rms": 9.061168267163618e-05,
+            "pcc": 0.999943192452461,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.20209169387817383,
+            "rms": 0.003251244280407293,
+            "pcc": 0.9998615026384967,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.09565401077270508,
+            "rms": 0.0021984345455908004,
+            "pcc": 0.999878881265291,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    },
+    {
+      "layer": 1,
+      "role": "down",
+      "input_shape": [
+        1,
+        4096,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0078125,
+            "rms": 0.00019669757480296506,
+            "pcc": 0.999879564428349,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0078125,
+            "rms": 0.00018838556130879765,
+            "pcc": 0.9998565959782375,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.003662109375,
+            "rms": 6.660509780860284e-05,
+            "pcc": 0.9999712927372459,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.01171875,
+            "rms": 0.00044563485034504257,
+            "pcc": 0.9998382678281744,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.004404991865158081,
+            "rms": 0.00020660987535233973,
+            "pcc": 0.999888382073485,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0015937909483909607,
+            "rms": 7.7060980220459e-05,
+            "pcc": 0.9999601075474257,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.0020820721983909607,
+            "rms": 0.00010535314192193302,
+            "pcc": 0.9999311983131426,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.006205379962921143,
+            "rms": 0.0006160151039389724,
+            "pcc": 0.9998780604884078,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0034026838839054108,
+            "rms": 0.0003523355660319964,
+            "pcc": 0.9999102299174295,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0078125,
+            "rms": 0.0001935436160799229,
+            "pcc": 0.9998775967350007,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0078125,
+            "rms": 0.00018556121838237153,
+            "pcc": 0.9998537278835565,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.001953125,
+            "rms": 6.122288192480558e-05,
+            "pcc": 0.9999740517833292,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.005859375,
+            "rms": 0.00044456477588806706,
+            "pcc": 0.999844311231999,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.003704264760017395,
+            "rms": 0.0002058346046790503,
+            "pcc": 0.9998865859979064,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.002322465181350708,
+            "rms": 7.744726477795308e-05,
+            "pcc": 0.9999573847336696,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.002810746431350708,
+            "rms": 0.00010285629969571077,
+            "pcc": 0.9999309821968505,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.00465354323387146,
+            "rms": 0.0006163534429143209,
+            "pcc": 0.9998844852643737,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0037192553281784058,
+            "rms": 0.00034838808142288134,
+            "pcc": 0.9999148438640714,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.01171875,
+            "rms": 0.0001829395925357532,
+            "pcc": 0.9998759429092978,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.01171875,
+            "rms": 0.00017573103951690948,
+            "pcc": 0.9998518215962037,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.001953125,
+            "rms": 5.9029949255247296e-05,
+            "pcc": 0.9999735927598861,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.005859375,
+            "rms": 0.00045086636059871133,
+            "pcc": 0.9998401251426989,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.0025335103273391724,
+            "rms": 0.00020305505807346634,
+            "pcc": 0.9998846663481752,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0013640746474266052,
+            "rms": 7.723302573949774e-05,
+            "pcc": 0.9999563827463792,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.0021123290061950684,
+            "rms": 0.00010242931727959996,
+            "pcc": 0.9999297828678926,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.004969671368598938,
+            "rms": 0.0006268676857588167,
+            "pcc": 0.9998837808041807,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.004344671964645386,
+            "rms": 0.00035485463473216254,
+            "pcc": 0.9999119971716519,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.005859375,
+            "rms": 0.00015189925380308016,
+            "pcc": 0.9998775359582864,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.005859375,
+            "rms": 0.00014565882448802284,
+            "pcc": 0.9998544970405497,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0009765625,
+            "rms": 4.820268861263981e-05,
+            "pcc": 0.9999752468574092,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.015625,
+            "rms": 0.0004626932633980769,
+            "pcc": 0.9998362186595229,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.0018236935138702393,
+            "rms": 0.00016237954921552694,
+            "pcc": 0.9998875256716112,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0009045600891113281,
+            "rms": 6.294798687401966e-05,
+            "pcc": 0.9999579272479545,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.0009045600891113281,
+            "rms": 8.291679676973915e-05,
+            "pcc": 0.9999324775183315,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.009681403636932373,
+            "rms": 0.0006445536369663749,
+            "pcc": 0.9998707343932521,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.005353003740310669,
+            "rms": 0.00037982351800460357,
+            "pcc": 0.9999045225085842,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "role": "out",
+      "input_shape": [
+        1,
+        4096,
+        1536
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.125,
+            "rms": 0.00030314558504230865,
+            "pcc": 0.9998419030330826,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.125,
+            "rms": 0.00026345199953745004,
+            "pcc": 0.9998760213745714,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.0001388843075776881,
+            "pcc": 0.9999337686092583,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0625,
+            "rms": 0.00046491769032371016,
+            "pcc": 0.9997907438438557,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.03377366065979004,
+            "rms": 0.00035244825994651505,
+            "pcc": 0.9998230555078735,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.02135157585144043,
+            "rms": 0.0001123057730473619,
+            "pcc": 0.9999715798892078,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.01726531982421875,
+            "rms": 0.0002096956273575264,
+            "pcc": 0.9999029220064579,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.013306915760040283,
+            "rms": 0.0006163096169667393,
+            "pcc": 0.999797032915512,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.00868453923612833,
+            "rms": 0.00038768599307797974,
+            "pcc": 0.9998753350022609,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.01953125,
+            "rms": 0.00021689659705640101,
+            "pcc": 0.9998621978695275,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.015625,
+            "rms": 0.00020596996984230439,
+            "pcc": 0.9998439180540335,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0078125,
+            "rms": 7.745601450307242e-05,
+            "pcc": 0.9999624042694067,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.005859375,
+            "rms": 0.000455587773846348,
+            "pcc": 0.9997934220488044,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.010175168514251709,
+            "rms": 0.00022410994017018414,
+            "pcc": 0.9998611358573047,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0030112415552139282,
+            "rms": 6.376065743244648e-05,
+            "pcc": 0.9999720061522186,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.004632145166397095,
+            "rms": 0.0001014285812398047,
+            "pcc": 0.9999350391670089,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.004477083683013916,
+            "rms": 0.0005942308589592493,
+            "pcc": 0.9998298327007858,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.002523958683013916,
+            "rms": 0.00033667107900558254,
+            "pcc": 0.9999037795895435,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.03125,
+            "rms": 0.00026409469291525863,
+            "pcc": 0.9998494368213503,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.03125,
+            "rms": 0.00024748149932624243,
+            "pcc": 0.9998436704717657,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.00011922786475899444,
+            "pcc": 0.9999518526108833,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0078125,
+            "rms": 0.00046629159097617037,
+            "pcc": 0.999800243590463,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.009371399879455566,
+            "rms": 0.0002652605349057691,
+            "pcc": 0.9998709596596561,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.007822811603546143,
+            "rms": 8.045878865336089e-05,
+            "pcc": 0.999982692937545,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.009371399879455566,
+            "rms": 0.00015363527071572658,
+            "pcc": 0.9999411127233855,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.005432009696960449,
+            "rms": 0.0006039117477904279,
+            "pcc": 0.9998339013096309,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0026843473315238953,
+            "rms": 0.00033574355038304003,
+            "pcc": 0.9999085391823065,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0087890625,
+            "rms": 0.00016717604133078352,
+            "pcc": 0.9998902599933066,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0078125,
+            "rms": 0.00016018395461588248,
+            "pcc": 0.9998702408713409,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.003692626953125,
+            "rms": 6.426009640020314e-05,
+            "pcc": 0.9999700611121249,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.25,
+            "rms": 0.0007794140945289365,
+            "pcc": 0.9998863271928349,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.006758332252502441,
+            "rms": 0.00018877115106486113,
+            "pcc": 0.9998782155767172,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0026950836181640625,
+            "rms": 6.166917395185399e-05,
+            "pcc": 0.9999718005469789,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.0036716461181640625,
+            "rms": 9.257078767241373e-05,
+            "pcc": 0.9999424742507778,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.06036670180037618,
+            "rms": 0.0013951533187836433,
+            "pcc": 0.9997661326376239,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.06036670180037618,
+            "rms": 0.0010752547039968286,
+            "pcc": 0.9998087532610203,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    },
+    {
+      "layer": 2,
+      "role": "down",
+      "input_shape": [
+        1,
+        4096,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.017578125,
+            "rms": 0.00018990318354140934,
+            "pcc": 0.9998718659313858,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.015625,
+            "rms": 0.00017704727283211625,
+            "pcc": 0.9998642930418292,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.00390625,
+            "rms": 7.441359893059817e-05,
+            "pcc": 0.9999617397138524,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.01171875,
+            "rms": 0.00046200110914884575,
+            "pcc": 0.9998054575215723,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.010791033506393433,
+            "rms": 0.00019561047246731108,
+            "pcc": 0.9998761789027847,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.004931658506393433,
+            "rms": 7.359384043248551e-05,
+            "pcc": 0.9999609316728142,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.006884783506393433,
+            "rms": 0.00010633901075926911,
+            "pcc": 0.9999231187120885,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.009932398796081543,
+            "rms": 0.0005968537177775325,
+            "pcc": 0.9998482795645566,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.006026148796081543,
+            "rms": 0.0003528504247851956,
+            "pcc": 0.9998885286236884,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0625,
+            "rms": 0.00038949850018686524,
+            "pcc": 0.9998488597888541,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0625,
+            "rms": 0.00035909295229803387,
+            "pcc": 0.9998900737651537,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.0002525902877907815,
+            "pcc": 0.9999355505706886,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0078125,
+            "rms": 0.0004350587355895688,
+            "pcc": 0.9998146709405275,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.03667938709259033,
+            "rms": 0.0003876038628561386,
+            "pcc": 0.9998111952975504,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.022926688194274902,
+            "rms": 0.00012643279771463328,
+            "pcc": 0.9999799058020659,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.019850969314575195,
+            "rms": 0.00023848310282587049,
+            "pcc": 0.9999261685631567,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.005260363221168518,
+            "rms": 0.0005512152020698049,
+            "pcc": 0.9998592028526807,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.002283744513988495,
+            "rms": 0.0003146004820669108,
+            "pcc": 0.9999010787416788,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.025390625,
+            "rms": 0.00028544701143842164,
+            "pcc": 0.9998550883030103,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0234375,
+            "rms": 0.00026848046679207817,
+            "pcc": 0.9998426777759887,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.00390625,
+            "rms": 9.323234309254838e-05,
+            "pcc": 0.9999657853422981,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0078125,
+            "rms": 0.0004377608848260231,
+            "pcc": 0.9998119377665127,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.01321151852607727,
+            "rms": 0.00026375803841888136,
+            "pcc": 0.9998720492487304,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0070396363735198975,
+            "rms": 0.00010131437377725043,
+            "pcc": 0.999949706202842,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.0063197314739227295,
+            "rms": 0.00013560824306086346,
+            "pcc": 0.9999142549183485,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.004056602716445923,
+            "rms": 0.000554277657713295,
+            "pcc": 0.9998613374577033,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0025989264249801636,
+            "rms": 0.0003166531224520689,
+            "pcc": 0.999900295043086,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.015625,
+            "rms": 0.00012044398156024247,
+            "pcc": 0.9998724056804893,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.015625,
+            "rms": 0.00011397258027337465,
+            "pcc": 0.9998570475829888,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.001953125,
+            "rms": 4.411851859294475e-05,
+            "pcc": 0.9999666612427435,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0625,
+            "rms": 0.0009096425056733775,
+            "pcc": 0.9998934302464552,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.0055605024099349976,
+            "rms": 0.0001325646417612872,
+            "pcc": 0.9998848149297339,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0033447593450546265,
+            "rms": 5.234274952202786e-05,
+            "pcc": 0.9999576099249062,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.004045695066452026,
+            "rms": 7.169766765711886e-05,
+            "pcc": 0.9999257678886442,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.04120063781738281,
+            "rms": 0.001337412683253475,
+            "pcc": 0.9997502191667043,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.037508487701416016,
+            "rms": 0.0012145324837761994,
+            "pcc": 0.999814516222787,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "role": "out",
+      "input_shape": [
+        1,
+        4096,
+        1536
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.02734375,
+            "rms": 0.00023116958339936268,
+            "pcc": 0.9998717048901663,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0234375,
+            "rms": 0.00021751190061581016,
+            "pcc": 0.9998580628156734,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0064697265625,
+            "rms": 8.744784393144054e-05,
+            "pcc": 0.9999626816650633,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.015625,
+            "rms": 0.000579787764424659,
+            "pcc": 0.9997981752411721,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.010492533445358276,
+            "rms": 0.0002712199690495366,
+            "pcc": 0.9998606261940988,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.004482775926589966,
+            "rms": 7.98988189898119e-05,
+            "pcc": 0.9999724770224817,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.004482775926589966,
+            "rms": 0.00012558022725459698,
+            "pcc": 0.9999382589043894,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.010731399059295654,
+            "rms": 0.0008246760048813072,
+            "pcc": 0.9998389717639927,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.00671955943107605,
+            "rms": 0.00048470157770256106,
+            "pcc": 0.9998984845008555,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.09375,
+            "rms": 0.000570344078019094,
+            "pcc": 0.9999007833377328,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.09375,
+            "rms": 0.00045961465802812787,
+            "pcc": 0.9999306416835746,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.00030434280173707775,
+            "pcc": 0.9999515442613929,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.015625,
+            "rms": 0.0006193760052507028,
+            "pcc": 0.9997911160210067,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.07231497764587402,
+            "rms": 0.0006640988282740684,
+            "pcc": 0.9998935947003258,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.023014545440673828,
+            "rms": 0.00014509823817483643,
+            "pcc": 0.9999883909180391,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.03863954544067383,
+            "rms": 0.00038929042536493716,
+            "pcc": 0.9999234020019119,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.01465064287185669,
+            "rms": 0.0008887538532367142,
+            "pcc": 0.9998283138016493,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0068381428718566895,
+            "rms": 0.0005282877861213685,
+            "pcc": 0.9998945574051835,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.078125,
+            "rms": 0.00044569240523322716,
+            "pcc": 0.9998699430565958,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.078125,
+            "rms": 0.0003517489191065789,
+            "pcc": 0.9999235091473228,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.015625,
+            "rms": 0.00026117428273728435,
+            "pcc": 0.9999190339903653,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.03125,
+            "rms": 0.0005965201879401129,
+            "pcc": 0.9998033200975796,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.07810449600219727,
+            "rms": 0.0004995499081168843,
+            "pcc": 0.9998384230843708,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.02026963233947754,
+            "rms": 0.000118377743875137,
+            "pcc": 0.9999853668220356,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.02026963233947754,
+            "rms": 0.00029921731887112455,
+            "pcc": 0.9999070905955654,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.006764166057109833,
+            "rms": 0.0008519685076233828,
+            "pcc": 0.9998331654621159,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.00419849157333374,
+            "rms": 0.0004932672216759516,
+            "pcc": 0.9999014173265864,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.21875,
+            "rms": 0.001346517276856971,
+            "pcc": 0.9998891826043282,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.1875,
+            "rms": 0.001121850066523412,
+            "pcc": 0.9999312743928482,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.03125,
+            "rms": 0.000646896595054888,
+            "pcc": 0.9999362705245568,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.25,
+            "rms": 0.003470746953176881,
+            "pcc": 0.9999554071496605,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.1837167739868164,
+            "rms": 0.0014668343166350792,
+            "pcc": 0.9998728588912276,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.03605794906616211,
+            "rms": 0.0003056366363094989,
+            "pcc": 0.9999867118109883,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.06077098846435547,
+            "rms": 0.0007257842192064976,
+            "pcc": 0.9999209262886664,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.2975478172302246,
+            "rms": 0.0058025059146576095,
+            "pcc": 0.9998778418531913,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.1592245101928711,
+            "rms": 0.0037463659424236406,
+            "pcc": 0.9998856852668473,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    },
+    {
+      "layer": 3,
+      "role": "down",
+      "input_shape": [
+        1,
+        4096,
+        4352
+      ],
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "native_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 48,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "separate_role_policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "native_mm_dtype": "DataType.BFLOAT8_B",
+      "native_mm_shape": [
+        1,
+        1,
+        4096,
+        5120
+      ],
+      "native_mm_source": "matmul_reduce_scatter_async return0, synchronized immediate readback; never persistent RS scratch",
+      "separate_mm_dtype": "DataType.BFLOAT16",
+      "ccl_dtype": "DataType.BFLOAT8_B",
+      "reference_rows": [
+        4064,
+        4096
+      ],
+      "reference_basis": "CPU FP32 matmul of dequantized accepted BF4 weights and actual TT BF16 input, then FP32 rank sum/scatter",
+      "ranks": [
+        {
+          "rank": 0,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.009765625,
+            "rms": 0.00016645002472821398,
+            "pcc": 0.9998740133398071,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0078125,
+            "rms": 0.00015949961742837225,
+            "pcc": 0.9998525190770776,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0037841796875,
+            "rms": 5.5711242832831916e-05,
+            "pcc": 0.9999727962104246,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0078125,
+            "rms": 0.0003623582804791757,
+            "pcc": 0.9998164579927123,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.0056809186935424805,
+            "rms": 0.00018172787586180413,
+            "pcc": 0.999885643060449,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0017746686935424805,
+            "rms": 7.229655446415193e-05,
+            "pcc": 0.999956749025295,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.002283841371536255,
+            "rms": 9.568796608442659e-05,
+            "pcc": 0.9999296995978785,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.005417913198471069,
+            "rms": 0.0005085399015871319,
+            "pcc": 0.9998655039102861,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0022081942297518253,
+            "rms": 0.00029437432301196426,
+            "pcc": 0.9999025421818944,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 1,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.015625,
+            "rms": 0.00018575578842697774,
+            "pcc": 0.9998705521847184,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.015625,
+            "rms": 0.0001768879921538384,
+            "pcc": 0.999851267370294,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.001953125,
+            "rms": 6.37047654568464e-05,
+            "pcc": 0.9999693823135776,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.005859375,
+            "rms": 0.0003665524882380846,
+            "pcc": 0.99982560928638,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.007629424333572388,
+            "rms": 0.00020001984591463067,
+            "pcc": 0.999882788697736,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.005676299333572388,
+            "rms": 7.891237867748407e-05,
+            "pcc": 0.9999554736899225,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.007629424333572388,
+            "rms": 0.00010687015854269358,
+            "pcc": 0.999923719532597,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.0031232163310050964,
+            "rms": 0.0005045285714021652,
+            "pcc": 0.9998733741823327,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.0018638446927070618,
+            "rms": 0.0002915678614332886,
+            "pcc": 0.99990826107225,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 2,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0087890625,
+            "rms": 0.0001690109726280786,
+            "pcc": 0.9998712428940999,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0078125,
+            "rms": 0.0001619256094764876,
+            "pcc": 0.9998491851591486,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0009765625,
+            "rms": 5.491807242095581e-05,
+            "pcc": 0.9999727487205853,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.0078125,
+            "rms": 0.000382443898716208,
+            "pcc": 0.99982002258775,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.00502324104309082,
+            "rms": 0.00018777907309053762,
+            "pcc": 0.9998856174769383,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0016009882092475891,
+            "rms": 7.273240978543358e-05,
+            "pcc": 0.9999558385196478,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.002194911241531372,
+            "rms": 9.682334047106851e-05,
+            "pcc": 0.9999273162107213,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.0054571181535720825,
+            "rms": 0.00052776299626558,
+            "pcc": 0.9998682633951789,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.004397556185722351,
+            "rms": 0.00030758680691335427,
+            "pcc": 0.999902803279322,
+            "exact": false,
+            "finite": true
+          }
+        },
+        {
+          "rank": 3,
+          "native_mm_vs_separate_bf16": {
+            "max_abs": 0.0078125,
+            "rms": 0.00013077557344551375,
+            "pcc": 0.999871486583774,
+            "exact": false,
+            "finite": true
+          },
+          "native_mm_vs_separate_bf8": {
+            "max_abs": 0.0078125,
+            "rms": 0.0001254966673130513,
+            "pcc": 0.9998485284669959,
+            "exact": false,
+            "finite": true
+          },
+          "separate_quantization_delta": {
+            "max_abs": 0.0009765625,
+            "rms": 4.115012585013166e-05,
+            "pcc": 0.9999750864319206,
+            "exact": false,
+            "finite": true
+          },
+          "post_rs_native_vs_separate": {
+            "max_abs": 0.03125,
+            "rms": 0.00043464199858270355,
+            "pcc": 0.9998385946467118,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_mm_vs_fp32": {
+            "max_abs": 0.0027442649006843567,
+            "rms": 0.0001455407020821742,
+            "pcc": 0.999884656920309,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf16_vs_fp32": {
+            "max_abs": 0.0009027197957038879,
+            "rms": 5.713441231486608e-05,
+            "pcc": 0.9999559007928922,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_bf8_vs_fp32": {
+            "max_abs": 0.0010128282010555267,
+            "rms": 7.425003470339062e-05,
+            "pcc": 0.9999306529807882,
+            "exact": false,
+            "finite": true
+          },
+          "tail_native_rs_vs_fp32": {
+            "max_abs": 0.02354586124420166,
+            "rms": 0.0006436166743764689,
+            "pcc": 0.999852974801763,
+            "exact": false,
+            "finite": true
+          },
+          "tail_separate_rs_vs_fp32": {
+            "max_abs": 0.021959960460662842,
+            "rms": 0.0004207662759632721,
+            "pcc": 0.9998714384410083,
+            "exact": false,
+            "finite": true
+          }
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Native direct-BF8 and separate BF16-then-BF8 differ in blocking/rounding and RS schedule; disagreement alone is not a kernel bug.",
+    "CPU FP32 reference covers last32 rows only and uses accepted dequantized inputs, not full-precision HF weights.",
+    "No semantic autoregressive conclusion, timing, profiling, trace, or production policy change."
+  ]
+}
