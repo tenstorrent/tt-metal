@@ -45,6 +45,7 @@ class HeadLayout:
     on_engine: bool
     GX: int = 11
     compact: bool = False  # (the RS arrival zones compact - se_rs.RsPlan: only where P-tile slots do not fit)
+    split: bool = False  # (the router's fin + top-K over two cores a row tile: router_stream's split)
 
 
 @dataclass
@@ -83,9 +84,10 @@ class Planned:
     note: str = ""
 
 
-def engine_width(shape: HeadShape):
-    """The engine's columns: every one left of the mover column, at most a gate / up pair (and a latent tile) each."""
-    GX = min(shape.grid[0] - 1, shape.I // 32)
+def engine_width(shape: HeadShape, split=False):
+    """The engine's columns: every one left of the mover column (split: but the one beside it - the router's second
+    cores), at most a gate / up pair (and a latent tile) each."""
+    GX = min(shape.grid[0] - 1 - (1 if split else 0), shape.I // 32)
     if shape.latent:
         GX = min(GX, shape.latent // 32 // shape.G)
     return GX
@@ -236,7 +238,7 @@ def cost(shape: HeadShape, lay: HeadLayout, eng, c: Cost = None):
     )
 
 
-def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False, placement="measured"):
+def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False, placement="measured", split=False):
     """Every candidate layout that fits (arena_max: bytes, or the device's cap a K step - se_engine3.arena_cap), ranked
     by predicted time. The router's placement a layout: "measured" -
     fused_head.router_placement's (its rates from measured A/Bs: the cost model's engine / router-core gap is inside
@@ -254,14 +256,28 @@ def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False
                 )  # fmt: skip
             got = []
             cells = router_cells(shape, GY, engine_width(shape))
+            # (split: the router's fin + top-K over two cores a row tile - the logits on the engine, the router cores
+            # in the mover column, an even expert tile count)
+            sp = split and cells == "column" and (shape.E // 32) % 2 == 0
+            if split and not sp:
+                continue
             for on in (True, False) if pref in (None, True) else (False, True):
                 if cells == "rows" and not on:  # (the router cores' W_r multicast: one row)
+                    continue
+                if sp and not on:
                     continue
                 # (P-tile RS zones where they fit - the layouts measured before compact zones, byte for byte - else
                 # compact: GLM-5.3 at 512 rows ran 331 us on slots, 349 compact)
                 for compact in (False, True) if shape.rs_dim == -2 and shape.G <= 4 else (False,):
                     lay = HeadLayout(
-                        GY=GY, MT=MT, NCH=NCH, KB=kb, on_engine=on, GX=engine_width(shape), compact=compact
+                        GY=GY,
+                        MT=MT,
+                        NCH=NCH,
+                        KB=kb,
+                        on_engine=on,
+                        GX=engine_width(shape, sp),
+                        compact=compact,
+                        split=sp,
                     )
                     eng, arena, sizes, why = size(shape, lay, arena_max)
                     if eng is not None:
@@ -280,7 +296,7 @@ def plan(shape: HeadShape, arena_max=ARENA_MAX, c: Cost = None, keep_unfit=False
     # all of W again (K2.7 1024 rows: 2 chunks 680 us, 4 750; 768: 2 530, 3 554; GLM-5.3 1024: 2 607, 4 638) - then
     # the layout the fit-first rule took, every measured head's (GLM-5.3 at 512 rows: K step 6 on slots 331 us, 12
     # compact 349, 8 compact 357), then the prediction)
-    if out:
+    if out and not split:
         old = legacy(shape, arena_max, c)
         pool = out + ([old] if old is not None else [])
         best = min(p.t for p in pool)

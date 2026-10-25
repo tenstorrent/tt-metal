@@ -349,6 +349,14 @@ AB = {
     # (the same with the ops tail: no fused tail's L1 - P-tile slots fit GLM-5.3 at KB 8 again)
     "zonesops-glm53-512": ("glm53", 512, [(8, 2, 1, 8, True, False), (8, 2, 1, 8, True, True)], "ops"),
     "zonesops-glm53-640": ("glm53", 640, [(10, 2, 1, 8, True, False), (10, 2, 1, 8, True, True)], "ops"),
+    # (the router's fin + top-K over two cores a row tile - the 7th field; K step 0: the largest that fits)
+    "split-k3-640": ("k3", 640, [(10, 2, 1, 0, True, False, False), (10, 2, 1, 0, True, False, True)]),
+    "split-k27-640": ("k27", 640, [(10, 2, 1, 0, True, True, False), (10, 2, 1, 0, True, True, True)]),
+    # (one layout a run: each its own profile - the chain's zones)
+    "one-k3-640-base": ("k3", 640, [(10, 2, 1, 0, True, False, False)]),
+    "one-k3-640-split": ("k3", 640, [(10, 2, 1, 0, True, False, True)]),
+    "one-k27-640-base": ("k27", 640, [(10, 2, 1, 0, True, True, False)]),
+    "one-k27-640-split": ("k27", 640, [(10, 2, 1, 0, True, True, True)]),
 }
 
 
@@ -382,7 +390,9 @@ def test_head_layout_ab(mesh_device, device_params, ab):
     m = mesh_model(name, R * C)
     w = scenario_weights(m, "uniform", R * C)
     for GY, MT, NCH, KB, on, *zc in lays:
-        lay = HeadLayout(GY=GY, MT=MT, NCH=NCH, KB=KB, on_engine=on, compact=bool(zc and zc[0]))
+        lay = HeadLayout(
+            GY=GY, MT=MT, NCH=NCH, KB=KB, on_engine=on, compact=bool(zc and zc[0]), split=bool(len(zc) > 1 and zc[1])
+        )
         try:
             block = MoEBlock(
                 mesh_device,
@@ -396,6 +406,7 @@ def test_head_layout_ab(mesh_device, device_params, ab):
             logger.warning(f"AB {ab} {lay}: does not build: {' '.join(str(e).split())[:200]}")
             continue
         tag = f"ab-{ab}-{GY}x{MT}x{NCH}-kb{KB}-{'eng' if on else 'rc'}{'-compact' if lay.compact else ''}"
+        tag += "-split" if lay.split else ""
         stats = run_checked(mesh_device, block, m, w, tag, eager=1, replays=12)
         logger.info(f"AB_RESULT {tag}: PCC min {min(stats['pcc']):.5f}; {block.summary}")
         block.close()
@@ -446,4 +457,117 @@ def test_logits_priority_ab(mesh_device, device_params, case, first):
     tag = f"prio-{name}-r{rows}-{'logits' if first else 'x'}first"
     stats = run_checked(mesh_device, block, m, w, tag, eager=1, replays=12)
     logger.info(f"PRIO_RESULT {tag}: PCC min {min(stats['pcc']):.5f}; {block.summary}")
+    block.close()
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model",
+    [
+        pytest.param(
+            (R, C),
+            _fab(
+                fabric_payload_size=fabric_payload(BASE[m].routed_width),
+                l1_small_size=0,
+                trace_region_size=TRACE_REGION,
+            ),
+            m,
+            id=f"split-equal-{m}",
+        )
+        for m in ("k3", "k27")
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(7200)
+def test_router_split_equal(mesh_device, device_params, model):
+    """The router's split (a row tile's experts over two cores, merged on the first) picks exactly what one core
+    does: deterministic sums (the sources' partials in slot order), the same inputs, the device's joint routing rows
+    bit for bit; then the split block's output against the host (PCC)."""
+    import gc
+
+    from models.demos.moe_block.moe_block import MoEOptions
+    from models.demos.moe_block.tt.head_plan import HeadLayout
+
+    rows_ = 640
+    m = mesh_model(model, R * C)
+    w = scenario_weights(m, "uniform", R * C)
+    T, H = rows_ * R, m.emb_dim
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(4000 + k)).to(torch.bfloat16) for k in range(3)]
+    got = {}
+    for split in (False, True):
+        lay = HeadLayout(GY=10, MT=2, NCH=1, KB=0, on_engine=True, compact=model != "k3", split=split)
+        block = MoEBlock(
+            mesh_device,
+            m,
+            T,
+            w,
+            WeightCache(path=None, layer=0),
+            options=MoEOptions(head="fused", head_layout=lay, deterministic=True),
+        )
+        logger.info(f"SPLIT {model} split={split}: {block.summary}")
+        block.keep_taps = "device"
+        x_in = block.input_buffer()
+        got[split] = []
+        for x_ in xs:
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(x_.view(1, 1, T, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper),
+                x_in,
+            )
+            out = block(x_in)
+            ttnn.synchronize_device(mesh_device)
+            got[split].append([t.clone() for t in block.taps()["rows"]])
+            ttnn.deallocate(out)
+        if split:
+            stats = run_checked(mesh_device, block, m, w, f"split-{model}", eager=2, replays=12)
+            logger.info(f"SPLIT_RESULT {model}: PCC min {min(stats['pcc']):.5f}; agreement {min(stats['agree']):.4f}")
+        block.close()
+        del block
+        gc.collect()
+    diff = sum(int(not torch.equal(a, b)) for ra, rb in zip(got[False], got[True]) for a, b in zip(ra, rb))
+    if diff:  # (a few tokens' ids, one core vs split: the joint rows [owned / 32, 32 x 2 K] - K ids then K weights)
+        a0, b0 = got[False][0][0].reshape(-1, 32, 2 * m.top_k), got[True][0][0].reshape(-1, 32, 2 * m.top_k)
+        for rt, tok in ((0, 0), (0, 5), (1, 0), (4, 31)):
+            logger.info(
+                f"SPLIT_DIFF chip 0 row tile {rt} token {tok}: one core {a0[rt, tok, :m.top_k].tolist()} split "
+                f"{b0[rt, tok, :m.top_k].tolist()}"
+            )
+    logger.info(f"SPLIT_EQUAL {model}: {diff} of {sum(len(r) for r in got[True])} chips' routing rows differ")
+    assert diff == 0, f"{model}: the split's routing rows differ from one core's on {diff} chips"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model",
+    [
+        pytest.param(
+            (R, C),
+            _fab(
+                fabric_payload_size=fabric_payload(BASE[m].routed_width),
+                l1_small_size=0,
+                trace_region_size=TRACE_REGION,
+            ),
+            m,
+            id=f"split-soak-{m}",
+        )
+        for m in ("k3", "k27")
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(7200)
+def test_router_split_soak(mesh_device, device_params, model):
+    """The router's split at 640 rows: traced replays on fresh inputs, every 25th checked (PCC, routing agreement)."""
+    from models.demos.moe_block.moe_block import MoEOptions
+
+    m = mesh_model(model, R * C)
+    w = scenario_weights(m, "uniform", R * C)
+    block = MoEBlock(  # (the planner's split layout: MoEOptions.router_split)
+        mesh_device, m, 640 * R, w, WeightCache(path=None, layer=0), options=MoEOptions(head="fused", router_split=True)
+    )
+    assert "10x10" in block.summary, block.summary
+    stats = run_checked(
+        mesh_device, block, m, w, f"split-soak-{model}", eager=2, replays=int(os.environ.get("SPLIT_SOAK", "2000"))
+    )
+    logger.info(
+        f"SPLIT_SOAK {model}: {len(stats['pcc'])} checks, PCC min {min(stats['pcc']):.5f}, agreement min "
+        f"{min(stats['agree']):.4f}; {block.summary}"
+    )
     block.close()

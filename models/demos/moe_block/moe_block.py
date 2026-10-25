@@ -146,6 +146,10 @@ class MoEOptions:
     # the fused head's ports: the router's partial logits ahead of the x gather (True), after it (False), or None the
     # head's choice (HeadSE3.logits_priority) - A/B sweeps
     logits_first: bool | None = None
+    # the fused head's router: a row tile's fin + top-K over two cores (router_stream's split - the logits on the engine,
+    # the engine a column narrower): the routing chain ~-45 us at K3's E 896 (2x4 / ring: 106-109 -> 63-65 us), the
+    # same picks. For meshes whose chain binds (the Galaxy's N 32); off - the LoudBox meshes' SE path binds
+    router_split: bool = False
     # the routed experts' gate / up weight readers: the DRAM cores (DRISC, the default) or Tensix readers (A/B)
     experts_drisc: bool = True
     # the tail: "fused" one program a chip - latent models: tt/tail_engine.py (the latent all-gather into the engine's
@@ -395,6 +399,7 @@ class MoEBlock(LightweightModule):
                     router=options.router,
                     layout=options.head_layout,
                     logits_first=options.logits_first,
+                    router_split=options.router_split,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -887,6 +892,7 @@ class FusedHead:
         router="auto",
         layout=None,
         logits_first=None,
+        router_split=False,
     ):
         from ttnn.bringup.combine_rf.lin2d import glu_weight
 
@@ -898,9 +904,13 @@ class FusedHead:
         grid = mesh.compute_with_storage_grid_size()
         if layout is not None:  # (a given layout: its logits placement too)
             router = "engine" if layout.on_engine else "router_cores"
+        split = bool(layout.split) if layout is not None else router_split
         self.head = HeadSE3(
             mesh,
-            GX=min(11, grid.x - 1),  # (the engine's columns: the last for the movers - a harvested grid has fewer)
+            # (the engine's columns: the last for the movers - a harvested grid has fewer; the router's split takes
+            # the one left of them)
+            GX=min(11, grid.x - 1) - (1 if split and layout is not None else 0),  # (planned: the planner's GX)
+            mover_col=min(11, grid.x - 1),
             GY=layout.GY if layout is not None else None,
             MT=layout.MT if layout is not None else None,
             KB=layout.KB if layout is not None else None,
@@ -920,6 +930,7 @@ class FusedHead:
                 route_scale=model.router.route_scale,
                 logits_first=logits_first,
                 ordered=deterministic,
+                split=split,
                 on_engine={"auto": None, "engine": True, "router_cores": False}[router],
             ),
             latent=latent,

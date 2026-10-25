@@ -310,7 +310,7 @@ void kernel_main() {
     const uint32_t n0d = get_arg_val<uint32_t>(a++);
 #ifdef SE_RTR
     const uint32_t R0 = a;  // (the router logits' args)
-    a += 12 + 3 * SE_MTR;
+    a += 12 + SE_RD * SE_MTR;
 #endif
     const uint32_t wg0 = a, wd0 = wg0 + NPG, ys0 = wd0 + NPD;  // pass widths (gate / up, down); the column's NoC y
     const uint32_t wbank = get_arg_val<uint32_t>(ys0 + GY);  // (the DRAM bank holding my W-own region)
@@ -389,18 +389,36 @@ void kernel_main() {
         // port sub-block it leaves from - (NoC, base, count) a row tile; the count ETC tiles, after they landed)
         const uint32_t ro = get_read_ptr(SE_RO);
         for (uint32_t r = 0; r < SE_MTR; ++r) {
+#ifdef SE_RTR_SPLIT
+            // (the row tile's experts over two router cores: tile g to half g / SE_RTR_SPLIT's destination, at
+            // g % SE_RTR_SPLIT; each half counted its own tiles)
+            const uint32_t a0 = R0 + 10 + SE_RD * r;
+            uint32_t n[2] = {0, 0};
+            for (uint32_t e = 0; e < etc; ++e) {
+                const uint32_t g = re0 + e, hh = g >= SE_RTR_SPLIT ? 1 : 0;
+                const uint32_t dw = get_arg_val<uint32_t>(a0 + 3 * hh), base = get_arg_val<uint32_t>(a0 + 3 * hh + 1);
+                noc_async_write(ro + (e * SE_MTR + r) * 4096, get_noc_addr(dw & 0xFFFF, dw >> 16, base + (g - hh * SE_RTR_SPLIT) * 4096), 4096);
+                ++n[hh];
+            }
+            noc_async_write_barrier();  // (landed before the counts)
+            for (uint32_t hh = 0; hh < 2; ++hh) {
+                const uint32_t dw = get_arg_val<uint32_t>(a0 + 3 * hh), ctr = get_arg_val<uint32_t>(a0 + 3 * hh + 2);
+                if (n[hh]) noc_semaphore_inc(get_noc_addr(dw & 0xFFFF, dw >> 16, ctr), n[hh]);
+            }
+#else
             const uint32_t dw = get_arg_val<uint32_t>(R0 + 10 + 3 * r), dx = dw & 0xFFFF, dy = dw >> 16;
             const uint32_t base = get_arg_val<uint32_t>(R0 + 11 + 3 * r), ctr = get_arg_val<uint32_t>(R0 + 12 + 3 * r);
             for (uint32_t e = 0; e < etc; ++e)
                 noc_async_write(ro + (e * SE_MTR + r) * 4096, get_noc_addr(dx, dy, base + (re0 + e) * 4096), 4096);
             noc_async_write_barrier();  // (landed before the count)
             if (etc) noc_semaphore_inc(get_noc_addr(dx, dy, ctr), etc);
+#endif
         }
         cb_pop_front(SE_RO, SE_ETC * SE_MTR);
 #ifdef SE_RTR_GATE
         {  // (my partials are written: router core 0 counts every engine core's, then opens the W gate)
-            const uint32_t gw = get_arg_val<uint32_t>(R0 + 10 + 3 * SE_MTR);
-            noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, get_arg_val<uint32_t>(R0 + 11 + 3 * SE_MTR)), 1);
+            const uint32_t gw = get_arg_val<uint32_t>(R0 + 10 + SE_RD * SE_MTR);
+            noc_semaphore_inc(get_noc_addr(gw & 0xFFFF, gw >> 16, get_arg_val<uint32_t>(R0 + 11 + SE_RD * SE_MTR)), 1);
         }
 #endif
     }
@@ -1790,6 +1808,9 @@ class SeEngine3:
             nd += "#define SE_RTR\n" + "".join(f"#define SE_{k.upper()} {v}\n" for k, v in RTR_CB.items())
             nd += f"#define SE_KTO {self.rtr['KTO']}\n#define SE_ETC {self.ETC}\n#define SE_ET {self.rtr['ET']}\n"
             nd += f"#define SE_MTR {MT * self.NCH}\n#define SE_RG {self.RG}\n"  # (the logits: my rows of every chunk, at the start)
+            # (a row tile's destination words: 3, or 6 with the router's split - one a half)
+            nd += f"#define SE_RD {6 if rtr.get('split') else 3}\n"
+            nd += f"#define SE_RTR_SPLIT {rtr['split']}u\n" if rtr.get("split") else ""
             nd += f"#define XACK_ID {XACK}\n#define WACK_ID {WACK}\n"
             nd += f"#define SE_GX {GX}\n#define RXR_ID {RXR}\n#define RWR_ID {RWR}\n"
             if rtr.get("gate"):

@@ -32,6 +32,9 @@ class RouterSpec:
     # (the fin sums the sources' partials in slot order: bit-identical runs; else in landing order - see RouterStream)
     ordered: bool = False
     fold: int = 1  # (E candidates, expert = candidate // fold: the joint rows carry experts - MoEModel's RouterConfig)
+    # (a row tile's experts over two router cores - the fin and the top-K over half the tiles each, merged on the
+    # first: router_stream's split; the logits on the engine, the second cores in the column left of the movers)
+    split: bool = False
 
 
 @dataclass(frozen=True)
@@ -110,6 +113,7 @@ class HeadSE3:
         I,
         glu,
         GX=11,
+        mover_col=None,
         GY=None,
         MT=None,
         KB=None,
@@ -169,7 +173,7 @@ class HeadSE3:
 
             planned = [
                 p_
-                for p_ in plan(shape, arena_max=lambda kb: arena_cap(mesh_device, kb))
+                for p_ in plan(shape, arena_max=lambda kb: arena_cap(mesh_device, kb), split=router.split)
                 if (router.on_engine is None or p_.lay.on_engine == router.on_engine) and (not KB or p_.lay.KB == KB)
             ]
             assert planned, f"HeadSE3: the planner has no layout for {rows} rows ({shape})"
@@ -234,7 +238,8 @@ class HeadSE3:
                 return False
 
         self._rc_only = False
-        MX = GX  # (the mover column: ports, watcher, router cores - the engine may be narrower, the planner's GX)
+        # (the mover column: ports, watcher, router cores - the engine may be narrower, the planner's GX)
+        MX = mover_col if mover_col is not None else GX
         if planned:
             for p_ in planned:
                 self._on = p_.lay.on_engine
@@ -280,9 +285,13 @@ class HeadSE3:
             if nrt + 2 * num_links + 1 <= grid.y:
                 self.rcores = [ttnn.CoreCoord(MX, cy) for cy in range(grid.y - nrt, grid.y)]
                 watcher = ttnn.CoreCoord(MX, grid.y - nrt - 1)
+                if router.split:  # (each row tile's second half beside its first: the column left of the movers)
+                    assert GX <= MX - 1, f"HeadSE3: the router's split needs column {MX - 1} free (engine GX {GX})"
+                    self.rcores += [ttnn.CoreCoord(MX - 1, c.y) for c in self.rcores]
             else:
                 # (a free core row under the engine; with the logits on the engine - no W_r multicast over them - the
                 # free rows under it)
+                assert not router.split, "HeadSE3: the router's split - the mover column's cells only"
                 free = [ttnn.CoreCoord(c, y) for y in range(GY, grid.y) for c in range(GX)]
                 if not (nrt <= GX or (self.router_on_engine(router, latent) and nrt <= len(free))):
                     raise ValueError(f"HeadSE3: no cells for {nrt} router cores (free core rows: GY {GY} < {grid.y})")
@@ -363,11 +372,13 @@ class HeadSE3:
             assert self.rs_mode == "fused"
             ttnn.deallocate(self.eng.arena)  # (again, also over the router cores and the ports: lockstep L1)
             # (the router cores carve the same range: at least what they need - the engine's own may be smaller)
-            need = (RouterStream.min_bytes(G, router.E, router.K) + 63) // 64 * 64
+            need = (RouterStream.min_bytes(G, router.E, router.K, split=router.split) + 63) // 64 * 64
             if self.eng.arena_bytes < need <= self.eng.arena_max:
                 self.eng.arena_bytes = need
             self.eng.alloc_arena(
-                extra=free[: rows // 32 // G] + [ttnn.CoreCoord(*c) for c in sorted(used - wset)] + [watcher]
+                extra=free[: (2 if router.split else 1) * (rows // 32 // G)]
+                + [ttnn.CoreCoord(*c) for c in sorted(used - wset)]
+                + [watcher]
             )
             if holes:  # (placed again: the router's and the routing's buffers into the second hole, above it)
                 ttnn.deallocate(holes.pop(0))
@@ -385,6 +396,7 @@ class HeadSE3:
                 on_engine=self.router_on_engine(router, latent),
                 ordered=router.ordered,
                 fold=router.fold,
+                split=router.split,
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
             )

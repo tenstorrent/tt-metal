@@ -25,6 +25,7 @@ import torch
 import ttnn
 
 XR, WR, HOLD, ARRF, ARRB, BIAS, SC, FINC, PSYNC, BEST, BESTI, IDX = range(12)  # (BESTI unused)
+PART = 13  # (split: the partner's best K, half 0)
 _NCRISC = r"""
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -46,22 +47,22 @@ void kernel_main() {
     const uint32_t r0 = 4, na = get_arg_val<uint32_t>(r0 + G);
     volatile tt_l1_ptr uint32_t* ctr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(r0 + G + 1));
     const uint32_t ab0 = r0 + G, nab = 0;  // (the tail: ab0 + nab + 2 ..)
-    {  // (the top-K's done words: zero before anyone can write them - they are written after the scores)
+    {  // (the top-K's done words: zero before anyone can write them - they are written after the scores; with the
+       // split word 128 too, the partner's best K landed - the arena is call scratch: stale, it let the merge take a
+       // stale page, the picks a call behind)
         const uint32_t w0 = get_arg_val<uint32_t>(ab0 + nab + 2);
-        for (uint32_t i = 0; i < 8; ++i) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w0 + 16 * i) = 0;
+        for (uint32_t i = 0; i < 9; ++i) *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w0 + 16 * i) = 0;
     }
     const auto xg = TensorAccessor(x_args, x_addr, 2048);
     const auto wg = TensorAccessor(w_args, w_addr, 2048);
     const auto bg = TensorAccessor(b_args, b_addr, 4096);
     const auto ig = TensorAccessor(i_args, i_addr, 2048);
-    cb_reserve_back(BIAS, ET);
+    cb_reserve_back(BIAS, RT_ETF);
     cb_reserve_back(IDX, ET);
-    for (uint32_t t = 0; t < ET; ++t) {
-        noc_async_read(bg.get_noc_addr(t), get_write_ptr(BIAS) + t * 4096, 4096);
-        noc_async_read(ig.get_noc_addr(t), get_write_ptr(IDX) + t * 2048, 2048);
-    }
+    for (uint32_t t = 0; t < RT_ETF; ++t) noc_async_read(bg.get_noc_addr(t), get_write_ptr(BIAS) + t * 4096, 4096);
+    for (uint32_t t = 0; t < ET; ++t) noc_async_read(ig.get_noc_addr(RT_HB + t), get_write_ptr(IDX) + t * 2048, 2048);
     noc_async_read_barrier();
-    cb_push_back(BIAS, ET);
+    cb_push_back(BIAS, RT_ETF);
     cb_push_back(IDX, ET);
 #ifdef RT_ENG
     {  // the engine computed my partial logits (every engine core its expert tiles x its rows, written into my HOLD
@@ -144,6 +145,18 @@ void kernel_main() {
             }
         }
     }
+#ifdef RT_SPLIT
+#if RT_HALF == 0
+    {  // (my partner's best K - the row tile's other expert half - written into my PART: to the compute's merge)
+        volatile tt_l1_ptr uint32_t* pw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(RT_PWORD);
+        while (*pw == 0) invalidate_l1_cache();
+        *pw = 0;  // (re-arm: one a call)
+        cb_reserve_back(RT_PART_CB, 1);
+        cb_push_back(RT_PART_CB, 1);
+    }
+#endif
+#endif
+#if RT_HALF == 0
     {  // (my share of the joint rows: tokens 11 .. 21, once the top-K is done)
         const uint32_t t2 = ab0 + nab + 2, words = get_arg_val<uint32_t>(t2);
         volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 64);
@@ -152,15 +165,16 @@ void kernel_main() {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();
         invalidate_l1_cache();
-        rows_::make<K, ET>(get_arg_val<uint32_t>(t2 + 1), get_read_ptr(BIAS), get_arg_val<uint32_t>(t2 + 2),
-                           get_arg_val<uint32_t>(t2 + 3), 8, 16);
+        rows_::make<K, RT_ETF>(get_arg_val<uint32_t>(t2 + 1), get_read_ptr(BIAS), get_arg_val<uint32_t>(t2 + 2),
+                               get_arg_val<uint32_t>(t2 + 3), 8, 16);
         set_l1_data_cache<false>();
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words + 16) = 1;
     }
+#endif
 #ifdef RA_PLAN
     {  // the second planner instance on this core (the routing exchange + planner: routing_stream)
         const uint32_t rr = 4 + G + 2 + 4, rows2 = get_arg_val<uint32_t>(rr), B = get_arg_val<uint32_t>(rr + 1);
-        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NC_);
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2), RA_NP_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows2) = 0;
         if (B) ra::plan(rr + 2, B);  // (no instance here when the chip has fewer experts than planner RISCs)
     }
@@ -185,7 +199,7 @@ constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_v
 constexpr uint32_t KBR = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4);
 constexpr uint32_t XR = 0, WR = 1, HOLD = 2, ARRF = 3, ARRB = 4, BIAS = 5, SC = 6, FINC = 7, PSYNC = 8;
 constexpr uint32_t BEST = 9, IDX = 11;
-constexpr uint32_t EM = rows_::em_of(ET);
+constexpr uint32_t EM = rows_::em_of(RT_ETF);
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {
 // a score tile's top-K keys: the fp32 score with its low mantissa bits (EM) replaced by the expert id (the uint16 id
@@ -252,7 +266,7 @@ void kernel_main() {
     cb_push_back(PSYNC, 1);
     cb_wait_front(PSYNC, 1);  // (UNPACK: the partials are in L1)
     cb_pop_front(PSYNC, 1);
-    cb_wait_front(BIAS, ET);
+    cb_wait_front(BIAS, RT_ETF);
     const uint32_t nops = get_arg_val<uint32_t>(0), et0 = 1 + nops;
     for (uint32_t o = 0; o < nops; ++o) {
         const uint32_t op = get_arg_val<uint32_t>(1 + o), kind = op & 0xFF, e = op >> 8;
@@ -320,7 +334,7 @@ void kernel_main() {
                 for (uint32_t j = 0; j < n; ++j) sigmoid_tile(j);
                 reconfig_data_format_srca(ARRF, BIAS);
                 copy_init(BIAS);
-                for (uint32_t j = 0; j < n; ++j) copy_tile(BIAS, i0 + j, 2 + j);
+                for (uint32_t j = 0; j < n; ++j) copy_tile(BIAS, RT_HB + i0 + j, 2 + j);
                 add_binary_tile_init();
                 for (uint32_t j = 0; j < n; ++j) add_binary_tile(j, 2 + j, j);
                 // -> the top-K's keys: the expert ids into the low mantissa bits (rt_key)
@@ -377,6 +391,26 @@ void kernel_main() {
             }
             if (t + 2 < ET) copy_dest_values<DataFormat::Int32>(0, 2);  // (parked in DEST tile 2: fused keys leave the id tiles unused)
         }
+#if defined(RT_SPLIT) && RT_HALF == 0
+        {  // my best K (DEST tile 0) against my partner's (its BEST page - the other expert half, its candidates
+           // below it - into DEST tile 1): one round as a first pair, the K best of the 64 on top (keys unique - the
+           // expert id in the low bits: the same picks as one core over every tile)
+            DeviceZoneScopedN("SE-RMERGE");
+            cb_wait_front(RT_PART_CB, 1);
+            reconfig_data_format_srca(RT_PART_CB);
+            copy_init(RT_PART_CB);
+            copy_tile(RT_PART_CB, 0, 1);
+            ckernel::topk_tile_init<true, false>();
+            ckernel::topk_local_sort<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, LK - 1);
+            for (uint32_t m = 0; m + 1 < NM; ++m) {
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, K);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, K, LK, false);
+            }
+            ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
+            ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, true);
+            cb_pop_front(RT_PART_CB, 1);
+        }
+#endif
         tile_regs_commit();
         cb_reserve_back(BEST, 1);
         tile_regs_wait();
@@ -393,18 +427,22 @@ void kernel_main() {
            // the BEST page is in L1 once PACK passed its push - PACK tells MATH (RT_MSYNC)
             const uint32_t bvc = get_arg_val<uint32_t>(t1 + 1), olc = get_arg_val<uint32_t>(t1 + 2);
             const uint32_t scl = get_arg_val<uint32_t>(t1 + 3), bia = get_arg_val<uint32_t>(t1 + 4);
+#if RT_HALF == 0  // (half 1 hands its best K to its partner: no rows)
             PACK(({
                 *reinterpret_cast<volatile uint32_t*>(RT_MSYNC) = 1;
-                rows_::make<K, ET>(bvc, bia, olc, scl, 24, 32);
+                rows_::make<K, RT_ETF>(bvc, bia, olc, scl, 24, 32);
                 *reinterpret_cast<volatile uint32_t*>(words + 48) = 1;
             }));
             MATH(({
                 volatile uint32_t* ms = reinterpret_cast<volatile uint32_t*>(RT_MSYNC);
                 while (*ms == 0) {
                 }
-                rows_::make<K, ET>(bvc, bia, olc, scl, 16, 24);
+                rows_::make<K, RT_ETF>(bvc, bia, olc, scl, 16, 24);
                 *reinterpret_cast<volatile uint32_t*>(words + 32) = 1;
             }));
+#else
+            (void)bvc, (void)olc, (void)scl, (void)bia;
+#endif
         }
 #ifdef RT_ROUTE
         // dispatch prep: the route words of my 32 owned tokens from the joint rows (BRISC's word 80: all shares
@@ -431,6 +469,17 @@ void kernel_main() {
 _ROWS = r"""
 #ifndef RT_FOLD
 #define RT_FOLD 1
+#endif
+// (RT_SPLIT: a row tile's experts over two router cores - RT_HALF 0 / 1, its expert tiles from RT_HB, ET of them;
+// RT_ETF every expert tile: the bias, the keys' id bits and the joint rows are the whole row tile's)
+#ifndef RT_ETF
+#define RT_ETF ET
+#endif
+#ifndef RT_HB
+#define RT_HB 0
+#endif
+#ifndef RT_HALF
+#define RT_HALF 0
 #endif
 namespace rows_ {
 // (r, c) of a tile: face (r / 16) * 2 + c / 16, then row-major within the face
@@ -545,16 +594,28 @@ void kernel_main() {
     // the top K of every token column, sorted descending in rows 0 .. K - 1 of the best page;
     // tokens 0 .. 7 here, 8 .. 15 the NCRISC, 16 .. 23 the compute's MATH thread, 24 .. 31 its PACK (done words 16 / 32 / 48)
     const uint32_t bv = get_arg_val<uint32_t>(t0 + 5);
-    cb_wait_front(BIAS, ET);
+    cb_wait_front(BIAS, RT_ETF);
     volatile tt_l1_ptr uint32_t* done = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words);
     while (*done == 0) invalidate_l1_cache();
     *done = 0;  // (re-arm)
+#if RT_HALF == 1
+    {  // my best K (the row tile's other expert half) into my partner's PART, then its word (args: the partner's NoC
+       // x | y << 16 in the out address's place)
+        DeviceZoneScopedN("SE-RHALF");
+        const uint32_t pxy = get_arg_val<uint32_t>(t0);
+        noc_async_write(bv, get_noc_addr(pxy & 0xFFFF, pxy >> 16, RT_PART), 4096);
+        noc_async_write_barrier();
+        noc_semaphore_inc(get_noc_addr(pxy & 0xFFFF, pxy >> 16, RT_PWORD), 1);
+        noc_async_atomic_barrier();
+        (void)o_addr, (void)page, (void)o_l1;
+    }
+#else
     {
         {
         DeviceZoneScopedN("SE-RROWS");
         set_l1_data_cache<true>();  // (write-through; the packed tiles read after an invalidate)
         invalidate_l1_cache();
-        rows_::make<K, ET>(bv, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
+        rows_::make<K, RT_ETF>(bv, get_read_ptr(BIAS), o_l1, get_arg_val<uint32_t>(t0 + 2), 0, 8);
         set_l1_data_cache<false>();
         }
         for (uint32_t i = 1; i < 4; ++i) {
@@ -569,17 +630,20 @@ void kernel_main() {
     const auto og = TensorAccessor(o_args, o_addr, 32 * 4 * K);
     noc_async_write(o_l1, og.get_noc_addr(page), 32 * 4 * K);
     noc_async_write_barrier();
+#endif
 #ifdef RA_PLAN
     {  // the routing exchange + planner (routing_stream): every router core's rows written, then routing_a2a's planner
         DeviceZoneScopedN("SE-RPLAN");
         const uint32_t r0 = t0 + 9, rows = get_arg_val<uint32_t>(r0), rows2 = get_arg_val<uint32_t>(r0 + 1);
         const uint32_t B = get_arg_val<uint32_t>(r0 + 2);
+#if RT_HALF == 0  // (the rows' makers: RA_NP_ of the RA_NC_ router cores - with RT_SPLIT the halves 0)
         for (uint32_t i = 0; i < RA_NC_; ++i) {  // (my rows are written: every router core's two planner RISCs told)
             const uint32_t x = get_arg_val<uint32_t>(r0 + 3 + 2 * i), y = get_arg_val<uint32_t>(r0 + 4 + 2 * i);
             noc_semaphore_inc(get_noc_addr(x, y, rows), 1);
             noc_semaphore_inc(get_noc_addr(x, y, rows2), 1);
         }
-        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_NC_);
+#endif
+        noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows), RA_NP_);
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows) = 0;  // (re-arm: all increments landed)
         if (B) ra::plan(r0 + 3 + 2 * RA_NC_, B);  // (no instance here: fewer planner instances than router cores)
     }
@@ -666,10 +730,12 @@ class RouterStream:
     free cells), xg: the gather (its ports carry the logits)."""
 
     @staticmethod
-    def layout_of(G, ET, K, kbr):
-        """The router cores' arena regions (offsets, bytes) at K block kbr: G chips, ET expert tiles, top-K."""
+    def layout_of(G, ET, K, kbr, ETF=None):
+        """The router cores' arena regions (offsets, bytes) at K block kbr: G chips, ET expert tiles a core, top-K;
+        ETF every expert tile (split: the bias is the whole row tile's; ET a half's) - then a PART page too."""
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
         off, o = {}, 0
+        ETF = ETF or ET
         for k, v in [
             ("xr", 2 * G * kbr * 2048),
             ("wr", 2 * kbr * ET * 2048),
@@ -677,7 +743,7 @@ class RouterStream:
             ("sc", ET * 4096),
             ("idx", ET * 2048),
             ("best", 4096),
-            ("bias", ET * 4096),
+            ("bias", ETF * 4096),
             # (above the planner's overlay - everything below the bias, dead once the rows are made: another chip's
             # partials for the next call may land while this chip's planner of this call still runs - launch skew)
             ("arr", (G - 1) * ET * 4096),
@@ -686,18 +752,19 @@ class RouterStream:
             ("arrb", 16 * max(1, G - 1)),  # (the arrivals' slots in landing order)
             ("rdy", 16 * 2),
             ("out", 32 * 4 * K),
-            ("words", 128),
+            ("words", 160),  # (word 128: split, the partner's best K landed)
             ("route", 32 * 4 * 2),
             ("gate", 16),  # (the W-stream gate's source word: 1, 16-byte aligned like its destination)
             ("msync", 16),  # (the compute's PACK -> MATH: the BEST page is in L1 - their shares of the rows)
-        ]:
+        ] + ([("part", 4096)] if ETF != ET else []):
             off[k], o = o, al(o + v)
         return off, o
 
     @staticmethod
-    def min_bytes(G, E, K):
+    def min_bytes(G, E, K, split=False):
         """The least arena the router cores need (K block 1)."""
-        return RouterStream.layout_of(G, E // 32, K, 1)[1]
+        ET = E // 32
+        return RouterStream.layout_of(G, ET // 2 if split else ET, K, 1, ETF=ET)[1]
 
     def __init__(
         self,
@@ -717,6 +784,7 @@ class RouterStream:
         on_engine=False,
         ordered=False,
         fold=1,
+        split=False,
     ):
         """arena: (tensor, base, bytes) - the engine's arena, also carved on these cores and the ports (lockstep L1);
         words: the port words' address (a zeroed L1 tensor on the ports, 16 B a router core). ordered: the fin sums the
@@ -729,19 +797,26 @@ class RouterStream:
         CR = rows // 32
         assert CR % G == 0
         self.RB, self.KT, self.ET, self.K = CR // G, H // G // 32, E // 32, K
-        assert len(cores) >= self.RB and E % 32 == 0 and K % 2 == 0 and 4 * K <= 64
-        self.cores = cores[: self.RB]
+        # (split: a row tile's experts over two router cores - core h RB + j its half h's ETL tiles: the fin and the
+        # top-K over half the tiles each, half 1's best K merged on half 0 - one more pair round)
+        self.S = 2 if split else 1
+        assert not split or (
+            on_engine and self.ET % 2 == 0
+        ), "split: the logits on the engine, an even expert tile count"
+        self.ETL = self.ET // self.S
+        assert len(cores) >= self.S * self.RB and E % 32 == 0 and K % 2 == 0 and 4 * K <= 64
+        self.cores = cores[: self.S * self.RB]
         self.on_engine = on_engine  # (the logits computed by the engine cores, se_engine3's SE_RTR: no matmul here)
         self.scale_bits = struct.unpack("<I", struct.pack("<f", route_scale))[0]
         self.prio_first = prio_first
         self.fidelity = fidelity  # (the port sends the logits ahead of the x gather: GLM-type)
         self.nv = xg.nv
-        ET, RB = self.ET, self.RB
+        ET, RB, ETL = self.ET, self.RB, self.ETL
         self.arena, self.base, abytes = arena
         al = lambda v: (v + 63) // 64 * 64  # noqa: E731
 
         def layout(kbr):
-            return RouterStream.layout_of(G, ET, K, kbr)
+            return RouterStream.layout_of(G, ETL, K, kbr, ETF=ET)
 
         # the K block: the largest <= 4 tiles dividing the chip's K whose buffers fit (8: no faster, measured - the
         # matmul is bound by its unpack / math, not by the blocks' L1-accumulated packs)
@@ -753,14 +828,14 @@ class RouterStream:
         self.crs = crs
         assert o <= abytes, f"router cores need {o} B of the arena's {abytes}"
         # the ports' buffers (in the arena's range there): per port the sub-blocks of its units x cores
-        nlink = -(-RB // xg.nv)
+        nlink = -(-len(self.cores) // xg.nv)
         # (sub-block slots a unit: every core of the link's, or - on the router cores, too much L1 (K3 E 896 at 1024
         # rows: 3 x 4 x 28 fp32 tiles = 1.34 MB) - fewer, core i in slot i % NS behind the port's word that core i - NS's
         # left; on the engine its cores write the sub-blocks themselves, all of them)
         self.NS = nlink
-        while not on_engine and self.NS > 1 and (G - 1) * self.NS * ET * 4096 > abytes // 2:
+        while not on_engine and self.NS > 1 and (G - 1) * self.NS * ETL * 4096 > abytes // 2:
             self.NS -= 1
-        self.pbuf_sub = (G - 1) * self.NS * ET * 4096
+        self.pbuf_sub = (G - 1) * self.NS * ETL * 4096
         assert self.pbuf_sub <= abytes, f"the ports' logits sub-blocks: {self.pbuf_sub} B > the arena's {abytes}"
         self.sfree_words = ttnn.from_torch(  # (the slots' "free" words on the router cores, 16 B a (direction, unit))
             torch.zeros(len(self.cores), 4 * 8, dtype=torch.int32),
@@ -844,8 +919,8 @@ class RouterStream:
         )
 
     def _port_layout(self, l):
-        """This link's router cores (core indices) in the walk order."""
-        return [j for j in range(self.RB) if j % self.nv == l]
+        """This link's router cores (core indices: h RB + j, split) in the walk order."""
+        return [j for j in range(len(self.cores)) if j % self.nv == l]
 
     def _pos(self, coord):
         return self.xg.chips[coord]["rings"][0]["p"]
@@ -884,14 +959,14 @@ class RouterStream:
         out += [len(js)] + [virt(self.cores[j]).x | virt(self.cores[j]).y << 8 for j in js]
         rpl = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // 4096)
         assert len(bs) * len(js) <= 16, "the port's sub-block words: 16 a port"
-        need = self.ET if self.on_engine else 1  # (engine tiles straight in, or one hand-off of the sub-block)
+        need = self.ETL if self.on_engine else 1  # (engine tiles straight in, or one hand-off of the sub-block)
         sf = int(self.sfree_words.buffer_address()) + 64 * ("fwd", "bwd").index(d)  # (a direction's units: 4 words)
         return out + [
             self.pbase,
             self.words,
             self.base + self.off["arr"],
             self.arr[0],
-            self.ET,
+            self.ETL,
             rpl,
             need,
             min(self.NS, len(js)),
@@ -941,23 +1016,27 @@ class RouterStream:
         handed it to (its word: ET tiles) - as (NoC x | y << 16, base, count address); and the W gate's counter
         (router core 0: NoC, address)."""
         virt = self.mesh.worker_core_from_logical_core
-        p, G, RB, ET = self._pos(coord), self.G, self.RB, self.ET
+        p, G, RB, ETL = self._pos(coord), self.G, self.RB, self.ETL
         ports = {(d, l): virt(c) for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
         dests = []
-        for R in range(G * RB):
+        for R in range(G * RB):  # (split: a destination a half - the expert tiles h ETL .. - one after the other)
             bb, j = R // RB, R % RB
-            if bb == p:
-                c = virt(self.cores[j])
-                dests.append((c.x | c.y << 16, self.base + self.off["hold"] + bb * ET * 4096, self.arr[1]))
-            else:
-                l = j % self.nv
-                js = self._port_layout(l)
-                d = self._dir(p, bb)
-                k = self._dests(p, d).index(bb) * len(js) + js.index(j)
-                pc = ports[(d, l)]
-                dests.append((pc.x | pc.y << 16, self.pbase + k * ET * 4096, self.words + 16 * k))
+            dr = ()
+            for h in range(self.S):
+                cj = h * RB + j
+                if bb == p:
+                    c = virt(self.cores[cj])
+                    dr += (c.x | c.y << 16, self.base + self.off["hold"] + bb * ETL * 4096, self.arr[1])
+                else:
+                    l = cj % self.nv
+                    js = self._port_layout(l)
+                    d = self._dir(p, bb)
+                    k = self._dests(p, d).index(bb) * len(js) + js.index(cj)
+                    pc = ports[(d, l)]
+                    dr += (pc.x | pc.y << 16, self.pbase + k * ETL * 4096, self.words + 16 * k)
+            dests.append(dr)
         c0 = virt(self.cores[0])
-        return dict(dests=dests, gate_ctr=(c0.x | c0.y << 16, self.arr[2]))
+        return dict(dests=dests, gate_ctr=(c0.x | c0.y << 16, self.arr[2]), split=ETL if self.S > 1 else 0)
 
     def attach_mcast(self, prog):
         """The W_r column family (rotating sender, handshake) on the router NCRISC: after prog.semaphores is set."""
@@ -985,7 +1064,7 @@ class RouterStream:
     def pieces(self, coord, x, w, b, ix, out, route=None):
         """(CBs, kernels) of the router cores on chip coord. x: the own shard [rows, H / TP] (DRAM); route: the route
         words' tensor [1, 1, 1, S] uint32 (dispatch prep, with self.prep)."""
-        G, ET, RB, K = self.G, self.ET, self.RB, self.K
+        G, ET, RB, K, ETL = self.G, self.ETL, self.RB, self.K, self.ETL
         p = self._pos(coord)
         virt = self.mesh.worker_core_from_logical_core
         ports = {(d, l): virt(c) for (_, d, l), c in self.xg.chips[coord]["ports"].items()}
@@ -1003,7 +1082,9 @@ class RouterStream:
         cb(WR, "wr", 2 * self.KBR * ET * 2048, ttnn.bfloat16, 2048)
         cb(HOLD, "hold", G * ET * 4096, ttnn.float32, 4096)
         cb(ARRF, "arr", (G - 1) * ET * 4096, ttnn.float32, 4096)
-        cb(BIAS, "bias", ET * 4096, ttnn.float32, 4096)
+        cb(BIAS, "bias", self.ET * 4096, ttnn.float32, 4096)
+        if self.S > 1:
+            cb(PART, "part", 4096, ttnn.float32, 4096)
         cb(SC, "sc", ET * 4096, ttnn.float32, 4096)
         cb(IDX, "idx", ET * 2048, ttnn.uint16, 2048)
         cb(BEST, "best", 4096, ttnn.float32, 4096)
@@ -1027,7 +1108,7 @@ class RouterStream:
             # entries = blocks (HOLD slot b: token tile b of my rows); the hand-offs, then my own block's fin
             n_rt[core.x][core.y] = (
                 [int(x.buffer_address()), int(w.buffer_address()), int(b.buffer_address()), int(ix.buffer_address())]
-                + [bb * RB + j for bb in range(G)]
+                + [bb * RB + j % RB for bb in range(G)]
                 + [G - 1, self.arr[0]]
                 + tail
                 + (self._ra_args2(coord, j) if self.ra is not None else [])
@@ -1038,7 +1119,7 @@ class RouterStream:
                 + ops
                 + [G - 1 if bb == p else 0 for bb in range(G)]
                 + tail
-                + [b0 + off["bias"], b0 + off["route"], 32 * j]
+                + [b0 + off["bias"], b0 + off["route"], 32 * (j % RB)]
             )
             hs = []
             l = j % self.nv
@@ -1052,11 +1133,23 @@ class RouterStream:
                 sw = int(self.sfree_words.buffer_address()) + 64 * ("fwd", "bwd").index(d) + 16 * u if i >= ns else 0
                 hs += [bb, pc.x, pc.y, self.pbase + (u * ns + i % ns) * ET * 4096]
                 hs += [self.words + 16 * (u * len(js) + i), sw]
+            jr, h = j % RB, j // RB  # (split: row tile jr's half h)
+            if h:  # (half 1: no rows - its partner's NoC in the out address's place)
+                pv = virt(self.cores[jr])
+                o_w = [pv.x | pv.y << 16, jr]
+            else:
+                o_w = [int(out.buffer_address()), jr]
             b_rt[core.x][core.y] = (
                 [len(hs) // 6]
                 + hs
-                + [int(out.buffer_address()), j, self.scale_bits, b0 + off["out"], b0 + off["words"]]
-                + [b0 + off["best"], b0 + off["route"], int(route.buffer_address()) if route is not None else 0, 32 * j]
+                + o_w
+                + [self.scale_bits, b0 + off["out"], b0 + off["words"]]
+                + [
+                    b0 + off["best"],
+                    b0 + off["route"],
+                    int(route.buffer_address()) if route is not None else 0,
+                    32 * jr,
+                ]
                 + (self._ra_args(coord, j) if self.ra is not None else [])
             )
         for j, core in enumerate(self.cores):  # (a kernel's runtime args a core: tt-metal's 341 - more are dropped)
@@ -1073,7 +1166,9 @@ class RouterStream:
         comp.dst_full_sync_en = False  # (half-sync: a block's packs under the next block's math)
         comp.math_approx_mode = False
         modes = [ttnn.UnpackToDestMode.Default] * 64
-        modes[SC] = modes[BEST] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (the scores: fp32 into DEST, unrounded)
+        modes[SC] = modes[BEST] = modes[
+            PART
+        ] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (the scores: fp32 into DEST, unrounded)
         modes[HOLD] = modes[ARRF] = modes[BIAS] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (the fin's partials, bias)
         comp.unpack_to_dest_mode = modes
         dm = lambda risc, noc: ttnn.DataMovementConfigDescriptor(  # noqa: E731
@@ -1088,16 +1183,6 @@ class RouterStream:
             eng += f"#define RT_GATE {g['addr']}u\n#define RT_GATE_N {g['n']}u\n#define RT_GATE_SRC {self.base + self.off['gate']}u\n"
             eng += f"#define RT_GATE_CTR {self.arr[2]}u\n"
             eng += "".join(f"#define RT_GATE_{k} {v}u\n" for k, v in zip(("X0", "Y0", "X1", "Y1"), g["rect"]))
-        self.ncrisc = ttnn.KernelDescriptor(
-            kernel_source=eng
-            + self._ra_src(coord, len(ct + acc(x) + acc(w) + acc(b) + acc(ix)))
-            + _NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
-            source_type=st,
-            core_ranges=self.crs,
-            compile_time_args=ct + acc(x) + acc(w) + acc(b) + acc(ix) + (self._ra_ct() if self.ra is not None else []),
-            runtime_args=n_rt,
-            config=dm("RISCV_1", ttnn.NOC.NOC_0),
-        )
         rt_c, rt_b, rt_ct = "", "", []
         if route is not None:
             from ttnn.bringup.combine_rf.sparse_all_gather_2d import route_words
@@ -1108,7 +1193,7 @@ class RouterStream:
             rt_c = "#define RT_ROUTE\n" + route_src(
                 (R_, C_),
                 coord[0] * C_ + coord[1],
-                E=ET * 32 // self.fold,
+                E=self.ET * 32 // self.fold,
                 EPC=self.prep["EPC"],
                 K=K,
                 torus=self.prep["torus"],
@@ -1118,26 +1203,66 @@ class RouterStream:
             rw = route_words(R_ * C_)
             rt_b = f"#define RT_ROUTE\n#define RT_CT0 {n0}\n#define RT_PAGE {int(route.buffer_aligned_page_size())}\n"
             rt_b += f"#define RT_RW {rw}\n"
-        kernels = [
-            self.ncrisc,
-            ttnn.KernelDescriptor(
-                kernel_source=eng + _COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS + rt_c, 1),
+        kernels = []
+
+        def sub(rt, cs):  # (a kernel group's runtime args: its cores' only)
+            if self.S == 1:
+                return rt
+            o = ttnn.RuntimeArgs()
+            for c in cs:
+                o[c.x][c.y] = list(rt[c.x][c.y])
+            return o
+
+        for h in range(self.S):  # (split: a kernel group a half - its defines; the route words only half 0's)
+            hc = self.cores[h * RB : (h + 1) * RB]
+            hcrs = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in hc]) if self.S > 1 else self.crs
+            sd = ""
+            if self.S > 1:
+                sd = f"#define RT_SPLIT\n#define RT_HALF {h}\n#define RT_HB {h * ETL}u\n#define RT_ETF {self.ET}u\n"
+                sd += f"#define RT_PWORD {b0 + off['words'] + 128}u\n#define RT_PART {b0 + off['part']}u\n"
+                sd += f"#define RT_PART_CB {PART}\n"
+            hrt_c, hrt_b, hrt_ct = (rt_c, rt_b, rt_ct) if h == 0 else ("", "", [])
+            nk = ttnn.KernelDescriptor(
+                kernel_source=eng
+                + sd
+                + self._ra_src(coord, len(ct + acc(x) + acc(w) + acc(b) + acc(ix)))
+                + _NCRISC.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS, 1),
                 source_type=st,
-                core_ranges=self.crs,
-                compile_time_args=ct,
-                runtime_args=c_rt,
-                config=comp,
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=f"#define RT_FOLD {self.fold}u\n"
-                + rt_b
-                + self._ra_src(coord, len(ct + acc(out)))
-                + _BRISC,
-                source_type=st,
-                core_ranges=self.crs,
-                compile_time_args=ct + acc(out) + (self._ra_ct() if self.ra is not None else []) + rt_ct,
-                runtime_args=b_rt,
-                config=dm("RISCV_0", ttnn.NOC.NOC_1),
-            ),
-        ]
+                core_ranges=hcrs,
+                compile_time_args=ct
+                + acc(x)
+                + acc(w)
+                + acc(b)
+                + acc(ix)
+                + (self._ra_ct() if self.ra is not None else []),
+                runtime_args=sub(n_rt, hc),
+                config=dm("RISCV_1", ttnn.NOC.NOC_0),
+            )
+            if h == 0:
+                self.ncrisc = nk
+            kernels += [
+                nk,
+                ttnn.KernelDescriptor(
+                    kernel_source=eng
+                    + sd
+                    + _COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS + hrt_c, 1),
+                    source_type=st,
+                    core_ranges=hcrs,
+                    compile_time_args=ct,
+                    runtime_args=sub(c_rt, hc),
+                    config=comp,
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=f"#define RT_FOLD {self.fold}u\n"
+                    + sd
+                    + hrt_b
+                    + self._ra_src(coord, len(ct + acc(out)))
+                    + _BRISC,
+                    source_type=st,
+                    core_ranges=hcrs,
+                    compile_time_args=ct + acc(out) + (self._ra_ct() if self.ra is not None else []) + hrt_ct,
+                    runtime_args=sub(b_rt, hc),
+                    config=dm("RISCV_0", ttnn.NOC.NOC_1),
+                ),
+            ]
         return cbs, kernels

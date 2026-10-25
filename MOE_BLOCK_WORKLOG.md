@@ -1772,3 +1772,22 @@ Validation (2026-10-25, bh-lb-09):
   8 cards (the pool's dirty flag) brought both links back.
 - Soak, 2x4, 10000 traced replays, every 25th checked (402 checks), uniform + zipf packed: K2.7 640 / 1024 rows, GLM-5.3
   640 rows - clean (PCC min 0.98577 .. 0.98702, routing agreement >= 0.99).
+
+## 2026-10-25: logits priority measured; the router's fin + top-K split over two cores (router_stream split)
+- Ports' priority A/B (MoEOptions.logits_first), head us logits first -> x first: 2x4 K3 640 rows 638 -> 558, 1024 1120
+  -> 1083, GLM-5.3 392 -> 383, K2.7 443 -> 433; ring of 4 K3 536 -> 458, 877 -> 852, GLM-5.3 312 -> 296, K2.7 331 -> 326.
+  x first is the default on meshes of up to 8 chips (the line's logits-first came from Galaxy projections).
+- Chain zones (640 rows, us from the head's start, 2x4): partials landed K3 219-273 / GLM-5.3 74 / K2.7 97-211; fin +
+  top-K K3 106-109, K2.7 47-54, GLM-5.3 38; planner done K3 390-464. The Galaxy (coordinator): fin + top-K 114, planner
+  done 490 vs the SE path 457 - the chain binds there.
+- Split (MoEOptions.router_split, or HeadLayout.split): core (h, j) takes expert half h of row tile j - the engine writes
+  each logits tile to its half's core (a count each), the ports carry 2 RB sub-blocks of ET / 2 tiles, the fin and the
+  top-K run over half the tiles (global ids in the keys, the whole bias), half 1's best-K page goes to half 0 (its PART +
+  a word, zeroed at program start - stale, it made the merge take the last call's page), half 0 merges it as one more
+  pair round and makes the rows. The second cores take the column left of the movers: the engine 10 wide.
+- Picks bit-equal to one core (deterministic sums: 0 of 24 chips' routing rows differ, K3 and K2.7); agreement as before.
+- 640 rows, us (fin + top-K / planner done / head): 2x4 K3 109 -> 65 / 464 -> 412 / 558 -> 542, K2.7 49 -> 32 /
+  326 -> 301 / 434 -> 439; ring K3 106 -> 63 / 391 -> 338 / 457 -> 456, K2.7 47 -> 30 / 248 -> 217 / 330 -> 325. The
+  narrower engine cost the SE path nothing measurable (K3 its end 540 -> 516 2x4, 455 -> 445 ring). The LoudBox
+  heads are SE-path bound: off by default there; on the Galaxy (chain 490 vs SE 457) ~-33 us expected.
+- Soak (planner path, router_split): K3 / K2.7 640 rows, 2000 + 500 traced replays each, every 25th checked - clean.

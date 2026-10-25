@@ -749,6 +749,7 @@ class RoutingStream:
             f"#define {k} {v}\n"
             for k, v in dict(
                 RA_NC_=len(self.router.cores),
+                RA_NP_=self.router.RB,  # (the joint rows' makers: a row tile's - its half 0 with the split)
                 RA_N_=self.N,
                 RA_M_=self.M,
                 RA_EPC_=self.EPC,
