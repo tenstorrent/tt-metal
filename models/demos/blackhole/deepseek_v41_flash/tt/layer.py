@@ -212,12 +212,19 @@ class DSV41Layer:
             P0 = P2 = S0 = S2 = lambda t: t  # noqa: E731
         xp, prep = P0(x), P0(pre_in)
 
-        attn_pre, attn_post, attn_comb = self.mhc_attn.mixes(xp)
-        mark("mhc_attn_mixes")
-        h = S2(
-            self.mhc_attn.collapse_norm(xp, prep, self.attn_norm_w, self.eps)
-        )  # fused collapse + RMSNorm -> bf16 [1,1,T,D]
-        mark("mhc_attn_collapse+norm")
+        fuse_pre = (not _STREAM_BF16) and self.mhc_attn.pre_fused_ok(
+            int(xp.shape[0])
+        )  # L02: mixes + collapse + norm of a sub-block in ONE program
+        if fuse_pre:
+            (attn_pre, attn_post, attn_comb), h = self.mhc_attn.mixes_collapse(xp, prep, self.attn_norm_w, self.eps)
+            mark("mhc_attn_mixes+collapse+norm")
+        else:
+            attn_pre, attn_post, attn_comb = self.mhc_attn.mixes(xp)
+            mark("mhc_attn_mixes")
+            h = S2(
+                self.mhc_attn.collapse_norm(xp, prep, self.attn_norm_w, self.eps)
+            )  # fused collapse + RMSNorm -> bf16 [1,1,T,D]
+            mark("mhc_attn_collapse+norm")
         a = self.attention.forward(h, st)  # [1,1,T,D] bf16, replicated
         mark("attention")
         # a: bf16 [1,1,T,D], consumed as is; expand + the FFN-side mixes are one program with DSV41_MHC_EP=1
@@ -226,15 +233,22 @@ class DSV41Layer:
         ):  # accuracy study: round the stream to bf16 at every hc_post like the bf16 reference / GPU model
             x2 = _rnd_bf16(self.mhc_attn.expand(a, xp, attn_post, attn_comb, None))
             ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
+        elif fuse_pre:
+            x2 = self.mhc_attn.expand(P2(a), xp, attn_post, attn_comb, None)
         else:
             x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
                 P2(a), xp, attn_post, attn_comb, None, self.mhc_ffn
             )
         mark("mhc_attn_expand+ffn_mixes")
-        h, h_tok = self.mhc_ffn.collapse_norm_rm(
-            x2, attn_pre, self.ffn_norm_w, self.eps
-        )  # h [1,1,Tp,D] bf16, h_tok [Tp,1,1,D] bf16 row-major
-        h, h_tok = S2(h), S0(h_tok)
+        if fuse_pre:
+            (ffn_pre, ffn_post, ffn_comb), h, h_tok = self.mhc_ffn.mixes_collapse(
+                x2, attn_pre, self.ffn_norm_w, self.eps, emit_rm=True
+            )
+        else:
+            h, h_tok = self.mhc_ffn.collapse_norm_rm(
+                x2, attn_pre, self.ffn_norm_w, self.eps
+            )  # h [1,1,Tp,D] bf16, h_tok [Tp,1,1,D] bf16 row-major
+            h, h_tok = S2(h), S0(h_tok)
         mark("mhc_ffn_collapse+norm")
         m = self.moe.forward(h, h_tok, forced_routing)  # [1,1,T,D/cols] per device
         mark("moe")

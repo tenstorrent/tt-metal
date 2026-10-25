@@ -37,6 +37,7 @@ from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand import mhc_expand
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_expand2 import mhc_expand2
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_mixes import mhc_post, mhc_proj
 from models.demos.blackhole.deepseek_v41_flash.tt.mhc_mixes2 import mhc_post2, mhc_proj2, proj_plan
+from models.demos.blackhole.deepseek_v41_flash.tt.mhc_pre import mhc_mixes_cn
 
 
 def _flag(name, default="0"):
@@ -197,6 +198,41 @@ class DSV41MHC:
             wt = self._wts[kc] = self._up(wfn)  # first call per T class must be outside a trace
         part = mhc_proj(x, wt, self.mix_col)
         return mhc_post(part, self.consts10, x.shape[0], self._w.iters, self._w.eps, self.sq_eps, self.post_fidelity)
+
+    def pre_fused_ok(self, T):
+        """mixes + collapse + norm of a sub-block as ONE program (mhc_pre.py): T = 1..8 token rows, T-aware kernels, DSV41_MHC_PRE=1 (default)"""
+        return (
+            _taware()
+            and T <= 8
+            and _flag("DSV41_MHC_PRE", "1")
+            and _flag("DSV41_MHC_MIXES_V2", "1")
+            and _flag("DSV41_MHC_CN_FUSED", "1")
+        )
+
+    def mixes_collapse(self, x, pre_in, w, eps=1e-20, emit_rm=False):
+        """== (self.mixes(x), self.collapse_norm[_rm](x, pre_in, w, eps)) in one program, bit-identical:
+        -> ((pre, post, comb), h) or ((pre, post, comb), h, h_tok) if emit_rm."""
+        T = int(x.shape[0])
+        Ti = 4 if T <= 4 else 8
+        tg = 4 if Ti == 8 and os.environ.get("DSV41_MHC_MIXES_T4", "1") == "1" else 8
+        plan = proj_plan(Ti, self.dim, self.device, tg, T)
+        w4 = self._norm_weight(w, T)
+        pre, post, comb, h, rm = mhc_mixes_cn(
+            x,
+            pre_in,
+            w4,
+            self._wt(plan),
+            self.consts9,
+            plan,
+            self.mix_col,
+            self._w.iters,
+            self._w.eps,
+            self.sq_eps,
+            eps,
+            emit_rm,
+            self.post_fidelity,
+        )
+        return ((pre, post, comb), h, rm) if emit_rm else ((pre, post, comb), h)
 
     def collapse(self, x, pre):
         """sum_i pre_i x_i: [T,1,1,n] @ [T,1,n,C] -> [T,1,1,C] (fp32). (The layer wants collapse_norm.)"""

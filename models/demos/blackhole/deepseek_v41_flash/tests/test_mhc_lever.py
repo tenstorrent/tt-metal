@@ -50,6 +50,15 @@ def layer_chain(ma, mf, T, x, pre_in, a, m, sh, wa, wf):
     return ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG), ttnn.to_memory_config(S0(fp), ttnn.DRAM_MEMORY_CONFIG)
 
 
+def layer_chain_fused(ma, mf, T, x, pre_in, a, m, sh, wa, wf):
+    """the fused path of DSV41Layer.forward (L02): mixes + collapse + norm in one program per sub-block"""
+    (ap, apo, ac), h = ma.mixes_collapse(x, pre_in, wa, 1e-20)
+    x2 = ma.expand(a, x, apo, ac, None)
+    (fp, fpo, fc), h2, h_tok = mf.mixes_collapse(x2, ap, wf, 1e-20, emit_rm=True)
+    x3 = mf.expand(m, x2, fpo, fc, sh)
+    return ttnn.to_memory_config(x3, ttnn.DRAM_MEMORY_CONFIG), ttnn.to_memory_config(fp, ttnn.DRAM_MEMORY_CONFIG)
+
+
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
@@ -91,6 +100,7 @@ def test_mhc_lever(mesh_device):
             res["mixes_it1"] = traced_us(md, lambda: mi1.mixes(x))
         res["cn_rm"] = traced_us(md, lambda: ma.collapse_norm_rm(x, pre, wa, 1e-20))
         res["expand"] = traced_us(md, lambda: ma.expand(a, x, post, comb, None))
+        res["chain_fused"] = traced_us(md, lambda: layer_chain_fused(ma, mf, T, x, pre, a, m, sh, wa, wf), n=20)
         res["chain"] = traced_us(md, lambda: layer_chain(ma, mf, T, x, pre, a, m, sh, wa, wf), n=20)
         print(
             "MHCLEVER T=%d " % T + "  ".join(f"{k}={v:.1f}" for k, v in res.items()) + "  (us/call, traced)", flush=True
