@@ -724,9 +724,9 @@ class ttMLA:
         # Debug/reference: MLA_SEQQ_QA=allreduce keeps the head-sharded path's q_a stem (all-reduce + norm of all
         # S/sp rows) and partitions the rows afterwards, isolating the reduce-scatter summation order.
         self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
-        # MLA_SEQQ_L1=1: the seq-path Q (rope output and its ROW_MAJOR copy, ~98 KB/core) and the tilized sparse_sdpa
-        # output (~87 KB/core) live in L1 instead of DRAM (R0, bit-exact: rope 60->47, untilize 57->34, tilize+wkv_b2
-        # 115->84 us). Opt-in: the L1-resident Q must fit beside sparse_sdpa's CBs and any persistent L1 buffers.
+        # MLA_SEQQ_L1=1: the seq-path rope output (~98 KB/core, untilized from L1 to DRAM: sparse_sdpa wants its q in
+        # DRAM) and the tilized sparse_sdpa output (~87 KB/core, wkv_b2's in0) live in L1 instead of DRAM (R0,
+        # bit-exact: rope 60->47, untilize 57->52, tilize+wkv_b2 115->84 us). Opt-in until checked in-model.
         self._seq_q_l1 = self._seq_q and os.getenv("MLA_SEQQ_L1", "0") not in ("", "0")
         assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
         if self._seq_q:
@@ -2501,8 +2501,9 @@ class ttMLA:
             )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
         # the op is ROW_MAJOR-only; q comes in TILE
+        # (sparse_sdpa requires its q in DRAM: under MLA_SEQQ_L1 the L1 rope output is untilized straight to DRAM.)
         q_rm = ttnn.to_layout(
-            q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG if self._seq_q_l1 else None
+            q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG if self._seq_q_l1 else None
         )
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
