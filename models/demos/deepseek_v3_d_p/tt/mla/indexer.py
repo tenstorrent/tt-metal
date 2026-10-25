@@ -34,6 +34,12 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 # so this measures host operation setup / program-cache handling / command submission, not device completion.
 # The test driver resets and reads the counters once per chunk.
 _fused_ring_host_timing = {"calls": 0, "seconds": 0.0}
+# mm track: the seqq indexer wq_b ([160, 1536] x [1536, 4096] bfp8, 1D mcast_in0 ib16 pn2 on 64 cores) is weight-stream
+# bound (33 us in-model = 202 GB/s). IDX_WQB_IB overrides its in0_block_w (0 = tuned config); IDX_WQB_WS=1 also lays the
+# replicated weight out DRAM WIDTH_SHARDED ([K, N/banks] per bank, a device tile copy, no requantization) so the 1D
+# factory reads it bank by bank (same mechanism as MLA_SEQQ_QB_WS for the seqq q_b).
+_IDX_WQB_WS = os.environ.get("IDX_WQB_WS", "0") == "1"
+_IDX_WQB_IB = int(os.environ.get("IDX_WQB_IB", "0"))
 
 
 @dataclass(frozen=True)
@@ -566,6 +572,9 @@ class TtIndexerBase:
             device=self.mesh_device,
         )
         self._idx_wq_b = w["wq_b"]
+        self._idx_wq_b_pc = self._wq_b_seq_program_config()
+        if self._idx_wq_b_pc is not None and _IDX_WQB_WS:
+            self._idx_wq_b = self._dram_width_shard(self._idx_wq_b)
         self._idx_wk = w["wk"]
         # Apply the static indexer scale to the persistent projection weight.
         wproj = w["weights_proj"]
@@ -645,6 +654,49 @@ class TtIndexerBase:
     def index_cache_layers(self) -> int:
         """Layer stride of the block-cyclic key cache, including compacted full-layer layouts."""
         return self._index_cache_layers
+
+    def _wq_b_seq_program_config(self):
+        """mm track (IDX_WQB_IB / IDX_WQB_WS): the tuned seqq wq_b 1D mcast_in0 config with in0_block_w overridden, or
+        None when neither knob is set or the tuned config is not a 1D mcast_in0 one."""
+        if not (_IDX_WQB_WS or _IDX_WQB_IB) or not self.tp_factor > 1:
+            return None
+        cfg = self._resolve_mm_cfg("indexer.wq_b", self.active_seq_len_local // self.tp_factor)
+        pc = cfg["program_config"] if cfg is not None else None
+        if not (isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig) and pc.mcast_in0):
+            return None
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+            in0_block_w=_IDX_WQB_IB or pc.in0_block_w,
+            out_subblock_h=pc.out_subblock_h,
+            out_subblock_w=pc.out_subblock_w,
+            per_core_M=pc.per_core_M,
+            per_core_N=pc.per_core_N,
+            fuse_batch=pc.fuse_batch,
+            fused_activation=pc.fused_activation,
+            mcast_in0=True,
+        )
+
+    def _dram_width_shard(self, w: ttnn.Tensor) -> ttnn.Tensor:
+        """Re-lay a DRAM-interleaved [.., K, N] weight out WIDTH_SHARDED over every DRAM bank ([K, N/banks] per bank)
+        by an on-device tile copy (bit-identical tiles). Returns w unchanged when N does not split into whole-tile
+        shards."""
+        g = self.mesh_device.dram_grid_size()
+        banks = g.x * g.y
+        n = w.shape[-1]
+        height = 1
+        for d in list(w.shape)[:-1]:
+            height *= d
+        if n % (banks * ttnn.TILE_SIZE) != 0:
+            return w
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(grid, [height, n // banks], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        out = ttnn.to_memory_config(w, mc)
+        ttnn.deallocate(w)
+        return out
 
     def _resolve_mm_cfg(self, weight_name: str, seq_len_local: int) -> dict | None:
         """Return the model-gated Blackhole config for an indexer matmul."""
@@ -828,12 +880,15 @@ class TtIndexerBase:
         # rows) is used as is.
         qr_local = ttnn.mesh_partition(qr, dim=2, cluster_axis=self.tp_axis) if tpsp and qr.shape[2] != sq_local else qr
         wq_b_cfg = self._resolve_mm_cfg("indexer.wq_b", sq_local)
+        wq_b_pc = wq_b_cfg["program_config"] if wq_b_cfg is not None else None
+        if getattr(self, "_idx_wq_b_pc", None) is not None and sq_local == self.active_seq_len_local // self.tp_factor:
+            wq_b_pc = self._idx_wq_b_pc
         q = ttnn.linear(
             qr_local,
             self._idx_wq_b,
             compute_kernel_config=self.default_compute_kernel_config,
             memory_config=wq_b_cfg["out_mem_config"] if wq_b_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wq_b_cfg["program_config"]} if wq_b_cfg is not None else {}),
+            **({"program_config": wq_b_pc} if wq_b_pc is not None else {}),
             # Preserve the unquantized values through Hadamard, then materialize BFP8 once below.
             dtype=ttnn.bfloat16,
         )  # [1,1,S/(sp*tp),H_idx*D_idx] — all heads, only this TP rank's query rows
