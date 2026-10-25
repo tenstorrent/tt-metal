@@ -84,7 +84,8 @@ void kernel_main() {
         }
 
         // reduce f(x)
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::cal, dfb::one, dfb::reduce>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::cal, dfb::one, dfb::reduce>(
+            dfb_cal_obj, dfb_one_obj, dfb_reduce_obj, ckl::ReduceInputBlockShape::single());
 
         ckl::eltwise_chain(
             ckl::IterationShape::tiles(onetile),

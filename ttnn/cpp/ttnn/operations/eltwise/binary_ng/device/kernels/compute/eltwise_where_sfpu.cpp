@@ -11,7 +11,11 @@
 #include "eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <typename In0DFB, typename In1DFB, typename OutDFB>
 ALWI void process_tile(
+    In0DFB& dfb_in0,
+    In1DFB& dfb_in1,
+    OutDFB& dfb_out,
     tt::CBIndex cb_in0_id,
     tt::CBIndex cb_in1_id,
     tt::CBIndex cb_out_id,
@@ -21,10 +25,6 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-
-    DataflowBuffer dfb_in0(cb_in0_id);
-    DataflowBuffer dfb_in1(cb_in1_id);
-    DataflowBuffer dfb_out(cb_out_id);
 
 #if BCAST_INPUT  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
     auto& dfb_bcast = dfb_in1;
@@ -106,6 +106,10 @@ void kernel_main() {
     constexpr auto cb_in1_id = tt::CBIndex::c_1;
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
+    DataflowBuffer dfb_in0(cb_in0_id);
+    DataflowBuffer dfb_in1(cb_in1_id);
+    DataflowBuffer dfb_out(cb_out_id);
+
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
     copy_init(cb_in0_id);
     BINARY_SFPU_INIT
@@ -115,6 +119,9 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
+            dfb_in0,
+            dfb_in1,
+            dfb_out,
             cb_in0_id,
             cb_in1_id,
             cb_out_id,
@@ -127,6 +134,9 @@ void kernel_main() {
 
     if (remaining_iterations > 0) {
         process_tile(
+            dfb_in0,
+            dfb_in1,
+            dfb_out,
             cb_in0_id,
             cb_in1_id,
             cb_out_id,

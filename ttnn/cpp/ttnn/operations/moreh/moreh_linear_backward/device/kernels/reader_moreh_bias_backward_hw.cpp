@@ -28,8 +28,8 @@ void kernel_main() {
     // DO_MASK_H_W — on exactly that condition. Without the binding there is no dfb::mask_h_w token
     // to name, hence the preprocessor gate around the otherwise-unchanged runtime check.
 #ifdef DO_MASK_H_W
+    DataflowBuffer dfb_mask_h_w(dfb::mask_h_w);
     if (do_mask_h || do_mask_w) {
-        DataflowBuffer dfb_mask_h_w(dfb::mask_h_w);
         generate_mask_h_w(dfb_mask_h_w, mask_h, mask_w);
     }
 #endif

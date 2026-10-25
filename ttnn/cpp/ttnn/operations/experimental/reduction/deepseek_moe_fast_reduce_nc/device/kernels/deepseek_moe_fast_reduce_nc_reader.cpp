@@ -26,6 +26,7 @@ void kernel_main() {
 
     CircularBuffer cb_compute_input_0(compute_input_cb_id_0);
     CircularBuffer cb_compute_input_1(compute_input_cb_id_1);
+    DataflowBuffer compute_input_1_dfb(compute_input_cb_id_1);
 
     uint32_t arg_idx = 0;
 
@@ -38,7 +39,7 @@ void kernel_main() {
     constexpr auto tensor_args = TensorAccessorArgs<initial_ct_idx>();
     auto tensor_accessor = TensorAccessor(tensor_args, input_address);
 
-    dataflow_kernel_lib::prepare_zero_tile<compute_input_cb_id_1>();
+    dataflow_kernel_lib::prepare_zero_tile(compute_input_1_dfb);
 
     uint32_t l1_write_addr;
     uint32_t input_granularity_index = 0;

@@ -173,6 +173,10 @@ void kernel_main() {
 #ifdef TILIZE_IN
     DataflowBuffer dfb_in_rm(dfb_in_rm_id);
 #endif
+#ifdef UNTILIZE_OUT
+    constexpr auto dfb_out_rm_id = dfb::out_rm;
+    DataflowBuffer dfb_out_rm(dfb_out_rm_id);
+#endif
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb(dfb_inb_id);
 #else
@@ -271,7 +275,7 @@ void kernel_main() {
 #endif
                 const auto final_iter = block.last() == Wt;
                 const auto pack_id = final_iter ? dfb_ex_id : dfb_accumulate_id;
-                DataflowBuffer pack_obj(pack_id);
+                auto& pack_obj = final_iter ? dfb_ex : dfb_accumulate;
                 if (final_iter) {
                     binop_with_scalar_tile_init();
                     mul_unary_tile(dst0, generic::bit_cast<uint32_t>(1.0f / W));
@@ -472,8 +476,6 @@ void kernel_main() {
             }
 
 #ifdef UNTILIZE_OUT
-            constexpr auto dfb_out_rm_id = dfb::out_rm;
-            DataflowBuffer dfb_out_rm(dfb_out_rm_id);
             untilize_row_major_block<decltype(block), block_size>(dfb_out, dfb_out_rm, block);
 #endif
         }  // block loop

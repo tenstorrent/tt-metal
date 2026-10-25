@@ -230,9 +230,10 @@ void kernel_main() {
     //    the same report lines and the TRISC data cache is not coherent between them.
     if constexpr (pattern == PATTERN_D) {
         DataflowBuffer dfb_in(dfb::in);
+        DataflowBuffer dfb_mid(dfb::mid);
         DataflowBuffer dfb_out(dfb::out);
         const std::uint32_t in_id = dfb_in.get_id();
-        const std::uint32_t mid_id = DataflowBuffer(dfb::mid).get_id();
+        const std::uint32_t mid_id = dfb_mid.get_id();
         const std::uint32_t out_id = dfb_out.get_id();
 
         compute_kernel_hw_startup(in_id, out_id);

@@ -59,6 +59,10 @@ void kernel_main() {
     // Physical core lookup table config
     const auto physical_core_lookup_table_accessor = TensorAccessor(tensor::physical_core_lookup_table);
     DataflowBuffer physical_core_lookup_table_dfb(dfb::physical_core_lookup_table);
+    DataflowBuffer value_tensor_intermediate_dfb(dfb::value_tensor_intermediate);
+    DataflowBuffer index_tensor_intermediate_dfb(dfb::index_tensor_intermediate);
+    DataflowBuffer value_tensor_peer_dfb(dfb::value_tensor_peer);
+    DataflowBuffer index_tensor_peer_dfb(dfb::index_tensor_peer);
     const uint32_t physical_core_lookup_table_tile_size_bytes = physical_core_lookup_table_dfb.get_tile_size();
 
     // Read lookup table for physical core IDs
@@ -146,7 +150,7 @@ void kernel_main() {
                     sort_barrier(
                         noc,
                         sem_barrier,
-                        dfb::physical_core_lookup_table,
+                        physical_core_lookup_table_dfb,
                         core_id,
                         leader_core_id,
                         number_of_cores_used,
@@ -154,15 +158,15 @@ void kernel_main() {
 
                     const uint32_t other_core_id = j / number_of_tiles_per_core;
                     const std::pair<uint32_t, uint32_t> remote_core_physical =
-                        get_core_physical_coordinates(other_core_id, dfb::physical_core_lookup_table);
+                        get_core_physical_coordinates(other_core_id, physical_core_lookup_table_dfb);
 
                     sort_noc_exchange_Wt_tiles(
                         noc,
                         sem_exchange,
-                        dfb::value_tensor_intermediate,
-                        dfb::index_tensor_intermediate,
-                        dfb::value_tensor_peer,
-                        dfb::index_tensor_peer,
+                        value_tensor_intermediate_dfb,
+                        index_tensor_intermediate_dfb,
+                        value_tensor_peer_dfb,
+                        index_tensor_peer_dfb,
                         number_of_tiles_per_core,
                         input_tensor_tile_size_bytes,
                         index_tensor_tile_size_bytes,

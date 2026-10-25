@@ -94,6 +94,7 @@ void kernel_main() {
     const uint32_t my_slot = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc;
+    DataflowBuffer sum_dfb(w_sum_cb), avg_dfb(w_avg_cb);
 
     CircularBuffer cb_packet(packet_cb);
     CircularBuffer cb_output(output_cb);
@@ -121,7 +122,8 @@ void kernel_main() {
         w_eps_cb,
         w_transmat_cb,
         w_reduce_factor,
-        static_cast<bool>(w_fuse_rope)>(w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
+        static_cast<bool>(w_fuse_rope)>(
+        sum_dfb, avg_dfb, w_eps_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
 
     uint32_t go_target = 0;
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {

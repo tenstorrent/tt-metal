@@ -26,6 +26,7 @@ void kernel_main() {
     DataflowBuffer dfb_add_obj(dfb::add);
     DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
     DataflowBuffer dfb_dx_obj(dfb::dx);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
 
     compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
 
@@ -69,7 +70,7 @@ void kernel_main() {
         }
 
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::add, dfb::scaler, dfb::sum>(
-            ckl::ReduceInputBlockShape::single());
+            dfb_add_obj, dfb_scaler_obj, dfb_sum_obj, ckl::ReduceInputBlockShape::single());
 
         for (uint32_t w = 0; w < Wt; w += onetile) {
             static constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
@@ -102,7 +103,7 @@ void kernel_main() {
 
         // step 2, compute sum(y * dy)
         ckl::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::add, dfb::scaler, dfb::sum>(
-            ckl::ReduceInputBlockShape::single());
+            dfb_add_obj, dfb_scaler_obj, dfb_sum_obj, ckl::ReduceInputBlockShape::single());
 
         // step 3, compute final result
         for (uint32_t w = 0; w < Wt; w += onetile) {

@@ -44,6 +44,8 @@ void kernel_main() {
     constexpr std::uint32_t total_num_blocks = get_compile_time_arg_val(6);
 
     compute_kernel_hw_startup(cb_in_batch, cb_tiled_in);
+    DataflowBuffer cb_in_batch_dfb(cb_in_batch);
+    DataflowBuffer cb_tiled_in_dfb(cb_tiled_in);
 
     for (std::uint32_t block_idx = 0; block_idx < total_num_blocks; block_idx++) {
         compute_kernel_lib::tilize<
@@ -53,7 +55,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-            1, total_sticks_per_block);
+            cb_in_batch_dfb, cb_tiled_in_dfb, 1, total_sticks_per_block);
 
         pack_untilize_init(cb_in_batch, cb_transpose_in0);
         transpose_init(cb_in_batch);

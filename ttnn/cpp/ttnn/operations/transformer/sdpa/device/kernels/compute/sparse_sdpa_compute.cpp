@@ -142,6 +142,8 @@ void kernel_main() {
     CircularBuffer neginf_cb(cb_neginf), mask_part_cb(cb_mask_part), corr_cb(cb_corr);
     CircularBuffer k_rm_cb(cb_k_rm), scale_bcast_cb(cb_k_scale_bcast);
     CircularBuffer latent_tile_cb(cb_k_latent_tile), rope_tile_cb(cb_k_rope_tile);
+    DataflowBuffer q_rm_dfb(cb_q_rm), q_in_dfb(cb_q_in), k_rm_dfb(cb_k_rm), k_in_dfb(cb_k_in);
+    DataflowBuffer out_im_dfb(cb_out_im), out_rm_dfb(cb_out_rm);
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
@@ -152,7 +154,8 @@ void kernel_main() {
 
     for (uint32_t tok = 0; tok < tok_count; ++tok) {
         // tilize Q rows -> [Sqt, DHt]
-        compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
+        compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(
+            q_rm_dfb, q_in_dfb, /*num_blocks=*/Sqt, /*total_input_pages=*/H);
 
         // Per-token control from the reader: num_active_chunks (>=1; all-sentinel chunks are skipped) and
         // num_valid_keys (last chunk's mask boundary). read_tile_value mailbox-distributes the UNPACK read so
@@ -246,7 +249,7 @@ void kernel_main() {
             } else {
                 // tilize K rows -> [Skt, DHt] (waits on reader cb_k_rm -> absorbs the K-read stall)
                 compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(
-                    /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
+                    k_rm_dfb, k_in_dfb, /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
             }
             // fp8 K tilize leaves srcA in fp8. QK reads K (transposed -> srcA) and Q (srcB), so restore
             // srcA=cb_k_in (bfp8 for fp8 K), srcB=cb_q_in. Reconfigure the tiled descriptor geometry/strides;
@@ -525,6 +528,6 @@ void kernel_main() {
         q_in_cb.pop_front(Sqt * DHt);  // Q reused across all chunks; drop it so >1 token/core stays clean
 
         // cb_out_im was written by normalize_row_streaming; untilize -> row-major out for the writer.
-        compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+        compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(out_im_dfb, out_rm_dfb, /*num_blocks=*/Sqt);
     }
 }

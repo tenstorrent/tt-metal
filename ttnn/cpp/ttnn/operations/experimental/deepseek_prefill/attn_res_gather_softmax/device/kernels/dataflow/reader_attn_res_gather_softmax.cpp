@@ -53,6 +53,7 @@ void kernel_main() {
     DataflowBuffer partial_buf(cb_id_partial);
     DataflowBuffer q_buf(cb_id_q);
     DataflowBuffer pending_buf(cb_id_pending);
+    DataflowBuffer scaler_buf(cb_id_scaler);
 
     auto prefix_accessor = TensorAccessor(prefix_args, prefix_addr);
     auto partial_accessor = TensorAccessor(partial_args, partial_addr);
@@ -67,7 +68,8 @@ void kernel_main() {
         // Both reductions are plain sums; the mean this feeds is taken against the
         // full unsharded `d` downstream, not against this rank's share.
         dataflow_kernel_lib::
-            calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+            calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+                scaler_buf);
 
         // q spans the same d as a row of the stream and is the same for every row
         // this core owns, so it is read once and left resident.

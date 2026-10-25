@@ -21,7 +21,7 @@
 //   * Must be called before the first cb_reserve_back / cb_push_back on this
 //     CB. At that point no consumer has read from it yet, so writing zeros
 //     into the full L1 region is race-free.
-//   * dfb_id refers to a local CB on this core.
+//   * dfb refers to a local CB on this core.
 //
 // Sizing:
 //   The function reads the CB's full byte size from the runtime CB interface
@@ -29,14 +29,14 @@
 //   CB sizing parameters from the caller.
 //
 // Args:
-//   dfb_id:
-//     ID of a local circular buffer on this core. Its full L1 backing region
+//   dfb:
+//     The kernel's DataflowBuffer for a local CB on this core. Its full L1 backing region
 //     (fifo_size bytes) will be overwritten with zeros.
 //   noc:
 //     NOC handle to use for the async reads and the trailing read barrier.
-inline void zero_whole_cb(uint32_t dfb_id, const Noc& noc) {
-    auto& iface = get_local_cb_interface(dfb_id);
-    const DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
+template <typename DFB>
+inline void zero_whole_cb(DFB& dfb, const Noc& noc) {
+    auto& iface = get_local_cb_interface(dfb.get_id());
     noc.async_write_zeros(dfb, iface.fifo_size);
     noc.write_zeros_l1_barrier();
 }

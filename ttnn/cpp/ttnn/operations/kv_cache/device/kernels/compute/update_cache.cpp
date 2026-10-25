@@ -25,18 +25,25 @@ void kernel_main() {
     constexpr std::uint32_t Bcache = get_arg(args::Bcache);
     const std::uint32_t batch_start_id = get_arg(args::batch_start_id);
 
+    DataflowBuffer cache_dfb(cache);
+    DataflowBuffer input_dfb(input);
+    DataflowBuffer untilized_cache_dfb(untilized_cache);
+    DataflowBuffer untilized_cache2_dfb(untilized_cache2);
+    DataflowBuffer untilized_input_dfb(untilized_input);
+    DataflowBuffer output_dfb(output);
+
     compute_kernel_hw_startup(input, untilized_input);
 
     for (std::uint32_t h = 0; h < num_batched_heads; ++h) {
         const std::uint32_t u_count = ttnn::kv_cache::user_groups_in_batch_tile(Bcache, batch_start_id, h, granularity);
         // Untilize input (standalone operation)
-        compute_kernel_lib::untilize<Wt, input, untilized_input>(1);
+        compute_kernel_lib::untilize<Wt, input, untilized_input>(input_dfb, untilized_input_dfb, 1);
 
         for (std::uint32_t u = 0; u < u_count; ++u) {
-            compute_kernel_lib::untilize<Wt, cache, untilized_cache>(granularity);
+            compute_kernel_lib::untilize<Wt, cache, untilized_cache>(cache_dfb, untilized_cache_dfb, granularity);
 
             // Wait on writer to update block, then tilize back
-            compute_kernel_lib::tilize<Wt, untilized_cache2, output>(granularity);
+            compute_kernel_lib::tilize<Wt, untilized_cache2, output>(untilized_cache2_dfb, output_dfb, granularity);
         }
     }
 }

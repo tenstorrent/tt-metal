@@ -86,8 +86,10 @@ void kernel_main() {
     const auto v = TensorAccessor(v_args, v_addr);
 
     // Reduce identity scaler; softmax scale is applied in compute.
+    DataflowBuffer scale_dfb(cb_scale);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scale, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<cb_scale, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+            scale_dfb);
 
     // Col-identity for final row-sum reduction.
     generate_bcast_col_scalar(experimental::CB(cb_col_identity), one_bf16_packed);

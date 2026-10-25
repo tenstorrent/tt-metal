@@ -153,7 +153,7 @@ ALWI void read_four_corner_inputs(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    DFB input_dfb) {
+    DFB& input_dfb) {
     // Boundary checks (recompute for performance)
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -219,7 +219,7 @@ ALWI void read_four_corner_inputs_with_fill(
     int32_t w0,
     int32_t w1,
     uint32_t input_height,
-    DFB input_dfb,
+    DFB& input_dfb,
     uint32_t fill_stick_addr) {
     const bool h0_valid = is_coordinate_valid(h0, input_height);
     const bool h1_valid = is_coordinate_valid(h1, input_height);
@@ -307,8 +307,8 @@ template <
     typename ScalarDFB>
 ALWI void process_grid_point(
     Noc noc,
-    InputDFB input_dfb,
-    ScalarDFB scalar_dfb,
+    InputDFB& input_dfb,
+    ScalarDFB& scalar_dfb,
     GridPtrType grid_ptr,
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,

@@ -19,6 +19,8 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
     DataflowBuffer dfb_im0(dfb::im0);
+    DataflowBuffer dfb_im1(dfb::im1);
+    DataflowBuffer dfb_out(dfb::out);
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
@@ -41,9 +43,12 @@ void kernel_main() {
                 dfb::out,
                 ckl::ReduceInputPolicy::WaitAndPopPerTile,
                 ckl::ReduceDataFormatReconfigMode::NONE>(
+                dfb_im0,
+                dfb_scaler,
+                dfb_out,
                 ckl::ReduceInputBlockShape::single(),
                 ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(dfb::im1, block));
+                ckl::Accumulate(dfb_im1, block));
         } else {
             ckl::reduce<
                 REDUCE_OP,
@@ -53,9 +58,12 @@ void kernel_main() {
                 dfb::im1,
                 ckl::ReduceInputPolicy::WaitAndPopPerTile,
                 ckl::ReduceDataFormatReconfigMode::NONE>(
+                dfb_im0,
+                dfb_scaler,
+                dfb_im1,
                 ckl::ReduceInputBlockShape::single(),
                 ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(dfb::im1, block));
+                ckl::Accumulate(dfb_im1, block));
         }
     }
     // The reduce helper reuses the scaler tile for every block.

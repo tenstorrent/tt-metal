@@ -11,21 +11,17 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <typename In0DFB, typename In1DFB, typename In2DFB, typename OutDFB>
 ALWI void process_tile(
-    uint32_t cb_in0_id,
-    uint32_t cb_in1_id,
-    uint32_t cb_in2_id,
-    uint32_t cb_out_id,
+    In0DFB& dfb_in0,
+    In1DFB& dfb_in1,
+    In2DFB& dfb_in2,
+    OutDFB& dfb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle,
     uint32_t scalar_arg) {
     using namespace ckernel;
-
-    DataflowBuffer dfb_in0(cb_in0_id);
-    DataflowBuffer dfb_in1(cb_in1_id);
-    DataflowBuffer dfb_in2(cb_in2_id);
-    DataflowBuffer dfb_out(cb_out_id);
 
     const bool scalar_is_not_1 = scalar_arg != 1u;
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
@@ -127,25 +123,22 @@ void kernel_main() {
     constexpr auto cb_out_id = tt::CBIndex::c_3;  // output
 
     // output = input_a + value * input_b * input_c
+    DataflowBuffer dfb_in0(cb_in0_id);
+    DataflowBuffer dfb_in1(cb_in1_id);
+    DataflowBuffer dfb_in2(cb_in2_id);
+    DataflowBuffer dfb_out(cb_out_id);
+
     compute_kernel_hw_startup(cb_in1_id, cb_in2_id, cb_out_id);
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
-            cb_in0_id, cb_in1_id, cb_in2_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
+        process_tile(dfb_in0, dfb_in1, dfb_in2, dfb_out, tile_freq, tile_start, num_tiles_per_cycle, scalar_arg);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_in0_id,
-            cb_in1_id,
-            cb_in2_id,
-            cb_out_id,
-            remaining_iterations,
-            tile_start,
-            num_tiles_per_cycle,
-            scalar_arg);
+            dfb_in0, dfb_in1, dfb_in2, dfb_out, remaining_iterations, tile_start, num_tiles_per_cycle, scalar_arg);
     }
 }

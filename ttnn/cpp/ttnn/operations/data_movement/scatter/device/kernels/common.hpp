@@ -133,15 +133,14 @@ FORCE_INLINE void load_to_scratchpad(
 }
 
 // this function is supposed to write either a whole stick or part of it (76800 elements)
-template <typename AddrGen>
+template <typename AddrGen, typename ExpDFB>
 FORCE_INLINE void write_to_output(
     Noc noc,
-    const uint32_t& dfb_id,
+    ExpDFB& dfb_exp,
     const AddrGen& addr_gtor,
     const uint32_t& offset_bytes,
     const uint32_t& chunk_size_bytes,
     const uint32_t& stick_id) {
-    DataflowBuffer dfb_exp(dfb_id);
     dfb_exp.wait_front(ONE_PAGE);
     const uint64_t destination_noc_address = addr_gtor.get_noc_addr(stick_id) + offset_bytes;
     const uint32_t l1_read_address = dfb_exp.get_read_ptr();

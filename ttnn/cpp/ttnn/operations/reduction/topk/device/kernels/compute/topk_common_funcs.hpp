@@ -25,21 +25,25 @@ template <
     bool stable_sort = false,
     bool fused = false,
     bool fused_largest = false,
-    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset,
+    typename InputDFB,
+    typename IndexDFB,
+    typename InputTransposedDFB,
+    typename IndexTransposedDFB>
 void process_and_sort_tiles(
-    std::uint32_t input_dfb_index,
-    std::uint32_t index_dfb_index,
-    std::uint32_t input_transposed_dfb_index,
-    std::uint32_t index_transposed_dfb_index,
+    InputDFB& input_dfb,
+    IndexDFB& index_dfb,
+    InputTransposedDFB& input_transposed_dfb,
+    IndexTransposedDFB& index_transposed_dfb,
     std::uint32_t Wt,
     bool switch_dir,
     bool& ascending,
     int end_phase) {
     static_assert(!(fused && stable_sort), "fused and comparator-stable modes are mutually exclusive");
-    DataflowBuffer input_dfb(static_cast<uint16_t>(input_dfb_index));
-    DataflowBuffer index_dfb(static_cast<uint16_t>(index_dfb_index));
-    DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
-    DataflowBuffer index_transposed_dfb(static_cast<uint16_t>(index_transposed_dfb_index));
+    const std::uint32_t input_dfb_index = input_dfb.get_id();
+    const std::uint32_t index_dfb_index = index_dfb.get_id();
+    const std::uint32_t input_transposed_dfb_index = input_transposed_dfb.get_id();
+    [[maybe_unused]] const std::uint32_t index_transposed_dfb_index = index_transposed_dfb.get_id();
 
     input_transposed_dfb.reserve_back(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
@@ -268,15 +272,17 @@ void process_tiles(
 template <
     bool stable_sort = false,
     bool fused = false,
-    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
+    ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset,
+    typename InputTransposedDFB,
+    typename IndexTransposedDFB>
 void process_iteration(
     std::uint32_t m_iter,
     std::uint32_t K,
     std::uint32_t Wt,
     std::uint32_t& num_k_sequences,
     std::uint32_t tiles_per_seq,
-    std::uint32_t input_transposed_dfb_index,
-    std::uint32_t index_transposed_dfb_index,
+    InputTransposedDFB& input_transposed_dfb,
+    IndexTransposedDFB& index_transposed_dfb,
     std::uint32_t input_dest_start,
     std::uint32_t input_dest_end,
     std::uint32_t index_dest_start,
@@ -286,8 +292,8 @@ void process_iteration(
     std::uint32_t logk,
     uint32_t& seq_per_2tiles,
     bool largest_param) {
-    DataflowBuffer input_transposed_dfb(static_cast<uint16_t>(input_transposed_dfb_index));
-    DataflowBuffer index_transposed_dfb(static_cast<uint16_t>(index_transposed_dfb_index));
+    const std::uint32_t input_transposed_dfb_index = input_transposed_dfb.get_id();
+    const std::uint32_t index_transposed_dfb_index = index_transposed_dfb.get_id();
 
     input_transposed_dfb.wait_front(static_cast<uint16_t>(Wt));
     if constexpr (!fused) {
@@ -371,10 +377,10 @@ void process_iteration(
     }
 }
 
-void transpose_and_pack(
-    std::uint32_t transposed_dfb_index, std::uint32_t dest_dfb_index, std::uint32_t Kt, std::uint32_t Wt) {
-    DataflowBuffer transposed_dfb(static_cast<uint16_t>(transposed_dfb_index));
-    DataflowBuffer dest_dfb(static_cast<uint16_t>(dest_dfb_index));
+template <typename TransposedDFB, typename DestDFB>
+void transpose_and_pack(TransposedDFB& transposed_dfb, DestDFB& dest_dfb, std::uint32_t Kt, std::uint32_t Wt) {
+    const std::uint32_t transposed_dfb_index = transposed_dfb.get_id();
+    const std::uint32_t dest_dfb_index = dest_dfb.get_id();
 
     reconfig_data_format_srca(transposed_dfb_index);
     transpose_init(transposed_dfb_index);
@@ -409,19 +415,25 @@ void transpose_and_pack(
 // index datums land in the LOW half of the 32-bit DEST words while the packer reads the high half,
 // so they are moved up (strip + mode-9) before the final pack. largest must match the fuse's
 // polarity.
-template <bool largest>
+template <
+    bool largest,
+    typename PackedDFB,
+    typename StagingValuesDFB,
+    typename StagingIndicesDFB,
+    typename ValuesDFB,
+    typename IndicesDFB>
 void defuse_and_pack_outputs(
-    std::uint32_t packed_dfb_index,
-    std::uint32_t staging_values_dfb_index,
-    std::uint32_t staging_indices_dfb_index,
-    std::uint32_t values_dfb_index,
-    std::uint32_t indices_dfb_index,
+    PackedDFB& packed_dfb,
+    StagingValuesDFB& staging_values_dfb,
+    StagingIndicesDFB& staging_indices_dfb,
+    ValuesDFB& values_dfb,
+    IndicesDFB& indices_dfb,
     std::uint32_t Kt,
     std::uint32_t Wt) {
-    DataflowBuffer packed_dfb(packed_dfb_index);
-    DataflowBuffer staging_values_dfb(staging_values_dfb_index);
-    DataflowBuffer staging_indices_dfb(staging_indices_dfb_index);
-    DataflowBuffer indices_dfb(indices_dfb_index);
+    const std::uint32_t packed_dfb_index = packed_dfb.get_id();
+    const std::uint32_t staging_values_dfb_index = staging_values_dfb.get_id();
+    const std::uint32_t staging_indices_dfb_index = staging_indices_dfb.get_id();
+    const std::uint32_t indices_dfb_index = indices_dfb.get_id();
 
     // Split the top Kt packed key tiles into staged value/index tiles (column layout).
     reconfig_data_format_srca(packed_dfb_index);
@@ -448,7 +460,7 @@ void defuse_and_pack_outputs(
     packed_dfb.pop_front(Wt);
 
     // Values: the standard 16-bit transpose back to row layout.
-    transpose_and_pack(staging_values_dfb_index, values_dfb_index, Kt, Kt);
+    transpose_and_pack(staging_values_dfb, values_dfb, Kt, Kt);
 
     // Indices: same transpose, plus the low->high move before packing.
     reconfig_data_format_srca(staging_indices_dfb_index);

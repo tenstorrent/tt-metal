@@ -17,16 +17,17 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
+template <typename MmPartialsDFB>
 FORCE_INLINE void reload_from_cb_to_dst(
+    MmPartialsDFB& mm_partials_dfb,
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
-    uint32_t mm_partials_dfb_id,
     bool in1_transpose_tile,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    DataflowBuffer mm_partials_dfb(static_cast<uint16_t>(mm_partials_dfb_id));
+    const uint32_t mm_partials_dfb_id = mm_partials_dfb.get_id();
     // Reconfigure input
     reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
     copy_init(mm_partials_dfb_id);
@@ -222,7 +223,9 @@ void kernel_main() {
     constexpr uint32_t activation_param2 = get_named_compile_time_arg_val("activation_param2");
 #endif
 
+    DataflowBuffer in0_dfb(in0_dfb_id);
     DataflowBuffer in1_dfb(in1_dfb_id);
+    DataflowBuffer in2_dfb(in2_dfb_id);
     DataflowBuffer sync_buf(sync_dfb);
     DataflowBuffer sync2_buf(sync_dfb2);
 
@@ -334,7 +337,7 @@ void kernel_main() {
             }
 
             const uint32_t input0_dfb_id = block == 0 ? in0_dfb_id : in2_dfb_id;
-            DataflowBuffer input0_dfb(static_cast<uint16_t>(input0_dfb_id));
+            auto& input0_dfb = block == 0 ? in0_dfb : in2_dfb;
             const bool last_out = block == (num_blocks - 1);
 // Configure packer once for pack out without Bias
 #if not defined FUSE_BIAS and defined PACK_RELU
@@ -376,9 +379,9 @@ void kernel_main() {
                     tile_regs_acquire();
                     if (enable_reload) {
                         reload_from_cb_to_dst(
+                            mm_partials_dfb,
                             input0_dfb_id,
                             in1_dfb_id,
-                            mm_partials_dfb_id,
                             in1_transpose_tile,
                             out_subblock_num_tiles,
                             out_subblock_w,

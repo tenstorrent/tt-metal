@@ -9,6 +9,7 @@
 
 void kernel_main() {
     Noc noc;
+    DataflowBuffer output(dfb::output);
 
     constexpr auto output_stick_size_bytes = get_arg(args::output_stick_size_bytes);
 
@@ -27,7 +28,7 @@ void kernel_main() {
              offset_bytes += input_and_output_chunk_size * output_element_size) {
             const uint32_t chunk_write_bytes =
                 std::min(output_stick_size_bytes - offset_bytes, input_and_output_chunk_size * output_element_size);
-            write_to_output(noc, dfb::output, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
+            write_to_output(noc, output, output_addr_gtor, offset_bytes, chunk_write_bytes, stick_id);
         }
     }
 }

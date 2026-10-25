@@ -216,11 +216,13 @@ void kernel_main() {
 
         // Compute dysum
         // Sum[dy]
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_dyadd, dfb::scaler, dfb::dysum>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_dyadd, dfb::scaler, dfb::dysum>(
+            dfb_dyadd_obj, dfb_scaler_obj, dfb_dysum_obj, ckl::ReduceInputBlockShape::single());
 
         // Compute ydysum
         // Sum[y * dy]
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_ydyadd, dfb::scaler, dfb::ydysum>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb_ydyadd, dfb::scaler, dfb::ydysum>(
+            dfb_ydyadd_obj, dfb_scaler_obj, dfb_ydysum_obj, ckl::ReduceInputBlockShape::single());
 
         // Compute recip_nrstd
         // rstd / n -> tmp3

@@ -65,8 +65,10 @@ void kernel_main() {
     auto mask_h = get_arg(args::mask_h);
     auto mask_w = get_arg(args::mask_w);
 
+    DataflowBuffer dfb_scaler(dfb::scaler);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_scaler);
 
     uint32_t l1_write_addr_in0;
     const auto s0 = TensorAccessor(tensor::src0);

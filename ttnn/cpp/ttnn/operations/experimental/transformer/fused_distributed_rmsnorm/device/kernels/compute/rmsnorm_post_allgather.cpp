@@ -49,7 +49,9 @@ void kernel_main() {
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
 
+    DataflowBuffer cb_stats_dfb(stats_cb);
     CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
+    DataflowBuffer cb_reduce_scalar_dfb(reduce_scalar_cb);  // helper-side handle for the same buffer
     CircularBuffer cb_epsilon(epsilon_cb);
     DataflowBuffer cb_epsilon_dfb(epsilon_cb);  // chain-side handle for the same buffer
     CircularBuffer cb_transformation_mat(transformation_mat_cb);
@@ -101,6 +103,9 @@ void kernel_main() {
          * Uses auto-batched STREAMING mode - library handles CB lifecycle
          */
         ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, stats_cb, reduce_scalar_cb, reduce_result_cb>(
+            cb_stats_dfb,
+            cb_reduce_scalar_dfb,
+            cb_reduce_result_dfb,
             ckl::ReduceInputBlockShape::row(stats_tiles_cols));
 
         // 1/sqrt(mean_squared + eps)

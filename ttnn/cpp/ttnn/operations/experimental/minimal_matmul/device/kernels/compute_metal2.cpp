@@ -34,9 +34,8 @@ inline void retarget_packer([[maybe_unused]] uint32_t ocb) {
 #endif
 }
 
-template <typename InTok, typename OutTok>
-void copy_and_pack_block(InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    DataflowBuffer dfb_out(out_dfb);
+template <typename OutDFB, typename InTok, typename OutTok>
+void copy_and_pack_block(OutDFB& dfb_out, InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     reconfig_data_format_srca(in_dfb);
     pack_reconfig_data_format(out_dfb);
     retarget_packer(out_dfb);
@@ -74,12 +73,14 @@ void copy_and_pack_block(InTok in_dfb, OutTok out_dfb, uint32_t M_block_tiles, u
 //
 // N_block_tiles must be even (enforced host-side).
 template <
+    typename OutDFB,
     typename InTok,
 #ifdef FUSE_BIAS
     typename BiasTok,
 #endif
     typename OutTok>
 void swiglu_block(
+    OutDFB& dfb_out,
     InTok in_dfb,
 #ifdef FUSE_BIAS
     BiasTok bias_dfb,
@@ -87,7 +88,6 @@ void swiglu_block(
     OutTok out_dfb,
     uint32_t M_block_tiles,
     uint32_t N_block_tiles) {
-    DataflowBuffer dfb_out(out_dfb);
 #ifdef FUSE_BIAS
     reconfig_data_format(in_dfb, bias_dfb);
 #else
@@ -149,9 +149,9 @@ void swiglu_block(
  *   - true: Pushes tiles one row at a time (for intermediate output to next stage)
  *   - false: Pushes all tiles at end (for final output)
  */
-template <typename InTok, typename BiasTok, typename OutTok>
-void add_bias_block(InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
-    DataflowBuffer dfb_out(out_dfb);
+template <typename OutDFB, typename InTok, typename BiasTok, typename OutTok>
+void add_bias_block(
+    OutDFB& dfb_out, InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     reconfig_data_format(in_dfb, bias_dfb);
     pack_reconfig_data_format(out_dfb);
     retarget_packer(out_dfb);
@@ -178,6 +178,13 @@ void add_bias_block(InTok in_dfb, BiasTok bias_dfb, OutTok out_dfb, uint32_t M_b
 #endif  // FUSE_BIAS
 
 template <
+    typename IntermediateDFB,
+#ifdef FUSE_BIAS
+    typename BiasDFB,
+#endif
+    typename TernaryADFB,
+    typename TernaryBDFB,
+    typename OutDFB,
     typename IntermediateTok,
 #ifdef FUSE_BIAS
     typename BiasTok,
@@ -186,6 +193,13 @@ template <
     typename TernaryBTok,
     typename OutTok>
 void add_bias_and_addcmul_block(
+    IntermediateDFB& dfb_intermediate,
+#ifdef FUSE_BIAS
+    BiasDFB& dfb_bias,
+#endif
+    TernaryADFB& dfb_ternary_a,
+    TernaryBDFB& dfb_ternary_b,
+    OutDFB& dfb_out,
     IntermediateTok intermediate_dfb,
 #ifdef FUSE_BIAS
     BiasTok bias_dfb,
@@ -201,14 +215,6 @@ void add_bias_and_addcmul_block(
     // As a workaround, we perform addcmul through multiple LLKs calls (mul_tiles, mul_unary_tile, add_tiles_bcast).
 
     const uint32_t out_block_num_tiles = M_block_tiles * N_block_tiles;
-
-    DataflowBuffer dfb_intermediate(intermediate_dfb);
-#ifdef FUSE_BIAS
-    DataflowBuffer dfb_bias(bias_dfb);
-#endif
-    DataflowBuffer dfb_ternary_a(ternary_a_dfb);
-    DataflowBuffer dfb_ternary_b(ternary_b_dfb);
-    DataflowBuffer dfb_out(out_dfb);
 
     constexpr uint32_t DST_ID = 0;
 #ifdef FUSE_BIAS
@@ -579,6 +585,10 @@ void kernel_main() {
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in2(dfb::in2);
 #endif
+#ifdef FUSE_TERNARY
+    DataflowBuffer dfb_ternary_a(dfb::ternary_a);
+    DataflowBuffer dfb_ternary_b(dfb::ternary_b);
+#endif
 
     // compute_kernel_hw_startup must be the first compute API call (before SFPU/op inits).
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::in0, dfb::in1, dfb::intermediate);
@@ -710,6 +720,7 @@ void kernel_main() {
             dfb_in2.wait_front(N_block_tiles);
 #endif
             swiglu_block(
+                dfb_out,
                 dfb::intermediate,
 #ifdef FUSE_BIAS
                 dfb::in2,
@@ -726,10 +737,10 @@ void kernel_main() {
             dfb_out.reserve_back(out_block_num_tiles);
             dfb_intermediate.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
-            copy_and_pack_block(dfb::intermediate, dfb::out, M_block_tiles, N_block_tiles);
+            copy_and_pack_block(dfb_out, dfb::intermediate, dfb::out, M_block_tiles, N_block_tiles);
 #else
             dfb_in2.wait_front(N_block_tiles);
-            add_bias_block(dfb::intermediate, dfb::in2, dfb::out, M_block_tiles, N_block_tiles);
+            add_bias_block(dfb_out, dfb::intermediate, dfb::in2, dfb::out, M_block_tiles, N_block_tiles);
             dfb_in2.pop_front(N_block_tiles);
 #endif  // FUSE_BIAS
             dfb_intermediate.pop_front(out_block_num_tiles);
@@ -737,6 +748,13 @@ void kernel_main() {
 #else  // FUSE_TERNARY is set
             dfb_out.reserve_back(out_block_num_tiles);
             add_bias_and_addcmul_block(
+                dfb_intermediate,
+#ifdef FUSE_BIAS
+                dfb_in2,
+#endif
+                dfb_ternary_a,
+                dfb_ternary_b,
+                dfb_out,
                 dfb::intermediate,
 #ifdef FUSE_BIAS
                 dfb::in2,

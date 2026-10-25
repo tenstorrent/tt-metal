@@ -28,8 +28,8 @@
 
 inline void kernel_sleep(uint32_t loop_count = 1000) { for (volatile uint32_t i = 0; i < loop_count; ++i); }
 
-template <uint32_t in_block_w, uint32_t in_cb_id, uint32_t out_cb_id>
-inline void tilize_in(uint32_t in_num_subblocks_x_in_subblock_h) {
+template <uint32_t in_block_w, uint32_t in_cb_id, uint32_t out_cb_id, typename InDFB, typename OutDFB>
+inline void tilize_in(InDFB& in_dfb, OutDFB& out_dfb, uint32_t in_num_subblocks_x_in_subblock_h) {
     compute_kernel_lib::tilize<
         in_block_w,
         in_cb_id,
@@ -37,19 +37,22 @@ inline void tilize_in(uint32_t in_num_subblocks_x_in_subblock_h) {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(
-        in_num_subblocks_x_in_subblock_h);
+        in_dfb, out_dfb, in_num_subblocks_x_in_subblock_h);
 }  // tilize_in()
 
 // NOTE: Bias is not supported with the untilize option
 #ifndef FUSE_BIAS
 
-template <uint32_t out_block_w, uint32_t reblock_cb_id, uint32_t out_cb_id>
+template <uint32_t out_block_w, uint32_t reblock_cb_id, uint32_t out_cb_id, typename ReblockDFB, typename OutDFB>
 inline void reblock_and_untilize(
+    ReblockDFB& reblock_dfb,
+    OutDFB& out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t interm_cb_id) {
+    ASSERT(reblock_dfb.get_id() == reblock_cb_id);
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     cb_wait_front(interm_cb_id, num_tiles_in_row_of_subblocks);
 
@@ -81,7 +84,8 @@ inline void reblock_and_untilize(
             out_cb_id,
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+            reblock_dfb, out_dfb, 1);
 
         within_block_index += out_subblock_w;
     }
@@ -131,6 +135,11 @@ void kernel_main() {
     constexpr uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_27;
     constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
+    DataflowBuffer in0_dfb(in0_cb_id), tilized_in0_dfb(tilized_in0_cb_id);
+#ifndef FUSE_BIAS
+    DataflowBuffer reblock_dfb(untilize_mode_reblock_cb), out_dfb(out_cb_id);
+#endif
+
 #ifdef FUSE_BIAS
     uint32_t bias_ntiles_w = get_compile_time_arg_val(16);
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_2;
@@ -150,7 +159,8 @@ void kernel_main() {
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
-                    tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_subblock_h * in0_num_subblocks);
+                    tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id>(
+                        in0_dfb, tilized_in0_dfb, in0_subblock_h * in0_num_subblocks);
                     reconfig_data_format_srca(in0_cb_id, in1_cb_id);
                     matmul_init(tilized_in0_cb_id, in1_cb_id);
                     cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
@@ -253,6 +263,8 @@ void kernel_main() {
                         reconfig_data_format(
                             untilize_mode_final_matmul_partials_cb, untilize_mode_final_matmul_partials_cb);
                         reblock_and_untilize<out_block_w, untilize_mode_reblock_cb, out_cb_id>(
+                            reblock_dfb,
+                            out_dfb,
                             in1_num_subblocks,
                             out_subblock_num_tiles,
                             out_subblock_h,

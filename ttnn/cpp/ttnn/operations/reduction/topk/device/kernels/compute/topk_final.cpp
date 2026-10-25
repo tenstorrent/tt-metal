@@ -88,6 +88,8 @@ void kernel_main() {
     DataflowBuffer index_dfb(index_dfb_index);
     DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
+    DataflowBuffer values_dfb(values_dfb_index);
+    DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
     // Aggregate results from all local cores for each height row
     for (std::uint32_t ht = 0; ht < Ht; ++ht) {
@@ -161,22 +163,22 @@ void kernel_main() {
         // - Final iteration: Global TopK across all cores' contributions
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
             process_iteration<network_stable, fused_keys, tie_order>(
-                m_iter,                      // Current merge iteration
-                K,                           // TopK value
-                Wt,                          // Total width tiles (from all cores)
-                num_k_sequences,             // K-sequences in aggregated data
-                tiles_per_seq,               // Tiles per sequence (ceil(K/32))
-                input_transposed_dfb_index,  // Aggregated values buffer
-                index_transposed_dfb_index,  // Aggregated indices buffer
-                input_dest_start,            // Destination register 0
-                input_dest_end,              // Destination register 1
-                index_dest_start,            // Destination register 2
-                index_dest_end,              // Destination register 3
-                largest,                     // Sort direction
-                switch_dir,                  // Direction switching strategy
-                logk,                        // log2(K) for bitonic depth
-                seq_per_2tiles,              // Sequences per tile pair
-                largest);                    // Find largest vs smallest
+                m_iter,                // Current merge iteration
+                K,                     // TopK value
+                Wt,                    // Total width tiles (from all cores)
+                num_k_sequences,       // K-sequences in aggregated data
+                tiles_per_seq,         // Tiles per sequence (ceil(K/32))
+                input_transposed_dfb,  // Aggregated values buffer
+                index_transposed_dfb,  // Aggregated indices buffer
+                input_dest_start,      // Destination register 0
+                input_dest_end,        // Destination register 1
+                index_dest_start,      // Destination register 2
+                index_dest_end,        // Destination register 3
+                largest,               // Sort direction
+                switch_dir,            // Direction switching strategy
+                logk,                  // log2(K) for bitonic depth
+                seq_per_2tiles,        // Sequences per tile pair
+                largest);              // Find largest vs smallest
         }
 
         // Extract the globally optimal TopK values and indices and prepare
@@ -185,21 +187,21 @@ void kernel_main() {
             // Split each packed key tile into staged 16-bit value/index tiles, then transpose
             // those back to row layout and emit (the only defuse of the whole pipeline). In fused
             // mode the c_5/c_7 CT-arg slots carry the two small final-core staging CBs.
-            constexpr std::uint32_t staging_values_dfb_index = index_dfb_index;  // c_5 by its fused-mode role
+            auto& staging_values_dfb = index_dfb;  // c_5 by its fused-mode role
             defuse_and_pack_outputs<largest != 0>(
-                input_transposed_dfb_index,  // packed keys after the merge tree (c_6)
-                staging_values_dfb_index,    // staging: defused bf16 values, column layout (c_5)
-                index_transposed_dfb_index,  // staging: defused u16 indices, column layout (c_7)
-                values_dfb_index,
-                output_ind_dfb_index,
+                input_transposed_dfb,  // packed keys after the merge tree (c_6)
+                staging_values_dfb,    // staging: defused bf16 values, column layout (c_5)
+                index_transposed_dfb,  // staging: defused u16 indices, column layout (c_7)
+                values_dfb,
+                output_ind_dfb,
                 Kt,
                 Wt);
         } else {
             // Extract and output final TopK values (first Kt tiles contain global optimum)
-            transpose_and_pack(input_transposed_dfb_index, values_dfb_index, Kt, Wt);
+            transpose_and_pack(input_transposed_dfb, values_dfb, Kt, Wt);
 
             // Extract and output final TopK indices (corresponding to global optimum values)
-            transpose_and_pack(index_transposed_dfb_index, output_ind_dfb_index, Kt, Wt);
+            transpose_and_pack(index_transposed_dfb, output_ind_dfb, Kt, Wt);
         }
     }  // ht loop
 }

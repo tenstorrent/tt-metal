@@ -24,13 +24,14 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     DataflowBuffer gate(dfb::gate);
     DataflowBuffer weight(dfb::weight);
     DataflowBuffer epsilon(dfb::epsilon);
+    DataflowBuffer scaler(dfb::scaler);
     Noc noc;
 
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb::scaler,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        Vt * tt::constants::TILE_WIDTH>();
+        Vt * tt::constants::TILE_WIDTH>(scaler);
     generate_bcast_col_scalar(epsilon, epsilon_bits);
 
     weight.reserve_back(Vt);

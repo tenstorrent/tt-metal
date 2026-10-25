@@ -158,7 +158,7 @@ void kernel_main() {
     // read each scalar at datum width; bf16 keeps the cheaper full-tile trick.
     constexpr bool stats_fp32_zero_fill = (datum_size_bytes >= 4);
     if constexpr (stats_fp32_zero_fill) {
-        zero_whole_cb(dfb_ex_external_id, noc);
+        zero_whole_cb(dfb_ex_external, noc);
     }
 
     if constexpr (num_mcast_cores > 1) {

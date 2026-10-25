@@ -35,35 +35,35 @@ constexpr uint32_t ilog2(uint32_t n) { return 31 - __builtin_clz(n); }
  *
  * @param noc                          Reference to the Noc object for NoC operations.
  * @param sem_self                     This core's exchange semaphore (Device 2.0 wrapper).
- * @param value_tensor_this_dfb_id     Dataflow buffer handle for this core's value tensor tiles (read from).
- * @param index_tensor_this_dfb_id     Dataflow buffer handle for this core's index tensor tiles (read from).
- * @param dfb_value_peer_id            Dataflow buffer handle for peer's value tensor tiles (write to).
- * @param dfb_index_peer_id            Dataflow buffer handle for peer's index tensor tiles (write to).
+ * @param value_tensor_this_dfb        Dataflow buffer for this core's value tensor tiles (read from).
+ * @param index_tensor_this_dfb        Dataflow buffer for this core's index tensor tiles (read from).
+ * @param dfb_value_peer               Dataflow buffer for peer's value tensor tiles (write to).
+ * @param dfb_index_peer               Dataflow buffer for peer's index tensor tiles (write to).
  * @param Wt                           Number of tiles to exchange.
  * @param value_tile_size              Size (in bytes) of each tile in value buffers.
  * @param index_tile_size              Size (in bytes) of each tile in index buffers.
  * @param other_core_x                 Physical X coordinate of the peer core.
  * @param other_core_y                 Physical Y coordinate of the peer core.
  */
-template <typename Sem>
+template <
+    typename Sem,
+    typename ValueTensorThisDFB,
+    typename IndexTensorThisDFB,
+    typename ValuePeerDFB,
+    typename IndexPeerDFB>
 FORCE_INLINE void sort_noc_exchange_Wt_tiles(
     Noc& noc,
     Sem& sem_self,
-    uint32_t value_tensor_this_dfb_id,
-    uint32_t index_tensor_this_dfb_id,
-    uint32_t dfb_value_peer_id,
-    uint32_t dfb_index_peer_id,
+    ValueTensorThisDFB& value_tensor_this_dfb,
+    IndexTensorThisDFB& index_tensor_this_dfb,
+    ValuePeerDFB& dfb_value_peer,
+    IndexPeerDFB& dfb_index_peer,
     uint32_t Wt,
     uint32_t value_tile_size,
     uint32_t index_tile_size,
     uint32_t other_core_x,
     uint32_t other_core_y) {
     constexpr uint32_t ONE_TILE = 1;
-
-    DataflowBuffer value_tensor_this_dfb(value_tensor_this_dfb_id);
-    DataflowBuffer index_tensor_this_dfb(index_tensor_this_dfb_id);
-    DataflowBuffer dfb_value_peer(dfb_value_peer_id);
-    DataflowBuffer dfb_index_peer(dfb_index_peer_id);
 
     for (uint32_t w = 0, sem_counter = 1; w < Wt; w++, sem_counter += 2) {
         // Reserve space for new tiles
@@ -128,13 +128,14 @@ FORCE_INLINE void sort_noc_exchange_Wt_tiles(
  * lookup table buffer at the specified index.
  *
  * @param core_id The logical ID of the core whose physical coordinates are to be retrieved.
- * @param lookup_table_buffer_dfb_id   The dataflow buffer handle for the lookup table containing core coordinates.
+ * @param lookup_table_buffer_dfb      The dataflow buffer for the lookup table containing core coordinates.
  * @param tile_size The size of the tile (default is 1024). Used to validate the core ID.
  * @return std::pair<uint32_t, uint32_t> The physical (x, y) coordinates of the core. Returns (0, 0) if the core ID is
  * invalid.
  */
+template <typename LookupTableBufferDFB>
 FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
-    const uint32_t core_id, const uint32_t lookup_table_buffer_dfb_id, const uint32_t tile_size = 1024) {
+    const uint32_t core_id, LookupTableBufferDFB& lookup_table_buffer_dfb, const uint32_t tile_size = 1024) {
     // Initialize as invalid coordinates
     uint32_t core_x = 0;
     uint32_t core_y = 0;
@@ -143,7 +144,6 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
         return {core_x, core_y};  // Invalid core ID
     }
 
-    DataflowBuffer lookup_table_buffer_dfb(lookup_table_buffer_dfb_id);
     const uint32_t l1_read_addr = lookup_table_buffer_dfb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
 
@@ -163,7 +163,7 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
  *
  * @param noc                                   Reference to the Noc object for NoC operations.
  * @param sem_barrier                           The barrier semaphore (Device 2.0 wrapper).
- * @param physical_core_lookup_table_dfb_id     Dataflow buffer handle for the physical-core lookup table.
+ * @param physical_core_lookup_table_dfb        Dataflow buffer for the physical-core lookup table.
  * @param this_core_id                          ID of the current core executing the function.
  * @param leader_core_id                        ID of the leader core responsible for coordinating the barrier.
  * @param num_cores                             Total number of participating cores in the barrier.
@@ -171,11 +171,11 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
  *
  * @note If only one core is participating, the function returns immediately.
  */
-template <typename Sem>
+template <typename Sem, typename PhysicalCoreLookupTableDFB>
 FORCE_INLINE void sort_barrier(
     Noc& noc,
     Sem& sem_barrier,
-    uint32_t physical_core_lookup_table_dfb_id,
+    PhysicalCoreLookupTableDFB& physical_core_lookup_table_dfb,
     uint32_t this_core_id,
     uint32_t leader_core_id,
     uint32_t num_cores,
@@ -198,14 +198,14 @@ FORCE_INLINE void sort_barrier(
             }
 
             const std::pair<uint32_t, uint32_t> remote_core_physical =
-                get_core_physical_coordinates(core_id, physical_core_lookup_table_dfb_id);
+                get_core_physical_coordinates(core_id, physical_core_lookup_table_dfb);
             sem_barrier.up(noc, remote_core_physical.first, remote_core_physical.second, 1);
             noc.async_atomic_barrier();
         }
     } else {
         // Indicate finish reading and wait for leader core to signal
         const std::pair<uint32_t, uint32_t> remote_core_physical =
-            get_core_physical_coordinates(leader_core_id, physical_core_lookup_table_dfb_id);
+            get_core_physical_coordinates(leader_core_id, physical_core_lookup_table_dfb);
         sem_barrier.up(noc, remote_core_physical.first, remote_core_physical.second, 1);
         noc.async_atomic_barrier();
         sem_barrier.wait(1);

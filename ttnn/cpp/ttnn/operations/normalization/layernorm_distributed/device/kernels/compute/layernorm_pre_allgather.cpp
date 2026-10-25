@@ -47,6 +47,7 @@ void kernel_main() {
     DataflowBuffer dfb_reduce(dfb::reduce);
     DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_x2(dfb::x2);
+    DataflowBuffer dfb_out(dfb::out);
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_res(dfb::res);
@@ -113,7 +114,7 @@ void kernel_main() {
             dfb::out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            reduce_fp32_mode>(dfb_x2, dfb_reduce, dfb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
         /*
          * sum(x)
@@ -128,7 +129,7 @@ void kernel_main() {
             dfb::out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            reduce_fp32_mode>(dfb_inp, dfb_reduce, dfb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
     }
     dfb_reduce.pop_front(1);
 }

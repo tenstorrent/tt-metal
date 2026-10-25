@@ -91,6 +91,7 @@ void kernel_main() {
     CircularBuffer q_in_cb(cb_q_in), k_in_cb(cb_k_in), v_in_cb(cb_v_in), qk_cb(cb_qk_im), scale_cb(cb_scale),
         ctrl_cb(cb_ctrl);
     CircularBuffer corr_cb(cb_corr), slot_cb(cb_slot);
+    DataflowBuffer q_rm_dfb(cb_q_rm), q_in_dfb(cb_q_in), out_im_dfb(cb_out_im), out_rm_dfb(cb_out_rm);
 
     const uint32_t tok_count = get_arg_val<uint32_t>(1);
 
@@ -104,7 +105,8 @@ void kernel_main() {
 
     for (uint32_t tok = 0; tok < tok_count; ++tok) {
         // tilize Q rows -> [Sqt, DHt]
-        compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(/*num_blocks=*/Sqt, /*total_input_pages=*/H);
+        compute_kernel_lib::tilize<DHt, cb_q_rm, cb_q_in>(
+            q_rm_dfb, q_in_dfb, /*num_blocks=*/Sqt, /*total_input_pages=*/H);
         // fp8 Q tilize leaves the packer in bfp8 format; restore bf16 before QK writes scores.
         pack_reconfig_data_format(cb_qk_im);
 
@@ -346,6 +348,6 @@ void kernel_main() {
         q_in_cb.pop_front(Sqt * DHt);  // Q reused across all chunks; drop it so >1 token/core stays clean
 
         // cb_out_im was written by normalize_row_streaming; untilize -> row-major out for the writer.
-        compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
+        compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(out_im_dfb, out_rm_dfb, /*num_blocks=*/Sqt);
     }
 }

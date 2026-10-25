@@ -95,10 +95,24 @@ void kernel_main() {
 
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
     // RMSNorm only allocates the Var[x] partial buffer; the host skips the E[x] one.
+#ifndef RMSNORM
+    DataflowBuffer dfb_ex_partial_obj(dfb::ex_partial);
+    DataflowBuffer dfb_ex_external_obj(dfb::ex_external);
+    DataflowBuffer dfb_ex_obj(dfb::ex);
+#endif
+#ifndef USE_WELFORD
+    DataflowBuffer dfb_ex_partial2_obj(dfb::ex_partial2);
+    DataflowBuffer dfb_ex_external2_obj(dfb::ex_external2);
+    DataflowBuffer dfb_ex2pe_obj(dfb::ex2pe);
+#ifdef TWO_STAGE_REDUCE
+    DataflowBuffer dfb_ex2_obj(dfb::ex2);
+#endif
+#endif
+    DataflowBuffer dfb_ex_global_obj(dfb::ex_global);
 #ifdef RMSNORM
-    DataflowBuffer dfb_partial_size_ref(dfb::ex_partial2);
+    const auto& dfb_partial_size_ref = dfb_ex_partial2_obj;
 #else
-    const DataflowBuffer dfb_partial_size_ref(dfb::ex_partial);
+    const auto& dfb_partial_size_ref = dfb_ex_partial_obj;
 #endif
     const uint32_t single_tile_size_bytes = dfb_partial_size_ref.get_tile_size();
 
@@ -134,18 +148,12 @@ void kernel_main() {
     // Waits on partial reduction, syncs with coordinator, reads
     // from other cores, signals when combine is done, receives multicast
     // ============================================================================
-    const auto& global_reduce_receiver = [&](const uint32_t dfb_partial_id,
-                                             const uint32_t dfb_external_id,
-                                             const uint32_t dfb_ex_id,
-                                             const uint32_t dfb_ex_global_id,
-                                             const uint32_t dfb_reduce_first_stage_id,
+    const auto& global_reduce_receiver = [&](auto& dfb_partial_obj,
+                                             auto& dfb_external_obj,
+                                             auto& dfb_ex_obj,
+                                             auto& dfb_ex_global_obj,
+                                             auto& dfb_reduce_first_stage_obj,
                                              const uint32_t num_tiles_scaler) __attribute__((always_inline)) {
-        DataflowBuffer dfb_partial_obj(static_cast<uint16_t>(dfb_partial_id));
-        DataflowBuffer dfb_external_obj(static_cast<uint16_t>(dfb_external_id));
-        DataflowBuffer dfb_ex_obj(static_cast<uint16_t>(dfb_ex_id));
-        DataflowBuffer dfb_ex_global_obj(static_cast<uint16_t>(dfb_ex_global_id));
-        DataflowBuffer dfb_reduce_first_stage_obj(static_cast<uint16_t>(dfb_reduce_first_stage_id));
-
         // ============================================================================
         // Partial reduction
         // ============================================================================
@@ -282,18 +290,20 @@ void kernel_main() {
     // RMSNorm has no mean to reduce, so its buffers are not declared and the call is compiled out.
 #ifndef RMSNORM
     // Welford processes 2 tiles at a time (mean and var)
-    global_reduce_receiver(dfb::ex_partial, dfb::ex_external, dfb::ex, dfb::ex_global, dfb::ex, use_welford ? 2 : 1);
+    global_reduce_receiver(
+        dfb_ex_partial_obj, dfb_ex_external_obj, dfb_ex_obj, dfb_ex_global_obj, dfb_ex_obj, use_welford ? 2 : 1);
 #endif
 
     // Welford produces the mean and variance together in the pass above, so it has no separate
     // variance reduction and those buffers are not declared either.
 #ifndef USE_WELFORD
 #ifdef TWO_STAGE_REDUCE
-    global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2, 1);
+    global_reduce_receiver(dfb_ex_partial2_obj, dfb_ex_external2_obj, dfb_ex2pe_obj, dfb_ex_global_obj, dfb_ex2_obj, 1);
 #else
     // A single-stage reduce has no first-stage result, so ex2 does not exist. The argument goes unused;
     // ex2pe stands in for it, as ex does in the E[x] call above.
-    global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2pe, 1);
+    global_reduce_receiver(
+        dfb_ex_partial2_obj, dfb_ex_external2_obj, dfb_ex2pe_obj, dfb_ex_global_obj, dfb_ex2pe_obj, 1);
 #endif
 #endif
 

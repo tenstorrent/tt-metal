@@ -44,6 +44,9 @@ void kernel_main() {
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(5);
 
     CircularBuffer cb_scalar(scalar_cb_id);
+    DataflowBuffer intermed0_dfb(intermed_cb_id0);
+    DataflowBuffer scalar_dfb(scalar_cb_id);
+    DataflowBuffer intermed1_dfb(intermed_cb_id1);
 
     compute_kernel_hw_startup(input_cb_id, scalar_cb_id, intermed_cb_id1);
 
@@ -64,6 +67,9 @@ void kernel_main() {
                     intermed_cb_id1,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    intermed0_dfb,
+                    scalar_dfb,
+                    intermed1_dfb,
                     compute_kernel_lib::ReduceInputBlockShape::single());  // 1 x B
             }
             // Get full tile back from writer and transpose it

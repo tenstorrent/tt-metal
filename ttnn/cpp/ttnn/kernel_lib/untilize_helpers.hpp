@@ -8,7 +8,6 @@
 #include "api/compute/cb_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 // This is the go-to helper for all untilize usage in compute kernels.
 // Prefer this over raw pack_untilize_init/pack_untilize_block/pack_untilize_uninit calls.
@@ -161,23 +160,6 @@ template <
     typename InDFB,
     typename OutDFB>
 ALWI void untilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks);
-
-// The id-only form: builds the DataflowBuffers from the ids and runs the form above. See id_only_helpers.hpp.
-template <
-    uint32_t block_width_tiles,
-    uint32_t input_dfb,
-    uint32_t output_dfb,
-    untilize_config::InitUninitMode init_uninit_mode = untilize_config::InitUninitMode::InitAndUninit,
-    untilize_config::WaitMode wait_mode = untilize_config::WaitMode::WaitBlock,
-    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    untilize_config::RemapMode remap_mode = untilize_config::RemapMode::Configure>
-KERNEL_LIB_ID_ONLY_HELPER ALWI void untilize(uint32_t num_blocks) {
-    DataflowBuffer in_dfb(input_dfb);
-    DataflowBuffer out_dfb(output_dfb);
-    untilize<block_width_tiles, input_dfb, output_dfb, init_uninit_mode, wait_mode, reconfig_mode, remap_mode>(
-        in_dfb, out_dfb, num_blocks);
-}
 
 }  // namespace compute_kernel_lib
 

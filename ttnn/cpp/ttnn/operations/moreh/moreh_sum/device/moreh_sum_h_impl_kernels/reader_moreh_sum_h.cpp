@@ -24,8 +24,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
 #ifdef REDUCE_SCALER
+    DataflowBuffer dfb_scaler(dfb::scaler);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(
+            dfb_scaler);
 #endif
 
 #ifdef DO_MASK_H

@@ -54,17 +54,13 @@ void kernel_main() {
     fill_cb_with_value(dfb_eps, eps);
 
 #ifdef DO_MASK_H
-    {
-        DataflowBuffer dfb_mask_h(cb_id_mask_h);
-        generate_mask_h(dfb_mask_h, mask_h);
-    }
+    DataflowBuffer dfb_mask_h(cb_id_mask_h);
+    generate_mask_h(dfb_mask_h, mask_h);
 #endif
 
 #ifdef DO_MASK_W
-    {
-        DataflowBuffer dfb_mask_w(cb_id_mask_w);
-        generate_mask_w(dfb_mask_w, mask_w);
-    }
+    DataflowBuffer dfb_mask_w(cb_id_mask_w);
+    generate_mask_w(dfb_mask_w, mask_w);
 #endif
 
     uint32_t offs = 0;

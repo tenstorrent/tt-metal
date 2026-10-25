@@ -129,7 +129,7 @@ void kernel_main() {
         }
         // Sum(|x|^p) - reduce single pre-accumulated tile
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb_xpowadd_id, dfb_one_id, dfb_xpowsum_id>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
+            dfb_xpowadd_obj, dfb_one_obj, dfb_xpowsum_obj, compute_kernel_lib::ReduceInputBlockShape::single());
 
         power_tile_to_dfb<dfb_xpowsum_id, dfb_xabs_id, dfb_xpow_id, dfb_recip_p_decimal_id, dfb_logx_id, dfb_y_id>(
             dfb_xpowsum_obj,

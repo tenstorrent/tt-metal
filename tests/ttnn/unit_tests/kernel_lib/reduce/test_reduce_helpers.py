@@ -140,7 +140,7 @@ def _regression_cases() -> list[ReduceCase]:
             output_dtype="fp32",
         ),
         # Regression for https://github.com/tenstorrent/tt-metal/issues/54178.
-        # calls=2 makes the second reduce() use Accumulate::at(cb_accumulator, 1),
+        # calls=2 makes the second reduce() use Accumulate(accumulator, 1),
         # which must reload all four column outputs for each batch into DEST.
         ReduceCase(
             name="regression-col-3x4-two-batches-two-calls",

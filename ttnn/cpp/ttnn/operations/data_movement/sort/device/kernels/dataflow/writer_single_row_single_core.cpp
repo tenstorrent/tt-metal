@@ -47,6 +47,7 @@ void kernel_main() {
     const auto value_accessor = TensorAccessor(tensor::value_tensor);
 
     Noc noc;
+    DataflowBuffer index_tensor_dfb(dfb::index_tensor);
 #ifndef IS_ROW_MAJOR
     DataflowBuffer value_tensor_dfb(dfb::value_tensor);
     const uint32_t value_tensor_tile_size = value_tensor_dfb.get_tile_size();
@@ -68,9 +69,9 @@ void kernel_main() {
         // Generate index tiles into the index DFB (consumed by compute)
         for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
-                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(index_tensor_dfb, w);
             } else {
-                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(index_tensor_dfb, w);
             }
         }
 
@@ -153,9 +154,9 @@ void kernel_main() {
         // the index DFB must contain raw unsigned integers, not floating-point values.
         for (uint32_t w = 0; w < Wt; w++) {
             if (is_32_bit_data) {
-                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(index_tensor_dfb, w);
             } else {
-                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(index_tensor_dfb, w);
             }
         }
 

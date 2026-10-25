@@ -18,8 +18,8 @@
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_mask_synthesize.hpp"
 #endif
 
-static void generate_tile_with_packed_bfloat16_values(uint32_t dfb_id, uint32_t packed_bf16_value) {
-    DataflowBuffer dfb(static_cast<uint16_t>(dfb_id));
+template <typename DFB>
+static void generate_tile_with_packed_bfloat16_values(DFB& dfb, uint32_t packed_bf16_value) {
     dfb.reserve_back(1);
     CoreLocalMem<uint32_t> ptr(dfb.get_write_ptr());
     for (uint32_t i = 0; i < 512U; ++i) {
@@ -118,6 +118,14 @@ void kernel_main() {
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_input_mask(dfb_input_mask_id);
+    constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
+    DataflowBuffer dfb_scaler(dfb_in_2);
+    DataflowBuffer dfb_scaler_c(dfb_in_4);
+    DataflowBuffer dfb_ones(dfb_ones_id);
+#ifdef PAD_CORRECTION
+    DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
+#endif
 
     const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
 
@@ -225,31 +233,28 @@ void kernel_main() {
 #endif
 
             if (i == 0 and b == 0) {
-                constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
 #ifdef PAD_CORRECTION
                 // Host-precomputed corrected reduce scaler: the row mask fixes the numerator,
                 // this fixes the denominator.
                 const float pad_corrected_scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(8));
-                dataflow_kernel_lib::prepare_reduce_scaler<
-                    dfb_in_2,
-                    ckernel::PoolType::AVG,
-                    ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
+                dataflow_kernel_lib::
+                    prepare_reduce_scaler<dfb_in_2, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_SCALAR>(
+                        dfb_scaler, pad_corrected_scaler);
 #else
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_in_2,
                     ckernel::PoolType::AVG,
                     ckernel::ReduceDim::REDUCE_SCALAR,
-                    reduce_factor_w>();
+                    reduce_factor_w>(dfb_scaler);
 #endif
 
                 constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
-                generate_tile_with_packed_bfloat16_values(dfb_ones_id, ones);
+                generate_tile_with_packed_bfloat16_values(dfb_ones, ones);
 
 #ifdef PAD_CORRECTION
                 // Once-per-core rowvalid tile (c_18): rows < rows_valid_this_core all-ones,
                 // the rest zero. Compute composes it with the c_7 column selectors to build
                 // each batch's final row-tile mask.
-                DataflowBuffer dfb_rowvalid(dfb_rowvalid_id);
                 dfb_rowvalid.reserve_back(1);
                 tt::tt_metal::groupnorm::synthesize_mask_tile_full_bf16(
                     dfb_rowvalid.get_write_ptr(),
@@ -262,12 +267,11 @@ void kernel_main() {
 #endif
 
                 if constexpr (is_mcast_sender) {
-                    constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
                     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                         dfb_in_4,
                         ckernel::PoolType::AVG,
                         ckernel::ReduceDim::REDUCE_SCALAR,
-                        reduce_factor_c>();
+                        reduce_factor_c>(dfb_scaler_c);
                 }
 
                 constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;

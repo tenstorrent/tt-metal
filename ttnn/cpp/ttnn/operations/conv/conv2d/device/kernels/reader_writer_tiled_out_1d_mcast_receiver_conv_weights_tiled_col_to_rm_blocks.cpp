@@ -64,17 +64,17 @@ void kernel_main() {
     // Experimental API objects
     Noc noc;
 
-    if constexpr (split_reader_enabled) {
-        if constexpr (needs_act_block_zero_out) {
-            zero_out_tiles<cb_id_act_second_reader>(noc, DataflowBuffer(cb_id_act_second_reader));
-        }
-    }
-
     DataflowBuffer dfb_weight_obj(cb_id_weight);
     DataflowBuffer dfb_bias_obj(bias_cb_id);
     DataflowBuffer dfb_act_second_obj(cb_id_act_second_reader);
     DataflowBuffer dfb_reader_indices_obj(cb_reader_indices);
     DataflowBuffer dfb_sharded_act_obj(cb_id_sharded_act);
+
+    if constexpr (split_reader_enabled) {
+        if constexpr (needs_act_block_zero_out) {
+            zero_out_tiles<cb_id_act_second_reader>(noc, dfb_act_second_obj);
+        }
+    }
 
     auto weights_pipe = weights_mcast_args.receiver(noc);
 

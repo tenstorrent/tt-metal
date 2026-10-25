@@ -18,8 +18,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
+    DataflowBuffer dfb_scale(dfb::scale);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scale, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb::scale, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_scale);
 
     const auto interleaved_accessor0 = TensorAccessor(tensor::output);
 

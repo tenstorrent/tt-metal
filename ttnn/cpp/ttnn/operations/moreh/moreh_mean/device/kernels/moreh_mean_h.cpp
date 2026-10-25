@@ -27,6 +27,8 @@ void kernel_main() {
     DataflowBuffer dfb_mask_h_obj(dfb::mask_h);
     DataflowBuffer dfb_input_obj(dfb::input);
     DataflowBuffer dfb_masked_input_obj(dfb::masked_input);
+    DataflowBuffer dfb_accum_dst_obj(dfb::accum_dst);
+    DataflowBuffer dfb_out_obj(dfb::out);
     constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
 
     compute_kernel_hw_startup(dfb::input, dfb::input, dfb::out);
@@ -49,7 +51,7 @@ void kernel_main() {
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::accum_dst>(
-                    ckl::ReduceInputBlockShape::col(Ht - 1));
+                    dfb_input_obj, dfb_scaler_obj, dfb_accum_dst_obj, ckl::ReduceInputBlockShape::col(Ht - 1));
             }
 
             // Optional masking of last H tile
@@ -64,17 +66,23 @@ void kernel_main() {
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::masked_input, dfb::scaler, dfb::out>(
+                    dfb_masked_input_obj,
+                    dfb_scaler_obj,
+                    dfb_out_obj,
                     ckl::ReduceInputBlockShape::single(),
                     ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(dfb::accum_dst, is_h_single_tile ? 0 : 1));
+                    ckl::Accumulate(dfb_accum_dst_obj, is_h_single_tile ? 0 : 1));
             } else {
                 // Phase 2 without masking: Reduce final tile with accumulation
                 // - If Ht == 1 (single tile): iteration=0, no accumulator reload
                 // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from dfb::accum_dst
                 ckl::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::out>(
+                    dfb_input_obj,
+                    dfb_scaler_obj,
+                    dfb_out_obj,
                     ckl::ReduceInputBlockShape::single(),
                     ckl::ReduceInputMemoryLayout::contiguous(),
-                    ckl::Accumulate::at(dfb::accum_dst, is_h_single_tile ? 0 : 1));
+                    ckl::Accumulate(dfb_accum_dst_obj, is_h_single_tile ? 0 : 1));
             }
         }
     }

@@ -19,6 +19,7 @@ void kernel_main() {
     // its cores' block width rather than fixed indices, because a factory whose work split gives cores
     // different block widths declares one correctly-sized buffer pair per width.
     compute_kernel_hw_startup(dfb::in, dfb::out);
+    DataflowBuffer in(dfb::in), out(dfb::out);
 
     constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<dfb::in>()
                                    ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
@@ -31,5 +32,5 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(block_size_col * third_dim);
+        fp32_mode>(in, out, block_size_col * third_dim);
 }

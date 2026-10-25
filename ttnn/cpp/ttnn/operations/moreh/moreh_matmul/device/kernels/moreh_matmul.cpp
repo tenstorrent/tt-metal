@@ -31,6 +31,36 @@ constexpr std::uint32_t cb_intermed1 = dfb::im1;
 constexpr std::uint32_t cb_intermed2 = dfb::im2;
 constexpr std::uint32_t cb_intermed3 = dfb::im3;
 
+// The kernel's DataflowBuffers, constructed once in kernel_main. Helpers resolve runtime-selected
+// ids through get() instead of constructing their own (on Quasar a DataflowBuffer drains on scope exit).
+struct MatmulDfbs {
+    DataflowBuffer& in0;
+    DataflowBuffer& in1;
+    DataflowBuffer& in2;
+    DataflowBuffer& in3;
+    DataflowBuffer& bias;
+    DataflowBuffer& out0;
+    DataflowBuffer& im0;
+    DataflowBuffer& im1;
+    DataflowBuffer& im2;
+    DataflowBuffer& im3;
+
+    FORCE_INLINE DataflowBuffer& get(std::uint32_t id) {
+        switch (id) {
+            case cb_in0: return in0;
+            case cb_in1: return in1;
+            case cb_in2: return in2;
+            case cb_in3: return in3;
+            case bias_cb_id: return bias;
+            case cb_out0: return out0;
+            case cb_intermed0: return im0;
+            case cb_intermed1: return im1;
+            case cb_intermed2: return im2;
+            default: return im3;
+        }
+    }
+};
+
 ////////////////////
 // inline functions
 ////////////////////
@@ -45,8 +75,8 @@ FORCE_INLINE void unravel_output_tidx(
 
 // TODO: move it to moreh_common.hpp if more use cases.
 FORCE_INLINE void transpose_tile_to_cb(
-    std::uint32_t icb, std::uint32_t ocb, std::uint32_t itile = 0, std::uint32_t idst = 0) {
-    DataflowBuffer ocb_obj(ocb);
+    MatmulDfbs& dfbs, std::uint32_t icb, std::uint32_t ocb, std::uint32_t itile = 0, std::uint32_t idst = 0) {
+    DataflowBuffer& ocb_obj = dfbs.get(ocb);
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb);
 #endif
@@ -64,25 +94,26 @@ FORCE_INLINE void transpose_tile_to_cb(
     ocb_obj.push_back(onetile);
 }
 
-FORCE_INLINE void transpose_src_tile(std::uint32_t& mm_src, bool transpose, bool need_mask, bool is_input) {
+FORCE_INLINE void transpose_src_tile(
+    MatmulDfbs& dfbs, std::uint32_t& mm_src, bool transpose, bool need_mask, bool is_input) {
     if (!transpose) {
         return;
     }
 
     if (need_mask) {
-        DataflowBuffer mm_src_obj(mm_src);
+        DataflowBuffer& mm_src_obj = dfbs.get(mm_src);
         mm_src_obj.wait_front(onetile);
-        transpose_tile_to_cb(mm_src, mm_src);
+        transpose_tile_to_cb(dfbs, mm_src, mm_src);
         mm_src_obj.pop_front(onetile);
     } else {
         std::uint32_t trans_src = (is_input) ? (cb_in0) : (cb_in1);
         mm_src = (is_input) ? (cb_intermed1) : (cb_intermed2);
-        transpose_tile_to_cb(trans_src, mm_src);
+        transpose_tile_to_cb(dfbs, trans_src, mm_src);
     }
 }
 
-FORCE_INLINE void pack_onetile_to_cb(std::uint32_t ocb = dfb::out0, std::uint32_t idst = 0) {
-    DataflowBuffer ocb_obj(ocb);
+FORCE_INLINE void pack_onetile_to_cb(MatmulDfbs& dfbs, std::uint32_t ocb = dfb::out0, std::uint32_t idst = 0) {
+    DataflowBuffer& ocb_obj = dfbs.get(ocb);
     ocb_obj.reserve_back(onetile);
     tile_regs_wait();
 #if defined FP32_DEST_ACC_EN
@@ -94,6 +125,7 @@ FORCE_INLINE void pack_onetile_to_cb(std::uint32_t ocb = dfb::out0, std::uint32_
 }
 
 FORCE_INLINE void mask_tile_to_cb(
+    MatmulDfbs& dfbs,
     std::uint32_t& mm_src,
     bool& need_mask,
     bool need_mask_h,
@@ -148,7 +180,7 @@ FORCE_INLINE void mask_tile_to_cb(
         mul_tiles(cb_in, cb_mask, 0, mask_tidx, 0);
         tile_regs_commit();
 
-        pack_onetile_to_cb(cb_intermed);
+        pack_onetile_to_cb(dfbs, cb_intermed);
         mm_src = cb_intermed;
         need_mask = true;
     }
@@ -156,10 +188,10 @@ FORCE_INLINE void mask_tile_to_cb(
 
 #ifdef FUSE_BIAS
 template <bool is_scalar_bias>
-FORCE_INLINE void bias_add() {
-    DataflowBuffer dfb_intermed3_obj(cb_intermed3);
-    DataflowBuffer bias_cb_id_obj(bias_cb_id);
-    pack_onetile_to_cb(cb_intermed3);
+FORCE_INLINE void bias_add(MatmulDfbs& dfbs) {
+    DataflowBuffer& dfb_intermed3_obj = dfbs.im3;
+    DataflowBuffer& bias_cb_id_obj = dfbs.bias;
+    pack_onetile_to_cb(dfbs, cb_intermed3);
     dfb_intermed3_obj.wait_front(onetile);
     bias_cb_id_obj.wait_front(onetile);
     tile_regs_acquire();
@@ -187,6 +219,7 @@ FORCE_INLINE void bias_add() {
 
 template <bool is_scalar_bias>
 FORCE_INLINE void matmul_with_transpose_and_mask(
+    MatmulDfbs& dfbs,
     std::uint32_t output_tidx,
     std::uint32_t num_output_tiles,
     std::uint32_t Kt,
@@ -199,11 +232,11 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     std::uint32_t Nt,
     bool need_other_mask_h,
     bool need_other_mask_w) {
-    DataflowBuffer dfb_in0_obj(cb_in0);
-    DataflowBuffer dfb_in1_obj(cb_in1);
-    DataflowBuffer dfb_in2_obj(cb_in2);
-    DataflowBuffer dfb_in3_obj(cb_in3);
-    DataflowBuffer dfb_intermed0_obj(cb_intermed0);
+    DataflowBuffer& dfb_in0_obj = dfbs.in0;
+    DataflowBuffer& dfb_in1_obj = dfbs.in1;
+    DataflowBuffer& dfb_in2_obj = dfbs.in2;
+    DataflowBuffer& dfb_in3_obj = dfbs.in3;
+    DataflowBuffer& dfb_intermed0_obj = dfbs.im0;
     // TODO: checking required when the input cb format and intermediate cb format are different.
     matmul_init(cb_in0, cb_in1);
     if (transpose_input || transpose_other) {
@@ -249,6 +282,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
             // transpose: the first argument (mm_src0) is passed by reference.
             ////////////////////
             mask_tile_to_cb(
+                dfbs,
                 mm_src0,
                 need_input_mask,
                 need_input_mask_h,
@@ -257,9 +291,10 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 input_last_row,
                 transpose_input,
                 true);
-            transpose_src_tile(mm_src0, transpose_input, need_input_mask, true);
+            transpose_src_tile(dfbs, mm_src0, transpose_input, need_input_mask, true);
 
             mask_tile_to_cb(
+                dfbs,
                 mm_src1,
                 need_other_mask,
                 need_other_mask_h,
@@ -268,7 +303,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 other_last_col,
                 transpose_other,
                 false);
-            transpose_src_tile(mm_src1, transpose_other, need_other_mask, false);
+            transpose_src_tile(dfbs, mm_src1, transpose_other, need_other_mask, false);
 
             ////////////////////
             // matmul
@@ -284,8 +319,8 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 dfb_intermed0_obj.pop_front(onetile);
             }
 
-            DataflowBuffer mm_src0_obj(mm_src0);
-            DataflowBuffer mm_src1_obj(mm_src1);
+            DataflowBuffer& mm_src0_obj = dfbs.get(mm_src0);
+            DataflowBuffer& mm_src1_obj = dfbs.get(mm_src1);
             if (transpose_input || need_input_mask) {
                 mm_src0_obj.wait_front(onetile);
             }
@@ -316,11 +351,11 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
 // bias add
 ////////////////////
 #ifdef FUSE_BIAS
-                bias_add<is_scalar_bias>();
+                bias_add<is_scalar_bias>(dfbs);
 #endif
-                pack_onetile_to_cb(cb_out0);
+                pack_onetile_to_cb(dfbs, cb_out0);
             } else {
-                pack_onetile_to_cb(cb_intermed0);
+                pack_onetile_to_cb(dfbs, cb_intermed0);
             }
 
             if (spill) {
@@ -331,9 +366,9 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     }
 }
 
-FORCE_INLINE void matmul(std::uint32_t num_output_tiles, std::uint32_t Kt) {
-    DataflowBuffer dfb_in0_obj(cb_in0);
-    DataflowBuffer dfb_in1_obj(cb_in1);
+FORCE_INLINE void matmul(MatmulDfbs& dfbs, std::uint32_t num_output_tiles, std::uint32_t Kt) {
+    DataflowBuffer& dfb_in0_obj = dfbs.in0;
+    DataflowBuffer& dfb_in1_obj = dfbs.in1;
     matmul_init(cb_in0, cb_in1);
     for (std::uint32_t i = 0; i < num_output_tiles; ++i) {
         tile_regs_acquire();
@@ -345,7 +380,7 @@ FORCE_INLINE void matmul(std::uint32_t num_output_tiles, std::uint32_t Kt) {
             dfb_in1_obj.pop_front(onetile);
         }
         tile_regs_commit();
-        pack_onetile_to_cb(cb_out0);
+        pack_onetile_to_cb(dfbs, cb_out0);
     }
 }
 
@@ -383,10 +418,23 @@ void kernel_main() {
         output_stride[i] = get_vararg(i);
     }
 
+    DataflowBuffer dfb_in0(cb_in0);
+    DataflowBuffer dfb_in1(cb_in1);
+    DataflowBuffer dfb_in2(cb_in2);
+    DataflowBuffer dfb_in3(cb_in3);
+    DataflowBuffer dfb_bias(bias_cb_id);
+    DataflowBuffer dfb_out0(cb_out0);
+    DataflowBuffer dfb_im0(cb_intermed0);
+    DataflowBuffer dfb_im1(cb_intermed1);
+    DataflowBuffer dfb_im2(cb_intermed2);
+    DataflowBuffer dfb_im3(cb_intermed3);
+    MatmulDfbs dfbs{dfb_in0, dfb_in1, dfb_in2, dfb_in3, dfb_bias, dfb_out0, dfb_im0, dfb_im1, dfb_im2, dfb_im3};
+
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0, cb_in1, cb_out0);
 
     if (need_transpose || need_mask || need_bias_add) {
         matmul_with_transpose_and_mask<is_scalar_bias>(
+            dfbs,
             output_tile_start_idx,
             num_output_tiles,
             Kt,
@@ -400,6 +448,6 @@ void kernel_main() {
             need_other_mask_h,
             need_other_mask_w);
     } else {
-        matmul(num_output_tiles, Kt);
+        matmul(dfbs, num_output_tiles, Kt);
     }
 }

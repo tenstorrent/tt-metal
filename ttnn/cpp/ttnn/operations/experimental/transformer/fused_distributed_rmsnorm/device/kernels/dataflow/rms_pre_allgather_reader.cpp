@@ -33,8 +33,10 @@ void kernel_main() {
     CircularBuffer cb_input(input_cb);
 
     // Generate constant tiles for reduce scalar
+    DataflowBuffer reduce_scalar_dfb(reduce_scalar_cb);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<reduce_scalar_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<reduce_scalar_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            reduce_scalar_dfb);
 
     for (uint32_t tile_row = tile_row_start; tile_row < tile_row_end; tile_row++) {
         uint32_t input_tile_idx = tile_row * num_tile_cols;

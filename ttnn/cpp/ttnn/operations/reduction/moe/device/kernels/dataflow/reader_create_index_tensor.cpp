@@ -29,6 +29,7 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::input);
     DataflowBuffer dfb_topk(dfb::topk_mask);
     DataflowBuffer dfb_expert(dfb::expert_mask);
+    DataflowBuffer dfb_index(dfb::index);
 
     const uint32_t tile_bytes_input = dfb_in0.get_tile_size();
     const uint32_t tile_bytes_topk = dfb_topk.get_tile_size();
@@ -55,10 +56,10 @@ void kernel_main() {
             dfb_in0.reserve_back(2);
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = 0});
             tile_id++;
-            dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
+            dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb_index, j);
             noc.async_read(s0, dfb_in0, tile_bytes_input, {.page_id = tile_id}, {.offset_bytes = tile_bytes_input});
             tile_id++;
-            dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j + 1);
+            dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb_index, j + 1);
             noc.async_read_barrier();
             dfb_in0.push_back(2);
         }

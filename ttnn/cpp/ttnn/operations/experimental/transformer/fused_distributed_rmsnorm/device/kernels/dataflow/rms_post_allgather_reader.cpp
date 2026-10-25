@@ -82,11 +82,12 @@ void kernel_main() {
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
 
     // Generate constant tiles for layernorm compute
+    DataflowBuffer reduce_scalar_dfb(reduce_scalar_cb);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         reduce_scalar_cb,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
+        reduce_factor>(reduce_scalar_dfb);
     generate_bcast_col_scalar(CircularBuffer(epsilon_cb), epsilon_value);
 
     if constexpr (fuse_rope) {

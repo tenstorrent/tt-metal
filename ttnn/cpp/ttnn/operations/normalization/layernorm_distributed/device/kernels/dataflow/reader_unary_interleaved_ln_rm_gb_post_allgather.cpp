@@ -88,6 +88,7 @@ void kernel_main() {
     // Input tiles and the per-device statistics, both consumed by the compute kernel.
     DataflowBuffer dfb_inp_buf(dfb::inp);
     DataflowBuffer dfb_stats_buf(dfb::stats);
+    DataflowBuffer dfb_reduce_buf(dfb::reduce);
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
@@ -111,7 +112,7 @@ void kernel_main() {
         dfb::reduce,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
+        reduce_factor>(dfb_reduce_buf);
     const auto eps = get_arg(args::eps);
     // generate_bcast_col_scalar is a shared kernel-pool helper that still takes a CircularBuffer by
     // value, so the handle is wrapped here at the call site rather than passed as a DataflowBuffer.

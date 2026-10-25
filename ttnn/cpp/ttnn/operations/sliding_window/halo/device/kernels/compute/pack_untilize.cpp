@@ -20,6 +20,10 @@ void kernel_main() {
 
     const uint32_t total_blocks = get_arg_val<uint32_t>(0);
 
+    DataflowBuffer src(src_cb_id);
+    DataflowBuffer out0(out_cb_id0);
+    DataflowBuffer out1(out_cb_id1);
+
     compute_kernel_hw_startup(src_cb_id, out_cb_id0);
 
     // Initialize once before the loop
@@ -34,7 +38,8 @@ void kernel_main() {
                 out_cb_id0,
                 compute_kernel_lib::untilize_config::InitUninitMode::Neither,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                src, out0, block_size);
         } else {
             compute_kernel_lib::untilize<
                 tiles_per_row,
@@ -42,7 +47,8 @@ void kernel_main() {
                 out_cb_id1,
                 compute_kernel_lib::untilize_config::InitUninitMode::Neither,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_size);
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                src, out1, block_size);
         }
     }
 

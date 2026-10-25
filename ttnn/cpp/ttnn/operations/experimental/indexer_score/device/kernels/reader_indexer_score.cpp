@@ -701,6 +701,8 @@ void kernel_main() {
     const auto w_acc = TensorAccessor(w_args, w_addr, bf16_tile_bytes);
 
     Noc noc;
+    // cb_scaler is only allocated with block_pool; the handle is only used on that path.
+    DataflowBuffer scaler_dfb(cb_scaler);
     // The fused path is DSA-only. Keep the invariant compile-time checked without preprocessor-specialized
     // binaries; the regular path may still use head streaming or the single-head fuse.
     static_assert(!fused_ring_enabled || !stream_heads, "fused ring requires all heads resident");
@@ -711,10 +713,9 @@ void kernel_main() {
     const auto run = [&](const FusedRingGate* gate) {
         build_mask_tiles(noc);
         if constexpr (block_pool) {
-            dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                cb_scaler,
-                ckernel::PoolType::MAX,
-                ckernel::ReduceDim::REDUCE_ROW>();
+            dataflow_kernel_lib::
+                calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+                    scaler_dfb);
         }
 
         WorkUnitSpan span;

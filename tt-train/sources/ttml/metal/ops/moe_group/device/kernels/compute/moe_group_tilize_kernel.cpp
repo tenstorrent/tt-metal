@@ -27,6 +27,7 @@ void kernel_main() {
     (void)num_chunks;
 
     compute_kernel_hw_startup(cb_id_in0, cb_id_out0);
+    DataflowBuffer in0(cb_id_in0), out0(cb_id_out0);
 
     cb_wait_front(cb_id_ctrl, 1U);
     uint32_t active_blocks = read_tile_value(cb_id_ctrl, 0U, 0U);
@@ -38,5 +39,5 @@ void kernel_main() {
         cb_id_out0,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(active_blocks);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in0, out0, active_blocks);
 }

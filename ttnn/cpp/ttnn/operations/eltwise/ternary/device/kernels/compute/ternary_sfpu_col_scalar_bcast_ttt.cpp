@@ -21,20 +21,16 @@ constexpr bool init_once = unpack_src_format[tt::CBIndex::c_0] == static_cast<st
 constexpr bool init_once = false;
 #endif
 
+template <typename PredicateDFB, typename TrueDFB, typename FalseDFB, typename OutDFB>
 ALWI void process_tile(
-    uint32_t predicate_cb_id,
-    uint32_t true_cb_id,
-    uint32_t false_cb_id,
-    uint32_t cb_out_id,
+    PredicateDFB& predicate_dfb,
+    TrueDFB& true_dfb,
+    FalseDFB& false_dfb,
+    OutDFB& dfb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-
-    DataflowBuffer predicate_dfb(predicate_cb_id);
-    DataflowBuffer true_dfb(true_cb_id);
-    DataflowBuffer false_dfb(false_cb_id);
-    DataflowBuffer dfb_out(cb_out_id);
 
     // 3-tensor broadcast-aware synchronization - wait for broadcast CBs outside loop
 #if BCAST_A
@@ -132,6 +128,11 @@ void kernel_main() {
     constexpr auto false_cb_id = tt::CBIndex::c_2;
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
+    DataflowBuffer predicate_dfb(predicate_cb_id);
+    DataflowBuffer true_dfb(true_cb_id);
+    DataflowBuffer false_dfb(false_cb_id);
+    DataflowBuffer dfb_out(cb_out_id);
+
     compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
     copy_init(predicate_cb_id);
     if constexpr (init_once) {
@@ -142,11 +143,11 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle);
+        process_tile(predicate_dfb, true_dfb, false_dfb, dfb_out, tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            predicate_cb_id, true_cb_id, false_cb_id, cb_out_id, remaining_iterations, tile_start, num_tiles_per_cycle);
+            predicate_dfb, true_dfb, false_dfb, dfb_out, remaining_iterations, tile_start, num_tiles_per_cycle);
     }
 }

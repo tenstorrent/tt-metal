@@ -61,7 +61,9 @@ void kernel_main() {
     constexpr uint32_t cb_gamma_out_tmp_idx = tt::CBIndex::c_13;  // gamma result when beta follows
     constexpr uint32_t cb_times_gamma_out_idx = (do_gamma && do_beta) ? cb_gamma_out_tmp_idx : cb_out_idx;
 
+    DataflowBuffer cb_stats_dfb(cb_stats);
     CircularBuffer cb_reduce(cb_reduce_idx);
+    DataflowBuffer cb_reduce_dfb(cb_reduce_idx);  // reduce-helper handle for the same buffer
     CircularBuffer cb_eps(cb_eps_idx);
     DataflowBuffer cb_eps_dfb(cb_eps_idx);  // chain-side handle for the same buffer
     CircularBuffer cb_gamma(cb_gamma_idx);
@@ -89,7 +91,7 @@ void kernel_main() {
          * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
         compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_reduce_idx, cb_var_idx>(
-            compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+            cb_stats_dfb, cb_reduce_dfb, cb_var, compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
 
         // 1/sqrt(var + eps)
         ckl::eltwise_chain(

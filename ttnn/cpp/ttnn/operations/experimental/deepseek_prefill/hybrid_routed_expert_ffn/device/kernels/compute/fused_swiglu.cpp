@@ -53,6 +53,7 @@
 // three threads agree on `effective_chunks` without re-reading L1.
 
 #include <cstdint>
+#include <type_traits>
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
@@ -434,8 +435,12 @@ template <
     // input/output CB as template args, like conv_bmm_tilize.cpp) can consume them.
     uint32_t x_cb_id,
     uint32_t x_rm_cb_id,
-    bool tilize_x = false>
+    bool tilize_x = false,
+    typename XBuffer,
+    typename XRmBuffer>
 FORCE_INLINE void matmul_phase_fused_gu(
+    XBuffer& x_dfb,
+    XRmBuffer& x_rm_dfb,
     uint32_t gate_cb_id,
     uint32_t up_cb_id,
     uint32_t partials_gu_cb_id,
@@ -511,7 +516,8 @@ FORCE_INLINE void matmul_phase_fused_gu(
                 x_cb_id,
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(n_strips);
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
+                x_rm_dfb, x_dfb, n_strips);
             // The helper consumed/produced only the runtime rows, but the reader
             // pushed a full max cb_x_rm block and the matmul below pops a full max
             // cb_in0_x block. Settle both with pointer-only bumps (no tilize work
@@ -1028,6 +1034,13 @@ void kernel_main() {
 #endif
 
     CircularBuffer counts_scratch_cb(cb_counts_scratch);
+    // Tilize-side handles for x; cb_x_rm is only allocated in row-major mode.
+    struct NoTilizeBuffer {
+        explicit NoTilizeBuffer(uint32_t) {}
+    };
+    using TilizeBuffer = std::conditional_t<(x_is_row_major != 0), DataflowBuffer, NoTilizeBuffer>;
+    TilizeBuffer x_tilize_dfb(cb_in0_x);
+    TilizeBuffer x_rm_tilize_dfb(cb_x_rm);
     CircularBuffer idx_scratch_cb(cb_idx_scratch);
 
     // Wait for the reader (NCRISC) to push the counts/idx into shared L1. They
@@ -1146,6 +1159,8 @@ void kernel_main() {
                 /*x_cb_id=*/cb_in0_x,
                 /*x_rm_cb_id=*/cb_x_rm,
                 /*tilize_x=*/(x_is_row_major != 0)>(
+                x_tilize_dfb,
+                x_rm_tilize_dfb,
                 cb_in1_gate,
                 cb_in1_up,
                 cb_partials_gu,

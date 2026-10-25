@@ -210,9 +210,9 @@ ALWI void add_silu_elementwise(
     out.push_back(tiles);
 }
 
-template <uint32_t width_tiles, uint32_t input_cb, uint32_t output_cb>
-ALWI void tilize_row(uint32_t input_pages, uint32_t output_tile_offset) {
-    DataflowBuffer input(input_cb);
+template <uint32_t width_tiles, uint32_t input_cb, uint32_t output_cb, typename InputDFB>
+ALWI void tilize_row(InputDFB& input, uint32_t input_pages, uint32_t output_tile_offset) {
+    ASSERT(input.get_id() == input_cb);
     input.wait_front(input_pages);
     reconfig_data_format_srca(input_cb);
     PACK((pack_reconfig_data_format(output_cb)));

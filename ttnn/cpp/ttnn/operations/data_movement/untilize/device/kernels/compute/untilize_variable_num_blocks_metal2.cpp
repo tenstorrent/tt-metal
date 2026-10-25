@@ -26,6 +26,7 @@ void kernel_main() {
 
     constexpr auto per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
+    DataflowBuffer src(dfb::src), out(dfb::out);
     compute_kernel_hw_startup(dfb::src, dfb::out);
     compute_kernel_lib::untilize<
         per_core_block_tile_cnt,
@@ -33,5 +34,6 @@ void kernel_main() {
         dfb::out,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_block_cnt);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+        src, out, per_core_block_cnt);
 }

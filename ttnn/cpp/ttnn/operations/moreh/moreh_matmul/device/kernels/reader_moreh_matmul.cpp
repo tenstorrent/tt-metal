@@ -92,15 +92,15 @@ void kernel_main() {
     bool need_input_mask_h = (input_mask_h != 32);
     bool need_input_mask_w = (input_mask_w != 32);
 
+    DataflowBuffer dfb_in2(cb_id_in2);
     if (need_input_mask_h || need_input_mask_w) {
-        DataflowBuffer dfb_in2(cb_id_in2);
         generate_mask_tiles(dfb_in2, input_mask_h, input_mask_w);
     }
 
     bool need_other_mask_h = (other_mask_h != 32);
     bool need_other_mask_w = (other_mask_w != 32);
+    DataflowBuffer dfb_in3(cb_id_in3);
     if (need_other_mask_h || need_other_mask_w) {
-        DataflowBuffer dfb_in3(cb_id_in3);
         generate_mask_tiles(dfb_in3, other_mask_h, other_mask_w);
     }
 

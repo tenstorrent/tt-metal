@@ -55,11 +55,12 @@ void kernel_main() {
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
+    DataflowBuffer identity_scale_dfb(cb_identity_scale_in);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(identity_scale_dfb);
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {

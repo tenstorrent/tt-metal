@@ -288,11 +288,12 @@ void kernel_main() {
 
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
+    DataflowBuffer identity_scale_dfb(cb_identity_scale_in);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(identity_scale_dfb);
 
     // Read the live length ONCE, before the ring loop. This kernel is a protocol participant, not just a
     // mask producer: the MUX forwarding loop below skips chunks on the same predicate as the reader and

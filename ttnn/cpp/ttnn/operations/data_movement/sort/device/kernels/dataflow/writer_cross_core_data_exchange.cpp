@@ -41,6 +41,7 @@ void kernel_main() {
     const uint32_t value_tensor_tile_size = value_tensor_dfb.get_tile_size();
 #endif
     DataflowBuffer physical_core_lookup_table_dfb(dfb::physical_core_lookup_table);
+    DataflowBuffer index_tensor_dfb(dfb::index_tensor);
 
     constexpr uint32_t TILE_H = 32;  // TILE_HEIGHT
     const uint32_t value_slice_offset_bytes = core_id * W_value_slice_bytes;
@@ -54,10 +55,10 @@ void kernel_main() {
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             if (is_32_bit_data) {
                 dataflow_kernel_lib::generate_index_tile<uint32_t>(
-                    dfb::index_tensor, core_id * number_of_tiles_per_core + w);
+                    index_tensor_dfb, core_id * number_of_tiles_per_core + w);
             } else {
                 dataflow_kernel_lib::generate_index_tile<uint16_t>(
-                    dfb::index_tensor, core_id * number_of_tiles_per_core + w);
+                    index_tensor_dfb, core_id * number_of_tiles_per_core + w);
             }
         }  // w loop
 

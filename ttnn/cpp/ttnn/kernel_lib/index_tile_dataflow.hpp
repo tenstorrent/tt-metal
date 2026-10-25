@@ -10,8 +10,6 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "ckernel.h"
-#include <type_traits>
-#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -41,7 +39,7 @@ namespace dataflow_kernel_lib {
  *            of scope, so a helper-owned one would block here until the consumer pops the tile.
  * @param wt  Width tile position [0, Wt)
  */
-template <typename T = uint16_t, typename DFB, std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
+template <typename T = uint16_t, typename DFB>
 FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
     constexpr uint32_t one_tile = 1;
     constexpr uint32_t tile_faces = 2;
@@ -134,13 +132,6 @@ FORCE_INLINE void generate_index_tile(DFB& dfb, const uint32_t wt) {
         }
     }
     dfb.push_back(one_tile);
-}
-
-// The id-only form: builds the DataflowBuffer from the id and runs the form above. See id_only_helpers.hpp.
-template <typename T = uint16_t>
-KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void generate_index_tile(const uint32_t dfb_id, const uint32_t wt) {
-    DataflowBuffer dfb(dfb_id);
-    generate_index_tile<T>(dfb, wt);
 }
 
 }  // namespace dataflow_kernel_lib

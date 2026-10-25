@@ -10,8 +10,8 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-void fill_cb_with_value(uint32_t cb_id, uint32_t value) {
-    DataflowBuffer dfb(cb_id);
+template <typename DFB>
+void fill_cb_with_value(DFB& dfb, uint32_t value) {
     dfb.reserve_back(1);
 
 #if defined FP32_DEST_ACC_EN
@@ -73,17 +73,19 @@ void kernel_main() {
     const auto max_exp_avg_sq_addrg = TensorAccessor(max_exp_avg_sq_args, max_exp_avg_sq_addr);
 #endif
 
-    fill_cb_with_value(cb_scalar_args, lr);
-    fill_cb_with_value(cb_scalar_args, beta1);
-    fill_cb_with_value(cb_scalar_args, beta2);
-    fill_cb_with_value(cb_scalar_args, eps);
-    fill_cb_with_value(cb_scalar_args, weight_decay);
+    DataflowBuffer dfb_scalar_args(cb_scalar_args);
+    DataflowBuffer dfb_one(cb_id_one);
+    fill_cb_with_value(dfb_scalar_args, lr);
+    fill_cb_with_value(dfb_scalar_args, beta1);
+    fill_cb_with_value(dfb_scalar_args, beta2);
+    fill_cb_with_value(dfb_scalar_args, eps);
+    fill_cb_with_value(dfb_scalar_args, weight_decay);
     union {
         float f;
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_one, scaler.u);
+    fill_cb_with_value(dfb_one, scaler.u);
 
     Noc noc;
     DataflowBuffer dfb_param(cb_id_param);

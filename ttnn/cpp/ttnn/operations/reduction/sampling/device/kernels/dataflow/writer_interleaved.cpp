@@ -53,10 +53,14 @@ void kernel_main() {
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
     constexpr uint32_t out_chunk_size = num_cores * sizeof(uint32_t);   // 4 bytes per uint32_t
+    DataflowBuffer dfb_scaler_max(dfb::scaler_max);
+    DataflowBuffer dfb_scaler_sum(dfb::scaler_sum);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler_max, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler_max, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_scaler_max);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_scaler_sum);
     // read k, p, temp
 
     const Noc noc;

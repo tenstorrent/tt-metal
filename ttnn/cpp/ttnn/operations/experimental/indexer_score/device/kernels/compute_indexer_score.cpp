@@ -530,6 +530,10 @@ void kernel_main() {
     CircularBuffer k(cb_k);
     CircularBuffer acc(cb_acc_strip);
     CircularBuffer q(cb_q);
+    DataflowBuffer acc_strip_dfb(cb_acc_strip);
+    DataflowBuffer out_strip_dfb(cb_out_strip);
+    // cb_scaler is only allocated with block_pool; the handle is only used on that path.
+    DataflowBuffer scaler_dfb(cb_scaler);
 
     WorkUnitSpan span;
     span.set_valid_k_len_tiles(kv_len_tiles);
@@ -710,13 +714,17 @@ void kernel_main() {
                             cb_scaler,
                             cb_out_strip,
                             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+                            acc_strip_dfb,
+                            scaler_dfb,
+                            out_strip_dfb,
                             compute_kernel_lib::ReduceInputBlockShape::of(
                                 /*rows = blocks/row */ blocks_per_unit,
                                 /*cols = tiles/block */ block_tiles,
                                 /*batches = q-rows */ q_tiles_per_unit));
                     }
                 } else {
-                    compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
+                    compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(
+                        acc_strip_dfb, out_strip_dfb, q_tiles_per_unit);
                 }
             }
 

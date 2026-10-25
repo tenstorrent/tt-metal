@@ -40,7 +40,8 @@ ALWI void calc_numeric_stable(DFB0& dfb_in_obj, DFB1& dfb_max_scaler_obj, DFB2& 
         dfb_in_token,
         dfb_max_scaler_token,
         dfb_max_token,
-        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(block_w));
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+        dfb_in_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::row(block_w));
 
     // calculate x-max(x)
     ckl::eltwise_chain(
@@ -79,7 +80,11 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb::in0, dfb::max_scaler, dfb::exps);
 
     DataflowBuffer dfb_exps_obj(dfb::exps);
+#ifdef NUMERIC_STABLE
     DataflowBuffer dfb_x_obj(dfb_x_id);
+#else
+    auto& dfb_x_obj = dfb_exps_obj;
+#endif
     DataflowBuffer dfb_max_scaler_obj(dfb::max_scaler);
     DataflowBuffer dfb_sum_scaler_obj(dfb::sum_scaler);
     // in0 and out0 are the borrowed input / output shards and this kernel is the only producer and consumer of
@@ -303,6 +308,9 @@ void kernel_main() {
             dfb::sum_scaler,
             dfb::recip_sum_exps,
             compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+            dfb_exps_obj,
+            dfb_sum_scaler_obj,
+            dfb_recip_sum_exps_obj,
             compute_kernel_lib::ReduceInputBlockShape::row(block_w),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},

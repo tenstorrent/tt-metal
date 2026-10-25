@@ -199,7 +199,7 @@ void kernel_main() {
         if (is_lastdim_layernorm || is_groupnorm) {
             // Sum[y * dy]
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::ydyadd, dfb::scaler, dfb::dgamma>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+                dfb_ydyadd_obj, dfb_scaler_obj, dfb_dgamma_obj, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Just copy
             copy_tile_to_dfb<dfb::ydyadd, dfb::dgamma>(dfb_ydyadd_obj, dfb_dgamma_obj);
@@ -210,7 +210,7 @@ void kernel_main() {
         if (is_lastdim_layernorm || is_groupnorm) {
             // Sum[dy]
             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::dyadd, dfb::scaler, dfb::dbeta>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+                dfb_dyadd_obj, dfb_scaler_obj, dfb_dbeta_obj, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // Just copy
             copy_tile_to_dfb<dfb::dyadd, dfb::dbeta>(dfb_dyadd_obj, dfb_dbeta_obj);

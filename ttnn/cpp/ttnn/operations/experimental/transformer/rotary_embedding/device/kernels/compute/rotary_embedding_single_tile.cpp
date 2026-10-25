@@ -20,19 +20,19 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
-template <uint32_t in0_cb, uint32_t out_cb>
-ALWI void UNTILIZE_ONE_TILE() {
+template <uint32_t in0_cb, uint32_t out_cb, typename In0DFB, typename OutDFB>
+ALWI void UNTILIZE_ONE_TILE(In0DFB& in0, OutDFB& out) {
     compute_kernel_lib::untilize<
         1,
         in0_cb,
         out_cb,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in0, out, 1);
 }
 
-template <uint32_t in0_cb, uint32_t out_cb>
-ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
+template <uint32_t in0_cb, uint32_t out_cb, typename In0DFB, typename OutDFB>
+ALWI void TILIZE_ONE_TILE(In0DFB& in0, OutDFB& out, uint32_t sync_cb) {
     CircularBuffer cb_sync(sync_cb);
     cb_sync.wait_front(1);
     compute_kernel_lib::tilize<
@@ -41,7 +41,7 @@ ALWI void TILIZE_ONE_TILE(uint32_t sync_cb) {
         out_cb,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in0, out, 1);
     cb_sync.pop_front(1);
 }
 
@@ -76,13 +76,20 @@ void kernel_main() {
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(13);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(14);
 
+    DataflowBuffer cb_sin(sin_cb);
+    DataflowBuffer cb_cos(cos_cb);
+    DataflowBuffer cb_untilized_sin(untilized_sin_cb);
+    DataflowBuffer cb_untilized_cos(untilized_cos_cb);
+    DataflowBuffer cb_updated_cos(retilized_cos_cb);
+    DataflowBuffer cb_updated_sin(retilized_sin_cb);
+
     compute_kernel_hw_startup(sin_cb, sin_cb, untilized_sin_cb);
-    UNTILIZE_ONE_TILE<sin_cb, untilized_sin_cb>();
-    UNTILIZE_ONE_TILE<cos_cb, untilized_cos_cb>();
+    UNTILIZE_ONE_TILE<sin_cb, untilized_sin_cb>(cb_sin, cb_untilized_sin);
+    UNTILIZE_ONE_TILE<cos_cb, untilized_cos_cb>(cb_cos, cb_untilized_cos);
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
-    TILIZE_ONE_TILE<untilized_sin_cb, retilized_sin_cb>(untilized_sin_sync_cb);
-    TILIZE_ONE_TILE<untilized_cos_cb, retilized_cos_cb>(untilized_cos_sync_cb);
+    TILIZE_ONE_TILE<untilized_sin_cb, retilized_sin_cb>(cb_untilized_sin, cb_updated_sin, untilized_sin_sync_cb);
+    TILIZE_ONE_TILE<untilized_cos_cb, retilized_cos_cb>(cb_untilized_cos, cb_updated_cos, untilized_cos_sync_cb);
     constexpr uint32_t updated_cos_cb = retilized_cos_cb;
     constexpr uint32_t updated_sin_cb = retilized_sin_cb;
     constexpr auto trig_bcast = BroadcastDim::Row;
@@ -92,9 +99,9 @@ void kernel_main() {
     constexpr uint32_t updated_sin_cb = sin_cb;
     constexpr auto trig_bcast = BroadcastDim::None;
     constexpr auto trig_pop = PopPolicy::PerTile;
-#endif
     DataflowBuffer cb_updated_cos(updated_cos_cb);
     DataflowBuffer cb_updated_sin(updated_sin_cb);
+#endif
 
     cb_trans_mat.wait_front(onetile);
     compute_kernel_hw_startup(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);

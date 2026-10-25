@@ -212,12 +212,14 @@ void kernel_main() {
 
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
+    DataflowBuffer identity_scale_dfb(cb_identity_scale_in);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-    dataflow_kernel_lib::prepare_zero_tile<cb_zero_in>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(identity_scale_dfb);
+    DataflowBuffer zero_dfb(cb_zero_in);
+    dataflow_kernel_lib::prepare_zero_tile(zero_dfb);
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Generate sliding window mask only if we have local data and need it

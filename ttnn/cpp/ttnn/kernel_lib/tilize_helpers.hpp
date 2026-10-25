@@ -10,7 +10,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 // This is the go-to helper for all tilize usage in compute kernels.
 // Prefer this over raw tilize_init/tilize_block/tilize_uninit calls.
@@ -170,26 +169,10 @@ template <
     typename InDFB,
     typename OutDFB>
 ALWI void tilize(
-    InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
-
-// The id-only form: builds the DataflowBuffers from the ids and runs the form above. See id_only_helpers.hpp.
-template <
-    uint32_t block_width_tiles,
-    uint32_t input_dfb,
-    uint32_t output_dfb,
-    tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
-    tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
-    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
-    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
-KERNEL_LIB_ID_ONLY_HELPER ALWI void tilize(
-    uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt) {
-    DataflowBuffer in_dfb(input_dfb);
-    DataflowBuffer out_dfb(output_dfb);
-    tilize<block_width_tiles, input_dfb, output_dfb, init_uninit_mode, wait_mode, reconfig_mode, fp32_mode, remap_mode>(
-        in_dfb, out_dfb, num_blocks, total_input_pages);
-}
+    InDFB& in_dfb,
+    OutDFB& out_dfb,
+    uint32_t num_blocks,
+    std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib
 

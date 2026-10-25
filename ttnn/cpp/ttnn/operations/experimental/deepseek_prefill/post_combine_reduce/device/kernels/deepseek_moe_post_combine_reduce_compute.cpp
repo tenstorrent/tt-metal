@@ -61,6 +61,8 @@ void kernel_main() {
     CircularBuffer cb_indices(cb_indices_id);
     CircularBuffer cb_output(cb_output_id);
     CircularBuffer cb_rowmajor(cb_rowmajor_id);
+    DataflowBuffer cb_rowmajor_dfb(cb_rowmajor_id);
+    DataflowBuffer cb_output_dfb(cb_output_id);
 
     if constexpr (use_dispatch_table_skip) {
         // Wait for writer to finish pre-loading dispatch table (loaded once for all chunks)
@@ -154,6 +156,6 @@ void kernel_main() {
 
         cb_rowmajor.push_back(total_token_tiles);
 
-        compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor_id, cb_output_id>(1);
+        compute_kernel_lib::tilize<total_token_tiles, cb_rowmajor_id, cb_output_id>(cb_rowmajor_dfb, cb_output_dfb, 1);
     }
 }

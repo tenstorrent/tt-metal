@@ -97,6 +97,10 @@ void kernel_main() {
     // (within-tile column reduce sees cols 0-15) for bf16 input; tilize_init re-inits for cb_in.
     compute_kernel_hw_startup(cb_abs_id, cb_output_e4m3_id);
     cb_scaler.wait_front(1);  // reader-filled 1.0 scaler, reused for every reduce
+#ifndef INPUT_TILE_LAYOUT
+    DataflowBuffer cb_in_dfb(cb_in_id);
+    DataflowBuffer cb_tile_dfb(cb_tile_id);
+#endif
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         {
@@ -122,7 +126,7 @@ void kernel_main() {
             cb_in.pop_front(tiles_per_block);
 #else
             // ROW_MAJOR input: tilize the row-major block into tiles.
-            compute_kernel_lib::tilize<tiles_per_block, cb_in_id, cb_tile_id>(block_ht);
+            compute_kernel_lib::tilize<tiles_per_block, cb_in_id, cb_tile_id>(cb_in_dfb, cb_tile_dfb, block_ht);
 #endif
 
             // ----- Phase 2: block amax -> scale (col 0) and 1/scale (col 0) -----

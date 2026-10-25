@@ -38,10 +38,10 @@
 // decoded correctly.
 template <typename DFB_IN0, typename DFB_IN1, typename DFB_SCRATCH, typename DFB_OUT>
 inline void mul_and_accumulate_block(
-    DFB_IN0 in0_dfb,
-    DFB_IN1 in1_dfb,
-    DFB_SCRATCH scratch_dfb,
-    DFB_OUT out_dfb,
+    DFB_IN0& in0_dfb,
+    DFB_IN1& in1_dfb,
+    DFB_SCRATCH& scratch_dfb,
+    DFB_OUT& out_dfb,
     uint32_t block_num_tiles,
     uint32_t idx,
     uint32_t num_taps) {
@@ -108,10 +108,10 @@ inline void mul_and_accumulate_block(
 // runs. DST usage: 2 tiles (running value + staged operand).
 template <typename DFB_IN0, typename DFB_IN1, typename DFB_SCRATCH, typename DFB_OUT>
 inline void mul_and_accumulate_block_sfpu(
-    DFB_IN0 in0_dfb,
-    DFB_IN1 in1_dfb,
-    DFB_SCRATCH scratch_dfb,
-    DFB_OUT out_dfb,
+    DFB_IN0& in0_dfb,
+    DFB_IN1& in1_dfb,
+    DFB_SCRATCH& scratch_dfb,
+    DFB_OUT& out_dfb,
     uint32_t block_num_tiles,
     uint32_t idx,
     uint32_t num_taps) {
@@ -175,7 +175,7 @@ template <
     typename DFB_IN0,
     typename DFB_IN1,
     typename DFB_OUT>
-inline void mul_and_accumulate_coalesced_block_sfpu(DFB_IN0 in0_dfb, DFB_IN1 in1_dfb, DFB_OUT out_dfb) {
+inline void mul_and_accumulate_coalesced_block_sfpu(DFB_IN0& in0_dfb, DFB_IN1& in1_dfb, DFB_OUT& out_dfb) {
     static_assert(kernel_width > 1);
     static_assert(in0_block_w % kernel_width == 0);
     static_assert(block_num_tiles % in0_block_w == 0);
@@ -239,7 +239,7 @@ template <
     typename DFB_IN0,
     typename DFB_IN1,
     typename DFB_OUT>
-inline void mul_and_accumulate_coalesced_block(DFB_IN0 in0_dfb, DFB_IN1 in1_dfb, DFB_OUT out_dfb) {
+inline void mul_and_accumulate_coalesced_block(DFB_IN0& in0_dfb, DFB_IN1& in1_dfb, DFB_OUT& out_dfb) {
     static_assert(kernel_width > 1);
     static_assert(in0_block_w % kernel_width == 0);
     static_assert(block_num_tiles % in0_block_w == 0);
@@ -303,6 +303,7 @@ void kernel_main() {
     // bit-exact on the stock FPU path.
     constexpr bool fp32_operands = get_compile_time_arg_val(12) == 1;
 
+    DataflowBuffer dfb_in0(in0_cb_id);
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer dfb_in1(in1_cb_id);
     DataflowBuffer dfb_out(out_cb_id);
@@ -319,7 +320,8 @@ void kernel_main() {
             // in0_block_num_tiles / in0_block_w (== act_block_h_ntiles); this must match the tile
             // count mul_and_accumulate_block(_coalesced) consumes below. Using in0_num_subblocks
             // here under-produces by out_subblock_h_ntiles when it is > 1, deadlocking the CB.
-            compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(in0_block_num_tiles / in0_block_w);
+            compute_kernel_lib::tilize<in0_block_w, in0_cb_id, tilized_in0_cb_id>(
+                dfb_in0, dfb_tilized_in0, in0_block_num_tiles / in0_block_w);
             reconfig_data_format_srca(tilized_in0_cb_id);
             if constexpr (coalesce_kw_reads && fp32_operands) {
                 mul_and_accumulate_coalesced_block_sfpu<in0_block_w, kernel_width, in0_block_num_tiles>(

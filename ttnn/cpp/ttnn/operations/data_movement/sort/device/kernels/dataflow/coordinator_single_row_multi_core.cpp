@@ -158,9 +158,9 @@ void kernel_main() {
 #else
             {
                 if (is_32_bit_data) {
-                    dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index_tensor, w);
+                    dataflow_kernel_lib::generate_index_tile<uint32_t>(index_tensor_dfb, w);
                 } else {
-                    dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index_tensor, w);
+                    dataflow_kernel_lib::generate_index_tile<uint16_t>(index_tensor_dfb, w);
                 }
 
                 index_tensor_dfb.wait_front(one_tile);

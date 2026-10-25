@@ -25,11 +25,12 @@ void kernel_main() {
 
 #ifdef REDUCE_SCALER
     constexpr uint32_t reduce_factor = get_arg(args::reduce_factor);
+    DataflowBuffer dfb_scaler(dfb::scaler);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         dfb::scaler,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_COL,
-        reduce_factor>();
+        reduce_factor>(dfb_scaler);
 #endif
 
 #ifdef DO_MASK_H

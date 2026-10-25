@@ -51,8 +51,17 @@ constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode
 // One reduce() call over the (ht_in_chunk × wt_in_chunk × NC) block currently staged in dfb::tile_in.
 // is_last_chunk == true packs the final result into dfb::out (with optional post-mul); otherwise the
 // partial is left in dfb::acc at index chunk_idx and accumulation continues on the next call.
+template <typename TileInDFB, typename ScalerDFB, typename AccDFB, typename OutDFB>
 FORCE_INLINE void reduce_block(
-    uint32_t ht_in_chunk, uint32_t wt_in_chunk, uint32_t NC, uint32_t chunk_idx, bool is_last_chunk) {
+    TileInDFB& tile_in,
+    ScalerDFB& scaler,
+    AccDFB& acc,
+    OutDFB& out,
+    uint32_t ht_in_chunk,
+    uint32_t wt_in_chunk,
+    uint32_t NC,
+    uint32_t chunk_idx,
+    bool is_last_chunk) {
     if (is_last_chunk) {
         compute_kernel_lib::reduce<
             REDUCE_OP,
@@ -63,9 +72,12 @@ FORCE_INLINE void reduce_block(
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             rm_reconfig_mode,
             fp32_mode>(
+            tile_in,
+            scaler,
+            out,
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
+            compute_kernel_lib::Accumulate(acc, chunk_idx),
 #ifdef REDUCE_POST_MUL
             [](uint32_t dst_idx) {
                 const auto post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
@@ -89,9 +101,12 @@ FORCE_INLINE void reduce_block(
             compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
             rm_reconfig_mode,
             fp32_mode>(
+            tile_in,
+            scaler,
+            acc,
             compute_kernel_lib::ReduceInputBlockShape::of(ht_in_chunk, wt_in_chunk, NC),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::Accumulate::at(dfb::acc, chunk_idx),
+            compute_kernel_lib::Accumulate(acc, chunk_idx),
             compute_kernel_lib::NoOp{});
     }
 }
@@ -109,6 +124,12 @@ void kernel_main() {
     // args::post_mul_scaler_bits is captured inside reduce_block() under REDUCE_POST_MUL;
     // args::enable_fp32_sfpu (the accurate-fp32 flag) is consumed by fp32_mode above.
 
+    DataflowBuffer dfb_rm(dfb::rm);
+    DataflowBuffer dfb_tile_in(dfb::tile_in);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    DataflowBuffer dfb_acc(dfb::acc);
+    DataflowBuffer dfb_out(dfb::out);
+
     compute_kernel_hw_startup(dfb::rm, dfb::tile_in);
 
     if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) {
@@ -124,8 +145,17 @@ void kernel_main() {
                 const bool is_last_chunk = (wt_base + wt_tiles_per_chunk) >= Wt;
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, dfb::rm, dfb::tile_in>(
-                    ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                    dfb_rm, dfb_tile_in, ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
+                reduce_block(
+                    dfb_tile_in,
+                    dfb_scaler,
+                    dfb_acc,
+                    dfb_out,
+                    ht_in_chunk,
+                    wt_tiles_per_chunk,
+                    NC,
+                    chunk_idx,
+                    is_last_chunk);
                 ++chunk_idx;
             }
         }
@@ -157,8 +187,17 @@ void kernel_main() {
                 const bool is_last_chunk = (ht_base + ht_in_chunk) == Ht_total;
 
                 compute_kernel_lib::tilize<wt_tiles_per_chunk, dfb::rm, dfb::tile_in>(
-                    ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
-                reduce_block(ht_in_chunk, wt_tiles_per_chunk, NC, chunk_idx, is_last_chunk);
+                    dfb_rm, dfb_tile_in, ht_in_chunk, ht_in_chunk * tt::constants::TILE_HEIGHT);
+                reduce_block(
+                    dfb_tile_in,
+                    dfb_scaler,
+                    dfb_acc,
+                    dfb_out,
+                    ht_in_chunk,
+                    wt_tiles_per_chunk,
+                    NC,
+                    chunk_idx,
+                    is_last_chunk);
                 ++chunk_idx;
             }
         }
@@ -168,5 +207,5 @@ void kernel_main() {
     // end so the buffer is left balanced. The wait is not present in this file:
     // compute_kernel_lib::reduce waits one page on the buffer it is given as the scaler
     // and leaves it unpopped so one pushed tile serves every reduce call.
-    DataflowBuffer(dfb::scaler).pop_front(1);
+    dfb_scaler.pop_front(1);
 }

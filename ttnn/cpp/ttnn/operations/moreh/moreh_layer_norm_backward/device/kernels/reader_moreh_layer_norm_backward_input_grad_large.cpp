@@ -9,10 +9,10 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
-template <typename T, dfb::AccessPattern Pap, dfb::AccessPattern Cap>
+template <typename T, typename DFB>
 void read_mean_rstd(
     const Noc& noc,
-    DFBBindingToken<Pap, Cap> dfb_token,
+    DFB& dfb,
     uint32_t tile_offset,
     uint32_t normalized_dims,
     uint32_t outer_idx,
@@ -24,7 +24,6 @@ void read_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer dfb(dfb_token);
     const uint32_t tile_bytes = dfb.get_tile_size();
     const auto dtype_bytes = tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
@@ -149,6 +148,8 @@ void kernel_main() {
     DataflowBuffer dfb_input(dfb::input);
     const auto output_grad_tile_bytes = dfb_output_grad.get_tile_size();
     const auto input_tile_bytes = dfb_input.get_tile_size();
+    DataflowBuffer dfb_mean(dfb::mean);
+    DataflowBuffer dfb_rstd(dfb::rstd);
 #ifdef GAMMA_HAS_VALUE
     DataflowBuffer dfb_gamma(dfb::gamma);
     const auto gamma_tile_bytes = dfb_gamma.get_tile_size();
@@ -160,7 +161,7 @@ void kernel_main() {
         // mean
         read_mean_rstd(
             noc,
-            dfb::mean,
+            dfb_mean,
             mean_rstd_tile_offset,
             normalized_dims,
             outer_idx,
@@ -173,7 +174,7 @@ void kernel_main() {
         // rstd
         read_mean_rstd(
             noc,
-            dfb::rstd,
+            dfb_rstd,
             mean_rstd_tile_offset,
             normalized_dims,
             outer_idx,

@@ -37,8 +37,11 @@ template <
     uint32_t dilation_w,
     bool zero_pages,
     uint32_t in_cb_sz,
-    uint32_t bf16_init_value>
-ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
+    uint32_t bf16_init_value,
+    typename InDFB,
+    typename ClearDFB>
+ALWI void read_kernel_with_top_left_index(
+    InDFB& in_dfb, [[maybe_unused]] ClearDFB& clear_dfb, uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
@@ -50,8 +53,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
 
-    DataflowBuffer in_dfb(in_cb_id);
-    DataflowBuffer clear_dfb(clear_value_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -237,6 +238,7 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
+    DataflowBuffer in_dfb(in_cb_id);
     DataflowBuffer clear_value_dfb(clear_value_cb_id);
     DataflowBuffer in_scalar_dfb(in_scalar_cb_id);
     DataflowBuffer in_shard_dfb(in_shard_cb_id);
@@ -254,7 +256,7 @@ void kernel_main() {
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_dfb);
+            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), in_dfb, clear_value_dfb);
         }
     }
 
@@ -361,7 +363,7 @@ void kernel_main() {
                 dilation_w,
                 zero_pages,
                 in_cb_sz,
-                bf16_init_value>(ind, in_l1_read_base_addr);
+                bf16_init_value>(in_dfb, clear_value_dfb, ind, in_l1_read_base_addr);
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }

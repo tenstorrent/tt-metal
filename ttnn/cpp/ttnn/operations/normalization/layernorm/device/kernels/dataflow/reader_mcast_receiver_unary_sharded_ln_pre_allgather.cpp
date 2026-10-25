@@ -61,7 +61,9 @@ void kernel_main() {
     Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
     const UnicastEndpoint remote_ep;
 
-    const DataflowBuffer dfb_ex_partial2_obj(dfb::ex_partial2);
+    DataflowBuffer dfb_ex_partial2_obj(dfb::ex_partial2);
+    DataflowBuffer dfb_ex_external2_obj(dfb::ex_external2);
+    DataflowBuffer dfb_ex2_obj(dfb::ex2);
     const uint32_t single_tile_size_bytes = dfb_ex_partial2_obj.get_tile_size();
 
     RemoteCoord remote_coords_first_stage[is_all_to_all_worker ? num_blocks_first_stage : 1];
@@ -130,13 +132,9 @@ void kernel_main() {
         remote_coords_second_stage[0] = {.x = in0_remote_noc_x[0], .y = in0_remote_noc_y[0]};
     }
 
-    const auto& global_reduce_receiver = [&](const uint32_t dfb_partial_id,
-                                             const uint32_t dfb_external_id,
-                                             const uint32_t dfb_reduce_first_stage_id) __attribute__((always_inline)) {
-        DataflowBuffer dfb_partial_obj(static_cast<uint16_t>(dfb_partial_id));
-        DataflowBuffer dfb_external_obj(static_cast<uint16_t>(dfb_external_id));
-        DataflowBuffer dfb_reduce_first_stage_obj(static_cast<uint16_t>(dfb_reduce_first_stage_id));
-
+    const auto& global_reduce_receiver = [&](auto& dfb_partial_obj,
+                                             auto& dfb_external_obj,
+                                             auto& dfb_reduce_first_stage_obj) __attribute__((always_inline)) {
         uint32_t num_tiles_per_partial_result = 2;
         if constexpr (rms_norm) {
             num_tiles_per_partial_result = 1;
@@ -230,6 +228,6 @@ void kernel_main() {
                 static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_to_read));
         }
     };
-    global_reduce_receiver(dfb::ex_partial2, dfb::ex_external2, dfb::ex2);
+    global_reduce_receiver(dfb_ex_partial2_obj, dfb_ex_external2_obj, dfb_ex2_obj);
     noc.async_atomic_barrier();
 }

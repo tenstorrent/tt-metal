@@ -31,6 +31,7 @@ void kernel_main() {
     const Noc noc;
     DataflowBuffer input_values_dfb(dfb::input_values);
     DataflowBuffer input_indices_dfb(dfb::input_indices);
+    DataflowBuffer index_dfb(dfb::index);
     const uint32_t tile_bytes_input_values = input_values_dfb.get_entry_size();
 
     uint32_t tile_id_input_values = 0;
@@ -43,9 +44,9 @@ void kernel_main() {
                 s0, input_values_dfb, tile_bytes_input_values, {.page_id = tile_id_input_values}, {.offset_bytes = 0});
             tile_id_input_values++;
             if constexpr (use_32bit_index) {
-                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, j);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(index_dfb, j);
             } else {
-                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, j);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(index_dfb, j);
             }
             noc.async_read_barrier();
             input_values_dfb.push_back(onetile);

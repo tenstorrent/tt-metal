@@ -97,6 +97,7 @@ void kernel_main() {
     const uint32_t transformation_mat_addr = get_common_arg_val<uint32_t>(1);
 
     Noc noc;
+    DataflowBuffer sum_dfb(reduce_scalar_sum_cb), avg_dfb(reduce_scalar_avg_cb);
     CircularBuffer cb_output(output_cb);
 
     const uint32_t output_tile_bytes = cb_output.get_tile_size();
@@ -114,7 +115,8 @@ void kernel_main() {
         epsilon_cb,
         transformation_mat_cb,
         reduce_factor,
-        static_cast<bool>(fuse_rope)>(epsilon_bits, TensorAccessor(transmat_args, transformation_mat_addr));
+        static_cast<bool>(fuse_rope)>(
+        sum_dfb, avg_dfb, epsilon_bits, TensorAccessor(transmat_args, transformation_mat_addr));
 
     // =================== TP>1: stats fabric AG ===================
     if constexpr (is_tp_1 == 0) {

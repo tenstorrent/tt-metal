@@ -10,7 +10,7 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t dfb_ids[6] = {
+    DataflowBuffer dfbs[6] = {
         dfb::in0,
         dfb::in1,
         dfb::in2,
@@ -41,7 +41,7 @@ void kernel_main() {
     AllocatorBank<AllocatorBankType::DRAM> dram_src;
 
     for (uint32_t i = 0; i < 6; ++i) {
-        DataflowBuffer dfb(dfb_ids[i]);
+        auto& dfb = dfbs[i];
         const uint32_t bytes_per_tile = dfb.get_entry_size();
         uint32_t src_addr = src_addrs[i];
         for (uint32_t t = 0; t < num_tiles; ++t) {

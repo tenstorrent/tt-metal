@@ -37,6 +37,10 @@ void kernel_main() {
     CircularBuffer cb_intermed1_obj(cb_intermed1);
     CircularBuffer cb_intermed2_obj(cb_intermed2);
     CircularBuffer cb_out_obj(out_cb_id);
+    DataflowBuffer intermed0_dfb(cb_intermed0);
+    DataflowBuffer intermed1_dfb(cb_intermed1);
+    DataflowBuffer intermed2_dfb(cb_intermed2);
+    DataflowBuffer out_dfb(out_cb_id);
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
@@ -74,7 +78,8 @@ void kernel_main() {
                         cb_intermed1,
                         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(1);
+                        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure>(
+                        intermed0_dfb, intermed1_dfb, 1);
 
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
                     matmul_init(cb_in0, cb_in1, transpose_hw);
@@ -83,7 +88,7 @@ void kernel_main() {
 
                 // cb_intermed2 comes from reader; untilized row-major tile
                 // tilize CB::intermed2 and write to CBIndex::c_16 with reconfiguration
-                compute_kernel_lib::tilize<onetile, cb_intermed2, out_cb_id>(1);
+                compute_kernel_lib::tilize<onetile, cb_intermed2, out_cb_id>(intermed2_dfb, out_dfb, 1);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 reconfig_data_format(cb_intermed2, cb_in1, cb_intermed2, cb_in0);

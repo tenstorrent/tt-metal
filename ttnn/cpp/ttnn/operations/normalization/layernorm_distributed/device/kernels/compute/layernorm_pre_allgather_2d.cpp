@@ -47,6 +47,7 @@ void kernel_main() {
     DataflowBuffer dfb_inp(dfb_inp_id);
     DataflowBuffer dfb_reduce(dfb::reduce);
     DataflowBuffer dfb_x2(dfb::x2);
+    DataflowBuffer dfb_out(dfb::out);
 #ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_res(dfb::res);
@@ -54,6 +55,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 #ifdef IS_MERGE_CORE
     DataflowBuffer dfb_zero(dfb::zero);
+    DataflowBuffer dfb_x2_merge(dfb::x2_merge);
+    DataflowBuffer dfb_out_final(dfb::out_final);
 #endif
 #ifdef FUSE_PRE_ADD
     constexpr auto in0_input =
@@ -113,7 +116,7 @@ void kernel_main() {
             dfb::out,
             compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop,
             compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-            reduce_fp32_mode>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            reduce_fp32_mode>(dfb_x2, dfb_reduce, dfb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         dfb_inp.pop_front(Wt);
 
         // On a merge core, do a final sum over the column's partial statistics for this row and write
@@ -121,8 +124,6 @@ void kernel_main() {
         // whole block is gated at the preprocessor rather than on a runtime flag.
 #ifdef IS_MERGE_CORE
         {
-            DataflowBuffer dfb_x2_merge(dfb::x2_merge);
-            DataflowBuffer dfb_out_final(dfb::out_final);
             constexpr int dst0 = 0;
 
             // Wait for all num_cores_y tiles

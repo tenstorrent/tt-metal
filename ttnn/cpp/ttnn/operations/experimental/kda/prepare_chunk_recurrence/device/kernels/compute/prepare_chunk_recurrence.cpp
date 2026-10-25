@@ -403,9 +403,21 @@ void transpose_tile_row_to_column(DFB0& in, DFB1& o, uint32_t row_tiles) {
 
 // Reduce each row of squared values directly to its inverse-L2 factor. Applying epsilon, rsqrt,
 // and optional scaling in DST avoids materializing row sums in a separate intermediate DFB.
-template <bool Scale, uint32_t SquaredDfb, uint32_t InverseNormsDfb>
-void reduce_squared_rows_to_inverse_norms(
-    uint32_t row_tiles, uint32_t column_tiles, uint32_t eps_bits, uint32_t scale_bits) {
+template <
+    bool Scale,
+    uint32_t SquaredDfb,
+    uint32_t InverseNormsDfb,
+    typename SquaredDFB,
+    typename OnesDFB,
+    typename InverseNormsDFB>
+inline void reduce_squared_rows_to_inverse_norms(
+    SquaredDFB& squared,
+    OnesDFB& ones,
+    InverseNormsDFB& inverse_norms,
+    uint32_t row_tiles,
+    uint32_t column_tiles,
+    uint32_t eps_bits,
+    uint32_t scale_bits) {
     auto inverse_norm = [eps_bits, scale_bits](uint32_t dst) {
         binop_with_scalar_tile_init();
         add_unary_tile(dst, eps_bits);
@@ -419,6 +431,9 @@ void reduce_squared_rows_to_inverse_norms(
 
     compute_kernel_lib::
         reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, SquaredDfb, dfb::ones, InverseNormsDfb>(
+            squared,
+            ones,
+            inverse_norms,
             compute_kernel_lib::ReduceInputBlockShape::of(row_tiles, column_tiles),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},
@@ -434,10 +449,12 @@ template <
     typename DFB0,
     typename DFB1,
     typename DFB2,
-    typename DFB3>
-void normalize_l2_rows(
+    typename DFB3,
+    typename OnesDFB>
+inline void normalize_l2_rows(
     DFB0& input,
     DFB1& normalized,
+    OnesDFB& ones,
     uint32_t eps_bits,
     uint32_t scale_bits,
 
@@ -449,7 +466,7 @@ void normalize_l2_rows(
     square_tiles(input, squared, matrix_tiles);
 
     reduce_squared_rows_to_inverse_norms<Scale, SquaredDfb, InverseNormsDfb>(
-        RowTiles, ColumnTiles, eps_bits, scale_bits);
+        squared, ones, inverse_norms, RowTiles, ColumnTiles, eps_bits, scale_bits);
 
     inverse_norms.wait_front(RowTiles);
     multiply_by_column(input, inverse_norms, normalized, RowTiles, ColumnTiles);
@@ -788,6 +805,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         normalize_l2_rows<Ct, Kt, true, dfb::workspace_3, dfb::tile_workspace_0>(
             q,
             normalized_q,
+            ones,
             EPS_BITS,
             SCALE_BITS,
             /*squared=*/workspace_3,
@@ -796,6 +814,7 @@ TT_KERNEL void compute(uint32_t work_item_start, uint32_t work_item_count, uint3
         normalize_l2_rows<Ct, Kt, false, dfb::workspace_3, dfb::tile_workspace_0>(
             k,
             normalized_k,
+            ones,
             EPS_BITS,
             SCALE_BITS,
             /*squared=*/workspace_3,

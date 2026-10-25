@@ -135,7 +135,7 @@ FORCE_INLINE void fill_each_face_row0_partial(
 // Prepare CB tile for reduce using a caller-provided float scaler
 // =============================================================================
 
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, typename DFB, std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int>>
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, typename DFB>
 FORCE_INLINE void prepare_reduce_scaler(
     DFB& dfb, float scaler_f, uint32_t valid_reduce_dim_elements_in_tile) {
     constexpr DataFormat data_format = get_dataformat(dfb_id);
@@ -213,8 +213,7 @@ template <
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t reduce_factor,
-    typename DFB,
-    std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int>>
+    typename DFB>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     DFB& dfb, uint32_t valid_reduce_dim_elements_in_tile) {
     // -------------------------------------------------------------------------

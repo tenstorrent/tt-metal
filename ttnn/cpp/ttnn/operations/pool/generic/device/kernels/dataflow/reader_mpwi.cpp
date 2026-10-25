@@ -17,6 +17,11 @@
 template <bool B>
 struct IndexType;
 
+// Stands in for a DataflowBuffer the program does not allocate in this configuration.
+struct UnallocatedDataflowBuffer {
+    explicit UnallocatedDataflowBuffer(uint16_t) {}
+};
+
 template <>
 struct IndexType<true> {
     using type = uint32_t;
@@ -36,9 +41,8 @@ template <
     uint32_t row_stride,
     bool is_large_kernel,
     uint32_t sticks_per_chunk,
-    uint32_t in_idx_cb_id>
-void fill_indexes(uint32_t init_index) {
-    DataflowBuffer idx_dfb(in_idx_cb_id);
+    typename IdxDFB>
+void fill_indexes(IdxDFB& idx_dfb, uint32_t init_index) {
     volatile tt_l1_ptr IndexType* idx_ptr = reinterpret_cast<volatile tt_l1_ptr IndexType*>(idx_dfb.get_write_ptr());
     uint32_t kernel_idx = 0;
 
@@ -76,14 +80,19 @@ template <
     uint32_t up_left_wrap_inc,
     uint32_t intra_kernel_right_inc,
     uint32_t intra_kernel_down_left_wrap_inc,
-    uint32_t in_idx_cb_id,
-    uint32_t right_inc_cb_id,
-    uint32_t down_left_wrap_inc_cb_id,
-    uint32_t up_left_wrap_inc_cb_id,
-    uint32_t intra_kernel_right_inc_cb_id,
-    uint32_t intra_kernel_down_left_wrap_inc_cb_id,
-    bool indexes_32_bit>
-ALWI void initialize_return_indices_data() {
+    bool indexes_32_bit,
+    typename IntraKernelIncDfb,
+    typename IdxDFB,
+    typename RightIncDFB,
+    typename DownLeftWrapIncDFB,
+    typename UpLeftWrapIncDFB>
+ALWI void initialize_return_indices_data(
+    IdxDFB& idx_dfb,
+    RightIncDFB& right_inc_dfb,
+    DownLeftWrapIncDFB& down_left_wrap_inc_dfb,
+    UpLeftWrapIncDFB& up_left_wrap_inc_dfb,
+    [[maybe_unused]] IntraKernelIncDfb& intra_kernel_right_inc_dfb,
+    [[maybe_unused]] IntraKernelIncDfb& intra_kernel_down_left_wrap_inc_dfb) {
     // since kernels can start in padded regions we need to have "indexes" in these regions
     // we choose a paradigm where we padding indexes must satisfy the following conditions:
     //   1. they are 1 less than the index to the right (whether it's padding or not)
@@ -125,7 +134,6 @@ ALWI void initialize_return_indices_data() {
     constexpr uint32_t row_stride = dilation_h * in_w - eff_kernel_w - (dilation_w - 1);
 
     // initialize the index CB
-    DataflowBuffer idx_dfb(in_idx_cb_id);
     idx_dfb.reserve_back(1);
     fill_indexes<
         typename IndexType<indexes_32_bit>::type,
@@ -135,8 +143,7 @@ ALWI void initialize_return_indices_data() {
         column_stride,
         row_stride,
         is_large_kernel,
-        sticks_per_chunk,
-        in_idx_cb_id>(init_index);
+        sticks_per_chunk>(idx_dfb, init_index);
     idx_dfb.push_back(1);
 
     // initialize the increment CBs
@@ -153,28 +160,23 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        DataflowBuffer right_inc_dfb(right_inc_cb_id);
         right_inc_dfb.reserve_back(1);
         fill_inc_32(right_inc_dfb, right_inc);
         right_inc_dfb.push_back(1);
 
-        DataflowBuffer down_left_wrap_inc_dfb(down_left_wrap_inc_cb_id);
         down_left_wrap_inc_dfb.reserve_back(1);
         fill_inc_32(down_left_wrap_inc_dfb, down_left_wrap_inc);
         down_left_wrap_inc_dfb.push_back(1);
 
-        DataflowBuffer up_left_wrap_inc_dfb(up_left_wrap_inc_cb_id);
         up_left_wrap_inc_dfb.reserve_back(1);
         fill_inc_32(up_left_wrap_inc_dfb, up_left_wrap_inc);
         up_left_wrap_inc_dfb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            DataflowBuffer intra_kernel_right_inc_dfb(intra_kernel_right_inc_cb_id);
             intra_kernel_right_inc_dfb.reserve_back(1);
             fill_inc_32(intra_kernel_right_inc_dfb, intra_kernel_right_inc);
             intra_kernel_right_inc_dfb.push_back(1);
 
-            DataflowBuffer intra_kernel_down_left_wrap_inc_dfb(intra_kernel_down_left_wrap_inc_cb_id);
             intra_kernel_down_left_wrap_inc_dfb.reserve_back(1);
             fill_inc_32(intra_kernel_down_left_wrap_inc_dfb, intra_kernel_down_left_wrap_inc);
             intra_kernel_down_left_wrap_inc_dfb.push_back(1);
@@ -191,28 +193,23 @@ ALWI void initialize_return_indices_data() {
             }
         };
 
-        DataflowBuffer right_inc_dfb(right_inc_cb_id);
         right_inc_dfb.reserve_back(1);
         fill_inc(right_inc_dfb, right_inc);
         right_inc_dfb.push_back(1);
 
-        DataflowBuffer down_left_wrap_inc_dfb(down_left_wrap_inc_cb_id);
         down_left_wrap_inc_dfb.reserve_back(1);
         fill_inc(down_left_wrap_inc_dfb, down_left_wrap_inc);
         down_left_wrap_inc_dfb.push_back(1);
 
-        DataflowBuffer up_left_wrap_inc_dfb(up_left_wrap_inc_cb_id);
         up_left_wrap_inc_dfb.reserve_back(1);
         fill_inc(up_left_wrap_inc_dfb, up_left_wrap_inc);
         up_left_wrap_inc_dfb.push_back(1);
 
         if constexpr (is_large_kernel) {
-            DataflowBuffer intra_kernel_right_inc_dfb(intra_kernel_right_inc_cb_id);
             intra_kernel_right_inc_dfb.reserve_back(1);
             fill_inc(intra_kernel_right_inc_dfb, intra_kernel_right_inc);
             intra_kernel_right_inc_dfb.push_back(1);
 
-            DataflowBuffer intra_kernel_down_left_wrap_inc_dfb(intra_kernel_down_left_wrap_inc_cb_id);
             intra_kernel_down_left_wrap_inc_dfb.reserve_back(1);
             fill_inc(intra_kernel_down_left_wrap_inc_dfb, intra_kernel_down_left_wrap_inc);
             intra_kernel_down_left_wrap_inc_dfb.push_back(1);
@@ -247,8 +244,20 @@ template <
     uint32_t reader_id,
     uint32_t pack_tmp_cb_id,
     uint32_t pack_idx_tmp_cb_id,
-    uint32_t indexes_32_bit>
-ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
+    uint32_t indexes_32_bit,
+    typename InDFB,
+    typename OutDFB,
+    typename OutIdxDFB,
+    typename PackTmpDFB,
+    typename PackIdxTmpDFB>
+ALWI void read_kernel_with_top_left_index(
+    InDFB& in_dfb,
+    OutDFB& out_dfb,
+    OutIdxDFB& out_idx_dfb,
+    PackTmpDFB& pack_tmp_dfb,
+    PackIdxTmpDFB& pack_idx_tmp_dfb,
+    uint32_t ind,
+    uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // MPWI requires 1 tile at a time for max reduction with indices
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 1;
@@ -257,11 +266,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     static_assert(MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for MPWI");
     constexpr uint32_t max_write_inc = TILE_WIDTH * BYTES_PER_ELEM;
 
-    DataflowBuffer in_dfb(in_cb_id);
-    DataflowBuffer out_dfb(out_cb_id);
-    DataflowBuffer out_idx_dfb(out_idx_cb_id);
-    DataflowBuffer pack_tmp_dfb(pack_tmp_cb_id);
-    DataflowBuffer pack_idx_tmp_dfb(pack_idx_tmp_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -435,12 +439,27 @@ void kernel_main() {
     constexpr bool wide_reduction = in_nblocks_c > 1;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
+    DataflowBuffer in_dfb(in_cb_id);
+    DataflowBuffer clear_value_dfb(clear_value_cb_id);
+    DataflowBuffer in_idx_dfb(in_idx_cb_id);
+    DataflowBuffer right_inc_dfb(right_inc_cb_id);
+    DataflowBuffer down_left_wrap_inc_dfb(down_left_wrap_inc_cb_id);
+    DataflowBuffer up_left_wrap_inc_dfb(up_left_wrap_inc_cb_id);
+    // The intra-kernel increment buffers exist only for large kernels.
+    using IntraKernelIncDfb = std::conditional_t<is_large_kernel, DataflowBuffer, UnallocatedDataflowBuffer>;
+    IntraKernelIncDfb intra_kernel_right_inc_dfb(intra_kernel_right_inc_cb_id);
+    IntraKernelIncDfb intra_kernel_down_left_wrap_inc_dfb(intra_kernel_down_left_wrap_inc_cb_id);
+    DataflowBuffer in_scalar_dfb(in_scalar_cb_id_0);
+    DataflowBuffer out_dfb(out_cb_id);
+    DataflowBuffer out_idx_dfb(out_idx_cb_id);
+    DataflowBuffer pack_tmp_dfb(pack_tmp_cb_id);
+    DataflowBuffer pack_idx_tmp_dfb(pack_idx_tmp_cb_id);
+
     // fill the clear cb
     if constexpr (reader_id == 0) {
-        DataflowBuffer clear_value_dfb(clear_value_cb_id);
         fill_with_val(clear_value_dfb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
         clear_value_dfb.push_back(1);
-        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), DataflowBuffer(in_cb_id), clear_value_dfb);
+        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), in_dfb, clear_value_dfb);
     }
 
     if constexpr (reader_id == 0) {
@@ -460,13 +479,13 @@ void kernel_main() {
             up_left_wrap_inc,
             intra_kernel_right_inc,
             intra_kernel_down_left_wrap_inc,
-            in_idx_cb_id,
-            right_inc_cb_id,
-            down_left_wrap_inc_cb_id,
-            up_left_wrap_inc_cb_id,
-            intra_kernel_right_inc_cb_id,
-            intra_kernel_down_left_wrap_inc_cb_id,
-            indexes_32_bit>();
+            indexes_32_bit>(
+            in_idx_dfb,
+            right_inc_dfb,
+            down_left_wrap_inc_dfb,
+            up_left_wrap_inc_dfb,
+            intra_kernel_right_inc_dfb,
+            intra_kernel_down_left_wrap_inc_dfb);
     }
 
     // initialize the scalar CB
@@ -474,7 +493,6 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        DataflowBuffer in_scalar_dfb(in_scalar_cb_id_0);
         fill_with_val(in_scalar_dfb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
         in_scalar_dfb.push_back(1);
     }
@@ -536,7 +554,8 @@ void kernel_main() {
                 reader_id,
                 pack_tmp_cb_id,
                 pack_idx_tmp_cb_id,
-                indexes_32_bit>(ind, in_l1_read_base_addr);
+                indexes_32_bit>(
+                in_dfb, out_dfb, out_idx_dfb, pack_tmp_dfb, pack_idx_tmp_dfb, ind, in_l1_read_base_addr);
         }
     }
 

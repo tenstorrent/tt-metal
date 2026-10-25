@@ -247,6 +247,19 @@ void kernel_main() {
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
+    DataflowBuffer dfb_ex_external(dfb_ex_external_id);
+#ifdef TILIZE_IN
+#ifdef READER_REPACK
+    DataflowBuffer dfb_in_rm(dfb_repack_id);
+#else
+    DataflowBuffer dfb_in_rm(dfb_in0_id);
+#endif
+#endif
+#ifdef UNTILIZE_OUT
+    static_assert(dfb_untilize_in_id == dfb_in_id || dfb_untilize_in_id == dfb_out_id);
+    auto& dfb_untilize_in = dfb_untilize_in_id == dfb_in_id ? dfb_in : dfb_out;
+    DataflowBuffer dfb_untilize_out(dfb_untilize_out_id);
+#endif
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -260,7 +273,8 @@ void kernel_main() {
         dfb_in_id,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+        dfb_in_rm, dfb_in, per_core_M);
 #else
     constexpr uint32_t dfb_in_rm_id = dfb_in0_id;
     compute_kernel_lib::tilize<
@@ -269,7 +283,8 @@ void kernel_main() {
         dfb_in_id,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+        dfb_in_rm, dfb_in, per_core_M);
 #endif
     dfb_in.wait_front(per_core_MN);
 #else
@@ -416,7 +431,7 @@ void kernel_main() {
             // dfb_ex_partial later in this kernel (variance).
             compute_kernel_lib::
                 reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+                    dfb_ex2pe, dfb_scaler, dfb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
@@ -427,6 +442,9 @@ void kernel_main() {
                     dfb_ex_global_id,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    dfb_ex_external,
+                    dfb_scaler_global,
+                    dfb_ex_global,
                     compute_kernel_lib::ReduceInputBlockShape::single());
                 dfb_ex.reserve_back(1);
                 dfb_ex.push_back(1);
@@ -548,7 +566,7 @@ void kernel_main() {
             // to exact zero (documented packer behavior for REDUCE_SCALAR).
             compute_kernel_lib::
                 reduce<PoolType::SUM, ReduceDim::REDUCE_SCALAR, dfb_ex2pe_id, dfb_scaler_id, dfb_ex_partial_id>(
-                    compute_kernel_lib::ReduceInputBlockShape::single());
+                    dfb_ex2pe, dfb_scaler, dfb_ex_partial, compute_kernel_lib::ReduceInputBlockShape::single());
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 compute_kernel_lib::reduce<
@@ -559,6 +577,9 @@ void kernel_main() {
                     dfb_ex_global_id,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    dfb_ex_external,
+                    dfb_scaler_global,
+                    dfb_ex_global,
                     compute_kernel_lib::ReduceInputBlockShape::single());
                 dfb_ex.reserve_back(1);
                 dfb_ex.push_back(1);
@@ -888,6 +909,7 @@ void kernel_main() {
         dfb_untilize_out_id,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+        dfb_untilize_in, dfb_untilize_out, per_core_M);
 #endif
 }

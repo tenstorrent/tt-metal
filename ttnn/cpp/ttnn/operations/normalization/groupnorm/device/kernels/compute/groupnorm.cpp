@@ -26,12 +26,18 @@
 
 namespace ckl = compute_kernel_lib;
 
-template <uint32_t input_id, uint32_t scaler_id, uint32_t output_id>
-ALWI void reduce_partial_statistics(uint32_t rows, uint32_t cols) {
+template <
+    uint32_t input_id,
+    uint32_t scaler_id,
+    uint32_t output_id,
+    typename InputDFB,
+    typename ScalerDFB,
+    typename OutputDFB>
+ALWI void reduce_partial_statistics(
+    InputDFB& input, ScalerDFB& scaler, OutputDFB& output, uint32_t rows, uint32_t cols) {
     if (rows == 0) {
         // The reader gathers one partial per scheduled block, even for an empty tail.
         // Publish the sum identity without asking the reduction helper to read zero rows.
-        DataflowBuffer output(output_id);
         output.reserve_back(1);
         fill_tile_init();
         tile_regs_acquire();
@@ -49,7 +55,7 @@ ALWI void reduce_partial_statistics(uint32_t rows, uint32_t cols) {
             scaler_id,
             output_id,
             ckl::ReduceInputPolicy::NoWaitNoPop,
-            ckl::ReduceDataFormatReconfigMode::NONE>(ckl::ReduceInputBlockShape::of(rows, cols));
+            ckl::ReduceDataFormatReconfigMode::NONE>(input, scaler, output, ckl::ReduceInputBlockShape::of(rows, cols));
     }
 }
 
@@ -264,6 +270,8 @@ void kernel_main() {
     DataflowBuffer dfb_ex2pe(dfb_ex2pe_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);
+    DataflowBuffer dfb_ex_external(dfb_ex_external_id);
     DataflowBuffer dfb_gamma(dfb_gamma_id);
 #ifdef TILIZE_IN
     DataflowBuffer dfb_in_resident(dfb_in_resident_id);
@@ -279,12 +287,26 @@ void kernel_main() {
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
     DataflowBuffer dfb_xmm(dfb_xmm_id);
+#ifdef READER_REPACK
+    DataflowBuffer dfb_repack(dfb_repack_id);
+#endif
+#ifdef UNTILIZE_OUT
+    DataflowBuffer dfb_reread_rm(dfb_reread_rm_id);
+    auto& dfb_untilize_in = (do_gamma or do_beta) ? dfb_outbeta : dfb_reread_write_out;
+#ifdef READER_REPACK
+    DataflowBuffer dfb_untilize_out(dfb_repack_out_id);
+#else
+    DataflowBuffer dfb_untilize_out(dfb_out_id);
+#endif
+#endif
 
 #ifdef TILIZE_IN
 #ifdef READER_REPACK
     constexpr std::uint32_t dfb_in_rm_id = dfb_repack_id;
+    auto& dfb_in_rm = dfb_repack;
 #else
     constexpr std::uint32_t dfb_in_rm_id = dfb_in0_id;
+    auto& dfb_in_rm = dfb_in0;
 #endif
     // Tilize the whole group once and reuse it for all three passes.
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in_resident_id);
@@ -412,7 +434,7 @@ void kernel_main() {
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                    out_block_h_normal);
+                    dfb_in_rm, dfb_in_resident, out_block_h_normal);
                 dfb_in_resident.wait_front((out_block_index + 1) * out_block_hw_normal);
                 std::uint32_t out_block_base = out_block_index * out_block_hw_normal;
 #else
@@ -478,7 +500,8 @@ void kernel_main() {
 
                 // Partial/E[x]
                 dfb_x.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                reduce_partial_statistics<dfb_x_id, dfb_scaler_id, dfb_ex_partial_id>(out_block_h_actual, block_w);
+                reduce_partial_statistics<dfb_x_id, dfb_scaler_id, dfb_ex_partial_id>(
+                    dfb_x, dfb_scaler, dfb_ex_partial, out_block_h_actual, block_w);
                 dfb_x.pop_front(static_cast<uint16_t>(out_block_hw_normal));
             }
             // End Local Redcue
@@ -492,6 +515,9 @@ void kernel_main() {
                     dfb_ex_global_id,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    dfb_ex_external,
+                    dfb_scaler_global,
+                    dfb_ex_global,
                     compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
                 if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex.reserve_back(1);
@@ -640,7 +666,8 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 dfb_xmm.wait_front(static_cast<uint16_t>(out_block_hw_normal));
-                reduce_partial_statistics<dfb_xmm_id, dfb_scaler_id, dfb_ex2_partial_id>(out_block_h_actual, block_w);
+                reduce_partial_statistics<dfb_xmm_id, dfb_scaler_id, dfb_ex2_partial_id>(
+                    dfb_xmm, dfb_scaler, dfb_ex2_partial, out_block_h_actual, block_w);
                 dfb_xmm.pop_front(static_cast<uint16_t>(out_block_hw_normal));
             }
             // End Local Reduce
@@ -654,6 +681,9 @@ void kernel_main() {
                     dfb_ex2_global_id,
                     compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
                     compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+                    dfb_ex_external,
+                    dfb_scaler_global,
+                    dfb_ex2_global,
                     compute_kernel_lib::ReduceInputBlockShape::col(dfb_ex_external_tiles_required));
                 if constexpr (num_cores_per_mcast_group > 1) {
                     dfb_ex2.reserve_back(1);
@@ -855,7 +885,7 @@ void kernel_main() {
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                    out_block_h_normal);
+                    dfb_reread_rm, dfb_reread_out, out_block_h_normal);
 #endif
 
                 dfb_reread_out.wait_front(static_cast<uint16_t>(out_block_hw_normal));
@@ -988,7 +1018,7 @@ void kernel_main() {
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                     compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
-                    out_block_h_normal);
+                    dfb_untilize_in, dfb_untilize_out, out_block_h_normal);
 #endif
             }
             // End Final Val Calc

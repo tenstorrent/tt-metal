@@ -53,7 +53,7 @@ public:
 };
 
 template <typename T, typename DFB>
-FORCE_INLINE void process_data(DFB cb, uint32_t value, int32_t num_of_elems) {
+FORCE_INLINE void process_data(DFB& cb, uint32_t value, int32_t num_of_elems) {
     T* ptr = reinterpret_cast<T*>(cb.get_write_ptr());
     for (int j = 0; j < num_of_elems; j++) {
         if constexpr (std::is_same_v<T, uint16_t>) {
@@ -65,7 +65,7 @@ FORCE_INLINE void process_data(DFB cb, uint32_t value, int32_t num_of_elems) {
 }
 
 template <typename T = uint16_t, typename DFB>
-FORCE_INLINE void generate_bcast_scaler(DFB cb_scaler, uint32_t scaler) {
+FORCE_INLINE void generate_bcast_scaler(DFB& cb_scaler, uint32_t scaler) {
     union {
         float f;
         uint32_t u;
@@ -92,7 +92,7 @@ FORCE_INLINE void generate_bcast_scaler(DFB cb_scaler, uint32_t scaler) {
 }
 
 template <typename DFB>
-FORCE_INLINE void fill_cb_with_value(DFB cb, uint32_t value, int32_t num_of_elems = 1024) {
+FORCE_INLINE void fill_cb_with_value(DFB& cb, uint32_t value, int32_t num_of_elems = 1024) {
     cb.reserve_back(1);
     const DataFormat data_format = cb.get_dataformat();
     switch ((uint)data_format & 0x1F) {
@@ -181,7 +181,7 @@ FORCE_INLINE void fill_subtile_mask_w(
 }
 
 template <typename T = uint16_t, typename DFB>
-FORCE_INLINE void generate_mask_h(DFB cb_mask, uint32_t mask_h) {
+FORCE_INLINE void generate_mask_h(DFB& cb_mask, uint32_t mask_h) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -221,7 +221,7 @@ FORCE_INLINE void generate_mask_h(DFB cb_mask, uint32_t mask_h) {
 }
 
 template <typename T = uint16_t, typename DFB>
-FORCE_INLINE void generate_mask_w(DFB cb_mask, uint32_t mask_w) {
+FORCE_INLINE void generate_mask_w(DFB& cb_mask, uint32_t mask_w) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -262,7 +262,7 @@ FORCE_INLINE void generate_mask_w(DFB cb_mask, uint32_t mask_w) {
 
 template <typename DFB>
 FORCE_INLINE void generate_mask_h_w(
-    DFB cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
+    DFB& cb_mask_h_w, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
     Scalar one = {};
     Scalar zero = {};
 
@@ -396,7 +396,7 @@ FORCE_INLINE void generate_mask_h_w(
 }
 
 template <typename DFB>
-FORCE_INLINE void generate_mask_h_w_if_needed(DFB cb_mask_h_w, uint32_t origin_h, uint32_t origin_w) {
+FORCE_INLINE void generate_mask_h_w_if_needed(DFB& cb_mask_h_w, uint32_t origin_h, uint32_t origin_w) {
     constexpr uint32_t TILE_H = 32;
     constexpr uint32_t TILE_W = 32;
 
@@ -474,7 +474,7 @@ FORCE_INLINE void mask_tile_if_need(uint32_t l1_addr, uint32_t origin_h, uint32_
 }
 
 template <typename DFB>
-FORCE_INLINE void generate_mask_tiles(DFB cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
+FORCE_INLINE void generate_mask_tiles(DFB& cb_mask, uint32_t mask_h, uint32_t mask_w, uint32_t single_tile_size = 2048) {
     constexpr uint32_t num_mask_tiles = 3;
     Scalar one = {};
     Scalar zero = {};
@@ -667,7 +667,7 @@ void get_noc_offset(uint32_t h, uint32_t w, uint32_t element_size, uint32_t& noc
 // It reads values from one tile.
 template <typename AddrGen, typename DFB>
 void read_tile(
-    DFB cb,
+    DFB& cb,
     AddrGen addrgen,
     uint32_t noc_id,
     uint32_t size = 0,
@@ -696,7 +696,7 @@ void read_tile(
 
 template <typename AddrGen, typename DFB>
 void read_value(
-    DFB cb,
+    DFB& cb,
     AddrGen addrgen,
     uint32_t noc_id,
     uint32_t tilized_idx = 0,
@@ -740,8 +740,8 @@ void read_value(
 // clang-format on
 template <typename AddrGen, typename DFB, typename DFBScratch>
 void read_line(
-    DFB cb,
-    DFBScratch cb_scratch,
+    DFB& cb,
+    DFBScratch& cb_scratch,
     AddrGen addrgen,
     uint32_t num_tiles,
     bool do_reserve = true,

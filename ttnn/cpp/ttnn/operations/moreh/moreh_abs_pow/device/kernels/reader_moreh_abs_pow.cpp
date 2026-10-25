@@ -30,8 +30,8 @@ void kernel_main() {
     const bool do_mask_w = (origin_w % TILE_W) != 0;
     const auto mask_w = do_mask_w ? (origin_w % TILE_W) : TILE_W;
 
+    DataflowBuffer dfb_mask_w(dfb::mask_w);
     if (do_mask_w) {
-        DataflowBuffer dfb_mask_w(dfb::mask_w);
         generate_mask_w(dfb_mask_w, mask_w);
     }
 

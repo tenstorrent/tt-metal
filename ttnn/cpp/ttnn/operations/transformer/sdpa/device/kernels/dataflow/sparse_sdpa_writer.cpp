@@ -81,11 +81,12 @@ void kernel_main() {
 
     // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
     // Reduce identity scaler (value 1.0; the softmax scale is applied in compute's exp).
+    DataflowBuffer scale_dfb(cb_scale);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_scale,
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
-        /*reduce_factor=*/1>();
+        /*reduce_factor=*/1>(scale_dfb);
 
     // Col-identity (column 0 = 1.0): compute matmul-reduces the partial row-sum against it to finalize the
     // within-tile reduction in normalize_row_streaming.

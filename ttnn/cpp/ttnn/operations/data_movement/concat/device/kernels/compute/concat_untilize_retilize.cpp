@@ -22,10 +22,12 @@ void kernel_main() {
 
     const uint32_t num_bands = get_arg_val<uint32_t>(0);
 
+    DataflowBuffer in(cb_in), rm(cb_rm), asm_buf(cb_asm), out(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_rm);
 
     for (uint32_t b = 0; b < num_bands; ++b) {
-        compute_kernel_lib::untilize<1, cb_in, cb_rm>(total_in_wt);
+        compute_kernel_lib::untilize<1, cb_in, cb_rm>(in, rm, total_in_wt);
         compute_kernel_lib::tilize<
             out_wt,
             cb_asm,
@@ -34,6 +36,6 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
             fp32_lossless ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
-                          : compute_kernel_lib::tilize_config::Fp32Mode::Fast>(1);
+                          : compute_kernel_lib::tilize_config::Fp32Mode::Fast>(asm_buf, out, 1);
     }
 }

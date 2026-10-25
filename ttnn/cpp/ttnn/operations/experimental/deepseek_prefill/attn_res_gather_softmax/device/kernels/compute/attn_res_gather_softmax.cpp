@@ -90,8 +90,9 @@ constexpr uint32_t dst_acc = 0;
 // The reduce drains `cb_tmp`, so the same buffer carries both transforms of the
 // row: fill it, reduce it, fill it again. `init` re-establishes the unpack and
 // pack configuration the previous reduce left changed.
-template <typename DFB, typename Init, typename TransformOne>
-ALWI void reduce_transformed_row(DFB& tmp_buf, Init init, TransformOne transform_one) {
+template <typename TmpDFB, typename ScalerDFB, typename StatsDFB, typename Init, typename TransformOne>
+ALWI void reduce_transformed_row(
+    TmpDFB& tmp_buf, ScalerDFB& scaler_buf, StatsDFB& local_stats_buf, Init init, TransformOne transform_one) {
     init();
     tmp_buf.reserve_back(Wt);
     for (uint32_t wt = 0; wt < Wt; ++wt) {
@@ -111,7 +112,8 @@ ALWI void reduce_transformed_row(DFB& tmp_buf, Init init, TransformOne transform
         cb_tmp,
         cb_scaler,
         cb_local_stats,
-        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+        tmp_buf, scaler_buf, local_stats_buf, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 }
 
 // Settle a deferred residual write into the row the statistics are about to be taken
@@ -257,6 +259,7 @@ void kernel_main() {
     DataflowBuffer q_buf(cb_q);
     DataflowBuffer tmp_buf(cb_tmp);
     DataflowBuffer scaler_buf(cb_scaler);
+    DataflowBuffer local_stats_buf(cb_local_stats);
 
     compute_kernel_hw_startup(cb_prefix, cb_q, cb_tmp);
 
@@ -277,6 +280,8 @@ void kernel_main() {
 
             reduce_transformed_row(
                 tmp_buf,
+                scaler_buf,
+                local_stats_buf,
                 [] {
                     reconfig_data_format(cb_stream, cb_stream);
                     pack_reconfig_data_format(cb_tmp);
@@ -286,6 +291,8 @@ void kernel_main() {
 
             reduce_transformed_row(
                 tmp_buf,
+                scaler_buf,
+                local_stats_buf,
                 [] {
                     reconfig_data_format(cb_stream, cb_q);
                     pack_reconfig_data_format(cb_tmp);

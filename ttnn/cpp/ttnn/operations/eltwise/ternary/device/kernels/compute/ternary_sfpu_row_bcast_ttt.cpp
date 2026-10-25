@@ -34,21 +34,21 @@ void kernel_main() {
 #if BCAST_A
     DataflowBuffer dfb_pre_a(tt::CBIndex::c_0);
     DataflowBuffer dfb_bcast_a(tt::CBIndex::c_4);
-    DataflowBuffer dfb_eff_a = dfb_bcast_a;
+    auto& dfb_eff_a = dfb_bcast_a;
 #else
     DataflowBuffer dfb_eff_a(tt::CBIndex::c_0);
 #endif
 #if BCAST_B
     DataflowBuffer dfb_pre_b(tt::CBIndex::c_1);
     DataflowBuffer dfb_bcast_b(tt::CBIndex::c_5);
-    DataflowBuffer dfb_eff_b = dfb_bcast_b;
+    auto& dfb_eff_b = dfb_bcast_b;
 #else
     DataflowBuffer dfb_eff_b(tt::CBIndex::c_1);
 #endif
 #if BCAST_C
     DataflowBuffer dfb_pre_c(tt::CBIndex::c_2);
     DataflowBuffer dfb_bcast_c(tt::CBIndex::c_6);
-    DataflowBuffer dfb_eff_c = dfb_bcast_c;
+    auto& dfb_eff_c = dfb_bcast_c;
 #else
     DataflowBuffer dfb_eff_c(tt::CBIndex::c_2);
 #endif

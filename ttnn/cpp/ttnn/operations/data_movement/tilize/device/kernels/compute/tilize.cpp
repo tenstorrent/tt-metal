@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(2);
     constexpr uint32_t per_core_block_tile_cnt = get_compile_time_arg_val(3);
     compute_kernel_hw_startup(cb_id_in0, cb_id_out0);
+    DataflowBuffer in(cb_id_in0), out(cb_id_out0);
 
     constexpr auto fp32_mode = compute_kernel_lib::is_fp32_input_format<cb_id_in0>()
                                    ? compute_kernel_lib::tilize_config::Fp32Mode::Lossless
@@ -25,5 +26,5 @@ void kernel_main() {
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-        fp32_mode>(per_core_block_cnt);
+        fp32_mode>(in, out, per_core_block_cnt);
 }

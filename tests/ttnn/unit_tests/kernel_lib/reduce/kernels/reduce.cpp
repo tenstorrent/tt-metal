@@ -35,23 +35,15 @@ struct PostReduceMultiply {
 using PostReduceMultiply = compute_kernel_lib::NoOp;
 #endif
 
-template <bool enable_accumulation>
-ALWI auto make_accumulation(uint32_t iteration) {
-    if constexpr (enable_accumulation) {
-        return compute_kernel_lib::Accumulate::at(cb_accumulator, iteration);
-    } else {
-        return compute_kernel_lib::NoAccumulation{};
-    }
-}
-
-template <uint32_t output_cb>
+template <uint32_t output_cb, typename Accumulation, typename InputDFB, typename ScalerDFB, typename OutputDFB>
 ALWI void run_reduce_call(
+    InputDFB& input,
+    ScalerDFB& scaler,
+    OutputDFB& output,
     compute_kernel_lib::ReduceInputBlockShape shape,
     compute_kernel_lib::ReduceInputMemoryLayout layout,
     uint32_t input_tiles,
-    uint32_t iteration) {
-    const auto accumulation = make_accumulation<(num_calls > 1)>(iteration);
-
+    const Accumulation& accumulation) {
     compute_kernel_lib::reduce<
         REDUCE_OP,
         REDUCE_DIM,
@@ -60,7 +52,7 @@ ALWI void run_reduce_call(
         output_cb,
         REDUCE_INPUT_POLICY,
         REDUCE_RECONFIG_MODE,
-        REDUCE_FP32_MODE>(shape, layout, accumulation, PostReduceMultiply{});
+        REDUCE_FP32_MODE>(input, scaler, output, shape, layout, accumulation, PostReduceMultiply{});
 
     constexpr bool helper_pops_input =
         REDUCE_INPUT_POLICY == compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile ||
@@ -87,16 +79,38 @@ void kernel_main() {
 
     constexpr uint32_t first_output_cb = num_calls == 1 ? cb_output : cb_accumulator;
     compute_kernel_hw_startup(cb_input, cb_scaler, first_output_cb);
+    DataflowBuffer input(cb_input), scaler(cb_scaler), output(cb_output);
 
     // One sharded tensor backs a linear sequence of per-call blocks. Make the
     // complete stream visible once; ownership then follows the selected policy.
     cb_reserve_back(cb_input, input_tiles * num_calls);
     cb_push_back(cb_input, input_tiles * num_calls);
 
-    for (uint32_t call = 0; call < num_calls - 1; ++call) {
-        run_reduce_call<cb_accumulator>(shape, layout, input_tiles, call);
+    if constexpr (num_calls == 1) {
+        run_reduce_call<cb_output>(
+            input, scaler, output, shape, layout, input_tiles, compute_kernel_lib::NoAccumulation{});
+    } else {
+        // The accumulator CB is only allocated when there is more than one call.
+        DataflowBuffer accumulator(cb_accumulator);
+        for (uint32_t call = 0; call < num_calls - 1; ++call) {
+            run_reduce_call<cb_accumulator>(
+                input,
+                scaler,
+                accumulator,
+                shape,
+                layout,
+                input_tiles,
+                compute_kernel_lib::Accumulate(accumulator, call));
+        }
+        run_reduce_call<cb_output>(
+            input,
+            scaler,
+            output,
+            shape,
+            layout,
+            input_tiles,
+            compute_kernel_lib::Accumulate(accumulator, num_calls - 1));
     }
-    run_reduce_call<cb_output>(shape, layout, input_tiles, num_calls - 1);
 
     // reduce() deliberately keeps the scaler resident for reuse by every call.
     cb_pop_front(cb_scaler, 1);

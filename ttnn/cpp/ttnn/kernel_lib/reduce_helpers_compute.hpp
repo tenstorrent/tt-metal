@@ -9,7 +9,6 @@
 #include "api/compute/reduce.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 /**
  * @file reduce_helpers_compute.hpp
  * @brief Single unified reduce function with automatic dispatch
@@ -161,18 +160,20 @@ struct ReduceInputBlockShape {
  * Holds the static configuration for accumulation (accumulator DFB and DST index).
  * Does not hold iteration state - that's provided via Accumulate wrapper.
  *
- * Pass the kernel's own accumulator DataflowBuffer: on Quasar a DataflowBuffer drains when it goes
- * out of scope, so reduce() must not construct its own. The buffer must outlive every reduce() call
- * that uses this config. A config built from a DFB id alone leaves accumulator unset; only the id-only
- * reduce() accepts it, and that form builds the accumulator DataflowBuffer itself.
+ * The accumulator is the kernel's own DataflowBuffer, bound by reference: on Quasar a
+ * DataflowBuffer drains when it goes out of scope, so reduce() must not construct its own.
+ * The referenced buffer must outlive every reduce() call that uses this config.
+ *
+ * @tparam DFB The accumulator's DataflowBuffer type (an access-pattern specialization on Quasar).
  */
+template <typename DFB>
 struct AccumulationConfig {
-    // CB holding the running output-tile stream across reduce() iterations; see Accumulate below.
-    uint32_t cb_accumulator = 0;
-    uint32_t dst_index = 0;  // DST register for accumulation (default: 0)
-    DataflowBufferAnyPattern* accumulator = nullptr;  // the kernel's accumulator buffer
+    // DFB holding the running output-tile stream across reduce() iterations; see Accumulate below.
+    DFB* accumulator = nullptr;
+    uint32_t cb_accumulator = 0;  // accumulator->get_id(), kept for the LLK calls
+    uint32_t dst_index = 0;       // DST register for accumulation (default: 0)
 
-    static constexpr AccumulationConfig with_cb(uint32_t cb, uint32_t dst = 0) { return {cb, dst}; }
+    static AccumulationConfig with_cb(DFB& dfb, uint32_t dst = 0) { return {&dfb, dfb.get_id(), dst}; }
 };
 
 /**
@@ -193,25 +194,23 @@ struct AccumulationConfig {
  *   copy_init asserts against on Quasar.
  *
  * Usage:
- *   DataflowBuffer accum(cb_accum);  // once, at kernel scope
- *   reduce<SUM, REDUCE_ROW>(..., Accumulate(accum, iteration));
+ *   DataflowBuffer accum(dfb::accum);  // once, at kernel scope
+ *   const auto cfg = AccumulationConfig<decltype(accum)>::with_cb(accum);
+ *   for (uint32_t i = 0; i < num_blocks; ++i) {
+ *       reduce<SUM, REDUCE_ROW>(..., Accumulate(cfg, i));
+ *   }
  *
- * Or, with the id-only reduce() only:
- *   reduce<SUM, REDUCE_ROW>(..., Accumulate::at(cb_accum, iteration));
+ * Or directly from the buffer (the DFB type is deduced):
+ *   reduce<SUM, REDUCE_ROW>(..., Accumulate(accum, iteration));
  */
+template <typename DFB>
 struct Accumulate {
-    AccumulationConfig config;
+    AccumulationConfig<DFB> config;
     uint32_t iteration = 0;
 
-    explicit constexpr Accumulate(AccumulationConfig cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
-    explicit constexpr Accumulate(uint32_t cb, uint32_t iter = 0) : config{cb, 0}, iteration(iter) {}
-    explicit Accumulate(DataflowBufferAnyPattern& dfb, uint32_t iter = 0, uint32_t dst = 0) :
-        config{dfb.get_id(), dst, &dfb}, iteration(iter) {}
-
-    // Factory for concise call sites
-    KERNEL_LIB_ID_ONLY_HELPER static constexpr Accumulate at(uint32_t cb, uint32_t iter, uint32_t dst = 0) {
-        return Accumulate(AccumulationConfig{cb, dst}, iter);
-    }
+    explicit constexpr Accumulate(AccumulationConfig<DFB> cfg, uint32_t iter = 0) : config(cfg), iteration(iter) {}
+    explicit Accumulate(DFB& dfb, uint32_t iter = 0, uint32_t dst = 0) :
+        config(AccumulationConfig<DFB>::with_cb(dfb, dst)), iteration(iter) {}
 
     // Convenience: check if this is first iteration (skip reload)
     constexpr bool is_first() const { return iteration == 0; }
@@ -232,8 +231,8 @@ struct NoAccumulation {};
 template <typename T>
 struct is_accumulate : std::false_type {};
 
-template <>
-struct is_accumulate<Accumulate> : std::true_type {};
+template <typename DFB>
+struct is_accumulate<Accumulate<DFB>> : std::true_type {};
 
 template <typename T>
 inline constexpr bool is_accumulate_v = is_accumulate<T>::value;
@@ -247,8 +246,8 @@ struct is_accumulation_type : std::false_type {};
 template <>
 struct is_accumulation_type<NoAccumulation> : std::true_type {};
 
-template <>
-struct is_accumulation_type<Accumulate> : std::true_type {};
+template <typename DFB>
+struct is_accumulation_type<Accumulate<DFB>> : std::true_type {};
 
 template <typename T>
 inline constexpr bool is_accumulation_type_v = is_accumulation_type<T>::value;
@@ -423,59 +422,6 @@ ALWI void reduce(
     ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
     AccumulateT accumulate = AccumulateT{},
     PostReduceOp post_reduce_op = PostReduceOp{});
-
-// The id-only form: builds the DataflowBuffers from the ids and runs the form above. See id_only_helpers.hpp.
-template <
-    PoolType reduce_type,
-    ReduceDim reduce_dim,
-    uint32_t input_dfb_id,
-    uint32_t scaler_dfb_id,
-    uint32_t output_dfb_id,
-    ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
-    ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
-    ReduceFp32Mode fp32_mode = ReduceFp32Mode::Fast,
-    typename AccumulateT = NoAccumulation,
-    typename PostReduceOp = NoOp>
-KERNEL_LIB_ID_ONLY_HELPER ALWI void reduce(
-    ReduceInputBlockShape input_block_shape,
-    ReduceInputMemoryLayout input_memory_layout = ReduceInputMemoryLayout::contiguous(),
-    AccumulateT accumulate = AccumulateT{},
-    PostReduceOp post_reduce_op = PostReduceOp{}) {
-    DataflowBuffer input_dfb(input_dfb_id);
-    DataflowBuffer scaler_dfb(scaler_dfb_id);
-    DataflowBuffer output_dfb(output_dfb_id);
-    if constexpr (is_accumulate_v<AccumulateT>) {
-        if (accumulate.config.accumulator == nullptr) {
-            DataflowBuffer accum_dfb(accumulate.config.cb_accumulator);
-            accumulate.config.accumulator = &accum_dfb;
-            reduce<
-                reduce_type,
-                reduce_dim,
-                input_dfb_id,
-                scaler_dfb_id,
-                output_dfb_id,
-                input_policy,
-                reconfig_mode,
-                fp32_mode,
-                AccumulateT,
-                PostReduceOp>(
-                input_dfb, scaler_dfb, output_dfb, input_block_shape, input_memory_layout, accumulate, post_reduce_op);
-            return;
-        }
-    }
-    reduce<
-        reduce_type,
-        reduce_dim,
-        input_dfb_id,
-        scaler_dfb_id,
-        output_dfb_id,
-        input_policy,
-        reconfig_mode,
-        fp32_mode,
-        AccumulateT,
-        PostReduceOp>(
-        input_dfb, scaler_dfb, output_dfb, input_block_shape, input_memory_layout, accumulate, post_reduce_op);
-}
 
 }  // namespace compute_kernel_lib
 

@@ -40,12 +40,12 @@ void kernel_main() {
 #ifdef SFPU_OP_INIT_PRE_IN0_0
     DataflowBuffer dfb_inp0(tt::CBIndex::c_3);
 #else
-    DataflowBuffer dfb_inp0 = dfb_in0;
+    auto& dfb_inp0 = dfb_in0;
 #endif
 #ifdef SFPU_OP_INIT_PRE_IN1_0
     DataflowBuffer dfb_inp1(tt::CBIndex::c_4);
 #else
-    DataflowBuffer dfb_inp1 = dfb_in1;
+    auto& dfb_inp1 = dfb_in1;
 #endif
 
     compute_kernel_hw_startup(dfb_in0.get_id(), dfb_out0.get_id());

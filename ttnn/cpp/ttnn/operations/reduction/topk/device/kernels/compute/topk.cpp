@@ -17,15 +17,14 @@
  * Transpose tiles from width-height to height-width format and pack to destination buffer
  * Used in final stage to convert sorted results back to output format
  *
- * @param input_dfb_index    Dataflow buffer id for the tiles to transpose (source buffer)
- * @param dest_dfb_index     Dataflow buffer id to store transposed tiles (destination buffer)
+ * @param input_dfb          Dataflow buffer holding the tiles to transpose (source buffer)
+ * @param dest_dfb           Dataflow buffer to store transposed tiles (destination buffer)
  * @param total_tiles       Number of tiles to process and transpose
  */
-template <bool strip_rank_tags = false>
-FORCE_INLINE void transpose_and_pack(
-    const uint32_t input_dfb_index, const uint32_t dest_dfb_index, const uint32_t total_tiles) {
-    DataflowBuffer input_dfb(static_cast<uint16_t>(input_dfb_index));
-    DataflowBuffer dest_dfb(static_cast<uint16_t>(dest_dfb_index));
+template <bool strip_rank_tags = false, typename InputDFB, typename DestDFB>
+FORCE_INLINE void transpose_and_pack(InputDFB& input_dfb, DestDFB& dest_dfb, const uint32_t total_tiles) {
+    const uint32_t input_dfb_index = input_dfb.get_id();
+    const uint32_t dest_dfb_index = dest_dfb.get_id();
 
     // Configure data formats for transpose operation.
     // Pack using the DESTINATION CB format: input_dfb may be bf16 (higher-precision
@@ -101,11 +100,11 @@ FORCE_INLINE void read_cb_and_transpose(const uint32_t dfb, const uint32_t base_
  * Utility function: Wait for tiles and pop them from front of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Dataflow buffer id to operate on
+ * @param dfb_obj  Dataflow buffer to operate on
  * @param count   Number of tiles to wait for and then remove from the front of the buffer
  */
-FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
-    DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb));
+template <typename ObjDFB>
+FORCE_INLINE void cb_wait_pop_front(ObjDFB& dfb_obj, const uint32_t count) {
     dfb_obj.wait_front(static_cast<uint16_t>(count));
     dfb_obj.pop_front(static_cast<uint16_t>(count));
 }
@@ -114,11 +113,11 @@ FORCE_INLINE void cb_wait_pop_front(const uint32_t dfb, const uint32_t count) {
  * Utility function: Reserve space and push tiles to back of dataflow buffer
  * Refactored to reduce code duplication
  *
- * @param dfb      Dataflow buffer id to operate on
+ * @param dfb_obj  Dataflow buffer to operate on
  * @param count   Number of tile slots to reserve at the back and then mark as available
  */
-FORCE_INLINE void cb_reserve_push_back(const uint32_t dfb, const uint32_t count) {
-    DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb));
+template <typename ObjDFB>
+FORCE_INLINE void cb_reserve_push_back(ObjDFB& dfb_obj, const uint32_t count) {
     dfb_obj.reserve_back(static_cast<uint16_t>(count));
     dfb_obj.push_back(static_cast<uint16_t>(count));
 }
@@ -163,6 +162,8 @@ void kernel_main() {
     DataflowBuffer transposed_ind_dfb(transposed_ind_dfb_index);
     DataflowBuffer result_prep_val_dfb(result_prep_val_dfb_index);
     DataflowBuffer result_prep_ind_dfb(result_prep_ind_dfb_index);
+    DataflowBuffer output_val_dfb(output_val_dfb_index);
+    DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
     constexpr uint32_t DST_VAL = 0;
     constexpr uint32_t DST_IND = 2;
@@ -325,8 +326,9 @@ void kernel_main() {
 
                 // Prepare data for merge operation
                 // Wait for required tiles to be available
-                DataflowBuffer dfb0_obj(static_cast<uint16_t>(dfb0));
-                DataflowBuffer dfb1_obj(static_cast<uint16_t>(dfb1));
+                // dfb0/dfb1 are the transposed buffers exactly on the first sort (case A).
+                auto& dfb0_obj = first_sort_from_transposed ? transposed_val_dfb : result_prep_val_dfb;
+                auto& dfb1_obj = first_sort_from_transposed ? transposed_ind_dfb : result_prep_ind_dfb;
                 dfb0_obj.wait_front(static_cast<uint16_t>(in_dfb_offset));  // Wait for existing sorted data
                 dfb1_obj.wait_front(static_cast<uint16_t>(in_dfb_offset));
                 if (transposed_offset == 0) {
@@ -446,18 +448,18 @@ void kernel_main() {
             input_take = 1;
 
             // Clean up intermediate transposed tile
-            cb_wait_pop_front(transposed_val_dfb_index, 1);
-            cb_wait_pop_front(transposed_ind_dfb_index, 1);
+            cb_wait_pop_front(transposed_val_dfb, 1);
+            cb_wait_pop_front(transposed_ind_dfb, 1);
         }  // count loop
 
         // Final output preparation
         // Prepare result buffers for final output
-        cb_reserve_push_back(result_prep_val_dfb_index, output_tiles);
-        cb_reserve_push_back(result_prep_ind_dfb_index, output_tiles);
+        cb_reserve_push_back(result_prep_val_dfb, output_tiles);
+        cb_reserve_push_back(result_prep_ind_dfb, output_tiles);
 
         // Transpose and pack final results to output buffers
         // Convert sorted results from HW back to WH format for output
-        transpose_and_pack<rank_stamped>(result_prep_val_dfb_index, output_val_dfb_index, output_tiles);
-        transpose_and_pack(result_prep_ind_dfb_index, output_ind_dfb_index, output_tiles);
+        transpose_and_pack<rank_stamped>(result_prep_val_dfb, output_val_dfb, output_tiles);
+        transpose_and_pack(result_prep_ind_dfb, output_ind_dfb, output_tiles);
     }  // core_loop loop
 }

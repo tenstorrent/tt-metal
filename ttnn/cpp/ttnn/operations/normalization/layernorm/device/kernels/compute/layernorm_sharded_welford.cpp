@@ -139,7 +139,8 @@ inline uint32_t get_next_set_size(
 // popped to advance it, so push each row (the data is already in L1) right before it is popped to keep the
 // buffer balanced. On Quasar a push with no intervening pack trips the TEN-4746 guard, so emit a no-write
 // PACR first (a no-op on WH/BH).
-ALWI void push_resident_row(DataflowBuffer& dfb, uint32_t num_tiles) {
+template <typename DFB>
+ALWI void push_resident_row(DFB& dfb, uint32_t num_tiles) {
     dfb.reserve_back(num_tiles);
     dummy_pack(dfb.get_id());
     dfb.push_back(num_tiles);

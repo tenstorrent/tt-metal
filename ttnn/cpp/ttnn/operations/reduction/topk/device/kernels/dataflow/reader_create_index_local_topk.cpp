@@ -56,10 +56,10 @@ void kernel_main() {
             // Generate corresponding index tile for position tracking during sort
             if (is32_bit_data) {
                 dataflow_kernel_lib::generate_index_tile<uint32_t>(
-                    dfb_id_in1, j);  // Generate indices for width position j
+                    dfb_in1, j);  // Generate indices for width position j
             } else {
                 dataflow_kernel_lib::generate_index_tile<uint16_t>(
-                    dfb_id_in1, j);  // Generate indices for width position j
+                    dfb_in1, j);  // Generate indices for width position j
             }
 #else
             // Read precomputed indices to circular buffer

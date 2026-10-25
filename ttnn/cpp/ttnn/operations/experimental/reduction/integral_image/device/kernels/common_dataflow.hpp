@@ -12,11 +12,10 @@
 
 template <typename addr_gen_t>
 FORCE_INLINE void write_to_dram(
-    uint32_t cb, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
-    ReadCBGuard read_guard{cb, num_tiles};
+    DataflowBuffer& cb_obj, const addr_gen_t& addr_gtor, uint32_t write_tile_id, uint32_t num_tiles = ONE_TILE) {
+    ReadCBGuard read_guard{cb_obj, num_tiles};
 
     Noc noc;
-    DataflowBuffer cb_obj(cb);
     noc.async_write(
         cb_obj,
         addr_gtor,
@@ -28,11 +27,10 @@ FORCE_INLINE void write_to_dram(
 
 template <typename addr_gen_type>
 FORCE_INLINE void load_from_dram(
-    uint32_t cb, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
-    WriteCBGuard write_guard{cb, num_tiles};
+    DataflowBuffer& cb_obj, const addr_gen_type& addr_gtor, uint32_t read_tile_id, uint32_t num_tiles = ONE_TILE) {
+    WriteCBGuard write_guard{cb_obj, num_tiles};
 
     Noc noc;
-    DataflowBuffer cb_obj(cb);
     noc.async_read(
         addr_gtor,
         cb_obj,

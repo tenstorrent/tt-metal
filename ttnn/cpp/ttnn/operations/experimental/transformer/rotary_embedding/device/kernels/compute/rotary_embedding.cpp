@@ -23,6 +23,9 @@ template <
     typename DFB1,
     typename DFB2>
 ALWI void mul_tiles_chain(DFB0& cb_in0, DFB1& cb_in1, DFB2& cb_out, uint32_t in1_idx) {
+    ASSERT(cb_in0.get_id() == in0_cb);
+    ASSERT(cb_in1.get_id() == in1_cb);
+    ASSERT(cb_out.get_id() == out_cb);
     using namespace compute_kernel_lib;
     if constexpr (kDecodeMode) {
         eltwise_chain(
@@ -50,19 +53,19 @@ ALWI void mul_tiles_chain(DFB0& cb_in0, DFB1& cb_in1, DFB2& cb_out, uint32_t in1
     }
 }
 
-template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
-ALWI void UNTILIZE_TILES() {
+template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb, typename In0DFB, typename OutDFB>
+ALWI void UNTILIZE_TILES(In0DFB& in0, OutDFB& out) {
     compute_kernel_lib::untilize<
         num_tiles,
         in0_cb,
         out_cb,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in0, out, 1);
 }
 
-template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb>
-ALWI void TILIZE_ROWS(uint32_t sync_cb) {
+template <uint32_t num_tiles, uint32_t in0_cb, uint32_t out_cb, typename In0DFB, typename OutDFB>
+ALWI void TILIZE_ROWS(In0DFB& in0, OutDFB& out, uint32_t sync_cb) {
     CircularBuffer cb_sync(sync_cb);
     cb_sync.wait_front(num_tiles);
     compute_kernel_lib::tilize<
@@ -71,7 +74,7 @@ ALWI void TILIZE_ROWS(uint32_t sync_cb) {
         out_cb,
         compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in0, out, 1);
     cb_sync.pop_front(num_tiles);
 }
 
@@ -109,22 +112,28 @@ void kernel_main() {
     constexpr uint32_t untilized_sin_sync_cb = get_compile_time_arg_val(16);
     constexpr uint32_t retilized_cos_cb = get_compile_time_arg_val(17);
     constexpr uint32_t retilized_sin_cb = get_compile_time_arg_val(18);
+    DataflowBuffer cb_sin(sin_cb);
+    DataflowBuffer cb_cos(cos_cb);
+    DataflowBuffer cb_untilized_sin(untilized_sin_cb);
+    DataflowBuffer cb_untilized_cos(untilized_cos_cb);
+    DataflowBuffer cb_updated_cos(retilized_cos_cb);
+    DataflowBuffer cb_updated_sin(retilized_sin_cb);
     compute_kernel_hw_startup(sin_cb, scalar_cb, untilized_sin_cb);
-    UNTILIZE_TILES<Wt, sin_cb, untilized_sin_cb>();
-    UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>();
+    UNTILIZE_TILES<Wt, sin_cb, untilized_sin_cb>(cb_sin, cb_untilized_sin);
+    UNTILIZE_TILES<Wt, cos_cb, untilized_cos_cb>(cb_cos, cb_untilized_cos);
     reconfig_data_format_srca(cos_cb, untilized_sin_cb);
     pack_reconfig_data_format(untilized_cos_cb, retilized_sin_cb);
-    TILIZE_ROWS<Wt, untilized_sin_cb, retilized_sin_cb>(untilized_sin_sync_cb);
-    TILIZE_ROWS<Wt, untilized_cos_cb, retilized_cos_cb>(untilized_cos_sync_cb);
+    TILIZE_ROWS<Wt, untilized_sin_cb, retilized_sin_cb>(cb_untilized_sin, cb_updated_sin, untilized_sin_sync_cb);
+    TILIZE_ROWS<Wt, untilized_cos_cb, retilized_cos_cb>(cb_untilized_cos, cb_updated_cos, untilized_cos_sync_cb);
     constexpr uint32_t updated_cos_cb = retilized_cos_cb;
     constexpr uint32_t updated_sin_cb = retilized_sin_cb;
 #else
     compute_kernel_hw_startup(rotated_in_cb, scalar_cb, rotated_in_interm_cb);
     constexpr uint32_t updated_cos_cb = cos_cb;
     constexpr uint32_t updated_sin_cb = sin_cb;
-#endif
     DataflowBuffer cb_updated_cos(updated_cos_cb);
     DataflowBuffer cb_updated_sin(updated_sin_cb);
+#endif
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
             const uint32_t in1_idx = kDecodeMode ? j : 0;

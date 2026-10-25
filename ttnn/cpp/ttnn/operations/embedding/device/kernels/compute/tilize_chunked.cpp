@@ -27,6 +27,9 @@ void kernel_main() {
     constexpr uint32_t num_chunks = get_arg(args::num_chunks);
     constexpr uint32_t last_chunk_tiles = get_arg(args::last_chunk_tiles);
 
+    DataflowBuffer in(dfb::in);
+    DataflowBuffer out(dfb::out);
+
     compute_kernel_hw_startup(dfb::in, dfb::out);
     // Process the block in chunks to fit within L1 memory limits.
     // When num_tiles_per_block divides evenly (last_chunk_tiles ==
@@ -41,7 +44,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-            per_core_block_cnt * num_chunks);
+            in, out, per_core_block_cnt * num_chunks);
     } else {
         for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
             if constexpr (num_chunks > 1) {
@@ -51,7 +54,8 @@ void kernel_main() {
                     dfb::out,
                     compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(num_chunks - 1);
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    in, out, num_chunks - 1);
             }
             compute_kernel_lib::tilize<
                 last_chunk_tiles,
@@ -59,18 +63,15 @@ void kernel_main() {
                 dfb::out,
                 compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+                compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in, out, 1);
         }
     }
 #ifdef OUT_SELF_LOOP
     // Sharded output (embeddings): there is no writer, so this kernel is the output shard's only producer and
     // consumer (self-loop). Pop everything it pushed so the buffer is left balanced; the tiles stay in place.
     // dummy_unpack orders the pop after the wait on Quasar (nothing unpacks this buffer).
-    {
-        DataflowBuffer out_dfb(dfb::out);
-        out_dfb.wait_front(per_core_block_cnt * ((num_chunks - 1) * tiles_per_chunk + last_chunk_tiles));
-        dummy_unpack(dfb::out);
-        out_dfb.pop_front(per_core_block_cnt * ((num_chunks - 1) * tiles_per_chunk + last_chunk_tiles));
-    }
+    out.wait_front(per_core_block_cnt * ((num_chunks - 1) * tiles_per_chunk + last_chunk_tiles));
+    dummy_unpack(dfb::out);
+    out.pop_front(per_core_block_cnt * ((num_chunks - 1) * tiles_per_chunk + last_chunk_tiles));
 #endif
 }

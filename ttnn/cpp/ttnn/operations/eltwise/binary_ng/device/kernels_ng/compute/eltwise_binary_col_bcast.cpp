@@ -13,7 +13,18 @@
 // still used for the shared preprocess_*_impl helper call sites (see PREPROCESS below).
 #include "api/dataflow/dataflow_buffer.h"
 
+template <
+    typename ExpDfbBcastDFB,
+    typename ExpDfbLlkPostDFB,
+    typename ExpDfbPostLhsDFB,
+    typename ExpDfbPostRhsDFB,
+    typename ExpDfbOutDFB>
 ALWI void process_tile(
+    ExpDfbBcastDFB& exp_dfb_bcast,
+    ExpDfbLlkPostDFB& exp_dfb_llk_post,
+    ExpDfbPostLhsDFB& exp_dfb_post_lhs,
+    ExpDfbPostRhsDFB& exp_dfb_post_rhs,
+    ExpDfbOutDFB& exp_dfb_out,
     tt::CBIndex cb_bcast,
     tt::CBIndex cb_llk_post,
     tt::CBIndex cb_pre_lhs,
@@ -41,11 +52,6 @@ ALWI void process_tile(
 #define EXP_CB_POST_BCAST exp_dfb_post_lhs
 #define EXP_CB_POST_OTHER exp_dfb_post_rhs
 #endif
-    DataflowBuffer exp_dfb_bcast(cb_bcast);
-    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
-    DataflowBuffer exp_dfb_post_lhs(cb_post_lhs);
-    DataflowBuffer exp_dfb_post_rhs(cb_post_rhs);
-    DataflowBuffer exp_dfb_out(cb_out);
 
     exp_dfb_bcast.wait_front(num_tiles_per_cycle);
     pack_reconfig_data_format(cb_out, cb_llk_post);
@@ -134,6 +140,20 @@ void kernel_main() {
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
 #endif
 
+    DataflowBuffer exp_dfb_bcast(cb_bcast);
+    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
+#if SRC_BCAST && !HAS_ACTIVATIONS(LHS)
+    auto& exp_dfb_post_lhs = exp_dfb_llk_post;
+#else
+    DataflowBuffer exp_dfb_post_lhs(cb_post_lhs);
+#endif
+#if SRC_BCAST_B && !HAS_ACTIVATIONS(RHS)
+    auto& exp_dfb_post_rhs = exp_dfb_llk_post;
+#else
+    DataflowBuffer exp_dfb_post_rhs(cb_post_rhs);
+#endif
+    DataflowBuffer exp_dfb_out(cb_out);
+
     compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
 #ifdef PACK_RELU
     pack_relu_config(ReluConfig::zero());
@@ -148,6 +168,11 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
+            exp_dfb_bcast,
+            exp_dfb_llk_post,
+            exp_dfb_post_lhs,
+            exp_dfb_post_rhs,
+            exp_dfb_out,
             cb_bcast,
             cb_llk_post,
             cb_pre_lhs,
@@ -162,6 +187,11 @@ void kernel_main() {
 
     if (remaining_iterations > 0) {
         process_tile(
+            exp_dfb_bcast,
+            exp_dfb_llk_post,
+            exp_dfb_post_lhs,
+            exp_dfb_post_rhs,
+            exp_dfb_out,
             cb_bcast,
             cb_llk_post,
             cb_pre_lhs,

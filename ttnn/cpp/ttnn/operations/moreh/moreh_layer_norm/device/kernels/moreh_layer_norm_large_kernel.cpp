@@ -178,7 +178,8 @@ void kernel_main() {
          * E[x]
          * cb_ex
          */
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xsum, cb_scaler, cb_ex>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xsum, cb_scaler, cb_ex>(
+            dfb_xsum_obj, dfb_scaler_obj, dfb_ex_obj, ckl::ReduceInputBlockShape::single());
 
         if constexpr (mean_has_value) {
             // Write on cb_mean.
@@ -275,7 +276,8 @@ void kernel_main() {
          * E[(x-E[x])^2 = Var[x]
          * cb_var
          */
-        ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xmm2sum, cb_scaler, cb_var>(ckl::ReduceInputBlockShape::single());
+        ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xmm2sum, cb_scaler, cb_var>(
+            dfb_xmm2sum_obj, dfb_scaler_obj, dfb_var_obj, ckl::ReduceInputBlockShape::single());
 
         /*
          * 1.0/(sqrt(E[(x-E[x])^2] + eps))

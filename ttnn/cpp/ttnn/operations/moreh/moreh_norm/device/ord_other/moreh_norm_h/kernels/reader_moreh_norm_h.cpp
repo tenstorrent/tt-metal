@@ -27,8 +27,8 @@ void kernel_main() {
     const bool do_mask_h = (origin_h % TILE_H) != 0;
     const auto mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
 
+    DataflowBuffer dfb_mask_h(dfb::mask_h);
     if (do_mask_h) {
-        DataflowBuffer dfb_mask_h(dfb::mask_h);
         generate_mask_h(dfb_mask_h, mask_h);
     }
 

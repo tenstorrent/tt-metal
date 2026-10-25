@@ -19,11 +19,13 @@ void kernel_main() {
     const bool do_mask_h = (get_arg(args::do_mask_h) == 1);
     const bool do_mask_w = (get_arg(args::do_mask_w) == 1);
 
+    DataflowBuffer dfb_scaler(dfb::scaler);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+        calculate_and_prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(
+            dfb_scaler);
 
+    DataflowBuffer dfb_mask_h_w(dfb::mask_h_w);
     if (do_mask_h || do_mask_w) {
-        DataflowBuffer dfb_mask_h_w(dfb::mask_h_w);
         generate_mask_h_w(dfb_mask_h_w, mask_h, mask_w);
     }
 

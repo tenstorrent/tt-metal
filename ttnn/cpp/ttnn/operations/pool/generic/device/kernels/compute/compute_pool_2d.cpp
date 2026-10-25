@@ -137,8 +137,8 @@ void kernel_main() {
         const bool use_reader1_scalar = !reader0 && !one_scalar_per_core;
         const uint32_t curr_scalar_cb_id = use_reader1_scalar ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
-        DataflowBuffer curr_scalar_dfb = use_reader1_scalar ? in_scalar_dfb_1 : in_scalar_dfb_0;
-        DataflowBuffer curr_in_dfb = reader0 ? in_dfb_0 : in_dfb_1;
+        auto& curr_scalar_dfb = use_reader1_scalar ? in_scalar_dfb_1 : in_scalar_dfb_0;
+        auto& curr_in_dfb = reader0 ? in_dfb_0 : in_dfb_1;
         if constexpr (!one_scalar_per_core) {
             curr_scalar_dfb.wait_front(1);
         }

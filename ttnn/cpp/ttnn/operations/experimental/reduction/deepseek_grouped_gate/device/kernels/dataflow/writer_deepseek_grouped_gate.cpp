@@ -443,6 +443,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_out_indices_buf(cb_out_indices);
     CircularBuffer cb_out_weights_buf(cb_out_weights);
+    DataflowBuffer reduce_ones_scalar_dfb(cb_reduce_ones_scalar);
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
@@ -465,7 +466,7 @@ void kernel_main() {
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_reduce_ones_scalar,
         ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW>(n_activated_experts);
+        ckernel::ReduceDim::REDUCE_ROW>(reduce_ones_scalar_dfb, n_activated_experts);
     write_single_scalar(cb_epsilon_scalar, packed_epsilon);
     write_single_scalar(cb_route_scale_scalar, packed_route_scale);
 

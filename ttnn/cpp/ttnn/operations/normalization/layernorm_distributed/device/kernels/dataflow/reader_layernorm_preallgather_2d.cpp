@@ -49,6 +49,8 @@ void kernel_main() {
     DataflowBuffer dfb_out_buf(dfb::out);
     // Gather buffer on the merge core: every core in the column lands its partial here.
     DataflowBuffer dfb_x2_merge_buf(dfb::x2_merge);
+    DataflowBuffer dfb_reduce_buf(dfb::reduce);
+    DataflowBuffer dfb_zero_buf(dfb::zero);
     // On the merge core: counts the partials that have landed in its gather buffer for the current row.
     Semaphore reducer_sem(sem::reducer);
     // On the other cores: incremented by the merge core when its gather buffer can take this core's next partial.
@@ -69,9 +71,9 @@ void kernel_main() {
         dfb::reduce,
         ckernel::PoolType::SUM,
         ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_reduce_buf);
     if (is_merge_core) {
-        dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
+        dataflow_kernel_lib::prepare_zero_tile(dfb_zero_buf);
     }
 
     // Partial statistics use the intermediate format, which is Float32 with fp32_dest_acc_en.

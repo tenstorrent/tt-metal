@@ -38,15 +38,19 @@ template <
     uint32_t transmat_cb,
     uint32_t reduce_factor,
     bool fuse_rope,
-    typename TMatAccessor>
-FORCE_INLINE void dit_rmsnorm_generate_scalars_and_transmat(uint32_t eps_bits, const TMatAccessor& tmat_acc) {
+    typename TMatAccessor,
+    typename SumDFB,
+    typename AvgDFB>
+FORCE_INLINE void dit_rmsnorm_generate_scalars_and_transmat(
+    SumDFB& sum_dfb, AvgDFB& avg_dfb, uint32_t eps_bits, const TMatAccessor& tmat_acc) {
+    ASSERT(sum_dfb.get_id() == sum_cb);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<sum_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<sum_cb, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(sum_dfb);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         avg_cb,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        reduce_factor>();
+        reduce_factor>(avg_dfb);
     generate_bcast_col_scalar(CircularBuffer(eps_cb), eps_bits);
 
     if constexpr (fuse_rope) {

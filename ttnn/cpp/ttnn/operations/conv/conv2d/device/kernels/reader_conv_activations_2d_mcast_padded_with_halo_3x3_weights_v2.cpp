@@ -24,12 +24,12 @@ void multicast_data(
     Noc noc,
     MulticastEndpoint mcast_ep,
     bool is_receiver_core,
-    SrcDFB src_dfb,
+    SrcDFB& src_dfb,
     uint32_t src_offset,
     McastDst& dst,
     uint32_t total_bytes) {
     // A bare DataflowBuffer NOC source already resolves to get_read_ptr() (see noc_traits_t<DataflowBuffer>).
-    auto src = src_dfb;
+    auto& src = src_dfb;
     if (is_receiver_core) {
         if constexpr (act_mcast_num_cores > 0) {
             noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
@@ -69,9 +69,9 @@ template <
 void mcast_block_chunked(
     Noc noc,
     MulticastEndpoint mcast_ep,
-    SrcDFB src_dfb_obj,
+    SrcDFB& src_dfb_obj,
     bool is_receiver_core,
-    DstDFB dst_dfb_obj,
+    DstDFB& dst_dfb_obj,
     const McastRect& rect) {
     // Build mcast dst once; only .addr is updated per burst
     // number of full bursts

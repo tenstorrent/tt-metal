@@ -12,7 +12,7 @@ namespace {
 template <typename output_addr_gen_t>
 FORCE_INLINE void receive_upper_block(
     const output_addr_gen_t& output_addr_gen,
-    uint32_t cb_axis_3_buffer_write,
+    DataflowBuffer& cb_axis_3_buffer_write,
     uint32_t channels_slice_i,
     uint32_t column_block_i,
     uint32_t row_block_i,
@@ -36,7 +36,7 @@ FORCE_INLINE void receive_upper_block(
 template <typename output_addr_gen_t>
 FORCE_INLINE void output_block(
     const output_addr_gen_t& output_addr_gen,
-    uint32_t cb_output,
+    DataflowBuffer& cb_output,
     uint32_t channels_slice_i,
     uint32_t column_block_i,
     uint32_t row_block_i,
@@ -70,6 +70,9 @@ void kernel_main() {
     const auto core_y = get_absolute_logical_y();
     const uint32_t my_channel = core_y * ctas.cores_x + core_x;
 
+    DataflowBuffer axis_3_buffer_cb(dfb::axis_3_buffer);
+    DataflowBuffer output_cb(dfb::output);
+
     for (uint32_t batch_i = 0; batch_i < ctas.num_batches;
          ++batch_i) {  // only one batch expected, unit tests don't cover more, also not everything is implemented in
                        // terms of num_batches > 1
@@ -81,7 +84,7 @@ void kernel_main() {
                     const uint32_t previous_row_chunk_i = row_chunk_i - 1;
                     receive_upper_block(
                         output_addr_gtor,
-                        dfb::axis_3_buffer,
+                        axis_3_buffer_cb,
                         my_channel,
                         column_block_i,
                         previous_row_chunk_i,
@@ -92,7 +95,7 @@ void kernel_main() {
                 }
                 output_block(
                     output_addr_gtor,
-                    dfb::output,
+                    output_cb,
                     my_channel,
                     column_block_i,
                     row_chunk_i,

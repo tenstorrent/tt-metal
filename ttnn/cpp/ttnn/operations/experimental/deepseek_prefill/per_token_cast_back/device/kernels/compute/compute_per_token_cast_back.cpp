@@ -74,6 +74,9 @@ void kernel_main() {
     constexpr uint32_t IDST0 = 0;
 
     compute_kernel_hw_startup(cb_input_e4m3_id, cb_out_id);
+    // Tilize source: e4m3 input on the bf16 datapath, the fp32 row-major block otherwise.
+    DataflowBuffer tilize_in_dfb(narrow_scales_to_bf16 ? cb_input_e4m3_id : cb_in_rm_fp32_id);
+    DataflowBuffer in_tile_dfb(cb_in_tile_id);
 
 #ifdef TOKEN_COUNT_AWARE
     // num_blocks is computed by the reader and delivered via the loop-count mailbox.
@@ -89,7 +92,8 @@ void kernel_main() {
         {
             if constexpr (narrow_scales_to_bf16) {
                 // ----- Phase 1 (bf16): tilize casts e4m3 straight into bf16 tiles -----
-                compute_kernel_lib::tilize<tiles_per_block, cb_input_e4m3_id, cb_in_tile_id>(block_ht);
+                compute_kernel_lib::tilize<tiles_per_block, cb_input_e4m3_id, cb_in_tile_id>(
+                    tilize_in_dfb, in_tile_dfb, block_ht);
 
                 // ----- Phase 2 (bf16): cast fp32 scale -> bf16 -----
                 // Packer narrows the fp32 scale to bf16 so the multiply's SrcB matches SrcA.
@@ -128,7 +132,8 @@ void kernel_main() {
                 }
 
                 // ----- Phase 2: tilize -----
-                compute_kernel_lib::tilize<tiles_per_block, cb_in_rm_fp32_id, cb_in_tile_id>(block_ht);
+                compute_kernel_lib::tilize<tiles_per_block, cb_in_rm_fp32_id, cb_in_tile_id>(
+                    tilize_in_dfb, in_tile_dfb, block_ht);
             }
 
             // ----- Phase 3: multiply by broadcast scale and untilize to output -----

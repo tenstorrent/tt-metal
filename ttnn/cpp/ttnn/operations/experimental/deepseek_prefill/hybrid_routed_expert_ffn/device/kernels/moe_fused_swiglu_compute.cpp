@@ -478,6 +478,7 @@ void kernel_main() {
     CircularBuffer tilize_done(cb_tilize_done);
     CircularBuffer mailbox_compute(cb_mailbox_compute);
     CircularBuffer x_buf(cb_x_tiles);
+    DataflowBuffer x_input(cb_x_in);
     CircularBuffer wg_buf(cb_w_gate);
     CircularBuffer wu_buf(cb_w_up);
     CircularBuffer wd_buf(cb_w_down);
@@ -615,12 +616,11 @@ void kernel_main() {
                     tilize_done.reserve_back(1);
                     {
                         MaybeDeviceZoneScope("compute_tilize_input_wait");
-                        DataflowBuffer x_input(cb_x_in);
                         x_input.wait_front(TILE_H);
                     }
                     {
                         MaybeDeviceZoneScope("compute_tilize_body");
-                        tilize_row<KR_PAD, cb_x_in, cb_x_tiles>(TILE_H, x_slot_offset + t * KR_PAD);
+                        tilize_row<KR_PAD, cb_x_in, cb_x_tiles>(x_input, TILE_H, x_slot_offset + t * KR_PAD);
                     }
                     tilize_done.push_back(1);
                 }

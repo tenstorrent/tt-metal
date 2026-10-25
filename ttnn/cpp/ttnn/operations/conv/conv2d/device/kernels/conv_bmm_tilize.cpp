@@ -27,7 +27,9 @@ template <
     uint32_t in_cb_id,
     uint32_t out_cb_id,
     bool init_tilize = true,
-    bool uninit_tilize = true>
+    bool uninit_tilize = true,
+    typename InDFB,
+    typename OutDFB>
 __attribute__((noinline)) void tilize_in(
 #else
 template <
@@ -35,10 +37,12 @@ template <
     uint32_t in_cb_id,
     uint32_t out_cb_id,
     bool init_tilize = true,
-    bool uninit_tilize = true>
+    bool uninit_tilize = true,
+    typename InDFB,
+    typename OutDFB>
 void tilize_in(
 #endif
-    uint32_t in_num_subblocks) {
+    InDFB& in_dfb, OutDFB& out_dfb, uint32_t in_num_subblocks) {
     constexpr compute_kernel_lib::tilize_config::InitUninitMode init_uninit_mode =
         init_tilize ? (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit
                                      : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
@@ -58,11 +62,12 @@ void tilize_in(
         out_cb_id,
         init_uninit_mode,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        reconfig_mode>(in_num_subblocks);
+        reconfig_mode>(in_dfb, out_dfb, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, typename DFBIn>
-inline void tilize_single_block(DFBIn in_dfb) {
+inline void tilize_single_block(DFBIn& in_dfb) {
+    ASSERT(in_dfb.get_id() == in_cb_id);
     in_dfb.wait_front(in_block_w);
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
     in_dfb.pop_front(in_block_w);
@@ -75,7 +80,8 @@ inline uint32_t update_in_cb(uint32_t in_cb_addr) {
 }
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset, typename DFBIn>
-inline void tilize_single_block_with_out_cb_update(DFBIn in_dfb, uint32_t& out_cb_addr) {
+inline void tilize_single_block_with_out_cb_update(DFBIn& in_dfb, uint32_t& out_cb_addr) {
+    ASSERT(in_dfb.get_id() == in_cb_id);
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr));
     PACK((out_cb_addr += tilized_cb_row_offset));
     tilize_single_block<in_cb_id, in_block_w, out_cb_id>(in_dfb);
@@ -97,11 +103,14 @@ template <
     typename DFBIn2,
     typename DFBOut>
 inline void tilize_in_reuse_split_reader(
-    DFBIn1 in1_dfb,
-    DFBIn2 in2_dfb,
-    DFBOut out_dfb,
+    DFBIn1& in1_dfb,
+    DFBIn2& in2_dfb,
+    DFBOut& out_dfb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
+    ASSERT(in1_dfb.get_id() == in1_cb_id);
+    ASSERT(in2_dfb.get_id() == in2_cb_id);
+    ASSERT(out_dfb.get_id() == out_cb_id);
     // with activation reuse, the activation buffers are sized to fit one output image width only,
     // so we need to interleave waits and pops on the two buffers to allow parallelization;
     // we reserve back tilized CB to store whole act block h - and then we update write pointers so that
@@ -172,8 +181,8 @@ inline void tilize_in_reuse_split_reader(
 
 template <uint32_t out_subblock_w, uint32_t out_block_w, typename DFBInterm, typename DFBOut>
 inline void reblock_and_untilize(
-    DFBInterm interm_dfb,
-    DFBOut out_dfb,
+    DFBInterm& interm_dfb,
+    DFBOut& out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
@@ -282,6 +291,7 @@ void kernel_main() {
     }
 
     DataflowBuffer dfb_in0(in0_cb_id);
+    DataflowBuffer dfb_in0_pretilize(in0_pretilize_cb_id);
     DataflowBuffer dfb_in0_second_reader(in0_cb_second_reader_id);
     DataflowBuffer dfb_tilized_in0(tilized_in0_cb_id);
     DataflowBuffer dfb_mm_in0(mm_in0_cb_id);
@@ -333,11 +343,12 @@ void kernel_main() {
                             in0_pretilize_cb_id,
                             tilized_in0_cb_id,
                             true,
-                            !split_reader || split_reader_cb_shared>(in0_num_subblocks_read);
+                            !split_reader || split_reader_cb_shared>(
+                            dfb_in0_pretilize, dfb_tilized_in0, in0_num_subblocks_read);
 
                         if constexpr (split_reader && !split_reader_cb_shared) {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                                dfb_in0_second_reader, dfb_tilized_in0, in0_num_subblocks_read_last);
                         }
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
                         matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
@@ -362,13 +373,13 @@ void kernel_main() {
 
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
-                            in0_num_subblocks_read);
+                            dfb_in0, dfb_tilized_in0, in0_num_subblocks_read);
                     }
 
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                                dfb_in0_second_reader, dfb_tilized_in0, in0_num_subblocks_read_last);
                         } else {
                             PACK((get_local_cb_interface(tilized_in0_cb_id).fifo_wr_ptr = tilized_cb_start_address));
                             tilize_in_reuse_split_reader<
@@ -479,7 +490,7 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-                        auto curr_out_dfb = curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
+                        auto& curr_out_dfb = curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
                         curr_out_dfb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 
@@ -594,7 +605,7 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                        in0_num_subblocks * out_subblock_h);
+                        dfb_matmul_partials, dfb_out, in0_num_subblocks * out_subblock_h);
                 }
             }
             if constexpr ((in1_num_blocks_w > 1 || in0_num_blocks_h > 1)) {

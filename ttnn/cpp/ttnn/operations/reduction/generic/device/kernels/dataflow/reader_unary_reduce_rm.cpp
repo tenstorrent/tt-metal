@@ -34,8 +34,8 @@
 // rt_start, decomposed into (nc, wt_in_nc)). h_chunks inner. wt_tiles_per_chunk is mandated 1 by
 // the H factory, so each output tile is one work unit.
 //
-template <ckernel::ReduceDim DIM>
-void reduce_rm_reader() {
+template <ckernel::ReduceDim DIM, typename RmDFB, typename ClearValueDFB, typename ScalerDFB>
+void reduce_rm_reader(RmDFB& dfb_rm, ClearValueDFB& dfb_clear_value, ScalerDFB& dfb_scaler) {
     // Runtime args (W: rt_count = num rows, rt_start = first row;
     //               H: rt_count = num output tiles, rt_start = first output tile).
     const uint32_t rt_count = get_arg(args::rt_count);
@@ -56,8 +56,6 @@ void reduce_rm_reader() {
     // dfb::rm stages row-major rows for compute to tilize; dfb::clear_value is this kernel's private
     // identity template — it both fills it and re-reads it as a NoC source, so it is the buffer's
     // only toucher.
-    DataflowBuffer dfb_rm(dfb::rm);
-    DataflowBuffer dfb_clear_value(dfb::clear_value);
     Noc noc;
 
     // Scaler entry — pushed once, used by every compute reduce() call.
@@ -72,7 +70,8 @@ void reduce_rm_reader() {
             return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
         }
     }();
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, DIM>(scaler_f, scaler_valid_for_reduce);
+    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, DIM>(
+        dfb_scaler, scaler_f, scaler_valid_for_reduce);
 
     // Identity template — pre-built once, reused as the pad source for every staged slab.
     const uint32_t clear_template_bytes = dfb_clear_value.get_tile_size();
@@ -175,4 +174,9 @@ void reduce_rm_reader() {
     dfb_clear_value.pop_front(onepage);
 }
 
-void kernel_main() { reduce_rm_reader<REDUCE_DIM>(); }
+void kernel_main() {
+    DataflowBuffer dfb_rm(dfb::rm);
+    DataflowBuffer dfb_clear_value(dfb::clear_value);
+    DataflowBuffer dfb_scaler(dfb::scaler);
+    reduce_rm_reader<REDUCE_DIM>(dfb_rm, dfb_clear_value, dfb_scaler);
+}

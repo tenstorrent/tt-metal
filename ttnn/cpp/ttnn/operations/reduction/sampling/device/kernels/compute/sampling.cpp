@@ -26,11 +26,11 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
+template <typename ObjDFB>
+static void generate_rand_tile(ObjDFB& dfb_obj, const uint32_t seed) {
+    const uint32_t dfb_id = dfb_obj.get_id();
     compute_kernel_hw_startup(dfb_id, dfb_id);
     copy_init(dfb_id);
-
-    DataflowBuffer dfb_obj(static_cast<uint16_t>(dfb_id));
 
     // The random threshold reaches the writer as BF16 (8-bit mantissa), which near 1.0 means
     // ~1/256 resolution: tokens whose cumulative slice lies in the last 0.4% of the mass could
@@ -58,15 +58,14 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     dfb_obj.push_back(1);
 }
 
-template <uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols>
-void sub_exp_block_bcast_cols_inplace() {
+template <uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols, typename In0DFB, typename In1DFB>
+void sub_exp_block_bcast_cols_inplace(In0DFB& in0_dfb_obj, In1DFB& in1_dfb_obj) {
+    ASSERT(in0_dfb_obj.get_id() == in0_dfb);
+    ASSERT(in1_dfb_obj.get_id() == in1_dfb);
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows produced
-
-    DataflowBuffer in0_dfb_obj(in0_dfb);
-    DataflowBuffer in1_dfb_obj(in1_dfb);
 
     sub_bcast_cols_init(in0_dfb, in1_dfb);
     exp_tile_init<true>();
@@ -98,12 +97,13 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-static void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
+template <typename In0DFB, typename In1DFB>
+static void add_block_inplace(In0DFB& in0_dfb_obj, In1DFB& in1_dfb_obj, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
-    DataflowBuffer in0_dfb_obj(static_cast<uint16_t>(in0_dfb));
-    DataflowBuffer in1_dfb_obj(static_cast<uint16_t>(in1_dfb));
+    const uint32_t in0_dfb = in0_dfb_obj.get_id();
+    const uint32_t in1_dfb = in1_dfb_obj.get_id();
 
     reconfig_data_format(in0_dfb, in1_dfb);
     add_init(in0_dfb, in1_dfb);
@@ -126,15 +126,17 @@ static void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_t
     }
 }
 
-static void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t rows, uint32_t cols) {
+template <typename In0DFB, typename In1DFB, typename OutDFB>
+static void mul_block_bcast_cols(
+    In0DFB& in0_dfb_obj, In1DFB& in1_dfb_obj, OutDFB& out_dfb_obj, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
     // Postcondition: in1_cb has rows consumed
 
-    DataflowBuffer in0_dfb_obj(static_cast<uint16_t>(in0_dfb));
-    DataflowBuffer in1_dfb_obj(static_cast<uint16_t>(in1_dfb));
-    DataflowBuffer out_dfb_obj(static_cast<uint16_t>(out_dfb));
+    const uint32_t in0_dfb = in0_dfb_obj.get_id();
+    const uint32_t in1_dfb = in1_dfb_obj.get_id();
+    const uint32_t out_dfb = out_dfb_obj.get_id();
 
     const uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init(in0_dfb, in1_dfb);
@@ -159,10 +161,11 @@ static void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t ou
     in1_dfb_obj.pop_front(static_cast<uint16_t>(rows));
 }
 
-static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
+template <typename InDFB>
+static void recip_block_inplace(InDFB& in_dfb_obj, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
-    DataflowBuffer in_dfb_obj(static_cast<uint16_t>(in_dfb));
+    const uint32_t in_dfb = in_dfb_obj.get_id();
 
     copy_init(in_dfb);
     recip_tile_init();
@@ -192,8 +195,11 @@ template <
     uint32_t scale_dfb,
     uint32_t out_dfb,
     uint32_t rows,
-    uint32_t cols>
-void reduce_c() {
+    uint32_t cols,
+    typename In0DFB,
+    typename ScaleDFB,
+    typename OutDFB>
+void reduce_c(In0DFB& in0, ScaleDFB& scale, OutDFB& out) {
     // Postcondition: in0_cb has rows*cols produced (WaitUpfrontNoPop — tiles not consumed)
     // Postcondition: out_cb has rows produced
     compute_kernel_lib::reduce<
@@ -204,7 +210,7 @@ void reduce_c() {
         out_dfb,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
+        in0, scale, out, compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
 }
 
 template <
@@ -221,8 +227,20 @@ template <
     uint32_t output_ind_dfb_index,
     uint32_t tile_width,
     bool first_call,
-    bool stable_sort>
-void top_k() {
+    bool stable_sort,
+    typename InputDFB,
+    typename IndexDFB,
+    typename InputTransposedDFB,
+    typename IndexTransposedDFB,
+    typename ValuesDFB,
+    typename OutputIndDFB>
+void top_k(
+    InputDFB& input_dfb,
+    IndexDFB& index_dfb,
+    InputTransposedDFB& input_transposed_dfb,
+    IndexTransposedDFB& index_transposed_dfb,
+    ValuesDFB& values_dfb,
+    OutputIndDFB& output_ind_dfb) {
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
     constexpr uint32_t input_dest_start = 0;
@@ -230,13 +248,6 @@ void top_k() {
     constexpr uint32_t input_dest_end = 1;
     constexpr uint32_t index_dest_end = 3;
     ckernel::topk_tile_init();
-
-    DataflowBuffer input_dfb(input_dfb_index);
-    DataflowBuffer index_dfb(index_dfb_index);
-    DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
-    DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
-    DataflowBuffer values_dfb(values_dfb_index);
-    DataflowBuffer output_ind_dfb(output_ind_dfb_index);
 
     if (first_call) {
         transpose_init(input_dfb_index);
@@ -407,15 +418,14 @@ void top_k() {
     sfpu::_init_sfpu_config_reg();
 }
 
-template <uint32_t in0_dfb, uint32_t in1_scalar_dfb, uint32_t num_tiles>
-void mul_block_bcast_scalar_inplace() {
+template <uint32_t in0_dfb, uint32_t in1_scalar_dfb, uint32_t num_tiles, typename In0DFB, typename In1ScalarDFB>
+void mul_block_bcast_scalar_inplace(In0DFB& in0_dfb_obj, In1ScalarDFB& in1_scalar_dfb_obj) {
+    ASSERT(in0_dfb_obj.get_id() == in0_dfb);
+    ASSERT(in1_scalar_dfb_obj.get_id() == in1_scalar_dfb);
     // Precondition: in0_cb has num_tiles produced
     // Precondition: in1_scalar_cb has 1 produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_scalar_cb has 1 produced
-
-    DataflowBuffer in0_dfb_obj(in0_dfb);
-    DataflowBuffer in1_scalar_dfb_obj(in1_scalar_dfb);
 
     const uint32_t dst_tiles = num_tiles;
     const uint32_t granularity = 1;
@@ -454,7 +464,23 @@ void kernel_main() {
     // Stable top-k: on exact value ties the candidate at the lowest position wins, so the sampled
     // token does not depend on how the bitonic network happens to swap equal values.
     constexpr bool stable_sort = get_arg(args::stable_sort) == 1;
-    generate_rand_tile(dfb::rand_tile, seed);
+
+    DataflowBuffer rand_tile_dfb(dfb::rand_tile);
+    DataflowBuffer input_values_dfb(dfb::input_values);
+    DataflowBuffer index_dfb(dfb::index);
+    DataflowBuffer input_transposed_dfb(dfb::input_transposed);
+    DataflowBuffer index_transposed_dfb(dfb::index_transposed);
+    DataflowBuffer values_dfb(dfb::values);
+    DataflowBuffer output_ind_dfb(dfb::output_ind);
+    DataflowBuffer topk_mask_dfb(dfb::topk_mask);
+    DataflowBuffer temp_dfb(dfb::temp);
+    DataflowBuffer scaler_max_dfb(dfb::scaler_max);
+    DataflowBuffer scaler_sum_dfb(dfb::scaler_sum);
+    DataflowBuffer cur_max_dfb(dfb::cur_max);
+    DataflowBuffer cur_sum_dfb(dfb::cur_sum);
+    DataflowBuffer local_vals_dfb(dfb::local_vals);
+
+    generate_rand_tile(rand_tile_dfb, seed);
 
     const uint32_t nearest32_K = 32;
     const uint32_t logk = 5;  // log(32)
@@ -474,35 +500,37 @@ void kernel_main() {
         dfb::output_ind,
         tile_width,
         true,
-        stable_sort>();
+        stable_sort>(
+        input_values_dfb, index_dfb, input_transposed_dfb, index_transposed_dfb, values_dfb, output_ind_dfb);
     constexpr uint32_t Kt = nearest32_K / tile_width;
 
     // scale temperature
 
     // mask out all values except the top-k
-    DataflowBuffer topk_mask_dfb(dfb::topk_mask);
     topk_mask_dfb.wait_front(Kt);
-    add_block_inplace(dfb::values, dfb::topk_mask, Ht * Kt);
-    mul_block_bcast_scalar_inplace<dfb::values, dfb::temp, Ht * Kt>();
+    add_block_inplace(values_dfb, topk_mask_dfb, Ht * Kt);
+    mul_block_bcast_scalar_inplace<dfb::values, dfb::temp, Ht * Kt>(values_dfb, temp_dfb);
     // softmax
-    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_max, dfb::cur_max, Ht, Kt>();
+    reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_max, dfb::cur_max, Ht, Kt>(
+        values_dfb, scaler_max_dfb, cur_max_dfb);
 
-    sub_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>();
-    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_sum, dfb::cur_sum, Ht, Kt>();
-    recip_block_inplace(dfb::cur_sum, Ht);
-    mul_block_bcast_cols(dfb::values, dfb::cur_sum, dfb::local_vals, Ht, Kt);
+    sub_exp_block_bcast_cols_inplace<dfb::values, dfb::cur_max, Ht, Kt>(values_dfb, cur_max_dfb);
+    reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, dfb::values, dfb::scaler_sum, dfb::cur_sum, Ht, Kt>(
+        values_dfb, scaler_sum_dfb, cur_sum_dfb);
+    recip_block_inplace(cur_sum_dfb, Ht);
+    mul_block_bcast_cols(values_dfb, cur_sum_dfb, local_vals_dfb, Ht, Kt);
 
     // Buffers this kernel waited and left unpopped, popped here so they are left balanced.
     // sub_exp_block_bcast_cols_inplace waits Ht tiles of dfb::cur_max, which is produced and
     // consumed entirely within this kernel. add_block_inplace waits Ht * Kt tiles of
     // dfb::topk_mask, and mul_block_bcast_scalar_inplace waits 1 tile of dfb::temp.
-    DataflowBuffer(dfb::cur_max).pop_front(Ht);
-    DataflowBuffer(dfb::topk_mask).pop_front(Ht * Kt);
-    DataflowBuffer(dfb::temp).pop_front(1);
+    cur_max_dfb.pop_front(Ht);
+    topk_mask_dfb.pop_front(Ht * Kt);
+    temp_dfb.pop_front(1);
 
     // dfb::scaler_max and dfb::scaler_sum are pushed once by the writer and waited inside
     // compute_kernel_lib::reduce, which leaves them unpopped so one pushed tile serves every reduce
     // call. Pop both here so they are left balanced.
-    DataflowBuffer(dfb::scaler_max).pop_front(1);
-    DataflowBuffer(dfb::scaler_sum).pop_front(1);
+    scaler_max_dfb.pop_front(1);
+    scaler_sum_dfb.pop_front(1);
 }

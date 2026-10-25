@@ -48,19 +48,39 @@ template <
     uint32_t Wt,
     uint32_t tile_width,
     uint32_t W,
-    uint32_t blk>
-void two_pass_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
-    DataflowBuffer dfb_in_obj(dfb_in);
-    DataflowBuffer dfb_inb_obj(dfb_inb);
-    DataflowBuffer dfb_in_fp32_obj(dfb_in_fp32);
-    DataflowBuffer dfb_inb_fp32_obj(dfb_inb_fp32);
-    DataflowBuffer dfb_pre_add_fp32_obj(dfb_pre_add_fp32);
-    DataflowBuffer dfb_interm_pre_add_obj(dfb_interm_pre_add);
-    DataflowBuffer dfb_ex_obj(dfb_ex);
-    DataflowBuffer dfb_ex2_obj(dfb_ex2);
-    DataflowBuffer dfb_ex_welford_obj(dfb_ex_welford);
-    DataflowBuffer dfb_ex2_welford_obj(dfb_ex2_welford);
-
+    uint32_t blk,
+    typename InDFB,
+    typename InbDFB,
+    typename InFp32DFB,
+    typename InbFp32DFB,
+    typename PreAddFp32DFB,
+    typename IntermPreAddDFB,
+    typename ExDFB,
+    typename Ex2DFB,
+    typename ExWelfordDFB,
+    typename Ex2WelfordDFB>
+void two_pass_fuse_pre_add(
+    InDFB& dfb_in_obj,
+    InbDFB& dfb_inb_obj,
+    InFp32DFB& dfb_in_fp32_obj,
+    InbFp32DFB& dfb_inb_fp32_obj,
+    PreAddFp32DFB& dfb_pre_add_fp32_obj,
+    IntermPreAddDFB& dfb_interm_pre_add_obj,
+    ExDFB& dfb_ex_obj,
+    Ex2DFB& dfb_ex2_obj,
+    ExWelfordDFB& dfb_ex_welford_obj,
+    Ex2WelfordDFB& dfb_ex2_welford_obj,
+    const std::array<uint32_t, W>& reciprocal_lut) {
+    ASSERT(dfb_in_obj.get_id() == dfb_in);
+    ASSERT(dfb_inb_obj.get_id() == dfb_inb);
+    ASSERT(dfb_in_fp32_obj.get_id() == dfb_in_fp32);
+    ASSERT(dfb_inb_fp32_obj.get_id() == dfb_inb_fp32);
+    ASSERT(dfb_pre_add_fp32_obj.get_id() == dfb_pre_add_fp32);
+    ASSERT(dfb_interm_pre_add_obj.get_id() == dfb_interm_pre_add);
+    ASSERT(dfb_ex_obj.get_id() == dfb_ex);
+    ASSERT(dfb_ex2_obj.get_id() == dfb_ex2);
+    ASSERT(dfb_ex_welford_obj.get_id() == dfb_ex_welford);
+    ASSERT(dfb_ex2_welford_obj.get_id() == dfb_ex2_welford);
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = last_tile_rows == 0;
     constexpr uint32_t full_block_n = blk * tile_width;
@@ -295,12 +315,17 @@ template <
     uint32_t Wt,
     uint32_t tile_width,
     uint32_t W,
-    uint32_t blk>
-void two_pass_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
-    DataflowBuffer dfb_in_obj(dfb_in);
-    DataflowBuffer dfb_x_welford_obj(dfb_x_welford);
-    DataflowBuffer dfb_in_fp32_obj(dfb_in_fp32);
-
+    uint32_t blk,
+    typename InDFB,
+    typename XWelfordDFB,
+    typename InFp32DFB>
+void two_pass_no_fuse_pre_add(
+    InDFB& dfb_in_obj,
+    XWelfordDFB& dfb_x_welford_obj,
+    InFp32DFB& dfb_in_fp32_obj,
+    const std::array<uint32_t, W>& reciprocal_lut) {
+    ASSERT(dfb_in_obj.get_id() == dfb_in);
+    ASSERT(dfb_x_welford_obj.get_id() == dfb_x_welford);
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = last_tile_rows == 0;
     constexpr uint32_t full_block_n = blk * tile_width;
@@ -502,20 +527,66 @@ void kernel_main() {
     constexpr auto dfb_ex2_welford = dfb_ex2;
 #endif
 
+    // One owning DataflowBuffer per distinct buffer; names that alias another buffer above are
+    // references to that buffer's object.
     DataflowBuffer dfb_eps_obj(dfb_eps);
     DataflowBuffer dfb_in_obj(dfb_in);
+#ifdef FUSE_PRE_ADD
     DataflowBuffer dfb_inb_obj(dfb_inb);
+    DataflowBuffer dfb_interm_pre_add_obj(dfb_interm_pre_add);
+#else
+    auto& dfb_inb_obj = dfb_in_obj;
+    auto& dfb_interm_pre_add_obj = dfb_in_obj;
+#endif
     DataflowBuffer dfb_out_obj(dfb_out);
+#ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma_obj(dfb_gamma);
+#else
+    auto& dfb_gamma_obj = dfb_in_obj;
+#endif
+#ifdef FUSE_BETA
     DataflowBuffer dfb_beta_obj(dfb_beta);
+#else
+    auto& dfb_beta_obj = dfb_in_obj;
+#endif
+    DataflowBuffer dfb_xmm_obj(dfb::xmm);
+    // Normalized tiles land in xmm when gamma/beta follow, otherwise directly in out.
+    auto& dfb_normalized = (do_gamma || do_beta) ? dfb_xmm_obj : dfb_out_obj;
     DataflowBuffer dfb_ex_obj(dfb_ex);
     DataflowBuffer dfb_ex2_obj(dfb_ex2);
+#ifdef WELFORD_STATE_FP32_ALIAS
     DataflowBuffer dfb_ex_welford_obj_main(dfb_ex_welford);
     DataflowBuffer dfb_ex2_welford_obj_main(dfb_ex2_welford);
+#else
+    auto& dfb_ex_welford_obj_main = dfb_ex_obj;
+    auto& dfb_ex2_welford_obj_main = dfb_ex2_obj;
+#endif
     DataflowBuffer dfb_ex2pe_obj(dfb_ex2pe);
+#ifdef FP32_SFPU_FINALIZER
     DataflowBuffer dfb_ex2pe_fp32_obj(dfb_ex2pe_fp32);
-    DataflowBuffer dfb_x_replay_obj(dfb_x_replay);
-    DataflowBuffer dfb_interm_pre_add_obj(dfb_interm_pre_add);
+    DataflowBuffer dfb_in_fp32_obj(dfb_in_fp32);
+#ifdef FUSE_PRE_ADD
+    DataflowBuffer dfb_inb_fp32_obj(dfb_inb_fp32);
+    DataflowBuffer dfb_pre_add_fp32_obj(dfb_pre_add_fp32);
+#else
+    auto& dfb_inb_fp32_obj = dfb_in_obj;
+#endif
+#else
+    auto& dfb_ex2pe_fp32_obj = dfb_ex2pe_obj;
+    auto& dfb_in_fp32_obj = dfb_in_obj;
+#ifdef FUSE_PRE_ADD
+    auto& dfb_inb_fp32_obj = dfb_inb_obj;
+    auto& dfb_pre_add_fp32_obj = dfb_interm_pre_add_obj;
+#else
+    auto& dfb_inb_fp32_obj = dfb_in_obj;
+#endif
+#endif
+    auto& dfb_x_replay_obj = dfb_interm_pre_add_obj;
+#ifdef WELFORD_FP32_ALIAS
+    DataflowBuffer dfb_x_welford_obj(dfb_x_welford);
+#else
+    auto& dfb_x_welford_obj = dfb_interm_pre_add_obj;
+#endif
 
     constexpr uint32_t onetile = 1;
 
@@ -565,7 +636,18 @@ void kernel_main() {
             Wt,
             tile_width,
             W,
-            blk>(*p_reciprocals);
+            blk>(
+            dfb_in_obj,
+            dfb_inb_obj,
+            dfb_in_fp32_obj,
+            dfb_inb_fp32_obj,
+            dfb_pre_add_fp32_obj,
+            dfb_interm_pre_add_obj,
+            dfb_ex_obj,
+            dfb_ex2_obj,
+            dfb_ex_welford_obj_main,
+            dfb_ex2_welford_obj_main,
+            *p_reciprocals);
 #else
         two_pass_no_fuse_pre_add<
             dfb_in,
@@ -578,7 +660,7 @@ void kernel_main() {
             Wt,
             tile_width,
             W,
-            blk>(*p_reciprocals);
+            blk>(dfb_in_obj, dfb_x_welford_obj, dfb_in_fp32_obj, *p_reciprocals);
 #endif
         // We should expect that either of the two would have have populated dst regs with mean and
         // variance in mean_dst and var_dst respectively.
@@ -726,7 +808,6 @@ void kernel_main() {
         // reader_unary_interleaved_ln_large_tensor_welford.cpp); compute pops it here to match
         // dfb_in's pop. Both share SRAM but have independent state; popping dfb_x_welford keeps it aligned
         // with dfb_in so the next NCHt statistics iteration reads from the correct SRAM offset after CB wrap.
-        DataflowBuffer dfb_x_welford_obj_eltwise(dfb_x_welford);
 
         const auto apply_affine = [&](const auto& block) __attribute__((always_inline)) {
             if constexpr (do_gamma == 1) {
@@ -734,16 +815,14 @@ void kernel_main() {
                 reconfig_data_format(dfb_xmm, dfb_gamma);
                 tile_regs_acquire();
                 dfb_gamma_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
+                dfb_xmm_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 mul_bcast_rows_init(dfb_xmm, dfb_gamma);
                 for (auto i : block.local()) {
                     mul_tiles_bcast_rows(dfb_xmm, dfb_gamma, i, i, i);
                 }
                 tile_regs_commit();
                 dfb_gamma_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
+                dfb_xmm_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
                 if constexpr (!do_beta) {
                     pack_reconfig_data_format(dfb_out);
@@ -756,13 +835,11 @@ void kernel_main() {
                     }
                     dfb_out_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
                 } else {
-                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                        .reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_xmm_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                     for (auto i : block.local()) {
                         pack_tile(i, dfb_xmm);
                     }
-                    DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                        .push_back(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_xmm_obj.push_back(static_cast<uint16_t>(block.full_block_size()));
                 }
                 tile_regs_release();
             }
@@ -772,16 +849,14 @@ void kernel_main() {
                 tile_regs_acquire();
                 reconfig_data_format(dfb_xmm, dfb_beta);
                 add_bcast_rows_init(dfb_xmm, dfb_beta);
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .wait_front(static_cast<uint16_t>(block.full_block_size()));
+                dfb_xmm_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 dfb_beta_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 for (auto i : block.local()) {
                     add_tiles_bcast_rows(dfb_xmm, dfb_beta, i, i, i);
                 }
                 tile_regs_commit();
                 dfb_beta_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .pop_front(static_cast<uint16_t>(block.full_block_size()));
+                dfb_xmm_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
 
                 pack_reconfig_data_format(dfb_out);
                 dfb_out_obj.reserve_back(static_cast<uint16_t>(block.full_block_size()));
@@ -795,8 +870,6 @@ void kernel_main() {
         };
 
         if constexpr (fp32_sfpu_finalizer) {
-            DataflowBuffer dfb_in_fp32_obj_eltwise(dfb_in_fp32);
-            DataflowBuffer dfb_inb_fp32_obj_eltwise(dfb_inb_fp32);
             sfpu_bcast_col_init();
 
             for (auto block : generic::blocks(Wt, blk)) {
@@ -804,19 +877,18 @@ void kernel_main() {
                     dfb_x_replay_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 } else {
                     dfb_in_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
-                    dfb_in_fp32_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_in_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     if constexpr (fuse_pre_add) {
                         dfb_inb_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
-                        dfb_inb_fp32_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                        dfb_inb_fp32_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                 }
                 if constexpr (welford_fp32_alias && !fuse_pre_add) {
-                    dfb_x_welford_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_x_welford_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 }
                 if constexpr (!(do_gamma || do_beta)) {
                     dfb_xmm = dfb_out;
                 }
-                DataflowBuffer dfb_normalized(dfb_xmm);
                 dfb_normalized.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 pack_reconfig_data_format(dfb_xmm);
                 constexpr uint32_t data_dst = 0;
@@ -893,14 +965,14 @@ void kernel_main() {
                     dfb_x_replay_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                 } else {
                     dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                    dfb_in_fp32_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_in_fp32_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     if constexpr (fuse_pre_add) {
                         dfb_inb_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
-                        dfb_inb_fp32_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                        dfb_inb_fp32_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                 }
                 if constexpr (welford_fp32_alias && !fuse_pre_add) {
-                    dfb_x_welford_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_x_welford_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                 }
                 apply_affine(block);
             }
@@ -918,7 +990,7 @@ void kernel_main() {
                     // dfb_x_welford was pushed by the reader in pass 2; wait for the push and pop in
                     // lockstep with dfb_in. We do not actually read dfb_x_welford in the eltwise pass
                     // (FPU consumes dfb_in via SrcA); this is purely a FIFO-pointer sync.
-                    dfb_x_welford_obj_eltwise.wait_front(static_cast<uint16_t>(block.full_block_size()));
+                    dfb_x_welford_obj.wait_front(static_cast<uint16_t>(block.full_block_size()));
                 }
                 if constexpr (fuse_pre_add && !fused_pre_add_replay) {
                     // Form a+b in FP32 DEST before centring. Evaluating
@@ -962,7 +1034,7 @@ void kernel_main() {
                         dfb_in_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                     if constexpr (welford_fp32_alias && !fuse_pre_add) {
-                        dfb_x_welford_obj_eltwise.pop_front(static_cast<uint16_t>(block.full_block_size()));
+                        dfb_x_welford_obj.pop_front(static_cast<uint16_t>(block.full_block_size()));
                     }
                 }
 
@@ -983,14 +1055,12 @@ void kernel_main() {
 
                 pack_reconfig_data_format(dfb_xmm);
                 // Sync with writer on full blocks
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .reserve_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_normalized.reserve_back(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_wait();
                 for (auto i : block.local()) {
                     pack_tile(i, dfb_xmm);
                 }
-                DataflowBuffer(static_cast<uint16_t>(dfb_xmm))
-                    .push_back(static_cast<uint16_t>(block.full_block_size()));
+                dfb_normalized.push_back(static_cast<uint16_t>(block.full_block_size()));
                 tile_regs_release();
 
                 apply_affine(block);

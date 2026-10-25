@@ -18,8 +18,8 @@ constexpr uint32_t LOG2_SUB_N = get_arg(args::log2_sub_n);
 
 enum : uint32_t { OP_ADD = 0, OP_SUB = 1, OP_MUL = 2 };
 
-template <uint32_t OP, typename DfbA, typename DfbB, typename DfbOut>
-FORCE_INLINE void sfpu_binop_push(DfbA a, DfbB b, DfbOut out) {
+template <uint32_t OP, typename DfbA, typename DfbB, typename OutDFB>
+FORCE_INLINE void sfpu_binop_push(DfbA a, DfbB b, OutDFB& cb_out) {
     tile_regs_acquire();
 
     copy_init(a);
@@ -41,28 +41,33 @@ FORCE_INLINE void sfpu_binop_push(DfbA a, DfbB b, DfbOut out) {
 
     tile_regs_commit();
 
-    DataflowBuffer cb_out(out);
     cb_out.reserve_back(1);
     tile_regs_wait();
-    pack_tile(0, out);
+    pack_tile(0, cb_out.get_id());
     tile_regs_release();
     cb_out.push_back(1);
 }
 
-template <typename AR, typename AI, typename BR, typename BI, typename OutR, typename OutI>
-FORCE_INLINE void cmul(AR ar, AI ai, BR br, BI bi, OutR outr, OutI outi) {
-    DataflowBuffer cb_tmp_r(dfb::tmp_r);
-    DataflowBuffer cb_tmp_i(dfb::tmp_i);
-    sfpu_binop_push<OP_MUL>(ar, br, dfb::tmp_r);
-    sfpu_binop_push<OP_MUL>(ai, bi, dfb::tmp_i);
+template <
+    typename AR,
+    typename AI,
+    typename BR,
+    typename BI,
+    typename TmpRDFB,
+    typename TmpIDFB,
+    typename OutrDFB,
+    typename OutiDFB>
+FORCE_INLINE void cmul(AR ar, AI ai, BR br, BI bi, TmpRDFB& cb_tmp_r, TmpIDFB& cb_tmp_i, OutrDFB& outr, OutiDFB& outi) {
+    sfpu_binop_push<OP_MUL>(ar, br, cb_tmp_r);
+    sfpu_binop_push<OP_MUL>(ai, bi, cb_tmp_i);
     cb_tmp_r.wait_front(1);
     cb_tmp_i.wait_front(1);
     sfpu_binop_push<OP_SUB>(dfb::tmp_r, dfb::tmp_i, outr);
     cb_tmp_r.pop_front(1);
     cb_tmp_i.pop_front(1);
 
-    sfpu_binop_push<OP_MUL>(ar, bi, dfb::tmp_r);
-    sfpu_binop_push<OP_MUL>(ai, br, dfb::tmp_i);
+    sfpu_binop_push<OP_MUL>(ar, bi, cb_tmp_r);
+    sfpu_binop_push<OP_MUL>(ai, br, cb_tmp_i);
     cb_tmp_r.wait_front(1);
     cb_tmp_i.wait_front(1);
     sfpu_binop_push<OP_ADD>(dfb::tmp_r, dfb::tmp_i, outi);
@@ -84,6 +89,12 @@ void kernel_main() {
     DataflowBuffer cb_tw_i(dfb::twiddle_i);
     DataflowBuffer cb_tw_odd_r(dfb::tw_odd_r);
     DataflowBuffer cb_tw_odd_i(dfb::tw_odd_i);
+    DataflowBuffer cb_tmp_r(dfb::tmp_r);
+    DataflowBuffer cb_tmp_i(dfb::tmp_i);
+    DataflowBuffer cb_out0_r(dfb::out0_r);
+    DataflowBuffer cb_out0_i(dfb::out0_i);
+    DataflowBuffer cb_out1_r(dfb::out1_r);
+    DataflowBuffer cb_out1_i(dfb::out1_i);
 
     for (uint32_t k = 0; k < batch_per_core; ++k) {
         for (uint32_t s = 0; s < LOG2_SUB_N; ++s) {
@@ -94,7 +105,7 @@ void kernel_main() {
             cb_tw_r.wait_front(1);
             cb_tw_i.wait_front(1);
 
-            cmul(dfb::odd_r, dfb::odd_i, dfb::twiddle_r, dfb::twiddle_i, dfb::tw_odd_r, dfb::tw_odd_i);
+            cmul(dfb::odd_r, dfb::odd_i, dfb::twiddle_r, dfb::twiddle_i, cb_tmp_r, cb_tmp_i, cb_tw_odd_r, cb_tw_odd_i);
 
             cb_odd_r.pop_front(1);
             cb_odd_i.pop_front(1);
@@ -104,10 +115,10 @@ void kernel_main() {
             cb_tw_odd_r.wait_front(1);
             cb_tw_odd_i.wait_front(1);
 
-            sfpu_binop_push<OP_ADD>(dfb::even_r, dfb::tw_odd_r, dfb::out0_r);
-            sfpu_binop_push<OP_ADD>(dfb::even_i, dfb::tw_odd_i, dfb::out0_i);
-            sfpu_binop_push<OP_SUB>(dfb::even_r, dfb::tw_odd_r, dfb::out1_r);
-            sfpu_binop_push<OP_SUB>(dfb::even_i, dfb::tw_odd_i, dfb::out1_i);
+            sfpu_binop_push<OP_ADD>(dfb::even_r, dfb::tw_odd_r, cb_out0_r);
+            sfpu_binop_push<OP_ADD>(dfb::even_i, dfb::tw_odd_i, cb_out0_i);
+            sfpu_binop_push<OP_SUB>(dfb::even_r, dfb::tw_odd_r, cb_out1_r);
+            sfpu_binop_push<OP_SUB>(dfb::even_i, dfb::tw_odd_i, cb_out1_i);
 
             cb_even_r.pop_front(1);
             cb_even_i.pop_front(1);

@@ -140,7 +140,7 @@ TT_KERNEL void compute(uint32_t wi_count) {
         square(Vt, tmp);
         compute_kernel_lib::
             reduce<ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
-                compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
+                tmp, scaler, stats, compute_kernel_lib::ReduceInputBlockShape::of(1, Vt));
         stats.wait_front(1);
         inverse_rms(inv);
         inv.wait_front(1);

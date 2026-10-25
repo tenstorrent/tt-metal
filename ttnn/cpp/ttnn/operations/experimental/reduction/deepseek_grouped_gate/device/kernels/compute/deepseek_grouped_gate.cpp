@@ -306,8 +306,16 @@ template <
     uint32_t cb_reduce_intermediate,
     uint32_t cb_reciprocal_sums,
     uint32_t cb_epsilon_scalar,
-    uint32_t cb_normalized_scores>
-void normalize_scores() {
+    uint32_t cb_normalized_scores,
+    typename GatheredSigmoidDFB,
+    typename ReduceOnesScalarDFB,
+    typename ReduceIntermediateDFB>
+void normalize_scores(
+    GatheredSigmoidDFB& gathered_sigmoid_dfb,
+    ReduceOnesScalarDFB& reduce_ones_scalar_dfb,
+    ReduceIntermediateDFB& reduce_intermediate_dfb) {
+    ASSERT(gathered_sigmoid_dfb.get_id() == cb_gathered_sigmoid);
+    ASSERT(reduce_intermediate_dfb.get_id() == cb_reduce_intermediate);
     CircularBuffer cb_gathered(cb_gathered_sigmoid);
     CircularBuffer cb_reduce_inter(cb_reduce_intermediate);
     CircularBuffer cb_epsilon(cb_epsilon_scalar);
@@ -320,7 +328,11 @@ void normalize_scores() {
         cb_gathered_sigmoid,
         cb_reduce_ones_scalar,
         cb_reduce_intermediate,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(compute_kernel_lib::ReduceInputBlockShape::single());
+        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+        gathered_sigmoid_dfb,
+        reduce_ones_scalar_dfb,
+        reduce_intermediate_dfb,
+        compute_kernel_lib::ReduceInputBlockShape::single());
 
     // 2. Add epsilon to intermediate results
     cb_epsilon.wait_front(1);
@@ -441,6 +453,9 @@ void kernel_main() {
 
     const uint32_t start_height_tile = get_arg_val<uint32_t>(0);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(1);
+    DataflowBuffer gathered_sigmoid_dfb(cb_gathered_sigmoid);
+    DataflowBuffer reduce_ones_scalar_dfb(cb_reduce_ones_scalar);
+    DataflowBuffer reduce_intermediate_dfb(cb_reduce_intermediate);
     compute_kernel_hw_startup(cb_in_scores, cb_in_bias, cb_biased_scores);
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
@@ -477,7 +492,7 @@ void kernel_main() {
             cb_reduce_intermediate,
             cb_reciprocal_sums,
             cb_epsilon_scalar,
-            cb_normalized_scores>();
+            cb_normalized_scores>(gathered_sigmoid_dfb, reduce_ones_scalar_dfb, reduce_intermediate_dfb);
         blocks::scale(cb_normalized_scores, cb_route_scale_scalar, cb_out_weights);
     }
 }

@@ -32,7 +32,8 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb_in0_obj(dfb::in0);
-    dataflow_kernel_lib::prepare_zero_tile<dfb::in1>();
+    DataflowBuffer cb_in1_obj(dfb::in1);
+    dataflow_kernel_lib::prepare_zero_tile(cb_in1_obj);
 
     const uint32_t input_tile_bytes = cb_in0_obj.get_entry_size();
 

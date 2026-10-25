@@ -129,6 +129,10 @@ void kernel_main() {
     DataflowBuffer dfb_gamma(dfb_gamma_id);
     DataflowBuffer dfb_beta(dfb_beta_id);
     DataflowBuffer dfb_out(dfb_out_id);
+    constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
+    constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
+    DataflowBuffer dfb_scaler(dfb_in_2);
+    DataflowBuffer dfb_scaler_c(dfb_in_4);
 
     const uint32_t single_tile_size_bytes = dfb_out.get_tile_size();
     const uint32_t input_mask_single_tile_size_bytes = dfb_input_mask.get_tile_size();
@@ -250,33 +254,30 @@ void kernel_main() {
 
             if (i == 0 and b == 0) {
                 if constexpr (!use_welford) {
-                    constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
                     if constexpr (has_pad_correction) {
                         // 1 / sqrt(reduce_factor_w * logical_hw / padded_hw), precomputed on host.
                         // The row mask fixes the numerator; this fixes the denominator.
                         const float pad_corrected_scaler = __builtin_bit_cast(float, pad_scaler_bits);
-                        dataflow_kernel_lib::prepare_reduce_scaler<
-                            dfb_in_2,
-                            ckernel::PoolType::AVG,
-                            ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
+                        dataflow_kernel_lib::
+                            prepare_reduce_scaler<dfb_in_2, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_SCALAR>(
+                                dfb_scaler, pad_corrected_scaler);
                     } else {
                         constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
                         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                             dfb_in_2,
                             ckernel::PoolType::AVG,
                             ckernel::ReduceDim::REDUCE_SCALAR,
-                            reduce_factor_w>();
+                            reduce_factor_w>(dfb_scaler);
                     }
                 }
 
                 if constexpr (!use_welford && is_mcast_sender) {
-                    constexpr uint32_t dfb_in_4 = tt::CBIndex::c_4;
                     constexpr uint32_t reduce_factor_c = get_named_compile_time_arg_val("reduce_factor_c");
                     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                         dfb_in_4,
                         ckernel::PoolType::AVG,
                         ckernel::ReduceDim::REDUCE_SCALAR,
-                        reduce_factor_c>();
+                        reduce_factor_c>(dfb_scaler_c);
                 }
 
                 constexpr uint32_t eps_dfb_id = tt::CBIndex::c_3;

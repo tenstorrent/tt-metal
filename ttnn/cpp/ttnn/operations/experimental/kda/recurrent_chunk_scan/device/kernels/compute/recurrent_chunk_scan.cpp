@@ -332,13 +332,17 @@ template <
     typename DFBDestination,
     typename DFBCorrected,
     typename DFBKDecayT,
-    typename DFBFinalDecay>
+    typename DFBFinalDecay,
+    typename DFBStateUpdate,
+    typename DFBStateTemporary>
 FORCE_INLINE void update_state(
     DFBState& current_state,
     DFBDestination& destination,
     DFBCorrected& corrected_value,
     DFBKDecayT& k_decay_transposed,
-    DFBFinalDecay& final_decay) {
+    DFBFinalDecay& final_decay,
+    DFBStateUpdate& state_update,
+    DFBStateTemporary& state_temporary) {
     constexpr uint32_t chunk_value_tiles = Ct * Vt;
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
@@ -350,8 +354,6 @@ FORCE_INLINE void update_state(
     // The update and the decayed state are each packed to FP32 and then added. Accumulating the matmul onto the
     // decayed state in DST instead changes the result enough that Kimi-K3's chunked prefill drifts from the
     // reference over consecutive calls (L24 worst-layer PCC 0.981 -> 0.953 at 56k tokens).
-    DataflowBuffer state_update(dfb::state_update);
-    DataflowBuffer state_temporary(dfb::state_temporary);
     matrix_multiply<Kt, Ct, Vt>(k_decay_transposed, corrected_value, state_update);
     state_update.wait_front(key_value_tiles);
     multiply_by_decay(current_state, final_decay, state_temporary, Kt, Vt);
@@ -386,6 +388,8 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer summary_head_output(dfb::summary_head_output);
     DataflowBuffer summary_head_state(dfb::summary_head_state);
     DataflowBuffer transport_state(dfb::transport_state);
+    DataflowBuffer state_update(dfb::state_update);
+    DataflowBuffer state_temporary(dfb::state_temporary);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -407,7 +411,13 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
         compute_value_new<ChunkInputPolicy::RETAIN, Ct, Kt, Vt, 2>(
             current, kd, v_beta, t_inv, scratch, value_new, scratch);
         update_state<ChunkInputPolicy::RETAIN, Ct, Kt, pair_columns>(
-            current, last ? final_state : state_ring, scratch, k_decay_transposed, final_decay);
+            current,
+            last ? final_state : state_ring,
+            scratch,
+            k_decay_transposed,
+            final_decay,
+            state_update,
+            state_temporary);
         if (split_chunk != 0 && chunk + 1 == split_chunk) {
             state_ring.wait_front(key_pair_tiles);
             pack_reconfig_data_format(summary_head_output.get_id());
@@ -453,6 +463,8 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
     DataflowBuffer tail_entry_states(dfb::tail_entry_states);
+    DataflowBuffer state_update(dfb::state_update);
+    DataflowBuffer state_temporary(dfb::state_temporary);
 
     constexpr uint32_t key_value_tiles = Kt * Vt;
 
@@ -479,7 +491,7 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
 
         pack_reconfig_data_format(dfb::state_ring);
         update_state<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            current_state, destination, value_new, k_decay_transposed, final_decay);
+            current_state, destination, value_new, k_decay_transposed, final_decay, state_update, state_temporary);
     }
 }
 

@@ -9,10 +9,10 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
-template <typename T>
+template <typename T, typename DFB>
 void write_mean_rstd(
     const Noc& noc,
-    uint32_t cb_id,
+    DFB& dfb,
     uint32_t tile_offset,
     uint32_t num_inner,
     uint32_t normalized_dims,
@@ -25,8 +25,7 @@ void write_mean_rstd(
     using namespace tt::constants;
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer dfb(cb_id);
-    const uint32_t cb_tile_bytes = get_tile_size(cb_id);
+    const uint32_t cb_tile_bytes = get_tile_size(dfb.get_id());
     const auto cb_dtype_bytes = cb_tile_bytes / (TILE_HEIGHT * TILE_WIDTH);
 
     dfb.wait_front(onetile);
@@ -134,12 +133,14 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_output(cb_id_output);
+    DataflowBuffer dfb_mean(cb_id_mean);
+    DataflowBuffer dfb_rstd(cb_id_rstd);
 
     for (uint32_t outer_idx = 0; outer_idx < num_rows_per_core; outer_idx++) {
         if (mean_has_value) {
             write_mean_rstd(
                 noc,
-                cb_id_mean,
+                dfb_mean,
                 tile_offset,
                 num_inner,
                 normalized_dims,
@@ -154,7 +155,7 @@ void kernel_main() {
         if (rstd_has_value) {
             write_mean_rstd(
                 noc,
-                cb_id_rstd,
+                dfb_rstd,
                 tile_offset,
                 num_inner,
                 normalized_dims,

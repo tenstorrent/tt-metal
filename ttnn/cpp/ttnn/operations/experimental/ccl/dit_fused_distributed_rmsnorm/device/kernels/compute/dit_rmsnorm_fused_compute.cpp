@@ -163,6 +163,13 @@ void kernel_main() {
     CircularBuffer cb_stats_transposed_gathered(stats_transposed_gathered_cb);
     // Aliases the packed-AG or the plain gathered CB, per stats_reduce_src_cb above.
     CircularBuffer cb_stats_reduce_src(stats_reduce_src_cb);
+    DataflowBuffer dfb_pre_intermediate(pre_intermediate_cb);
+    DataflowBuffer dfb_reduce_scalar_sum(reduce_scalar_sum_cb);
+    DataflowBuffer dfb_reduce_scalar_avg(reduce_scalar_avg_cb);
+    DataflowBuffer dfb_reduce_result(reduce_result_cb);
+    DataflowBuffer dfb_stats_gathered(stats_gathered_cb);
+    DataflowBuffer dfb_stats_local(stats_local_cb);
+    auto& dfb_stats_dest = (is_tp_1 != 0) ? dfb_stats_gathered : dfb_stats_local;
 
     // One-time waits for reader-produced singletons.
     cb_reduce_scalar_sum.wait_front(1);
@@ -253,7 +260,11 @@ void kernel_main() {
                         ReduceDim::REDUCE_ROW,
                         pre_intermediate_cb,
                         reduce_scalar_sum_cb,
-                        stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                        stats_dest_cb>(
+                        dfb_pre_intermediate,
+                        dfb_reduce_scalar_sum,
+                        dfb_stats_dest,
+                        compute_kernel_lib::ReduceInputBlockShape::single());
                 }
             } else {
                 uint32_t input_tiles_waited = 0;
@@ -311,7 +322,11 @@ void kernel_main() {
                             ReduceDim::REDUCE_ROW,
                             pre_intermediate_cb,
                             reduce_scalar_sum_cb,
-                            stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
+                            stats_dest_cb>(
+                            dfb_pre_intermediate,
+                            dfb_reduce_scalar_sum,
+                            dfb_stats_dest,
+                            compute_kernel_lib::ReduceInputBlockShape::single());
                     }
                 }
             }
@@ -390,6 +405,9 @@ void kernel_main() {
                                     stats_gathered_cb,
                                     reduce_scalar_avg_cb,
                                     reduce_result_cb>(
+                                    dfb_stats_gathered,
+                                    dfb_reduce_scalar_avg,
+                                    dfb_reduce_result,
                                     compute_kernel_lib::ReduceInputBlockShape::single(),
                                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                                     compute_kernel_lib::NoAccumulation{},
@@ -488,6 +506,9 @@ void kernel_main() {
                                     stats_gathered_cb,
                                     reduce_scalar_avg_cb,
                                     reduce_result_cb>(
+                                    dfb_stats_gathered,
+                                    dfb_reduce_scalar_avg,
+                                    dfb_reduce_result,
                                     compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols),
                                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                                     compute_kernel_lib::NoAccumulation{},

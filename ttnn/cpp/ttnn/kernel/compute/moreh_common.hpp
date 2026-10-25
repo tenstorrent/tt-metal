@@ -58,7 +58,7 @@ using moreh_dfb_t =
     DataflowBufferFor<moreh_input<Dfb>.producer_access_pattern, moreh_input<Dfb>.consumer_access_pattern>;
 
 template <typename IDFB>
-ALWI void pack_tile_with_dt(uint32_t ifrom_dst, IDFB icb) {
+ALWI void pack_tile_with_dt(uint32_t ifrom_dst, IDFB& icb) {
 #if defined FP32_DEST_ACC_EN
     pack_reconfig_data_format(icb.get_id());
 #endif
@@ -66,7 +66,7 @@ ALWI void pack_tile_with_dt(uint32_t ifrom_dst, IDFB icb) {
 }
 
 template <typename IDFB>
-ALWI void copy_tile_init_with_dt(IDFB icb, uint32_t transpose = 0) {
+ALWI void copy_tile_init_with_dt(IDFB& icb, uint32_t transpose = 0) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format_srca(icb.get_id());
 #endif
@@ -74,7 +74,7 @@ ALWI void copy_tile_init_with_dt(IDFB icb, uint32_t transpose = 0) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void add_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void add_tiles_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -82,7 +82,7 @@ ALWI void add_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void add_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void add_bcast_rows_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -90,7 +90,7 @@ ALWI void add_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void add_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void add_bcast_cols_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -98,7 +98,7 @@ ALWI void add_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void add_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void add_bcast_scalar_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -106,7 +106,7 @@ ALWI void add_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void sub_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void sub_tiles_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -114,7 +114,7 @@ ALWI void sub_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void sub_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void sub_bcast_rows_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -124,7 +124,7 @@ ALWI void sub_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void sub_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void sub_bcast_cols_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -132,7 +132,7 @@ ALWI void sub_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void sub_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void sub_bcast_scalar_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -140,7 +140,7 @@ ALWI void sub_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void mul_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void mul_tiles_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -148,7 +148,7 @@ ALWI void mul_tiles_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void mul_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void mul_bcast_rows_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -156,7 +156,7 @@ ALWI void mul_bcast_rows_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void mul_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void mul_bcast_cols_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -164,7 +164,7 @@ ALWI void mul_bcast_cols_init_with_dt(DFB0 icb0, DFB1 icb1) {
 }
 
 template <typename DFB0, typename DFB1>
-ALWI void mul_bcast_scalar_init_with_dt(DFB0 icb0, DFB1 icb1) {
+ALWI void mul_bcast_scalar_init_with_dt(DFB0& icb0, DFB1& icb1) {
 #if defined FP32_DEST_ACC_EN
     reconfig_data_format(icb0.get_id(), icb1.get_id());
 #endif
@@ -763,7 +763,7 @@ ALWI void power_and_recip_tile_to_dfb(
 
 template <typename DFB0, typename DFB1, typename ODFB>
 ALWI void mul_tiles_to_cb(
-    DFB0 icb0, DFB1 icb1, ODFB ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    DFB0& icb0, DFB1& icb1, ODFB& ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -791,7 +791,7 @@ ALWI void mul_tiles_to_cb(
 }
 
 template <typename IDFB, typename ODFB>
-ALWI void copy_tile_to_cb(IDFB icb, ODFB ocb, uint32_t itile = 0, uint32_t pop = 1) {
+ALWI void copy_tile_to_cb(IDFB& icb, ODFB& ocb, uint32_t itile = 0, uint32_t pop = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -815,7 +815,7 @@ ALWI void copy_tile_to_cb(IDFB icb, ODFB ocb, uint32_t itile = 0, uint32_t pop =
 
 template <typename DFB0, typename DFB1, typename ODFB>
 ALWI void add_tiles_to_cb(
-    DFB0 icb0, DFB1 icb1, ODFB ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    DFB0& icb0, DFB1& icb1, ODFB& ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -844,7 +844,7 @@ ALWI void add_tiles_to_cb(
 
 template <typename DFB0, typename DFB1, typename ODFB>
 ALWI void sub_tiles_to_cb(
-    DFB0 icb0, DFB1 icb1, ODFB ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
+    DFB0& icb0, DFB1& icb1, ODFB& ocb, uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
 
@@ -880,12 +880,12 @@ template <
     typename DFBExpLxmd,
     typename DFBCorrectXPow>
 ALWI void power_tile_to_cb(
-    DFBX cb_x,
-    DFBXPow cb_xpow,
-    DFBLogX cb_logx,
-    DFBDecimal cb_decimal,
-    DFBExpLxmd cb_exp_lxmd,
-    DFBCorrectXPow cb_correct_xpow,
+    DFBX& cb_x,
+    DFBXPow& cb_xpow,
+    DFBLogX& cb_logx,
+    DFBDecimal& cb_decimal,
+    DFBExpLxmd& cb_exp_lxmd,
+    DFBCorrectXPow& cb_correct_xpow,
     uint32_t p,
     bool p_is_negative) {
     constexpr uint32_t onetile = 1;
@@ -972,7 +972,7 @@ ALWI void power_tile_to_cb(
 }
 
 template <typename IDFB>
-ALWI void copy_tile_to_dst(IDFB icb, uint32_t itile = 0, uint32_t dst = 0, bool cb_wait_and_pop = true) {
+ALWI void copy_tile_to_dst(IDFB& icb, uint32_t itile = 0, uint32_t dst = 0, bool cb_wait_and_pop = true) {
     constexpr uint32_t onetile = 1;
     if (cb_wait_and_pop) {
         icb.wait_front(onetile);
@@ -986,7 +986,7 @@ ALWI void copy_tile_to_dst(IDFB icb, uint32_t itile = 0, uint32_t dst = 0, bool 
 }
 
 template <typename ODFB>
-ALWI void pack_tile_from_dst(ODFB ocb, uint32_t dst = 0) {
+ALWI void pack_tile_from_dst(ODFB& ocb, uint32_t dst = 0) {
     constexpr uint32_t onetile = 1;
     ocb.reserve_back(onetile);
     pack_reconfig_data_format(ocb.get_id());

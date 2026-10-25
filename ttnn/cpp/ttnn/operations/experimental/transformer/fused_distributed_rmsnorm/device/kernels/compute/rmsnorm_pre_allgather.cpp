@@ -32,6 +32,9 @@ void kernel_main() {
     CircularBuffer cb_input(input_cb);
     CircularBuffer cb_reduce_scalar(reduce_scalar_cb);
     CircularBuffer cb_intermediate(intermediate_cb);
+    DataflowBuffer intermediate_dfb(intermediate_cb);
+    DataflowBuffer reduce_scalar_dfb(reduce_scalar_cb);
+    DataflowBuffer output_dfb(output_cb);
 
     compute_kernel_hw_startup(input_cb, input_cb, intermediate_cb);
 
@@ -79,7 +82,7 @@ void kernel_main() {
          * sum(x**2)
          */
         compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, intermediate_cb, reduce_scalar_cb, output_cb>(
-            compute_kernel_lib::ReduceInputBlockShape::single());
+            intermediate_dfb, reduce_scalar_dfb, output_dfb, compute_kernel_lib::ReduceInputBlockShape::single());
     }
     cb_reduce_scalar.pop_front(onetile);
 }

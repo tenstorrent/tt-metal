@@ -83,6 +83,12 @@ void kernel_main() {
     CircularBuffer cb_scaler_obj(cb_scaler);
     CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
     CircularBuffer cb_signaling(signaling_cb);
+    DataflowBuffer cb_ex_external2_obj(cb_ex_external2);
+    DataflowBuffer cb_scaler_global_obj(cb_scaler_global);
+    DataflowBuffer cb_to_allgather_writer_obj(cb_to_allgather_writer);
+    DataflowBuffer cb_ex2_obj(cb_ex2);
+    DataflowBuffer post_cb_scaler_global_obj(post_cb_scaler_global);
+    DataflowBuffer cb_eps_obj(cb_eps);
 
     const uint32_t subblock_w = (block_w <= 2) ? subblock_w_volatile : subblock_w_const;
 
@@ -157,7 +163,8 @@ void kernel_main() {
                 cb_scaler_global,
                 cb_to_allgather_writer,
                 ckl::ReduceInputPolicy::WaitAndPopPerTile,
-                ckl::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+                ckl::ReduceDataFormatReconfigMode::INPUT>(
+                cb_ex_external2_obj, cb_scaler_global_obj, cb_to_allgather_writer_obj, reduce_block);
         } else {
             ckl::reduce<
                 PoolType::AVG,
@@ -166,7 +173,8 @@ void kernel_main() {
                 cb_scaler_global,
                 cb_ex2,
                 ckl::ReduceInputPolicy::WaitAndPopPerTile,
-                ckl::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+                ckl::ReduceDataFormatReconfigMode::INPUT>(
+                cb_ex_external2_obj, cb_scaler_global_obj, cb_ex2_obj, reduce_block);
         }
     }
 
@@ -193,8 +201,8 @@ void kernel_main() {
         if (enable_sqrt) {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
             CircularBuffer cb_stats_obj(cb_stats);
+            DataflowBuffer cb_stats_dfb(cb_stats);
             DataflowBuffer cb_var_obj(cb_var);
-            DataflowBuffer cb_eps_obj(cb_eps);
             DataflowBuffer cb_stats_reduced_obj(cb_stats_reduced);
 
             // The factory gives cb_var and cb_x2 the same cb_data_format, so the existing packer
@@ -206,7 +214,11 @@ void kernel_main() {
                 post_cb_scaler_global,
                 cb_var,
                 ckl::ReduceInputPolicy::NoWaitNoPop,
-                ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(num_distributed_blocks));
+                ckl::ReduceDataFormatReconfigMode::INPUT>(
+                cb_stats_dfb,
+                post_cb_scaler_global_obj,
+                cb_var_obj,
+                ckl::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_stats_obj.pop_front(num_distributed_blocks);
 
             // Reduce distributed E[x^2], then compute 1/sqrt(E[x^2] + eps).

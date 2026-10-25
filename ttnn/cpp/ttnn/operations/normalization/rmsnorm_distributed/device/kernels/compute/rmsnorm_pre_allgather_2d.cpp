@@ -50,6 +50,9 @@ void kernel_main() {
     CircularBuffer cb_inp(cb_inp_idx);
     CircularBuffer cb_reduce(cb_reduce_idx);
     CircularBuffer cb_x2(cb_x2_idx);
+    DataflowBuffer cb_x2_dfb(cb_x2_idx);  // reduce-helper handles for the same buffers
+    DataflowBuffer cb_reduce_dfb(cb_reduce_idx);
+    DataflowBuffer cb_out_dfb(cb_out);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         /*
@@ -84,7 +87,8 @@ void kernel_main() {
             cb_x2_idx,
             cb_reduce_idx,
             cb_out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+            cb_x2_dfb, cb_reduce_dfb, cb_out_dfb, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
         cb_inp.pop_front(Wt);
         cb_reduce.pop_front(1);
     }

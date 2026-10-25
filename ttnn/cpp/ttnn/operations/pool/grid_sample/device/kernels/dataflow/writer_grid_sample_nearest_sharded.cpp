@@ -29,7 +29,7 @@ ALWI void process_grid_point_nearest(
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
     uint32_t batch_offset,
-    OutputDFB output_dfb,
+    OutputDFB& output_dfb,
     uint32_t output_write_offset,
     uint32_t fill_stick_addr) {
     // Compute scaling factors to match prepare_grid.cpp

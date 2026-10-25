@@ -20,8 +20,9 @@ void kernel_main() {
     uint32_t input_total_blocks_w = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_id_in2 = 2;
+    DataflowBuffer cb_in2(cb_id_in2);
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(cb_in2);
 
     constexpr uint32_t cb_id_in0 = 0;
     CircularBuffer cb_in0(cb_id_in0);

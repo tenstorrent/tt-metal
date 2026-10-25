@@ -84,7 +84,7 @@ void kernel_main() {
 
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_x2(dfb_x2_id);
-    const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
+    DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_ex_external2(dfb_ex_external2_id);
 
@@ -184,6 +184,9 @@ void kernel_main() {
         dfb_ex_partial2_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        dfb_x2,
+        dfb_scaler,
+        dfb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     dfb_x2.pop_front(num_tiles_per_block);
@@ -201,6 +204,9 @@ void kernel_main() {
         dfb_ex_partial2_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        dfb_in,
+        dfb_scaler,
+        dfb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(dfb_in_id, dfb_in_id);
@@ -273,6 +279,9 @@ void kernel_main() {
         dfb_scaler_id,
         dfb_ex_partial2_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+        dfb_x2,
+        dfb_scaler,
+        dfb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(dfb_x2_id, dfb_scaler_id);
@@ -298,8 +307,9 @@ void kernel_main() {
         // reserves them again. If there were ever a second reserve here, or a loop around this block,
         // would overwrite partials that the second-stage reader has not yet read, so additional
         // synchronization would be needed.
-        DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
-            .reserve_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
+        DataflowBuffer dfb_reduction_out_obj(static_cast<uint16_t>(dfb_reduction_out));
+        dfb_reduction_out_obj.reserve_back(
+            static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height
             tile_regs_acquire();
@@ -324,17 +334,16 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        DataflowBuffer(static_cast<uint16_t>(dfb_reduction_out))
-            .push_back(static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
+        dfb_reduction_out_obj.push_back(
+            static_cast<uint16_t>(num_tiles_per_partial_result * num_tiles_per_allgather_worker));
         if (dfb_reduction_out == dfb_out) {
             // The statistics leave the device through the all-gather, not a kernel: compute is the only
             // producer and consumer of the output DFB (self-loop), so pop what it just pushed. dummy_unpack
             // orders the pop after the wait on Quasar (nothing unpacks this buffer).
             const uint32_t num_out_tiles = num_tiles_per_partial_result * num_tiles_per_allgather_worker;
-            DataflowBuffer dfb_out_obj(dfb_out);
-            dfb_out_obj.wait_front(num_out_tiles);
+            dfb_reduction_out_obj.wait_front(num_out_tiles);
             dummy_unpack(dfb_out);
-            dfb_out_obj.pop_front(num_out_tiles);
+            dfb_reduction_out_obj.pop_front(num_out_tiles);
         }
         // The global-reduce scaler tile is pushed once (only on all-gather worker cores) and read by
         // tile index throughout the global reduce above without being popped. Pop it once here, inside

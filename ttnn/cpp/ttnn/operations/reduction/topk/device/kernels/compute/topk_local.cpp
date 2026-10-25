@@ -134,6 +134,8 @@ void kernel_main() {
     ckernel::topk_tile_init<fused_keys>();
     constexpr auto tie_order = ckernel::topk_tie_order_from_global_direction(largest != 0);
 
+    DataflowBuffer input_dfb(input_dfb_index);
+    DataflowBuffer index_dfb(index_dfb_index);
     DataflowBuffer input_transposed_dfb(input_transposed_dfb_index);
     DataflowBuffer index_transposed_dfb(index_transposed_dfb_index);
     DataflowBuffer values_dfb(values_dfb_index);
@@ -148,14 +150,14 @@ void kernel_main() {
 
         // Initial bitonic sort on local width chunk
         process_and_sort_tiles<network_stable, fused_keys, largest != 0, tie_order>(
-            input_dfb_index,             // Input values buffer (double-buffered)
-            index_dfb_index,             // Input indices buffer (double-buffered)
-            input_transposed_dfb_index,  // Transposed values staging buffer
-            index_transposed_dfb_index,  // Transposed indices staging buffer
-            Wt,                          // Width tiles for this local chunk
-            switch_dir,                  // Whether to alternate sort direction
-            ascending,                   // Current sort direction
-            end_phase);                  // Ending phase for local sort
+            input_dfb,             // Input values buffer (double-buffered)
+            index_dfb,             // Input indices buffer (double-buffered)
+            input_transposed_dfb,  // Transposed values staging buffer
+            index_transposed_dfb,  // Transposed indices staging buffer
+            Wt,                    // Width tiles for this local chunk
+            switch_dir,            // Whether to alternate sort direction
+            ascending,             // Current sort direction
+            end_phase);            // Ending phase for local sort
 
         std::uint32_t num_k_sequences = (Wt * 32) / K;  // Number of K-element sequences in chunk
 
@@ -167,22 +169,22 @@ void kernel_main() {
         // Final iteration produces locally sorted TopK results for this width chunk.
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
             process_iteration<network_stable, fused_keys, tie_order>(
-                m_iter,                      // Current merge iteration (0 to logWt-1)
-                K,                           // TopK value (number of elements to find)
-                Wt,                          // Width tiles in local chunk
-                num_k_sequences,             // Number of K-element sequences (updated each iter)
-                tiles_per_seq,               // Tiles per sequence (ceil(K/32))
-                input_transposed_dfb_index,  // Values buffer for in-place operations
-                index_transposed_dfb_index,  // Indices buffer for in-place operations
-                input_dest_start,            // Destination register 0 (first tile)
-                input_dest_end,              // Destination register 1 (second tile)
-                index_dest_start,            // Destination register 2 (first indices)
-                index_dest_end,              // Destination register 3 (second indices)
-                !direction_init,             // Base sort direction
-                switch_dir,                  // Whether to switch direction per iteration
-                logk,                        // log2(K) for bitonic network depth
-                seq_per_2tiles,              // Sequences that fit in 2 tiles
-                largest);                    // Find largest (true) or smallest (false)
+                m_iter,                // Current merge iteration (0 to logWt-1)
+                K,                     // TopK value (number of elements to find)
+                Wt,                    // Width tiles in local chunk
+                num_k_sequences,       // Number of K-element sequences (updated each iter)
+                tiles_per_seq,         // Tiles per sequence (ceil(K/32))
+                input_transposed_dfb,  // Values buffer for in-place operations
+                index_transposed_dfb,  // Indices buffer for in-place operations
+                input_dest_start,      // Destination register 0 (first tile)
+                input_dest_end,        // Destination register 1 (second tile)
+                index_dest_start,      // Destination register 2 (first indices)
+                index_dest_end,        // Destination register 3 (second indices)
+                !direction_init,       // Base sort direction
+                switch_dir,            // Whether to switch direction per iteration
+                logk,                  // log2(K) for bitonic network depth
+                seq_per_2tiles,        // Sequences that fit in 2 tiles
+                largest);              // Find largest (true) or smallest (false)
         }  // m_iter loop
 
         // Extract and prepare local TopK results for transmission

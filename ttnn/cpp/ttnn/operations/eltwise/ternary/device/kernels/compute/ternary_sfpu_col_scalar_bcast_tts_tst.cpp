@@ -13,19 +13,16 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <typename PredicateDFB, typename TensorDFB, typename OutDFB>
 ALWI void process_tile(
-    uint32_t predicate_cb_id,
-    uint32_t tensor_cb_id,
-    uint32_t cb_out_id,
+    PredicateDFB& predicate_dfb,
+    TensorDFB& tensor_dfb,
+    OutDFB& dfb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle,
     uint32_t scalar) {
     using namespace ckernel;
-
-    DataflowBuffer predicate_dfb(predicate_cb_id);
-    DataflowBuffer tensor_dfb(tensor_cb_id);
-    DataflowBuffer dfb_out(cb_out_id);
 
 #if BCAST_A
     predicate_dfb.wait_front(num_tiles_per_cycle);  // predicate_dfb is broadcast
@@ -137,6 +134,10 @@ void kernel_main() {
     constexpr auto tensor_cb_id = tt::CBIndex::c_1;  // Either true (TTS) or false (TST) tensor
     constexpr auto cb_out_id = tt::CBIndex::c_3;
 
+    DataflowBuffer predicate_dfb(predicate_cb_id);
+    DataflowBuffer tensor_dfb(tensor_cb_id);
+    DataflowBuffer dfb_out(cb_out_id);
+
     compute_kernel_hw_startup(predicate_cb_id, cb_out_id);
     copy_init(predicate_cb_id);
 
@@ -144,18 +145,11 @@ void kernel_main() {
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        process_tile(
-            predicate_cb_id, tensor_cb_id, cb_out_id, tile_freq, tile_start, num_tiles_per_cycle, scalar_value);
+        process_tile(predicate_dfb, tensor_dfb, dfb_out, tile_freq, tile_start, num_tiles_per_cycle, scalar_value);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            predicate_cb_id,
-            tensor_cb_id,
-            cb_out_id,
-            remaining_iterations,
-            tile_start,
-            num_tiles_per_cycle,
-            scalar_value);
+            predicate_dfb, tensor_dfb, dfb_out, remaining_iterations, tile_start, num_tiles_per_cycle, scalar_value);
     }
 }

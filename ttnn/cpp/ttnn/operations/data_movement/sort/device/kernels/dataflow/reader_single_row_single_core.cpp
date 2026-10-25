@@ -50,6 +50,11 @@ void kernel_main() {
     DataflowBuffer index_output_dfb(dfb::index_tensor_output);
     const uint32_t input_tensor_tile_size = input_tensor_dfb.get_tile_size();
     const uint32_t index_tensor_tile_size = index_output_dfb.get_tile_size();
+#ifdef IS_UINT16_FP32_MODE
+    DataflowBuffer uint16_input_stage_dfb(dfb::uint16_input_stage);
+    const uint32_t uint16_stage_tile_size = uint16_input_stage_dfb.get_tile_size();
+    constexpr uint32_t ELEMENTS_PER_TILE = 1024;  // 32 × 32
+#endif
 
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         const uint32_t h = core_loop * total_number_of_cores +
@@ -68,10 +73,6 @@ void kernel_main() {
         // the extra dfb::uint16_input_stage allocation or the per-element
         // conversion loop — the factory only binds the staging DFB when the
         // define is set.
-        DataflowBuffer uint16_input_stage_dfb(dfb::uint16_input_stage);
-        const uint32_t uint16_stage_tile_size = uint16_input_stage_dfb.get_tile_size();
-        constexpr uint32_t ELEMENTS_PER_TILE = 1024;  // 32 × 32
-
         for (uint32_t w = 0; w < Wt; w++) {
             uint16_input_stage_dfb.reserve_back(one_tile);
             noc.async_read(

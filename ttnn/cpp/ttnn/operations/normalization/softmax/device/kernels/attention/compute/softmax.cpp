@@ -50,7 +50,8 @@ void calc_numeric_stable(
         dfb_max_scaler,
         dfb_max,
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        dfb_in_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
     // calculate x-max(x)
     ckl::eltwise_chain(
@@ -364,6 +365,9 @@ void kernel_main() {
             dfb_sum_scaler,
             dfb_recipsumexps,
             compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
+            dfb_exps_obj,
+            dfb_sum_scaler_obj,
+            dfb_recipsumexps_obj,
             compute_kernel_lib::ReduceInputBlockShape::row(Wt),
             compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
             compute_kernel_lib::NoAccumulation{},

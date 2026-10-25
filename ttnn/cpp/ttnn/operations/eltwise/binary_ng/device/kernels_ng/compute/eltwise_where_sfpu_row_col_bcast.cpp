@@ -13,7 +13,12 @@
 #include "api/compute/bcast.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <typename ExpDfbBcastDFB, typename ExpDfbOtherDFB, typename ExpDfbLlkPostDFB, typename ExpDfbOutDFB>
 ALWI void process_tile(
+    ExpDfbBcastDFB& exp_dfb_bcast,
+    ExpDfbOtherDFB& exp_dfb_other,
+    ExpDfbLlkPostDFB& exp_dfb_llk_post,
+    ExpDfbOutDFB& exp_dfb_out,
     tt::CBIndex cb_in0,
     tt::CBIndex cb_in1,
     tt::CBIndex cb_out,
@@ -23,7 +28,6 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-    DataflowBuffer exp_dfb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
                  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
@@ -40,10 +44,6 @@ ALWI void process_tile(
     auto cb_left = cb_in0;
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
-
-    DataflowBuffer exp_dfb_bcast(CB_BCAST);
-    DataflowBuffer exp_dfb_other(CB_OTHER);
-    DataflowBuffer exp_dfb_llk_post(cb_llk_post);
 
     // compute_kernel_hw_startup is hoisted to kernel_main (must be the first Compute API call and run
     // exactly once); process_tile is called per iteration, so it only re-inits the op here.
@@ -143,6 +143,17 @@ void kernel_main() {
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
+#if BCAST_INPUT
+    DataflowBuffer exp_dfb_bcast(cb_in1);
+    DataflowBuffer exp_dfb_other(cb_in0);
+    DataflowBuffer exp_dfb_llk_post(tt::CBIndex::c_5);
+#else
+    DataflowBuffer exp_dfb_bcast(cb_in0);
+    DataflowBuffer exp_dfb_other(cb_in1);
+    DataflowBuffer exp_dfb_llk_post(tt::CBIndex::c_6);
+#endif
+    DataflowBuffer exp_dfb_out(cb_out);
+
     // One-time hardware startup: must be the first Compute API call and run exactly once. Match the
     // cb_left process_tile configures the copy from (c_5 when the bcast input is B, else cb_in0).
 #if BCAST_INPUT
@@ -157,11 +168,26 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_in0, cb_in1, cb_out, scalar_value, scalar_value_ptr, tile_freq, tile_start, num_tiles_per_cycle);
+            exp_dfb_bcast,
+            exp_dfb_other,
+            exp_dfb_llk_post,
+            exp_dfb_out,
+            cb_in0,
+            cb_in1,
+            cb_out,
+            scalar_value,
+            scalar_value_ptr,
+            tile_freq,
+            tile_start,
+            num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
+            exp_dfb_bcast,
+            exp_dfb_other,
+            exp_dfb_llk_post,
+            exp_dfb_out,
             cb_in0,
             cb_in1,
             cb_out,

@@ -68,19 +68,19 @@ using std_type_t = typename df_to_std<df>::std_type;
  * Example usage:
  * @code
  * {
- *     ReadCBGuard guard(cb_id, num_tiles);
+ *     ReadCBGuard guard(dfb, num_tiles);
  *     // Safely read from DFB: data is guaranteed ready.
  *     // ...
  * } // Automatically pops the tiles on scope exit.
  * @endcode
  */
 class ReadCBGuard {
-    uint32_t cb;
+    DataflowBuffer& dfb;
     uint32_t tiles;
 
 public:
-    ReadCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { DataflowBuffer(cb).wait_front(tiles); }
-    ~ReadCBGuard() { DataflowBuffer(cb).pop_front(tiles); }
+    ReadCBGuard(DataflowBuffer& dfb, uint32_t tiles) : dfb{dfb}, tiles{tiles} { dfb.wait_front(tiles); }
+    ~ReadCBGuard() { dfb.pop_front(tiles); }
 
     ReadCBGuard(const ReadCBGuard&) = delete;  // can not allow to touch the object anyhow
     ReadCBGuard(ReadCBGuard&&) = delete;
@@ -108,19 +108,19 @@ public:
  * Example usage:
  * @code
  * {
- *     WriteCBGuard guard(cb_id, num_tiles);
+ *     WriteCBGuard guard(dfb, num_tiles);
  *     // Safely write to DFB: space is guaranteed reserved.
  *     // ...
  * } // Automatically pushes tiles to the DFB on scope exit.
  * @endcode
  */
 class WriteCBGuard {
-    uint32_t cb;
+    DataflowBuffer& dfb;
     uint32_t tiles;
 
 public:
-    WriteCBGuard(uint32_t cb, uint32_t tiles) : cb{cb}, tiles{tiles} { DataflowBuffer(cb).reserve_back(tiles); }
-    ~WriteCBGuard() { DataflowBuffer(cb).push_back(tiles); }
+    WriteCBGuard(DataflowBuffer& dfb, uint32_t tiles) : dfb{dfb}, tiles{tiles} { dfb.reserve_back(tiles); }
+    ~WriteCBGuard() { dfb.push_back(tiles); }
 
     WriteCBGuard(const WriteCBGuard&) = delete;  // can not allow to touch the object anyhow
     WriteCBGuard(WriteCBGuard&&) = delete;

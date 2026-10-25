@@ -33,6 +33,7 @@ void kernel_main() {
     DataflowBuffer dfb_mask_h_w_obj(cb_mask_h_w);
 
     constexpr uint32_t cb_y = 16;
+    DataflowBuffer dfb_y_obj(cb_y);
 
     static constexpr uint32_t cb_xabs = 24;   // |x|
     static constexpr uint32_t cb_xpow = 25;   // |x|^p
@@ -129,7 +130,8 @@ void kernel_main() {
     }
 
     // Compute cb_y - reduce single pre-accumulated tile to scalar
-    ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_y>(ckl::ReduceInputBlockShape::single());
+    ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd, cb_one, cb_y>(
+        dfb_xpowadd_obj, dfb_one_obj, dfb_y_obj, ckl::ReduceInputBlockShape::single());
 
     dfb_decimal_obj.pop_front(onetile);
     dfb_one_obj.pop_front(onetile);

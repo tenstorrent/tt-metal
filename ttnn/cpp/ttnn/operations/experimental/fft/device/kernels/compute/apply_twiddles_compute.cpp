@@ -24,8 +24,8 @@
 
 enum : uint32_t { OP_ADD = 0, OP_SUB = 1, OP_MUL = 2 };
 
-template <uint32_t OP, typename DfbA, typename DfbB, typename DfbOut>
-FORCE_INLINE void sfpu_binop_push(DfbA a, DfbB b, DfbOut out) {
+template <uint32_t OP, typename DfbA, typename DfbB, typename OutDFB>
+FORCE_INLINE void sfpu_binop_push(DfbA a, DfbB b, OutDFB& cb_out) {
     tile_regs_acquire();
 
     copy_init(a);
@@ -47,10 +47,9 @@ FORCE_INLINE void sfpu_binop_push(DfbA a, DfbB b, DfbOut out) {
 
     tile_regs_commit();
 
-    DataflowBuffer cb_out(out);
     cb_out.reserve_back(1);
     tile_regs_wait();
-    pack_tile(0, out);
+    pack_tile(0, cb_out.get_id());
     tile_regs_release();
     cb_out.push_back(1);
 }
@@ -67,6 +66,8 @@ void kernel_main() {
     DataflowBuffer cb_t_i(dfb::t_i);
     DataflowBuffer cb_tmp_r(dfb::tmp_r);
     DataflowBuffer cb_tmp_i(dfb::tmp_i);
+    DataflowBuffer cb_b_r(dfb::b_r);
+    DataflowBuffer cb_b_i(dfb::b_i);
 
     for (uint32_t k = 0; k < num_tiles; ++k) {
         cb_a_r.wait_front(1);
@@ -75,20 +76,20 @@ void kernel_main() {
         cb_t_i.wait_front(1);
 
         // B_R = A_R * T_R - A_I * T_I
-        sfpu_binop_push<OP_MUL>(dfb::a_r, dfb::t_r, dfb::tmp_r);
-        sfpu_binop_push<OP_MUL>(dfb::a_i, dfb::t_i, dfb::tmp_i);
+        sfpu_binop_push<OP_MUL>(dfb::a_r, dfb::t_r, cb_tmp_r);
+        sfpu_binop_push<OP_MUL>(dfb::a_i, dfb::t_i, cb_tmp_i);
         cb_tmp_r.wait_front(1);
         cb_tmp_i.wait_front(1);
-        sfpu_binop_push<OP_SUB>(dfb::tmp_r, dfb::tmp_i, dfb::b_r);
+        sfpu_binop_push<OP_SUB>(dfb::tmp_r, dfb::tmp_i, cb_b_r);
         cb_tmp_r.pop_front(1);
         cb_tmp_i.pop_front(1);
 
         // B_I = A_R * T_I + A_I * T_R
-        sfpu_binop_push<OP_MUL>(dfb::a_r, dfb::t_i, dfb::tmp_r);
-        sfpu_binop_push<OP_MUL>(dfb::a_i, dfb::t_r, dfb::tmp_i);
+        sfpu_binop_push<OP_MUL>(dfb::a_r, dfb::t_i, cb_tmp_r);
+        sfpu_binop_push<OP_MUL>(dfb::a_i, dfb::t_r, cb_tmp_i);
         cb_tmp_r.wait_front(1);
         cb_tmp_i.wait_front(1);
-        sfpu_binop_push<OP_ADD>(dfb::tmp_r, dfb::tmp_i, dfb::b_i);
+        sfpu_binop_push<OP_ADD>(dfb::tmp_r, dfb::tmp_i, cb_b_i);
         cb_tmp_r.pop_front(1);
         cb_tmp_i.pop_front(1);
 

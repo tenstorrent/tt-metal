@@ -239,8 +239,12 @@ void kernel_main() {
         }
     }
 
+    DataflowBuffer q_in_dfb(cb_q_in);
+    DataflowBuffer out_accumulate_im_dfb(cb_out_accumulate_im), out_final_dfb(cb_out_final);
+
     // We tilize input Q if it is in ROW MAJOR layout
     if constexpr (tilize_q) {
+        DataflowBuffer q_rm_dfb(cb_q_rm);
         compute_kernel_hw_startup(cb_q_rm, cb_q_in);
         // Keep InitAndUninit: the helper picks fast- vs regular-tilize at compile time and its
         // teardown must match (fast_tilize_uninit vs tilize_uninit). tilize_q with a FULL-tile Q
@@ -252,7 +256,7 @@ void kernel_main() {
             cb_q_in,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(q_rm_dfb, q_in_dfb, 1);
         matmul_init(cb_q_in, cb_k_in);
         // #49266: the Q tilize runs on SrcA, and on galaxy Q is a half-tile (num_faces=2).
         // tilize_uninit leaves SrcA at Q's geometry, but the QK matmul reads operands reversed
@@ -708,7 +712,8 @@ void kernel_main() {
                     cb_out_final,
                     compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                     compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
+                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_accumulate_im_dfb, out_final_dfb, 1);
             } else {
                 // Move output to buffer for the writer
                 move_block_ool(cb_out_accumulate_im, cb_out_final, out_chunk_tiles);

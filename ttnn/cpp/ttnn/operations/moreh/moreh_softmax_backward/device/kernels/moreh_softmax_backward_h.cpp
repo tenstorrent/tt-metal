@@ -20,6 +20,7 @@ void kernel_main() {
     DataflowBuffer dfb_ydy_obj(dfb::ydy);
     DataflowBuffer dfb_dy_m_sum_obj(dfb::dy_m_sum);
     DataflowBuffer dfb_dx_obj(dfb::dx);
+    DataflowBuffer dfb_scaler_obj(dfb::scaler);
 
     compute_kernel_hw_startup(dfb::y, dfb::scaler, dfb::dx);
 
@@ -41,7 +42,7 @@ void kernel_main() {
                 /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb::dy_m_sum, dfb::scaler, dfb::sum>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+                dfb_dy_m_sum_obj, dfb_scaler_obj, dfb_sum_obj, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             // On this path the y*dy and sum buffers hold two partial sums instead; the second
             // names below are handle aliases for those same two FIFOs, not extra buffers.
@@ -53,7 +54,7 @@ void kernel_main() {
                 dfb::scaler,
                 dfb_inter0_id,
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+                dfb_dy_obj, dfb_scaler_obj, dfb_ydy_obj, compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
 
             static constexpr auto dfb_inter1_id = dfb::sum;
             mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter1_id>(
@@ -66,7 +67,7 @@ void kernel_main() {
                 /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_COL, dfb_inter1_id, dfb::scaler, dfb::dy_m_sum>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+                dfb_sum_obj, dfb_scaler_obj, dfb_dy_m_sum_obj, compute_kernel_lib::ReduceInputBlockShape::single());
 
             add_tiles_to_dfb<dfb_inter0_id, dfb::dy_m_sum, dfb::sum>(dfb_ydy_obj, dfb_dy_m_sum_obj, dfb_sum_obj);
         }
@@ -108,7 +109,8 @@ void kernel_main() {
             dfb::ydy,
             dfb::scaler,
             dfb::sum,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::col(Ht));
+            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
+            dfb_ydy_obj, dfb_scaler_obj, dfb_sum_obj, compute_kernel_lib::ReduceInputBlockShape::col(Ht));
 
         // step 3, compute final result
         for (uint32_t h = 0; h < Ht; ++h) {

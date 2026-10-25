@@ -79,6 +79,7 @@ void kernel_main() {
     constexpr auto dfb_tilize = dfb::tilize;
     constexpr auto dfb_out_idx = dfb::out;
 
+    DataflowBuffer dfb_in_buf(dfb_in);
     DataflowBuffer dfb_tilize_buf(dfb_tilize);
     DataflowBuffer dfb_out(dfb_out_idx);
 
@@ -95,7 +96,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure,
-            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(Ht);
+            compute_kernel_lib::tilize_config::Fp32Mode::Lossless>(dfb_in_buf, dfb_tilize_buf, Ht);
 
         // transpose
         dfb_tilize_buf.wait_front(HtWt);

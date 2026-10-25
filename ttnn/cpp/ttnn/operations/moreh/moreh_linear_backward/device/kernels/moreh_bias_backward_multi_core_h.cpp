@@ -22,6 +22,8 @@ void kernel_main() {
     DataflowBuffer dfb_scaler_obj(dfb::scaler);
     DataflowBuffer dfb_mask_h_w_obj(dfb::mask_h_w);
     DataflowBuffer dfb_intermed0_obj(dfb::intermed0);
+    DataflowBuffer dfb_intermed1_obj(dfb::intermed1);
+    DataflowBuffer dfb_out_obj(dfb::out);
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
 
@@ -87,22 +89,27 @@ void kernel_main() {
 
                 const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
                 const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
-                const auto reduce_accum = compute_kernel_lib::Accumulate::at(dfb::intermed1, num_tile_done);
+                const auto reduce_accum = compute_kernel_lib::Accumulate(dfb_intermed1_obj, num_tile_done);
                 if (do_mask) {
                     if (last_out) {
                         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::out>(
-                            reduce_block, reduce_layout, reduce_accum);
+                            dfb_intermed0_obj, dfb_scaler_obj, dfb_out_obj, reduce_block, reduce_layout, reduce_accum);
                     } else {
                         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::intermed0, dfb::scaler, dfb::intermed1>(
-                            reduce_block, reduce_layout, reduce_accum);
+                            dfb_intermed0_obj,
+                            dfb_scaler_obj,
+                            dfb_intermed1_obj,
+                            reduce_block,
+                            reduce_layout,
+                            reduce_accum);
                     }
                 } else {
                     if (last_out) {
                         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::out>(
-                            reduce_block, reduce_layout, reduce_accum);
+                            dfb_in0_obj, dfb_scaler_obj, dfb_out_obj, reduce_block, reduce_layout, reduce_accum);
                     } else {
                         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::in0, dfb::scaler, dfb::intermed1>(
-                            reduce_block, reduce_layout, reduce_accum);
+                            dfb_in0_obj, dfb_scaler_obj, dfb_intermed1_obj, reduce_block, reduce_layout, reduce_accum);
                     }
                 }
 

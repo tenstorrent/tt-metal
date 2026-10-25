@@ -25,13 +25,15 @@ void kernel_main() {
     Noc noc;
     // Input tiles, consumed downstream by the compute kernel.
     DataflowBuffer dfb_inp_buf(dfb::inp);
+    DataflowBuffer dfb_reduce_buf(dfb::reduce);
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = dfb_inp_buf.get_tile_size();
 
     // The reduce-scalar tile the compute kernel's row reduction multiplies by.
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<dfb::reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<dfb::reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            dfb_reduce_buf);
 
     const auto src_a = TensorAccessor(tensor::src);
 

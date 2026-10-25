@@ -33,6 +33,8 @@ void kernel_main() {
     constexpr uint32_t tile_row_blocks_per_chunk = 1U;
 
     compute_kernel_hw_startup(cb_id_src, cb_id_w, cb_id_combined);
+    DataflowBuffer existing_rm(cb_id_existing_rm), existing_tile(cb_id_existing_tile), combined(cb_id_combined),
+        out(cb_id_out);
 
     // NCRISC reader publishes active_steps * num_chunks after reading offsets.
     // Each iteration below processes one tiles_per_chunk chunk.
@@ -51,7 +53,7 @@ void kernel_main() {
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
-            tile_row_blocks_per_chunk, tt::constants::TILE_HEIGHT);
+            existing_rm, existing_tile, tile_row_blocks_per_chunk, tt::constants::TILE_HEIGHT);
 
         // ---- Phase B: mul cb_src * broadcast(cb_w col 0), add existing_tile in DST → cb_combined ----
         cb_wait_front(cb_id_src, tiles_per_chunk);
@@ -85,6 +87,6 @@ void kernel_main() {
             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
             compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(
-            tile_row_blocks_per_chunk);
+            combined, out, tile_row_blocks_per_chunk);
     }
 }

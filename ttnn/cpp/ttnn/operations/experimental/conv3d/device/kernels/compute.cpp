@@ -332,8 +332,15 @@ void add_bias_inplace_sfpu(uint32_t inout_cb, uint32_t bias_cb) {
     // Deliberately no bias pop: the caller pops it once per C_out block, matching add_bias_inplace.
 }
 
-template <uint32_t rows, uint32_t cols, bool fp32_interm, uint32_t in_cb, uint32_t out_cb>
-void untilize_block() {
+template <
+    uint32_t rows,
+    uint32_t cols,
+    bool fp32_interm,
+    uint32_t in_cb,
+    uint32_t out_cb,
+    typename InDFB,
+    typename OutDFB>
+void untilize_block(InDFB& in, OutDFB& out) {
     constexpr auto untilize_reconfig_mode =
         fp32_interm ? compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackReconfigure
                     : compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure;
@@ -344,7 +351,7 @@ void untilize_block() {
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
         untilize_reconfig_mode,
-        compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(rows);
+        compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(in, out, rows);
 }
 
 template <
@@ -355,8 +362,12 @@ template <
     bool use_bias,
     uint32_t inout_cb,
     uint32_t bias_cb,
-    uint32_t out_cb>
-void bias_untilize_fullblock_math() {
+    uint32_t out_cb,
+    typename InoutDFB,
+    typename OutDFB>
+void bias_untilize_fullblock_math(InoutDFB& inout_dfb, OutDFB& out_dfb) {
+    ASSERT(inout_dfb.get_id() == inout_cb);
+    ASSERT(out_dfb.get_id() == out_cb);
     CircularBuffer inout_cb_obj(inout_cb);
     inout_cb_obj.wait_front(rows * cols);
     if constexpr (use_bias) {
@@ -371,7 +382,7 @@ void bias_untilize_fullblock_math() {
             add_bias_inplace<rows, cols, compute_kernel_lib::DEST_AUTO_LIMIT>(inout_cb, bias_cb);
         }
     }
-    untilize_block<rows, cols, use_fp32_partials || use_fp32_exact, inout_cb, out_cb>();
+    untilize_block<rows, cols, use_fp32_partials || use_fp32_exact, inout_cb, out_cb>(inout_dfb, out_dfb);
 }
 
 template <
@@ -418,13 +429,18 @@ template <
     uint32_t remote_cb,
     uint32_t bias_cb,
     uint32_t out_cb,
-    uint32_t acc_cb>
-void reduce_bias_untilize_fullblock(uint32_t num_workers) {
+    uint32_t acc_cb,
+    typename LocalDFB,
+    typename OutDFB>
+void reduce_bias_untilize_fullblock(uint32_t num_workers, LocalDFB& local_dfb, OutDFB& out_dfb) {
+    ASSERT(local_dfb.get_id() == local_cb);
+    ASSERT(out_dfb.get_id() == out_cb);
     if (num_workers > 0) {
         reduce_fullblock_inplace_math<rows, cols, use_fp32_partials, use_fp32_exact, local_cb, remote_cb, acc_cb>(
             num_workers);
     }
-    bias_untilize_fullblock_math<rows, cols, use_fp32_partials, use_fp32_exact, use_bias, local_cb, bias_cb, out_cb>();
+    bias_untilize_fullblock_math<rows, cols, use_fp32_partials, use_fp32_exact, use_bias, local_cb, bias_cb, out_cb>(
+        local_dfb, out_dfb);
 }
 
 void kernel_main() {
@@ -491,6 +507,10 @@ void kernel_main() {
     CircularBuffer cb_weight_lo_tiled_cb(operand_split ? cb_weight_lo_tiled : cb_weight_tiled);
     CircularBuffer cb_x_hi_tiled_cb(operand_split ? cb_x_hi_tiled : cb_vol2col_tiled);
     CircularBuffer cb_x_lo_tiled_cb(operand_split ? cb_x_lo_tiled : cb_vol2col_tiled);
+    DataflowBuffer cb_vol2col_rm_dfb(cb_vol2col_rm);
+    DataflowBuffer cb_vol2col_tiled_dfb(cb_vol2col_tiled);
+    DataflowBuffer cb_matmul_interm_tiled_dfb(cb_matmul_interm_tiled);
+    DataflowBuffer cb_matmul_result_rm_dfb(cb_matmul_result_rm);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_matmul_in0, cb_weight_tiled, cb_matmul_interm_tiled);
     matmul_init(cb_matmul_in0, cb_weight_tiled);
@@ -554,7 +574,7 @@ void kernel_main() {
                                                 NoReconfigure,
                                             compute_kernel_lib::tilize_config::Fp32Mode::Fast,
                                             compute_kernel_lib::tilize_config::RemapMode::AssumeConfigured>(
-                                            1, patches_this_row);
+                                            cb_vol2col_rm_dfb, cb_vol2col_tiled_dfb, 1, patches_this_row);
                                         patches_left -= patches_this_row;
                                     }
 
@@ -643,7 +663,7 @@ void kernel_main() {
                                             compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
                                             untilize_reconfig_mode_sb,
                                             compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(
-                                            subblock_h);
+                                            cb_matmul_interm_tiled_dfb, cb_matmul_result_rm_dfb, subblock_h);
                                     }
                                 }
                             }
@@ -678,7 +698,8 @@ void kernel_main() {
                                         cb_reduction_tiled,
                                         cb_bias_tiled,
                                         cb_matmul_result_rm,
-                                        cb_reduction_acc_tiled>(num_workers);
+                                        cb_reduction_acc_tiled>(
+                                        num_workers, cb_matmul_interm_tiled_dfb, cb_matmul_result_rm_dfb);
                                 }
                             }  // end if constexpr (!enable_streaming_output)
                         }

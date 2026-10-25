@@ -64,6 +64,9 @@ void kernel_main() {
     CircularBuffer cb_to_allgather_writer_obj(cb_to_allgather_writer);
     CircularBuffer cb_signaling(signaling_cb);
     CircularBuffer cb_gamma_obj(cb_gamma);
+    DataflowBuffer cb_in_2_obj(cb_in_2);
+    DataflowBuffer cb_in_4_obj(cb_in_4);
+    DataflowBuffer post_cb_in_4_obj(post_cb_in_4);
 
     Semaphore<> stats_set_sem(stats_set_semaphore_id);
 
@@ -78,18 +81,18 @@ void kernel_main() {
         cb_in_2,
         ckernel::PoolType::AVG,
         ckernel::ReduceDim::REDUCE_ROW,
-        block_w * tt::constants::TILE_WIDTH>();
+        block_w * tt::constants::TILE_WIDTH>(cb_in_2_obj);
 
     if constexpr (is_all_to_all_worker) {
         const uint32_t scalar_c_bits = get_arg_val<uint32_t>(arg_idx++);
         float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
         dataflow_kernel_lib::prepare_reduce_scaler<cb_in_4, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-            scalar_c_f);
+            cb_in_4_obj, scalar_c_f);
         const uint32_t post_scalar_c_bits = get_arg_val<uint32_t>(base_post_rt + 0);
         float post_scalar_c_f = __builtin_bit_cast(float, post_scalar_c_bits);
         dataflow_kernel_lib::
             prepare_reduce_scaler<post_cb_in_4, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
-                post_scalar_c_f);
+                post_cb_in_4_obj, post_scalar_c_f);
     } else {
         arg_idx++;
     }

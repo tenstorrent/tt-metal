@@ -27,7 +27,8 @@ void kernel_main() {
 #ifdef USE_FPU
     // Only the float factory accumulates on the FPU and needs a zero tile staged for it; the int32
     // factory binds no zero buffer, so this block is preprocessed away there.
-    dataflow_kernel_lib::prepare_zero_tile<dfb::zero>();
+    DataflowBuffer dfb_zero(dfb::zero);
+    dataflow_kernel_lib::prepare_zero_tile(dfb_zero);
 #endif
 
     const auto input_addrg = TensorAccessor(tensor::input);

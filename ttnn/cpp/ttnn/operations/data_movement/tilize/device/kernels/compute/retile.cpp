@@ -72,6 +72,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::src, dfb::mid);
 
+    DataflowBuffer src(dfb::src);
     DataflowBuffer mid(dfb::mid);
     DataflowBuffer mid_view(dfb::mid_view);
     DataflowBuffer out_dfb(dfb::out);
@@ -96,7 +97,8 @@ void kernel_main() {
                 dfb::mid,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
-                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(real_rows);
+                compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                src, mid, real_rows);
         }
         for (uint32_t k = 0; k < pad_rows; ++k) {
             fill_zeros_pages(mid, tiles_per_block, mid_page_size);

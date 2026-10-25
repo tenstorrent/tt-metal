@@ -8,8 +8,6 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "llk_defs.h"
 #include "api/tile_constants.h"
-#include <type_traits>
-#include "ttnn/cpp/ttnn/kernel_lib/id_only_helpers.hpp"
 
 namespace dataflow_kernel_lib {
 
@@ -61,12 +59,7 @@ constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
  *        dimension is partially filled, this specifies how many row or column elements contain
  *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
-template <
-    uint32_t dfb_id,
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    typename DFB,
-    std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, typename DFB>
 FORCE_INLINE void prepare_reduce_scaler(
     DFB& dfb, float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
@@ -92,31 +85,9 @@ FORCE_INLINE void prepare_reduce_scaler(
  *        dimension is partially filled, this specifies how many row or column elements contain
  *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
-template <
-    uint32_t dfb_id,
-    PoolType pool_type,
-    ReduceDim reduce_dim,
-    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR,
-    typename DFB,
-    std::enable_if_t<is_dataflow_buffer_v<std::remove_cv_t<DFB>>, int> = 0>
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR, typename DFB>
 FORCE_INLINE void calculate_and_prepare_reduce_scaler(
     DFB& dfb, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
-
-// The id-only forms: build the DataflowBuffer from the id and run the forms above. See id_only_helpers.hpp.
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim>
-KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void prepare_reduce_scaler(
-    float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH) {
-    DataflowBuffer dfb(dfb_id);
-    prepare_reduce_scaler<dfb_id, pool_type, reduce_dim>(dfb, scaler_f, valid_reduce_dim_elements_in_tile);
-}
-
-template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR>
-KERNEL_LIB_ID_ONLY_HELPER FORCE_INLINE void calculate_and_prepare_reduce_scaler(
-    uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH) {
-    DataflowBuffer dfb(dfb_id);
-    calculate_and_prepare_reduce_scaler<dfb_id, pool_type, reduce_dim, reduce_factor>(
-        dfb, valid_reduce_dim_elements_in_tile);
-}
 
 }  // namespace dataflow_kernel_lib
 

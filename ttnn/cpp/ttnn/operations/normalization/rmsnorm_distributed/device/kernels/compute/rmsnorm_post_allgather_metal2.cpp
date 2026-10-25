@@ -63,6 +63,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::inp, dfb::inp, dfb::var);
 
+    DataflowBuffer dfb_stats(dfb::stats);
     DataflowBuffer dfb_reduce(dfb::reduce);
     DataflowBuffer dfb_eps(dfb::eps);
     DataflowBuffer dfb_var(dfb::var);  // E(x**2)
@@ -98,7 +99,7 @@ void kernel_main() {
          * Uses auto-batched STREAMING mode - library handles buffer lifecycle.
          */
         compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, dfb::stats, dfb::reduce, dfb::var>(
-            compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+            dfb_stats, dfb_reduce, dfb_var, compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
 
         /*
          * 1/sqrt(var + eps)

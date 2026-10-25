@@ -303,7 +303,7 @@ void kernel_main() {
                                                     (dfb_ex_external_data_bytes <
                                                      dfb_ex_external_tiles_required * single_tile_size_bytes);
     if constexpr (needs_dfb_ex_external_zero_fill) {
-        zero_whole_cb(dfb_ex_external_id, noc);
+        zero_whole_cb(dfb_ex_external, noc);
     }
 
         index_b_offset = 0;
