@@ -55,6 +55,7 @@ void kernel_main() {
     constexpr uint32_t cb_recv_max = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_MAX);
     constexpr uint32_t cb_recv_sum = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_RECV_SUM);
     constexpr uint32_t cb_merge_ctrl = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_MERGE_CTRL);
+    constexpr bool out_tiled = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::OUT_TILED) != 0;
     constexpr auto out_args =
         TensorAccessorArgs<sparse_sdpa::writer_ct_arg::END, sparse_sdpa::writer_common_arg::END>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
@@ -293,10 +294,37 @@ void kernel_main() {
                 }
             }
         }
-        out_cb.wait_front(block_tiles);  // one untilized [H, V_DIM] block
-        for (uint32_t h = 0; h < H; ++h) {
-            // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
-            noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+        out_cb.wait_front(block_tiles);  // one [H, V_DIM] block: untilized rows, or (out_tiled) normalized tiles
+        if constexpr (out_tiled) {
+            // TILE output [1,H,S,V_DIM] (head-major tiles): this token is row r = tok % 32 of tile row tok / 32 of
+            // every head. cb_out_im holds the [Sqt x vDHt] tiles of [H heads x V_DIM]; head h is row h % 32 of tile
+            // row h / 32. Copy each (head, 32-col tile) row as two 32-B face rows into the output tile's row r.
+            constexpr uint32_t face_bytes = tt::constants::FACE_HW * sizeof(uint16_t);         // 512
+            constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * sizeof(uint16_t);  // 32
+            constexpr uint32_t tile_bytes_bf16 = tt::constants::TILE_HW * sizeof(uint16_t);    // 2048
+            constexpr uint32_t s_tiles = S / tt::constants::TILE_HEIGHT;
+            const uint32_t r = tok % tt::constants::TILE_HEIGHT;
+            const uint32_t dst_off =
+                (r / tt::constants::FACE_HEIGHT) * 2 * face_bytes + (r % tt::constants::FACE_HEIGHT) * face_row_bytes;
+            const uint32_t src0 = out_cb.get_read_ptr();
+            const uint32_t tok_tile = tok / tt::constants::TILE_HEIGHT;
+            for (uint32_t h = 0; h < H; ++h) {
+                const uint32_t hr = h % tt::constants::TILE_HEIGHT;
+                const uint32_t src_row =
+                    (hr / tt::constants::FACE_HEIGHT) * 2 * face_bytes + (hr % tt::constants::FACE_HEIGHT) * face_row_bytes;
+                uint32_t src = src0 + (h / tt::constants::TILE_HEIGHT) * vDHt * tile_bytes_bf16 + src_row;
+                uint32_t page = (h * s_tiles + tok_tile) * vDHt;
+                for (uint32_t j = 0; j < vDHt; ++j, ++page, src += tile_bytes_bf16) {
+                    const uint64_t dst = out.get_noc_addr(page, dst_off);
+                    noc_async_write(src, dst, face_row_bytes);
+                    noc_async_write(src + face_bytes, dst + face_bytes, face_row_bytes);
+                }
+            }
+        } else {
+            for (uint32_t h = 0; h < H; ++h) {
+                // row h (head h) at CB read-ptr byte offset h*row_bytes; DRAM page = h*S + tok.
+                noc.async_write(out_cb, out, row_bytes, {.offset_bytes = h * row_bytes}, {.page_id = h * S + tok});
+            }
         }
         noc.async_write_barrier();
         out_cb.pop_front(block_tiles);

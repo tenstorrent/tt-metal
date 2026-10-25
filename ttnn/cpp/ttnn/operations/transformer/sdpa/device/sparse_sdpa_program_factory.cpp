@@ -181,7 +181,12 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_out_b, tile_bytes, Sqt * vDHt, bf);
     cb(cb_corr, tile_bytes, Sqt, bf);
     cb(cb_out_im, tile_bytes, Sqt * vDHt, bf);
-    cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
+    // TILE output: the writer copies face rows straight out of the normalized tiles (cb_out_im); no untilize.
+    const bool tile_out = attrs.tile_output();
+    const bool q_tiled = t.q.layout() == Layout::TILE;
+    if (!tile_out) {
+        cb(cb_out_rm, out_tile_bytes, Sqt * vDHt, out_df);
+    }
     cb(cb_idx, topk * idx_elem_bytes, 1, bf);
     cb(cb_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_col_identity, tile_bytes, 1, bf);
@@ -252,6 +257,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         reader_ct.end(),
         {static_cast<uint32_t>(scaled_kv), v_dim, cb_k_scale_bcast, packed_page_bytes, cb_kreq, cb_kack});
     reader_ct.push_back(static_cast<uint32_t>(split_k));
+    reader_ct.push_back(static_cast<uint32_t>(q_tiled));
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
@@ -267,7 +273,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     auto* spill_buf = t.kv_spill.has_value() ? t.kv_spill->buffer() : nullptr;
     tt::tt_metal::TensorAccessorArgs(spill_buf).append_to(reader_ct, reader_crt);
     // The writer is the lighter dataflow kernel, so it builds the three persistent compute-input tiles.
-    std::vector<uint32_t> writer_ct = {H, S, vDHt, cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
+    std::vector<uint32_t> writer_ct = {
+        H, S, vDHt, tile_out ? cb_out_im : cb_out_rm, cb_scale, cb_col_identity, cb_neginf, out_elem_bytes};
     writer_ct.insert(writer_ct.end(), block_cyclic_ct.begin(), block_cyclic_ct.end());
     writer_ct.insert(
         writer_ct.end(),
@@ -282,7 +289,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
          cb_recv_out,
          cb_recv_max,
          cb_recv_sum,
-         cb_merge_ctrl});
+         cb_merge_ctrl,
+         static_cast<uint32_t>(tile_out)});
     TT_FATAL(
         writer_ct.size() == ::sparse_sdpa::writer_ct_arg::END,
         "sparse_sdpa writer compile-time argument layout is out of sync");
@@ -375,6 +383,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
          cb_mmax,
          cb_corr2});
     compute_ct.push_back(static_cast<uint32_t>(kdeq_batch));
+    compute_ct.push_back(static_cast<uint32_t>(tile_out));
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");

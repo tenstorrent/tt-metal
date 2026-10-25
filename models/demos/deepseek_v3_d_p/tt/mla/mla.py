@@ -38,6 +38,8 @@ _GLUE_STEM_RS_WORKERS = int(os.environ.get("GLUE_STEM_RS_WORKERS", "8")) or None
 _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
 _GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
+# sparse_sdpa on TILE q / TILE output (no untilize/tilize around it); see _sparse_mla.
+_SPARSE_TILE_IO = os.environ.get("MLA_SPARSE_TILE_IO", "0") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
 
 
@@ -2865,9 +2867,22 @@ class ttMLA:
         # (_q_stem_seq) is built TP-sequence-sharded with all heads: _sparse_q_seq passes it through, and the
         # caller (_finish_sparse_chunked_attn) restores heads after wkv_b2 instead of here.
         q_seq_sharded = self._sparse_q_seq(q) if q_seq is None else q_seq
-        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
-        if q_seq_sharded is not q:
-            ttnn.deallocate(q_seq_sharded)
+        # MLA_SPARSE_TILE_IO=1: sparse_sdpa takes the TILE q and writes a TILE output itself (it gathers each token's
+        # face rows), so the untilize before and the tilize after the op disappear.
+        tile_io = (
+            _SPARSE_TILE_IO
+            and q_seq_sharded.layout == ttnn.TILE_LAYOUT
+            and q_seq_sharded.dtype == ttnn.bfloat16
+            and q_seq_sharded.memory_config().buffer_type == ttnn.BufferType.DRAM
+            and not q_seq_sharded.memory_config().is_sharded()
+            and q_seq_sharded.shape[2] % ttnn.TILE_SIZE == 0
+        )
+        if tile_io:
+            q_rm = q_seq_sharded
+        else:
+            q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # q comes in TILE
+            if q_seq_sharded is not q:
+                ttnn.deallocate(q_seq_sharded)
 
         # Indices must match q_rm's sequence sharding. Direct TP sequence shards [1,1,S/(sp*tp),k]
         # already match after head-to-sequence redistribution. Partition legacy globally replicated
@@ -2909,15 +2924,20 @@ class ttMLA:
             ),
             cache_batch_idx=cache_batch_idx,
             kv_spill=kv_spill,
+            output_layout=ttnn.TILE_LAYOUT if tile_io else None,
             **grid,
         )
         # `overlap`: the next layer's prefix push, fused into this sparse_sdpa program (see _next_layer_prefetch).
         out = sdpa(**(overlap or self._sparse_sdpa_grid(q_rm.shape[2])))
-        ttnn.deallocate(q_rm)
+        if not tile_io or q_rm is not q:
+            ttnn.deallocate(q_rm)
         if idx is not indices:
             ttnn.deallocate(idx)
-        ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
-        ttnn.deallocate(out)
+        if tile_io:
+            ret = out  # already TILE for the downstream wkv_b2 linear
+        else:
+            ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
+            ttnn.deallocate(out)
 
         if transpose_head_to_seq and not self._seq_q:
             # Invert the redistribution so the result matches the head-sharded

@@ -61,6 +61,7 @@ void kernel_main() {
     constexpr uint32_t packed_row_bytes = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::PACKED_ROW_BYTES);
     constexpr uint32_t cb_kreq = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KREQ);
     constexpr uint32_t cb_kack = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::CB_KACK);
+    constexpr bool q_tiled = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::Q_TILED) != 0;
 
     // kv carries a RUNTIME tensor shape (its T dim is common runtime args, not compile-time), so its accessor
     // spans both the compile-time AND common-runtime arg streams. Thread both offsets through all three.
@@ -124,8 +125,31 @@ void kernel_main() {
         }
         // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
         q_cb.reserve_back(H);
-        for (uint32_t h = 0; h < H; ++h) {
-            noc.async_read(q, q_cb, q_row_bytes, {.page_id = h * S + tok}, {.offset_bytes = h * q_row_bytes});
+        if constexpr (q_tiled) {
+            // TILE q [1,H,S,K_DIM] (head-major tiles): this token is row r = tok % 32 of tile row tok / 32 of
+            // every head. A tile row is two 16-element face rows (32 B each, one face apart); gather them into the
+            // head's cb_q_rm row, so compute sees the same row-major [H, K_DIM] block as for a ROW_MAJOR q.
+            constexpr uint32_t face_bytes = tt::constants::FACE_HW * sizeof(uint16_t);              // 512
+            constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * sizeof(uint16_t);       // 32
+            constexpr uint32_t q_tiles_w = k_dim / tt::constants::TILE_WIDTH;                      // 18
+            constexpr uint32_t s_tiles = S / tt::constants::TILE_HEIGHT;
+            const uint32_t r = tok % tt::constants::TILE_HEIGHT;
+            const uint32_t row_off =
+                (r / tt::constants::FACE_HEIGHT) * 2 * face_bytes + (r % tt::constants::FACE_HEIGHT) * face_row_bytes;
+            const uint32_t dst0 = q_cb.get_write_ptr();
+            uint32_t page = (tok / tt::constants::TILE_HEIGHT) * q_tiles_w;
+            for (uint32_t h = 0; h < H; ++h, page += (s_tiles - 1) * q_tiles_w) {
+                uint32_t dst = dst0 + h * q_row_bytes;
+                for (uint32_t j = 0; j < q_tiles_w; ++j, ++page, dst += 2 * face_row_bytes) {
+                    const uint64_t src = q.get_noc_addr(page, row_off);
+                    noc_async_read(src, dst, face_row_bytes);
+                    noc_async_read(src + face_bytes, dst + face_row_bytes, face_row_bytes);
+                }
+            }
+        } else {
+            for (uint32_t h = 0; h < H; ++h) {
+                noc.async_read(q, q_cb, q_row_bytes, {.page_id = h * S + tok}, {.offset_bytes = h * q_row_bytes});
+            }
         }
         noc.async_read_barrier();
         q_cb.push_back(H);

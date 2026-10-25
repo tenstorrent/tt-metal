@@ -781,3 +781,37 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, kdeq_batch
     score = pcc(actual, expected)
     worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
     assert score >= 0.999 and worst >= 0.995, f"split_k={split_k} PCC {score:.5f}, worst token {worst:.5f}"
+
+
+# ---- TILE q / TILE output: the head<->token transpose done in the dataflow kernels must be exact ----
+@run_for_blackhole()
+@pytest.mark.parametrize("io", ["tile_tile", "tile_rm", "rm_tile"])
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,kc,nv_id",
+    [
+        (64, 160, 4096, 2048, 128, "all"),  # GLM per-chip shape (split-K on 96/120 cores)
+        (64, 64, 1024, 512, 128, "mixed"),  # whole-token split, sentinel tails
+        (32, 96, 1024, 256, 64, "all"),
+    ],
+)
+def test_sparse_sdpa_scaled_fp8_tile_io(device, io, H, S, T, TOPK, kc, nv_id):
+    nv_fn = {"all": lambda s: TOPK, "mixed": lambda s: 1 + (s * 37) % TOPK}[nv_id]
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=81)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=82, round_scale=True)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    kw = dict(kv_format=SCALED_FP8_KV, scale=K_DIM**-0.5, k_chunk_size=kc)
+    q_rm = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    ref = ttnn.to_torch(ttnn.transformer.sparse_sdpa(q_rm, tt_packed, tt_idx, V_DIM, **kw))
+    q_in = q_rm
+    if io.startswith("tile"):
+        q_in = ttnn.from_torch(
+            q.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    out_layout = ttnn.TILE_LAYOUT if io.endswith("tile") else ttnn.ROW_MAJOR_LAYOUT
+    out = ttnn.transformer.sparse_sdpa(q_in, tt_packed, tt_idx, V_DIM, output_layout=out_layout, **kw)
+    assert out.layout == out_layout
+    got = ttnn.to_torch(out)
+    assert torch.equal(got, ref), f"{io}: differs from the ROW_MAJOR path (max abs {(got - ref).abs().max()})"
+    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    assert pcc(got, expected) >= 0.999

@@ -166,6 +166,8 @@ void kernel_main() {
     constexpr uint32_t cb_mmax = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MMAX);
     constexpr uint32_t cb_corr2 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_CORR2);
     constexpr bool kdeq_batch = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::KDEQ_BATCH) != 0;
+    // TILE output: the writer reads the normalized tiles in cb_out_im directly (no untilize).
+    constexpr bool out_tiled = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::OUT_TILED) != 0;
 
     constexpr uint32_t qsb =
         get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::QUERY_SUBBLOCK);  // query tile-rows per DST group
@@ -725,7 +727,7 @@ void kernel_main() {
         q_in_cb.pop_front(Sqt * DHt);  // Q reused across all chunks; drop it so >1 token/core stays clean
 
         // cb_out_im was written by normalize_row_streaming; untilize -> row-major out for the writer.
-        if (!(split_k && seg_kind == sparse_sdpa::seg_kind::HEAD)) {
+        if (!out_tiled && !(split_k && seg_kind == sparse_sdpa::seg_kind::HEAD)) {
             compute_kernel_lib::untilize<vDHt, cb_out_im, cb_out_rm>(/*num_blocks=*/Sqt);
         }
     }
