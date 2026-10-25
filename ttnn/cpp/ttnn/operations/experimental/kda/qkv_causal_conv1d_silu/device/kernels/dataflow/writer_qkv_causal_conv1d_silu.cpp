@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/tile_constants.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
 #include "api/semaphore.h"
@@ -37,6 +38,8 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
     const auto k = TensorAccessor(tensor::k);
     const auto v = TensorAccessor(tensor::v);
     DataflowBuffer output(dfb::output);
+    DataflowBuffer strips(dfb::strips);
+    DataflowBuffer activation(dfb::act_tile_writer);
     Noc noc;
 
     // With the fabric exchange, stage this core's share of the rows the exchange core sends, channel tiles
@@ -118,15 +121,13 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
     }
 
     const uint32_t tile_bytes = output.get_entry_size();
-    const auto process = [&](uint32_t work) {
+    // Write one output group of an item: channel tiles [ct0, ct0 + group) of tile row work % Mt.
+    const auto write_group = [&](uint32_t work, uint32_t ct0) {
         const uint32_t mt = work % Mt;
-        const uint32_t ct_start = (work / Mt) * block_ct;
-        for (uint32_t local_ct = 0; local_ct < block_ct; ++local_ct) {
-            const uint32_t slot = local_ct % group;
-            if (slot == 0) {
-                output.wait_front(group);
-            }
-            const uint32_t ct = ct_start + local_ct;
+        const uint32_t ct_start = (work / Mt) * block_ct + ct0;
+        output.wait_front(group);
+        for (uint32_t slot = 0; slot < group; ++slot) {
+            const uint32_t ct = ct_start + slot;
             if (ct < Qt) {
                 noc.async_write(output, q, tile_bytes, {.offset_bytes = slot * tile_bytes}, {.page_id = mt * Qt + ct});
             } else if (ct < Qt + Kt) {
@@ -136,11 +137,53 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count, uint32_t staged_ct_s
                 const uint32_t vt = ct - Qt - Kt;
                 noc.async_write(output, v, tile_bytes, {.offset_bytes = slot * tile_bytes}, {.page_id = mt * Vt + vt});
             }
-            if (slot + 1 == group) {
-                noc.async_write_barrier();
-                output.pop_front(group);
-            }
         }
+        noc.async_write_barrier();
+        output.pop_front(group);
+    };
+
+    // Per item, the shifted tiles of taps [reader_taps, tap_count) out of the strips the reader produced, on this
+    // kernel's NoC. Each group's outputs are written after the next group's taps are copied, so compute, which needs
+    // both, does not wait for the output writes.
+    UnicastEndpoint self;
+    const uint32_t self_x = my_x[noc.get_noc_id()];
+    const uint32_t self_y = my_y[noc.get_noc_id()];
+    constexpr uint32_t no_work = ~0U;
+    uint32_t pending_work = no_work;
+    uint32_t pending_ct0 = 0;
+    const auto process = [&](uint32_t work) {
+        strips.wait_front(1);
+        const uint32_t strip_base = StripEntry::base(strips.get_read_ptr());
+        for (uint32_t ct0 = 0; ct0 < block_ct; ct0 += group) {
+            activation.reserve_back(group * writer_taps);
+            for (uint32_t i = 0; i < group; ++i) {
+                for (uint32_t tap = 0; tap < writer_taps; ++tap) {
+#pragma GCC unroll 4
+                    for (uint32_t face = 0; face < 4; ++face) {
+                        noc.async_read(
+                            self,
+                            activation,
+                            face_bytes,
+                            noc_traits_t<UnicastEndpoint>::src_args_type{
+                                .noc_x = self_x,
+                                .noc_y = self_y,
+                                .addr = shifted_face_source(strip_base, ct0 + i, reader_taps + tap, face)},
+                            {.offset_bytes = (i * writer_taps + tap) * tile_bytes + face * face_bytes});
+                    }
+                }
+            }
+            noc.async_read_barrier();
+            activation.push_back(group * writer_taps);
+            if (pending_work != no_work) {
+                write_group(pending_work, pending_ct0);
+            }
+            pending_work = work;
+            pending_ct0 = ct0;
+        }
+        strips.pop_front(1);
     };
     for_each_work_item(wi_start, wi_count, Mt, deferred_row, process);
+    if (pending_work != no_work) {
+        write_group(pending_work, pending_ct0);
+    }
 }

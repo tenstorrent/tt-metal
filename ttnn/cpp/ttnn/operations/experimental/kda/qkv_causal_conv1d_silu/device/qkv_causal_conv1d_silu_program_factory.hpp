@@ -37,22 +37,28 @@ inline uint32_t qkv_causal_conv1d_silu_staged_ct(uint32_t channel_tiles, uint32_
     return (channel_tiles + convolution_cores - 1) / convolution_cores;
 }
 
-// Dataflow buffer depths in tiles: double-buffered shifted taps and output groups, and per channel block the tap
-// tiles, the identity and the diagonal weights.
+// Dataflow buffer depths in tiles: double-buffered shifted taps (the reader's and the writer's) and output groups,
+// and per channel block the tap tiles, the identity and the diagonal weights.
 struct QkvCausalConv1dSiluDfbTiles {
     uint32_t act_tile;
+    uint32_t act_tile_writer;
     uint32_t taps;
     uint32_t eye;
     uint32_t weights;
     uint32_t output;
-    uint32_t total() const { return act_tile + taps + eye + weights + output; }
+    uint32_t total() const { return act_tile + act_tile_writer + taps + eye + weights + output; }
 };
+
+// The strips dataflow buffer: one entry per work item, double-buffered, so the reader stages the next item's strips
+// while the writer still copies out of the current one.
+constexpr uint32_t qkv_causal_conv1d_silu_strip_entries = 2;
 
 inline QkvCausalConv1dSiluDfbTiles qkv_causal_conv1d_silu_dfb_tiles(uint32_t block_ct, uint32_t dest_limit) {
     using qkv_conv::tap_count;
     const uint32_t group = qkv_conv::dest_group(block_ct, dest_limit);
     return {
-        .act_tile = 2 * tap_count * group,
+        .act_tile = 2 * qkv_conv::reader_taps * group,
+        .act_tile_writer = 2 * qkv_conv::writer_taps * group,
         .taps = tap_count * block_ct,
         .eye = 1,
         .weights = tap_count * block_ct,
@@ -62,6 +68,7 @@ inline QkvCausalConv1dSiluDfbTiles qkv_causal_conv1d_silu_dfb_tiles(uint32_t blo
 inline uint64_t qkv_causal_conv1d_silu_l1_bytes(
     uint32_t block_ct, uint32_t dest_limit, uint64_t tile_bytes, uint32_t max_staged_ct) {
     return (qkv_causal_conv1d_silu_dfb_tiles(block_ct, dest_limit).total() * tile_bytes) +
+           (qkv_causal_conv1d_silu_strip_entries * qkv_conv::StripEntry{block_ct}.bytes()) +
            qkv_conv::ReaderScratch{block_ct}.bytes() + qkv_conv::StagingScratch{max_staged_ct}.bytes();
 }
 

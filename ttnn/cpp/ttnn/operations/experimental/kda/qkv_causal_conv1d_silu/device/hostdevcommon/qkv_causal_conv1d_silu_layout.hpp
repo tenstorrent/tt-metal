@@ -58,11 +58,34 @@ constexpr uint32_t strip_rows = history_rows + tile_height;
 constexpr uint32_t strip_stride = align_up(strip_rows * face_row_bytes, read_alignment);
 constexpr uint32_t strip_phase = read_alignment - (history_rows * face_row_bytes) % read_alignment;
 
-// Reader scratch, from an aligned base: two parities of [left, right] strips per channel tile, the previous tile's two
-// bottom faces per channel tile, and the three carried rows of the channel block.
+// The shifted tap tiles are four face copies each out of the strips, and the copies cost per NoC transaction rather
+// than per byte. The reader makes taps [0, reader_taps) on its NoC and the writer the rest on the other NoC, so the
+// two NoCs share them. Compute takes the reader's taps from act_tile and the writer's from act_tile_writer.
+constexpr uint32_t reader_taps = tap_count / 2;
+constexpr uint32_t writer_taps = tap_count - reader_taps;
+
+// One work item's strips, [left, right] per channel tile, in an entry of the strips dataflow buffer: the reader
+// produces it, its own and the writer's tap copies read it, and the writer frees it. The entry starts at any
+// L1-aligned address, so it carries the slack for aligning its base.
+struct StripEntry {
+    uint32_t block_ct;
+    constexpr uint32_t bytes() const { return 2 * block_ct * strip_stride + read_alignment; }
+    static constexpr uint32_t base(uint32_t entry_address) { return align_up(entry_address, read_alignment); }
+    static constexpr uint32_t strip(uint32_t base, uint32_t ct, uint32_t side) {
+        return base + strip_phase + (ct * 2 + side) * strip_stride;
+    }
+};
+
+// Face f of tap t's shifted tile is strip f % 2 from row t + 16 * (f / 2).
+constexpr uint32_t shifted_face_source(uint32_t base, uint32_t ct, uint32_t tap, uint32_t face) {
+    return StripEntry::strip(base, ct, face % 2) + (tap + (face / 2) * face_rows) * face_row_bytes;
+}
+
+// Reader scratch, from an aligned base: the previous tile's two bottom faces per channel tile, then the three carried
+// rows of the channel block.
 struct ReaderScratch {
     uint32_t block_ct;
-    constexpr uint32_t staging() const { return 2 * block_ct * 2 * strip_stride + read_alignment; }
+    static constexpr uint32_t staging() { return 0; }
     constexpr uint32_t rows() const { return staging() + block_ct * 2 * face_bytes; }
     // Slack for aligning the base.
     constexpr uint32_t bytes() const { return rows() + history_rows * block_ct * tile_row_bytes + read_alignment; }
