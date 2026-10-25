@@ -83,15 +83,13 @@ jobs:
 
   # Check Harbor availability first - outputs harbor-prefix for downstream jobs
   check-harbor:
-    # TEMP(clang-tidy-23 shadow): draft bypass, revert before real review.
-    if: github.event.action != 'destroyed' && true # was: (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/check-harbor.yaml
     with:
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
   # Single docker build job - deduplicates container builds across asan-build, build, and clang-tidy
   build-docker-images:
-    # TEMP(clang-tidy-23 shadow): draft bypass, see check-harbor above.
-    if: github.event.action != 'destroyed' && true # was: (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     needs: check-harbor
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
@@ -163,8 +161,7 @@ jobs:
       manylinux-docker-image: ${{ needs.resolve-docker-pull-refs.outputs.manylinux-docker-image }}
       runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
   find-changed-files:
-    # TEMP(clang-tidy-23 shadow): draft bypass, see check-harbor above.
-    if: github.event.action != 'destroyed' && true # was: (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-slim
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
@@ -495,14 +492,10 @@ jobs:
   # affect the scan (see find-changed-files.sh's explicit key-workflow list) are skipped entirely.
   code-analysis:
     needs: [build-docker-images, find-changed-files]
-    # TEMP(clang-tidy-23 shadow): draft bypass, revert before real review
-    # (was: github.event_name == 'pull_request' && !...pull_request.draft).
-    # workflow_dispatch added so both scans can be re-run on demand (cache
-    # warming) without pushing a new commit; revert alongside the rest.
     if: >-
       ${{
         needs.find-changed-files.outputs.run-clang-tidy == 'true' &&
-        (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch')
+        ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group')
       }}
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
