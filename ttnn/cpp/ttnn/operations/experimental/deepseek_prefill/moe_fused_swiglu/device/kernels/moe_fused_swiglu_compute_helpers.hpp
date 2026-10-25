@@ -14,6 +14,29 @@
 
 namespace moe_fused_swiglu::compute {
 
+// MM_RE_FORMS (mm experiment, needs PR #58817's matmul API): the BH matmul forms for k steps per DEST section >= 5 and
+// bf16 partials ('h' in the PR's table: hoisted unpack rows, tile MOP) instead of the defaults. Init and execute agree
+// because every matmul_block_init / matmul_block of this op goes through fs_mm_init / fs_mm.
+#if defined(MM_RE_FORMS) && defined(ARCH_BLACKHOLE)
+ALWI void fs_mm_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt_dim) {
+    matmul_block_init<false, false, 8, DataFormat::Float16_b>(in0, in1, transpose, ct, rt, kt_dim);
+}
+ALWI void fs_mm(
+    uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t dst, uint32_t transpose, uint32_t ct, uint32_t rt,
+    uint32_t kt_dim) {
+    ckernel::matmul_block<false, false, 8, DataFormat::Float16_b>(in0, in1, i0, i1, dst, transpose, ct, rt, kt_dim);
+}
+#else
+ALWI void fs_mm_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt_dim) {
+    matmul_block_init(in0, in1, transpose, ct, rt, kt_dim);
+}
+ALWI void fs_mm(
+    uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t dst, uint32_t transpose, uint32_t ct, uint32_t rt,
+    uint32_t kt_dim) {
+    ckernel::matmul_block(in0, in1, i0, i1, dst, transpose, ct, rt, kt_dim);
+}
+#endif
+
 struct MatmulShape {
     uint32_t m_subblocks;
     uint32_t n_subblocks;
@@ -87,7 +110,7 @@ ALWI void matmul_row_major(
     const uint32_t row_group_tiles = shape.subblock_h * out_row_width;
 
     if constexpr (init_matmul) {
-        matmul_block_init(in0_cb, in1_cb, false, shape.subblock_w, shape.subblock_h, shape.k_tiles);
+        fs_mm_init(in0_cb, in1_cb, false, shape.subblock_w, shape.subblock_h, shape.k_tiles);
     }
 
     bool reload_partials = false;
@@ -131,13 +154,12 @@ ALWI void matmul_row_major(
                     }
                     reconfig_data_format(in1_cb, in0_cb);
                     PACK((pack_reconfig_data_format(interm_cb)));
-                    matmul_block_init(in0_cb, in1_cb, false, shape.subblock_w, shape.subblock_h, shape.k_tiles);
+                    fs_mm_init(in0_cb, in1_cb, false, shape.subblock_w, shape.subblock_h, shape.k_tiles);
                 }
 
                 uint32_t in0_index = m_subblock * in0_subblock_tiles;
                 for (uint32_t step = 0; step < inner_steps; ++step) {
-                    ckernel::matmul_block(
-                        in0_cb, in1_cb, in0_index, in1_index, 0, false, n_width, shape.subblock_h, shape.k_tiles);
+                    fs_mm(in0_cb, in1_cb, in0_index, in1_index, 0, false, n_width, shape.subblock_h, shape.k_tiles);
                     ++in0_index;
                     in1_index += in1_width;
                 }

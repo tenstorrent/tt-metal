@@ -824,7 +824,7 @@ void kernel_main() {
                     // result never leaves DEST for an intermediate BF16 accumulation spill.
                     constexpr uint32_t WD_RESIDENT_TILES = HGROUPS * HN_PAD * WD_EC_MAX;
                     wd_buf.wait_front(WD_RESIDENT_TILES);
-                    matmul_block_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
+                    fs_mm_init(cb_h, cb_w_down, false, down_ec, 1, HID_T);
                     const MatmulShape row_shape = MatmulShape::of(1, 1, 1, down_ec, HID_T, 1);
                     for (uint32_t r = 0; r < down_rows; ++r) {
                         matmul_row_major<
