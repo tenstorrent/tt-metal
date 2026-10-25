@@ -628,7 +628,7 @@ void WatcherServer::Impl::poll_watcher_data() {
     } else {
         disabled_features = "None";
     }
-    log_info(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
+    log_debug(LogLLRuntime, "Watcher server initialized, disabled features: {}", disabled_features);
 
     while (true) {
         // Need to hold the lock here as well to prevent kernel_names_ being modified from the main thread while being
@@ -676,7 +676,7 @@ void WatcherServer::Impl::poll_watcher_data() {
         }
     }
 
-    log_info(LogLLRuntime, "Watcher thread stopped watching...");
+    log_debug(LogLLRuntime, "Watcher thread stopped watching...");
     server_running_ = false;
     stop_server_ = false;
 }

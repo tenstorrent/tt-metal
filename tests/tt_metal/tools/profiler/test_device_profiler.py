@@ -979,6 +979,7 @@ def test_dispatch_cores():
 
 @skip_for_blackhole()
 @pytest.mark.skip_post_commit
+@pytest.mark.timeout(600)
 def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],

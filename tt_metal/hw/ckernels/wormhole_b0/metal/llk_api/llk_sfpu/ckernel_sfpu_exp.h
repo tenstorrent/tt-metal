@@ -11,7 +11,7 @@
 // clang-format off: sfpi.h before polyval (polyval uses sfpi_inline); matches blackhole ordering
 #include "sfpi.h"
 #include "llk_math_eltwise_unary_sfpu.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 // clang-format on
 #include "ckernel_sfpu_recip.h"
 #include "lltt.h"

@@ -12,6 +12,13 @@ namespace ttnn::operations::moreh::moreh_softmax {
 
 #define L1_512KB (512 * 1024)
 
+tt::DataFormat get_intermed_data_format(tt::DataFormat data_format, bool fp32_dest_acc_en) {
+    if (fp32_dest_acc_en) {
+        return tt::DataFormat::Float32;
+    }
+    return data_format == tt::DataFormat::Bfp8_b ? tt::DataFormat::Float16_b : data_format;
+}
+
 bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config) {
     auto w = tensor.logical_shape()[-1];
     int32_t Wt = (w + tt::constants::TILE_WIDTH - 1) / tt::constants::TILE_WIDTH;
@@ -22,7 +29,7 @@ bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComput
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     // Same formats as the small factories.
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    auto intermed_data_format = get_intermed_data_format(data_format, fp32_dest_acc_en);
     auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);
@@ -55,7 +62,7 @@ bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComput
 
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
     // Same formats as the small factories.
-    auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    auto intermed_data_format = get_intermed_data_format(data_format, fp32_dest_acc_en);
     auto mask_scaler_format = (data_format == tt::DataFormat::Bfp8_b) ? tt::DataFormat::Float16_b : data_format;
 
     auto tile_size = tt::tile_size(data_format);

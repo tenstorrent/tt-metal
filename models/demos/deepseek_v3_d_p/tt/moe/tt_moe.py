@@ -322,7 +322,7 @@ class TtMoe(LightweightModule):
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
                 written. Blackhole only. Off by default (False): only models that opt in with
-                ROUTED_EXPERT_COMBINE_OVERLAP (Kimi K2.7, GLM 5.3) pass
+                ROUTED_EXPERT_COMBINE_OVERLAP (Kimi K2.7, GLM 5.3, Mistral Small 4) pass
                 init_helpers.routed_expert_combine_overlap_arg's None, which means on wherever it is
                 supported AND the mesh's fabric payload fits half a bf16 token plus combine_fabric2d's
                 routing tail -- open the mesh with init_helpers.moe_fabric_payload_size for that; with the

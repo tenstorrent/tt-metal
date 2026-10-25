@@ -17,7 +17,7 @@ from helpers.constraints import (
     get_valid_dest_accumulation_modes,
     get_valid_dest_indices,
 )
-from helpers.data_format_inference import infer_data_formats
+from helpers.data_format_inference import infer_data_formats, unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     FACES_PER_TILE,
@@ -121,9 +121,7 @@ def test_pack(
         input_dimensions=input_dimensions,
     )
 
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     # To come as close as possible to actual hardware behavior, we infer data formats here
     # and use the inferred pack_src format for ReLU operations.
     data_formats = infer_data_formats(

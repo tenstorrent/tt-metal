@@ -256,6 +256,18 @@
   team: models
   budget_type: agentic_research
 
+- name: Gemma4 26B A4B QB2 GPQA subset and serving
+  cmd: bash models/demos/gemma4_26b_a4b_qb2/tests/run_ci.sh
+  model: gemma4-26b-a4b-qb2
+  model_family: Gemma
+  skus:
+    bh_quietbox_2:
+      timeout: 35
+      tier: 3
+  owner_id: U08BGTAMU1W # Marina Vasiljevic
+  team: models
+  budget_type: agentic_research
+
 - name: Qwen3.8 27B QB2 model, GPQA subset and serving
   cmd: bash models/demos/qwen38_27b_qb2/tests/run_ci.sh
   model: qwen38-27b-qb2

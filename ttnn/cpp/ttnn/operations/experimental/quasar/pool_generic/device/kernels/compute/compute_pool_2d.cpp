@@ -172,8 +172,8 @@ void kernel_main() {
     for (uint32_t n = 0; n < num_out_sticks_per_thread; ++n) {
         const uint32_t curr_scalar_cb_id = in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = in_cb_id_0;
-        DataflowBuffer curr_scalar_cb = in_scalar_cb_0;
-        DataflowBuffer curr_in_cb = in_cb_0;
+        auto& curr_scalar_cb = in_scalar_cb_0;
+        auto& curr_in_cb = in_cb_0;
         if constexpr (!one_scalar_per_core) {
             curr_scalar_cb.wait_front(1);
         }
@@ -291,7 +291,7 @@ void kernel_main() {
             } else {
 #if PACK_TO_SCRATCH == 1
                 const uint32_t curr_scratch_cb_id = scratch_cb_id_0;
-                DataflowBuffer curr_scratch_cb = scratch_cb_0;
+                auto& curr_scratch_cb = scratch_cb_0;
                 // One full-width stick per output row: reserve/push once, pack each c-block into its channel slice.
                 if (first_c_block) {
                     curr_scratch_cb.reserve_back(1);

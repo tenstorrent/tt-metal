@@ -31,6 +31,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import torch
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
@@ -138,7 +139,7 @@ def _run(values_by_face, out_fmt, dest_acc, in_fmt=DataFormat.Float16_b, floats=
             tile_count_res=tc_A,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=in_fmt.is_32_bit() and dest_acc == DestAccumulation.Yes,
+        unpack_to_dest=unpacks_to_dest(in_fmt, dest_acc),
     )
     hw = torch.tensor(cfg.run().result, dtype=format_dict[formats.output_format])
     return src_A.to(torch.float32).numpy(), hw.to(torch.float32).numpy()

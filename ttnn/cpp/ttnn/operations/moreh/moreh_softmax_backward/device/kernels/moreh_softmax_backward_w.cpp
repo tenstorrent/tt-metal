@@ -45,7 +45,7 @@ void kernel_main() {
         } else {
             // On this path the y*dy and sum buffers hold two partial sums instead; the second
             // names below are handle aliases for those same two FIFOs, not extra buffers.
-            constexpr auto dfb_inter0_id = dfb::ydy;
+            static constexpr auto dfb_inter0_id = dfb::ydy;
             compute_kernel_lib::reduce<
                 PoolType::SUM,
                 ReduceDim::REDUCE_ROW,
@@ -55,7 +55,7 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
-            constexpr auto dfb_inter1_id = dfb::sum;
+            static constexpr auto dfb_inter1_id = dfb::sum;
             mask_tile_to_dfb<dfb::dy, dfb::mask, dfb_inter1_id>(
                 dfb_dy_obj,
                 dfb_mask_obj,
@@ -72,7 +72,7 @@ void kernel_main() {
         }
 
         // dy - sum * exp(y)
-        constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
+        static constexpr auto dfb_exp_id = dfb::ydy;  // the y * dy buffer, reused to hold exp(y)
         for (uint32_t w = 0; w < Wt; w += onetile) {
             // exp(y)
             exp_tile_to_dfb<dfb::y, dfb_exp_id>(dfb_y_obj, dfb_ydy_obj, w, /*pop=*/0);

@@ -19,7 +19,7 @@ namespace ckernel {
 #if defined(ARCH_BLACKHOLE)
 
 // DEST geometry.  A DEST "row" is 16 datums.
-// custom_mm<dense_packing=true> output tile: 2 faces, 16 rows apart.
+// custom_mm Dense-layout output tile: 2 faces, 16 rows apart.
 constexpr std::uint32_t CUSTOM_MM_DEST_TILE_ROWS = 32;
 // custom_mm_reuse_dest_srcb accumulator tile: 2 faces, 8 rows apart.
 constexpr std::uint32_t CUSTOM_MM_REUSE_DEST_TILE_ROWS = 16;
@@ -52,7 +52,7 @@ ALWI void custom_mm_reuse_dest_srcb_pack_init() {
  * dense strides.
  *
  * A chaining core therefore needs only this call, not also
- * custom_mm_block_uninit<dense_packing>().
+ * custom_mm_block_uninit<CustomMmDestLayout::Dense>(out_cb_id).
  */
 ALWI void custom_mm_reuse_dest_srcb_pack_uninit() {
     PACK((cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(FACE_C_DIM * FACE_R_DIM * 2)));
@@ -114,7 +114,7 @@ ALWI void custom_mm_reuse_dest_srcb_block_init_short(
  * | kt_dim           | Inner dimension in tiles. All kt_dim in0 tiles must be DEST-resident at once: kt_dim * src_tile_stride + nt_dim * 16 <= CUSTOM_MM_MAX_DEST_ROWS, and the producing custom_mm's ct_dim caps it at 16 | uint32_t | even; see bound                | True     |
  * | nt_dim           | Output width in tiles                                           | uint32_t | 1 to 16                        | True     |
  * | in1_k_stride     | Weight tiles between consecutive K rows (nt_dim if contiguous)  | uint32_t | >= nt_dim                      | True     |
- * | src_tile_stride  | DEST rows between consecutive in0 tiles                         | uint32_t | 32 for custom_mm dense_packing, 64 without | True     |
+ * | src_tile_stride  | DEST rows between consecutive in0 tiles                         | uint32_t | 32 for a Dense custom_mm, 64 for Default   | True     |
  */
 // clang-format on
 template <std::uint32_t in0_tile_r_dim>

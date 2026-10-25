@@ -91,9 +91,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1>(srcs_shape, L1_ADDRESS(buffer_Res[0]), formats.pack_S_dst);
     _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
-    // Implied math format disable for SrcS (unpacker). Load/store decode uses explicit sfpmem.
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = true;
-
     // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
     const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
     const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));

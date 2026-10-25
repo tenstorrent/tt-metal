@@ -59,6 +59,7 @@ import numpy as np
 import pytest
 import torch
 from conftest import wormhole_only
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -303,10 +304,6 @@ def _int32_face_spec(vals):
     )
 
 
-def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> bool:
-    return input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-
-
 def _drive(mathop, formats, spec_A, num_tiles, dest_acc, want_golden=True):
     """Run one kernel over one stimulus set.
 
@@ -371,7 +368,7 @@ def _drive(mathop, formats, spec_A, num_tiles, dest_acc, want_golden=True):
             tile_count_res=tile_cnt_A,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=_unpack_to_dest(formats.input_format, dest_acc),
+        unpack_to_dest=unpacks_to_dest(formats.input_format, dest_acc),
     )
     res = configuration.run().result
     res_tensor = torch.tensor(res, dtype=format_dict[formats.output_format])

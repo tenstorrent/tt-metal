@@ -51,15 +51,22 @@ constexpr bool kSoftminMinShiftSupported =
 // UseMinShift so the branch that is not taken is never instantiated: kernel_main is not a
 // template, so a plain if constexpr there would still instantiate the MIN reduce and trip its
 // static_assert.
-template <bool UseMinShift>
+template <
+    bool UseMinShift,
+    typename DFBIn0,
+    typename DFBMask,
+    typename DFBTmp,
+    typename DFBExps,
+    typename DFBAdd,
+    typename DFBMax>
 ALWI void find_shift(
     std::uint32_t Wt,
-    DataflowBuffer& dfb_in0_obj,
-    DataflowBuffer& dfb_mask_obj,
-    DataflowBuffer& dfb_tmp_obj,
-    DataflowBuffer& dfb_exps_obj,
-    DataflowBuffer& dfb_add_obj,
-    DataflowBuffer& dfb_max_obj) {
+    DFBIn0& dfb_in0_obj,
+    DFBMask& dfb_mask_obj,
+    DFBTmp& dfb_tmp_obj,
+    DFBExps& dfb_exps_obj,
+    DFBAdd& dfb_add_obj,
+    DFBMax& dfb_max_obj) {
     constexpr PoolType kShiftPool = UseMinShift ? PoolType::MIN : PoolType::MAX;
     if constexpr (!UseMinShift) {
         // find max

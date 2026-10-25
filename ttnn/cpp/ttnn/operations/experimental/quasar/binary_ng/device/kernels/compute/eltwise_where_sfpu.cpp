@@ -11,20 +11,17 @@
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
 
+template <typename In0DFB, typename In1DFB, typename OutDFB>
 ALWI void process_tile(
-    tt::CBIndex cb_in0_id,
-    tt::CBIndex cb_in1_id,
-    tt::CBIndex cb_out_id,
+    In0DFB& cb_in0,
+    In1DFB& cb_in1,
+    OutDFB& cb_out,
     const uint32_t scalar_value,
     const float* scalar_val,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-
-    DataflowBuffer cb_in0(cb_in0_id);
-    DataflowBuffer cb_in1(cb_in1_id);
-    DataflowBuffer cb_out(cb_out_id);
 
 #if BCAST_INPUT  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
     auto& cb_bcast = cb_in1;
@@ -106,6 +103,10 @@ void kernel_main() {
     constexpr auto cb_in1_id = tt::CBIndex::c_1;
     constexpr auto cb_out_id = tt::CBIndex::c_2;
 
+    DataflowBuffer cb_in0(cb_in0_id);
+    DataflowBuffer cb_in1(cb_in1_id);
+    DataflowBuffer cb_out(cb_out_id);
+
     compute_kernel_hw_startup(cb_in0_id, cb_out_id);
     copy_init(cb_in0_id);
     BINARY_SFPU_INIT
@@ -115,21 +116,14 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_in0_id,
-            cb_in1_id,
-            cb_out_id,
-            scalar_value,
-            scalar_value_ptr,
-            tile_freq,
-            tile_start,
-            num_tiles_per_cycle);
+            cb_in0, cb_in1, cb_out, scalar_value, scalar_value_ptr, tile_freq, tile_start, num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_in0_id,
-            cb_in1_id,
-            cb_out_id,
+            cb_in0,
+            cb_in1,
+            cb_out,
             scalar_value,
             scalar_value_ptr,
             remaining_iterations,

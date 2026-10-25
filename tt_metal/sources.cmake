@@ -96,6 +96,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
     api/tt-metalium/experimental/per_core_allocation/allocator_state.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
+    api/tt-metalium/experimental/per_core_allocation/device_memory_span.hpp
     api/tt-metalium/experimental/per_core_allocation/memory_config.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
     api/tt-metalium/experimental/range_lockstep_allocation/buffer.hpp

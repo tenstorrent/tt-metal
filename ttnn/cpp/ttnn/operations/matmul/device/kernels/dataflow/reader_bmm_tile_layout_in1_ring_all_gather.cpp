@@ -233,20 +233,22 @@ void kernel_main() {
                 dfb_in1.reserve_back(in1_block_num_tiles);
                 l1_write_addr_in1 = dfb_in1.get_write_ptr();
 
-                const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+                const BankView dram_bank(s1);
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         const uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
                         noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
-                            dram_bank, curr_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr},
+                            dram_bank,
+                            curr_page_size,
+                            {.bank_id = dram_bank_id, .offset_bytes = 0},
                             NocOptVals{.vc = vc});
                         noc.async_read_with_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
                             dram_bank,
                             CoreLocalMem<uint32_t>(l1_write_addr_in1),
                             curr_page_size,
-                            {.bank_id = dram_bank_id, .addr = in1_tensor_addr + curr_l1_read_addr_in1},
+                            {.bank_id = dram_bank_id, .offset_bytes = curr_l1_read_addr_in1},
                             {},
                             NocOptVals{.vc = vc});
                         curr_l1_read_addr_in1 += curr_page_size;

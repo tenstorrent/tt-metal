@@ -11,7 +11,7 @@
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"

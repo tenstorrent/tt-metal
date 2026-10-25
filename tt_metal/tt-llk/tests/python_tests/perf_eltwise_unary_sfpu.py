@@ -5,6 +5,7 @@
 import pytest
 from conftest import skip_for_blackhole
 from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -220,9 +221,7 @@ def test_perf_eltwise_unary_sfpu(
     # A 32-bit (fp32) input with dest_acc ON unpacks straight into the 32-bit Dest
     # register. With dest_acc OFF it goes through the source registers (converted to 16-bit)
     # and is copied into Dest for the SFPU op.
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     configuration = PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
@@ -400,9 +399,7 @@ def test_perf_eltwise_unary_sfpu_erfinv_fp32(
     perf_report, formats, mathop, input_dimensions
 ):
     dest_acc = DestAccumulation.Yes
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     _extra_slice_config(
         formats, mathop, dest_acc, unpack_to_dest, input_dimensions
     ).run(perf_report)

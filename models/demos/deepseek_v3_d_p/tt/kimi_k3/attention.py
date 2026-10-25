@@ -115,7 +115,7 @@ class K3Attention(Protocol):
     """GLOBAL model layer index — what names weights and what taps report."""
 
     writes_kv: bool
-    """Whether this layer fills a KV slab, and so whether the block owes a pad-zero and an ack."""
+    """Whether this layer fills a KV slab, and so whether the block owes a pad-zero."""
 
     def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
         """`[1, 1, T_local, emb/tp]` in, the same out. Ownership of the return passes to the caller."""

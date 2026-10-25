@@ -72,10 +72,6 @@ _TYPECAST_PERF_CASES = [
 ]
 
 
-def _is_block_float(fmt: DataFormat) -> bool:
-    return fmt in (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b)
-
-
 @pytest.mark.perf
 @parametrize(
     typecast_case=_TYPECAST_PERF_CASES,
@@ -165,7 +161,7 @@ def test_perf_eltwise_unary_typecast(
     # inference already yields the output format, so no patch is needed there.
     if dest_acc == DestAccumulation.No:
         pack_src = (
-            DataFormat.Float16_b if _is_block_float(output_format) else output_format
+            DataFormat.Float16_b if output_format.is_block_float() else output_format
         )
         for fmt_config in configuration.formats_config:
             fmt_config.pack_src = pack_src

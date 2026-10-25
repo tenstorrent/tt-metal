@@ -69,6 +69,7 @@ jobs:
 
   models-sanity-tests:
     needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:
       fail-fast: false
       matrix:

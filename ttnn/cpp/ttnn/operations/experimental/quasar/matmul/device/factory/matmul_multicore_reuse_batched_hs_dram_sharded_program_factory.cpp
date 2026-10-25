@@ -408,6 +408,9 @@ static ProgramDescriptor create_program_batch_sharded_descriptor(
         in1_writer_compile_args.push_back(in3_block_tiles);
         tt::tt_metal::TensorAccessorArgs(*bias_tensor).append_to(in1_writer_compile_args);
     }
+    // in1 TensorAccessorArgs for the BankView reads, appended last: CTA 10 without bias, after the bias args
+    // with bias.
+    tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_writer_compile_args);
 
     uint32_t in0_num_subblocks = per_core_M / out_subblock_h;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;

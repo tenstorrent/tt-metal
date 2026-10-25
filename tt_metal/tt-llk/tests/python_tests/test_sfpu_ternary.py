@@ -6,6 +6,7 @@ import struct
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TernarySFPUGolden,
@@ -195,8 +196,7 @@ def _run_sfpu_ternary(
     ],
 )
 def test_sfpu_ternary(formats, dest_acc, mathop):
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
     if (
         formats.input_format == DataFormat.Bfp8_b
         and mathop != MathOperation.SfpuAddcmul
@@ -230,8 +230,7 @@ def test_sfpu_ternary_approx_after_lreg_clobber(formats, dest_acc, mathop):
             "items 2 and 5, verified on Blackhole silicon only; Wormhole's "
             "sfpu_reciprocal_init programs its constants in both modes"
         )
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     _run_sfpu_ternary(
         formats,
@@ -280,8 +279,7 @@ _TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], s
 )
 def test_sfpu_ternary_edges(formats, dest_acc, mathop):
     """Drive each ternary op's operand-C pole or knee, where it has one."""
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     spec_C = edge_spec(
         mathop,
