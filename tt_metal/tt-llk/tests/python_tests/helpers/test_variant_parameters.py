@@ -107,11 +107,11 @@ class MATMUL_ROW_MOP(TemplateParameter):
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
         from helpers.matmul_prod_keys import main_form_cell, m2_row_mop
 
-        if get_chip_architecture() != ChipArchitecture.BLACKHOLE or dest_sync != DestSync.Half:
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim)):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 

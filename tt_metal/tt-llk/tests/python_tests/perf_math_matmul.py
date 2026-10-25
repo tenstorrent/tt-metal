@@ -35,6 +35,7 @@ from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
+    MATMUL_ROW_MOP,
     MATMUL_K_LOOP,
     MATMUL_IN1_ALT,
     MATMUL_PACK_BLOCK,
@@ -293,6 +294,19 @@ def test_perf_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_c_dim,
                 dest_sync=matmul_config.dest_sync,
                 throttle=throttle,
+            ),
+            *(
+                MATMUL_ROW_MOP.for_block(
+                    formats,
+                    matmul_config.dest_acc,
+                    math_fidelity,
+                    matmul_config.dest_sync,
+                    matmul_config.tile_dimensions.ct_dim,
+                    matmul_config.tile_dimensions.rt_dim,
+                    matmul_config.tile_dimensions.kt_dim,
+                )
+                if math_fidelity == MathFidelity.LoFi
+                else []
             ),
             *MATMUL_FORM_KEYS.for_block(
                 formats,
