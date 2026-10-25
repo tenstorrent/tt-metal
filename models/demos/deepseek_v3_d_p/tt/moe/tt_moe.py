@@ -48,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
 # Prelude overlap (overlap agent, 2026-10-25): the MoE x all-gather (axis 1) runs on its own sub-device next to the
 # routing chain (masked_bincount, offset_cumsum's axis-0 gather + cumsum, the indices/scores untilize), which needs
-# none of it. Manager {SD0 = columns 0..SPLIT-1 (masked_bincount's fixed (0,0)-(7,7) grid, offset_cumsum's (0,0)
+# none of it. Manager {SD0 = columns 0..SPLIT-1 (masked_bincount's fixed (0,0)-(7,0) grid, offset_cumsum's (0,0)
 # core and default-sub-device gather, column-major untilize cores), SD1 = the rest (the x all-gather's workers)},
 # loaded after the gate (so the gate's axis-1 all-gather is done: two programs on one fabric axis must never overlap,
 # notes/pipeline/deadlock-matrix.md) and cleared before the indices copy and Q1, which need the whole grid.
