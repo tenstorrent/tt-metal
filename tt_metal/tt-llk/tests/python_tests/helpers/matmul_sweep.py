@@ -124,11 +124,12 @@ def matmul_pack_form(
         math_fidelity != MathFidelity.LoFi
         or throttle >= 4
         or (small and formats.output_format == DataFormat.Float32)
-        # Float32 operands bound a full fp32 section on the unpacker, the denser DEST reads of the block pack only slow the math
+        # Float32 operands bound a full fp32 section on the unpacker, the denser DEST reads of the block pack only slow the math (three tiles
+        # already: the 1x3 block to Bfp8_b reads 0.6 cycles behind main with the closed block pack)
         or (
             formats.input_format == DataFormat.Float32
             and formats.output_format != DataFormat.Float32
-            and rt_dim * ct_dim >= 4
+            and rt_dim * ct_dim >= 3
         )
     ):
         return 0
