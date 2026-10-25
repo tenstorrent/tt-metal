@@ -196,7 +196,8 @@ void kernel_main() {
         bool last = false;
         bool empty = false;
         while (!last) {
-            if (pending_tok != no_tok && cb_pages_available_at_front(cb_out_rm, block_tiles)) {
+            if (!(sparse_sdpa::dbg::MASK & sparse_sdpa::dbg::EAGER_OUT) && pending_tok != no_tok &&
+                cb_pages_available_at_front(cb_out_rm, block_tiles)) {
                 write_out(pending_tok);
                 pending_tok = no_tok;
             }
@@ -314,6 +315,10 @@ void kernel_main() {
             write_out(pending_tok);  // previous segment's block (compute is long past it by now)
         }
         pending_tok = tok;
+        if constexpr (sparse_sdpa::dbg::MASK & sparse_sdpa::dbg::EAGER_OUT) {
+            write_out(pending_tok);
+            pending_tok = no_tok;
+        }
     }
     if (pending_tok != no_tok) {
         write_out(pending_tok);

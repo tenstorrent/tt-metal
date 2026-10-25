@@ -113,6 +113,7 @@ constexpr uint32_t NO_DEQUANT_MUL = 16u;  // skip the latent * scale multiply (t
 constexpr uint32_t NO_KTILIZE = 32u;      // skip the latent/rope tilize (timing only; wrong numerics)
 constexpr uint32_t PROF_READER_GATHER = 64u;  // per-slab reader zone around the gather + writer join
 constexpr uint32_t PROF_COMPUTE_WAIT = 128u;  // per-slab compute zone around the K-row wait
+constexpr uint32_t EAGER_OUT = 256u;          // writer drains each output block before the next gather (base order)
 #if defined(SPARSE_SDPA_DBG)
 constexpr uint32_t MASK = SPARSE_SDPA_DBG;
 #else
