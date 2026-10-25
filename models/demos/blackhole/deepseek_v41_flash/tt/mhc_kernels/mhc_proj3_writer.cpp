@@ -20,6 +20,9 @@ void kernel_main() {
     constexpr uint32_t cb_q =
         get_compile_time_arg_val(5);  // packed partial pages (same L1 address on every core of the program)
     constexpr uint32_t SEM = get_compile_time_arg_val(6);
+    constexpr uint32_t NGRP = get_compile_time_arg_val(
+        7);  // token groups handled by this core (1 or 2): one partial tile / one page write each
+    constexpr uint32_t PGPG = get_compile_time_arg_val(8);
     constexpr uint32_t TILE = 4096;
 
     const uint32_t pg = get_arg_val<uint32_t>(0);
@@ -59,18 +62,17 @@ void kernel_main() {
         DeviceZoneScopedN("PW_built");
     }
 
-    cbp.wait_front(1);
-    {
-        DeviceZoneScopedN("PW_gotP");
-    }
     const uint32_t dst_off = ((row0 >> 4) << 11) + ((row0 & 15) << 6);
-    const uint32_t src = cbp.get_read_ptr();
-    const uint32_t qb = cbq.get_write_ptr() + pg * TILE + dst_off;
-    noc_async_write(src, get_noc_addr(pnx, pny, qb), TG * 64);
-    noc_async_write(src + 1024, get_noc_addr(pnx, pny, qb + 1024), TG * 64);
-    noc_async_writes_flushed();
-    noc_semaphore_inc(get_noc_addr(pnx, pny, get_semaphore(SEM)), 1);
-    noc_async_atomic_barrier();
-    noc_async_write_barrier();
-    cbp.pop_front(1);
+    for (uint32_t g = 0; g < NGRP; ++g) {
+        cbp.wait_front(1);
+        const uint32_t src = cbp.get_read_ptr();
+        const uint32_t qb = cbq.get_write_ptr() + (g * PGPG + pg) * TILE + dst_off;
+        noc_async_write(src, get_noc_addr(pnx, pny, qb), TG * 64);
+        noc_async_write(src + 1024, get_noc_addr(pnx, pny, qb + 1024), TG * 64);
+        noc_async_writes_flushed();
+        noc_semaphore_inc(get_noc_addr(pnx, pny, get_semaphore(SEM)), 1);
+        noc_async_atomic_barrier();
+        noc_async_write_barrier();
+        cbp.pop_front(1);
+    }
 }

@@ -31,14 +31,14 @@ def mhc_mixes_cn(
     grid = mesh.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
     avail = [(cx, cy) for cy in range(gy) for cx in range(4, gx)]
-    pcores = avail[: plan.cores]
+    pcores = avail[:S]  # one core per column range handles ALL token groups (weights read once)
     assert gy >= 9, gy
     post_core = (
         0,
         8,
     )  # below the collapse+norm rectangle (rows 0..7 of columns 0..3): always free, the projection cores need columns >= 4
-    assert plan.cores <= len(avail), (plan.cores, len(avail))
-    NPROJ = plan.cores
+    assert S <= len(avail), (S, len(avail))
+    NPROJ = S * G
     TILE = 4096
     cs = lambda cores: ttnn.CoreRangeSet(
         [ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores]
@@ -59,15 +59,15 @@ def mhc_mixes_cn(
 
     # ---------------- projection cores (proj2 reader / compute, proj3 writer) ----------------
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-    for c, (cx, cy) in enumerate(pcores):
-        g, r = divmod(c, S)
-        rrt[cx][cy] = [r, g * TG, max(0, min(TG, plan.tv - g * TG))]
-        wrt[cx][cy] = [g * PGPG + r // PPT, (r % PPT) * TG, int(pn.x), int(pn.y)]
+    for r, (cx, cy) in enumerate(pcores):
+        nvs = [max(0, min(TG, plan.tv - g * TG)) for g in range(2)]
+        rrt[cx][cy] = [r, nvs[0], nvs[1]]
+        wrt[cx][cy] = [r // PPT, (r % PPT) * TG, int(pn.x), int(pn.y)]
         crt[cx][cy] = []
     # projection CB indices 10..17 (index 1 is the shared packed-partial pages: post2_compute hard-codes Q = 1)
     X, W, ONES, SEL, SQ, Z, Q1, P = range(10, 18)
     cbs += [
-        _cb(p_set, X, TPJ, TILE, f32),
+        _cb(p_set, X, G * TPJ, TILE, f32),
         _cb(p_set, W, 4 * TPJ, TILE, f32),
         _cb(p_set, ONES, 1, TILE, f32),
         _cb(p_set, SEL, 5, TILE, f32),
@@ -79,21 +79,26 @@ def mhc_mixes_cn(
     NCONST = int(consts.shape[0])
     kernels += [
         _kernel(
-            "mhc_proj2_reader.cpp",
+            "mhc_proj3_reader.cpp",
             p_set,
-            [X, W, TG, plan.NJ, TPJ] + _acc(x) + _acc(wt),
+            [X, W, TG, plan.NJ, TPJ, G] + _acc(x) + _acc(wt),
             rrt,
             None,
             ttnn.ReaderConfigDescriptor(),
             common=[x.buffer_address(), wt.buffer_address()],
         ),
         _kernel(
-            "mhc_proj3_writer.cpp", p_set, [ONES, SEL, P, ncol, TG, 1, SEMID], wrt, None, ttnn.WriterConfigDescriptor()
+            "mhc_proj3_writer.cpp",
+            p_set,
+            [ONES, SEL, P, ncol, TG, 1, SEMID, G, PGPG],
+            wrt,
+            None,
+            ttnn.WriterConfigDescriptor(),
         ),
         _kernel(
-            "mhc_proj2_compute.cpp",
+            "mhc_proj3_compute.cpp",
             p_set,
-            [X, W, ONES, SEL, SQ, Z, Q1, P, TPJ],
+            [X, W, ONES, SEL, SQ, Z, Q1, P, TPJ, G],
             crt,
             None,
             ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
@@ -207,7 +212,7 @@ def mhc_mixes_cn(
     ]
     prog = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
     prog.custom_program_hash = _hash(
-        0x5D1,
+        0x5D2,
         T,
         plan.T,
         D,
