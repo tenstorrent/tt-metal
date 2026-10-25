@@ -401,3 +401,49 @@ def test_head_layout_ab(mesh_device, device_params, ab):
         block.close()
         del block
         gc.collect()  # (its global semaphores go with their last reference: before the next block's L1)
+
+
+# the ports' logits priority A/B (MoEOptions.logits_first): (model, rows a mesh row)
+PRIO = [("k3", 640), ("glm53", 640), ("k27", 640), ("k3", 1024)]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, case, first",
+    [
+        pytest.param(
+            (R, C),
+            _fab(
+                fabric_payload_size=fabric_payload(BASE[m].routed_width),
+                l1_small_size=0,
+                trace_region_size=TRACE_REGION,
+            ),
+            (m, rows),
+            first,
+            id=f"prio-{m}-r{rows}-{'logits' if first else 'x'}first",
+        )
+        for m, rows in PRIO
+        for first in (True, False)
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(36000)
+def test_logits_priority_ab(mesh_device, device_params, case, first):
+    """The block with the ports' logits ahead of / after the x gather, traced replays timed (the profiler: the head's
+    zones - the routing chain's steps)."""
+    from models.demos.moe_block.moe_block import MoEOptions
+
+    name, rows = case
+    m = mesh_model(name, R * C)
+    w = scenario_weights(m, "uniform", R * C)
+    block = MoEBlock(
+        mesh_device,
+        m,
+        rows * R,
+        w,
+        WeightCache(path=None, layer=0),
+        options=MoEOptions(head="fused", logits_first=first),
+    )
+    tag = f"prio-{name}-r{rows}-{'logits' if first else 'x'}first"
+    stats = run_checked(mesh_device, block, m, w, tag, eager=1, replays=12)
+    logger.info(f"PRIO_RESULT {tag}: PCC min {min(stats['pcc']):.5f}; {block.summary}")
+    block.close()

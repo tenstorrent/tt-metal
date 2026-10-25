@@ -527,6 +527,13 @@ class HeadSE3:
         on a line too (K3 Galaxy-projected 367 us vs 380 x first from the mesh's last launch, 397 vs 461 eager)."""
         if router.logits_first is not None:
             return router.logits_first
+        # (measured, traced, 640 / 1024 rows, logits first vs x first: the 2x4 line - K3 638 vs 558 us, 1120 vs 1083,
+        # GLM-5.3 392 vs 383, K2.7 443 vs 433; the ring of 4 - K3 536 vs 458, 877 vs 852, GLM-5.3 312 vs 296, K2.7 331
+        # vs 326: x first on every mesh of up to 8 chips. Larger meshes (the Galaxy's N 32 routing chain binds) keep
+        # the projections' rule below until measured)
+        R_, C_ = tuple(self.mesh.shape)
+        if R_ * C_ <= 8:
+            return False
         if latent and self._ring():  # (measured on a ring of 4, K3 E 896: x first 453-455 us traced, logits first
             return False  # 479-483 - the chain still ends ~90 us before the SE path, ~+20 for the Galaxy's N 32)
         return self._ring() or not latent or self.router_on_engine(router, latent)

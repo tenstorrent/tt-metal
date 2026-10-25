@@ -143,6 +143,9 @@ class MoEOptions:
     # the fused head's layout (tt/head_plan.py HeadLayout: engine GY, MT, chunks, K step, the logits on the engine):
     # None the planner's (its cost model's best that fits L1); given - A/B sweeps
     head_layout: object = None
+    # the fused head's ports: the router's partial logits ahead of the x gather (True), after it (False), or None the
+    # head's choice (HeadSE3.logits_priority) - A/B sweeps
+    logits_first: bool | None = None
     # the routed experts' gate / up weight readers: the DRAM cores (DRISC, the default) or Tensix readers (A/B)
     experts_drisc: bool = True
     # the tail: "fused" one program a chip - latent models: tt/tail_engine.py (the latent all-gather into the engine's
@@ -391,6 +394,7 @@ class MoEBlock(LightweightModule):
                     accumulators=acc,
                     router=options.router,
                     layout=options.head_layout,
+                    logits_first=options.logits_first,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -882,6 +886,7 @@ class FusedHead:
         accumulators=12,
         router="auto",
         layout=None,
+        logits_first=None,
     ):
         from ttnn.bringup.combine_rf.lin2d import glu_weight
 
@@ -913,6 +918,7 @@ class FusedHead:
                 K=K,
                 fold=model.router.fold,
                 route_scale=model.router.route_scale,
+                logits_first=logits_first,
                 ordered=deterministic,
                 on_engine={"auto": None, "engine": True, "router_cores": False}[router],
             ),
