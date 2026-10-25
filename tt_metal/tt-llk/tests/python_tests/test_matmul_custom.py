@@ -159,7 +159,8 @@ def _run_matmul_custom(
     formats=MATMUL_FORMATS,
     dest_acc=DEST_ACC_MODES,
     # dimensions depends on (formats, dest_acc): the max result-tile count is set by
-    # which dest register the pair lands in (see _dest_bank_max_tiles). Kept as its
+    # which dest register the pair lands in (see max_dest_tiles; is_dest_acc_needed
+    # formats are forced onto the 32-bit dest). Kept as its
     # own axis -- rather than a packed (format, dest_acc, dims) tuple -- so test and
     # perf coverage line up axis-for-axis (cf. perf_matmul.matmul_combos).
     dimensions=lambda formats, dest_acc: generate_matmul_dimension_combinations(

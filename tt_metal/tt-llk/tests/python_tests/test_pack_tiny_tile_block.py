@@ -21,7 +21,7 @@ from helpers.llk_params import (
     format_dict,
     format_tile_sizes,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import max_dest_tiles, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -68,12 +68,9 @@ def _make_config(
     golden_tensor = src_A.to(torch_format)
 
     # Determine DEST capacity (SyncHalf: 8 tiles FP16, 4 tiles FP32)
-    capacity_divisor = (
-        2
-        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
-        else 1
+    max_tiles_in_dest = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit()
     )
-    max_tiles_in_dest = 8 // capacity_divisor
 
     # For tiny tiles with fewer faces, more tiles fit in DEST
     # Scale by the ratio of faces: a 2-face tile uses half the DEST of a 4-face tile
@@ -200,12 +197,9 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
     torch_format = format_dict[formats.output_format]
     golden_tensor = src_A.to(torch_format)
 
-    capacity_divisor = (
-        2
-        if (dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit())
-        else 1
+    max_tiles_in_dest = max_dest_tiles(
+        dest_acc == DestAccumulation.Yes or formats.input_format.is_32_bit()
     )
-    max_tiles_in_dest = 8 // capacity_divisor
     if num_faces < 4:
         max_tiles_in_dest = max_tiles_in_dest * (4 // num_faces)
 

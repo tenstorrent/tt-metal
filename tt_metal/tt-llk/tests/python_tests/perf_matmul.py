@@ -73,8 +73,13 @@ def matmul_combos(
     def _acc_modes(fmt: FormatConfig) -> List[DestAccumulation]:
         return dest_acc(fmt) if callable(dest_acc) else dest_acc
 
+    def _max_tiles(fmt: FormatConfig, acc: DestAccumulation, sync: DestSync) -> int:
+        return max_dest_tiles(
+            is_dest_acc_needed(fmt) or acc == DestAccumulation.Yes, sync
+        )
+
     unique_max_tiles = set(
-        max_dest_tiles(is_dest_acc_needed(fmt) or acc == DestAccumulation.Yes, sync)
+        _max_tiles(fmt, acc, sync)
         for fmt in formats
         for acc in _acc_modes(fmt)
         for sync in DEST_SYNC_MODES
@@ -89,12 +94,7 @@ def matmul_combos(
         for format in formats
         for accumulation in _acc_modes(format)
         for dest_sync in DEST_SYNC_MODES
-        for dims in dimensions[
-            max_dest_tiles(
-                is_dest_acc_needed(format) or accumulation == DestAccumulation.Yes,
-                dest_sync,
-            )
-        ]
+        for dims in dimensions[_max_tiles(format, accumulation, dest_sync)]
     ]
 
 
