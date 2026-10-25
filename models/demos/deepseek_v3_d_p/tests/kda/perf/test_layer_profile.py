@@ -10,6 +10,9 @@ generated/kda_profile.json): the per-op times, the gaps between programs and the
 KDA_PROFILE_TOKENS sets the chunk length (default 5120; multiples of 256 from 1024), KDA_PROFILE_REPLAYS the replays
 and KDA_PROFILE_CALLS the calls each replay runs back to back. KDA_PROFILE_DELAY=point:delay_us:chips (see
 delay_injection.DelayConfig) profiles the layer with that delay injected, its spin program recorded as one more program.
+KDA_PROFILE_START moves actual_start (default: mid SP rank 4). KDA_PROFILE_WARMUP_S replays the trace back to back for
+that many seconds before each profiled replay, so the chips run at their sustained, power-limited clocks: profiler
+durations count cycles, so a chip's cycles per call then shows its clock relative to the others'.
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ _REPLAYS = int(os.environ.get("KDA_PROFILE_REPLAYS", "5"))
 _CALLS = int(os.environ.get("KDA_PROFILE_CALLS", "4"))
 _OUT = Path(os.environ.get("KDA_PROFILE_OUT", "generated/kda_profile.json"))
 _DELAY = os.environ.get("KDA_PROFILE_DELAY")
+# Seconds of back-to-back replays before profiling, so the chips reach their sustained (power-limited) clocks.
+_WARMUP_SECONDS = float(os.environ.get("KDA_PROFILE_WARMUP_S", "0"))
 _SP = 8
 _SETTLE_SECONDS = 0.5
 _TIMEOUT_SECONDS = 20.0
@@ -90,6 +95,15 @@ def _replay_records(mesh_device: ttnn.MeshDevice, trace_id: int) -> tuple[float,
     return wall_ms, records
 
 
+def _warm_up(mesh_device: ttnn.MeshDevice, trace_id: int) -> None:
+    """Replay the trace back to back for _WARMUP_SECONDS (no profiler callback registered)."""
+    deadline = time.monotonic() + _WARMUP_SECONDS
+    while time.monotonic() < deadline:
+        for _ in range(10):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+
+
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
@@ -108,6 +122,8 @@ def test_kimi_k3_layer_profile(mesh_device: ttnn.MeshDevice, device_params: dict
     local_rows = _TOKENS // _SP
     # A full chunk whose start falls mid-device, as the perf gate runs it.
     actual_start = 4 * local_rows + (local_rows // 2) // 32 * 32
+    # KDA_PROFILE_START overrides it (a 32-aligned absolute position), e.g. to move the split to another SP rank.
+    actual_start = int(os.environ.get("KDA_PROFILE_START", actual_start))
     case = make_synthetic_kimi_k3_test_case(sequence=_TOKENS)
     layer, hidden_tt = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
     with DelayConfig.parse(_DELAY).inject(layer) if _DELAY else contextlib.nullcontext():
@@ -116,6 +132,7 @@ def test_kimi_k3_layer_profile(mesh_device: ttnn.MeshDevice, device_params: dict
         try:
             _replay_records(mesh_device, trace.trace_id)  # first-replay jitter
             for _ in range(_REPLAYS):
+                _warm_up(mesh_device, trace.trace_id)
                 wall_ms, records = _replay_records(mesh_device, trace.trace_id)
                 replays.append({"wall_ms": wall_ms, "records": records})
         finally:
