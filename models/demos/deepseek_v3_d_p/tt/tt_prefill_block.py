@@ -37,6 +37,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvC
 # NOT the totals. When off (default) there is no sync and no timing, so normal runs are unperturbed.
 # Keyed by global layer_idx -> {"mla": [seconds...], "ffn": [seconds...]} (one entry per forward call).
 _BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
+# glue track: add the post-attention residual inside the MoE's dispatch || shared-expert window.
+_FOLD_MOE_RESIDUAL = os.environ.get("GLUE_FOLD_MOE_RESIDUAL", "1") == "1"
 _BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
 
 
@@ -720,7 +722,7 @@ class TtPrefillBlock(LightweightModule):
                 return None, kv_cache, None
             return None, kv_cache
 
-        x = ttnn.add(x, mla_out)
+        x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mla_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
@@ -735,6 +737,9 @@ class TtPrefillBlock(LightweightModule):
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
+        # The MoE can add the residual itself inside its dispatch || shared-expert window, off the
+        # critical path (GLUE_FOLD_MOE_RESIDUAL=0 restores the add here).
+        fold_residual = self.is_moe and _FOLD_MOE_RESIDUAL and not return_intermediates and isinstance(self.ffn, TtMoe)
         if self.is_moe:
             ffn_out = self._moe_path(
                 ffn_norm_out,
@@ -744,13 +749,18 @@ class TtPrefillBlock(LightweightModule):
                 actual_start=actual_start,
                 metadata=metadata,
                 cache_user_id=cache_user_id,
+                residual=x if fold_residual else None,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
 
         ttnn.deallocate(ffn_norm_out)
-        x = ttnn.add(x, ffn_out)
-        ttnn.deallocate(ffn_out)
+        if fold_residual:
+            ttnn.deallocate(x)
+            x = ffn_out
+        else:
+            x = ttnn.add(x, ffn_out)
+            ttnn.deallocate(ffn_out)
         if _timing:
             ttnn.synchronize_device(self.mesh_device)
             _t_ffn = time.perf_counter()
@@ -783,6 +793,7 @@ class TtPrefillBlock(LightweightModule):
         actual_start: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
+        residual: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE.
 
@@ -799,6 +810,7 @@ class TtPrefillBlock(LightweightModule):
             metadata=metadata,
             # Only consumed by the env-gated routing dump, which names its files by KV slot.
             cache_user_id=cache_user_id,
+            **({"residual": ttnn.squeeze(residual, dim=0)} if residual is not None else {}),
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)

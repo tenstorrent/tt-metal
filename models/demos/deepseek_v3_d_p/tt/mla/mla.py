@@ -32,6 +32,11 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
+# glue track: workers per link for the q_a (and merged q_a+kv_a) TP reduce-scatter; "0" = op default.
+_GLUE_STEM_RS_WORKERS = int(os.environ.get("GLUE_STEM_RS_WORKERS", "8")) or None
+# glue track: o_proj RS output in L1 (read once by the block's residual add).
+_GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "0") == "1"
+
 
 class ttMLA:
     MLA_WEIGHT_NAMES = [
@@ -373,6 +378,7 @@ class ttMLA:
                 "wkv_b2",
                 "o_proj",
                 "g_proj",  # Kimi-K3; listed unconditionally, _resolve_mm_cfg indexes with a bare []
+                "qkv_a_proj",  # merged [q_a | kv_a | pad] stem (_merge_qkv_a)
             ]
         }
         self.sdpa_configs = MLA_SDPA_CONFIG
@@ -487,11 +493,14 @@ class ttMLA:
         self._kv_stem_gather_output = None
         self._output_gate_gather_output = None
         # q_a and kv_a as one matmul + one all-reduce over [q_a_proj | kv_a_proj_with_mqa | pad].
+        # GLUE_MERGE_QKV_A=1 (glue track) also opts DSA/indexer models (GLM-5.3) in: the indexer only
+        # reads the normed q_a latent (qr), which the merged path still produces before the indexer runs.
+        _glue_merge = os.environ.get("GLUE_MERGE_QKV_A", "0") == "1"
         self._merge_qkv_a = (
-            bool(getattr(config, "mla_merge_qkv_a", False))
+            (bool(getattr(config, "mla_merge_qkv_a", False)) or _glue_merge)
             and self.tp_factor > 1
             and not self.kv_only
-            and not self._has_indexer
+            and (_glue_merge or not self._has_indexer)
             and not self._use_gate
         )
         if self._merge_qkv_a:
@@ -604,6 +613,17 @@ class ttMLA:
         logger.info(f"Loaded {len(weights)} weights in MLA layer {layer_idx} (kv_only={kv_only})")
         if self._merge_qkv_a:
             self.qkv_a_proj_weight = self._concat_qkv_a_weight()
+        # glue track: q_a norm as a TP-distributed fused RMSNorm on the reduce-scatter output, BEFORE the
+        # all-gather (the replicated ttnn.rms_norm on [S, q_lora_rank] runs on one core per tile-row).
+        self._q_distnorm = (
+            os.environ.get("GLUE_Q_DISTNORM", "1") == "1"
+            and self.tp_factor > 1
+            and not kv_only
+            and not self._merge_qkv_a
+            and self._llama4_beta is None
+        )
+        if self._q_distnorm:
+            self._q_a_norm_weight_tp = self._tp_shard_norm_weight(self.q_a_layernorm_weight, self.q_lora_rank)
 
         # DSA indexer (v3.2 / GLM): self._has_indexer was resolved above (before the buffer alloc). The
         # TtIndexer owns the indexer stems / RoPE tables / device key-cache and reuses this MLA's q_a stem
@@ -744,6 +764,32 @@ class ttMLA:
         else:
             self._apply_rope = self._apply_rope_padded if self._use_indexed_rope else self._apply_rope_one_shot
 
+        # glue track: absorbed-Q stem without the 512-channel concat copy. wkv_b1 runs with its N padded by
+        # qk_rope_head_dim zero columns, straight into the [.., kv_lora_rank + rope] Q buffer, and the indexed
+        # RoPE writes the rotated q_pe into those last channels in place (output_tensor=). Needs the
+        # rotary_embedding_indexed output_tensor mode (C++); GLUE_Q_ROPE_INPLACE=0 restores concat_prefix.
+        self._q_rope_inplace = (
+            os.environ.get("GLUE_Q_ROPE_INPLACE", "1") == "1"
+            and not kv_only
+            and self._use_indexed_rope
+            and self._is_blackhole
+            and self._resolve_mm_cfg("wkv_b1", self.active_seq_len_local) is not None
+        )
+        if self._q_rope_inplace:
+            self.wkv_b1_weight_padded = self._pad_wkv_b1_weight()
+            b1 = self._resolve_mm_cfg("wkv_b1", self.active_seq_len_local)["program_config"]
+            n_t = (self.kv_lora_rank + self.qk_rope_head_dim) // ttnn.TILE_SIZE
+            sub_w = max(w for w in range(1, 9) if n_t % w == 0)
+            grid = b1.compute_with_storage_grid_size
+            self._wkv_b1_padded_pc = ttnn.MatmulMultiCoreReuseProgramConfig(
+                compute_with_storage_grid_size=(grid.x, grid.y),
+                in0_block_w=b1.in0_block_w,
+                out_subblock_h=1,
+                out_subblock_w=sub_w,
+                per_core_M=b1.per_core_M,
+                per_core_N=n_t,
+            )
+
         # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
         # _sparse_chunked_attn (single-shot = one full-seq chunk); dense splits by chunking. forward()
         # then calls self._attention(...) with no mode ladder: the decision is made here, not per call.
@@ -826,6 +872,7 @@ class ttMLA:
         "wkv_b2": ttnn.bfloat8_b,
         "o_proj": ttnn.bfloat16,
         "g_proj": ttnn.bfloat16,  # Kimi-K3; this dict is a KeyError not a fallback (see _get_mm_kwargs)
+        "qkv_a_proj": ttnn.bfloat16,
     }
 
     # Matmul dimensions for batched matmuls (wkv_b1 / wkv_b2) keyed by weight name.
@@ -1192,16 +1239,18 @@ class ttMLA:
             **self._get_mm_kwargs("q_a_proj", seq_len_local),
         )
 
+        if self._q_distnorm:
+            return self._q_a_latent_distnorm(qr, seq_len_local)
         # All reduce (skip for single-device TP)
         if self.tp_factor > 1:
             qr = self._tp_all_reduce(qr, self._q_a_latent_gather_output, seq_len_local)
         return self._q_a_norm(qr, norm_memory_config)
 
-    def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+    def _tp_reduce_scatter(self, x: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         assert (
             seq_len_local == self.active_seq_len_local
         ), f"TP gather was preallocated for {self.active_seq_len_local} local tokens, got {seq_len_local}"
-        x = ttnn.experimental.reduce_scatter_minimal_async(
+        return ttnn.experimental.reduce_scatter_minimal_async(
             x,
             persistent_output_buffers=None,
             dim=3,
@@ -1211,7 +1260,12 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
+            # Default is 2 workers below 1 MB per link; 8 measured 42.6 -> 38.5 us at [640,2048] (glue R0).
+            num_workers_per_link=_GLUE_STEM_RS_WORKERS,
         )
+
+    def _tp_all_reduce(self, x: ttnn.Tensor, gather_output: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        x = self._tp_reduce_scatter(x, seq_len_local)
         return ttnn.experimental.high_bw_all_gather(
             x,
             dim=3,
@@ -1219,6 +1273,55 @@ class ttMLA:
             cluster_axis=self.tp_axis,
             num_links=self.ccl_num_links,
         )
+
+    def _tp_shard_norm_weight(self, weight: ttnn.Tensor, width: int) -> ttnn.Tensor:
+        """Replicated ROW_MAJOR [1, 1, width/32, 32] norm weight -> TP-sharded TILE [1, 1, 1, width/tp] row,
+        the affine-weight form dit_fused_distributed_rmsnorm broadcasts (same as TtDistributedRmsNorm)."""
+        host = ttnn.to_torch(ttnn.get_device_tensors(weight)[0]).reshape(1, 1, 1, width)
+        dims = [None, None]
+        dims[self.tp_axis] = 3
+        return ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=tuple(self.mesh_device.shape), dims=dims),
+        )
+
+    def _q_a_latent_distnorm(self, qr: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
+        """RS -> TP-distributed fused RMSNorm on this chip's [S, q_lora/tp] slice -> AG of the normed latent.
+        Row-wise RMSNorm commutes with the column gather once the row statistics are all-reduced, which the
+        fused op does with one small stats all-gather. Returns the model-owned persistent gather buffer:
+        callers must NOT deallocate it."""
+        x = self._tp_reduce_scatter(qr, seq_len_local)
+        ttnn.deallocate(qr)
+        semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
+            x, self._q_a_norm_weight_tp, self.tp_axis, self.ccl_num_links
+        )
+        normed = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            x,
+            self.tp_axis,
+            self.mesh_device,
+            semaphores,
+            topology=self.tp_ccl_topology,
+            epsilon=self.config.rms_norm_eps,
+            weight=self._q_a_norm_weight_tp,
+            persistent_output_buffer=stats,
+            num_preferred_links=self.ccl_num_links,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(x)
+        out = ttnn.experimental.high_bw_all_gather(
+            normed,
+            dim=3,
+            output_tensor=self._q_a_latent_gather_output,
+            cluster_axis=self.tp_axis,
+            num_links=self.ccl_num_links,
+        )
+        ttnn.deallocate(normed)
+        return out
 
     def _q_a_norm(self, qr: ttnn.Tensor, norm_memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
         return ttnn.rms_norm(
@@ -1228,6 +1331,27 @@ class ttMLA:
             memory_config=norm_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
         )
+
+    def _pad_wkv_b1_weight(self) -> ttnn.Tensor:
+        """[.., nope, kv_lora_rank] bfp8 -> [.., nope, kv_lora_rank + rope] with zero rope columns. Whole
+        tiles are appended along N, so the bfp8 -> bf16 -> bfp8 round trip keeps every block exact."""
+        w = ttnn.typecast(self.wkv_b1_weight, ttnn.bfloat16)
+        shape = list(w.shape)
+        shape[-1] = self.qk_rope_head_dim
+        zeros = ttnn.from_torch(
+            torch.zeros(shape),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        merged = ttnn.concat([w, zeros], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(w)
+        ttnn.deallocate(zeros)
+        out = ttnn.typecast(merged, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(merged)
+        return out
 
     def _concat_qkv_a_weight(self) -> ttnn.Tensor:
         # Both parts are whole tiles wide, so the bf8 round trip keeps every shared-exponent block intact.
@@ -1255,11 +1379,11 @@ class ttMLA:
         self, hidden_states: ttnn.Tensor, seq_len_local: int, norm_memory_config: ttnn.MemoryConfig
     ) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ttnn.Tensor]]:
         """Merged _q_a_latent + the kv_a projection: returns (qr, (kv_nope, kv_rope))."""
+        # Tuned config where one exists (GLM-5.3: L1 out, 2D mcast); otherwise the TTNN default to DRAM.
         x = ttnn.linear(
             hidden_states,
             self.qkv_a_proj_weight,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **self._get_mm_kwargs("qkv_a_proj", seq_len_local),
         )
         x = self._tp_all_reduce(x, self._qkv_a_gather_output, seq_len_local)
         nope_start = self.q_lora_rank
@@ -1298,7 +1422,8 @@ class ttMLA:
             self.q_b_proj_weight,
             **self._get_mm_kwargs("q_b_proj", seq_len_local),
         )
-        ttnn.deallocate(qr)
+        if not self._q_distnorm:  # distnorm qr IS the persistent TP gather buffer
+            ttnn.deallocate(qr)
 
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
@@ -1308,6 +1433,29 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
+
+        if self._q_rope_inplace and seq_len_local == self.active_seq_len_local:
+            # [q_nope @ wkv_b1 | 0] straight into the Q buffer, then RoPE the q_pe into its last channels.
+            tt_q = ttnn.linear(
+                tt_q_nope,
+                self.wkv_b1_weight_padded,
+                program_config=self._wkv_b1_padded_pc,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.default_compute_kernel_config,
+            )
+            ttnn.deallocate(tt_q_nope)
+            ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                tt_q_rope,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
+                cluster_axis=self.sp_axis,
+                output_tensor=tt_q,
+            )
+            ttnn.deallocate(tt_q_rope)
+            return tt_q
 
         tt_q_nope = ttnn.linear(
             tt_q_nope,
@@ -1677,7 +1825,8 @@ class ttMLA:
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
                 num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                # glue track (GLUE_EPI_L1=1): consumed at once by the residual add.
+                memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_EPI_L1 else ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.tp_ccl_topology,
                 cluster_axis=self.tp_axis,
             )

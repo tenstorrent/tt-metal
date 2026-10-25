@@ -49,6 +49,11 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         // `kv_actual_global` attribute.
         std::optional<Tensor> metadata;
         std::optional<Tensor> concat_prefix;
+        // Optional preallocated output, wider than input by a whole number of tiles. The op then writes
+        // only the input's channels (rotated region + passthrough) into its LAST input-width channels and
+        // leaves the leading channels untouched: an in-place concat whose prefix the caller has already
+        // written (e.g. a matmul producing [prefix | zeros]). Exclusive with concat_prefix.
+        std::optional<Tensor> output_tensor;
     };
 
     using spec_return_value_t = tt::tt_metal::TensorSpec;
@@ -118,6 +123,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& seq_subshard_axis,
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
-    const std::optional<ttnn::Tensor>& concat_prefix);
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

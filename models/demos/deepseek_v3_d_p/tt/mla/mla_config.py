@@ -36,6 +36,30 @@ _GLM_INDEXER_TAGS = {"num_heads": 64, "q_lora_rank": 2048}
 _MISTRAL4_TAGS = {"num_heads": 32, "q_lora_rank": 1024, "tp_factor": 4, "chunked_only": True}
 
 MLA_MATMUL_CONFIG = {
+    # hidden_states @ [q_a_proj | kv_a_proj_with_mqa | pad] (ttMLA._merge_qkv_a). GLM-5.3: [640,1536] x
+    # [1536,2688] per device, N = 84 tiles over 11 columns (8 per core), M = 20 tiles over 10 rows. L1 out:
+    # the TP reduce-scatter reads it directly (same as the q_a_proj entry it replaces).
+    "qkv_a_proj": {
+        640: [
+            {
+                **_GLM_TAGS,
+                "program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=COMPUTE_GRID,
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=8,
+                    per_core_M=2,
+                    per_core_N=8,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,
+                ),
+                "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,
+                "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+                "out_dtype": ttnn.bfloat16,
+            },
+        ],
+    },
     # hidden_states @ q_a_proj_weight
     "q_a_proj": {
         640: [

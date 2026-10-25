@@ -41,6 +41,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
+# glue track: workers per link for the MoE x all-gather over TP; "0" = op default.
+_GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
+
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
 #   emb_dim            7168  model hidden. Gate input, shared-expert input, block in/out.
@@ -806,6 +809,7 @@ class TtMoe(LightweightModule):
         metadata: Optional[tuple] = None,
         input_ids: Optional[torch.Tensor] = None,
         cache_user_id: int = 0,
+        residual: Optional[ttnn.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -834,6 +838,11 @@ class TtMoe(LightweightModule):
                 the HASH_HOST / HASH_DEVICE gate modes, which select experts by tid2eid[input_ids].
                 HASH_DEVICE ships them per forward, so it is illegal inside a trace capture and
                 assumes sequential SP placement (not is_balanced).
+            residual: optional block residual, same shape/sharding as the MoE output. When given, it is
+                added to the shared-expert output INSIDE the dispatch || shared-expert sub-device window
+                (the shared rows idle for hundreds of us while dispatch runs), so the returned output
+                already includes it and the caller must not add it again. This takes one full-size
+                elementwise add off the per-layer critical path. Ignored with return_intermediates.
 
         Returns:
             Tuple of (final_output, intermediates):
@@ -971,6 +980,8 @@ class TtMoe(LightweightModule):
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
+                # glue R0: 8 workers per link 85.3 us vs 90.5 default at [640,1536] -> 6144.
+                num_workers_per_link=_GLUE_MOE_XAG_WORKERS,
             )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
@@ -1021,6 +1032,17 @@ class TtMoe(LightweightModule):
         shared_output = self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
+        fold_residual = residual is not None and not return_intermediates
+        if fold_residual:
+            # Same sub-device (and so same in-order stream) as the shared expert's reduce-scatter, so the
+            # add starts only once that RS has written shared_output, while dispatch still runs on its
+            # own rows. The RS output is kept alive until after the window closes (freed below).
+            shared_rs_output = shared_output
+            shared_output = ttnn.add(
+                shared_rs_output,
+                residual,
+                sub_core_grids=self.shared_expert.subdevice_cores if self.overlap_shared_expert_with_dispatch else None,
+            )
 
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
@@ -1048,6 +1070,8 @@ class TtMoe(LightweightModule):
         else:
             routed_x = ttnn.deallocate(routed_x, force=True)
         x = ttnn.deallocate(x, force=True)
+        if fold_residual:
+            ttnn.deallocate(shared_rs_output)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
@@ -1152,7 +1176,7 @@ class TtMoe(LightweightModule):
         # ========================================
         # final_output = routed_output + shared_output
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
-        final_output = ttnn.add(routed_output, shared_output)
+        final_output = ttnn.add(routed_output, shared_output, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 

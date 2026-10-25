@@ -153,6 +153,31 @@ void validate_runtime_args(
             prefix.padded_shape()[-1] == prefix.logical_shape()[-1], "concat_prefix width must not have extra padding");
     }
 
+    if (tensor_args.output_tensor.has_value()) {
+        const auto& out = *tensor_args.output_tensor;
+        TT_FATAL(!tensor_args.concat_prefix.has_value(), "output_tensor and concat_prefix are exclusive");
+        require_standard_tile(out, "output_tensor");
+        TT_FATAL(
+            out.storage_type() == StorageType::DEVICE && out.buffer() != nullptr, "output_tensor must be on device");
+        TT_FATAL(out.device() == input.device(), "output_tensor must be on the input device");
+        TT_FATAL(out.dtype() == input.dtype(), "output_tensor dtype must match input");
+        TT_FATAL(out.logical_shape().rank() == 4, "output_tensor must be rank 4");
+        for (uint32_t dim = 0; dim < 3; ++dim) {
+            TT_FATAL(
+                out.logical_shape()[dim] == input.logical_shape()[dim] &&
+                    out.padded_shape()[dim] == input.padded_shape()[dim],
+                "output_tensor leading shape must match input");
+        }
+        TT_FATAL(
+            out.padded_shape()[-1] == out.logical_shape()[-1] && out.logical_shape()[-1] % TILE_WIDTH == 0,
+            "output_tensor width must be tile-aligned with no extra padding");
+        TT_FATAL(
+            out.padded_shape()[-1] >= input.padded_shape()[-1],
+            "output_tensor width ({}) must be at least the input width ({})",
+            out.padded_shape()[-1],
+            input.padded_shape()[-1]);
+    }
+
     if (tensor_args.metadata.has_value()) {
         // Metadata path: kv_actual_global is read on-device from element [0] of the metadata tensor, so
         // its VALUE is the caller's responsibility. But the tensor is bound as tensor::metadata and read
@@ -289,6 +314,9 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_hit(
 RotaryEmbeddingIndexedDeviceOperation::spec_return_value_t RotaryEmbeddingIndexedDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
+    if (tensor_args.output_tensor.has_value()) {
+        return tensor_args.output_tensor->tensor_spec();
+    }
     auto output_shape = input.logical_shape();
     if (tensor_args.concat_prefix.has_value()) {
         ttsl::SmallVector<uint32_t> dims;
@@ -306,6 +334,9 @@ RotaryEmbeddingIndexedDeviceOperation::spec_return_value_t RotaryEmbeddingIndexe
 RotaryEmbeddingIndexedDeviceOperation::tensor_return_value_t
 RotaryEmbeddingIndexedDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    if (tensor_args.output_tensor.has_value()) {
+        return *tensor_args.output_tensor;
+    }
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input.device());
 }
 
@@ -329,6 +360,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     auto hash = tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         tensor_args.metadata.has_value(),
         tensor_args.concat_prefix.has_value(),
+        tensor_args.output_tensor.has_value(),
         args.cluster_axis,
         args.seq_subshard_axis,
         args.rotary_dim,
@@ -342,6 +374,10 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         tensor_args.trans_mat.tensor_spec());
     if (tensor_args.concat_prefix.has_value()) {
         hash = ttsl::hash::hash_objects(hash, tensor_args.concat_prefix->tensor_spec());
+    }
+    if (tensor_args.output_tensor.has_value()) {
+        // The output is a TensorParameter; its (wider) spec sets prefix_Wt / output_Wt.
+        hash = ttsl::hash::hash_objects(hash, tensor_args.output_tensor->tensor_spec());
     }
     if (tensor_args.metadata.has_value()) {
         // metadata is an optional TensorParameter, compared just as strictly when it is present.
@@ -381,8 +417,14 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     const uint32_t n_heads = input.padded_shape()[1];
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t input_head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    // In-place prefix (preallocated wider output): the leading channels are already in the output, so the
+    // writer offsets its writes by prefix_Wt but copies none of them (prefix_copy_Wt = 0).
+    const bool prefix_in_output = tensor_args.output_tensor.has_value();
     const uint32_t prefix_head_dim_t =
-        has_concat_prefix ? tensor_args.concat_prefix->mesh_tensor().padded_shape()[3] / TILE_WIDTH : 0;
+        has_concat_prefix ? tensor_args.concat_prefix->mesh_tensor().padded_shape()[3] / TILE_WIDTH
+        : prefix_in_output ? out.padded_shape()[3] / TILE_WIDTH - input_head_dim_t
+                           : 0;
+    const uint32_t prefix_copy_head_dim_t = prefix_in_output ? 0 : prefix_head_dim_t;
     const uint32_t output_head_dim_t = input_head_dim_t + prefix_head_dim_t;
     const uint32_t head_dim_t = args.rotary_dim / TILE_WIDTH;
     const uint32_t rotary_offset_t = args.rotary_offset / TILE_WIDTH;
@@ -485,7 +527,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     std::vector<ScratchpadSpec> scratchpads = {
         ScratchpadSpec{
             .unique_id = ZERO_SCRATCH,
-            .size_per_node = output_single_tile_size * std::max(1u, prefix_head_dim_t + input_head_dim_t - head_dim_t)},
+            .size_per_node =
+                output_single_tile_size * std::max(1u, prefix_copy_head_dim_t + input_head_dim_t - head_dim_t)},
     };
     if (has_metadata) {
         scratchpads.push_back(ScratchpadSpec{.unique_id = META_SCRATCH, .size_per_node = kMetadataBytes});
@@ -601,6 +644,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"input_Wt", input_head_dim_t},
              {"rotary_offset_t", rotary_offset_t},
              {"prefix_Wt", prefix_head_dim_t},
+             {"prefix_copy_Wt", prefix_copy_head_dim_t},
              {"output_Wt", output_head_dim_t}},
         .runtime_arg_schema =
             {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end", "head_start", "head_end"}},
@@ -819,7 +863,8 @@ ttnn::Tensor rotary_embedding_indexed(
     const std::optional<uint32_t>& seq_subshard_axis,
     const std::optional<uint32_t>& rotary_dim,
     uint32_t rotary_offset,
-    const std::optional<ttnn::Tensor>& concat_prefix) {
+    const std::optional<ttnn::Tensor>& concat_prefix,
+    const std::optional<ttnn::Tensor>& output_tensor) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::
         RotaryEmbeddingIndexedDeviceOperation;
 
@@ -833,6 +878,9 @@ ttnn::Tensor rotary_embedding_indexed(
     }
     if (memory_config.has_value()) {
         out_mem_config = memory_config.value();
+    }
+    if (output_tensor.has_value()) {
+        out_mem_config = output_tensor->memory_config();
     }
 
     auto attrs = OperationType::operation_attributes_t{
@@ -851,7 +899,8 @@ ttnn::Tensor rotary_embedding_indexed(
         .sin = sin,
         .trans_mat = trans_mat,
         .metadata = metadata,
-        .concat_prefix = concat_prefix};
+        .concat_prefix = concat_prefix,
+        .output_tensor = output_tensor};
     return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 
