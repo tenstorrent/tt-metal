@@ -395,6 +395,10 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         activations_are_row_major ? kr_pad * geo::TILE * tensor_arguments.activations.element_size() : bfp8_tile;
     const uint32_t l1_max = hal::get_max_worker_l1_unreserved_size();
     TT_FATAL(l1_max > geo::L1_CB_RESERVE, "moe_fused_swiglu: invalid worker L1 budget");
+    // The whole unreserved L1 unless the entry point found live L1 buffers above the CB region; see l1_budget_bytes.
+    const uint32_t l1_budget = operation_arguments.l1_budget_bytes != 0
+                                   ? std::min(l1_max - geo::L1_CB_RESERVE, operation_arguments.l1_budget_bytes)
+                                   : l1_max - geo::L1_CB_RESERVE;
 
     geo::Blocking blocking(
         hgroups,
@@ -406,7 +410,7 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
         bfp8_tile,
         bf16_tile,
         activation_slice,
-        l1_max - geo::L1_CB_RESERVE,
+        l1_budget,
         output_tile,
         /*enable_phase_alias_=*/true,
         activations_are_row_major,

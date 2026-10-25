@@ -42,6 +42,11 @@ struct OperationArguments {
     tt::tt_metal::MemoryConfig output_memory_config{
         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config;
+    // Per-core L1 the circular buffers may take, 0 = everything above the allocator base. Set by the entry point
+    // to what is free below the lowest live L1 buffer, so a persistent L1 tensor another op keeps alive shrinks the
+    // blocking instead of clashing with it at enqueue. Hashed: a program planned for one budget is not reused at
+    // another.
+    uint32_t l1_budget_bytes = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "experts_per_chip",
@@ -55,7 +60,8 @@ struct OperationArguments {
         "fuse_bias",
         "output_dtype",
         "output_memory_config",
-        "compute_kernel_config");
+        "compute_kernel_config",
+        "l1_budget_bytes");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -70,7 +76,8 @@ struct OperationArguments {
             fuse_bias,
             output_dtype,
             output_memory_config,
-            compute_kernel_config);
+            compute_kernel_config,
+            l1_budget_bytes);
     }
 };
 

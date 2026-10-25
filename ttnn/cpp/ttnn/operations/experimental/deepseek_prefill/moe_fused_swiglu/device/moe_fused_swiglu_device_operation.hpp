@@ -56,6 +56,7 @@ ttnn::Tensor moe_fused_swiglu(
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
     uint32_t min_active_tokens = 0,
-    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max());
+    uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max(),
+    uint32_t l1_budget_bytes = 0);
 
 }  // namespace ttnn::prim
