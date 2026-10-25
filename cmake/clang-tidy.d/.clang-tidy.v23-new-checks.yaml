@@ -1,43 +1,32 @@
-# Checks newly enabled by clang-tidy 23 vs. this repo's effective v20 check
-# set (diffed via --list-checks on both binaries). Used only by the PR-gate
-# v23 shadow run to keep it a plain version bump with no new-check noise.
-# Regenerate if clang-tidy-version or .clang-tidy's Checks list changes.
+# Checks clang-tidy 23 enables that this repo's v20 config doesn't, so the
+# PR-gate v23 shadow run stays a plain version bump (no new-check noise).
+# Diffed via --list-checks on both binaries; regenerate if clang-tidy-version
+# or .clang-tidy's Checks list changes.
 #
-# Not included: `portability-no-assembler`, despite being new in v23 — it's
-# where v20's `hicpp-no-assembler` landed after the hicpp module was removed
-# (most other hicpp checks have a surviving alias already enabled here, e.g.
-# hicpp-use-noexcept -> modernize-use-noexcept; this one doesn't). Disabling
-# it would drop coverage v20 already has.
+# Two deliberate exceptions, not caught by (or overridden despite) the diff:
+#   portability-no-assembler — left ENABLED. It's where v20's
+#     hicpp-no-assembler landed after hicpp was removed with no alias;
+#     disabling it would drop coverage v20 already has.
+#   performance-faster-string-find — left DISABLED though not "new". v23
+#     errors on this deprecated name itself under --warnings-as-errors=*.
 #
-# Also disabled below: `performance-faster-string-find`, the *old* name for
-# `performance-prefer-single-char-overloads`. It's not "new" in v23 so a
-# plain diff misses it, but clang-tidy 23 treats the deprecated name itself
-# as an error under --warnings-as-errors=*, regardless of findings — it must
-# be off too or every TU fails.
-#
-# Also disabled below: same-name checks whose *detection logic* changed
-# between v20 and v23 (invisible to a --list-checks name diff, confirmed via
-# a/b testing both binaries against real repo code, not just by name):
-#   bugprone-fold-init-type: v23 widened the std::accumulate matcher to the
-#     4-arg overload with a transparent functor, without checking the
-#     functor's template arg type — flags narrowing that v20 never saw.
-#   bugprone-optional-value-conversion: v23 (LLVM 21) widened to also match
-#     std::make_optional() arguments, not just direct construction.
-#   cppcoreguidelines-missing-std-forward: v23 rewrote its forwarding
-#     detection and now false-positives on C++20 lambdas with an explicit
-#     template parameter list even when the pack genuinely is forwarded —
-#     open upstream regression, llvm/llvm-project#228393.
-#   modernize-redundant-void-arg: v23 (LLVM 23, upstream #173340) replaced the
-#     per-construct matchers with one FunctionTypeLoc matcher, so void(void)
-#     is now flagged inside template args too (e.g. std::function<void(void)>
-#     params in CLI11), not just on function declarations.
-#   modernize-type-traits: v23 (LLVM 21) widened to flag ::type access on a
-#     dependent trait specialization inside decltype, not just direct uses.
-#   modernize-use-default-member-init: v23 (LLVM 21, upstream #129425) widened
-#     the ctor-initializer matcher from literals only to also match
-#     references to constexpr/static constants.
-#   readability-else-after-return: v23 widened the matcher to also catch
-#     if/else directly under an unbraced switch case label.
+# Everything else below is a check that exists under the same name in both
+# versions but got a stricter/changed matcher in v21-23 — invisible to a
+# plain --list-checks diff, found by a/b testing both binaries on real code:
+#   bugprone-fold-init-type — widened std::accumulate matcher (4-arg +
+#     transparent functor, no functor type check)
+#   bugprone-optional-value-conversion — also matches std::make_optional()
+#   cppcoreguidelines-missing-std-forward — rewritten forwarding detection,
+#     false-positives on C++20 lambdas with explicit template params
+#     (open upstream regression, llvm/llvm-project#228393)
+#   modernize-redundant-void-arg — one matcher now also catches void(void)
+#     inside template args, e.g. std::function<void(void)> (upstream #173340)
+#   modernize-type-traits — flags ::type on dependent specializations inside
+#     decltype, not just direct uses
+#   modernize-use-default-member-init — also matches constexpr/static
+#     constant references, not just literals (upstream #129425)
+#   readability-else-after-return — also catches if/else directly under an
+#     unbraced switch case label
 Checks: >
   -bugprone-assignment-in-selection-statement,
   -bugprone-capturing-this-in-member-variable,

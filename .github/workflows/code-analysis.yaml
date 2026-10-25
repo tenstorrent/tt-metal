@@ -98,7 +98,7 @@ on:
         options:
           - "20"
           - "23"
-        description: "clang-tidy version for the full scan (e.g. to warm ct23 against a chosen ref without pushing to it)"
+        description: "clang-tidy version for the full scan"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
