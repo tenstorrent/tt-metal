@@ -816,13 +816,13 @@ class ttMLA:
             self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
             self.wkv_b1_weight = self._replicate_over_tp(self.wkv_b1_weight, dim=1)
             self.wkv_b2_weight = self._replicate_over_tp(self.wkv_b2_weight, dim=1)
-        # mm track: MLA_SEQQ_QB_WS=1 lays the TP-replicated seqq q_b weight ([2048, 16384] bfp8, 35.6 MB/chip, the
+        # mm track (default on; MLA_SEQQ_QB_WS=0 disables): lays the TP-replicated seqq q_b weight ([2048, 16384] bfp8, 35.6 MB/chip, the
         # weight-stream-bound 1D mcast_in0 matmul) out DRAM WIDTH_SHARDED ([K, N/banks] per bank; a device tile copy,
         # no requantization) so the matmul reads it bank by bank, one request per worker K-row slice, and runs it with
         # in0_block_w=MLA_SEQQ_QB_IB (default 2). R0: 113.0 -> 95.2 us (PCC 0.99996 vs 0.99993; the smaller K block
         # changes the packer-L1 accumulation order, so not bit-exact).
         self._seq_qb_ws_pc = None
-        if self._seq_q and self._is_blackhole and os.getenv("MLA_SEQQ_QB_WS", "0") not in ("", "0"):
+        if self._seq_q and self._is_blackhole and os.getenv("MLA_SEQQ_QB_WS", "1") not in ("", "0"):
             qb_rows = self.active_seq_len_local // self.tp_factor
             qb_cfg = self._resolve_mm_cfg("q_b_proj", qb_rows)
             pc = qb_cfg["program_config"] if qb_cfg is not None else None
