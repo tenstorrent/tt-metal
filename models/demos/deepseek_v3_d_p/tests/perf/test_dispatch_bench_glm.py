@@ -335,9 +335,38 @@ def test_dispatch_bench(mesh_device, device_params):
 
                     outs = run2()
                     ttnn.synchronize_device(mesh_device)
+                    _beat(f"fab2d {spec} eager")
+                    if os.environ.get("DB_FAB2D_CHECK", "0") == "1":
+                        offs, counts, region, _ = get_gate_outputs(
+                            indices, H, E, experts_per_chip, SEQ, TOPK, expert_dispatch_table=table
+                        )
+                        ref = TorchDispatchModule(
+                            dispatch_group_size=H,
+                            experts_per_chip=experts_per_chip,
+                            num_routed_experts=E,
+                            num_experts_per_tok=TOPK,
+                            metadata_len=3,
+                            max_dispatched_tokens_per_expert=max_per_expert,
+                            max_dispatch_buffer_token_size=max_buf,
+                            seq_len_per_chip=SEQ,
+                            emb_dim=EMB,
+                            num_dispatch_groups=G,
+                            expert_dispatch_table=table,
+                        )
+                        ref_buf, ref_meta = ref(x, torch.zeros(H, SEQ, TOPK), indices, offs)
+                        comp = get_ep_mesh_composer(mesh_device)
+                        got_buf = ttnn.to_torch(outs[0], mesh_composer=comp, dtype=torch.float32)
+                        got_meta = ttnn.to_torch(outs[1], mesh_composer=comp)
+                        rb = validate_dispatch_buffer(
+                            ref_buf, got_buf, region, counts, table, G, H, experts_per_chip, verbose=False
+                        )
+                        rm = validate_dispatch_metadata(
+                            ref_meta, got_meta, region, counts, table, G, H, experts_per_chip, verbose=False
+                        )
+                        logger.info(f"[dbench] CHECK fab2d {spec}: buffer={rb.passed} metadata={rm.passed}")
+                        assert rb.passed and rm.passed, f"fab2d {spec} output mismatch"
                     for o in outs:
                         ttnn.deallocate(o)
-                    _beat(f"fab2d {spec} eager")
                     if os.environ.get("DB_PROFILE", "0") == "1":
                         # Device-profiler mode: a few synced eager launches, then dump zones (no trace).
                         ttnn.ReadDeviceProfiler(mesh_device)
