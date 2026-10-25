@@ -773,6 +773,10 @@ class ttMLA:
         # Debug/reference: MLA_SEQQ_QA=allreduce keeps the head-sharded path's q_a stem (all-reduce + norm of all
         # S/sp rows) and partitions the rows afterwards, isolating the reduce-scatter summation order.
         self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
+        # MLA_SEQQ_L1=1: the tilized sparse_sdpa output (~87 KB/core, wkv_b2's in0) lives in L1 instead of DRAM
+        # (R0, bit-exact: tilize+wkv_b2 115->84 us). Opt-in until checked in-model. The rope output stays in DRAM:
+        # it is the row-major q of sparse_sdpa, which reads its q from DRAM.
+        self._seq_q_l1 = self._seq_q and os.getenv("MLA_SEQQ_L1", "0") not in ("", "0")
         assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
         if self._seq_q:
             assert ttMLA.replicates_wkv_b1(self.config, self.tp_factor, self._has_indexer), "needs every head's wkv_b1"
@@ -2596,7 +2600,7 @@ class ttMLA:
                 cluster_axis=self.tp_axis,
             )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
-        # the op is ROW_MAJOR-only; q comes in TILE unless _q_stem_seq_sharded already wrote it row-major
+        # the op is ROW_MAJOR-only; q comes in TILE unless _q_stem_seq_sharded or _q_stem_seq wrote it row-major
         q_rm = q if q_seq_ready else ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
@@ -2642,7 +2646,8 @@ class ttMLA:
             # The all-to-all back to heads reads sparse_sdpa's row-major output and tilizes it on the way.
             ret = out
         else:
-            ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the downstream wkv_b2 linear
+            # back to TILE for the downstream wkv_b2 linear
+            ret = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG if self._seq_q_l1 else None)
             ttnn.deallocate(out)
 
         # Sequence-sharded Q keeps all heads of its rows through wkv_b2; _finish_sparse_chunked_attn restores heads.
