@@ -317,6 +317,10 @@ void kernel_main() {
 #else
     constexpr uint32_t mm_out_dfb_id = untilize_mode_out_dfb_id;
 #endif
+    // a Bfp8_b section pack below HiFi3 reads slower without the half-sync flip's base write on the tt-llk sweep: keep it there
+    constexpr bool bmm_keep_flip_write =
+        MATH_FIDELITY != ckernel::MathFidelity::HiFi3 && MATH_FIDELITY != ckernel::MathFidelity::HiFi4 &&
+        unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id] == (uint8_t)DataFormat::Bfp8_b;
     DataflowBuffer mm_out_dfb(mm_out_dfb_id);
 #ifdef ARCH_BLACKHOLE
     // the format each DEST section is packed to: the partials until the last inner block
@@ -490,7 +494,7 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-                                tile_regs_commit_matmul();
+                                tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
                                 mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
@@ -530,7 +534,7 @@ void kernel_main() {
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
 
                             } else {
-                                tile_regs_commit_matmul();
+                                tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
                                 mm_partials_dfb.reserve_back(out_subblock_num_tiles);
                                 tile_regs_wait();
 
@@ -658,7 +662,7 @@ void kernel_main() {
                                 bias_tile_idx++;
                             }
                         }
-                        tile_regs_commit_matmul();
+                        tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
 
                         mm_partials_dfb.pop_front(out_subblock_num_tiles);
 

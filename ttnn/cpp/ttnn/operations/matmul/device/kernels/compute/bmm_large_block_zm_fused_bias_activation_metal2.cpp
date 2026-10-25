@@ -502,6 +502,10 @@ void kernel_main() {
 #else
     constexpr DataFormat mm_pack_format = DataFormat::Invalid;
 #endif
+    // a Bfp8_b section pack below HiFi3 reads slower without the half-sync flip's base write on the tt-llk sweep: keep it there
+    constexpr bool bmm_keep_flip_write =
+        MATH_FIDELITY != ckernel::MathFidelity::HiFi3 && MATH_FIDELITY != ckernel::MathFidelity::HiFi4 &&
+        unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : mm_out_dfb_id] == (uint8_t)DataFormat::Bfp8_b;
 
     // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
     // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
@@ -733,7 +737,7 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-                                tile_regs_commit_matmul();
+                                tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
                                 mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
@@ -777,7 +781,7 @@ void kernel_main() {
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
 
                             } else {
-                                tile_regs_commit_matmul();
+                                tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
                                 mm_partials_dfb.reserve_back(out_subblock_num_tiles);
                                 tile_regs_wait();
 
@@ -934,7 +938,7 @@ void kernel_main() {
                                 bias_tile_idx++;
                             }
                         }
-                        tile_regs_commit_matmul();
+                        tile_regs_commit_matmul<DST_ACCUM_MODE, bmm_keep_flip_write>();
 
                         mm_partials_dfb.pop_front(out_subblock_num_tiles);
 

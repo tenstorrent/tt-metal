@@ -413,9 +413,10 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         self.row_le_8 = row_le_8
         self.unfused_post = unfused_post
         self.force_form = force_form
+        self.keep_flip = False
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', force ' + self.force_form if self.force_form else ''})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', force ' + self.force_form if self.force_form else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -424,11 +425,21 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
             + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
             + ("\n#define MATMUL_UNFUSED_POST" if self.unfused_post else "")
+            + ("\n#define MATMUL_KEEP_FLIP_WRITE" if self.keep_flip else "")
             + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
         )
 
     @staticmethod
     def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False) -> list:
+        keys = MATMUL_FORM_KEYS._for_block(formats, kt_dim, ct_dim, rt_dim, math_fidelity, dest_sync, dest_acc, unfuse_one_tile, throttle, sections, in0_r_dim, unfuse_cells)
+        # a Bfp8_b pack below HiFi3 (the unfused post cells) reads slower without the half-sync flip's base write (the bound phase moves): the kernels keep it
+        keep = formats.output_format == DataFormat.Bfp8_b and math_fidelity in (MathFidelity.LoFi, MathFidelity.HiFi2)
+        for k in keys:
+            k.keep_flip = keep
+        return keys
+
+    @staticmethod
+    def _for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []

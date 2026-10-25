@@ -104,11 +104,11 @@ ALWI void tile_regs_commit() {
  * copy_tile, bcast, binary and SFPU starts call set_dst_write_addr, 16-bit DEST only), so on Blackhole in half sync the
  * section flip skips its own base write and the stall that guarded it. Any other kernel keeps tile_regs_commit.
  */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE, bool keep_flip_write = false>
 ALWI void tile_regs_commit_matmul() {
 #ifdef ARCH_BLACKHOLE
     UNPACK((llk_unpack_dest_section_done<is_fp32_dest_acc_en>()));
-    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en, !is_fp32_dest_acc_en>()));
+    MATH((llk_math_dest_section_done<is_fp32_dest_acc_en, !is_fp32_dest_acc_en && !keep_flip_write>()));
 #else
     tile_regs_commit<is_fp32_dest_acc_en>();
 #endif
