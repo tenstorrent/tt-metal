@@ -105,13 +105,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
     def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
-        from helpers.matmul_prod_keys import main_form_cell, m2_row_mop
+        from helpers.matmul_prod_keys import forced_r_cell, main_form_cell, m2_row_mop
 
-        if get_chip_architecture() != ChipArchitecture.BLACKHOLE or dest_sync != DestSync.Half:
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim)):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
+            return []
+        if dest_sync == DestSync.Half and forced_r_cell(
+            math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
+        ):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
@@ -158,6 +162,37 @@ class MATMUL_STREAM_NARROW(TemplateParameter):
 MATMUL_DENSE_STREAM_FORMATS = (DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32)
 
 
+# (dest sync, rt, ct, kt, static throttle, input format, output format) of blocks where the Z step read slower than main or more than 0.3 cycles
+# slower than the config write and read (tt-llk sweep, A B B A on one card); the rest of the keyed blocks gain
+MATMUL_STREAM_Z_LOSES = frozenset(
+    {
+        ("Full", 1, 6, 1, 0, "Float32", "Float16_b"),
+        ("Full", 1, 7, 1, 0, "Float32", "Bfp8_b"),
+        ("Full", 1, 7, 4, 0, "Float16_b", "Bfp8_b"),
+        ("Full", 1, 7, 4, 0, "Float16_b", "Float16_b"),
+        ("Full", 1, 7, 4, 0, "Float16_b", "Float32"),
+        ("Full", 1, 7, 4, 0, "Float32", "Float32"),
+        ("Full", 1, 7, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Full", 1, 7, 32, 0, "Float16_b", "Float32"),
+        ("Half", 1, 4, 1, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 4, 1, 0, "Float16_b", "Float16_b"),
+        ("Half", 1, 4, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 5, 1, 0, "Float16_b", "Float32"),
+        ("Half", 1, 6, 1, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 7, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 1, 7, 32, 0, "Float16_b", "Float16_b"),
+        ("Half", 1, 7, 32, 0, "Float16_b", "Float32"),
+        ("Half", 1, 8, 32, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 2, 4, 5, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 2, 4, 5, "Float16_b", "Float32"),
+        ("Half", 2, 3, 1, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 3, 4, 0, "Float16_b", "Bfp8_b"),
+        ("Half", 2, 3, 4, 0, "Float16_b", "Float16_b"),
+        ("Half", 2, 4, 4, 0, "Float16_b", "Bfp8_b"),
+    }
+)
+
+
 @dataclass
 class MATMUL_STREAM_Z(TemplateParameter):
     """Blackhole matmul unpack that steps the streamed in1 tile by the unpacker Z counter instead of a config read and write."""
@@ -184,6 +219,8 @@ class MATMUL_STREAM_Z(TemplateParameter):
         ):
             return []
         if MATMUL_STREAM_NARROW.for_block(formats, dest_acc, dest_sync, ct_dim, rt_dim, in0_r_dim, math_fidelity):
+            return []
+        if (dest_sync.name, rt_dim, ct_dim, kt_dim, throttle, formats.input_format.name, formats.output_format.name) in MATMUL_STREAM_Z_LOSES:
             return []
         return [MATMUL_STREAM_Z()] if formats.input_format in MATMUL_DENSE_STREAM_FORMATS else []
 
@@ -291,15 +328,16 @@ class MATMUL_FORM_KEYS(TemplateParameter):
     still holds them, as the variant hash reads it."""
 
     def __init__(
-        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False, unfused_post: bool = False
+        self, kt_per_section: int, output_format: DataFormat, row_le_8: bool = False, unfused_post: bool = False, force_form: str = ""
     ):
         self.kt_per_section = kt_per_section
         self.output_format = output_format
         self.row_le_8 = row_le_8
         self.unfused_post = unfused_post
+        self.force_form = force_form
 
     def __repr__(self) -> str:
-        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''})"
+        return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', force ' + self.force_form if self.force_form else ''})"
 
     def convert_to_cpp(self) -> str:
         return (
@@ -308,6 +346,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             f"constexpr DataFormat MATMUL_OUT_FORMAT = DataFormat::{self.output_format.name};"
             + ("\n#define MATMUL_ROW_LE_8" if self.row_le_8 else "")
             + ("\n#define MATMUL_UNFUSED_POST" if self.unfused_post else "")
+            + (f"\n#define MATMUL_FORCE_FORM_CHAR '{self.force_form}'" if self.force_form else "")
         )
 
     @staticmethod
@@ -339,11 +378,26 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             )
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        # LoFi, full sync, four k steps, a 3 tile row, 16-bit DEST and Float16_b output: the hoisted unpack of the Float16_b column reads 0.4 cycles
+        # slower than main and main's own form does not recover it; the per-row unpack with the row MOP (the Float32 column) does
+        if (
+            (kt_dim, ct_dim, rt_dim) == (4, 3, 1)
+            and math_fidelity == MathFidelity.LoFi
+            and dest_sync == DestSync.Full
+            and dest_acc == DestAccumulation.No
+            and formats.output_format == DataFormat.Float16_b
+            and DataFormat.Float32 not in (formats.input_format, formats.input_format_B)
+        ):
+            return [MATMUL_FORM_KEYS(2, DataFormat.Float32, True)]
         # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
         if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
-            from helpers.matmul_prod_keys import main_form_cell
+            from helpers.matmul_prod_keys import forced_r_cell, main_form_cell
 
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
+            if dest_sync == DestSync.Half and forced_r_cell(
+                math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
+            ):
+                return [MATMUL_FORM_KEYS(1, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, "R")]
             if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
@@ -352,14 +406,23 @@ class MATMUL_FORM_KEYS(TemplateParameter):
                 1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
                 formats.output_format,
                 0 < max(ct_dim, rt_dim) <= 8,
-                # Bfp8_b input to a Float32 output at HiFi2 and half sync reads slower with the fused post and DEST flip: main's separate stalls
-                # for one tile, and for any one k step block with a 16-bit DEST
+                # Bfp8_b input to a Float32 output at half sync reads slower with the fused post and DEST flip than main's separate stalls:
+                # at HiFi2 on one k step blocks with a 16-bit DEST (and the one tile block with a 32-bit one), at HiFi3 on the
+                # one k step blocks of up to five tiles that are not four rows tall
                 unfuse_one_tile
-                and math_fidelity == MathFidelity.HiFi2
                 and dest_sync == DestSync.Half
                 and formats.input_format == DataFormat.Bfp8_b
                 and formats.output_format == DataFormat.Float32
-                and (kt_dim == 1 and (dest_acc == DestAccumulation.No or (ct_dim, rt_dim) == (1, 1)))
+                and kt_dim == 1
+                and (
+                    (math_fidelity == MathFidelity.HiFi2 and (dest_acc == DestAccumulation.No or (ct_dim, rt_dim) == (1, 1)))
+                    or (
+                        math_fidelity == MathFidelity.HiFi3
+                        and dest_acc == DestAccumulation.No
+                        and ct_dim * rt_dim <= 5
+                        and rt_dim < 4
+                    )
+                )
             )
         ]
 

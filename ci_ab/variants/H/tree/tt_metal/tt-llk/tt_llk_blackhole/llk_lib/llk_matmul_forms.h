@@ -75,6 +75,7 @@ struct matmul_main_form_cell
     int sync = -1; // 0 half, 1 full, -1 any
     std::uint32_t min_k = 0;
     std::uint32_t max_k = 0xFFFF;
+    std::uint32_t min_dim = 0; // the smaller side of the block, in tiles
 };
 
 inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
@@ -107,24 +108,49 @@ inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
     {MathFidelity::LoFi, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 7},
     {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
     {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
-    // LoFi at full sync: the seven tile row of a Float16_b block of two to four k steps reads slower than main's tile form
-    {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, false, 7, 7, 1, 2, 4},
+    // LoFi at full sync: the row MOP of a Float32 input to Bfp8_b with a 32-bit DEST reads 2.6 cycles slower than the tile form on four row blocks
+    {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 4, 4, 1, 2, 4},
 };
 
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0>
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0, std::uint32_t min_side = 99>
 constexpr bool matmul_main_form_cell_selected()
 {
     for (const matmul_main_form_cell& c : matmul_main_form_cells)
     {
         if (c.fidelity == math_fidelity && c.k1 == (kt_per_section == 1) && c.fp32_dest == fp32_dest && c.out == out_format && c.pack == pack_format &&
             (c.in == in0 || c.in == in1) && !(c.several_blocks_ok && several_blocks) && row_tiles >= c.min_row && row_tiles <= c.max_row && (c.sync < 0 || c.sync == sync) &&
-            kt_per_section >= c.min_k && kt_per_section <= c.max_k)
+            kt_per_section >= c.min_k && kt_per_section <= c.max_k && min_side >= c.min_dim)
         {
             return true;
         }
     }
     return false;
 }
+
+// Cells whose rows read slower than main's with the keyed form but faster with the hoisted rows form 'R' ('r' per row unpack
+// loses there); the kernels key them with Bfp4_b, which the table reads as 'R' at k 1, LoFi, half sync and a 32-bit DEST.
+inline constexpr matmul_main_form_cell matmul_forced_r_cells[] = {
+    // Float32 input to Bfp8_b at LoFi, one k step, half sync and a 32-bit DEST: the 2x2 block reads 1.5 cycles behind main on the per row unpack;
+    // the four tile row and column blocks lose with the hoisted form, so only blocks with both sides of two tiles or more
+    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 0, 0xFFFF, 0, 0, 0xFFFF, 2},
+};
+
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles, int sync, std::uint32_t min_side>
+constexpr bool matmul_forced_r_cell_selected()
+{
+    for (const matmul_main_form_cell& c : matmul_forced_r_cells)
+    {
+        if (c.fidelity == math_fidelity && c.k1 == (kt_per_section == 1) && c.fp32_dest == fp32_dest && c.out == out_format && c.pack == pack_format &&
+            (c.in == in0 || c.in == in1) && !(c.several_blocks_ok && several_blocks) && row_tiles >= c.min_row && row_tiles <= c.max_row &&
+            (c.sync < 0 || c.sync == sync) && kt_per_section >= c.min_k && kt_per_section <= c.max_k && min_side >= c.min_dim)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static_assert(matmul_default_form<MathFidelity::LoFi, DstSync::SyncHalf, true, 1, DataFormat::Bfp4_b>() == 'R', "the forced hoisted rows cells key as Bfp4_b");
 
 /**
  * @brief The math fidelity whose phases cover every nonzero mantissa slice of the two matmul operands.

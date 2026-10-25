@@ -607,10 +607,8 @@ inline void _llk_unpack_AB_matmul_(
     constexpr bool hoisted     = hoist_rows && !auto_ttsync && kernel_broadcast_a == 0 && kernel_broadcast_b == 0;
     std::uint32_t address_a    = base_address_a + tile_size_a * tile_index_a;
     std::uint32_t address_b    = base_address_b + tile_size_b * tile_index_b;
-    const std::uint32_t step_a = reuse_a ? tile_size_a * kt_dim : 0;
-    const std::uint32_t step_b = reuse_a ? 0 : tile_size_b;
     const std::uint32_t mop_0  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, 0);
-    const std::uint32_t mop_1  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, context_1_zmask);
+    const std::uint32_t mop_1  = mop_0 | context_1_zmask;
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
@@ -732,8 +730,8 @@ inline void _llk_unpack_AB_matmul_(
 
         if constexpr (hoisted)
         {
-            address_a += step_a;
-            address_b += step_b;
+            address_a += reuse_a ? tile_size_a * kt_dim : 0;
+            address_b += reuse_a ? 0 : tile_size_b;
         }
     }
 }

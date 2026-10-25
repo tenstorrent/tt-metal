@@ -1,0 +1,418 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "counters.h"
+#include "llk_defs.h"
+#include "params.h"
+#include "perf.h"
+#include "profiler.h"
+
+// Globals
+std::uint32_t unp_cfg_context          = 0;
+std::uint32_t pack_sync_tile_dst_ptr   = 0;
+std::uint32_t math_sync_tile_dst_index = 0;
+
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PHASE_ELIDE)
+#include "llk_matmul_forms.h"
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = ckernel::matmul_phase_fidelity<MATH_FIDELITY, MATMUL_IN0_FORMAT, MATMUL_IN1_FORMAT>();
+#else
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
+#endif
+
+#ifdef LLK_TRISC_UNPACK
+
+#include "llk_unpack_AB_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_LE_8)
+constexpr std::uint32_t matmul_max_row_tiles = 8;
+#elif defined(ARCH_BLACKHOLE)
+constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#elif defined(ARCH_BLACKHOLE)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
+#endif
+#include "llk_unpack_common.h"
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t in0_tile_r_dim = params.in0_tile_r_dim;
+    const std::uint32_t in1_tile_r_dim = params.in1_tile_r_dim;
+
+    const bool PARTIAL_FACE_A = params.PARTIAL_FACE_A;
+    const bool PARTIAL_FACE_B = params.PARTIAL_FACE_B;
+
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
+    const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
+    const std::uint32_t num_faces_A        = params.num_faces_A;
+    const std::uint32_t num_faces_B        = params.num_faces_B;
+
+    const std::uint32_t CT_DIM        = params.CT_DIM;
+    const std::uint32_t RT_DIM        = params.RT_DIM;
+    const std::uint32_t KT_DIM        = params.KT_DIM;
+    const int NUM_BLOCKS              = params.NUM_BLOCKS;
+    const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
+    const Operand& buffer_A           = params.buffer_A;
+    const Operand& buffer_B           = params.buffer_B;
+#endif
+
+#ifdef ARCH_BLACKHOLE
+    // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
+#ifdef MATMUL_STREAM_NARROW
+    constexpr bool stream_narrow = !is_fp32_dest_acc_en;
+#else
+    constexpr bool stream_narrow = false;
+#endif
+#ifdef MATMUL_STREAM_Z
+    constexpr std::uint32_t stream_z = 4;
+#else
+    constexpr std::uint32_t stream_z = 0;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow, stream_z
+#define MATMUL_UNPACK_TEMPLATE_ARGS \
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles, stream_z
+#else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#define MATMUL_UNPACK_TEMPLATE_ARGS
+#endif
+
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
+            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
+            num_faces_B, // in1
+            num_faces_A, // in0
+            TILE_SIZE_UNPACK_B,
+            TILE_SIZE_UNPACK_A);
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
+            UNPACK_TRANSPOSE_FACES,
+            CT_DIM,
+            RT_DIM,
+            KT_DIM,
+            in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
+            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
+            num_faces_B,    // in1
+            num_faces_A,    // in0
+            PARTIAL_FACE_B, // in1
+            PARTIAL_FACE_A);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+            return;
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            _perf_unpack_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM, NUM_BLOCKS);
+            return;
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (int block = 0; block < NUM_BLOCKS; ++block)
+                {
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_K_LOOP)
+                    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), stream_z>(
+                        L1_ADDRESS(buffer_A[0]),
+                        L1_ADDRESS(buffer_B[0]),
+                        0,
+                        0,
+                        TILE_SIZE_UNPACK_B,
+                        TILE_SIZE_UNPACK_A,
+                        PARTIAL_FACE_B,
+                        PARTIAL_FACE_A,
+                        CT_DIM,
+                        RT_DIM,
+                        KT_DIM,
+                        KT_DIM,
+                        CT_DIM);
+#else
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
+                    {
+                        _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
+                            L1_ADDRESS(buffer_A[0]),
+                            L1_ADDRESS(buffer_B[0]),
+                            j,
+                            j * CT_DIM,
+                            TILE_SIZE_UNPACK_B,
+                            TILE_SIZE_UNPACK_A,
+                            PARTIAL_FACE_B,
+                            PARTIAL_FACE_A,
+                            CT_DIM,
+                            RT_DIM,
+                            KT_DIM);
+                    }
+#endif
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif
+// zone markers of the other threads keep their line numbers
+#line 146
+
+#ifdef LLK_TRISC_MATH
+
+#include "llk_math_common.h"
+#include "llk_math_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#else
+constexpr bool matmul_tile_mop = false;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_IN1_ALT)
+constexpr int matmul_in1_order = 1;
+#else
+constexpr int matmul_in1_order = 0;
+#endif
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t in0_tile_r_dim = params.in0_tile_r_dim;
+    const std::uint32_t in0_tile_c_dim = params.in0_tile_c_dim;
+    const std::uint32_t in1_tile_r_dim = params.in1_tile_r_dim;
+    const std::uint32_t in1_tile_c_dim = params.in1_tile_c_dim;
+
+    const bool PARTIAL_FACE_MATH = params.PARTIAL_FACE_MATH;
+
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const int DST_INDEX                    = params.DST_INDEX;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+
+    const std::uint32_t CT_DIM        = params.CT_DIM;
+    const std::uint32_t RT_DIM        = params.RT_DIM;
+    const std::uint32_t KT_DIM        = params.KT_DIM;
+    const int NUM_BLOCKS              = params.NUM_BLOCKS;
+    const bool UNPACK_TRANSPOSE_FACES = params.UNPACK_TRANSPOSE_FACES;
+#endif
+
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
+        _llk_math_matmul_init_<MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull>(
+            in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            _perf_math_matmul_mock(LOOP_FACTOR, RT_DIM, KT_DIM, CT_DIM, NUM_BLOCKS);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (int block = 0; block < NUM_BLOCKS; ++block)
+                {
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
+                    {
+                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (int block = 0; block < NUM_BLOCKS; ++block)
+                {
+                    _llk_math_wait_for_dest_available_<dest_sync>();
+                    LLK_ASSERT(
+                        (NUM_TILES_IN_BLOCK <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                        "Matmul block exceeds destination capacity");
+                    for (std::uint32_t j = 0; j < KT_DIM; j++)
+                    {
+                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
+                    }
+                    #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
+                    #else
+                    constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                    #endif
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+
+    _llk_math_matmul_uninit_();
+}
+
+#endif
+
+#ifdef LLK_TRISC_PACK
+
+#include "llk_lib_pack_wrappers.h"
+#include "llk_pack_common.h"
+
+#ifndef MATMUL_PACK_FORM
+#define MATMUL_PACK_FORM 0
+#endif
+// The fast block packs need four faces of 16 rows.
+#if MATMUL_PACK_FORM != 0
+#define MATMUL_FAST_PACK_ARG , num_faces == 4 && !PARTIAL_FACE_PACK
+#else
+#define MATMUL_FAST_PACK_ARG
+#endif
+
+#if defined(ARCH_BLACKHOLE)
+// MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
+inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces, [[maybe_unused]] bool fast = false)
+{
+#if MATMUL_PACK_FORM != 0
+    // At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
+    constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
+    constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
+    if (fast && MATMUL_PACK_FORM == 1 && fast_plain)
+    {
+        _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
+        return;
+    }
+    if (fast && MATMUL_PACK_FORM == 2 && fast_closed)
+    {
+        _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
+        return;
+    }
+#endif
+    if constexpr (MATMUL_PACK_FORM == 1)
+    {
+        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
+    }
+    else
+    {
+        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride, num_faces);
+    }
+}
+#endif
+
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t in0_tile_r_dim     = params.in0_tile_r_dim;
+    const bool PARTIAL_FACE_PACK           = params.PARTIAL_FACE_PACK;
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_SIZE_PACK     = params.TILE_SIZE_PACK;
+    const int num_faces                    = params.num_faces;
+    const int DST_INDEX                    = params.DST_INDEX;
+    const std::uint32_t CT_DIM             = params.CT_DIM;
+    const std::uint32_t RT_DIM             = params.RT_DIM;
+    const int NUM_BLOCKS                   = params.NUM_BLOCKS;
+    const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
+    const Operand& buffer_Res              = params.buffer_Res;
+#endif
+
+    {
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src,
+            formats.pack_dst,
+            TILE_SIZE_PACK,
+            in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
+            TILE_C_DIM,
+            num_faces,
+            PARTIAL_FACE_PACK);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+            formats.pack_dst, in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM, TILE_C_DIM, num_faces);
+        _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0
+        if (num_faces == 4 && !PARTIAL_FACE_PACK)
+        {
+            _llk_pack_block_fast_init_();
+        }
+#endif
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
+        {
+            return;
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (int block = 0; block < NUM_BLOCKS; ++block)
+                {
+                    for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
+                    {
+                        _llk_pack_<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, PERF_ADDRESS(PERF_OUTPUT, tile));
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (int block = 0; block < NUM_BLOCKS; ++block)
+                {
+                    _llk_packer_wait_for_math_done_();
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (MATMUL_PACK_FORM != 0)
+                    {
+                        matmul_pack_out(
+                            DST_INDEX,
+                            L1_ADDRESS(buffer_Res[block * NUM_TILES_IN_BLOCK]),
+                            NUM_TILES_IN_BLOCK,
+                            (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4,
+                            num_faces MATMUL_FAST_PACK_ARG);
+                    }
+                    else
+#endif
+                    {
+                        for (std::uint32_t tile = 0; tile < NUM_TILES_IN_BLOCK; ++tile)
+                        {
+                            const std::uint32_t result_tile = block * NUM_TILES_IN_BLOCK + tile;
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[result_tile]));
+                        }
+                    }
+                    _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+}
+
+#endif
