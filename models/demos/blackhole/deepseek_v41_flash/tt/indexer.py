@@ -127,6 +127,8 @@ def mask_scores(scores, nvalid, ar):
 
 _ARANGES = {}  # id(mesh device) -> {n: [1,1,1,n] float32 tile 0..n-1}
 
+_FP4_FUSED = os.environ.get("DSV41_IDX_FP4", "fused") == "fused"  # fused fp4 simulation of the indexer q / key (bit-identical); DSV41_IDX_FP4=chain: the ttnn op chain
+
 SELECT_CONCAT_BYTES = (
     1 << 20
 )  # score rows of the users concatenated into one tensor must stay below this (the circular buffer of the concat holds a few of them in L1)
@@ -301,6 +303,26 @@ class DSV41DecodeIndexer:
 
     # ---- stages --------------------------------------------------------------------------------------------------------------
     @staticmethod
+    def _fp4_fused_q(q):
+        """fp4 simulation of a bf16 tile tensor q [R,1,32,128] with ONE fused generic_op (tt/pf_fp4.py, bit-identical to the 27-op chain of ``_fp4_blocks``: 75-80 us -> 12.7 us).
+        DSV41_IDX_FP4=chain restores the op chain."""
+        from models.demos.blackhole.deepseek_v41_flash.tt import pf_fp4
+
+        return pf_fp4.fp4_fused(q)
+
+    @staticmethod
+    def _fp4_fused_rows(k):
+        """fp4 simulation of a bf16 tile tensor k [1,1,R,128] (R key rows, R < 32 is tile padded): pad to whole tiles, fused op, slice back."""
+        from models.demos.blackhole.deepseek_v41_flash.tt import pf_fp4
+
+        R = int(k.shape[-2])
+        Rp = -(-R // 32) * 32
+        if Rp != R:
+            k = ttnn.pad(k, [(0, 0), (0, 0), (0, Rp - R), (0, 0)], 0.0)
+        out = pf_fp4.fp4_fused(k)
+        return out if Rp == R else ttnn.slice(out, [0, 0, 0, 0], [1, 1, R, int(k.shape[-1])])
+
+    @staticmethod
     def _fp4_blocks(x):
         """fp4 (e2m1, per-32 e8m0 scale) quantise-dequantise of float32 ``x`` [..., 32] (each last-dim row is one block), exactly like the reference
         ``fp4_act_quant``: scale = 2**ceil(log2(amax / 6)), value = round-to-grid(x / scale) * scale. The e2m1 grid {0,.5,1,1.5,2,3,4,6} is a
@@ -316,6 +338,8 @@ class DSV41DecodeIndexer:
     def _fp4_sim(self, q):
         """fp4 simulation of q [U,1,32,128] (see ``_fp4_blocks``)."""
         U = self.T
+        if _FP4_FUSED and q.dtype == ttnn.bfloat16 and q.layout == ttnn.TILE_LAYOUT:
+            return self._fp4_fused_q(q)
         x = ttnn.reshape(ttnn.typecast(q, ttnn.float32), (U, 1, HEADS * 4, 32))  # row = head * 4 + block
         return ttnn.typecast(ttnn.reshape(self._fp4_blocks(x), (U, 1, HEADS, DIM)), ttnn.bfloat16)
 
@@ -344,9 +368,12 @@ class DSV41DecodeIndexer:
         k = ttnn.addcmul(
             ttnn.multiply(k, st["iCg"]), ttnn.matmul(k, self.P, compute_kernel_config=self.ckc), st["iSg"]
         )  # RoPE of position pos + 1 - ratio
-        k = ttnn.typecast(
-            self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, T * 4, 32))), ttnn.bfloat16
-        )
+        if _FP4_FUSED and k.dtype == ttnn.bfloat16:
+            k = self._fp4_fused_rows(k)
+        else:
+            k = ttnn.typecast(
+                self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, T * 4, 32))), ttnn.bfloat16
+            )
         k = ttnn.reshape(k, (1, 1, T, DIM))
         ent = st["ent"]
         Us = getattr(self, "U_slab", None)

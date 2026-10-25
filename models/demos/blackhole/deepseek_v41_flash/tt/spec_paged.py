@@ -20,7 +20,7 @@ import torch
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
-from models.demos.blackhole.deepseek_v41_flash.tt.indexer import DIM, HEADS, DSV41DecodeIndexer
+from models.demos.blackhole.deepseek_v41_flash.tt.indexer import _FP4_FUSED, DIM, HEADS, DSV41DecodeIndexer
 from models.demos.blackhole.deepseek_v41_flash.tt.model import DSV41DecodeChain
 from models.demos.blackhole.deepseek_v41_flash.tt.paged_attention import (
     DSV41PagedAttention,
@@ -55,8 +55,11 @@ class SpecIndexer(DSV41DecodeIndexer):
         q = ttnn.reshape(q, (R, 1, HEADS, DIM))
         q = ttnn.addcmul(ttnn.multiply(q, st["C"]), ttnn.matmul(q, self.P, compute_kernel_config=self.ckc), st["S"])
         if self.fp4_q:
-            x4 = ttnn.reshape(ttnn.typecast(q, ttnn.float32), (R, 1, HEADS * 4, 32))
-            q = ttnn.typecast(ttnn.reshape(self._fp4_blocks(x4), (R, 1, HEADS, DIM)), ttnn.bfloat16)
+            if _FP4_FUSED and q.dtype == ttnn.bfloat16 and q.layout == ttnn.TILE_LAYOUT:
+                q = self._fp4_fused_q(q)
+            else:
+                x4 = ttnn.reshape(ttnn.typecast(q, ttnn.float32), (R, 1, HEADS * 4, 32))
+                q = ttnn.typecast(ttnn.reshape(self._fp4_blocks(x4), (R, 1, HEADS, DIM)), ttnn.bfloat16)
         q = ttnn.reshape(q, (U, 1, n * HEADS, DIM))  # the n rows of a user stacked on the head axis
         return q, ttnn.reshape(w, (R, 1, 1, HEADS))
 
@@ -123,9 +126,12 @@ class SpecIndexer(DSV41DecodeIndexer):
         k = ttnn.linear(lat_pre, self.wk, compute_kernel_config=self.ckc)  # [1,1,R,128]
         k = ttnn.rms_norm(ttnn.typecast(k, ttnn.bfloat16), weight=self.k_norm_w, epsilon=self.k_eps)
         k = ttnn.addcmul(ttnn.multiply(k, st["iCg"]), ttnn.matmul(k, self.P, compute_kernel_config=self.ckc), st["iSg"])
-        k = ttnn.typecast(
-            self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, R * 4, 32))), ttnn.bfloat16
-        )
+        if _FP4_FUSED and k.dtype == ttnn.bfloat16:
+            k = self._fp4_fused_rows(k)
+        else:
+            k = ttnn.typecast(
+                self._fp4_blocks(ttnn.reshape(ttnn.typecast(k, ttnn.float32), (1, 1, R * 4, 32))), ttnn.bfloat16
+            )
         k_rm = ttnn.reshape(ttnn.to_layout(ttnn.reshape(k, (1, 1, R, DIM)), ttnn.ROW_MAJOR_LAYOUT), (U, n, DIM))
         ents = self._ent_per_j(st)
         for j in range(n):
