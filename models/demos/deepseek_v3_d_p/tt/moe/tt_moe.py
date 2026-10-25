@@ -44,6 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.persistent_sd import (
     barrier_target,
+    fence,
     get_persistent_sub_devices,
     moe_dispatch_on_comm,
     restore_base_manager,
@@ -802,9 +803,17 @@ class TtMoe(LightweightModule):
                 self.row_num_links,
             )
 
-    def _persistent_barrier(self):
-        """Full SD0/SD1 join under the persistent manager: no in-trace wait op yet, so swap to the manager's twin,
-        which drains and resets both sub-devices (a trace-segment boundary under capture, like a load/clear)."""
+    def _persistent_join(self, producer_on_comm):
+        """Make every later program wait for the producer sub-device's earlier programs. TT_GLM_MOE_JOIN=fence
+        (default): a one-core program on the producer SD (in-order go signals; no trace split). =swap: the twin
+        manager swap (drains both SDs; a trace-segment boundary, like today's load/clear). =none: no join (the
+        two-stream driver inserts its own fences; or set self.dispatch_join = False)."""
+        mode = os.getenv("TT_GLM_MOE_JOIN", "fence")
+        if mode == "none" or not getattr(self, "dispatch_join", True):
+            return
+        if mode == "fence":
+            fence(self.mesh_device, on_comm=producer_on_comm)
+            return
         target = barrier_target(self.mesh_device)
         if self._trace_controller is not None:
             self._trace_controller.sub_device_load(target)
@@ -1131,7 +1140,7 @@ class TtMoe(LightweightModule):
         if self._dispatch_on_comm:
             # Dispatch on SD1 must not start before its inputs (all-gathered x, indices, offsets) are written on SD0:
             # programs on different sub-devices do not wait for each other.
-            self._persistent_barrier()
+            self._persistent_join(producer_on_comm=False)
         elif self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_load(self.sd_manager_id)
@@ -1204,8 +1213,9 @@ class TtMoe(LightweightModule):
             )
 
         if self._dispatch_on_comm:
-            # Join dispatch (SD1) with the main grid (SD0) before the routed expert reads its output.
-            self._persistent_barrier()
+            # Join dispatch (SD1) with the main grid (SD0) before the routed expert reads its output, and before the
+            # host frees anything dispatch still reads (x / routed_x below).
+            self._persistent_join(producer_on_comm=True)
         elif self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
