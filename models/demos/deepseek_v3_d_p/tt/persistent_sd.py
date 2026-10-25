@@ -174,8 +174,51 @@ def barrier_target(mesh_device):
     return psd.manager_id
 
 
+_fence_tensors: dict = {}
+
+
+def fence(mesh_device, on_comm: bool, core=None) -> None:
+    """Cross-sub-device join without a manager swap or a trace split: issue a one-core program on SD1 (comm,
+    `on_comm=True`) or SD0 (main).
+
+    dispatch_s sends go signals strictly in issue order and each waits for every earlier program of its own
+    sub-device (cq_dispatch_subordinate.cpp:594-714; pipe-e2 measured 0 stale reads in 1000 replays with such a
+    program between producer and consumer), so every program issued after the fence, on ANY sub-device of this CQ,
+    starts only after all programs issued before it on the fenced sub-device are done. Head-of-line: later go signals of
+    other sub-devices wait too, so issue the fence just before the consumer. Trace-capturable (no host action).
+
+    Here the one-core program is a 1-tile add into a persistent output (no allocation); pipe-e2's
+    subdevice_sync.Fence (a 1-core signal kernel) is the cheaper drop-in once merged."""
+    psd = get_persistent_sub_devices(mesh_device)
+    assert psd is not None, "fence() needs the persistent manager"
+    cores = psd.comm_cores if on_comm else psd.main_cores
+    if core is None:
+        core = cores.bounding_box().end_coord  # the last core: (10,9) on SD0, (11,9) on SD1
+    key = mesh_device.id()
+    pair = _fence_tensors.get(key)
+    if pair is None:
+        import torch
+
+        def make():
+            return ttnn.from_torch(
+                torch.zeros(1, 1, 32, 32),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
+        pair = (make(), make())
+        _fence_tensors[key] = pair
+    a, out = pair
+    ttnn.add(a, a, output_tensor=out, sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(core, core)]))
+
+
 def release_persistent_sub_devices(mesh_device) -> None:
     """Clear (back to the default manager) and remove the persistent manager. Idempotent."""
+    for t in _fence_tensors.pop(mesh_device.id(), ()):
+        ttnn.deallocate(t)
     psd = _cache.pop(mesh_device.id(), None)
     if psd is None:
         return

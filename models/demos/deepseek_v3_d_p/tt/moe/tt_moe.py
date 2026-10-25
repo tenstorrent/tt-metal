@@ -23,7 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.pipeline import Fence, pipeline_active, pipeline_yield
+from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_yield
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
@@ -46,6 +46,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
 from models.demos.deepseek_v3_d_p.tt.persistent_sd import (
     barrier_target,
+    fence,
     get_persistent_sub_devices,
     moe_dispatch_on_comm,
     restore_base_manager,
@@ -553,17 +554,15 @@ class TtMoe(LightweightModule):
             # routed_x is TILE, so dispatch_fabric2d untilizes it on row 1, under its senders on row 0
             # next to the ethernet cores.
             dispatch_sd_rows = 2 if moe_transport == "fabric2d" else 1
-            # Under the persistent manager the region still spans the whole device grid (the op-grid override
-            # does not apply to it), so dispatch and the shared expert run exactly the programs they run without it.
-            grid = (
-                mesh_device.device_compute_with_storage_grid_size()
-                if psd is not None
-                else mesh_device.compute_with_storage_grid_size()
-            )
+            grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
+            # Under an op-grid override (persistent manager) the dispatch rows keep the device's full width, so
+            # dispatch_fabric2d keeps the senders it has without the override (the worker nearest an eth core can be
+            # in the column past the override); the shared expert's matmuls must fit the op grid, so it stays inside.
+            dispatch_x = mesh_device.device_compute_with_storage_grid_size().x if psd is not None else grid_x
             assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
             dispatch_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dispatch_sd_rows - 1))}
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dispatch_x - 1, dispatch_sd_rows - 1))}
             )
             shared_cores = ttnn.CoreRangeSet(
                 {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
@@ -807,18 +806,17 @@ class TtMoe(LightweightModule):
                 self.row_num_links,
             )
 
-    def _pipe_fence(self, cores):
-        """1-core no-op program on one core of `cores` (utils/pipeline.Fence; one fence object per mesh)."""
-        fence = getattr(self.tt_ccl, "_pipe_fence", None)
-        if fence is None:
-            fence = Fence(self.mesh_device)
-            self.tt_ccl._pipe_fence = fence
-        last = cores.ranges()[-1].end_coord
-        fence(ttnn.CoreRangeSet({ttnn.CoreRange(last, last)}))
-
-    def _persistent_barrier(self):
-        """Full SD0/SD1 join under the persistent manager: no in-trace wait op yet, so swap to the manager's twin,
-        which drains and resets both sub-devices (a trace-segment boundary under capture, like a load/clear)."""
+    def _persistent_join(self, producer_on_comm):
+        """Make every later program wait for the producer sub-device's earlier programs. TT_GLM_MOE_JOIN=fence
+        (default): a one-core program on the producer SD (in-order go signals; no trace split). =swap: the twin
+        manager swap (drains both SDs; a trace-segment boundary, like today's load/clear). =none: no join (the
+        two-stream driver inserts its own fences; or set self.dispatch_join = False)."""
+        mode = os.getenv("TT_GLM_MOE_JOIN", "fence")
+        if mode == "none" or not getattr(self, "dispatch_join", True):
+            return
+        if mode == "fence":
+            fence(self.mesh_device, on_comm=producer_on_comm)
+            return
         target = barrier_target(self.mesh_device)
         if self._trace_controller is not None:
             self._trace_controller.sub_device_load(target)
@@ -1223,10 +1221,7 @@ class TtMoe(LightweightModule):
         if self._dispatch_on_comm:
             # Dispatch on SD1 must not start before its inputs (all-gathered x, indices, offsets) are written on SD0:
             # programs on different sub-devices do not wait for each other.
-            if pipeline_active():
-                self._pipe_fence(self._psd.main_cores)  # one CQ: an SD0 program between producer and dispatch
-            else:
-                self._persistent_barrier()
+            self._persistent_join(producer_on_comm=False)
         elif self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_load(self.sd_manager_id)
@@ -1307,13 +1302,9 @@ class TtMoe(LightweightModule):
         # read by dispatch (frees come after the join below). No-op without an active TwoStreamRunner.
         pipeline_yield("moe_window_open")
         if self._dispatch_on_comm:
-            if pipeline_active():
-                # One CQ: a program on SD1 issued after dispatch makes every LATER program (the frees' reuse, the
-                # routed expert reading dispatch's buffer) start only after dispatch has finished. No drain.
-                self._pipe_fence(self._psd.comm_cores)
-            else:
-                # Join dispatch (SD1) with the main grid (SD0) before the routed expert reads its output.
-                self._persistent_barrier()
+            # Join dispatch (SD1) with the main grid (SD0) before the routed expert reads its output, and before the
+            # host frees anything dispatch still reads (x / routed_x below).
+            self._persistent_join(producer_on_comm=True)
         elif self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
