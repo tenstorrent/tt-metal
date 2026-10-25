@@ -423,12 +423,15 @@ class TtMoe(LightweightModule):
             elif combine_fwd_reduction is None:
                 fabric2d_error = "combine_fabric2d needs combine_fwd_reduction"
             else:
+                # The fp8 dispatch wire sends 1 B/element rows (+ scales): its packet need is smaller.
+                fp8_intent = (_GLM_FP8_DISPATCH_ENV == "1") if _GLM_FP8_DISPATCH_ENV is not None else bool(fp8_dispatch_wire)
                 fabric2d_error = fabric2d_setup_error(
                     mesh_device,
                     cluster_axis=0,
                     emb_dim=self.routed_emb_dim,
                     op="dispatch",
                     num_experts_per_tok=num_experts_per_tok,
+                    fp8=fp8_intent and is_blackhole(),
                 )
 
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch

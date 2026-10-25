@@ -14,6 +14,8 @@ This module provides shared helper functions used across MoE tests including:
 
 from dataclasses import dataclass
 
+import os
+
 import torch
 from loguru import logger
 from tqdm import tqdm
@@ -39,11 +41,25 @@ def combine_overlap_payload_size(routed_emb_dim: int) -> int:
     return routed_emb_dim + CMB_FABRIC2D_ROUTING_INFO_BYTES
 
 
-def dispatch_fabric2d_packet_bytes(routed_emb_dim: int) -> int:
-    """The fabric payload dispatch_fabric2d needs: it sends a whole bfloat16 token, padded to the 64 B DRAM
-    alignment, with its routing tail in one packet."""
-    token_page_bytes = -(-routed_emb_dim * 2 // 64) * 64
+def dispatch_fabric2d_packet_bytes(routed_emb_dim: int, fp8: bool = False) -> int:
+    """The fabric payload dispatch_fabric2d needs: it sends a whole token, padded to the 64 B DRAM alignment, with
+    its routing tail in one packet. A bfloat16 token is 2 B/element; an fp8 dispatch-wire row is 1 B/element plus
+    one fp32 scale per GLM_FP8_SCALE_BLOCK elements packed in the row."""
+    if fp8:
+        block = int(os.environ.get("GLM_FP8_SCALE_BLOCK", "128"))
+        token_page_bytes = -(-(routed_emb_dim + 4 * (routed_emb_dim // block)) // 64) * 64
+    else:
+        token_page_bytes = -(-routed_emb_dim * 2 // 64) * 64
     return token_page_bytes + CMB_FABRIC2D_ROUTING_INFO_BYTES
+
+
+def fab2d_fp8_payload_enabled(model_cfg) -> bool:
+    """Experimental (GLM_FAB2D_FP8_PAYLOAD=1, default off): with the fp8 dispatch wire on, size the fabric payload
+    for an fp8 row instead of a bfloat16 token, so EDM slots are not half empty."""
+    if os.environ.get("GLM_FAB2D_FP8_PAYLOAD", "0") != "1":
+        return False
+    env = os.environ.get("GLM_FP8_DISPATCH")
+    return (env == "1") if env is not None else bool(getattr(model_cfg, "MOE_FP8_DISPATCH_WIRE", False))
 
 
 def routed_expert_combine_overlap_enabled(model_cfg) -> bool:
@@ -89,7 +105,7 @@ def moe_fabric_payload_size(model_cfg) -> int:
         payload = max(payload, combine_overlap_payload_size(model_cfg.EMB_SIZE))
     if moe_fabric2d_transport_enabled(model_cfg):
         routed_emb_dim = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
-        payload = max(payload, dispatch_fabric2d_packet_bytes(routed_emb_dim))
+        payload = max(payload, dispatch_fabric2d_packet_bytes(routed_emb_dim, fp8=fab2d_fp8_payload_enabled(model_cfg)))
     return payload
 
 
@@ -102,7 +118,7 @@ DISPATCH_FABRIC2D_MAX_TOPK = 16
 
 
 def fabric2d_setup_error(
-    mesh_device, cluster_axis: int, emb_dim: int, op: str, num_experts_per_tok: int | None = None
+    mesh_device, cluster_axis: int, emb_dim: int, op: str, num_experts_per_tok: int | None = None, fp8: bool = False
 ) -> str | None:
     """Why `op` ("dispatch" or "combine", for dispatch_fabric2d or combine_fabric2d) cannot run on this mesh and
     fabric, or None if it can.
@@ -138,7 +154,7 @@ def fabric2d_setup_error(
             f"got {fabric_config}"
         )
     if op == "dispatch":
-        packet_bytes = dispatch_fabric2d_packet_bytes(emb_dim)
+        packet_bytes = dispatch_fabric2d_packet_bytes(emb_dim, fp8=fp8)
         what = f"dispatch_fabric2d sends a {emb_dim}-wide bf16 token"
     else:
         packet_bytes = combine_overlap_payload_size(emb_dim)
