@@ -1758,3 +1758,17 @@ first bug: fast workers' later row tiles stood in for a slow one's, a row tile o
 | GLM-Flash | 640 | 59 | 46 |
 | GLM-Flash | 1024 | 88 | 66 |
 (link floor, line of 4: the middle links carry 4 blocks - K2.7 640 rows ~56 us.)
+Validation (2026-10-25, bh-lb-09):
+- 2x4 matrix, nightly uniform, every model at 128 .. 1280 rows (head us before -> after; PCC unchanged everywhere):
+  K3 316 / 521 / 567 / 639 / 901 / 1079 / 1905 -> within +-1% (every layout as before). GLM-Flash: within +-1% (128:
+  -4%). GLM-5.3: 1024 638 -> 607, the rest +-1%. K2.7: 640 762 -> 444 (block 1860 -> 1541), 768 554 -> 532, 1024 750 ->
+  679; 128 / 512 +3% (inside the model's error). Blocks of the non-latent models 1-2% lower besides (the fused tail).
+- Ring of 4 (1x4, torus X), 640 / 1024 rows: K3 457 / 856 (was 458 / 853), GLM-Flash 213 / 335 (213 / 335), GLM-5.3
+  312 / 478 (311 / 466), K2.7 333 / 548; tails fused (K2.7 53 us, GLM-5.3 44, GLM-Flash 35 at 640 rows). The first ring
+  run hung in the fused tail: the far destination's block was split both ways, and a 2D unicast injected toward the
+  neighbour the fabric does not route by is never delivered (XGather3.ring_dir's lesson again) - now every
+  destination and every ready goes the fabric's way (protocol model: tie cases).
+- After that hang's reset the 2x4 came up with one routing plane (sparse_all_gather_2d: 1 link): a full reset of the
+  8 cards (the pool's dirty flag) brought both links back.
+- Soak, 2x4, 10000 traced replays, every 25th checked (402 checks), uniform + zipf packed: K2.7 640 / 1024 rows, GLM-5.3
+  640 rows - clean (PCC min 0.98577 .. 0.98702, routing agreement >= 0.99).

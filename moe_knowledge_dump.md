@@ -298,6 +298,19 @@ overlapped**, so for K3 on a small stage the overlap work is worth ~13% and can 
 
 ---
 
+## 7b. The fused head's planner and the fused non-latent tail (2026-10-25, MOE_BLOCK_WORKLOG.md)
+
+- The head's layout is planned (tt/head_plan.py): candidates sized by the engine's own arena code on the host, ranked by
+  a cost model fit on 62 measured heads (median 6% error). Inside the error it keeps the fit-first layout unless fewer
+  row chunks are on offer - every chunk streams all of W down the columns again (the dominant cost of chunked heads).
+- Cliffs found were L1, not ranking: the rows reduce-scatter's arrival zones are now compact (a core's own tiles only;
+  K2.7 640 rows 762 -> 444 us). What still forces many chunks: the call's whole x resident (K3-size heads at 2048 rows)
+  and huge H x I. Levers: an x slot ring, a W-major chunk loop.
+- Non-latent tail fused (tt/tail_a2a.py): tilize + SE add + TP all-to-all in one program, ~30% under the ops tail.
+- Galaxy chain (coordinator, K3 8x4 chunk 5120, us from the head's start): logits on the engine 51, partials sent 83,
+  all landed 235 (152 us wait, likely behind the x gather), fin + top-K 349, exchange 377 .. 425, planner done 490 (=
+  head end); SE path 457. The chain binds by ~30 us there.
+
 ## 8. Dispatch and combine design decisions
 
 - **Combine options**: one row per slot (independent rows, streams perfectly), one row per (token,
