@@ -70,6 +70,14 @@ class LayerKV:
     def tensors(self) -> dict:
         return {"key": self.key, "value": self.value}
 
+    def zero(self) -> None:
+        """Zero every cache of the layer in place on the device (a new sequence)."""
+        from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
+
+        for t in (self.key, self.value, self.attn_value):
+            if t is not None:
+                DRAMZeroFill.op(t)
+
 
 def chunk_positions(start: int, sp: int, chunk: int) -> torch.Tensor:
     """[sp, chunk // sp] int64: the absolute position of every local row of a chunk at ``start`` (any 32-aligned

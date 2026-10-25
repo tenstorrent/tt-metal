@@ -219,5 +219,16 @@ def device_component(mesh, spec, layer, step):
     raise NotImplementedError(f"implement stage: no device module for {step} yet")
 
 
+_MODELS = {}  # one loaded model per (mesh, layers, lm_head) in a process: new_state() zeroes its caches
+
+
 def device_model(mesh, spec, layers, lm_head=True):
-    raise NotImplementedError("assemble stage: no device model yet")
+    """The all-device model (tt/model.py): embedding to final norm on the device, every block through run_block."""
+    from models.demos.mimo_v26_flash_rl.tt.model import MimoModel
+
+    key = (id(mesh), tuple(layers), bool(lm_head))
+    hit = _MODELS.get(key)
+    if hit is None or hit.mesh is not mesh:
+        _MODELS.clear()  # drop a model of another mesh or layer set before loading the next
+        _MODELS[key] = hit = MimoModel(mesh, spec, layers, lm_head=lm_head, slots=SLOTS)
+    return hit

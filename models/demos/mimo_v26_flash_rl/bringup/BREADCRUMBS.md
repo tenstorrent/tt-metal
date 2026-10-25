@@ -249,3 +249,41 @@
 - Cost: 3 matmuls per fp32 matmul and the composed RoPE; P.* can fuse (an fp32-score sink SDPA fork would remove
   the composed softmax and the discarded ring SDPA output).
 - Re-run: `bfw job check --task S.sliding_moe.02 --gate-only`.
+
+## M.1 (assemble, layers 0-5): device gates PASS, job check blocked by a stale freeze
+
+- `tt/model.py` `MimoModel` (from `hooks.device_model`, cached per (mesh, layers, lm_head) in the process;
+  `new_state` zeroes the caches with DRAMZeroFill): embed -> 6 blocks -> final norm on the device. Each block runs
+  `run_block` over the reference's own graph (`reference.model.Layer.graph`) with the validated component modules
+  (RMSNorm, Attention, ResidualAdd, DenseMLP | Router + Experts); the intermediate boundaries are freed after the block.
+  It runs in the slow runtime mode so the ladder's device proof counts the ops.
+- Embed: tokens in natural order, padded with PAD_ID, are permuted on the host into the server's reshuffled `[8, 1, 640]`
+  uint32 (same as `server_rules.server_payload`, checked for starts 0 / 1312 / 2944 / 51200). That is the runner's H2D
+  input, built at the harness boundary. On the device: `minimum(ids, V-1)` -> `embedding` (bf16 table replicated) ->
+  `mesh_partition(dim 2, TP)`. `embed` also stages the chunk metadata (`ChunkMeta.stage`, one for the full layers and
+  one for the sliding ones, shared by every layer of that kind) with end = start + the number of real tokens, so
+  `layer` does no host work (host_transfers_per_layer 0). `from_host` / `to_host` / `logits` apply the same row
+  permutation at the boundary.
+- State = the served caches (`LayerKV` of each attention layer); `to_torch` reads each chip's shard
+  (`get_device_tensors`) and inverts the block-cyclic layout; `load_prefix` is `Attention.load_prefix` for slot 0.
+- lm_head: [V/4, H] bfloat8_b per TP column, HiFi4 fp32. It is not used at layers 0-5 (lm_head=False there).
+- Device runs (direct safe runner): ladder s10240 PASS, worst layer PCC 0.999957, worst state PCC 0.999843, 41+ ops
+  per layer, 0 host transfers, warm chunk 3.14 s. test_kv_layout PASS (6 layers, 0 problems). test_cache_writes PASS,
+  lowest layer 5 value 0.9758 (pulled_back) / 0.9784 (follow_up_tile) against 0.97: thin, and it falls with depth
+  (layer 0 0.99992).
+- `bfw job check --task M.1 --gate-only`: FAIL in the precheck, before any test ran. M.1's frozen hashes of
+  bringup/serving_contract.md and contract_tests.yaml are the first SC.1 version (taken at 13:45), not the
+  re-pinned one approved at 14:36. A person must refreeze M.1 (and K.1).
+- Run 20261025-055712 attempt 1: the freeze precheck now passes (the gate command ran). The first gate was started
+  as a background task and was killed when the session ended, so the board was marked dirty. The foreground re-run then
+  stopped at `SAFE_PYTEST: Device marked dirty from previous hang` (reset refused in a stage). No code change; the
+  next attempt runs the same gate on a reset board.
+- Run 20261025-055712, stage script (before that agent ran): `bfw job check` PASS (ladder worst layer PCC 0.999957,
+  state 0.999843, 41 ops per layer, 0 host transfers), then SCOPE "protected tasks changed during the job" (render-tests
+  had re-frozen M.1 during the job).
+- Run 20261025-064412 attempt 1: no code change. `bfw job check --task M.1 --gate-only` FAILs in the precheck again:
+  a binding mismatch, plus stale hashes for the two SC.1 files (tasks.yaml M.1 `frozen.at` 2026-10-24T13:45:19).
+  The gate's three commands, run directly through the safe runner on a fresh board, all PASS: ladder s10240 0.999957 /
+  state 0.999843, test_kv_layout, and test_cache_writes (lowest: layer 5 value 0.9758 pulled_back, 0.9784
+  follow_up_tile). M.1 (and K.1) must be refrozen by render-tests.
+- Re-run: `bfw job check --task M.1 --gate-only`.
