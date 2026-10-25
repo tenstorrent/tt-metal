@@ -18,6 +18,7 @@
 #include "core_config.h"
 #include "hostdev/dev_msgs.h"
 #include "noc/noc_parameters.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "dataflow/dispatch_fabric2d_reader_ct_args.hpp"
 
 namespace dspf2d::routing_index {
@@ -279,14 +280,26 @@ inline void fill_pass(const Scratch& c, const Risc& me, uint32_t t0, uint32_t t1
 
 // The whole of one RISC's share: wait for the tables, count, exchange, fill, report.
 inline void run_risc(const Scratch& c, uint32_t risc) {
-    wait_at_least(dspf2d::kSemTablesReady, 1u);
+    {
+        DeviceZoneScopedN("ri_wait_tables");
+        wait_at_least(dspf2d::kSemTablesReady, 1u);
+    }
     const uint32_t tokens = routed_token_count(c);
     const Risc me = risc_view(c, risc);
-    count_pass(c, me, slice_lo(tokens, risc), slice_hi(tokens, risc));
+    {
+        DeviceZoneScopedN("ri_count");
+        count_pass(c, me, slice_lo(tokens, risc), slice_hi(tokens, risc));
+    }
     signal(dspf2d::index_risc_sem(risc), dspf2d::kRiscCounted);
-    wait_all_riscs(dspf2d::kRiscCounted);
-    place_slice(c, me, risc);
-    fill_pass(c, me, slice_lo(tokens, risc), slice_hi(tokens, risc));
+    {
+        DeviceZoneScopedN("ri_wait_counted");
+        wait_all_riscs(dspf2d::kRiscCounted);
+    }
+    {
+        DeviceZoneScopedN("ri_place_fill");
+        place_slice(c, me, risc);
+        fill_pass(c, me, slice_lo(tokens, risc), slice_hi(tokens, risc));
+    }
     signal(dspf2d::index_risc_sem(risc), dspf2d::kRiscFilled);
 }
 
