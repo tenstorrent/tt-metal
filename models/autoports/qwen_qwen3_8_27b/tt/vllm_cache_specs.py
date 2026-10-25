@@ -33,6 +33,8 @@ def selected_block_size():
 def physical_cache_budget():
     raw = os.environ.get('QWEN38_CACHE_BUDGET_BYTES_PER_DEVICE')
     if raw is None:
+        if selected_block_size() <= 512:
+            raise ValueError('Fine checkpoints require an explicit physical cache byte budget')
         return None
     budget = int(raw)
     if budget <= 0:

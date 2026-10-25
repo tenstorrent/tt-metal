@@ -65,6 +65,12 @@ class CacheBudgetTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'native context'):
                 specs.bounded_token_budget(262144,32)
 
+    def test_fine_checkpoints_require_explicit_budget(self):
+        for block in (256, 512):
+            with self.environment(block):
+                with self.assertRaisesRegex(ValueError, 'explicit physical cache'):
+                    specs.bounded_token_budget(262144,32)
+
     def test_mismatched_cli_or_geometry_rejected(self):
         with self.environment(512,23661297664):
             with self.assertRaisesRegex(ValueError,'must match'):
