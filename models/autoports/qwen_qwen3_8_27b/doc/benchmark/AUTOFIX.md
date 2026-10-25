@@ -1,0 +1,9 @@
+# Benchmark integration repair
+
+Failing contract: Stage10 events cannot supply full-phase host timing or distinguish asynchronously completed measured requests. AutoDebug identified enqueue-only decode markers, narrower prefill timing, and absent request joins. See AUTODEBUG.md.
+
+Selected repair: opt-in model-local wrappers of the pinned plugin lifecycle, immutable per-step scalar snapshots, existing async completion/output boundaries, scheduler schedule/consumption timestamps, buffered idle-only flush, and unique upstream client request-ID prefixes. No device synchronization, device profiler, precision or cache changes. Cold4096 measurement rejects intermediate-only prefills or missing completion/consumption rather than estimating their split. Accounting uses full64 selected-precision useful FLOPs and explicit estimated DRAM traffic; unknown rereads/spills remain documented lower-bound limitations.
+
+Additional setup fixes: no live server survived Stage10 cleanup, so an owned server-control hook launches and records each matching configuration inside the runner budget. A qwen3 reasoning parser exposes final content separately; native HF chat template remains applied once. Gated GPQA transport uses a pinned public mirror with exact full-population and selected-document hash equality; upstream scoring is unchanged. Separate client environments resolve lm-eval Transformers4 and vLLM0.26 Transformers5 requirements without changing the TT server.
+
+Host validation: protocol, native-template and dataset hash checks pass; async hook mock tests cover overlapping submissions, row remaps, stale host positions and output completion; synthetic timeline partition check preserves gaps without overlap. Python/Bash syntax checks pass. Live verification is required and will run as the roofline check before accuracy. No hardware measurement claimed by these host tests.

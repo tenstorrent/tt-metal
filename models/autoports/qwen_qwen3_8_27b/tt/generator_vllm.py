@@ -58,6 +58,9 @@ class Qwen38ForCausalLM:
         obj.tt_supported_decode_batch_sizes = [max_batch_size]
         print(f"AUTOPORT_ADAPTER {__file__}:{cls.__name__} layers={obj.model.layer_indices} "
               f"precision={obj.model.precision_config}", flush=True)
+        if os.environ.get('QWEN38_BENCHMARK_PHASES'):
+            from .benchmark_phases import install
+            install(obj)
         return obj
 
     @classmethod

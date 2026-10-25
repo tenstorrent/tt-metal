@@ -1,0 +1,61 @@
+{
+  "model": "Qwen/Qwen3.8-27B",
+  "operator_eval": "r1_gpqa_diamond",
+  "upstream_task": "gpqa_diamond_cot_zeroshot",
+  "harness": "lm-eval==0.4.13",
+  "completed_samples": null,
+  "selected_samples": 10,
+  "dataset_samples": 198,
+  "scope": "subset",
+  "manifest": "subset/manifest.json",
+  "manifest_sha256": "fb01e42fbed84a24ad4f7c57b6355afa2abbd27e7cc3a27418e20b861fd6b5d7",
+  "common_subset_policy": "First ten index-sorted entries of packaged ci-v1-reasoning GPQA; frozen before inference; goal12 must reuse these IDs/content hashes to compare.",
+  "dataset_transport": "Public Wanfq/gpqa mirror pinned to03ff68d77f7a4103ae2bf72fb099d358f6308b65; exact complete processed population matches packaged manifest. See subset-source/mirror.json. No prompt/scorer changes.",
+  "num_fewshot": 0,
+  "fewshot_as_multiturn": true,
+  "choice_shuffle_seed": 0,
+  "numpy_random_seed": 1234,
+  "torch_random_seed": 1234,
+  "fewshot_random_seed": 1234,
+  "request_seed": 1234,
+  "accuracy_concurrency": 32,
+  "native_template_application": "lm-eval emits structured messages using tokenizer_backend=None/tokenized_requests=False; vLLM applies native HF Jinja exactly once. Host validation passed; live verification required.",
+  "native_template_sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+  "reasoning_parser": "qwen3",
+  "parser_source": "vLLM0.30 parser/qwen3.py starts in REASONING state when thinking=True and switches at </think>; enable --reasoning-parser qwen3 to expose final content separately.",
+  "generation": {
+    "max_gen_toks": 16384,
+    "do_sample": true,
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "top_k": 20,
+    "min_p": 0.0,
+    "presence_penalty": 0.0,
+    "repetition_penalty": 1.0,
+    "until": [],
+    "chat_template_kwargs": {
+      "enable_thinking": true,
+      "reasoning_effort": "xhigh",
+      "preserve_thinking": true
+    }
+  },
+  "generation_cap_note": "16384 is proposed total-output cap for the timed client stage; run_config.json is authoritative. Official model guidance suggests reasoning up to262144 and final response131072, so smaller cap is a protocol limitation; all capped answers remain in denominator, with raw reasoning retained and absent final scored empty.",
+  "stops": "No textual stop strings (until=[]), native EOS retained; removes upstream </s> textual stop while keeping tokenizer EOS behavior.",
+  "metrics": [
+    "exact_match,strict-match",
+    "exact_match,flexible-extract"
+  ],
+  "scoring": "Upstream task v2.2 regex strict-match and multi_choice_regex flexible-extract, then upstream exact_match with ignore_case and ignore_punctuation. Only API final content scored; no correction of upstream scorer outputs.",
+  "reference": {
+    "score": 89.2,
+    "unit": "percent",
+    "url": "https://huggingface.co/Qwen/Qwen3.8-27B",
+    "local_source": ".cache/qwen38-full/README.md",
+    "protocol_notes": "Published exact-model GPQA Diamond score; local10/198 zero-shot lm-eval variant and output cap may differ. Published complete evaluation recipe not established from model card."
+  },
+  "not_covered": {
+    "swe_bench_verified": "Requires repository/tool-using agent harness, outside lm-evaluation-harness; belongs to goal12.",
+    "terminal_bench_2": "Requires terminal/environment agent harness, outside lm-evaluation-harness; belongs to goal12."
+  },
+  "validation": "subset-source/protocol-host-check-fixed.log; dataset checksum, subset checks, structured-message transport, native Jinja once and thinking prefix passed. Initial check harness expected str rather than JsonChatStr; fixed check uses .prompt, no model/runtime change."
+}

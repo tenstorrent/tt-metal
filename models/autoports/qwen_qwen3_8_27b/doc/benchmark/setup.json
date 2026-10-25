@@ -1,0 +1,18 @@
+{
+  "started_utc": "2026-10-25T14:21:00Z",
+  "configured_batches": [
+    1,
+    8,
+    16,
+    32
+  ],
+  "budget_seconds": 7200,
+  "supplied_server": null,
+  "supplied_server_reason": "Stage10 cleanup.json explicitly stopped server; observed no server process. First launch is inside timed hook.",
+  "prior_stage_server_configuration": "doc/optimized_vllm/selected_b1_command.json",
+  "prior_startup_seconds": null,
+  "context_contract_sha256": "9ccc4b1d6aae95b8e05d614706beb710981357db84618697657ad7247a88690d",
+  "inputs_sha256": "0af9da0ac0df7a870a06020f67fd5da7703ce2a1f80526190c27a4a0ff80ad11",
+  "initial_source_commit": "78dd15ceacf11a789487bde65dca2d87ff272c6d",
+  "setup_work": "Client venvs, pinned vLLM0.26 empty installation, frozen GPQA subset and verified mirror, host phase collector and server hook, read-only device listing. No server launched before runner."
+}

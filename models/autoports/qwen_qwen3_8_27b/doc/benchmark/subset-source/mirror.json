@@ -1,0 +1,11 @@
+{
+  "upstream": "Idavidrein/gpqa",
+  "mirror": "Wanfq/gpqa",
+  "mirror_revision": "03ff68d77f7a4103ae2bf72fb099d358f6308b65",
+  "filename": "gpqa_diamond.csv",
+  "local_path": "/home/mvasiljev/.cache/huggingface/hub/datasets--Wanfq--gpqa/snapshots/03ff68d77f7a4103ae2bf72fb099d358f6308b65/gpqa_diamond.csv",
+  "sha256": "41d1213cd7a4998605a26c2798500652572007161b3a92817ba46b35befcd305",
+  "processed_population_sha256": "2ed8c1e6bb9d79c67848407d60c89eadc23fa3cb8ab1d8e1e65230aea0953bbf",
+  "population": 198,
+  "verification": "All 198 processed documents match the packaged common manifest population hash, including metadata; all 10 selected hashes match. No scorer or prompt substitutions."
+}
