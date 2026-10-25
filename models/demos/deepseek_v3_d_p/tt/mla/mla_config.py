@@ -992,6 +992,97 @@ MLA_SDPA_CONFIG = {
 }
 
 
+# ---- small native chunks (smallchunk agent, 2026-10-25) ----------------------------------------------------------
+# Native GLM chunks of 1024/2048 tokens give 128/256 rows per chip (32/64 TP-sequence rows for seqq) where the table
+# has no entry, so every MLA/indexer matmul falls back to the TTNN auto config with a DRAM output (auto is ~2x slower
+# than tuned on these shapes, e.g. indexer wq_b 60 vs 31 us), and the paths keyed on a tuned config (in-place q RoPE,
+# L1 activations) turn off. GLM_SMALL_MM_CFG=1 derives the missing entry from the smallest larger tuned key by
+# scaling only the M blocking (per_core_M / out_subblock_h); K/N blocking, grids, memory configs and dtypes are kept.
+def small_mm_cfg_enabled() -> bool:
+    import os
+
+    return os.environ.get("GLM_SMALL_MM_CFG", "0") not in ("", "0")
+
+
+def _divisor_at_least(n: int, lo: int) -> int:
+    d = max(1, lo)
+    while n % d:
+        d += 1
+    return d
+
+
+def _largest_divisor_at_most(n: int, hi: int) -> int:
+    d = max(1, min(n, hi))
+    while n % d:
+        d -= 1
+    return d
+
+
+def derive_small_rows_cfg(cfg: dict, seq_len_local: int) -> dict | None:
+    """A copy of tuned entry ``cfg`` re-blocked for ``seq_len_local`` (< the entry's key) rows, or None if its program
+    config type is not handled (caller then keeps the auto fallback)."""
+    if seq_len_local % ttnn.TILE_SIZE:
+        return None
+    m_t = seq_len_local // ttnn.TILE_SIZE
+    pc = cfg.get("program_config")
+    if isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
+        grid = pc.compute_with_storage_grid_size
+        m_cores = grid.x if pc.transpose_mcast else grid.y
+        pm = _divisor_at_least(m_t, -(-m_t // m_cores))
+        new = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=pc.in0_block_w,
+            out_subblock_h=_largest_divisor_at_most(pm, max(1, 8 // pc.out_subblock_w)),
+            out_subblock_w=pc.out_subblock_w,
+            per_core_M=pm,
+            per_core_N=pc.per_core_N,
+            transpose_mcast=pc.transpose_mcast,
+            fuse_batch=pc.fuse_batch,
+            fused_activation=pc.fused_activation,
+        )
+    elif isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig):
+        if not pc.mcast_in0:
+            return None
+        new = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y),
+            in0_block_w=pc.in0_block_w,
+            out_subblock_h=_largest_divisor_at_most(m_t, max(1, 8 // pc.out_subblock_w)),
+            out_subblock_w=pc.out_subblock_w,
+            per_core_M=m_t,
+            per_core_N=pc.per_core_N,
+            fuse_batch=pc.fuse_batch,
+            fused_activation=pc.fused_activation,
+            mcast_in0=True,
+        )
+    elif isinstance(pc, ttnn.MatmulMultiCoreReuseProgramConfig):
+        pm = _largest_divisor_at_most(m_t, pc.per_core_M)
+        new = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(pc.compute_with_storage_grid_size.x, pc.compute_with_storage_grid_size.y),
+            in0_block_w=pc.in0_block_w,
+            out_subblock_h=_largest_divisor_at_most(pm, max(1, 8 // pc.out_subblock_w)),
+            out_subblock_w=pc.out_subblock_w,
+            per_core_M=pm,
+            per_core_N=pc.per_core_N,
+        )
+    else:
+        return None
+    return {**cfg, "program_config": new}
+
+
+def small_rows_entry(table: dict, seq_len_local: int):
+    """Derived candidates for a missing ``seq_len_local`` slot: the smallest larger tuned key's candidates, each
+    re-blocked (see derive_small_rows_cfg). None when disabled, present, or nothing to derive from."""
+    if not small_mm_cfg_enabled() or seq_len_local in table or seq_len_local % ttnn.TILE_SIZE:
+        return None
+    larger = sorted(k for k in table if k > seq_len_local)
+    if not larger:
+        return None
+    entry = table[larger[0]]
+    cands = entry if isinstance(entry, (list, tuple)) else [entry]
+    out = [d for d in (derive_small_rows_cfg(c, seq_len_local) for c in cands) if d is not None]
+    return out or None
+
+
 def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | None:
     """Raw matmul entry for a given weight and local sequence length (per-device).
 
@@ -1002,7 +1093,9 @@ def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | Non
     count, q_lora_rank and chunked mode. Any new caller should do the same rather than assume the
     return value is a single usable config.
     """
-    return MLA_MATMUL_CONFIG.get(weight_name, {}).get(seq_len_local)
+    table = MLA_MATMUL_CONFIG.get(weight_name, {})
+    entry = table.get(seq_len_local)
+    return entry if entry is not None else small_rows_entry(table, seq_len_local)
 
 
 def get_sdpa_config(seq_len_local: int) -> dict | list | None:

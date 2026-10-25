@@ -18,7 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     indexer_layer_is_reused,
     resolve_has_indexer,
 )
-from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG
+from models.demos.deepseek_v3_d_p.tt.mla.mla_config import MLA_MATMUL_CONFIG, MLA_SDPA_CONFIG, small_rows_entry
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import sparse_kv_push_supported
 from models.demos.deepseek_v3_d_p.tt.mla.utils import llama4_scale_host
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl, resolve_per_axis_topology
@@ -979,7 +979,11 @@ class ttMLA:
         Returns None when no tuned config applies (caller falls back to defaults)."""
         if not self._is_blackhole:
             return None
-        return self._select_cfg(self.mm_configs[weight_name].get(seq_len_local), weight_name)
+        table = self.mm_configs[weight_name]
+        entry = table.get(seq_len_local)
+        if entry is None:
+            entry = small_rows_entry(table, seq_len_local)  # GLM_SMALL_MM_CFG=1 only
+        return self._select_cfg(entry, weight_name)
 
     def _weight_kt(self, weight_name: str) -> int | None:
         """This model's per-device K for one weight, in tiles, or None if the weight is absent.
