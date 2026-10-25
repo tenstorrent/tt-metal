@@ -1,0 +1,43 @@
+2026-10-25 09:57:54.987 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab SKIPPED': {'message': 'Requested
+sample logprobs of 248320, which is greater than max allowed: 20
+(parameter=logprobs, value=248320)', 'type': 'BadRequestError', 'param':
+'logprobs', 'code': 400}})
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED
+
+==================================== PASSES ====================================
+- generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
+============================= slowest 25 durations =============================
+1.04s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+0.19s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+0.12s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+0.03s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+=========================== short test summary info ============================
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py:109: Server does not support all-vocab logprobs: Error code: 400 - {'error': {'message': 'Requested sample logprobs of 248320, which is greater than max allowed: 20 (parameter=logprobs, value=248320)', 'type': 'BadRequestError', 'param': 'logprobs', 'code': 400}}
+========================= 3 passed, 1 skipped in 1.41s =========================

@@ -1,0 +1,435 @@
+{
+  "status": "pass",
+  "failures": [],
+  "fixture": "synthetic token IDs; NOT qualitative or headline performance evidence",
+  "model": "/workspace/.cache/qwen38-full",
+  "reduced": "real_layers_0_3",
+  "quick": true,
+  "max_concurrency": 2,
+  "server_url": "http://localhost:8000",
+  "agent_turns": {
+    "skipped": false,
+    "prompt_tokens": 4130,
+    "appended_tokens": 33,
+    "requested_concurrency": 2,
+    "metrics_before": {
+      "samples": [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:kv_cache_usage_perc{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 39032.0",
+        "vllm:prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903378e+09",
+        "vllm:prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 8192.0",
+        "vllm:prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792922189590347e+09",
+        "vllm:external_prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903554e+09",
+        "vllm:external_prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903645e+09",
+        "vllm:num_preemptions_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792922189590385e+09",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"1.0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"2.0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"3.0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"4.0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"5.0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"10.0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"20.0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"+Inf\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_count{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 22.0",
+        "vllm:request_num_preemptions_sum{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:request_num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895909178e+09",
+        "vllm:cache_config_info{_block_size_resolved=\"True\",block_size=\"4096\",cache_dtype=\"auto\",enable_mamba_fine_grained_prefix_cache=\"False\",enable_prefix_caching=\"True\",engine=\"0\",gpu_memory_utilization=\"0.92\",is_attention_free=\"False\",kv_cache_dtype_skip_layers=\"[]\",kv_cache_layout=\"None\",kv_cache_max_concurrency=\"1.1285714285714286\",kv_cache_memory_bytes=\"None\",kv_cache_size_tokens=\"295848\",kv_offloading_backend=\"native\",kv_offloading_size=\"None\",kv_sharing_fast_prefill=\"False\",mamba_block_size=\"4096\",mamba_cache_dtype=\"auto\",mamba_cache_mode=\"align\",mamba_page_size_padded=\"None\",mamba_ssm_cache_dtype=\"float32\",num_cpu_blocks=\"None\",num_gpu_blocks=\"79\",num_gpu_blocks_override=\"None\",prefix_cache_retention_interval=\"0\",prefix_caching_hash_algo=\"sha256\",prefix_match_unit=\"None\",replayssm_buffer_len=\"16\",skip_page_size_padded=\"None\",sliding_window=\"None\",use_kda_recoverssm=\"False\",use_replayssm=\"False\",user_specified_block_size=\"True\",user_specified_mamba_block_size=\"True\"} 1.0"
+      ]
+    },
+    "metrics_after_turn_0": {
+      "samples": [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:kv_cache_usage_perc{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 47292.0",
+        "vllm:prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903378e+09",
+        "vllm:prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 8192.0",
+        "vllm:prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792922189590347e+09",
+        "vllm:external_prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903554e+09",
+        "vllm:external_prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903645e+09",
+        "vllm:num_preemptions_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792922189590385e+09",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"1.0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"2.0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"3.0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"4.0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"5.0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"10.0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"20.0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"+Inf\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_count{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 24.0",
+        "vllm:request_num_preemptions_sum{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:request_num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895909178e+09",
+        "vllm:cache_config_info{_block_size_resolved=\"True\",block_size=\"4096\",cache_dtype=\"auto\",enable_mamba_fine_grained_prefix_cache=\"False\",enable_prefix_caching=\"True\",engine=\"0\",gpu_memory_utilization=\"0.92\",is_attention_free=\"False\",kv_cache_dtype_skip_layers=\"[]\",kv_cache_layout=\"None\",kv_cache_max_concurrency=\"1.1285714285714286\",kv_cache_memory_bytes=\"None\",kv_cache_size_tokens=\"295848\",kv_offloading_backend=\"native\",kv_offloading_size=\"None\",kv_sharing_fast_prefill=\"False\",mamba_block_size=\"4096\",mamba_cache_dtype=\"auto\",mamba_cache_mode=\"align\",mamba_page_size_padded=\"None\",mamba_ssm_cache_dtype=\"float32\",num_cpu_blocks=\"None\",num_gpu_blocks=\"79\",num_gpu_blocks_override=\"None\",prefix_cache_retention_interval=\"0\",prefix_caching_hash_algo=\"sha256\",prefix_match_unit=\"None\",replayssm_buffer_len=\"16\",skip_page_size_padded=\"None\",sliding_window=\"None\",use_kda_recoverssm=\"False\",use_replayssm=\"False\",user_specified_block_size=\"True\",user_specified_mamba_block_size=\"True\"} 1.0"
+      ]
+    },
+    "metrics_after_turn_1": {
+      "samples": [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:kv_cache_usage_perc{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 55618.0",
+        "vllm:prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903378e+09",
+        "vllm:prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 16384.0",
+        "vllm:prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792922189590347e+09",
+        "vllm:external_prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903554e+09",
+        "vllm:external_prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895903645e+09",
+        "vllm:num_preemptions_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792922189590385e+09",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"1.0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"2.0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"3.0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"4.0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"5.0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"10.0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"20.0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"+Inf\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_count{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 26.0",
+        "vllm:request_num_preemptions_sum{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:request_num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929221895909178e+09",
+        "vllm:cache_config_info{_block_size_resolved=\"True\",block_size=\"4096\",cache_dtype=\"auto\",enable_mamba_fine_grained_prefix_cache=\"False\",enable_prefix_caching=\"True\",engine=\"0\",gpu_memory_utilization=\"0.92\",is_attention_free=\"False\",kv_cache_dtype_skip_layers=\"[]\",kv_cache_layout=\"None\",kv_cache_max_concurrency=\"1.1285714285714286\",kv_cache_memory_bytes=\"None\",kv_cache_size_tokens=\"295848\",kv_offloading_backend=\"native\",kv_offloading_size=\"None\",kv_sharing_fast_prefill=\"False\",mamba_block_size=\"4096\",mamba_cache_dtype=\"auto\",mamba_cache_mode=\"align\",mamba_page_size_padded=\"None\",mamba_ssm_cache_dtype=\"float32\",num_cpu_blocks=\"None\",num_gpu_blocks=\"79\",num_gpu_blocks_override=\"None\",prefix_cache_retention_interval=\"0\",prefix_caching_hash_algo=\"sha256\",prefix_match_unit=\"None\",replayssm_buffer_len=\"16\",skip_page_size_padded=\"None\",sliding_window=\"None\",use_kda_recoverssm=\"False\",use_replayssm=\"False\",user_specified_block_size=\"True\",user_specified_mamba_block_size=\"True\"} 1.0"
+      ]
+    },
+    "event_line_offsets": [
+      [
+        783,
+        802
+      ],
+      [
+        803,
+        816
+      ]
+    ],
+    "previous_sent_tokens_ceiling": 8260,
+    "previous_sent_tokens_per_conversation": 4130,
+    "actual_cachehit_admissions": [
+      {
+        "slot": 0,
+        "cached_start": 4096
+      },
+      {
+        "slot": 1,
+        "cached_start": 4096
+      }
+    ],
+    "observed_active_slots_max": 2,
+    "observed_cached_tokens": 8192,
+    "reuse_fraction_of_previous_sent": 0.9917675544794189,
+    "completed_admissions_observed": 2,
+    "pool_bound": {
+      "scheduler_blocks": 79,
+      "source": "vLLM cache_config_info metric"
+    }
+  },
+  "events_path": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/reduced_events.jsonl",
+  "event_line_offsets": [
+    40,
+    818
+  ],
+  "pid": 1548881,
+  "execution_signatures": {
+    "decode:B2:masked=False": "MeshTraceId(0)",
+    "decode:B2:masked=True": "MeshTraceId(1)",
+    "sampling:B2:topk": "MeshTraceId(2)",
+    "sampling_buffered:B2:topk": "MeshTraceId(3)"
+  },
+  "captures": 4,
+  "captures_final": 4,
+  "retirement_final": 0,
+  "state_pool_final": {
+    "saves": 7,
+    "restores": 4,
+    "metadata_uploads": 13
+  },
+  "retirement_baseline": 0,
+  "actual_chunks": [
+    {
+      "start": 0,
+      "length": 129,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 130,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 131,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 129,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 130,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 0,
+      "length": 131,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 4096,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 4096,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 8192,
+      "length": 1,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 0,
+      "length": 131,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 4096,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 4096,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 8192,
+      "length": 4096,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 12288,
+      "length": 1,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 0,
+      "length": 131,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 129,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 130,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 130,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 130,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 4096,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 4080,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 4096,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 4096,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 67,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 67,
+      "slots": [
+        1
+      ]
+    }
+  ],
+  "concurrent_prefill": [
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        8192
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        8192
+      ],
+      "ends": [
+        8193
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        8192
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        8192
+      ],
+      "ends": [
+        12288
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        12288
+      ],
+      "ends": [
+        12289
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    }
+  ],
+  "requests": 22,
+  "raw_requests": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/reduced_lifecycle.requests.json",
+  "ttft_ms_p50": 18.60310509800911,
+  "completion_ms_p99": 792.9700911045074
+}

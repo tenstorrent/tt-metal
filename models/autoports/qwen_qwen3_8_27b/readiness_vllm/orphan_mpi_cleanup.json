@@ -1,0 +1,8 @@
+{
+  "time": 1792925841.904821,
+  "scope": "private IPC namespace qwen38-functional-build, UID4123 MPI sm_segment only",
+  "live_references": [],
+  "removed_count": 670,
+  "freed_allocated_bytes": 49397760,
+  "excluded": "TT UMD locks and tt_device metadata retained"
+}

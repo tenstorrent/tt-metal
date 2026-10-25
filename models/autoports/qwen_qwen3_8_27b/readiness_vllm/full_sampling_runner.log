@@ -1,0 +1,11 @@
+
+=== Running plugin sampling tests ===
+  profile: full (1 target(s))
+  tt-max-num-seqs: 8
+  cmd: /opt/venv/bin/python -m pytest /workspace/bringup/dependencies/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=/workspace/.cache/qwen38-full --tt-max-num-seqs=8
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/sampling_tests.log
+  PASS
+
+============================================================
+vLLM checks complete. Results in /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm
+============================================================

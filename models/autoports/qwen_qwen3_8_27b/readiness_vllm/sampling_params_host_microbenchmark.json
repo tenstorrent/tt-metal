@@ -1,0 +1,26 @@
+{
+  "scope": "synthetic CPU conversion only, not serving/device latency",
+  "results": [
+    {
+      "batch": 1,
+      "fields": 9,
+      "host_us_median": 3.3487377,
+      "calls_per_repeat": 10000,
+      "repeats": 7
+    },
+    {
+      "batch": 8,
+      "fields": 9,
+      "host_us_median": 4.2463815,
+      "calls_per_repeat": 10000,
+      "repeats": 7
+    },
+    {
+      "batch": 32,
+      "fields": 9,
+      "host_us_median": 5.6580307,
+      "calls_per_repeat": 10000,
+      "repeats": 7
+    }
+  ]
+}

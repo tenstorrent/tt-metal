@@ -1,0 +1,10 @@
+INFO 10-25 09:14:30 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 09:14:30 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 09:14:30 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-10-25 09:14:31.641 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+INFO 10-25 09:14:31 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 09:14:33 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 09:14:33 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+INFO 10-25 09:14:33 [tt/platform.py:1362] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+models.autoports.qwen_qwen3_8_27b.tt.generator_vllm Qwen38ForCausalLM

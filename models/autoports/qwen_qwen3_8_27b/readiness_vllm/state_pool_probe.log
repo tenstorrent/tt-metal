@@ -1,0 +1,50 @@
+2026-10-25 09:35:27.328 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-25 09:35:27.426 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-25 09:35:27.426 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-25 09:35:27.426 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-25 09:35:27.426 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-25 09:35:27.437 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-25 09:35:27.437 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-25 09:35:27.518 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-25 09:35:27.518 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-25 09:35:27.518 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-25 09:35:27.518 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-25 09:35:27.520 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-25 09:35:27.764 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.1e2af8be78d0.4123.ead50000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  1e2af8be78d0
+  Space Requested: 16777216 B
+  Space Available: 17596416 B
+--------------------------------------------------------------------------
+2026-10-25 09:35:27.828 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-25 09:35:27.828 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-25 09:35:27.828 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-25 09:35:27.829 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-25 09:35:27.875 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-25 09:35:28.087 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-25 09:35:28.087 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/probe_serving_state_pool.py", line 30, in <module>
+    pool=ServingStatePool(model,active,{0:5,7:5})
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/serving_state.py", line 35, in __init__
+    if tuple(active.conv.shape[1:]) != (3,2560) or active.conv.dtype != ttnn.bfloat16 or active.conv.layout != ttnn.ROW_MAJOR_LAYOUT:
+TypeError: __getitem__(): incompatible function arguments. The following argument types are supported:
+    1. __getitem__(self, arg: int, /) -> int
+
+Invoked with types: ttnn._ttnn.types.Shape, slice
+2026-10-25 09:35:28.993 | info     |    BuildKernels | JIT cache stats: 55/55 hits (100.0%) [55 cached, 45 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-25 09:35:28.993 | info     |    BuildKernels | JIT telemetry: 31 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-25 09:35:29.007 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-25 09:35:29.007 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-25 09:35:29.206 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-25 09:35:29.206 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-25 09:35:29.206 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

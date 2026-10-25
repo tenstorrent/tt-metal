@@ -1,0 +1,7 @@
+Using Python 3.10.22 environment at: /opt/venv
+Resolved 1 package in 42ms
+Downloading pip (1.7MiB)
+ Downloaded pip
+Prepared 1 package in 19ms
+Installed 1 package in 16ms
+ + pip==26.2.2

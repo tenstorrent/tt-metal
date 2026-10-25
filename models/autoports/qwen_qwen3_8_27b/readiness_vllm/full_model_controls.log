@@ -1,0 +1,253 @@
+2026-10-25 10:02:21.096 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-25 10:02:22.584 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-25 10:02:22.584 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-25 10:02:22.584 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-25 10:02:22.584 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-25 10:02:22.596 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-25 10:02:22.597 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-25 10:02:22.677 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-25 10:02:22.677 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-25 10:02:22.677 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-25 10:02:22.677 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-25 10:02:22.678 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-25 10:02:22.681 | warning  |             UMD | AICLK settled at 1331 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-25 10:02:22.681 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.1e2af8be78d0.4123.30ef0000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  1e2af8be78d0
+  Space Requested: 16777216 B
+  Space Available: 17596416 B
+--------------------------------------------------------------------------
+2026-10-25 10:02:22.743 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-25 10:02:22.743 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-25 10:02:22.743 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-25 10:02:22.744 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-25 10:02:22.804 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-25 10:02:22.827 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-25 10:02:22.827 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+LOAD_LAYER 0
+LOAD_LAYER 1
+LOAD_LAYER 2
+LOAD_LAYER 3
+LOAD_LAYER 4
+LOAD_LAYER 5
+LOAD_LAYER 6
+LOAD_LAYER 7
+LOAD_LAYER 8
+LOAD_LAYER 9
+LOAD_LAYER 10
+LOAD_LAYER 11
+LOAD_LAYER 12
+LOAD_LAYER 13
+LOAD_LAYER 14
+LOAD_LAYER 15
+LOAD_LAYER 16
+LOAD_LAYER 17
+LOAD_LAYER 18
+LOAD_LAYER 19
+LOAD_LAYER 20
+LOAD_LAYER 21
+LOAD_LAYER 22
+LOAD_LAYER 23
+LOAD_LAYER 24
+LOAD_LAYER 25
+LOAD_LAYER 26
+LOAD_LAYER 27
+LOAD_LAYER 28
+LOAD_LAYER 29
+LOAD_LAYER 30
+LOAD_LAYER 31
+LOAD_LAYER 32
+LOAD_LAYER 33
+LOAD_LAYER 34
+LOAD_LAYER 35
+LOAD_LAYER 36
+LOAD_LAYER 37
+LOAD_LAYER 38
+LOAD_LAYER 39
+LOAD_LAYER 40
+LOAD_LAYER 41
+LOAD_LAYER 42
+LOAD_LAYER 43
+LOAD_LAYER 44
+LOAD_LAYER 45
+LOAD_LAYER 46
+LOAD_LAYER 47
+LOAD_LAYER 48
+LOAD_LAYER 49
+LOAD_LAYER 50
+LOAD_LAYER 51
+LOAD_LAYER 52
+LOAD_LAYER 53
+LOAD_LAYER 54
+LOAD_LAYER 55
+LOAD_LAYER 56
+LOAD_LAYER 57
+LOAD_LAYER 58
+LOAD_LAYER 59
+LOAD_LAYER 60
+LOAD_LAYER 61
+LOAD_LAYER 62
+LOAD_LAYER 63
+2026-10-25 10:05:42.633 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:05:42.633 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region for them. (ccl_common.cpp:175)
+2026-10-25 10:05:42.638 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:82)
+2026-10-25 10:05:42.640 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:05:42.640 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region for them. (ccl_common.cpp:175)
+PREPARE_PREFILL 1
+PREPARE_PREFILL 32
+PREPARE_PREFILL 64
+PREPARE_PREFILL 96
+PREPARE_PREFILL 128
+PREPARE_PREFILL 160
+PREPARE_PREFILL 192
+PREPARE_PREFILL 224
+PREPARE_PREFILL 256
+PREPARE_PREFILL 288
+PREPARE_PREFILL 320
+PREPARE_PREFILL 352
+PREPARE_PREFILL 384
+PREPARE_PREFILL 416
+PREPARE_PREFILL 448
+PREPARE_PREFILL 480
+PREPARE_PREFILL 512
+PREPARE_PREFILL 544
+PREPARE_PREFILL 576
+PREPARE_PREFILL 608
+PREPARE_PREFILL 640
+PREPARE_PREFILL 672
+PREPARE_PREFILL 704
+PREPARE_PREFILL 736
+PREPARE_PREFILL 768
+PREPARE_PREFILL 800
+PREPARE_PREFILL 832
+PREPARE_PREFILL 864
+PREPARE_PREFILL 896
+PREPARE_PREFILL 928
+PREPARE_PREFILL 960
+PREPARE_PREFILL 992
+PREPARE_PREFILL 1024
+PREPARE_PREFILL 1056
+PREPARE_PREFILL 1088
+PREPARE_PREFILL 1120
+PREPARE_PREFILL 1152
+PREPARE_PREFILL 1184
+PREPARE_PREFILL 1216
+PREPARE_PREFILL 1248
+PREPARE_PREFILL 1280
+PREPARE_PREFILL 1312
+PREPARE_PREFILL 1344
+PREPARE_PREFILL 1376
+PREPARE_PREFILL 1408
+PREPARE_PREFILL 1440
+PREPARE_PREFILL 1472
+PREPARE_PREFILL 1504
+PREPARE_PREFILL 1536
+PREPARE_PREFILL 1568
+PREPARE_PREFILL 1600
+PREPARE_PREFILL 1632
+PREPARE_PREFILL 1664
+PREPARE_PREFILL 1696
+PREPARE_PREFILL 1728
+PREPARE_PREFILL 1760
+PREPARE_PREFILL 1792
+PREPARE_PREFILL 1824
+PREPARE_PREFILL 1856
+PREPARE_PREFILL 1888
+PREPARE_PREFILL 1920
+PREPARE_PREFILL 1952
+PREPARE_PREFILL 1984
+PREPARE_PREFILL 2016
+PREPARE_PREFILL 2048
+PREPARE_PREFILL 2080
+PREPARE_PREFILL 2112
+PREPARE_PREFILL 2144
+PREPARE_PREFILL 2176
+PREPARE_PREFILL 2208
+PREPARE_PREFILL 2240
+PREPARE_PREFILL 2272
+PREPARE_PREFILL 2304
+PREPARE_PREFILL 2336
+PREPARE_PREFILL 2368
+PREPARE_PREFILL 2400
+PREPARE_PREFILL 2432
+PREPARE_PREFILL 2464
+PREPARE_PREFILL 2496
+PREPARE_PREFILL 2528
+PREPARE_PREFILL 2560
+PREPARE_PREFILL 2592
+PREPARE_PREFILL 2624
+PREPARE_PREFILL 2656
+PREPARE_PREFILL 2688
+PREPARE_PREFILL 2720
+PREPARE_PREFILL 2752
+PREPARE_PREFILL 2784
+PREPARE_PREFILL 2816
+PREPARE_PREFILL 2848
+PREPARE_PREFILL 2880
+PREPARE_PREFILL 2912
+PREPARE_PREFILL 2944
+PREPARE_PREFILL 2976
+PREPARE_PREFILL 3008
+PREPARE_PREFILL 3040
+PREPARE_PREFILL 3072
+PREPARE_PREFILL 3104
+PREPARE_PREFILL 3136
+PREPARE_PREFILL 3168
+PREPARE_PREFILL 3200
+PREPARE_PREFILL 3232
+PREPARE_PREFILL 3264
+PREPARE_PREFILL 3296
+PREPARE_PREFILL 3328
+PREPARE_PREFILL 3360
+PREPARE_PREFILL 3392
+PREPARE_PREFILL 3424
+PREPARE_PREFILL 3456
+PREPARE_PREFILL 3488
+PREPARE_PREFILL 3520
+PREPARE_PREFILL 3552
+PREPARE_PREFILL 3584
+PREPARE_PREFILL 3616
+PREPARE_PREFILL 3648
+PREPARE_PREFILL 3680
+PREPARE_PREFILL 3712
+PREPARE_PREFILL 3744
+PREPARE_PREFILL 3776
+PREPARE_PREFILL 3808
+PREPARE_PREFILL 3840
+PREPARE_PREFILL 3872
+PREPARE_PREFILL 3904
+PREPARE_PREFILL 3936
+PREPARE_PREFILL 3968
+PREPARE_PREFILL 4000
+PREPARE_PREFILL 4032
+PREPARE_PREFILL 4064
+PREPARE_PREFILL 4096
+2026-10-25 10:06:25.497 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:06:25.497 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:06:25.497 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:06:25.497 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:06:25.809 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:06:25.809 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:06:25.811 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 10:06:25.811 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+FULL_MODEL_CONTROL vllm_01 tokens=225 finish=eos
+FULL_MODEL_CONTROL vllm_02 tokens=137 finish=eos
+FULL_MODEL_CONTROL vllm_03 tokens=256 finish=length
+FULL_MODEL_CONTROL vllm_04 tokens=256 finish=length
+FULL_MODEL_CONTROL vllm_05 tokens=121 finish=eos
+FULL_MODEL_CONTROL vllm_06 tokens=256 finish=length
+FULL_MODEL_CONTROL shared_explain tokens=135 finish=eos
+FULL_MODEL_CONTROL shared_structured tokens=114 finish=eos
+FULL_MODEL_CONTROL shared_code tokens=244 finish=eos
+2026-10-25 10:07:17.474 | info     |    BuildKernels | JIT cache stats: 11792/11792 hits (100.0%) [11792 cached, 24027 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-25 10:07:17.474 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-25 10:07:17.540 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-25 10:07:17.540 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-25 10:07:17.730 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-25 10:07:17.731 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-25 10:07:17.731 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

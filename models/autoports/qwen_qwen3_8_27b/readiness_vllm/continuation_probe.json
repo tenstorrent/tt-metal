@@ -1,0 +1,328 @@
+{
+  "scope": "reduced real layers0/3,B2,context512; no model accuracy/performance",
+  "physical_prefill_chunk_size": 128,
+  "trace_allocation_tracking": "1",
+  "skip_program_cache": "0",
+  "numerical_gate": {
+    "pcc_min": 0.995,
+    "normalized_rmse_max": 0.1,
+    "basis": "Inherited whole-vs-chunk recurrence/logits PCC gate; added scale-sensitive normalized RMSE. BF16/BFP8/BFP4 paths have different reduction order."
+  },
+  "cases": [
+    {
+      "total": 193,
+      "chunks": [
+        64,
+        64,
+        65
+      ],
+      "starts": [
+        0,
+        64,
+        128
+      ],
+      "comparisons": {
+        "logits": {
+          "pcc": 0.9999768137931824,
+          "normalized_rmse": 0.0030440823321025894,
+          "max_abs": 0.0625,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank0": {
+          "pcc": 1.0,
+          "normalized_rmse": 0.0,
+          "max_abs": 0.0,
+          "exact": true,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank1": {
+          "pcc": 1.0,
+          "normalized_rmse": 0.0,
+          "max_abs": 0.0,
+          "exact": true,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank2": {
+          "pcc": 1.0,
+          "normalized_rmse": 0.0,
+          "max_abs": 0.0,
+          "exact": true,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank3": {
+          "pcc": 1.0,
+          "normalized_rmse": 0.0,
+          "max_abs": 0.0,
+          "exact": true,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank0": {
+          "pcc": 0.9999956488609314,
+          "normalized_rmse": 0.00295404644223245,
+          "max_abs": 0.08361053466796875,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank1": {
+          "pcc": 0.9999950528144836,
+          "normalized_rmse": 0.0030427964878102873,
+          "max_abs": 0.048043251037597656,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank2": {
+          "pcc": 0.9999917149543762,
+          "normalized_rmse": 0.004017070717254227,
+          "max_abs": 0.09212684631347656,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank3": {
+          "pcc": 0.9999929666519165,
+          "normalized_rmse": 0.003712411378949763,
+          "max_abs": 0.06991386413574219,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank0": {
+          "pcc": 0.9997568726539612,
+          "normalized_rmse": 0.02207332644879742,
+          "max_abs": 0.4375,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank1": {
+          "pcc": 0.9996544122695923,
+          "normalized_rmse": 0.02618482687524208,
+          "max_abs": 0.3125,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank2": {
+          "pcc": 0.9996646642684937,
+          "normalized_rmse": 0.025909518056114914,
+          "max_abs": 0.375,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank3": {
+          "pcc": 0.9995375871658325,
+          "normalized_rmse": 0.030422828862541065,
+          "max_abs": 0.375,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank0": {
+          "pcc": 0.999584972858429,
+          "normalized_rmse": 0.02907539932791914,
+          "max_abs": 0.078125,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank1": {
+          "pcc": 0.999508798122406,
+          "normalized_rmse": 0.031049076270914324,
+          "max_abs": 0.078125,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank2": {
+          "pcc": 0.9994955658912659,
+          "normalized_rmse": 0.031752168134942506,
+          "max_abs": 0.109375,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank3": {
+          "pcc": 0.9996834397315979,
+          "normalized_rmse": 0.025239142359183342,
+          "max_abs": 0.09375,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        }
+      },
+      "inactive_peer_exact": true,
+      "sampling_advance": 0,
+      "status": "pass",
+      "failing_fields": []
+    },
+    {
+      "total": 129,
+      "chunks": [
+        123,
+        6
+      ],
+      "starts": [
+        0,
+        123
+      ],
+      "comparisons": {
+        "logits": {
+          "pcc": 0.9999598860740662,
+          "normalized_rmse": 0.0033408549119873336,
+          "max_abs": 0.0625,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank0": {
+          "pcc": 0.9999669194221497,
+          "normalized_rmse": 0.01049590556182699,
+          "max_abs": 1.0,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank1": {
+          "pcc": 0.999968945980072,
+          "normalized_rmse": 0.0099593942992697,
+          "max_abs": 0.75,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank2": {
+          "pcc": 0.9999659061431885,
+          "normalized_rmse": 0.0100656385264596,
+          "max_abs": 1.0,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:conv:rank3": {
+          "pcc": 0.9999659061431885,
+          "normalized_rmse": 0.010456068439109912,
+          "max_abs": 0.75,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank0": {
+          "pcc": 0.9999836087226868,
+          "normalized_rmse": 0.006840487237223782,
+          "max_abs": 0.3001289367675781,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank1": {
+          "pcc": 0.9999864101409912,
+          "normalized_rmse": 0.006268985850417081,
+          "max_abs": 0.1835184097290039,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank2": {
+          "pcc": 0.9999866485595703,
+          "normalized_rmse": 0.006303875715644483,
+          "max_abs": 0.2953662872314453,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer0:recurrent:rank3": {
+          "pcc": 0.9999851584434509,
+          "normalized_rmse": 0.006188586680374692,
+          "max_abs": 0.18385982513427734,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank0": {
+          "pcc": 0.9999732375144958,
+          "normalized_rmse": 0.006858644471288906,
+          "max_abs": 0.1875,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank1": {
+          "pcc": 0.9999661445617676,
+          "normalized_rmse": 0.008137207881701485,
+          "max_abs": 0.25,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank2": {
+          "pcc": 0.9999650716781616,
+          "normalized_rmse": 0.00838983908896791,
+          "max_abs": 0.25,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:key:rank3": {
+          "pcc": 0.9999576210975647,
+          "normalized_rmse": 0.00891732170670636,
+          "max_abs": 0.1875,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank0": {
+          "pcc": 0.9999669790267944,
+          "normalized_rmse": 0.008123825227364828,
+          "max_abs": 0.078125,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank1": {
+          "pcc": 0.9999557733535767,
+          "normalized_rmse": 0.00938040366503411,
+          "max_abs": 0.0703125,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank2": {
+          "pcc": 0.9999588131904602,
+          "normalized_rmse": 0.009095614668203243,
+          "max_abs": 0.0546875,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        },
+        "layer1:value:rank3": {
+          "pcc": 0.9999735355377197,
+          "normalized_rmse": 0.007509416757888593,
+          "max_abs": 0.078125,
+          "exact": false,
+          "finite": true,
+          "pass_gate": true
+        }
+      },
+      "inactive_peer_exact": true,
+      "sampling_advance": 0,
+      "status": "pass",
+      "failing_fields": []
+    }
+  ],
+  "captures_before": 4,
+  "captures_after": 4,
+  "trace_ids": {
+    "False": "MeshTraceId(0)",
+    "True": "MeshTraceId(1)"
+  },
+  "status": "pass"
+}

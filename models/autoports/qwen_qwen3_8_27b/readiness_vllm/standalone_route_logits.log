@@ -1,0 +1,93 @@
+2026-10-25 11:15:43.862 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-25 11:15:45.697 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-25 11:15:45.697 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-25 11:15:45.697 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-25 11:15:45.697 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-25 11:15:45.709 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-25 11:15:45.709 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-25 11:15:45.788 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-25 11:15:45.788 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-25 11:15:45.788 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-25 11:15:45.788 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-25 11:15:45.790 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-25 11:15:45.792 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-25 11:15:45.792 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-25 11:15:45.855 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-25 11:15:45.855 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-25 11:15:45.855 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-25 11:15:45.856 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-25 11:15:45.909 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-25 11:15:45.932 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-25 11:15:45.932 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+LOAD_LAYER 0
+LOAD_LAYER 1
+LOAD_LAYER 2
+LOAD_LAYER 3
+LOAD_LAYER 4
+LOAD_LAYER 5
+LOAD_LAYER 6
+LOAD_LAYER 7
+LOAD_LAYER 8
+LOAD_LAYER 9
+LOAD_LAYER 10
+LOAD_LAYER 11
+LOAD_LAYER 12
+LOAD_LAYER 13
+LOAD_LAYER 14
+LOAD_LAYER 15
+LOAD_LAYER 16
+LOAD_LAYER 17
+LOAD_LAYER 18
+LOAD_LAYER 19
+LOAD_LAYER 20
+LOAD_LAYER 21
+LOAD_LAYER 22
+LOAD_LAYER 23
+LOAD_LAYER 24
+LOAD_LAYER 25
+LOAD_LAYER 26
+LOAD_LAYER 27
+LOAD_LAYER 28
+LOAD_LAYER 29
+LOAD_LAYER 30
+LOAD_LAYER 31
+LOAD_LAYER 32
+LOAD_LAYER 33
+LOAD_LAYER 34
+LOAD_LAYER 35
+LOAD_LAYER 36
+LOAD_LAYER 37
+LOAD_LAYER 38
+LOAD_LAYER 39
+LOAD_LAYER 40
+LOAD_LAYER 41
+LOAD_LAYER 42
+LOAD_LAYER 43
+LOAD_LAYER 44
+LOAD_LAYER 45
+LOAD_LAYER 46
+LOAD_LAYER 47
+LOAD_LAYER 48
+LOAD_LAYER 49
+LOAD_LAYER 50
+LOAD_LAYER 51
+LOAD_LAYER 52
+LOAD_LAYER 53
+LOAD_LAYER 54
+LOAD_LAYER 55
+LOAD_LAYER 56
+LOAD_LAYER 57
+LOAD_LAYER 58
+LOAD_LAYER 59
+LOAD_LAYER 60
+LOAD_LAYER 61
+LOAD_LAYER 62
+LOAD_LAYER 63
+2026-10-25 11:18:57.266 | info     |    BuildKernels | JIT cache stats: 461/461 hits (100.0%) [461 cached, 405 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-25 11:18:57.266 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-25 11:18:57.288 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-25 11:18:57.288 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-25 11:18:57.443 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-25 11:18:57.443 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-25 11:18:57.444 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

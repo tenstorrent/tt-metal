@@ -1,0 +1,76 @@
+Launching vLLM server for /workspace/.cache/qwen38-full on P300x2
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /workspace/.cache/qwen38-full --block_size 4096 --max_num_seqs 32 --port 8000 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 134217728, "fabric_config": "FABRIC_1D_RING", "trace_mode": "decode_only"}}' --language-model-only --mamba-cache-mode align --mamba-block-size 4096 --max-num-batched-tokens 131072 --long-prefill-token-threshold 4096 --max-logprobs -1 --async-scheduling
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log
+Waiting up to 1800s for server to become ready...
+  Server ready after ~280s
+
+=== Running vLLM serving benchmark: single_user_decode ===
+  prompt_len=4096, output_len=128, num_requests=1, concurrency=1, temperature=0.0
+  comparison_scope: Primary batch-1 serving decode profile for headline t/s/u. TTFT is reported separately and is not blended into the TPOT-derived decode value beyond normal single-request timing.
+  command: /opt/venv/bin/vllm bench serve --backend vllm --model /workspace/.cache/qwen38-full --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 4096 --random-output-len 128 --num-prompts 1 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_result.json --max-concurrency 1 --temperature 0.0
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_benchmark.log
+
+=== Serving benchmark summary: single_user_decode ===
+  Requests : 1/1 completed
+  TTFT     : P50=15089.0ms  P99=15089.0ms
+  TPOT     : mean=133.2ms  P99=133.2ms
+  ITL      : P50=133.2ms  P99=133.9ms
+  Output   : 4.0 tok/s aggregate
+  Decode   : 7.5 t/s/u from mean TPOT
+  Raw      : /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_result.json
+  Summary  : /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_benchmark.json
+
+=== Running vLLM serving benchmark: ci_serving_burst ===
+  prompt_len=100, output_len=100, num_requests=32, concurrency=None, temperature=0.0
+  comparison_scope: vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT.
+  command: /opt/venv/bin/vllm bench serve --backend vllm --model /workspace/.cache/qwen38-full --base-url http://localhost:8000 --endpoint /v1/completions --dataset-name random --random-input-len 100 --random-output-len 100 --num-prompts 32 --ignore-eos --percentile-metrics ttft,tpot,itl,e2el --save-result --result-filename /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_ci_serving_result.json --temperature 0.0
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_ci_serving_benchmark.log
+
+=== Serving benchmark summary: ci_serving_burst ===
+  Requests : 32/32 completed
+  TTFT     : P50=2395.2ms  P99=2395.8ms
+  TPOT     : mean=112.1ms  P99=112.4ms
+  ITL      : P50=109.2ms  P99=204.3ms
+  Output   : 237.2 tok/s aggregate
+  Decode   : 8.9 t/s/u from mean TPOT
+  Raw      : /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_ci_serving_result.json
+  Summary  : /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_ci_serving_benchmark.json
+
+============================================================
+vLLM checks complete. Results in /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm
+============================================================
+
+Shutting down server (PID 1654397)...
+  Terminated cleanly.
+
+=== Server log tail (/workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log, last 30 lines) ===
+(APIServer pid=1654397) INFO:     127.0.0.1:49274 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654397) INFO:     127.0.0.1:49282 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654397) INFO:     127.0.0.1:49294 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654397) INFO:     127.0.0.1:49296 - "POST /v1/completions HTTP/1.1" 200 OK
+(EngineCore pid=1654441) INFO 10-25 12:17:10 [tt/scheduler.py:881] TT scheduler: widest decode batch reached 32 request row(s)
+(EngineCore pid=1654441) INFO 10-25 12:17:10 [tt/async_decode.py:731] TT submissions: 128 ordinary decode, 0 verify, 125 overlapped an outstanding step
+(EngineCore pid=1654441) INFO 10-25 12:17:10 [tt/async_decode.py:751] TT async decode: 128 submission(s) overlapped an outstanding step, 0 of them a step that was not overlap-safe
+(APIServer pid=1654397) INFO 10-25 12:17:14 [loggers.py:315] Engine 000: Avg prompt throughput: 319.9 tokens/s, Avg generation throughput: 118.4 tokens/s, Running: 32 reqs, Waiting: 0 reqs, TT KV cache usage: 44.4%, Prefix cache hit rate: 0.0%
+(APIServer pid=1654397) INFO:     127.0.0.1:49026 - "GET /metrics HTTP/1.1" 200 OK
+(APIServer pid=1654397) INFO:     127.0.0.1:49040 - "GET /metrics HTTP/1.1" 200 OK
+(APIServer pid=1654397) INFO 10-25 12:17:21 [launcher.py:129] [shutdown] API server: shutdown triggered
+(APIServer pid=1654397) INFO 10-25 12:17:21 [launcher.py:145] [shutdown] API server: stopping engine client mode=abort timeout=0s
+(APIServer pid=1654397) INFO 10-25 12:17:21 [core_client.py:744] [shutdown] MPClient: start timeout=0s
+(APIServer pid=1654397) INFO 10-25 12:17:21 [core_client.py:746] [shutdown] MPClient: stopping engine manager
+(APIServer pid=1654397) INFO 10-25 12:17:21 [utils.py:632] [shutdown] Process manager: send sigterm to process EngineCore
+(APIServer pid=1654397) WARNING 10-25 12:17:21 [utils.py:652] [shutdown] Process manager: force killing remaining processes count=1
+(APIServer pid=1654397) WARNING 10-25 12:17:21 [utils.py:657] [shutdown] Process manager: force killing remaining process EngineCore pid 1654441
+(EngineCore pid=1654441) INFO 10-25 12:17:21 [core.py:1342] [shutdown] EngineCore: trigger received signal=SIGTERM
+(EngineCore pid=1654441) INFO 10-25 12:17:21 [core.py:1493] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=1654441) INFO 10-25 12:17:21 [core.py:1524] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=1654441) INFO 10-25 12:17:21 [core.py:1355] [shutdown] EngineCore: exiting busy loop
+(APIServer pid=1654397) INFO 10-25 12:17:21 [core_client.py:748] [shutdown] MPClient: engine manager stopped
+(APIServer pid=1654397) INFO 10-25 12:17:21 [core_client.py:749] [shutdown] MPClient: cleaning up background resources
+(APIServer pid=1654397) INFO 10-25 12:17:21 [core_client.py:751] [shutdown] MPClient: complete
+(APIServer pid=1654397) INFO 10-25 12:17:21 [launcher.py:154] [shutdown] API server: engine client stopped
+(APIServer pid=1654397) INFO 10-25 12:17:21 [launcher.py:157] [shutdown] API server: signalling HTTP server shutdown
+(APIServer pid=1654397) INFO 10-25 12:17:21 [launcher.py:179] [shutdown] API server: shutting down FastAPI HTTP server
+(APIServer pid=1654397) INFO:     Shutting down
+(APIServer pid=1654397) INFO:     Waiting for application shutdown.
+(APIServer pid=1654397) INFO:     Application shutdown complete.

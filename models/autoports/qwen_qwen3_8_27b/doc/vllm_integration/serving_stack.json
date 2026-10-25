@@ -1,0 +1,26 @@
+{
+  "plugin": {
+    "source": "https://github.com/tenstorrent/vllm-tt-plugin",
+    "commit": "1badbd02bb6911dfdb59c206bdc00c6c1e8dc0bf",
+    "checkout": "bringup/dependencies/vllm-tt-plugin",
+    "recommendation": [
+      "README.md",
+      "docs/install-vllm-tt.sh",
+      "docs/vllm-overrides.txt"
+    ],
+    "local_checkpoint_commit": "d5ee19c6754905e7a9a69c79d9e2ee4b99b84295"
+  },
+  "vllm": {
+    "source": "https://github.com/vllm-project/vllm",
+    "ref": "v0.30.0",
+    "installed": "0.30.0+empty",
+    "location": "/opt/venv/lib/python3.10/site-packages/vllm",
+    "build": "VLLM_TARGET_DEVICE=empty from source distribution"
+  },
+  "interpreter": "qwen38-functional-build:/opt/venv/bin/python",
+  "registration": "TT_MODEL_CLASS_OVERRIDES=TTQwen3_5ForConditionalGeneration=models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM",
+  "precision": "doc/datatype_sweep/selected_precision_config.json",
+  "supported_context": 262144,
+  "status": "passed: installation, autoport registration, full sampling, qualitative, lifecycle, async, final benchmarks and independent clean-pass",
+  "registration_evidence": "readiness_vllm/registration.log; readiness_vllm/final_b1_server.log; readiness_vllm/full_b32_performance_server.log"
+}

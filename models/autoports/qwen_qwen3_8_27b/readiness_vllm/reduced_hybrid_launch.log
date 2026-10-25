@@ -1,0 +1,50 @@
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1143, in <module>
+    _main()
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1042, in _main
+    _wait_for_server(
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 323, in _wait_for_server
+    raise RuntimeError(
+RuntimeError: Server launcher exited with code 1 before becoming ready. Inspect /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log.
+Launching vLLM server for /workspace/.cache/qwen38-full on P300x2
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /workspace/.cache/qwen38-full --block_size 4096 --max_num_seqs 2 --port 8000 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 134217728, "fabric_config": "FABRIC_1D_RING", "trace_mode": "decode_only"}}' --mamba-cache-mode align --mamba-block-size 4096 --max-num-batched-tokens 8192
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log
+Waiting up to 1800s for server to become ready...
+
+Server launcher already exited (code 1).
+
+=== Server log tail (/workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log, last 30 lines) ===
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py", line 59, in <module>
+(APIServer pid=1547993)     main()
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 226, in main
+(APIServer pid=1547993)     uvloop.run(run_server(args))
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/uvloop/__init__.py", line 69, in run
+(APIServer pid=1547993)     return loop.run_until_complete(wrapper())
+(APIServer pid=1547993)   File "uvloop/loop.pyx", line 1515, in uvloop.loop.Loop.run_until_complete
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/uvloop/__init__.py", line 48, in wrapper
+(APIServer pid=1547993)     return await main
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 176, in run_server
+(APIServer pid=1547993)     await run_server_worker(listen_address, sock, args, **uvicorn_kwargs)
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 190, in run_server_worker
+(APIServer pid=1547993)     async with build_async_engine_client(
+(APIServer pid=1547993)   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=1547993)     return await anext(self.gen)
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 58, in build_async_engine_client
+(APIServer pid=1547993)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=1547993)   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=1547993)     return await anext(self.gen)
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 82, in build_async_engine_client_from_engine_args
+(APIServer pid=1547993)     vllm_config = engine_args.create_engine_config(usage_context=usage_context)
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/engine/arg_utils.py", line 2073, in create_engine_config
+(APIServer pid=1547993)     model_config = self.create_model_config()
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/vllm/engine/arg_utils.py", line 1820, in create_model_config
+(APIServer pid=1547993)     return ModelConfig(
+(APIServer pid=1547993)   File "/opt/venv/lib/python3.10/site-packages/pydantic/_internal/_dataclasses.py", line 121, in __init__
+(APIServer pid=1547993)     s.__pydantic_validator__.validate_python(ArgsKwargs(args, kwargs), self_instance=s)
+(APIServer pid=1547993) pydantic_core._pydantic_core.ValidationError: 1 validation error for ModelConfig
+(APIServer pid=1547993)   Value error, This model does not support `--runner generate`. [type=value_error, input_value=ArgsKwargs((), {'model': ...nderer_num_workers': 1}), input_type=ArgsKwargs]
+(APIServer pid=1547993)     For further information visit https://errors.pydantic.dev/2.14/v/value_error

@@ -1,0 +1,48 @@
+{
+  "scope": "reduced real layers0/3; not model accuracy or performance",
+  "tokens_equal": true,
+  "positions_equal": true,
+  "state_equal": [
+    {
+      "conv": true,
+      "recurrent": true
+    },
+    {
+      "key": true,
+      "value": true
+    }
+  ],
+  "tokens": [
+    [
+      220,
+      220
+    ],
+    [
+      220,
+      220
+    ],
+    [
+      220,
+      220
+    ],
+    [
+      220,
+      220
+    ],
+    [
+      220,
+      220
+    ]
+  ],
+  "steady_refresh_delta": {
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "page_table_refreshes": 1
+  },
+  "trace_ids": {
+    "False": "MeshTraceId(0)",
+    "True": "MeshTraceId(1)"
+  },
+  "captures": 4,
+  "status": "pass"
+}

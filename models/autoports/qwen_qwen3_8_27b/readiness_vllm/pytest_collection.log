@@ -1,0 +1,1097 @@
+2026-10-25 09:43:08.947 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 10-25 09:43:09 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 09:43:09 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 09:43:09 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-25 09:43:09 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 09:43:11 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 09:43:11 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 150 items
+
+<Dir workspace>
+  <Dir bringup>
+    <Dir dependencies>
+      <Dir vllm-tt-plugin>
+        <Package tests>
+          <Package tt>
+            <Package spec>
+              <Module test_acceptance_metrics.py>
+                Speculation happened, and happened as configured.
+                
+                A completed request proves nothing about drafting. The server serves the same
+                text whether it drafted five tokens a step or none, and a speculative launch
+                whose drafter silently proposed nothing looks exactly like a working one from
+                the outside. So every assertion here is a delta on vLLM's own counters across
+                the request, and the response is checked against what those counters imply.
+                
+                What each counter has to show, per configuration:
+                
+                ``accept depth 0``
+                    Drafts offered on nearly every step, none accepted, every per-position
+                    count zero. One token committed per step.
+                ``accept depth n``
+                    Exactly ``n`` positions accepted on every speculative step, and exactly
+                    the positions ``0..n-1``: a mean acceptance length of ``n+1``, which
+                    distinguishes "two of five every step" from "five of five two steps in
+                    five".
+                ``accept every draft``
+                    Every position accepted on every step, and a mean acceptance length of
+                    ``1+K``.
+                
+                The committed token ids are checked as well, because a counter says how many
+                tokens were accepted and not which ones.
+                <Function test_a_completed_request_also_moved_the_draft_counters>
+                  The baseline claim: drafting occurred at all.
+                  
+                  This is the assertion whose absence made the first device experiment weak.
+                  A 200 with the right number of tokens is compatible with a server that
+                  never drafted, and with a drafter whose proposals were all thrown away
+                  before the verify.
+                <Function test_the_per_position_acceptance_is_exactly_the_configured_depth>
+                  Where acceptance stopped, position by position.
+                  
+                  A total acceptance count cannot tell a prefix of two accepted on every
+                  step from five accepted on two steps in five. The per-position counters
+                  can, and the configured depth predicts them exactly: positions below the
+                  depth accepted on every step, positions at or above it never.
+                <Function test_the_committed_width_per_step_follows_the_acceptance>
+                  The response's length and the step count have to agree.
+                  
+                  Each speculative step commits the accepted drafts plus one token, so the
+                  tokens and the steps are two views of the same thing. A commit path that
+                  dropped or duplicated a token would leave them disagreeing while both
+                  looked plausible alone.
+                <Function test_the_committed_ids_are_the_dummy_s_own_arithmetic>
+                  Which tokens, not only how many.
+                  
+                  The ``depth`` target commits an ascending run with the rejected position's
+                  correction skipping one value, so the sequence is predictable from the
+                  accept depth alone. The ``fixed`` target follows its own rule instead, and
+                  the losslessness test is what checks that one.
+                <Function test_a_request_that_asks_for_one_token_still_speculates_nothing_wrong>
+                  The degenerate length: one token, and no draft in flight yet.
+                  
+                  A request's first decode step has nothing drafted, because the drafter runs
+                  after a commit. So this request must complete with one token and move the
+                  draft counters not at all, which is also the one case where a zero draft
+                  count is correct rather than a failure.
+              <Module test_adaptive_policy.py>
+                The drafter offers for a lone request and declines for a batch.
+                
+                `TT_SPEC_DRAFT_POLICY=solo` makes the model's drafter offer the full draft
+                length while one request is live and nothing while more are, which is the shape
+                a deployment has: speculation pays for a lone request and loses to batching for
+                a full one. A server launched that way has to do both, and "both responses came
+                back" is no evidence of either, because the text is the same whether the server
+                drafted or not.
+                
+                So each test here is a delta on vLLM's own counters across the requests it
+                sent. `spec_decode_num_drafts_total` is the one that separates the two
+                behaviors: it counts the steps on which drafts were verified, so a solo request
+                moves it once per step and a batch barely moves it at all.
+                
+                These tests need a server launched with that policy, which the `adaptive`
+                configuration of `run_spec_regression.sh` does. They skip elsewhere rather than
+                assert something the launch cannot produce.
+                <Function test_a_lone_request_is_drafted_for_on_every_step>
+                  One request live, so the drafter offers and the verify accepts.
+                  
+                  The floor is what makes this an assertion rather than an observation: a
+                  request emitting `MAX_TOKENS` tokens while committing `1+K` per accepted
+                  step cannot have been drafted for fewer than a handful of steps, and a
+                  drafter that silently offered nothing would leave the counter at zero while
+                  the response looked identical.
+                <Function test_a_batch_is_not_drafted_for>
+                  Several requests live, so the drafter declines and the steps are plain.
+                  
+                  What this asserts is a ratio rather than a zero. The batch is not live for
+                  the whole run: the first request is alone until the others arrive, the last
+                  one is alone again once its peers finish, and the drafter decides at each
+                  commit, so the edges of the run legitimately draft. The middle must not,
+                  and a policy that ignored the batch would draft on nearly every step of it
+                  instead.
+                <Function test_speculation_resumes_when_the_batch_empties>
+                  A peer arrives and leaves, and the lone request speculates again.
+                  
+                  The transition is what this is for. The drafter decides at the commit of
+                  the step that ran, so speculation stops one step after the peer arrives and
+                  restarts one step after it leaves, and neither edge may leave the surviving
+                  request stuck in plain decoding: that would look like a working server with
+                  no speculation for the rest of its life.
+              <Module test_async_correctness.py>
+                What an asynchronously scheduled speculating server must still emit.
+                
+                `test_async_transitions.py` asks whether the asynchronous launch behaves as one:
+                the resolved scheduling mode, the overlap, the serialization of verify steps.
+                This file asks the other question, and asks it of every acceptance depth, every
+                draft length and every lifecycle event the server can be put through: is the
+                output still exactly what the model's own rule produces.
+                
+                The `fixed` target is what makes that a question with one answer. It chooses by
+                `(token * 31 + position * 7 + 11) % vocab` for an ordinary decode and for a
+                verify alike, reading only the token and its position, so its output is a
+                property of the prompt tail and of nothing else: not of the accept depth, not
+                of how much any step committed, not of whether a step overlapped another, and
+                not of whether the launch schedules asynchronously at all. Every test here
+                therefore compares the whole response against `fixed_target_ids`, token for
+                token, rather than comparing a prefix or comparing two runs against each other.
+                
+                What the accept depth decides is how much of each step's block the drafter gets
+                right, which the acceptance counters report and the output does not. So the
+                counters are read as well, and read the way an asynchronous launch requires:
+                `AsyncScheduler` gives every scheduled request `[-1] * K` as its lookahead
+                reservation and vLLM counts that as drafts offered, so
+                `spec_decode_num_drafts_total` and `num_draft_tokens_total` move on a launch
+                that never verified a real draft. `num_accepted_tokens_total` and the
+                per-position counters cannot, so those are what these tests assert on.
+                
+                Skips rather than weakens: a configuration that is synchronous, or whose target
+                is not `fixed`, cannot answer these questions and says so.
+                <Function test_the_output_is_the_rule_whatever_the_acceptance>
+                  The claim that holds across every configuration in this file.
+                  
+                  Whatever the drafter offered and whatever the verify accepted, the emitted
+                  sequence is the one the rule produces. A deferred commit that wrote a token
+                  twice, dropped one, or published a prefix longer than it wrote would break
+                  this and would break nothing else that a response can show.
+                <Function test_zero_acceptance_commits_one_token_per_step>
+                  Every draft rejected, and the output unchanged by that.
+                  
+                  At an accept depth of zero the target disagrees with the drafter at the
+                  first candidate position of every step, so each step commits one token: the
+                  target's own choice there. That is the hardest case for the deferred accept
+                  walk, because the published prefix is one token while the block it came
+                  from is `1+K` wide.
+                <Function test_partial_acceptance_commits_exactly_the_depth>
+                  Some drafts accepted, the rest rejected, and the output unchanged.
+                  
+                  The positions are what distinguishes this from a mean: a depth of two means
+                  positions 0 and 1 accepted on every speculative step and positions 2 and up
+                  on none, which tells "two of five every step" apart from "five of five two
+                  steps in five".
+                <Function test_preemption_replays_without_losing_a_token>
+                  A preempted request resumes and still emits its own whole sequence.
+                  
+                  Preemption frees the blocks an outstanding verify was computed against, and
+                  the resume replays the request from its saved history. On this path the
+                  commit of that verify can land after the preemption, which is the case the
+                  runner has to refuse: a late result must not write into a request whose
+                  device state is gone, and must not leave a gap in the one that comes back.
+                <Function test_a_forced_prefix_reset_keeps_every_response_intact>
+                  The one case where a published frame must not reach request state.
+                  
+                  A wholesale prefix-cache reset preempts every running request, frees its
+                  blocks, and marks the frames already in flight as stale: vLLM replays each
+                  request from its saved history and discards that many published outputs. So
+                  the runner must publish those frames and not apply them, and a speculative
+                  frame is one output for a reservation of `1+K` tokens rather than one per
+                  token. Get that accounting wrong in either direction and a response loses a
+                  token or repeats one.
+                <Function test_a_cancelled_row_is_reused_without_inheriting_anything>
+                  A cancellation mid-decode, and the next request into that row.
+                  
+                  The cancelled request's last verify can complete after its row is gone and
+                  after another request has taken it, so the runner must drop that result
+                  rather than write it. The new request's own sequence is what says it did:
+                  one inherited token would put it off the rule from that point on.
+                <Function test_prefills_arriving_during_decode_do_not_disturb_the_decoders>
+                  Staggered arrivals, so prefill steps land between decode steps.
+                  
+                  A prefill is not a decode: it interrupts the decode chain, changes the
+                  batch layout, and on this path drains whatever was outstanding. Each
+                  request still owes its own sequence afterwards, and a decoder that lost or
+                  repeated a token across one of those interruptions fails here.
+                <Function test_an_output_limit_inside_an_accepted_block>
+                  A request that ends partway through a step's committed prefix.
+                  
+                  A speculative step commits up to `1+K` tokens at once, so a `max_tokens`
+                  that is not a multiple of that width has to cut inside one. The response
+                  must carry exactly the tokens asked for and stop: the rest of that step's
+                  prefix is discarded, and a runner that published the whole block would
+                  overrun the limit while one that dropped the block would fall short.
+                  
+                  Every offset across one block width is covered, because which offsets fall
+                  inside a block depends on the accept depth and the prefill's own token.
+                <Function test_distinct_histories_stay_distinct>
+                  Rows sharing steps, each answering its own prompt.
+                  
+                  Every row of a speculative step is verified in the same forward and
+                  committed in the same walk, so a row that read another row's count or
+                  another row's block would emit a sequence that belongs to its neighbour.
+                  Different prompts make that visible: each response has to be its own rule
+                  from its own tail, and no two may coincide.
+              <Module test_async_transitions.py>
+                A speculating server that actually schedules asynchronously.
+                
+                Every other device test here runs against `--no-async-scheduling`, because
+                until now a speculating launch could not keep asynchronous scheduling: vLLM
+                refuses it for the `custom_class` method before the TT platform hook, and the
+                dummy declared no `supports_async_decode`. Both are fixed, so this file drives
+                the launch that was previously unreachable and asserts the four things such a
+                server has to show.
+                
+                Three of them cannot be read from an HTTP response, and two cannot be read from
+                vLLM's metrics either:
+                
+                - **the resolved scheduling mode**, which vLLM logs once as "Asynchronous
+                  scheduling is enabled"; a launch flag is a request, not an outcome, and
+                  upstream may still disable it.
+                - **that ordinary steps overlapped**, which the plugin logs as its count of
+                  submissions that found a step already outstanding. No metric reports overlap,
+                  and per-step wall clock cannot separate it from a faster model.
+                - **that no verify overlapped anything**, the second number on that same line,
+                  which must be zero for the life of the server: a verify's candidate block
+                  starts from each row's last committed token, and an outstanding step is
+                  holding one.
+                
+                The fourth, that speculation still happens and still resumes, is the acceptance
+                counters, and the fifth, that the output is the one an unspeculated run emits,
+                is the closed-form rule the `fixed` target follows.
+                
+                These tests read the server log, so they need the driver's
+                `--tt-spec-server-log`, and they skip without it rather than assert something
+                weaker.
+                <Function test_the_resolved_server_schedules_asynchronously>
+                  The outcome, not the request.
+                  
+                  vLLM decides asynchronous scheduling inside configuration and logs what it
+                  decided. It disables the setting for a speculative method it does not
+                  know, so a launch that merely asked for it proves nothing; this reads what
+                  the engine resolved.
+                <Function test_ordinary_steps_overlap_and_no_verify_does>
+                  The performance claim and the safety claim, from the same counter.
+                  
+                  A batch is served by ordinary decode steps under the adaptive draft
+                  policy, and those are the steps that may overlap: the plugin counts a
+                  submission that found a step already outstanding. The same line counts how
+                  many of those were not overlap-safe, which is what a verify is, and that
+                  number must be zero.
+                <Function test_speculation_happens_and_resumes_on_the_asynchronous_launch>
+                  Async must not cost the speculation itself.
+                  
+                  Upstream stops routing drafts through the scheduler when asynchronous
+                  scheduling is on, so a launch that got this wrong would serve correctly and
+                  never speculate. A lone request has to be drafted for, and has to be
+                  drafted for again after a peer comes and goes. Under the ``fixed`` target
+                  every response also has to be the rule's sequence across those
+                  transitions.
+                <Function test_the_asynchronous_output_is_the_rule_s_own_sequence>
+                  Correctness, against something that does not depend on the run.
+                  
+                  The ``fixed`` target chooses by ``(token * 31 + position * 7 + 11) % vocab``
+                  for an ordinary decode and for a verify alike, so its output is a property
+                  of the prompt tail rather than of what was drafted, of how much was
+                  accepted, or of which steps overlapped. A deferred commit that wrote a
+                  token twice, dropped one, or committed one from the wrong row would show
+                  here.
+              <Module test_capacity.py>
+                Preemption and replay, proved before anything is claimed about them.
+                
+                Sending more requests than a server can hold does not establish that preemption
+                happened. The scheduler may queue them, admit them in turn, and never preempt
+                anything, and every response still arrives correct. So each test here reads
+                ``vllm:num_preemptions_total`` across the work and **skips rather than passes**
+                when the counter did not move: a test that cannot reach its subject should say
+                so instead of reporting success.
+                
+                Preemption matters more under speculation than without it. A preempted request
+                loses the KV blocks its candidate state was computed against, so the runner has
+                to drop its accepted count and its pending proposal; a resume that kept either
+                would continue from a candidate the model has since overwritten. That is
+                invisible in a completed response unless the output is checked against what the
+                request should have emitted.
+                
+                Reaching preemption needs a server launched with little KV capacity, which is
+                what ``README.md`` calls the constrained configuration:
+                ``TT_SPEC_MAX_TOKENS_ALL_USERS=1024`` and enough concurrent requests that
+                their blocks do not fit at once. ``--max_model_len`` limits each request,
+                not the dummy model's shared KV-token budget.
+                <Function test_preempted_requests_still_emit_their_full_output>
+                  Every response complete, and the preemption counter moved.
+                  
+                  The assertion order matters: the counter is read first and the test skips
+                  if it did not move, so a pass here means the responses were produced
+                  across at least one preemption and replay rather than in spite of none.
+                <Function test_a_resumed_request_speculates_again_after_its_replay>
+                  Drafting continues across the preemption boundary.
+                  
+                  A resume re-prefills the prompt and every generated token, and the runner
+                  drops the request's accepted count because the candidate state it named is
+                  gone. If the resume left speculation off, or left a stale count behind, the
+                  counters after the flood would show drafting stalling rather than
+                  continuing.
+                <Function test_a_request_admitted_after_the_flood_is_unaffected>
+                  The server is still correct once the queue drains.
+                  
+                  A preemption that leaked a device state slot or a persistent-batch row
+                  would show up as the next request failing, speculating less, or answering
+                  short.
+              <Module test_concurrency.py>
+                Check per-request lengths and scheduler-observed multi-row decoding.
+                
+                Sending requests at once is not a concurrency test on its own: the server can
+                serve them one after another and every response still arrives correct. So these
+                tests check response lengths, staggered arrivals, and scheduled decode width.
+                
+                Different requested output lengths check per-request completion accounting.
+                The depth target does not provide prompt-dependent continuations, so these
+                length checks do not establish token-content isolation. Fixed-target lossless
+                and async correctness tests check complete token sequences.
+                
+                They **stagger the arrivals**, which is what makes rows join a batch that is
+                already decoding and forces the persistent batch to grow while drafts are in
+                flight.
+                
+                And where a claim about the same-step batch size is made, the test reads the
+                scheduler's direct report of the widest decode batch. A claim that rows ran
+                together is a claim about the scheduler output, not about how many requests
+                were posted or how many prompt tokens a metric counted.
+                <Function test_distinct_requests_each_get_their_own_output>
+                  Different prompts and different lengths, arriving together.
+                  
+                  Under the ``depth`` target, prefill seeds the same ascending continuation
+                  for different prompts. This test checks each response's requested length
+                  and aggregate drafting, not the contents of each token sequence.
+                <Function test_the_rows_shared_engine_steps>
+                  Require the scheduler to report a decode step with multiple rows.
+                <Function test_a_request_joining_a_running_batch_is_served_correctly>
+                  Staggered arrivals: rows join while others are mid-speculation.
+                  
+                  A row added to the persistent batch while drafts are in flight is where a
+                  row-keyed piece of state goes wrong, and where the scheduler's draft
+                  bookkeeping has to keep the newcomer out of a block it never drafted for.
+                <Function test_every_row_s_acceptance_matches_the_configured_depth>
+                  Acceptance is per row, and a batch must not flatten it.
+                  
+                  The per-position counters are summed across rows, so with every row at the
+                  same configured depth the totals stay proportional: a batch where one row's
+                  short acceptance shortened another's would show a position count below the
+                  step count.
+              <Module test_lossless_device.py>
+                The server emits the same tokens speculating as not, through the real stack.
+                
+                The host suite settles this against a stand-in. This settles it through the
+                engine, the scheduler, the worker and HTTP, which is where the state that could
+                break it lives: the scheduler's draft bookkeeping, the persistent batch's rows,
+                and the commit path that writes a variable number of tokens per step.
+                
+                It requires the ``fixed`` target. The ``depth`` target returns each draft
+                unchanged up to its accept depth, so its output is a function of what was
+                drafted and the two arms are meant to differ; asking it this question would
+                compare two different models. The ``fixed`` target chooses by a rule the drafts
+                never enter, so the sequence is a property of the rule and both arms have to
+                produce it.
+                
+                The unspeculated arm is a second server, launched from the same model with no
+                ``--speculative-config`` at all, whose URL is passed with
+                ``--tt-reference-url``. Running the two arms against one server is impossible:
+                whether a launch speculates is fixed when the engine starts.
+                <Function test_the_speculated_output_equals_the_unspeculated_output>
+                  Token for token, over the whole output, from one prompt.
+                  
+                  The two arms commit at different widths per step, so they take different
+                  numbers of steps to reach the same length. Comparing the full sequences at
+                  a fixed token count is what makes this a statement about the tokens rather
+                  than about the steps.
+                <Function test_the_two_arms_reach_the_same_output_in_different_step_counts>
+                  The equality above is not a coincidence of identical execution.
+                  
+                  If both arms took the same number of engine steps, the speculated arm
+                  committed one token per step and accepted nothing, and the comparison would
+                  hold trivially. The step counts have to differ for the equality to mean
+                  anything.
+                <Function test_a_deliberately_wrong_drafter_still_emits_the_same_output>
+                  The rejection path, end to end.
+                  
+                  Under the ``fixed`` target the drafter bends every draft past its accept
+                  depth, so a partial-acceptance launch rejects on every step and commits the
+                  target's own choice at the position that rejected. That is where a wrong
+                  token could reach the output, and the sequence still has to match.
+              <Module test_mixed_sampling.py>
+                A sampled request beside a speculating greedy one is never answered greedily.
+                
+                On a launch whose model does not serve ``logits``, the runner verifies in
+                ``argmax_ids`` mode, and a verify commits the target's argmax on every row of
+                the step. So a sampled or penalized request must never be part of a verify.
+                Two launches enforce that two ways:
+                
+                - With narrow decode (``TT_SPEC_DRAFT_POLICY=solo``), every step a sampled
+                  request is part of runs as the ordinary decode, and the drafts the greedy
+                  request holds for that step are dropped.
+                - Without it (``always``), every decode step is a verify, so a sampled request
+                  is refused when it arrives.
+                
+                The first needs the ``fixed`` target, whose logits are a known distribution: the
+                rule's choice at 0.4 and three shared tokens at the rest. That makes three
+                things checkable from outside: the greedy request's output is the rule's
+                sequence exactly, every sampled token lies in the distribution's support, and
+                the join step really ran as an ordinary decode. The last is read off vLLM's
+                counters: the drafter under this target always proposes what the target
+                chooses, so a verify accepts every draft, and the only way a draft step can
+                accept nothing is the ordinary decode that dropped the drafts.
+                
+                The ``mixed`` and ``async-mixed`` configurations of ``run_spec_regression.sh``
+                launch the first; the ``accept-all``, ``accept-2`` and ``accept-0``
+                configurations exercise the second. A launch serving ``logits`` speculates
+                sampled requests instead, which ``test_sampled_speculation.py`` covers.
+                <Function test_a_sampled_request_joining_a_speculating_one_is_sampled>
+                  The join step runs as an ordinary decode, and both requests stay right.
+                  
+                  Each trial starts a long greedy request, lets it speculate alone, and sends
+                  a sampled peer. The greedy request holds drafts when the peer joins, so
+                  the first step the two share is the one that used to be a verify.
+                <Function test_a_sampled_request_is_refused_where_every_step_verifies[temperature]>
+                  Without narrow decode, a sampled request would get greedy tokens.
+                  
+                  The ``always`` drafter declares a hidden feed through the runner and no
+                  narrow decode, so every decode step of the launch is a verify. A request
+                  that asked to sample would come back as greedy text with a 200, so the
+                  plugin refuses it with the reason.
+                <Function test_a_sampled_request_is_refused_where_every_step_verifies[presence-penalty]>
+                  Without narrow decode, a sampled request would get greedy tokens.
+                  
+                  The ``always`` drafter declares a hidden feed through the runner and no
+                  narrow decode, so every decode step of the launch is a verify. A request
+                  that asked to sample would come back as greedy text with a 200, so the
+                  plugin refuses it with the reason.
+                <Function test_a_sampled_request_is_refused_where_every_step_verifies[repetition-penalty]>
+                  Without narrow decode, a sampled request would get greedy tokens.
+                  
+                  The ``always`` drafter declares a hidden feed through the runner and no
+                  narrow decode, so every decode step of the launch is a verify. A request
+                  that asked to sample would come back as greedy text with a 200, so the
+                  plugin refuses it with the reason.
+              <Module test_request_admission.py>
+                Which request controls a speculating server admits, over HTTP.
+                
+                ``TTPlatform.validate_request`` decides this from the model's declared accept
+                modes. A launch whose model serves ``logits`` applies logprobs, structured
+                output, ``allowed_token_ids``, ``bad_words`` and ``min_tokens`` in its accept
+                walk and admits them. A launch whose model serves only ``argmax_ids`` cannot,
+                and refuses each with HTTP 400 rather than answering without it. ``logit_bias``
+                is refused on every speculating launch, by vLLM itself before the plugin.
+                <Function test_a_control_is_admitted_exactly_when_the_model_serves_logits[logprobs]>
+                <Function test_a_control_is_admitted_exactly_when_the_model_serves_logits[logprobs-0]>
+                <Function test_a_control_is_admitted_exactly_when_the_model_serves_logits[structured_outputs]>
+                <Function test_a_control_is_admitted_exactly_when_the_model_serves_logits[allowed_token_ids]>
+                <Function test_a_control_is_admitted_exactly_when_the_model_serves_logits[bad_words]>
+                <Function test_a_control_is_admitted_exactly_when_the_model_serves_logits[min_tokens]>
+                <Function test_logit_bias_is_refused_on_every_speculating_launch>
+              <Module test_sampled_controls.py>
+                Grammars, token filters and logprobs speculate through the real stack.
+                
+                A launch whose model declares the ``logits`` accept mode applies structured
+                output, ``allowed_token_ids``, ``bad_words`` and ``min_tokens`` at every
+                candidate column of a verify, and returns logprobs for every committed token.
+                The host suite holds the walk to vLLM's own sampler and to an independent
+                reference. This file asks the same of the server, where the scheduler's grammar
+                validation and bitmask layout, the engine's deferred sampling for structured
+                requests, the request's stop handling and the OpenAI logprobs encoding are all
+                on the path.
+                
+                It needs the ``fixed`` target, as ``test_sampled_speculation.py`` does: after a
+                token at a position the target puts 0.4 on the rule's choice and 0.3, 0.2 and
+                0.1 on the shared tokens 17, 4099 and 65537, for every kind of step. Each
+                committed token is checked against what its controls allow, deterministically,
+                and the pooled counts against expected counts from
+                ``fixed_target_distribution`` with the same tokens excluded.
+                
+                The Llama 3.1 tokenizer the suite serves with decodes 17 as ``"2"``, 4099 as
+                ``"pression"`` and 65537 as ``" Guang"``, and vLLM tokenizes the bad word
+                ``"2pression"`` to ``[[17, 4099]]``. That makes a two-token bad word and two
+                regular grammars out of shared tokens alone, so every control here leaves the
+                target something to sample.
+                <Function test_allowed_token_ids_speculate_and_commit_only_allowed_tokens[sampled]>
+                  Only the shared tokens are allowed, so the rule's choice never commits.
+                  
+                  The model drafter proposes the rule's choice, which the allowlist rules
+                  out at every column, so every such draft has probability 0 and is
+                  rejected; a draft the walk accepted shows up as a forbidden token.
+                <Function test_allowed_token_ids_speculate_and_commit_only_allowed_tokens[greedy]>
+                  Only the shared tokens are allowed, so the rule's choice never commits.
+                  
+                  The model drafter proposes the rule's choice, which the allowlist rules
+                  out at every column, so every such draft has probability 0 and is
+                  rejected; a draft the walk accepted shows up as a forbidden token.
+                <Function test_a_two_token_bad_word_is_never_committed>
+                  ``"2pression"`` bans 4099 right after 17, in drafted columns too.
+                  
+                  The rule's drafts are accepted at probability 0.4, so verifies commit
+                  multi-token blocks and a 17 is often a draft or a correction inside one;
+                  the 4099 after it is then banned by a column whose history ends with a
+                  token that was not yet committed when the step began.
+                <Function test_min_tokens_holds_a_stop_token_back_until_it_is_reached>
+                  17 is a stop token at probability 0.3, masked for the first ten tokens.
+                  
+                  Without ``min_tokens`` most requests would stop within three tokens. With
+                  it, no 17 may appear before position 10, and the request stops at the
+                  first 17 after that. Verifies commit blocks that straddle position 10, so
+                  the column that may first commit 17 is often a drafted one.
+                <Function test_logprobs_report_the_target_s_raw_distribution[sampled]>
+                  Raw logprobs: the target's own 0.4, 0.3, 0.2 and 0.1, whatever was sampled.
+                  
+                  Every committed token, accepted draft or correction or bonus alike,
+                  reports the log of its raw probability and the support as its top
+                  entries. The penalties and temperature change what is committed, not what
+                  is reported for it, because vLLM's default ``raw_logprobs`` is taken
+                  before them.
+                <Function test_logprobs_report_the_target_s_raw_distribution[greedy]>
+                  Raw logprobs: the target's own 0.4, 0.3, 0.2 and 0.1, whatever was sampled.
+                  
+                  Every committed token, accepted draft or correction or bonus alike,
+                  reports the log of its raw probability and the support as its top
+                  entries. The penalties and temperature change what is committed, not what
+                  is reported for it, because vLLM's default ``raw_logprobs`` is taken
+                  before them.
+                <Function test_logprobs_report_the_target_s_raw_distribution[penalized]>
+                  Raw logprobs: the target's own 0.4, 0.3, 0.2 and 0.1, whatever was sampled.
+                  
+                  Every committed token, accepted draft or correction or bonus alike,
+                  reports the log of its raw probability and the support as its top
+                  entries. The penalties and temperature change what is committed, not what
+                  is reported for it, because vLLM's default ``raw_logprobs`` is taken
+                  before them.
+                <Function test_structured_output_speculates_and_follows_each_request_s_grammar[sampled]>
+                  Two grammars in one batch, half the requests each.
+                  
+                  What each response's tokens spell must match its own grammar in full,
+                  which a bitmask row shifted onto the other request breaks: the grammars share 17 and
+                  differ in the other token. Among a response's 17s and its grammar's other
+                  token, 17 commits with probability 0.3 / (0.3 + 0.2) or 0.3 / (0.3 + 0.1),
+                  whatever else the grammar admits, which the pooled counts check.
+                  
+                  The model drafter proposes the rule's choice, which neither grammar
+                  allows, so on a synchronous launch the scheduler drops those drafts and on
+                  an asynchronous one the walk rejects them; only the n-gram drafter, which
+                  proposes from the output, gets drafts the grammar accepts.
+                <Function test_structured_output_speculates_and_follows_each_request_s_grammar[greedy]>
+                  Two grammars in one batch, half the requests each.
+                  
+                  What each response's tokens spell must match its own grammar in full,
+                  which a bitmask row shifted onto the other request breaks: the grammars share 17 and
+                  differ in the other token. Among a response's 17s and its grammar's other
+                  token, 17 commits with probability 0.3 / (0.3 + 0.2) or 0.3 / (0.3 + 0.1),
+                  whatever else the grammar admits, which the pooled counts check.
+                  
+                  The model drafter proposes the rule's choice, which neither grammar
+                  allows, so on a synchronous launch the scheduler drops those drafts and on
+                  an asynchronous one the walk rejects them; only the n-gram drafter, which
+                  proposes from the output, gets drafts the grammar accepts.
+                <Function test_a_grammar_the_model_drafts_follow_accepts_its_drafts>
+                  Printable ASCII admits most of the rule's choices, so drafts are valid.
+                  
+                  The model drafter proposes the rule's choice, which this grammar admits
+                  about three times in four, so a structured request accepts drafts. Under
+                  asynchronous scheduling that is the evidence the scheduler validated the
+                  drafts the runner actually verified: they reach it only through
+                  ``take_draft_token_ids`` on the engine's deferred-sampling path, and a
+                  structured row whose drafts did not reach it walks with none, so it could
+                  accept nothing. Each committed token must still be in its context's
+                  support.
+                  
+                  The grammar is ASCII so that every token it admits is a whole character.
+                  One admitting the first byte of a multi-byte character would then need a
+                  continuation byte, which none of the dummy's four support tokens is, and a
+                  context with nothing allowed has no distribution to sample.
+                <Function test_requests_with_different_controls_keep_their_own_in_one_verify>
+                  One request per control, concurrently, so the rows share verifies.
+                  
+                  Each row's filters, grammar and logprobs are captured per row, so a mix up
+                  between rows breaks a response's own check: a forbidden token, a banned
+                  pair, an early stop, a grammar violation or a logprob from another context.
+              <Module test_sampled_speculation.py>
+                Sampled requests speculate through the real stack, and stay lossless.
+                
+                A launch whose model declares the ``logits`` accept mode rejection-samples
+                every verify row on the host, under the row's own temperature, top-k, top-p,
+                penalties and seed. The host suite holds that walk to independent references.
+                This file asks the same of the server: the engine core's draft handshake, the
+                scheduler's lookahead, the persistent batch's rows and both decode tails are
+                all on the path a sampled token takes here.
+                
+                It needs the ``fixed`` target, whose distribution after a token at a position
+                is the same for a prefill, an ordinary decode and every verify column, and
+                does not depend on what was drafted: the rule's choice at 0.4 and three tokens
+                shared by every context at 0.3, 0.2 and 0.1. So each committed token can be
+                checked twice. Deterministically, it must be in its context's support, which
+                a commit of a rejected or padded draft is not. Statistically, the counts of
+                which support member was committed, pooled over every token of every request,
+                must match the expected counts computed from ``fixed_target_distribution``
+                with each request's own history, independently of the plugin.
+                
+                The acceptance counters are read too, because a server that never verified a
+                draft would pass every distribution check. Under asynchronous scheduling vLLM
+                counts the lookahead reservation as drafts offered, so rejection is read off
+                the per-position acceptance counts instead: a launch that accepted every draft
+                accepts as often at the last position as at the first.
+                <Function test_sampled_requests_speculate_and_commit_the_target_distribution[temperature]>
+                  Many seeded sampled requests, pooled, against the expected counts.
+                  
+                  Seeded so a failing synchronous run repeats. The penalties case has a different
+                  distribution at every step, read from each request's own history, which is
+                  why the expected counts are summed per token rather than taken from a
+                  fixed table.
+                <Function test_sampled_requests_speculate_and_commit_the_target_distribution[top-k]>
+                  Many seeded sampled requests, pooled, against the expected counts.
+                  
+                  Seeded so a failing synchronous run repeats. The penalties case has a different
+                  distribution at every step, read from each request's own history, which is
+                  why the expected counts are summed per token rather than taken from a
+                  fixed table.
+                <Function test_sampled_requests_speculate_and_commit_the_target_distribution[top-p]>
+                  Many seeded sampled requests, pooled, against the expected counts.
+                  
+                  Seeded so a failing synchronous run repeats. The penalties case has a different
+                  distribution at every step, read from each request's own history, which is
+                  why the expected counts are summed per token rather than taken from a
+                  fixed table.
+                <Function test_sampled_requests_speculate_and_commit_the_target_distribution[penalties]>
+                  Many seeded sampled requests, pooled, against the expected counts.
+                  
+                  Seeded so a failing synchronous run repeats. The penalties case has a different
+                  distribution at every step, read from each request's own history, which is
+                  why the expected counts are summed per token rather than taken from a
+                  fixed table.
+                <Function test_unseeded_sampled_requests_commit_the_target_distribution>
+                  The global stream rather than per-request generators, same claim.
+                <Function test_a_greedy_penalized_request_speculates_to_its_exact_output>
+                  Temperature 0 with penalties is deterministic, so the claim is equality.
+                  
+                  The drafter proposes the unpenalized rule, so at each flipped index the
+                  draft is rejected and the correction has to be the penalized argmax, and
+                  everywhere else the accepted draft has to enter the next column's penalty
+                  history.
+                <Function test_a_seeded_sampled_request_repeats_alone_and_in_company>
+                  Same seed, same output, whoever else shares its verifies.
+                  
+                  A row's generator advances by its own draft counts only, and the model
+                  drafter under ``always`` offers every row its full draft length, so on a
+                  synchronous launch other requests in the batch cannot change what a seeded
+                  request reads. Under asynchronous scheduling a later arrival's prefill-only
+                  step hides the request and drops that step's proposal, so its draft counts
+                  depend on its company.
+                <Function test_greedy_and_sampled_requests_keep_their_own_semantics_in_one_batch>
+                  A greedy row in a sampled verify still emits exactly the rule.
+                <Function test_a_stop_token_ends_a_sampled_request_where_it_was_drawn>
+                  The engine truncates at the first stop token, inside a committed block too.
+                  
+                  17 is a shared token at probability 0.3, so a sampled request draws it
+                  within a few tokens, and on most seeds after the first verify, where a
+                  step commits a block and the stop can sit anywhere inside it.
+                <Function test_a_greedy_request_on_a_logits_launch_still_follows_the_rule>
+                  Through ``argmax_ids`` where both modes are served, through ``logits``
+                  on a launch that serves only that.
+                <Function test_sampled_requests_survive_preemption>
+                  Replay after preemption keeps every token in its context's support.
+                  
+                  A preempted request resumes with a prefill over its whole history, which
+                  then samples the next token under the same penalties and seed. Only a
+                  launch whose KV budget is smaller than the concurrent work preempts; on
+                  any other this skips rather than passes.
+              <Module test_termination.py>
+                A request stops where it should, inside a committed prefix.
+                
+                Speculation makes stopping hard in one specific way: a step commits several
+                tokens at once, so the token that ends the request usually arrives in the
+                middle of a block rather than at its end. Everything after it in that block has
+                to be discarded, and the same boundary has to hold whether the client is
+                streaming or not.
+                
+                The three ways a request ends are each put inside a multi-token prefix here:
+                
+                ``max_tokens``
+                    A limit that is not a multiple of the committed width, so the last step
+                    commits more tokens than the request is allowed to keep.
+                ``stop_token_ids``
+                    A token the target will emit in the middle of a step's prefix.
+                ``the end-of-sequence id``
+                    The dummy's ``config.json`` sets only ``model_type``, so ``eos_token_id``
+                    comes from HF's ``LlamaConfig`` default of 2, and this model counts
+                    straight through it: with an ascending run, token 2 lands inside the first
+                    step's committed prefix.
+                
+                Cancellation is here too, because an abandoned request has to free its row: the
+                test that follows a cancellation with another request is the one that shows the
+                row came back.
+                <Function test_max_tokens_cuts_inside_a_committed_prefix>
+                  A limit that falls mid-block, so the last step overshoots it.
+                  
+                  The width is ``1+depth``, and the limit is chosen to leave a remainder, so
+                  the final step commits tokens the response must not contain.
+                <Function test_a_stop_token_inside_a_prefix_ends_the_request_there>
+                  Everything the step committed after the stop token is discarded.
+                <Function test_the_end_of_sequence_id_inside_a_prefix_ends_the_request>
+                  EOS committed in the middle of a block, with ``ignore_eos`` off.
+                  
+                  This model counts through the id HF defaults ``eos_token_id`` to, so an
+                  accept-all run commits 0, 1, 2, ... and the end of sequence lands inside
+                  the very first step's prefix. A server that only looked at the last token
+                  of a block would run past it.
+                <Function test_streaming_and_non_streaming_stop_at_the_same_boundary>
+                  One request, two transports, one boundary.
+                  
+                  A streamed response is assembled from the chunks a step produced, so a
+                  boundary applied to the whole block but not to the chunks, or the other way
+                  round, shows up here and nowhere else.
+                <Function test_streaming_and_non_streaming_agree_on_a_length_boundary>
+                  The same, for a limit that cuts a block.
+                <Function test_a_cancelled_request_frees_its_row_for_the_next_one>
+                  Abandon a stream, then serve another request correctly.
+                  
+                  A cancelled request that kept its row would leak a slot, and a speculative
+                  launch has one accepted count and one pending proposal per row to clean up
+                  with it. The request that follows is what shows the row came back: it has
+                  to complete, with its own length, and with drafting still happening.
+                <Function test_many_cancellations_do_not_exhaust_the_rows>
+                  Cancel as many requests as there are rows, then use them all.
+                  
+                  One leaked row is invisible on a server with several. Cancelling
+                  ``max_num_seqs`` requests and then filling the batch is what makes a leak
+                  fail rather than pass.
+            <Module test_build_logprobs_from_topk.py>
+              Unit tests for build_logprobs_from_topk.
+              
+              These tests use synthetic data only (no device required) to verify
+              that the helper correctly packs top-K logprobs into LogprobsTensors
+              for the downstream vLLM pipeline.
+              <Class TestBuildLogprobsFromTopk>
+                Tests for build_logprobs_from_topk.
+                <Function test_basic_shape>
+                  Output shape is [sz, max_num_logprobs + 1].
+                <Function test_sampled_token_at_col0>
+                  Column 0 always contains the sampled token ID and logprob.
+                <Function test_top_n_at_cols_1_to_n>
+                  Columns 1..N contain top-N tokens from sorted list.
+                <Function test_selected_token_ranks>
+                  selected_token_ranks matches the sampled token's position.
+                <Function test_sampled_at_rank0>
+                  Edge case: sampled token is the most likely (rank 0).
+                <Function test_max_num_logprobs_zero>
+                  max_num_logprobs=0 → shape [sz, 1] (sampled token only).
+                <Function test_dtypes>
+                  Output dtypes match LogprobsTensors contract.
+                <Function test_per_user_different_sampled>
+                  Each user can have a different sampled token at different ranks.
+            <Module test_chunked_prefill.py>
+              Scheduler-driven chunked prefill against a live TT server.
+              
+              Requires a server started with ``--enable-chunked-prefill`` and run with
+              ``--tt-chunked-prefill-budget=<max_num_batched_tokens>``; every test here skips
+              without it.
+              
+              The failure mode is silent. A resume offset the model cannot honour makes the
+              request attend the wrong prefix, and nothing raises: throughput checks pass and
+              the response is fluent. So each prompt carries a passphrase in its own body and
+              is asked to repeat it, which fails loudly when part of that prompt's K/V is
+              wrong.
+              
+              Concurrency is the point, not prompt length. A single prefill in flight gets the
+              whole token budget every step, so every boundary it lands on is a multiple of
+              that budget. Boundaries only go ragged when several prefills share a step and one
+              is admitted into what is left of it, which is when a resume offset the model
+              cannot honour reaches the generator. A block-size-aligned-but-not-q_chunk-aligned
+              offset scored 10/20 here against 20/20 with chunked prefill off.
+              <Function test_a_solo_split_prefill_recalls_its_needle>
+                One prompt, several engine steps, nothing else in flight.
+                
+                Every boundary is a multiple of the whole budget here, so this is the
+                well-behaved case. A failure means multi-step prefill is broken outright,
+                before any question of which offsets the model can honour.
+              <Function test_a_long_split_prefill_recalls_its_needle>
+                Prompt long enough that a resumed span pins q_chunk_size=256.
+                
+                tt_transformers uses q_chunk_size 64 when the padded remaining span is
+                below 2048 and 256 at or above it. The budget-sized solo prompt only
+                resumes a short tail, so it never hits the 256 alignment. Three budgets
+                of filler leave a remaining span that pads to 2048 or more.
+              <Function test_prefills_sharing_a_step_each_recall_their_own_needle>
+                Several prompts that together overflow one step's token budget.
+                
+                A request admitted into the remainder of a step gets whatever tokens were
+                left, which is a multiple of nothing, and resumes from there on the next
+                step. Every prompt carries its own passphrase, so a request reading the
+                wrong prefix shows up as that request answering wrongly rather than as a
+                change in aggregate throughput.
+            <Module test_config.py>
+              <Function test_get_tt_config_reads_additional_config>
+              <Function test_get_tt_per_lane_max_num_seqs_derives_lane_capacity_from_global_cap>
+              <Function test_get_tt_per_lane_max_num_seqs_requires_divisible_global_cap>
+            <Module test_host_only_params.py>
+              Tests for sampling parameters which require host ("compat") sampling.
+              <Class TestHostOnlyParameters>
+                <Function test_min_p>
+                  Test min_p parameter (smoke test - verifies it doesn't error).
+                <Function test_bad_words>
+                  Test bad_words parameter prevents specified words from appearing.
+                <Function test_logit_bias>
+                  Test logit_bias parameter (smoke test).
+                <Function test_allowed_token_ids>
+                  Test allowed_token_ids parameter (smoke test).
+                <Function test_min_tokens>
+                  Test min_tokens parameter ensures minimum output length.
+            <Module test_logprobs.py>
+              <Class TestLogprobs>
+                <Function test_logprobs[0-0]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[0-0.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[0-1]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[0-1.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[1-0]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[1-0.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[1-1]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[1-1.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[3-0]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[3-0.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[3-1]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[3-1.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[5-0]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[5-0.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[5-1]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[5-1.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[10-0]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[10-0.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[10-1]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_logprobs[10-1.5]>
+                  Test logprobs parameter returns actual logprobs data.
+                  
+                  batch_fraction: 1.5 = one and a half batches, 1 = full batch,
+                      0.5 = half batch, 0 = single request
+                  num_logprobs: number of top logprobs alternatives to return
+                <Function test_chat_logprobs_all_vocab>
+                  Test chat completions with top_logprobs=-1 (all vocab logprobs).
+                  
+                  The legacy completions API rejects logprobs=-1, so this must go
+                  through the chat API where top_logprobs=-1 is allowed.
+                  Servers with a low max_logprobs cap will reject this request;
+                  the test is skipped in that case.
+            <Module test_request_isolation.py>
+              <Class TestBatchIsolation>
+                Verify each request gets its own parameters applied.
+                <Function test_mixed_params_batch>
+                  Batch where each request has completely different parameters.
+                  
+                  The plugin picks one sampler per forward, for all requests in it, and
+                  host and device sampling draw from different random streams. A seeded
+                  request therefore reproduces across the shuffled runs only if no
+                  companion can move its steps to host sampling. For that reason every
+                  top_k set here is within the device sampler's bound
+                  (max_device_top_k=32). Requests that set no top_k use the server
+                  default, which must also be within that bound.
+            <Module test_seeding_and_variety.py>
+              <Class TestSeedingAndVariety>
+                <Function test_seeding>
+                  Batch with mix of greedy (temp=0) and sampling requests.
+                  Greedy should be deterministic, sampling should vary.
+                <Function test_different_seeds_produce_different_outputs>
+                  Same prompt, different seeds per request.
+                <Function test_same_seeds_reproduce_across_batches>
+                  Same seeds should reproduce even when in different batch positions.
+                <Function test_specific_seed_reproducible[42]>
+                  A specific seed should produce same result across batch runs.
+                <Function test_specific_seed_reproducible[123]>
+                  A specific seed should produce same result across batch runs.
+                <Function test_specific_seed_reproducible[999]>
+                  A specific seed should produce same result across batch runs.
+                <Function test_specific_seed_reproducible[0]>
+                  A specific seed should produce same result across batch runs.
+                <Function test_batch1_seed_reproducible[1]>
+                  Batch with 1 user with seed should produce reproducible outputs.
+                <Function test_batch1_seed_reproducible[0]>
+                  Batch with 1 user with seed should produce reproducible outputs.
+                <Function test_batch1_no_seed_varied>
+                  Batch with 1 user without seed should produce varied outputs.
+                <Function test_uniform_seed_deterministic[32-1]>
+                  Batches with uniform seed should produce deterministic outputs.
+                <Function test_uniform_seed_deterministic[32-0]>
+                  Batches with uniform seed should produce deterministic outputs.
+                <Function test_uniform_seed_deterministic[10-1]>
+                  Batches with uniform seed should produce deterministic outputs.
+                <Function test_uniform_seed_deterministic[10-0]>
+                  Batches with uniform seed should produce deterministic outputs.
+                <Function test_uniform_seed_deterministic[1-1]>
+                  Batches with uniform seed should produce deterministic outputs.
+                <Function test_uniform_seed_deterministic[1-0]>
+                  Batches with uniform seed should produce deterministic outputs.
+                <Function test_uniform_noseed_varied>
+                  Full batch without seed should produce varied outputs.
+                <Function test_negative_seed_does_not_crash>
+                  Negative seed should not crash.
+                <Function test_temperature_varied_in_batch[7]>
+                <Function test_temperature_varied_in_batch[10]>
+                <Function test_temperature_varied_in_batch[19]>
+                <Function test_temperature_varied_in_batch[32]>
+                <Function test_temperature_varied_in_batch[37]>
+                <Function test_temperature_varied_between_batches>
+                <Function test_topk[15]>
+                <Function test_topk[19]>
+                <Function test_topk[32]>
+                <Function test_top1_is_greedy>
+            <Module test_structured_output_dp1.py>
+              <Function test_dp1_full_capacity_mixes_structured_and_plain_requests>
+              <Function test_dp1_reuses_slots_with_mixed_requests>
+                Twice the slots: queued requests take over slots freed mid-batch.
+            <Module test_tile_size.py>
+              <Function test_plugin_tile_matches_ttnn>
+                Pin the admission constant to tt-metal's real tile dimension.
+            <Module test_tt_penalties.py>
+              <Class TestRepetitionPenalty>
+                Different repetition penalties per request in same batch.
+                <Function test_different_repetition_penalties>
+                  Each request has different repetition penalty.
+                <Function test_repetition_penalty_mixed_batch>
+              <Class TestPresencePenalty>
+                Different presence penalties per request.
+                <Function test_presence_penalty_changes_output>
+                  Presence must alter greedy output on most of a diverse prompt set.
+                  
+                  Threshold is a bare majority, well under the observed rate, so ordinary
+                  model-to-model variation in confidence cannot fail it -- but a penalty that
+                  is not applied at all scores 0 and fails loudly.
+                  
+                  STOPGAP. Presence is structurally the wrong penalty for a "the penalty
+                  reached the sampler" claim: it adds a FIXED -P once, so any prompt whose
+                  top-2 logit gap exceeds P is immune no matter how correct the plumbing is,
+                  which is why this has to be a majority vote over a prompt set rather than
+                  an assertion. test_frequency_penalty_changes_output below carries that
+                  claim properly -- count * F is unbounded and clears any gap. Keep this one
+                  only as long as it is cheap; the real presence math is asserted against
+                  controlled logits in tt-metal models/common/tests/test_tt_sampling.py
+                  (TestPresencePenaltyPerRequest), where the gap is fixed at 1.0 nat.
+                <Function test_presence_penalty_is_per_request>
+                  Penalised and unpenalised requests in one batch must not affect each other.
+                  
+                  This is the isolation half of the old mixed-batch test: it still catches a
+                  penalty leaking across slots, without requiring the penalty to be strong
+                  enough to flip an argmax.
+              <Class TestFrequencyPenalty>
+                Different frequency penalties per request.
+                <Function test_frequency_penalty_changes_output>
+                  Frequency penalty must alter greedy output on most of the prompt set.
+                  
+                  This is the "the penalty reaches the sampler" assertion. count * F grows
+                  without bound only while a token KEEPS repeating. A fluent greedy
+                  continuation repeats a token once at most (Llama-3.3-70B on "She opened
+                  the door and" repeats only ' the', once, in 24 tokens; Llama-3.1-8B shows
+                  the same on one prompt of this set), so on such a prompt the penalty
+                  degenerates to a single -F hit and is bounded by the same top-2 gap that
+                  limits presence. Vote over the set, as the presence test does: a penalty
+                  that never reaches the sampler still scores 0 and fails loudly, while one
+                  confident non-repeating continuation no longer fails the whole test.
+                <Function test_different_frequency_penalties>
+                <Function test_frequency_penalty_mixed_batch>
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
+========================= 150 tests collected in 2.11s =========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

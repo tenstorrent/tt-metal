@@ -1,0 +1,461 @@
+INFO 10-25 10:51:31 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 10:51:31 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 10:51:31 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-10-25 10:51:32.672 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+INFO 10-25 10:51:32 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 10:51:34 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 10:51:34 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py:24: DeprecationWarning: `vllm.entrypoints.openai.api_server` is deprecated and will likely beunsupported in a future version. Use the corresponding function from `vllm.entrypoints.launchers` instead.
+  warnings.warn(
+/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/openai/api_server.py:51: DeprecationWarning: The `python -m vllm.entrypoints.openai.api_server` command is deprecated and may be removed in a future release. Please use `vllm server` instead.
+  warnings.warn(
+INFO 10-25 10:51:35 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+INFO 10-25 10:51:35 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+(APIServer pid=1635256) INFO 10-25 10:51:35 [api_utils.py:347] 
+(APIServer pid=1635256) INFO 10-25 10:51:35 [api_utils.py:347]        █     █     █▄   ▄█
+(APIServer pid=1635256) INFO 10-25 10:51:35 [api_utils.py:347]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.30.0
+(APIServer pid=1635256) INFO 10-25 10:51:35 [api_utils.py:347]   █▄█▀ █     █     █     █  model   /workspace/.cache/qwen38-full
+(APIServer pid=1635256) INFO 10-25 10:51:35 [api_utils.py:347]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=1635256) INFO 10-25 10:51:35 [api_utils.py:347] 
+(APIServer pid=1635256) INFO 10-25 10:51:35 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+(APIServer pid=1635256) INFO 10-25 10:51:35 [api_utils.py:286] non-default args: {'model': '/workspace/.cache/qwen38-full', 'max_model_len': 262144, 'max_logprobs': -1, 'block_size': 4096, 'mamba_block_size': 4096, 'mamba_cache_mode': 'align', 'language_model_only': True, 'max_num_batched_tokens': 8192, 'max_num_seqs': 1, 'async_scheduling': True, 'additional_config': {'tt': {'sample_on_device_mode': 'all', 'trace_region_size': 134217728, 'fabric_config': 'FABRIC_1D_RING', 'trace_mode': 'decode_only'}}}
+(APIServer pid=1635256) INFO 10-25 10:51:35 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+(APIServer pid=1635256) WARNING 10-25 10:51:35 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_TT_PLUGIN_ROOT
+(APIServer pid=1635256) WARNING 10-25 10:51:35 [envs.py:2248] Unknown vLLM environment variable detected: VLLM_RPC_TIMEOUT
+(APIServer pid=1635256) INFO 10-25 10:51:35 [model.py:692] Resolved architecture: Qwen3_5ForConditionalGeneration
+(APIServer pid=1635256) INFO 10-25 10:51:35 [model.py:2030] Using max model len 262144
+(APIServer pid=1635256) INFO 10-25 10:51:36 [registry.py:146] All limits of multimodal modalities supported by the model are set to 0, running in text-only mode.
+(APIServer pid=1635256) INFO 10-25 10:51:36 [model.py:900] Disabled mm_prefix attention mode because multimodal inputs are configuration-disabled. Attention backends without mm_prefix support may now be selected.
+(APIServer pid=1635256) INFO 10-25 10:51:36 [scheduler.py:288] Chunked prefill is enabled with max_num_batched_tokens=8192.
+(APIServer pid=1635256) WARNING 10-25 10:51:36 [vllm.py:1570] Inductor compilation was disabled by user settings, optimizations settings that are only active during inductor compilation will be ignored.
+(APIServer pid=1635256) INFO 10-25 10:51:36 [kernel.py:416] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native'])
+(APIServer pid=1635256) INFO 10-25 10:51:36 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+(APIServer pid=1635256) INFO 10-25 10:51:36 [tt/platform.py:287] Chunked prefill enabled for TT model Qwen38ForCausalLM (models.autoports.qwen_qwen3_8_27b.tt.generator_vllm): max_num_batched_tokens=8192, long_prefill_token_threshold=0.
+(APIServer pid=1635256) INFO 10-25 10:51:36 [tt/platform.py:230] Decode interleave enabled: at most 2 consecutive prefill step(s) before 1 decode-only step(s).
+(APIServer pid=1635256) INFO 10-25 10:51:36 [tt/platform.py:2160] Automatic prefix caching is enabled
+(APIServer pid=1635256) INFO 10-25 10:51:36 [compilation.py:336] Enabled custom fusions: norm_quant, act_quant
+(APIServer pid=1635256) WARNING 10-25 10:51:36 [registry.py:129] Model /workspace/.cache/qwen38-full is treated as multimodal but has no registered multimodal processor; running in text-only mode.
+INFO 10-25 10:51:39 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 10:51:39 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 10:51:39 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+2026-10-25 10:51:39.876 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+INFO 10-25 10:51:39 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 10:51:42 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 10:51:42 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [core.py:123] Initializing a V1 LLM engine (v0.30.0) with config: model='/workspace/.cache/qwen38-full', speculative_config=None, tokenizer='/workspace/.cache/qwen38-full', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=262144, download_dir=None, load_format=auto, tensor_parallel_size=1, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=True, quantization=None, quantization_config=None, enforce_eager=False, enable_return_routed_experts=False, kv_cache_dtype=auto, device_config=None, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=True, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, per_request_spec_decode_metrics='none', kv_cache_metrics=False, kv_cache_metrics_sample=0.01, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=0, served_model_name=/workspace/.cache/qwen38-full, enable_prefix_caching=True, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.VLLM_COMPILE: 3>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'eager', 'custom_ops': ['all'], 'ir_enable_torch_wrap': False, 'splitting_ops': ['vllm::unified_attention_with_output', 'vllm::unified_mla_attention_with_output', 'vllm::mamba_mixer2', 'vllm::mamba_mixer', 'vllm::short_conv', 'vllm::qwen4_exp_ple_short_conv', 'vllm::qwen4_exp_qsa_with_output', 'vllm::linear_attention', 'vllm::qwen_gdn_attention_core', 'vllm::qwen_gdn_attention_core_fused_norm_packed', 'vllm::gdn_attention_core_xpu', 'vllm::olmo_hybrid_gdn_full_forward', 'vllm::sparse_attn_indexer', 'vllm::rocm_aiter_sparse_attn_indexer', 'vllm::deepseek_v4_attention', 'vllm::hpc_rope_norm_forward', 'vllm::unified_kv_cache_update', 'vllm::unified_mla_kv_cache_update'], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'compile_sizes': None, 'compile_ranges_endpoints': [8192], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'size_asserts': False, 'alignment_asserts': False, 'scalar_asserts': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.NONE: 0>, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'enable_sp': False, 'fuse_gemm_comms': False, 'fuse_allreduce_rms': False, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': None, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['native']), enable_flashinfer_autotune=True, enable_cutedsl_warmup=True, enable_jit_warmup=True, moe_backend='auto', sparse_indexer_topk_backend='auto', linear_backend='auto', linear_backend_per_quant=None)
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+(EngineCore pid=1635300) WARNING 10-25 10:51:42 [registry.py:129] Model /workspace/.cache/qwen38-full is treated as multimodal but has no registered multimodal processor; running in text-only mode.
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [tt/platform.py:1373] Applied TT_MODEL_CLASS_OVERRIDES: TTQwen3_5ForConditionalGeneration -> models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [tt/platform.py:287] Chunked prefill enabled for TT model Qwen38ForCausalLM (models.autoports.qwen_qwen3_8_27b.tt.generator_vllm): max_num_batched_tokens=8192, long_prefill_token_threshold=0.
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [tt/platform.py:230] Decode interleave enabled: at most 2 consecutive prefill step(s) before 1 decode-only step(s).
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [tt/platform.py:2160] Automatic prefix caching is enabled
+(EngineCore pid=1635300) INFO 10-25 10:51:42 [tt/worker.py:263] TT worker standard-DP binding: data_parallel_index=0 data_parallel_rank_local=0 TT_VISIBLE_DEVICES=None MESH_DEVICE=P300x2
+2026-10-25 10:51:42.919 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-25 10:51:42.919 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-25 10:51:42.919 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-25 10:51:42.919 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-25 10:51:42.931 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-25 10:51:42.931 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-25 10:51:43.011 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-25 10:51:43.011 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-25 10:51:43.011 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-25 10:51:43.011 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-25 10:51:43.012 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-25 10:51:43.015 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+--------------------------------------------------------------------------
+It appears as if there is not enough space for /dev/shm/sm_segment.1e2af8be78d0.4123.a4b60000.0 (the shared-memory backing
+file). It is likely that your MPI job will now either abort or experience
+performance degradation.
+
+  Local host:  1e2af8be78d0
+  Space Requested: 16777216 B
+  Space Available: 17596416 B
+--------------------------------------------------------------------------
+(EngineCore pid=1635300) INFO 10-25 10:51:43 [tt/worker.py:1070] Attempting to open mesh device with grid shape (1, 4)
+(EngineCore pid=1635300) INFO 10-25 10:51:43 [tt/worker.py:1006] Setting fabric config: {'config': FabricConfig.FABRIC_1D_RING, 'reliability_mode': FabricReliabilityMode.STRICT_INIT}
+2026-10-25 10:51:43.076 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-25 10:51:43.076 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-25 10:51:43.076 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-25 10:51:43.077 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-25 10:51:43.141 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-25 10:51:43.163 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-25 10:51:43.163 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+(EngineCore pid=1635300) INFO 10-25 10:51:43 [tt/worker.py:1083] multidevice with 4 devices and grid (1, 4) is created
+(EngineCore pid=1635300) INFO 10-25 10:51:43 [tt/worker.py:740] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'models.autoports.qwen_qwen3_8_27b.tt.generator_vllm.Qwen38ForCausalLM'>'.
+(EngineCore pid=1635300) INFO 10-25 10:51:43 [tt/model_runner.py:387] TTModelRunner: trace_mode=decode_only, sample_on_device_mode=all, enable_model_warmup=True
+(EngineCore pid=1635300) LOAD_LAYER 0
+(EngineCore pid=1635300) LOAD_LAYER 1
+(EngineCore pid=1635300) LOAD_LAYER 2
+(EngineCore pid=1635300) LOAD_LAYER 3
+(EngineCore pid=1635300) LOAD_LAYER 4
+(EngineCore pid=1635300) LOAD_LAYER 5
+(EngineCore pid=1635300) LOAD_LAYER 6
+(EngineCore pid=1635300) LOAD_LAYER 7
+(EngineCore pid=1635300) LOAD_LAYER 8
+(EngineCore pid=1635300) LOAD_LAYER 9
+(EngineCore pid=1635300) LOAD_LAYER 10
+(EngineCore pid=1635300) LOAD_LAYER 11
+(EngineCore pid=1635300) LOAD_LAYER 12
+(EngineCore pid=1635300) LOAD_LAYER 13
+(EngineCore pid=1635300) LOAD_LAYER 14
+(EngineCore pid=1635300) LOAD_LAYER 15
+(EngineCore pid=1635300) LOAD_LAYER 16
+(EngineCore pid=1635300) LOAD_LAYER 17
+(EngineCore pid=1635300) LOAD_LAYER 18
+(EngineCore pid=1635300) LOAD_LAYER 19
+(EngineCore pid=1635300) LOAD_LAYER 20
+(EngineCore pid=1635300) LOAD_LAYER 21
+(EngineCore pid=1635300) LOAD_LAYER 22
+(EngineCore pid=1635300) LOAD_LAYER 23
+(EngineCore pid=1635300) LOAD_LAYER 24
+(EngineCore pid=1635300) LOAD_LAYER 25
+(EngineCore pid=1635300) LOAD_LAYER 26
+(EngineCore pid=1635300) LOAD_LAYER 27
+(EngineCore pid=1635300) LOAD_LAYER 28
+(EngineCore pid=1635300) LOAD_LAYER 29
+(EngineCore pid=1635300) LOAD_LAYER 30
+(EngineCore pid=1635300) LOAD_LAYER 31
+(EngineCore pid=1635300) LOAD_LAYER 32
+(EngineCore pid=1635300) LOAD_LAYER 33
+(EngineCore pid=1635300) LOAD_LAYER 34
+(EngineCore pid=1635300) LOAD_LAYER 35
+(EngineCore pid=1635300) LOAD_LAYER 36
+(EngineCore pid=1635300) LOAD_LAYER 37
+(EngineCore pid=1635300) LOAD_LAYER 38
+(EngineCore pid=1635300) LOAD_LAYER 39
+(EngineCore pid=1635300) LOAD_LAYER 40
+(EngineCore pid=1635300) LOAD_LAYER 41
+(EngineCore pid=1635300) LOAD_LAYER 42
+(EngineCore pid=1635300) LOAD_LAYER 43
+(EngineCore pid=1635300) LOAD_LAYER 44
+(EngineCore pid=1635300) LOAD_LAYER 45
+(EngineCore pid=1635300) LOAD_LAYER 46
+(EngineCore pid=1635300) LOAD_LAYER 47
+(EngineCore pid=1635300) LOAD_LAYER 48
+(EngineCore pid=1635300) LOAD_LAYER 49
+(EngineCore pid=1635300) LOAD_LAYER 50
+(EngineCore pid=1635300) LOAD_LAYER 51
+(EngineCore pid=1635300) LOAD_LAYER 52
+(EngineCore pid=1635300) LOAD_LAYER 53
+(EngineCore pid=1635300) LOAD_LAYER 54
+(EngineCore pid=1635300) LOAD_LAYER 55
+(EngineCore pid=1635300) LOAD_LAYER 56
+(EngineCore pid=1635300) LOAD_LAYER 57
+(EngineCore pid=1635300) LOAD_LAYER 58
+(EngineCore pid=1635300) LOAD_LAYER 59
+(EngineCore pid=1635300) LOAD_LAYER 60
+(EngineCore pid=1635300) LOAD_LAYER 61
+(EngineCore pid=1635300) LOAD_LAYER 62
+(EngineCore pid=1635300) LOAD_LAYER 63
+(EngineCore pid=1635300) AUTOPORT_ADAPTER /workspace/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py:Qwen38ForCausalLM layers=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63] precision={'schema_version': 1, 'config_id': 'head_bfp8_hifi2', 'weight_groups': {'attention': 'bfloat4_b', 'mlp': 'bfloat4_b', 'down': 'bfloat4_b', 'embedding': 'bfloat16', 'head': 'bfloat8_b', 'norm': 'bfloat16'}, 'layer_exceptions': {}, 'compute_fidelities': {'projection': 'LoFi', 'fused_prefill': 'LoFi', 'fused_decode': 'LoFi', 'sdpa': 'LoFi', 'head': 'HiFi2', 'norm': 'HiFi4'}, 'activation_dtype': {'prefill_column': 'bfloat8_b', 'ordinary_attention': 'bfloat16', 'ordinary_mlp': 'bfloat16', 'fused_row': 'bfloat16'}, 'residual_dtype': 'bfloat16', 'ccl_dtype': {'decode_b1': 'bfloat8_b', 'prefill': 'bfloat8_b', 'native_batched': 'bfloat16'}, 'kv_cache_dtype': 'bfloat8_b', 'logits_sampling': {'logits': 'bfloat16', 'sampling': 'bfloat16', 'token_ids': 'uint32'}, 'recurrent_state_dtype': 'float32', 'max_context': 262144}
+(EngineCore pid=1635300) INFO 10-25 10:54:52 [utils.py:320] Using LBNHC KV cache layout.
+(EngineCore pid=1635300) INFO 10-25 10:54:52 [kv_cache_utils.py:2711] Overriding num_gpu_blocks=72 with num_gpu_blocks_override=72
+(EngineCore pid=1635300) INFO 10-25 10:54:52 [kv_cache_utils.py:2395] TT KV cache size: 269,633 tokens, Maximum concurrency for 262,144 tokens per request: 1.03x
+Building ncrisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DROUTING_MODE=145 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="gather_reader_rm_single_row_single_core/2571666999642619104/" -DKERNEL_COMPILE_TIME_ARGS=0,1,2,1,1,1,1,4,4,4,2,64 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache9306116277277556189/kernels/gather_reader_rm_single_row_single_core/2571666999642619104/ncrisc/ncrisck.14003224710810375748_1635300.o /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache9306116277277556189/kernels/gather_reader_rm_single_row_single_core/2571666999642619104/ncrisc/ncrisck.14003224710810375748_1635300.d
+In file included from ../kernel_includes.hpp:2,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_rm_single_row_single_core.cpp: In function 'void kernel_main()':
+/workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_rm_single_row_single_core.cpp:53:58: warning: 'void tt::data_movement::common::noc_async_read_sharded(uint32_t, AddrGenType, uint32_t, uint32_t, uint32_t) [with AddrGenType = TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295> >; uint32_t = long unsigned int]' is deprecated: Use the overload with leading Noc parameter instead. [-Wdeprecated-declarations]
+   53 |         tt::data_movement::common::noc_async_read_sharded(
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+   54 |             input_index_cb.get_write_ptr(),
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~               
+   55 |             input_index_accessor,
+      |             ~~~~~~~~~~~~~~~~~~~~~                         
+   56 |             /*src_id=*/h,
+      |             ~~~~~~~~~~~~~                                 
+   57 |             /*offset=*/0,
+      |             ~~~~~~~~~~~~~                                 
+   58 |             /*size=*/input_index_stick_size_bytes);
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~        
+In file included from /workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_reader_rm_single_row_single_core.cpp:11:
+/workspace/ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp:458:19: note: declared here
+  458 | FORCE_INLINE void noc_async_read_sharded(
+      |                   ^~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/workspace/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/workspace/ -I/workspace/ttnn -I/workspace/ttnn/cpp -I/workspace/tt_metal/hw/inc -I/workspace/tt_metal/tt-llk/common -I/workspace/tt_metal/tt-llk/tools/include -I/workspace/tt_metal/hostdevcommon/api -I/workspace/tt_metal/api/ -I/workspace/tt_metal/hw/ckernels/blackhole/metal/common -I/workspace/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/workspace/tt_metal/hw/inc/internal/tt-1xx -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/workspace/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/workspace/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/workspace/tt_metal/hw/firmware/src/tt-1xx -I/workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow -include /workspace/.cache/tt-metal-cache/tt-metal-cache/pch/b37ee4f4898b28de/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DROUTING_MODE=145 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="gather_writer_rm_single_row_single_core/17590627750735992428/" -DKERNEL_COMPILE_TIME_ARGS=0,2,1,1,1,1,4,4,2,64,2,64 -c -o /workspace/.cache/tt-metal-cache/tt-metal-cache9306116277277556189/kernels/gather_writer_rm_single_row_single_core/17590627750735992428/brisc/brisck.14003224710810375748_1635300.o /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /workspace/.cache/tt-metal-cache/tt-metal-cache9306116277277556189/kernels/gather_writer_rm_single_row_single_core/17590627750735992428/brisc/brisck.14003224710810375748_1635300.d
+In file included from ../kernel_includes.hpp:2,
+                 from /workspace/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:21:
+/workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp: In function 'void kernel_main()':
+/workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp:53:58: warning: 'void tt::data_movement::common::noc_async_read_sharded(uint32_t, AddrGenType, uint32_t, uint32_t, uint32_t) [with AddrGenType = TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295> >; uint32_t = long unsigned int]' is deprecated: Use the overload with leading Noc parameter instead. [-Wdeprecated-declarations]
+   53 |         tt::data_movement::common::noc_async_read_sharded(
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+   54 |             input_cb.get_write_ptr(),
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~                     
+   55 |             input_accessor,
+      |             ~~~~~~~~~~~~~~~                               
+   56 |             /*src_id=*/h,
+      |             ~~~~~~~~~~~~~                                 
+   57 |             /*offset=*/0,
+      |             ~~~~~~~~~~~~~                                 
+   58 |             /*size=*/input_stick_size_bytes);
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~              
+In file included from /workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp:9:
+/workspace/ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp:458:19: note: declared here
+  458 | FORCE_INLINE void noc_async_read_sharded(
+      |                   ^~~~~~~~~~~~~~~~~~~~~~
+/workspace/ttnn/cpp/ttnn/operations/data_movement/gather/device/kernels/dataflow/gather_writer_rm_single_row_single_core.cpp:63:59: warning: 'void tt::data_movement::common::noc_async_write_sharded(uint32_t, AddrGenType, uint32_t, uint32_t, uint32_t) [with AddrGenType = TensorAccessor<tensor_accessor::DistributionSpec<0, 0, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<long unsigned int>, tensor_accessor::ArrayStaticWrapper<short unsigned int>, true, true, false, 4294967295> >; uint32_t = long unsigned int]' is deprecated: Use the overload with leading Noc parameter instead. [-Wdeprecated-declarations]
+   63 |         tt::data_movement::common::noc_async_write_sharded(
+      |         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+   64 |             output_cb.get_read_ptr(),
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~                      
+   65 |             output_accessor,
+      |             ~~~~~~~~~~~~~~~~                               
+   66 |             /*dest_id=*/h,
+      |             ~~~~~~~~~~~~~~                                 
+   67 |             /*offset=*/0,
+      |             ~~~~~~~~~~~~~                                  
+   68 |             /*size=*/output_stick_size_bytes);
+      |             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~              
+/workspace/ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp:409:19: note: declared here
+  409 | FORCE_INLINE void noc_async_write_sharded(
+      |                   ^~~~~~~~~~~~~~~~~~~~~~~
+2026-10-25 10:55:01.046 | critical |          Always | TT_THROW: Tensor has to be of rank 4! (assert.hpp:104)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366] EngineCore failed to start.
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366] Traceback (most recent call last):
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1328, in run_engine_core
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     engine_core = EngineCoreProc(*args, engine_index=dp_rank, **kwargs)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     return func(*args, **kwargs)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1085, in __init__
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     super().__init__(
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 145, in __init__
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     kv_cache_config = self._initialize_kv_caches(vllm_config)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     return func(*args, **kwargs)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 356, in _initialize_kv_caches
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     self.model_executor.compile_or_warm_up_model()
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/executor/abstract.py", line 126, in compile_or_warm_up_model
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     compilation_times: list[CompilationTimes] = self.collective_rpc(
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/executor/uniproc_executor.py", line 103, in collective_rpc
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     result = run_method(self.driver_worker, method, args, kwargs)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/serial_utils.py", line 510, in run_method
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     return func(*args, **kwargs)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/workspace/bringup/dependencies/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 498, in compile_or_warm_up_model
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     self.model_runner.warmup_model()
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/workspace/bringup/dependencies/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py", line 4543, in warmup_model
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     self.model.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py", line 132, in warmup_model_prefill
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     self.generator.prepare_decode()
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/generator.py", line 403, in prepare_decode
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     self.remap_state_slots(list(range(self.batch_size)))
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/generator.py", line 165, in remap_state_slots
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     gathered=ttnn.gather(value,0,op['indices'],out=op['scratch'])
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]   File "/workspace/ttnn/ttnn/decorators.py", line 1245, in __call__
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]     result = self.function(*function_args, **function_kwargs)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366] RuntimeError: TT_THROW @ /workspace/ttnn/cpp/ttnn/operations/core/core.cpp:34: tt::exception
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366] info:
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366] Tensor has to be of rank 4!
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366] backtrace:
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xb8c7b9) [0x7783bef8c7b9]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- ttnn::operations::core::squeeze_from_4D(ttnn::Tensor const&, int)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xd84c82) [0x7783bf184c82]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- ttnn::gather(ttnn::Tensor const&, signed char, ttnn::Tensor const&, bool, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::Tensor>, std::optional<tt::tt_metal::CoreRangeSet> const&)
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- /workspace/ttnn/ttnn/_ttnn.so(+0x448ccc) [0x7783c1a48ccc]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- /workspace/ttnn/ttnn/_ttnn.so(+0x448b2f) [0x7783c1a48b2f]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca9dd) [0x7783c19ca9dd]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyObject_Call_Prepend+0x116) [0x55dee450aa16]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x3b9b7e) [0x55dee4651b7e]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x8f71) [0x55dee456ca41]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyObject_Call_Prepend+0x116) [0x55dee450aa16]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x3b9b7e) [0x55dee4651b7e]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x3012e8) [0x55dee45992e8]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1cfe8) [0x55dee4580ab8]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x273829) [0x55dee450b829]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3536f) [0x55dee4598e3f]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x27393f) [0x55dee450b93f]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7a02) [0x55dee456b4d2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x3010ec) [0x55dee45990ec]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1bcc5) [0x55dee457f795]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7a02) [0x55dee456b4d2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x273829) [0x55dee450b829]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x97b0) [0x55dee456d280]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3536f) [0x55dee4598e3f]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x2a81b6) [0x55dee45401b6]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x2a9a98) [0x55dee4541a98]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x8f71) [0x55dee456ca41]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3536f) [0x55dee4598e3f]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x3010ec) [0x55dee45990ec]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1bcc5) [0x55dee457f795]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x3010ec) [0x55dee45990ec]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1cfe8) [0x55dee4580ab8]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x3ee472) [0x55dee4686472]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x424d82) [0x55dee46bcd82]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(PyRun_SimpleStringFlags+0xa5) [0x55dee46bd0e5]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(Py_RunMain+0x519) [0x55dee46c97e9]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x431fb2) [0x55dee46c9fb2]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x35847c) [0x55dee45f047c]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x778405b07d90]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x778405b07e40]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366]  --- VLLM::EngineCore(+0x35838d) [0x55dee45f038d]
+(EngineCore pid=1635300) ERROR 10-25 10:55:01 [core.py:1366] 
+(EngineCore pid=1635300) Process EngineCore:
+(EngineCore pid=1635300) Traceback (most recent call last):
+(EngineCore pid=1635300)   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/multiprocessing/process.py", line 314, in _bootstrap
+(EngineCore pid=1635300)     self.run()
+(EngineCore pid=1635300)   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/multiprocessing/process.py", line 108, in run
+(EngineCore pid=1635300)     self._target(*self._args, **self._kwargs)
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1370, in run_engine_core
+(EngineCore pid=1635300)     raise e
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1328, in run_engine_core
+(EngineCore pid=1635300)     engine_core = EngineCoreProc(*args, engine_index=dp_rank, **kwargs)
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=1635300)     return func(*args, **kwargs)
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 1085, in __init__
+(EngineCore pid=1635300)     super().__init__(
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 145, in __init__
+(EngineCore pid=1635300)     kv_cache_config = self._initialize_kv_caches(vllm_config)
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(EngineCore pid=1635300)     return func(*args, **kwargs)
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core.py", line 356, in _initialize_kv_caches
+(EngineCore pid=1635300)     self.model_executor.compile_or_warm_up_model()
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/executor/abstract.py", line 126, in compile_or_warm_up_model
+(EngineCore pid=1635300)     compilation_times: list[CompilationTimes] = self.collective_rpc(
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/executor/uniproc_executor.py", line 103, in collective_rpc
+(EngineCore pid=1635300)     result = run_method(self.driver_worker, method, args, kwargs)
+(EngineCore pid=1635300)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/serial_utils.py", line 510, in run_method
+(EngineCore pid=1635300)     return func(*args, **kwargs)
+(EngineCore pid=1635300)   File "/workspace/bringup/dependencies/vllm-tt-plugin/src/vllm_tt_plugin/worker.py", line 498, in compile_or_warm_up_model
+(EngineCore pid=1635300)     self.model_runner.warmup_model()
+(EngineCore pid=1635300)   File "/workspace/bringup/dependencies/vllm-tt-plugin/src/vllm_tt_plugin/model_runner.py", line 4543, in warmup_model
+(EngineCore pid=1635300)     self.model.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+(EngineCore pid=1635300)   File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py", line 132, in warmup_model_prefill
+(EngineCore pid=1635300)     self.generator.prepare_decode()
+(EngineCore pid=1635300)   File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/generator.py", line 403, in prepare_decode
+(EngineCore pid=1635300)     self.remap_state_slots(list(range(self.batch_size)))
+(EngineCore pid=1635300)   File "/workspace/models/autoports/qwen_qwen3_8_27b/tt/generator.py", line 165, in remap_state_slots
+(EngineCore pid=1635300)     gathered=ttnn.gather(value,0,op['indices'],out=op['scratch'])
+(EngineCore pid=1635300)   File "/workspace/ttnn/ttnn/decorators.py", line 1245, in __call__
+(EngineCore pid=1635300)     result = self.function(*function_args, **function_kwargs)
+(EngineCore pid=1635300) RuntimeError: TT_THROW @ /workspace/ttnn/cpp/ttnn/operations/core/core.cpp:34: tt::exception
+(EngineCore pid=1635300) info:
+(EngineCore pid=1635300) Tensor has to be of rank 4!
+(EngineCore pid=1635300) backtrace:
+(EngineCore pid=1635300)  --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xb8c7b9) [0x7783bef8c7b9]
+(EngineCore pid=1635300)  --- ttnn::operations::core::squeeze_from_4D(ttnn::Tensor const&, int)
+(EngineCore pid=1635300)  --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0xd84c82) [0x7783bf184c82]
+(EngineCore pid=1635300)  --- ttnn::gather(ttnn::Tensor const&, signed char, ttnn::Tensor const&, bool, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::Tensor>, std::optional<tt::tt_metal::CoreRangeSet> const&)
+(EngineCore pid=1635300)  --- /workspace/ttnn/ttnn/_ttnn.so(+0x448ccc) [0x7783c1a48ccc]
+(EngineCore pid=1635300)  --- /workspace/ttnn/ttnn/_ttnn.so(+0x448b2f) [0x7783c1a48b2f]
+(EngineCore pid=1635300)  --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca9dd) [0x7783c19ca9dd]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyObject_Call_Prepend+0x116) [0x55dee450aa16]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x3b9b7e) [0x55dee4651b7e]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x8f71) [0x55dee456ca41]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyObject_Call_Prepend+0x116) [0x55dee450aa16]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x3b9b7e) [0x55dee4651b7e]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x3012e8) [0x55dee45992e8]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1cfe8) [0x55dee4580ab8]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x273829) [0x55dee450b829]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3536f) [0x55dee4598e3f]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x27393f) [0x55dee450b93f]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7a02) [0x55dee456b4d2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x3010ec) [0x55dee45990ec]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1bcc5) [0x55dee457f795]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7a02) [0x55dee456b4d2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x273829) [0x55dee450b829]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x97b0) [0x55dee456d280]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3536f) [0x55dee4598e3f]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x2a81b6) [0x55dee45401b6]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x2a9a98) [0x55dee4541a98]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x8f71) [0x55dee456ca41]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x3536f) [0x55dee4598e3f]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x55dee456b8e2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x3010ec) [0x55dee45990ec]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1bcc5) [0x55dee457f795]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x55dee4509373]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x3010ec) [0x55dee45990ec]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1cfe8) [0x55dee4580ab8]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x3ee472) [0x55dee4686472]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x424d82) [0x55dee46bcd82]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(PyRun_SimpleStringFlags+0xa5) [0x55dee46bd0e5]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(Py_RunMain+0x519) [0x55dee46c97e9]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x431fb2) [0x55dee46c9fb2]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x35847c) [0x55dee45f047c]
+(EngineCore pid=1635300)  --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x778405b07d90]
+(EngineCore pid=1635300)  --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x778405b07e40]
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x35838d) [0x55dee45f038d]
+(EngineCore pid=1635300) 
+nanobind: leaked 1 instances!
+ - leaked instance 0x55df0a0bd860 of type "ttnn._ttnn.multi_device.MeshDevice"
+nanobind: leaked 1 keep_alive records!
+nanobind: leaked 4 types!
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "TensorMemoryLayout"
+ - leaked type "BufferType"
+ - leaked type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 51 functions!
+ - leaked function "reset_sub_device_stall_group"
+ - leaked function "create_submesh"
+ - leaked function "__repr__"
+ - leaked function "clear_loaded_sub_device_manager"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "worker_core_from_logical_core"
+ - leaked function ""
+ - leaked function "compute_with_storage_grid_size"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-10-25 10:55:02.414 | info     |    BuildKernels | JIT cache stats: 217/223 hits (97.3%) [217 cached, 924 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-25 10:55:02.414 | info     |    BuildKernels | JIT telemetry: 36 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-25 10:55:02.431 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-25 10:55:02.431 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-25 10:55:02.671 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-25 10:55:02.672 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-25 10:55:02.672 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

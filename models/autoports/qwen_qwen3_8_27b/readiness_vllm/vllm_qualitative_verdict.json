@@ -1,0 +1,156 @@
+{
+  "status": "pass_with_matching_length_limits",
+  "source": "vllm_qualitative_outputs.json",
+  "control": "full_model_controls.json",
+  "model_scope": "all64 layers; selected head_bfp8_hifi2; fixed B32; native context262144",
+  "generation": {
+    "greedy": {
+      "temperature": 0
+    },
+    "sampled": {
+      "temperature": 0.7,
+      "top_p": 0.9
+    },
+    "max_tokens": 256,
+    "prompt_mode": "HF chat template, one user message, no system message"
+  },
+  "outputs": [
+    {
+      "prompt_index": 1,
+      "mode": "greedy",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer."
+    },
+    {
+      "prompt_index": 1,
+      "mode": "sampled",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer."
+    },
+    {
+      "prompt_index": 2,
+      "mode": "greedy",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer."
+    },
+    {
+      "prompt_index": 2,
+      "mode": "sampled",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer."
+    },
+    {
+      "prompt_index": 3,
+      "mode": "greedy",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Token-limited, coherent continuation; same limitation in standalone control."
+    },
+    {
+      "prompt_index": 3,
+      "mode": "sampled",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Token-limited, coherent continuation; same limitation in standalone control."
+    },
+    {
+      "prompt_index": 4,
+      "mode": "greedy",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Token-limited, coherent continuation; same limitation in standalone control."
+    },
+    {
+      "prompt_index": 4,
+      "mode": "sampled",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Token-limited, coherent continuation; same limitation in standalone control."
+    },
+    {
+      "prompt_index": 5,
+      "mode": "greedy",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer; French is requested translation."
+    },
+    {
+      "prompt_index": 5,
+      "mode": "sampled",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer; French is requested translation."
+    },
+    {
+      "prompt_index": 6,
+      "mode": "greedy",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer."
+    },
+    {
+      "prompt_index": 6,
+      "mode": "sampled",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "notes": "Relevant final answer."
+    }
+  ],
+  "limitations": [
+    "Story and thermodynamics completions reach the256-token limit; matching standalone controls also truncate these topics. No completeness claim for those answers.",
+    "Raw checkpoint thinking before </think> is retained, matching standalone controls.",
+    "Greedy text need not match B1 controls exactly: fixed B32 uses batched arithmetic; no material quality regression observed."
+  ]
+}

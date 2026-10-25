@@ -1,0 +1,36 @@
+{
+  "scope": "reduced0/3, B2, hybrid cache",
+  "prompt_tokens": 129,
+  "status": 200,
+  "response": {
+    "id": "cmpl-8719bb44f935abe4",
+    "object": "text_completion",
+    "created": 1792922198,
+    "model": "/workspace/.cache/qwen38-full",
+    "choices": [
+      {
+        "index": 0,
+        "text": "   ",
+        "logprobs": null,
+        "finish_reason": "length",
+        "stop_reason": null,
+        "token_ids": null,
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "routed_experts": null
+      }
+    ],
+    "service_tier": null,
+    "system_fingerprint": "vllm-0.30.0-9b8218b8",
+    "usage": {
+      "prompt_tokens": 129,
+      "total_tokens": 132,
+      "completion_tokens": 3,
+      "prompt_tokens_details": null,
+      "completion_tokens_details": null
+    },
+    "kv_transfer_params": null,
+    "ec_transfer_params": null,
+    "metrics": null
+  }
+}

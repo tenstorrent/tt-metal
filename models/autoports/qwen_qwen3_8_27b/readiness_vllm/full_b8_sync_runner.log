@@ -1,0 +1,55 @@
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1143, in <module>
+    _main()
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1057, in _main
+    _hold_until_signal(server_proc, server_log)
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 785, in _hold_until_signal
+    raise RuntimeError(f"Fatal marker {fatal!r} found in {log_file}. Server engine is dead.")
+RuntimeError: Fatal marker 'EngineCore encountered a fatal error' found in /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log. Server engine is dead.
+Launching vLLM server for /workspace/.cache/qwen38-full on P300x2
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /workspace/.cache/qwen38-full --block_size 4096 --max_num_seqs 8 --port 8000 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 134217728, "fabric_config": "FABRIC_1D_RING", "trace_mode": "decode_only", "seeded_sampling_policy": "host"}}' --language-model-only --mamba-cache-mode align --mamba-block-size 4096 --max-num-batched-tokens 8192 --max-logprobs -1 --no-async-scheduling
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log
+Waiting up to 1800s for server to become ready...
+  Server ready after ~360s
+
+Server ready at http://localhost:8000
+Server is running. Press Ctrl-C (or send SIGTERM) to stop.
+
+Shutting down server (PID 1636630)...
+  Terminated cleanly.
+
+=== Server log tail (/workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log, last 30 lines) ===
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x63d3df75f373]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x63d3df7c18e2]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x63d3df75f373]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x7e12) [0x63d3df7c18e2]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x63d3df75f373]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(+0x3010ec) [0x63d3df7ef0ec]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1bcc5) [0x63d3df7d5795]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyFunction_Vectorcall+0x2e3) [0x63d3df75f373]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(+0x3010ec) [0x63d3df7ef0ec]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(_PyEval_EvalFrameDefault+0x1cfe8) [0x63d3df7d6ab8]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(+0x3ee472) [0x63d3df8dc472]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(+0x424d82) [0x63d3df912d82]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(PyRun_SimpleStringFlags+0xa5) [0x63d3df9130e5]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(Py_RunMain+0x519) [0x63d3df91f7e9]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(+0x431fb2) [0x63d3df91ffb2]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(+0x35847c) [0x63d3df84647c]
+(EngineCore pid=1636674)  --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x763090847d90]
+(EngineCore pid=1636674)  --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x763090847e40]
+(EngineCore pid=1636674)  --- VLLM::EngineCore(+0x35838d) [0x63d3df84638d]
+(EngineCore pid=1636674) 
+(APIServer pid=1636630) INFO:     Application shutdown complete.
+(APIServer pid=1636630) INFO:     Finished server process [1636630]
+(APIServer pid=1636630) INFO 10-25 11:13:35 [core_client.py:744] [shutdown] MPClient: start timeout=0s
+(APIServer pid=1636630) INFO 10-25 11:13:35 [core_client.py:746] [shutdown] MPClient: stopping engine manager
+(APIServer pid=1636630) INFO 10-25 11:13:35 [utils.py:632] [shutdown] Process manager: send sigterm to process EngineCore
+(APIServer pid=1636630) WARNING 10-25 11:13:35 [utils.py:652] [shutdown] Process manager: force killing remaining processes count=1
+(APIServer pid=1636630) WARNING 10-25 11:13:35 [utils.py:657] [shutdown] Process manager: force killing remaining process EngineCore pid 1636674
+(APIServer pid=1636630) INFO 10-25 11:13:35 [core_client.py:748] [shutdown] MPClient: engine manager stopped
+(APIServer pid=1636630) INFO 10-25 11:13:35 [core_client.py:749] [shutdown] MPClient: cleaning up background resources
+(APIServer pid=1636630) INFO 10-25 11:13:35 [core_client.py:751] [shutdown] MPClient: complete

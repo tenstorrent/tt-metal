@@ -1,0 +1,3096 @@
+{
+  "status": "pass",
+  "failures": [],
+  "fixture": "synthetic token IDs; NOT qualitative or headline performance evidence",
+  "model": "/workspace/.cache/qwen38-full",
+  "reduced": null,
+  "quick": false,
+  "max_concurrency": 32,
+  "server_url": "http://localhost:8000",
+  "agent_turns": {
+    "skipped": false,
+    "prompt_tokens": 4130,
+    "appended_tokens": 33,
+    "requested_concurrency": 32,
+    "metrics_before": {
+      "samples": [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:kv_cache_usage_perc{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 69703.0",
+        "vllm:prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792923753222931e+09",
+        "vllm:prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 8192.0",
+        "vllm:prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229407e+09",
+        "vllm:external_prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229483e+09",
+        "vllm:external_prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229567e+09",
+        "vllm:num_preemptions_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229779e+09",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"1.0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"2.0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"3.0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"4.0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"5.0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"10.0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"20.0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"+Inf\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_count{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 171.0",
+        "vllm:request_num_preemptions_sum{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:request_num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792923753223528e+09",
+        "vllm:cache_config_info{_block_size_resolved=\"True\",block_size=\"4096\",cache_dtype=\"auto\",enable_mamba_fine_grained_prefix_cache=\"False\",enable_prefix_caching=\"True\",engine=\"0\",gpu_memory_utilization=\"0.92\",is_attention_free=\"False\",kv_cache_dtype_skip_layers=\"[]\",kv_cache_layout=\"None\",kv_cache_max_concurrency=\"4.128571428571429\",kv_cache_memory_bytes=\"None\",kv_cache_size_tokens=\"1082280\",kv_offloading_backend=\"native\",kv_offloading_size=\"None\",kv_sharing_fast_prefill=\"False\",mamba_block_size=\"4096\",mamba_cache_dtype=\"auto\",mamba_cache_mode=\"align\",mamba_page_size_padded=\"None\",mamba_ssm_cache_dtype=\"float32\",num_cpu_blocks=\"None\",num_gpu_blocks=\"289\",num_gpu_blocks_override=\"None\",prefix_cache_retention_interval=\"0\",prefix_caching_hash_algo=\"sha256\",prefix_match_unit=\"None\",replayssm_buffer_len=\"16\",skip_page_size_padded=\"None\",sliding_window=\"None\",use_kda_recoverssm=\"False\",use_replayssm=\"False\",user_specified_block_size=\"True\",user_specified_mamba_block_size=\"True\"} 1.0"
+      ]
+    },
+    "metrics_after_turn_0": {
+      "samples": [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:kv_cache_usage_perc{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 201863.0",
+        "vllm:prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792923753222931e+09",
+        "vllm:prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 8192.0",
+        "vllm:prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229407e+09",
+        "vllm:external_prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229483e+09",
+        "vllm:external_prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229567e+09",
+        "vllm:num_preemptions_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229779e+09",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"1.0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"2.0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"3.0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"4.0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"5.0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"10.0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"20.0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"+Inf\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_count{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 203.0",
+        "vllm:request_num_preemptions_sum{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:request_num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792923753223528e+09",
+        "vllm:cache_config_info{_block_size_resolved=\"True\",block_size=\"4096\",cache_dtype=\"auto\",enable_mamba_fine_grained_prefix_cache=\"False\",enable_prefix_caching=\"True\",engine=\"0\",gpu_memory_utilization=\"0.92\",is_attention_free=\"False\",kv_cache_dtype_skip_layers=\"[]\",kv_cache_layout=\"None\",kv_cache_max_concurrency=\"4.128571428571429\",kv_cache_memory_bytes=\"None\",kv_cache_size_tokens=\"1082280\",kv_offloading_backend=\"native\",kv_offloading_size=\"None\",kv_sharing_fast_prefill=\"False\",mamba_block_size=\"4096\",mamba_cache_dtype=\"auto\",mamba_cache_mode=\"align\",mamba_page_size_padded=\"None\",mamba_ssm_cache_dtype=\"float32\",num_cpu_blocks=\"None\",num_gpu_blocks=\"289\",num_gpu_blocks_override=\"None\",prefix_cache_retention_interval=\"0\",prefix_caching_hash_algo=\"sha256\",prefix_match_unit=\"None\",replayssm_buffer_len=\"16\",skip_page_size_padded=\"None\",sliding_window=\"None\",use_kda_recoverssm=\"False\",use_replayssm=\"False\",user_specified_block_size=\"True\",user_specified_mamba_block_size=\"True\"} 1.0"
+      ]
+    },
+    "metrics_after_turn_1": {
+      "samples": [
+        "vllm:num_requests_running{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:kv_cache_usage_perc{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 335079.0",
+        "vllm:prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792923753222931e+09",
+        "vllm:prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 139264.0",
+        "vllm:prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229407e+09",
+        "vllm:external_prefix_cache_queries_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_queries_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229483e+09",
+        "vllm:external_prefix_cache_hits_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:external_prefix_cache_hits_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229567e+09",
+        "vllm:num_preemptions_total{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.7929237532229779e+09",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"1.0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"2.0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"3.0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"4.0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"5.0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"10.0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"20.0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_bucket{engine=\"0\",le=\"+Inf\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_count{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 235.0",
+        "vllm:request_num_preemptions_sum{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 0.0",
+        "vllm:request_num_preemptions_created{engine=\"0\",model_name=\"/workspace/.cache/qwen38-full\"} 1.792923753223528e+09",
+        "vllm:cache_config_info{_block_size_resolved=\"True\",block_size=\"4096\",cache_dtype=\"auto\",enable_mamba_fine_grained_prefix_cache=\"False\",enable_prefix_caching=\"True\",engine=\"0\",gpu_memory_utilization=\"0.92\",is_attention_free=\"False\",kv_cache_dtype_skip_layers=\"[]\",kv_cache_layout=\"None\",kv_cache_max_concurrency=\"4.128571428571429\",kv_cache_memory_bytes=\"None\",kv_cache_size_tokens=\"1082280\",kv_offloading_backend=\"native\",kv_offloading_size=\"None\",kv_sharing_fast_prefill=\"False\",mamba_block_size=\"4096\",mamba_cache_dtype=\"auto\",mamba_cache_mode=\"align\",mamba_page_size_padded=\"None\",mamba_ssm_cache_dtype=\"float32\",num_cpu_blocks=\"None\",num_gpu_blocks=\"289\",num_gpu_blocks_override=\"None\",prefix_cache_retention_interval=\"0\",prefix_caching_hash_algo=\"sha256\",prefix_match_unit=\"None\",replayssm_buffer_len=\"16\",skip_page_size_padded=\"None\",sliding_window=\"None\",use_kda_recoverssm=\"False\",use_replayssm=\"False\",user_specified_block_size=\"True\",user_specified_mamba_block_size=\"True\"} 1.0"
+      ]
+    },
+    "event_line_offsets": [
+      [
+        4696,
+        5039
+      ],
+      [
+        5039,
+        5084
+      ]
+    ],
+    "previous_sent_tokens_ceiling": 132160,
+    "previous_sent_tokens_per_conversation": 4130,
+    "actual_cachehit_admissions": [
+      {
+        "slot": 0,
+        "cached_start": 4096
+      },
+      {
+        "slot": 1,
+        "cached_start": 4096
+      },
+      {
+        "slot": 2,
+        "cached_start": 4096
+      },
+      {
+        "slot": 3,
+        "cached_start": 4096
+      },
+      {
+        "slot": 4,
+        "cached_start": 4096
+      },
+      {
+        "slot": 5,
+        "cached_start": 4096
+      },
+      {
+        "slot": 6,
+        "cached_start": 4096
+      },
+      {
+        "slot": 7,
+        "cached_start": 4096
+      },
+      {
+        "slot": 8,
+        "cached_start": 4096
+      },
+      {
+        "slot": 9,
+        "cached_start": 4096
+      },
+      {
+        "slot": 10,
+        "cached_start": 4096
+      },
+      {
+        "slot": 11,
+        "cached_start": 4096
+      },
+      {
+        "slot": 12,
+        "cached_start": 4096
+      },
+      {
+        "slot": 13,
+        "cached_start": 4096
+      },
+      {
+        "slot": 14,
+        "cached_start": 4096
+      },
+      {
+        "slot": 15,
+        "cached_start": 4096
+      },
+      {
+        "slot": 16,
+        "cached_start": 4096
+      },
+      {
+        "slot": 17,
+        "cached_start": 4096
+      },
+      {
+        "slot": 18,
+        "cached_start": 4096
+      },
+      {
+        "slot": 19,
+        "cached_start": 4096
+      },
+      {
+        "slot": 20,
+        "cached_start": 4096
+      },
+      {
+        "slot": 21,
+        "cached_start": 4096
+      },
+      {
+        "slot": 22,
+        "cached_start": 4096
+      },
+      {
+        "slot": 23,
+        "cached_start": 4096
+      },
+      {
+        "slot": 24,
+        "cached_start": 4096
+      },
+      {
+        "slot": 25,
+        "cached_start": 4096
+      },
+      {
+        "slot": 26,
+        "cached_start": 4096
+      },
+      {
+        "slot": 27,
+        "cached_start": 4096
+      },
+      {
+        "slot": 28,
+        "cached_start": 4096
+      },
+      {
+        "slot": 29,
+        "cached_start": 4096
+      },
+      {
+        "slot": 30,
+        "cached_start": 4096
+      },
+      {
+        "slot": 31,
+        "cached_start": 4096
+      }
+    ],
+    "observed_active_slots_max": 32,
+    "observed_cached_tokens": 131072,
+    "reuse_fraction_of_previous_sent": 0.9917675544794189,
+    "completed_admissions_observed": 32,
+    "pool_bound": {
+      "scheduler_blocks": 289,
+      "source": "vLLM cache_config_info metric"
+    }
+  },
+  "events_path": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/full_b32_events.jsonl",
+  "event_line_offsets": [
+    3900,
+    5084
+  ],
+  "pid": 1634546,
+  "execution_signatures": {
+    "decode:B32:masked=False": "MeshTraceId(0)",
+    "decode:B32:masked=True": "MeshTraceId(1)",
+    "sampling:B32:topk": "MeshTraceId(2)",
+    "sampling_buffered:B32:topk": "MeshTraceId(3)"
+  },
+  "captures": 4,
+  "captures_final": 4,
+  "retirement_final": 0,
+  "state_pool_final": {
+    "saves": 40,
+    "restores": 34,
+    "metadata_uploads": 76
+  },
+  "retirement_baseline": 0,
+  "actual_chunks": [
+    {
+      "start": 0,
+      "length": 137,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 138,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 139,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 138,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 137,
+      "slots": [
+        1,
+        3,
+        5,
+        10,
+        11,
+        17,
+        18,
+        21,
+        25,
+        27,
+        29
+      ]
+    },
+    {
+      "start": 0,
+      "length": 138,
+      "slots": [
+        4,
+        6,
+        9,
+        13,
+        15,
+        19,
+        22,
+        24,
+        28,
+        31
+      ]
+    },
+    {
+      "start": 0,
+      "length": 139,
+      "slots": [
+        2,
+        7,
+        8,
+        12,
+        14,
+        16,
+        20,
+        23,
+        26,
+        30
+      ]
+    },
+    {
+      "start": 0,
+      "length": 139,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 5120,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 6144,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 7168,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 8192,
+      "length": 3,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 0,
+      "length": 139,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 5120,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 6144,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 7168,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 8192,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 9216,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 10240,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 11264,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 12288,
+      "length": 3,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 0,
+      "length": 139,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 137,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 138,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 138,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 138,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1008,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        2
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        2
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        2
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        2
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        1
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        3
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        3
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        3
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        3
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        2
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        4
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        4
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        4
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        4
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        3
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        5
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        5
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        5
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        5
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        4
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        6
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        6
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        6
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        6
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        5
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        7
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        7
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        7
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        7
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        6
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        8
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        8
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        8
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        8
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        7
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        9
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        9
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        9
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        9
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        8
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        10
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        10
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        10
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        10
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        9
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        11
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        11
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        11
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        11
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        10
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        11
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        13
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        13
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        13
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        13
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        13
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 0,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 1024,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 2048,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 3072,
+      "length": 1024,
+      "slots": [
+        12
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        15
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 34,
+      "slots": [
+        14
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 67,
+      "slots": [
+        0
+      ]
+    },
+    {
+      "start": 4096,
+      "length": 67,
+      "slots": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31
+      ]
+    }
+  ],
+  "concurrent_prefill": [
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        8192
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        8192
+      ],
+      "ends": [
+        8195
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        8192
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        8192
+      ],
+      "ends": [
+        12288
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        12288
+      ],
+      "ends": [
+        12291
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    },
+    {
+      "starts": [
+        0
+      ],
+      "ends": [
+        4096
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "starts": [
+        4096
+      ],
+      "ends": [
+        4130
+      ],
+      "active_decode_slots": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13
+      ]
+    }
+  ],
+  "host_logits_read_delta": 0,
+  "requests": 112,
+  "raw_requests": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/full_b32_lifecycle.requests.json",
+  "workload_seconds": 746.3419887421187,
+  "completed_requests_per_second": 0.1500652538506701,
+  "ttft_ms_p50": 4965.838008094579,
+  "ttft_ms_p95": 456099.4190450292,
+  "ttft_ms_p99": 521623.39696101844,
+  "sse_pause_ms_p99": 32764.50335700065,
+  "sse_pause_ms_max": 32765.599726932123,
+  "completion_ms_p99": 524258.9996610768
+}

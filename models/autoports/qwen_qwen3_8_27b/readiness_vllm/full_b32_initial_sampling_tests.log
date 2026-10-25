@@ -1,0 +1,162 @@
+2026-10-25 10:23:38.035 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 4 items
+
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch FAILED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy PASSED
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab SKIPPED': {'message': 'Requested
+sample logprobs of 248320, which is greater than max allowed: 20
+(parameter=logprobs, value=248320)', 'type': 'BadRequestError', 'param':
+'logprobs', 'code': 400}})
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p PASSED
+
+=================================== FAILURES ===================================
+__________________ TestBatchIsolation.test_mixed_params_batch __________________
+
+self = <tests.tt.test_request_isolation.TestBatchIsolation object at 0x7a2338e78430>
+tt_server = <tests.tt.conftest.tt_server.<locals>.ServerWrapper object at 0x7a2338e6ba30>
+tt_model_name = '/workspace/.cache/qwen38-full', max_batch_size = 32
+
+    def test_mixed_params_batch(self, tt_server, tt_model_name, max_batch_size):
+        """
+        Batch where each request has completely different parameters.
+    
+        The plugin picks one sampler per forward, for all requests in it, and
+        host and device sampling draw from different random streams. A seeded
+        request therefore reproduces across the shuffled runs only if no
+        companion can move its steps to host sampling. For that reason every
+        top_k set here is within the device sampler's bound
+        (max_device_top_k=32). Requests that set no top_k use the server
+        default, which must also be within that bound.
+        """
+        configs = [
+            # Greedy
+            RequestConfig(prompt="Count: ", max_tokens=5, temperature=0),
+            # High temp with seed
+            RequestConfig(
+                prompt="Random: ", max_tokens=5, temperature=2.0, top_k=32, seed=42
+            ),
+            # With repetition penalty
+            RequestConfig(
+                prompt="test test. Say: ",
+                max_tokens=5,
+                temperature=0.5,
+                repetition_penalty=3.0,
+                seed=42,
+            ),
+            # With presence penalty
+            RequestConfig(
+                prompt="List: ",
+                max_tokens=10,
+                temperature=0.5,
+                presence_penalty=2.0,
+                seed=42,
+            ),
+            # top_k=1 (should be greedy-like)
+            RequestConfig(
+                prompt="Word: ", max_tokens=3, temperature=2.0, top_k=1, seed=99
+            ),
+            # Low temp
+            RequestConfig(prompt="Letter: ", max_tokens=3, temperature=0.01, seed=42),
+            # High temp low top_k
+            RequestConfig(
+                prompt="Number: ", max_tokens=3, temperature=2.0, top_k=5, seed=42
+            ),
+            # With frequency penalty
+            RequestConfig(
+                prompt="a a a. Next: ",
+                max_tokens=5,
+                temperature=0.5,
+                frequency_penalty=2.0,
+                seed=42,
+            ),
+            # Combined penalties
+            RequestConfig(
+                prompt="All: ",
+                max_tokens=8,
+                temperature=0.5,
+                repetition_penalty=1.5,
+                presence_penalty=1.0,
+                frequency_penalty=1.0,
+                seed=6,
+            ),
+            # Top-p variation
+            RequestConfig(
+                prompt="TopP: ", max_tokens=8, temperature=1.0, top_p=0.5, seed=7
+            ),
+        ][:max_batch_size]
+    
+        # Run twice, with random batch order on second run
+        results1 = run_concurrent_batch(tt_server, tt_model_name, configs)
+    
+        # Shuffle configs and results1 together for the second run
+        indices = list(range(len(configs)))
+        random.shuffle(indices)
+        configs = [configs[i] for i in indices]
+        results1 = [results1[i] for i in indices]
+    
+        results2 = run_concurrent_batch(tt_server, tt_model_name, configs)
+    
+        # Each deterministic config should reproduce
+        for i, (r1, r2) in enumerate(zip(results1, results2)):
+            if configs[i].temperature == 0 or configs[i].seed is not None:
+>               assert r1 == r2, (
+                    f"Request {i} should be deterministic/reproducible.\n"
+                    f"Config:"
+                    f"temp={configs[i].temperature},"
+                    f"seed={configs[i].seed}\n"
+                    f"Run 1: {r1!r}\n"
+                    f"Run 2: {r2!r}"
+                )
+E               AssertionError: Request 1 should be deterministic/reproducible.
+E                 Config:temp=2.0,seed=42
+E                 Run 1: '1\n#'
+E                 Run 2: '21\n'
+E               assert '1\n#' == '21\n'
+E                 
+E                 - 21
+E                 ? -
+E                 + 1
+E                 + #
+
+bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py:96: AssertionError
+==================================== PASSES ====================================
+- generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
+============================= slowest 25 durations =============================
+13.70s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+6.21s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+3.87s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+0.03s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+0.00s setup    bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+0.00s teardown bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+=========================== short test summary info ============================
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy
+PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p
+SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py:109: Server does not support all-vocab logprobs: Error code: 400 - {'error': {'message': 'Requested sample logprobs of 248320, which is greater than max allowed: 20 (parameter=logprobs, value=248320)', 'type': 'BadRequestError', 'param': 'logprobs', 'code': 400}}
+FAILED bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch - AssertionError: Request 1 should be deterministic/reproducible.
+  Config:temp=2.0,seed=42
+  Run 1: '1\n#'
+  Run 2: '21\n'
+assert '1\n#' == '21\n'
+  
+  - 21
+  ? -
+  + 1
+  + #
+=================== 1 failed, 2 passed, 1 skipped in 23.88s ====================

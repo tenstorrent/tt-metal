@@ -1,0 +1,204 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace
+configfile: pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 10-25 09:34:29 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 09:34:29 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 09:34:29 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-25 09:34:29 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 09:34:32 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 09:34:32 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 67 items
+
+tests/test_mamba_cache_bridge.py::test_mamba_allocator_receives_exact_scheduler_config PASSED
+tests/test_mamba_cache_bridge.py::test_mamba_tables_cover_raw_model_indices_not_attention_ordinals PASSED
+tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[1-72] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'tests.test_mamba_cache_bridge.test_mamba_sparse_pool_reserves_every_group.<locals>.Model'>'.
+PASSED
+tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[32-289] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'tests.test_mamba_cache_bridge.test_mamba_sparse_pool_reserves_every_group.<locals>.Model'>'.
+PASSED
+tests/test_model_runner.py::test_hybrid_kv_cache_uses_v029_tensor_layers PASSED
+tests/test_model_runner.py::test_kv_cache_layout_resolves_to_lbnhc_for_mixed_specs INFO 10-25 09:34:33 [utils.py:320] Using LBNHC KV cache layout.
+PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[0-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[2-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[5-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[6-False] PASSED
+tests/test_model_runner.py::test_resumed_replay_past_prompt_length_remains_prefill PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[0] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[1] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[2] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[5] PASSED
+tests/test_model_runner.py::test_structured_decode_build_captures_expected_grammar_request_ids PASSED
+tests/test_model_runner.py::test_final_one_token_prompt_chunk_stays_prefill PASSED
+tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row PASSED
+tests/test_model_runner.py::test_steady_block_step_builds_decode_input PASSED
+tests/test_model_runner.py::test_block_resume_replay_past_one_canvas_remains_prefill PASSED
+tests/test_model_runner.py::test_decode_with_bad_words_carries_the_output_history_without_penalties PASSED
+tests/test_model_runner.py::test_apply_sampled_token_updates_request_state PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-None] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-True] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-False] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-None] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-True] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-False] PASSED
+tests/test_num_available_blocks.py::test_default_branch_no_sliding WARNING 10-25 09:34:33 [tt/worker.py:749] Setting max_tokens_all_users=131072 for number of blocks in KV cache using rules in `get_num_available_blocks_tt`.
+PASSED
+tests/test_num_available_blocks.py::test_lane_mode_kv_shape_matches_per_lane_standard_dp WARNING 10-25 09:34:33 [tt/worker.py:749] Setting max_tokens_all_users=131072 for number of blocks in KV cache using rules in `get_num_available_blocks_tt`.
+PASSED
+tests/test_num_available_blocks.py::test_block_output_budget_includes_one_physical_canvas INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=1024 for number of blocks in KV cache from generator '<MagicMock id='124140708073088'>'.
+PASSED
+tests/test_num_available_blocks.py::test_block_output_rejects_fallback_budget_below_served_length WARNING 10-25 09:34:33 [tt/worker.py:749] Setting max_tokens_all_users=131072 for number of blocks in KV cache using rules in `get_num_available_blocks_tt`.
+PASSED
+tests/test_num_available_blocks.py::test_block_output_auto_fit_shrinks_max_model_len_instead_of_raising WARNING 10-25 09:34:33 [tt/worker.py:749] Setting max_tokens_all_users=131072 for number of blocks in KV cache using rules in `get_num_available_blocks_tt`.
+INFO 10-25 09:34:33 [tt/worker.py:916] Auto-fitting block-output max_model_len from 200000 to 131072 so the KV budget covers one full output canvas.
+PASSED
+tests/test_num_available_blocks.py::test_block_output_auto_fit_requires_room_for_a_prompt_tile[fits-only-the-canvas] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=256 for number of blocks in KV cache from generator '<MagicMock id='124140707439056'>'.
+PASSED
+tests/test_num_available_blocks.py::test_block_output_auto_fit_requires_room_for_a_prompt_tile[fits-less-than-the-canvas] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=32 for number of blocks in KV cache from generator '<MagicMock id='124140706120224'>'.
+PASSED
+tests/test_num_available_blocks.py::test_block_output_auto_fit_requires_room_for_a_prompt_tile[fits-a-prompt-tile-too] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=320 for number of blocks in KV cache from generator '<MagicMock id='124140706272192'>'.
+INFO 10-25 09:34:33 [tt/worker.py:916] Auto-fitting block-output max_model_len from 200000 to 320 so the KV budget covers one full output canvas.
+PASSED
+tests/test_num_available_blocks.py::test_determine_available_memory_reports_the_count_sized_before_load PASSED
+tests/test_num_available_blocks.py::test_determine_available_memory_requires_a_sized_pool PASSED
+tests/test_num_available_blocks.py::test_sliding_window_adds_headroom INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=131072 for number of blocks in KV cache from generator '<MagicMock id='124140707870416'>'.
+PASSED
+tests/test_num_available_blocks.py::test_n150_branch_unchanged_for_uniform_model INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=32768 for number of blocks in KV cache from generator '<MagicMock id='124140707907856'>'.
+PASSED
+tests/test_num_available_blocks.py::test_per_model_branch_with_sliding_window INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=65536 for number of blocks in KV cache from generator '<MagicMock id='124140706441840'>'.
+PASSED
+tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[1-1024-32966] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=1048576 for number of blocks in KV cache from generator '<class 'tests.test_num_available_blocks.test_hybrid_pool_covers_upstream_admission.<locals>.HybridModel'>'.
+WARNING 10-25 09:34:33 [tt/worker.py:842] Raising the TT KV pool from 32898 to 32966 blocks: one request at max_model_len=1048576 (max_in_flight_tokens=1024) needs 32965 blocks upstream (including the null block) plus 1 output-reservation blocks, more than max_tokens_all_users provides. Device memory for the larger pool is not checked.
+INFO 10-25 09:34:33 [kv_cache_utils.py:2711] Overriding num_gpu_blocks=32966 with num_gpu_blocks_override=32966
+INFO 10-25 09:34:33 [kv_cache_utils.py:2711] Overriding num_gpu_blocks=32898 with num_gpu_blocks_override=32898
+INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=1048576 for number of blocks in KV cache from generator '<class 'tests.test_num_available_blocks.test_hybrid_pool_covers_upstream_admission.<locals>.HybridModel'>'.
+PASSED
+tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[32-1024-36904] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=1048576 for number of blocks in KV cache from generator '<class 'tests.test_num_available_blocks.test_hybrid_pool_covers_upstream_admission.<locals>.HybridModel'>'.
+INFO 10-25 09:34:33 [kv_cache_utils.py:2711] Overriding num_gpu_blocks=36904 with num_gpu_blocks_override=36904
+PASSED
+tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[1-512-32902] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=1048576 for number of blocks in KV cache from generator '<class 'tests.test_num_available_blocks.test_hybrid_pool_covers_upstream_admission.<locals>.HybridModel'>'.
+WARNING 10-25 09:34:33 [tt/worker.py:842] Raising the TT KV pool from 32898 to 32902 blocks: one request at max_model_len=1048576 (max_in_flight_tokens=512) needs 32901 blocks upstream (including the null block) plus 1 output-reservation blocks, more than max_tokens_all_users provides. Device memory for the larger pool is not checked.
+INFO 10-25 09:34:33 [kv_cache_utils.py:2711] Overriding num_gpu_blocks=32902 with num_gpu_blocks_override=32902
+PASSED
+tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[1-4096-33350] INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=1048576 for number of blocks in KV cache from generator '<class 'tests.test_num_available_blocks.test_hybrid_pool_covers_upstream_admission.<locals>.HybridModel'>'.
+WARNING 10-25 09:34:33 [tt/worker.py:842] Raising the TT KV pool from 32898 to 33350 blocks: one request at max_model_len=1048576 (max_in_flight_tokens=4096) needs 33349 blocks upstream (including the null block) plus 1 output-reservation blocks, more than max_tokens_all_users provides. Device memory for the larger pool is not checked.
+INFO 10-25 09:34:33 [kv_cache_utils.py:2711] Overriding num_gpu_blocks=33350 with num_gpu_blocks_override=33350
+PASSED
+tests/test_num_available_blocks.py::test_hybrid_pool_floor_skips_a_hook_that_returns_none INFO 10-25 09:34:33 [tt/worker.py:740] Getting max_tokens_all_users=8192 for number of blocks in KV cache from generator '<class 'tests.test_num_available_blocks.test_hybrid_pool_floor_skips_a_hook_that_returns_none.<locals>.HybridModelWithoutSpecs'>'.
+PASSED
+tests/test_worker_lifecycle.py::test_a_worker_without_token_kv_runs_the_whole_lifecycle INFO 10-25 09:34:33 [tt/worker.py:263] TT worker standard-DP binding: data_parallel_index=0 data_parallel_rank_local=0 TT_VISIBLE_DEVICES=None MESH_DEVICE=None
+PASSED
+tests/test_worker_lifecycle.py::test_a_worker_with_token_kv_keeps_its_pool_and_spec INFO 10-25 09:34:33 [tt/worker.py:263] TT worker standard-DP binding: data_parallel_index=0 data_parallel_rank_local=0 TT_VISIBLE_DEVICES=None MESH_DEVICE=None
+PASSED
+tests/test_worker_lifecycle.py::test_a_worker_without_token_kv_refuses_an_ar_runner INFO 10-25 09:34:33 [tt/worker.py:263] TT worker standard-DP binding: data_parallel_index=0 data_parallel_rank_local=0 TT_VISIBLE_DEVICES=None MESH_DEVICE=None
+PASSED
+tests/test_state_slots.py::test_state_follows_the_request_across_row_moves PASSED
+tests/test_state_slots.py::test_accepting_the_decode_remap_advances_the_ownership_map PASSED
+tests/test_state_slots.py::test_continuing_prefill_keeps_state_after_a_peer_finishes PASSED
+tests/test_state_slots.py::test_reordered_prefill_continuations_keep_their_slots PASSED
+tests/test_state_slots.py::test_new_prefill_reserves_later_continuations_before_assigning_slots PASSED
+tests/test_state_slots.py::test_release_keeps_a_merely_unscheduled_request PASSED
+tests/test_state_slots.py::test_preemption_frees_the_slot_a_later_prefill_needs PASSED
+tests/test_state_slots.py::test_a_resumed_preempted_request_gets_a_slot_and_a_valid_remap PASSED
+tests/test_state_slots.py::test_remap_carries_off_batch_state PASSED
+tests/test_state_slots.py::test_preemption_releases_its_state_slot PASSED
+tests/test_state_slots.py::test_slot_exhaustion_fails_instead_of_guessing PASSED
+tests/test_state_slots.py::test_more_decode_rows_than_slots_raises PASSED
+tests/test_state_slots.py::test_a_clean_map_is_silent_and_a_broken_one_raises PASSED
+tests/test_state_slots.py::test_a_decoding_request_without_a_slot_raises PASSED
+tests/test_state_slots.py::test_cancelling_an_older_request_keeps_a_reused_slots_live_session PASSED
+tests/test_state_slots.py::test_the_model_is_told_about_a_gather_only_once_it_is_accepted PASSED
+tests/test_state_slots.py::test_identity_gathers_report_nothing_to_the_model PASSED
+tests/test_state_slots.py::test_a_model_without_the_move_hook_still_releases PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/bringup/dependencies/vllm-tt-plugin/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.04s setup    bringup/dependencies/vllm-tt-plugin/tests/test_mamba_cache_bridge.py::test_mamba_allocator_receives_exact_scheduler_config
+0.01s call     bringup/dependencies/vllm-tt-plugin/tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[1-1024-32966]
+
+(23 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_allocator_receives_exact_scheduler_config
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_tables_cover_raw_model_indices_not_attention_ordinals
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[1-72]
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[32-289]
+PASSED tests/test_model_runner.py::test_hybrid_kv_cache_uses_v029_tensor_layers
+PASSED tests/test_model_runner.py::test_kv_cache_layout_resolves_to_lbnhc_for_mixed_specs
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[0-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[2-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[5-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[6-False]
+PASSED tests/test_model_runner.py::test_resumed_replay_past_prompt_length_remains_prefill
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[0]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[1]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[2]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[5]
+PASSED tests/test_model_runner.py::test_structured_decode_build_captures_expected_grammar_request_ids
+PASSED tests/test_model_runner.py::test_final_one_token_prompt_chunk_stays_prefill
+PASSED tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row
+PASSED tests/test_model_runner.py::test_steady_block_step_builds_decode_input
+PASSED tests/test_model_runner.py::test_block_resume_replay_past_one_canvas_remains_prefill
+PASSED tests/test_model_runner.py::test_decode_with_bad_words_carries_the_output_history_without_penalties
+PASSED tests/test_model_runner.py::test_apply_sampled_token_updates_request_state
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-None]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-True]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-False]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-None]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-True]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-False]
+PASSED tests/test_num_available_blocks.py::test_default_branch_no_sliding
+PASSED tests/test_num_available_blocks.py::test_lane_mode_kv_shape_matches_per_lane_standard_dp
+PASSED tests/test_num_available_blocks.py::test_block_output_budget_includes_one_physical_canvas
+PASSED tests/test_num_available_blocks.py::test_block_output_rejects_fallback_budget_below_served_length
+PASSED tests/test_num_available_blocks.py::test_block_output_auto_fit_shrinks_max_model_len_instead_of_raising
+PASSED tests/test_num_available_blocks.py::test_block_output_auto_fit_requires_room_for_a_prompt_tile[fits-only-the-canvas]
+PASSED tests/test_num_available_blocks.py::test_block_output_auto_fit_requires_room_for_a_prompt_tile[fits-less-than-the-canvas]
+PASSED tests/test_num_available_blocks.py::test_block_output_auto_fit_requires_room_for_a_prompt_tile[fits-a-prompt-tile-too]
+PASSED tests/test_num_available_blocks.py::test_determine_available_memory_reports_the_count_sized_before_load
+PASSED tests/test_num_available_blocks.py::test_determine_available_memory_requires_a_sized_pool
+PASSED tests/test_num_available_blocks.py::test_sliding_window_adds_headroom
+PASSED tests/test_num_available_blocks.py::test_n150_branch_unchanged_for_uniform_model
+PASSED tests/test_num_available_blocks.py::test_per_model_branch_with_sliding_window
+PASSED tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[1-1024-32966]
+PASSED tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[32-1024-36904]
+PASSED tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[1-512-32902]
+PASSED tests/test_num_available_blocks.py::test_hybrid_pool_covers_upstream_admission[1-4096-33350]
+PASSED tests/test_num_available_blocks.py::test_hybrid_pool_floor_skips_a_hook_that_returns_none
+PASSED tests/test_worker_lifecycle.py::test_a_worker_without_token_kv_runs_the_whole_lifecycle
+PASSED tests/test_worker_lifecycle.py::test_a_worker_with_token_kv_keeps_its_pool_and_spec
+PASSED tests/test_worker_lifecycle.py::test_a_worker_without_token_kv_refuses_an_ar_runner
+PASSED tests/test_state_slots.py::test_state_follows_the_request_across_row_moves
+PASSED tests/test_state_slots.py::test_accepting_the_decode_remap_advances_the_ownership_map
+PASSED tests/test_state_slots.py::test_continuing_prefill_keeps_state_after_a_peer_finishes
+PASSED tests/test_state_slots.py::test_reordered_prefill_continuations_keep_their_slots
+PASSED tests/test_state_slots.py::test_new_prefill_reserves_later_continuations_before_assigning_slots
+PASSED tests/test_state_slots.py::test_release_keeps_a_merely_unscheduled_request
+PASSED tests/test_state_slots.py::test_preemption_frees_the_slot_a_later_prefill_needs
+PASSED tests/test_state_slots.py::test_a_resumed_preempted_request_gets_a_slot_and_a_valid_remap
+PASSED tests/test_state_slots.py::test_remap_carries_off_batch_state
+PASSED tests/test_state_slots.py::test_preemption_releases_its_state_slot
+PASSED tests/test_state_slots.py::test_slot_exhaustion_fails_instead_of_guessing
+PASSED tests/test_state_slots.py::test_more_decode_rows_than_slots_raises
+PASSED tests/test_state_slots.py::test_a_clean_map_is_silent_and_a_broken_one_raises
+PASSED tests/test_state_slots.py::test_a_decoding_request_without_a_slot_raises
+PASSED tests/test_state_slots.py::test_cancelling_an_older_request_keeps_a_reused_slots_live_session
+PASSED tests/test_state_slots.py::test_the_model_is_told_about_a_gather_only_once_it_is_accepted
+PASSED tests/test_state_slots.py::test_identity_gathers_report_nothing_to_the_model
+PASSED tests/test_state_slots.py::test_a_model_without_the_move_hook_still_releases
+======================== 67 passed, 2 warnings in 3.77s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

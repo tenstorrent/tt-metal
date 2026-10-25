@@ -1,0 +1,43 @@
+{
+  "kind": "host helper microbenchmark; not serving performance",
+  "results": [
+    {
+      "batch": 1,
+      "layers": 64,
+      "groups": 4,
+      "input_columns": 3,
+      "target_columns": 9,
+      "before": {
+        "allocations_per_call": 64,
+        "host_us_per_call_median": 254.204606,
+        "repeats": 7,
+        "calls_per_repeat": 1000
+      },
+      "after": {
+        "allocations_per_call": 4,
+        "host_us_per_call_median": 16.879167000000002,
+        "repeats": 7,
+        "calls_per_repeat": 1000
+      }
+    },
+    {
+      "batch": 32,
+      "layers": 64,
+      "groups": 4,
+      "input_columns": 3,
+      "target_columns": 9,
+      "before": {
+        "allocations_per_call": 64,
+        "host_us_per_call_median": 266.18124200000005,
+        "repeats": 7,
+        "calls_per_repeat": 1000
+      },
+      "after": {
+        "allocations_per_call": 4,
+        "host_us_per_call_median": 16.566327,
+        "repeats": 7,
+        "calls_per_repeat": 1000
+      }
+    }
+  ]
+}

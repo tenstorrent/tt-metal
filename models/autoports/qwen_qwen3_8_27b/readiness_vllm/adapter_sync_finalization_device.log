@@ -1,0 +1,63 @@
+2026-10-25 11:19:38.464 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
+2026-10-25 11:19:39.927 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:235)
+2026-10-25 11:19:39.928 | info     |             UMD | Cluster constructor started. (cluster.cpp:426)
+2026-10-25 11:19:39.928 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:145)
+2026-10-25 11:19:39.928 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:164)
+2026-10-25 11:19:39.939 | info     |             UMD | Established firmware bundle version: 19.8.1 (topology_discovery.cpp:695)
+2026-10-25 11:19:39.939 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:168)
+2026-10-25 11:19:40.017 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-10-25 11:19:40.017 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-10-25 11:19:40.017 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-10-25 11:19:40.017 | info     |             UMD | Cluster constructor completed. (cluster.cpp:866)
+2026-10-25 11:19:40.019 | info     |             UMD | Starting devices in cluster (cluster.cpp:1455)
+2026-10-25 11:19:40.034 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (blackhole_device_firmware.cpp:251)
+2026-10-25 11:19:40.207 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1464)
+2026-10-25 11:19:40.271 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:533)
+2026-10-25 11:19:40.271 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:595)
+2026-10-25 11:19:40.271 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:160)
+2026-10-25 11:19:40.272 | info     |          Fabric | No specific Physical Grouping Descriptor found; using default. (physical_grouping_descriptor_core.cpp:895)
+2026-10-25 11:19:40.319 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:319)
+2026-10-25 11:19:40.345 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:466)
+2026-10-25 11:19:40.345 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:336)
+LOAD_LAYER 0
+LOAD_LAYER 3
+2026-10-25 11:19:53.904 | warning  |              Op | Tensor::view: this view changes the padded shape (Shape([1, 32, 5120]) -> Shape([1, 1, 32, 5120])), so the nd_shard_spec (shard_shape Shape([32, 64])) no longer describes the tensor and is dropped; the view keeps the equivalent 2D shard_spec and is TensorMemoryLayout::WIDTH_SHARDED-sharded, not ND-sharded. If this view is an op's final output, pass an explicit ND memory_config to keep ND sharding. This message is emitted once per process. (tensor_ops.cpp:421)
+2026-10-25 11:19:53.962 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:53.962 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region for them. (ccl_common.cpp:175)
+2026-10-25 11:19:53.967 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:82)
+2026-10-25 11:19:53.969 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:53.969 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Pass a non-zero l1_small_size to ttnn.open_device / ttnn.open_mesh_device to reserve an L1_SMALL region for them. (ccl_common.cpp:175)
+PREPARE_PREFILL 1
+PREPARE_PREFILL 32
+PREPARE_PREFILL 64
+PREPARE_PREFILL 96
+PREPARE_PREFILL 128
+PREPARE_PREFILL 160
+PREPARE_PREFILL 192
+PREPARE_PREFILL 224
+PREPARE_PREFILL 256
+PREPARE_PREFILL 288
+PREPARE_PREFILL 320
+PREPARE_PREFILL 352
+PREPARE_PREFILL 384
+PREPARE_PREFILL 416
+PREPARE_PREFILL 448
+PREPARE_PREFILL 480
+PREPARE_PREFILL 512
+2026-10-25 11:19:56.489 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:56.489 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:56.490 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:56.490 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:56.524 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:56.525 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:56.525 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-10-25 11:19:56.525 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+AUTOPORT_SHUTDOWN_AUDIT {"host_sampling_compatibility": false, "host_logits_reads": 0, "counters": {"model_replays": 8, "sampling_replays": 12, "token_refreshes": 5, "position_refreshes": 5, "page_table_refreshes": 5, "readbacks": 14, "captures": 4, "host_copies_total": 779}, "layer_indices": [0, 3], "batch": 2, "trace_ids": ["MeshTraceId(0)", "MeshTraceId(1)", "MeshTraceId(2)", "MeshTraceId(3)"]}
+2026-10-25 11:19:57.402 | info     |    BuildKernels | JIT cache stats: 2300/2300 hits (100.0%) [2300 cached, 3661 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-25 11:19:57.402 | info     |    BuildKernels | JIT telemetry: 32 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-25 11:19:57.425 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-25 11:19:57.425 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-25 11:19:57.652 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-25 11:19:57.652 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-25 11:19:57.652 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

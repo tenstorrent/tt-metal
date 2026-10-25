@@ -1,0 +1,50 @@
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1143, in <module>
+    _main()
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1042, in _main
+    _wait_for_server(
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 323, in _wait_for_server
+    raise RuntimeError(
+RuntimeError: Server launcher exited with code 1 before becoming ready. Inspect /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log.
+Launching vLLM server for /workspace/.cache/qwen38-full on P300x2
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /workspace/.cache/qwen38-full --block_size 4096 --max_num_seqs 32 --port 8000 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 134217728, "fabric_config": "FABRIC_1D_RING", "trace_mode": "decode_only"}}' --language-model-only --mamba-cache-mode align --mamba-block-size 4096 --max-num-batched-tokens 8192
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log
+Waiting up to 1800s for server to become ready...
+
+Server launcher already exited (code 1).
+
+=== Server log tail (/workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log, last 30 lines) ===
+(APIServer pid=1630685)     async with build_async_engine_client(
+(APIServer pid=1630685)   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=1630685)     return await anext(self.gen)
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 58, in build_async_engine_client
+(APIServer pid=1630685)     async with build_async_engine_client_from_engine_args(
+(APIServer pid=1630685)   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/contextlib.py", line 199, in __aenter__
+(APIServer pid=1630685)     return await anext(self.gen)
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/entrypoints/launchers/api_server/entry.py", line 94, in build_async_engine_client_from_engine_args
+(APIServer pid=1630685)     async_llm = AsyncLLM.from_vllm_config(
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/async_llm.py", line 235, in from_vllm_config
+(APIServer pid=1630685)     return cls(
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/async_llm.py", line 169, in __init__
+(APIServer pid=1630685)     self.engine_core = EngineCoreClient.make_async_mp_client(
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(APIServer pid=1630685)     return func(*args, **kwargs)
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core_client.py", line 163, in make_async_mp_client
+(APIServer pid=1630685)     return AsyncMPClient(
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/tracing/otel.py", line 178, in sync_wrapper
+(APIServer pid=1630685)     return func(*args, **kwargs)
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core_client.py", line 1060, in __init__
+(APIServer pid=1630685)     super().__init__(
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/core_client.py", line 656, in __init__
+(APIServer pid=1630685)     with launch_core_engines(
+(APIServer pid=1630685)   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/contextlib.py", line 142, in __exit__
+(APIServer pid=1630685)     next(self.gen)
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/utils.py", line 1240, in launch_core_engines
+(APIServer pid=1630685)     wait_for_engine_startup(
+(APIServer pid=1630685)   File "/opt/venv/lib/python3.10/site-packages/vllm/v1/engine/utils.py", line 1320, in wait_for_engine_startup
+(APIServer pid=1630685)     raise RuntimeError(
+(APIServer pid=1630685) RuntimeError: Engine core initialization failed. See root cause above. Failed core proc(s): {}

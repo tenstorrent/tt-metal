@@ -1,0 +1,102 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 123,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0732
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] sampled_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 120,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 102,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0588
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 101,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0594
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 203,
+      "adjacent_duplication": 0.005,
+      "trigram_loop_fraction": 0.0296
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] sampled_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 204,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0294
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 164,
+      "adjacent_duplication": 0.0061,
+      "trigram_loop_fraction": 0.0366
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] sampled_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 162,
+      "adjacent_duplication": 0.0062,
+      "trigram_loop_fraction": 0.037
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 132,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1136
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] sampled_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 45,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1333
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 127,
+      "adjacent_duplication": 0.0159,
+      "trigram_loop_fraction": 0.0472
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 123,
+      "adjacent_duplication": 0.0164,
+      "trigram_loop_fraction": 0.0732
+    }
+  ],
+  "exit_code": 0
+}

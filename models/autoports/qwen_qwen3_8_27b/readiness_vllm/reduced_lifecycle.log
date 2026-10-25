@@ -1,0 +1,1 @@
+{"status": "fail", "output": "models/autoports/qwen_qwen3_8_27b/readiness_vllm/reduced_lifecycle.json", "failures": ["No chunk at actual start 8192 observed for long prompt fixture", "No nonzero chunk start observed", "No prefill with concurrent decode slots observed", "UnboundLocalError: local variable 'concurrent' referenced before assignment"]}

@@ -1,0 +1,20 @@
+Host-only validation, 2026-10-25:
+Root's reduced hybrid server failed upstream VllmConfig.validate_block_size because
+mamba_cache_mode=align requires disable_chunked_mm_input=False. The TT plugin
+previously set it True for every model with chunked prefill enabled.
+
+Fix: platform._apply_chunked_prefill_policy clears that restriction only for
+align mode and a resolved adapter without the upstream supports_multimodal
+interface. Native HF multimodal metadata does not imply this text adapter
+accepts multimodal inputs. Actual multimodal adapters retain the restriction.
+
+Command (container qwen38-functional-build, plugin working directory):
+USER=mvasiljev PYTHONPATH=tests/host-stubs TORCHINDUCTOR_CACHE_DIR=/workspace/.cache/torchinductor /opt/venv/bin/python -m pytest --confcutdir=. tests/test_chunked_prefill_policy.py tests/test_mamba_cache_bridge.py -q
+Result: 19 passed, 2 SWIG deprecation warnings, 3.21 seconds.
+
+Command (same container and working directory):
+USER=mvasiljev PRE_COMMIT_HOME=/workspace/.cache/precommit /opt/venv/bin/python -m pre_commit run --files src/vllm_tt_plugin/platform.py tests/test_chunked_prefill_policy.py
+Result: all applicable hooks passed after formatter changes. git diff --check passed.
+
+No hardware was opened by this validation. A subsequent server retry is required
+to establish device execution; these tests establish configuration policy only.

@@ -1,0 +1,21 @@
+{
+  "status": "pass",
+  "time_utc": "2026-10-25T12:22:54Z",
+  "namespace": "qwen38-functional-build",
+  "live_serving_processes": [],
+  "open_device_holders": [],
+  "defunct_without_live_process_or_device_ownership": [
+    {
+      "pid": 1635300,
+      "comm": "VLLM::EngineCor",
+      "state": "Z"
+    }
+  ],
+  "basis": "/proc cmdline/comm/state and every accessible fd link; no TT device opened",
+  "shutdown_note": "Upstream abort timeout0 can force EngineCore termination; this is ownership cleanup proof, not graceful release proof.",
+  "host_namespace_audit": {
+    "live_serving_processes": [],
+    "accessible_open_device_holders": [],
+    "inaccessible_process_directories": 670
+  }
+}

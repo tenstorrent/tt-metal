@@ -1,0 +1,201 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/bringup/dependencies/vllm-tt-plugin
+configfile: ../../../pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 10-25 09:21:58 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 09:21:58 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 09:21:58 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-25 09:21:58 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 09:22:00 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 09:22:00 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 74 items
+
+tests/test_state_slots.py::test_state_follows_the_request_across_row_moves PASSED
+tests/test_state_slots.py::test_accepting_the_decode_remap_advances_the_ownership_map PASSED
+tests/test_state_slots.py::test_continuing_prefill_keeps_state_after_a_peer_finishes PASSED
+tests/test_state_slots.py::test_reordered_prefill_continuations_keep_their_slots PASSED
+tests/test_state_slots.py::test_new_prefill_reserves_later_continuations_before_assigning_slots PASSED
+tests/test_state_slots.py::test_release_keeps_a_merely_unscheduled_request PASSED
+tests/test_state_slots.py::test_preemption_frees_the_slot_a_later_prefill_needs PASSED
+tests/test_state_slots.py::test_a_resumed_preempted_request_gets_a_slot_and_a_valid_remap PASSED
+tests/test_state_slots.py::test_remap_carries_off_batch_state PASSED
+tests/test_state_slots.py::test_preemption_releases_its_state_slot PASSED
+tests/test_state_slots.py::test_slot_exhaustion_fails_instead_of_guessing PASSED
+tests/test_state_slots.py::test_more_decode_rows_than_slots_raises PASSED
+tests/test_state_slots.py::test_a_clean_map_is_silent_and_a_broken_one_raises PASSED
+tests/test_state_slots.py::test_a_decoding_request_without_a_slot_raises PASSED
+tests/test_state_slots.py::test_cancelling_an_older_request_keeps_a_reused_slots_live_session PASSED
+tests/test_state_slots.py::test_the_model_is_told_about_a_gather_only_once_it_is_accepted PASSED
+tests/test_state_slots.py::test_identity_gathers_report_nothing_to_the_model PASSED
+tests/test_state_slots.py::test_a_model_without_the_move_hook_still_releases PASSED
+tests/test_decode_reload_contract.py::test_first_and_steady_device_decode_commands PASSED
+tests/test_decode_reload_contract.py::test_reload_plan_rejects_incoherent_command_combinations PASSED
+tests/test_decode_reload_contract.py::test_page_table_only_refresh_is_overlap_safe PASSED
+tests/test_decode_reload_contract.py::test_a_verify_always_reloads_its_inputs PASSED
+tests/test_decode_reload_contract.py::test_the_plain_decode_after_a_verify_reloads_its_inputs PASSED
+tests/test_decode_reload_contract.py::test_host_sampled_decodes_after_a_verify[verify-host] PASSED
+tests/test_decode_reload_contract.py::test_host_sampled_decodes_after_a_verify[verify-host-device] PASSED
+tests/test_decode_reload_contract.py::test_submit_decode_reloads_the_plain_decode_after_a_verify PASSED
+tests/test_decode_reload_contract.py::test_previous_submission_verified_commits_only_after_accepted_decode PASSED
+tests/test_decode_reload_contract.py::test_submit_decode_delivers_page_table_only_refresh PASSED
+tests/test_decode_reload_contract.py::test_v0_preserves_host_to_device_overlap_predicate PASSED
+tests/test_decode_reload_contract.py::test_failed_deferred_readback_is_terminal PASSED
+tests/test_decode_reload_contract.py::test_state_slot_ownership_commits_only_after_accepted_decode PASSED
+tests/test_decode_reload_contract.py::test_host_sampling_and_host_to_device_transition_reload PASSED
+tests/test_decode_reload_contract.py::test_prefill_layout_trace_and_capability_force_input_reload PASSED
+tests/test_decode_reload_contract.py::test_transition_applies_drained_token_before_host_authoritative_reload PASSED
+tests/test_decode_reload_contract.py::test_scheduler_context_phase_distinguishes_chunked_prefill_from_decode PASSED
+tests/test_decode_reload_contract.py::test_scheduler_prediction_rejects_every_front_packed_layout_transition PASSED
+tests/test_decode_reload_contract.py::test_contract_v1_receives_commands_without_legacy_reset PASSED
+tests/test_decode_reload_contract.py::test_contract_v1_host_sampling_still_receives_commands_and_remap PASSED
+tests/test_decode_reload_contract.py::test_contract_v0_keeps_legacy_call_shape_and_warns_once PASSED
+tests/test_decode_reload_contract.py::test_contract_v0_sync_mode_is_informational_once PASSED
+tests/test_decode_reload_contract.py::test_finished_async_result_updates_neither_runner_nor_published_output PASSED
+tests/test_decode_reload_contract.py::test_ordinary_preemption_or_resume_keeps_inflight_token[preempted] PASSED
+tests/test_decode_reload_contract.py::test_ordinary_preemption_or_resume_keeps_inflight_token[resumed] PASSED
+tests/test_decode_reload_contract.py::test_only_finished_result_ids_are_suppressed_from_scheduler_output PASSED
+tests/test_decode_reload_contract.py::test_forced_reset_skips_only_newest_counted_runner_state_frames PASSED
+tests/test_decode_reload_contract.py::test_async_scheduled_final_prefill_uses_forced_reset_lifecycle PASSED
+tests/test_decode_reload_contract.py::test_async_scheduled_final_prefill_applies_on_ordinary_next_step PASSED
+tests/test_decode_reload_contract.py::test_step_resolved_during_apply_stays_pending_until_drained PASSED
+tests/test_decode_reload_contract.py::test_forced_reset_discard_count_requires_all_stale_frames PASSED
+tests/test_decode_reload_contract.py::test_unscheduled_live_request_keeps_accepted_token_in_cached_state PASSED
+tests/test_prefill_chunk_alignment.py::test_leftover_budget_first_chunk_is_rounded_down_to_the_grid PASSED
+tests/test_prefill_chunk_alignment.py::test_a_new_request_that_cannot_reach_the_grid_waits_a_step PASSED
+tests/test_prefill_chunk_alignment.py::test_a_running_request_never_gets_an_empty_chunk PASSED
+tests/test_prefill_chunk_alignment.py::test_the_chunk_that_finishes_the_prompt_is_left_alone PASSED
+tests/test_prefill_chunk_alignment.py::test_decode_and_multimodal_requests_are_untouched PASSED
+tests/test_prefill_chunk_alignment.py::test_zero_disables_and_the_hook_is_only_armed_when_needed PASSED
+tests/test_prefill_chunk_alignment.py::test_config_accessor_defaults_and_validates PASSED
+tests/test_prefill_chunk_alignment.py::test_a_permanent_cap_below_the_grid_still_makes_progress PASSED
+tests/test_prefill_chunk_alignment.py::test_init_rejects_caps_below_the_alignment PASSED
+tests/test_prefill_chunk_alignment.py::test_max_num_scheduled_tokens_is_the_step_limit_when_set PASSED
+tests/test_prefill_chunk_alignment.py::test_init_rejects_a_scheduled_token_limit_below_the_alignment PASSED
+tests/test_chunked_prefill_policy.py::test_declared_support_keeps_chunked_prefill INFO 10-25 09:22:01 [tt/platform.py:276] Chunked prefill enabled for TT model _FakeModel (tests.test_chunked_prefill_policy): max_num_batched_tokens=3000, long_prefill_token_threshold=512.
+PASSED
+tests/test_chunked_prefill_policy.py::test_declared_support_leaves_the_scheduler_budget_alone INFO 10-25 09:22:01 [tt/platform.py:276] Chunked prefill enabled for TT model _FakeModel (tests.test_chunked_prefill_policy): max_num_batched_tokens=3000, long_prefill_token_threshold=1000.
+PASSED
+tests/test_chunked_prefill_policy.py::test_vllm_serve_default_budget_is_kept INFO 10-25 09:22:01 [tt/platform.py:276] Chunked prefill enabled for TT model _FakeModel (tests.test_chunked_prefill_policy): max_num_batched_tokens=2048, long_prefill_token_threshold=512.
+PASSED
+tests/test_chunked_prefill_policy.py::test_llm_class_default_budget_is_kept INFO 10-25 09:22:01 [tt/platform.py:276] Chunked prefill enabled for TT model _FakeModel (tests.test_chunked_prefill_policy): max_num_batched_tokens=8192, long_prefill_token_threshold=512.
+PASSED
+tests/test_chunked_prefill_policy.py::test_undeclared_model_loses_chunked_prefill_and_gets_a_full_prompt_budget[None-None-max_num_batched_tokens] INFO 10-25 09:22:01 [tt/platform.py:180] Chunked prefill is not supported for TT model _FakeModel (tests.test_chunked_prefill_policy); disabling it.
+WARNING 10-25 09:22:01 [tt/platform.py:192] max_num_batched_tokens=2048 < max_model_len=16384 with chunked prefill disabled, bumping max_num_batched_tokens to match.
+PASSED
+tests/test_chunked_prefill_policy.py::test_undeclared_model_loses_chunked_prefill_and_gets_a_full_prompt_budget[2048-16384-max_num_scheduled_tokens] INFO 10-25 09:22:01 [tt/platform.py:180] Chunked prefill is not supported for TT model _FakeModel (tests.test_chunked_prefill_policy); disabling it.
+WARNING 10-25 09:22:01 [tt/platform.py:192] max_num_batched_tokens=2048 < max_model_len=16384 with chunked prefill disabled, bumping max_num_batched_tokens to match.
+WARNING 10-25 09:22:01 [tt/platform.py:207] max_num_scheduled_tokens=2048 < max_model_len=16384 with chunked prefill disabled, bumping max_num_scheduled_tokens to match.
+PASSED
+tests/test_chunked_prefill_policy.py::test_undeclared_model_loses_chunked_prefill_and_gets_a_full_prompt_budget[32768-32768-max_num_scheduled_tokens] INFO 10-25 09:22:01 [tt/platform.py:180] Chunked prefill is not supported for TT model _FakeModel (tests.test_chunked_prefill_policy); disabling it.
+WARNING 10-25 09:22:01 [tt/platform.py:192] max_num_batched_tokens=2048 < max_model_len=16384 with chunked prefill disabled, bumping max_num_batched_tokens to match.
+PASSED
+tests/test_chunked_prefill_policy.py::test_model_without_any_capabilities_loses_chunked_prefill INFO 10-25 09:22:01 [tt/platform.py:180] Chunked prefill is not supported for TT model _FakeModel (tests.test_chunked_prefill_policy); disabling it.
+WARNING 10-25 09:22:01 [tt/platform.py:192] max_num_batched_tokens=2048 < max_model_len=16384 with chunked prefill disabled, bumping max_num_batched_tokens to match.
+PASSED
+tests/test_chunked_prefill_policy.py::test_unsplit_prefill_leaves_chunked_mm_input_enabled INFO 10-25 09:22:01 [tt/platform.py:180] Chunked prefill is not supported for TT model _FakeModel (tests.test_chunked_prefill_policy); disabling it.
+PASSED
+tests/test_chunked_prefill_policy.py::test_undeclared_model_zeroes_the_long_prefill_threshold PASSED
+tests/test_chunked_prefill_policy.py::test_token_budget_is_left_alone_when_it_already_covers_the_model_len INFO 10-25 09:22:01 [tt/platform.py:180] Chunked prefill is not supported for TT model _FakeModel (tests.test_chunked_prefill_policy); disabling it.
+PASSED
+tests/test_chunked_prefill_policy.py::test_declared_support_with_the_flag_off_falls_back_to_the_unsplit_policy PASSED
+tests/test_chunked_prefill_policy.py::test_block_output_model_loses_chunked_prefill_even_when_declared INFO 10-25 09:22:01 [tt/platform.py:180] Chunked prefill is not supported for TT model _FakeModel (tests.test_chunked_prefill_policy) (block-output); disabling it.
+WARNING 10-25 09:22:01 [tt/platform.py:192] max_num_batched_tokens=3000 < max_model_len=16384 with chunked prefill disabled, bumping max_num_batched_tokens to match.
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/bringup/dependencies/vllm-tt-plugin/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.02s setup    tests/test_state_slots.py::test_state_follows_the_request_across_row_moves
+
+(24 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/test_state_slots.py::test_state_follows_the_request_across_row_moves
+PASSED tests/test_state_slots.py::test_accepting_the_decode_remap_advances_the_ownership_map
+PASSED tests/test_state_slots.py::test_continuing_prefill_keeps_state_after_a_peer_finishes
+PASSED tests/test_state_slots.py::test_reordered_prefill_continuations_keep_their_slots
+PASSED tests/test_state_slots.py::test_new_prefill_reserves_later_continuations_before_assigning_slots
+PASSED tests/test_state_slots.py::test_release_keeps_a_merely_unscheduled_request
+PASSED tests/test_state_slots.py::test_preemption_frees_the_slot_a_later_prefill_needs
+PASSED tests/test_state_slots.py::test_a_resumed_preempted_request_gets_a_slot_and_a_valid_remap
+PASSED tests/test_state_slots.py::test_remap_carries_off_batch_state
+PASSED tests/test_state_slots.py::test_preemption_releases_its_state_slot
+PASSED tests/test_state_slots.py::test_slot_exhaustion_fails_instead_of_guessing
+PASSED tests/test_state_slots.py::test_more_decode_rows_than_slots_raises
+PASSED tests/test_state_slots.py::test_a_clean_map_is_silent_and_a_broken_one_raises
+PASSED tests/test_state_slots.py::test_a_decoding_request_without_a_slot_raises
+PASSED tests/test_state_slots.py::test_cancelling_an_older_request_keeps_a_reused_slots_live_session
+PASSED tests/test_state_slots.py::test_the_model_is_told_about_a_gather_only_once_it_is_accepted
+PASSED tests/test_state_slots.py::test_identity_gathers_report_nothing_to_the_model
+PASSED tests/test_state_slots.py::test_a_model_without_the_move_hook_still_releases
+PASSED tests/test_decode_reload_contract.py::test_first_and_steady_device_decode_commands
+PASSED tests/test_decode_reload_contract.py::test_reload_plan_rejects_incoherent_command_combinations
+PASSED tests/test_decode_reload_contract.py::test_page_table_only_refresh_is_overlap_safe
+PASSED tests/test_decode_reload_contract.py::test_a_verify_always_reloads_its_inputs
+PASSED tests/test_decode_reload_contract.py::test_the_plain_decode_after_a_verify_reloads_its_inputs
+PASSED tests/test_decode_reload_contract.py::test_host_sampled_decodes_after_a_verify[verify-host]
+PASSED tests/test_decode_reload_contract.py::test_host_sampled_decodes_after_a_verify[verify-host-device]
+PASSED tests/test_decode_reload_contract.py::test_submit_decode_reloads_the_plain_decode_after_a_verify
+PASSED tests/test_decode_reload_contract.py::test_previous_submission_verified_commits_only_after_accepted_decode
+PASSED tests/test_decode_reload_contract.py::test_submit_decode_delivers_page_table_only_refresh
+PASSED tests/test_decode_reload_contract.py::test_v0_preserves_host_to_device_overlap_predicate
+PASSED tests/test_decode_reload_contract.py::test_failed_deferred_readback_is_terminal
+PASSED tests/test_decode_reload_contract.py::test_state_slot_ownership_commits_only_after_accepted_decode
+PASSED tests/test_decode_reload_contract.py::test_host_sampling_and_host_to_device_transition_reload
+PASSED tests/test_decode_reload_contract.py::test_prefill_layout_trace_and_capability_force_input_reload
+PASSED tests/test_decode_reload_contract.py::test_transition_applies_drained_token_before_host_authoritative_reload
+PASSED tests/test_decode_reload_contract.py::test_scheduler_context_phase_distinguishes_chunked_prefill_from_decode
+PASSED tests/test_decode_reload_contract.py::test_scheduler_prediction_rejects_every_front_packed_layout_transition
+PASSED tests/test_decode_reload_contract.py::test_contract_v1_receives_commands_without_legacy_reset
+PASSED tests/test_decode_reload_contract.py::test_contract_v1_host_sampling_still_receives_commands_and_remap
+PASSED tests/test_decode_reload_contract.py::test_contract_v0_keeps_legacy_call_shape_and_warns_once
+PASSED tests/test_decode_reload_contract.py::test_contract_v0_sync_mode_is_informational_once
+PASSED tests/test_decode_reload_contract.py::test_finished_async_result_updates_neither_runner_nor_published_output
+PASSED tests/test_decode_reload_contract.py::test_ordinary_preemption_or_resume_keeps_inflight_token[preempted]
+PASSED tests/test_decode_reload_contract.py::test_ordinary_preemption_or_resume_keeps_inflight_token[resumed]
+PASSED tests/test_decode_reload_contract.py::test_only_finished_result_ids_are_suppressed_from_scheduler_output
+PASSED tests/test_decode_reload_contract.py::test_forced_reset_skips_only_newest_counted_runner_state_frames
+PASSED tests/test_decode_reload_contract.py::test_async_scheduled_final_prefill_uses_forced_reset_lifecycle
+PASSED tests/test_decode_reload_contract.py::test_async_scheduled_final_prefill_applies_on_ordinary_next_step
+PASSED tests/test_decode_reload_contract.py::test_step_resolved_during_apply_stays_pending_until_drained
+PASSED tests/test_decode_reload_contract.py::test_forced_reset_discard_count_requires_all_stale_frames
+PASSED tests/test_decode_reload_contract.py::test_unscheduled_live_request_keeps_accepted_token_in_cached_state
+PASSED tests/test_prefill_chunk_alignment.py::test_leftover_budget_first_chunk_is_rounded_down_to_the_grid
+PASSED tests/test_prefill_chunk_alignment.py::test_a_new_request_that_cannot_reach_the_grid_waits_a_step
+PASSED tests/test_prefill_chunk_alignment.py::test_a_running_request_never_gets_an_empty_chunk
+PASSED tests/test_prefill_chunk_alignment.py::test_the_chunk_that_finishes_the_prompt_is_left_alone
+PASSED tests/test_prefill_chunk_alignment.py::test_decode_and_multimodal_requests_are_untouched
+PASSED tests/test_prefill_chunk_alignment.py::test_zero_disables_and_the_hook_is_only_armed_when_needed
+PASSED tests/test_prefill_chunk_alignment.py::test_config_accessor_defaults_and_validates
+PASSED tests/test_prefill_chunk_alignment.py::test_a_permanent_cap_below_the_grid_still_makes_progress
+PASSED tests/test_prefill_chunk_alignment.py::test_init_rejects_caps_below_the_alignment
+PASSED tests/test_prefill_chunk_alignment.py::test_max_num_scheduled_tokens_is_the_step_limit_when_set
+PASSED tests/test_prefill_chunk_alignment.py::test_init_rejects_a_scheduled_token_limit_below_the_alignment
+PASSED tests/test_chunked_prefill_policy.py::test_declared_support_keeps_chunked_prefill
+PASSED tests/test_chunked_prefill_policy.py::test_declared_support_leaves_the_scheduler_budget_alone
+PASSED tests/test_chunked_prefill_policy.py::test_vllm_serve_default_budget_is_kept
+PASSED tests/test_chunked_prefill_policy.py::test_llm_class_default_budget_is_kept
+PASSED tests/test_chunked_prefill_policy.py::test_undeclared_model_loses_chunked_prefill_and_gets_a_full_prompt_budget[None-None-max_num_batched_tokens]
+PASSED tests/test_chunked_prefill_policy.py::test_undeclared_model_loses_chunked_prefill_and_gets_a_full_prompt_budget[2048-16384-max_num_scheduled_tokens]
+PASSED tests/test_chunked_prefill_policy.py::test_undeclared_model_loses_chunked_prefill_and_gets_a_full_prompt_budget[32768-32768-max_num_scheduled_tokens]
+PASSED tests/test_chunked_prefill_policy.py::test_model_without_any_capabilities_loses_chunked_prefill
+PASSED tests/test_chunked_prefill_policy.py::test_unsplit_prefill_leaves_chunked_mm_input_enabled
+PASSED tests/test_chunked_prefill_policy.py::test_undeclared_model_zeroes_the_long_prefill_threshold
+PASSED tests/test_chunked_prefill_policy.py::test_token_budget_is_left_alone_when_it_already_covers_the_model_len
+PASSED tests/test_chunked_prefill_policy.py::test_declared_support_with_the_flag_off_falls_back_to_the_unsplit_policy
+PASSED tests/test_chunked_prefill_policy.py::test_block_output_model_loses_chunked_prefill_even_when_declared
+======================== 74 passed, 2 warnings in 3.34s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

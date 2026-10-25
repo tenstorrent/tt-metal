@@ -1,0 +1,23 @@
+[
+  {
+    "shape": [
+      4,
+      3,
+      2560
+    ],
+    "dtype": "DataType.BFLOAT16",
+    "exact": true,
+    "max_error": 0.0
+  },
+  {
+    "shape": [
+      4,
+      12,
+      128,
+      128
+    ],
+    "dtype": "DataType.FLOAT32",
+    "exact": true,
+    "max_error": 0.0
+  }
+]

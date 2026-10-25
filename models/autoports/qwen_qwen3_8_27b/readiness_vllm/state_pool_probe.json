@@ -1,0 +1,36 @@
+{
+  "scope": "snapshot copy primitive on1x4 mesh, synthetic distinct linear states; no model metric",
+  "status": "pass",
+  "checks": [
+    {
+      "field": "conv",
+      "restored_exact": true,
+      "peer_unchanged": true
+    },
+    {
+      "field": "recurrent",
+      "restored_exact": true,
+      "peer_unchanged": true
+    },
+    {
+      "field": "conv",
+      "restored_exact": true,
+      "peer_unchanged": true
+    },
+    {
+      "field": "recurrent",
+      "restored_exact": true,
+      "peer_unchanged": true
+    }
+  ],
+  "older_snapshot_immutable": true,
+  "trace_id": "MeshTraceId(0)",
+  "captures": 1,
+  "retirements_during_workload": 0,
+  "counters": {
+    "saves": 2,
+    "restores": 2,
+    "metadata_uploads": 6
+  },
+  "allocated_bytes_per_device": 8017920
+}

@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/run_serving_lifecycle.py", line 302, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/home/mvasiljev/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/run_serving_lifecycle.py", line 139, in main
+    if not first.wait(600):
+           ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/threading.py", line 655, in wait
+    signaled = self._cond.wait(timeout)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/threading.py", line 359, in wait
+    gotit = waiter.acquire(True, timeout)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt

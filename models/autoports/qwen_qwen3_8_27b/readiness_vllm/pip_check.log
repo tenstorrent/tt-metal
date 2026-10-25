@@ -1,0 +1,21 @@
+WARNING: The directory '/.cache/pip' or its parent directory is not owned or is not writable by the current user. The cache has been disabled. Check the permissions and owner of that directory. If executing pip with sudo, you should use sudo's -H flag.
+fvcore 0.1.5.post20221221 requires iopath, which is not installed.
+fvcore 0.1.5.post20221221 requires yacs, which is not installed.
+lvis 0.5.3 requires cython, which is not installed.
+lvis 0.5.3 requires opencv-python, which is not installed.
+pycocoevalcap 1.2 requires pycocotools, which is not installed.
+pyiqa 0.1.16 requires addict, which is not installed.
+pyiqa 0.1.16 requires bitsandbytes, which is not installed.
+pyiqa 0.1.16 requires facexlib, which is not installed.
+pyiqa 0.1.16 requires ruff, which is not installed.
+pyiqa 0.1.16 requires tensorboard, which is not installed.
+pyiqa 0.1.16 requires yapf, which is not installed.
+vbench 0.1.5 requires cython, which is not installed.
+vbench 0.1.5 requires opencv-python, which is not installed.
+vbench 0.1.5 requires tensorboard, which is not installed.
+vbench 0.1.5 requires wheel, which is not installed.
+fiftyone 0.25.2 has requirement sse-starlette<1,>=0.10.3, but you have sse-starlette 3.5.1.
+vbench 0.1.5 has requirement timm<=1.0.12,>=0.9, but you have timm 1.0.30.
+vbench 0.1.5 has requirement transformers==4.33.2, but you have transformers 5.12.1.
+vllm 0.30.0+empty has requirement opencv-python-headless>=4.13.0, but you have opencv-python-headless 4.11.0.86.
+decord 0.6.0 is not supported on this platform

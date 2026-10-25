@@ -1,0 +1,51 @@
+Traceback (most recent call last):
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 196, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/runpy.py", line 86, in _run_code
+    exec(code, run_globals)
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1143, in <module>
+    _main()
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 1042, in _main
+    _wait_for_server(
+  File "/workspace/.codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/run_vllm_server.py", line 329, in _wait_for_server
+    raise RuntimeError(f"Fatal marker {fatal!r} found in {log_file}. Server cannot start.")
+RuntimeError: Fatal marker 'EngineCore failed to start' found in /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log. Server cannot start.
+Launching vLLM server for /workspace/.cache/qwen38-full on P300x2
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /workspace/.cache/qwen38-full --block_size 4096 --max_num_seqs 1 --port 8000 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 134217728, "fabric_config": "FABRIC_1D_RING", "trace_mode": "decode_only"}}' --language-model-only --mamba-cache-mode align --mamba-block-size 4096 --max-num-batched-tokens 8192 --max-logprobs -1 --async-scheduling
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log
+Waiting up to 1800s for server to become ready...
+
+Shutting down server (PID 1635256)...
+  Did not exit after SIGTERM; sending SIGKILL.
+
+=== Server log tail (/workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log, last 30 lines) ===
+(EngineCore pid=1635300)  --- VLLM::EngineCore(+0x35838d) [0x55dee45f038d]
+(EngineCore pid=1635300) 
+nanobind: leaked 1 instances!
+ - leaked instance 0x55df0a0bd860 of type "ttnn._ttnn.multi_device.MeshDevice"
+nanobind: leaked 1 keep_alive records!
+nanobind: leaked 4 types!
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - leaked type "TensorMemoryLayout"
+ - leaked type "BufferType"
+ - leaked type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 51 functions!
+ - leaked function "reset_sub_device_stall_group"
+ - leaked function "create_submesh"
+ - leaked function "__repr__"
+ - leaked function "clear_loaded_sub_device_manager"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "worker_core_from_logical_core"
+ - leaked function ""
+ - leaked function "compute_with_storage_grid_size"
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-10-25 10:55:02.414 | info     |    BuildKernels | JIT cache stats: 217/223 hits (97.3%) [217 cached, 924 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-10-25 10:55:02.414 | info     |    BuildKernels | JIT telemetry: 36 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-10-25 10:55:02.431 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:563)
+2026-10-25 10:55:02.431 | info     |             UMD | Closing devices in cluster (cluster.cpp:1469)
+2026-10-25 10:55:02.671 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1479)
+2026-10-25 10:55:02.672 | info     |             UMD | Cluster destructor started. (cluster.cpp:1200)
+2026-10-25 10:55:02.672 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1213)

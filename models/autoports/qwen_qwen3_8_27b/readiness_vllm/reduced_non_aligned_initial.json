@@ -1,0 +1,16 @@
+{
+  "logical_prompt_tokens": 129,
+  "reduced_layers": [
+    0,
+    3
+  ],
+  "status_code": 500,
+  "response": {
+    "error": {
+      "message": "EngineCore encountered an issue. See stack trace (above) for the root cause.",
+      "type": "InternalServerError",
+      "param": null,
+      "code": 500
+    }
+  }
+}

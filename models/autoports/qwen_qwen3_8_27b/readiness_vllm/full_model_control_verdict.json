@@ -1,0 +1,117 @@
+{
+  "scope": "Matching all64-layer standalone qualitative controls, not serving acceptance or accuracy benchmark",
+  "source": "full_model_controls.json",
+  "verdict": "coherent controls; length-limited outputs explicitly retained",
+  "judged_fields": [
+    "coherence",
+    "topic",
+    "repetition",
+    "gibberish",
+    "wrong_language_drift",
+    "request_contamination"
+  ],
+  "outputs": [
+    {
+      "id": "vllm_01",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "eos",
+      "notes": "Reasoning followed by relevant final answer."
+    },
+    {
+      "id": "vllm_02",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "eos",
+      "notes": "Reasoning followed by relevant final answer."
+    },
+    {
+      "id": "vllm_03",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "length",
+      "notes": "Truncated at256 including reasoning; final answer incomplete."
+    },
+    {
+      "id": "vllm_04",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "length",
+      "notes": "Truncated at256 including reasoning; final answer incomplete."
+    },
+    {
+      "id": "vllm_05",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "eos",
+      "notes": "Reasoning followed by relevant final answer."
+    },
+    {
+      "id": "vllm_06",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "length",
+      "notes": "Truncated at256 including reasoning; final answer incomplete."
+    },
+    {
+      "id": "shared_explain",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "eos",
+      "notes": "Reasoning followed by relevant final answer."
+    },
+    {
+      "id": "shared_structured",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "eos",
+      "notes": "Reasoning followed by relevant final answer."
+    },
+    {
+      "id": "shared_code",
+      "coherent": true,
+      "on_topic": true,
+      "repetition_loop": false,
+      "gibberish": false,
+      "wrong_language_drift": false,
+      "request_contamination": false,
+      "finish_reason": "eos",
+      "notes": "Reasoning followed by relevant final answer."
+    }
+  ],
+  "notes": [
+    "HF chat template includes thinking; raw completion reasoning before </think> matches control behavior. French translation is requested language, not drift. These controls do not establish vLLM correctness."
+  ]
+}

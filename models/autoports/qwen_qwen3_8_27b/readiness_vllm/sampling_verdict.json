@@ -1,0 +1,18 @@
+{
+  "status": "pass",
+  "profile": "full",
+  "passed": 76,
+  "skipped": 74,
+  "failed": 0,
+  "skip_reasons": {
+    "speculative_decoding_not_configured": 71,
+    "chunked_prefill_opt_in_budget_not_passed_by_shared_runner": 3
+  },
+  "chunked_prefill_separate_evidence": "full_b32_lifecycle.json",
+  "max_num_seqs": 8,
+  "host_compatibility": true,
+  "seeded_sampling_policy": "host",
+  "command": "full_sampling_runner.log",
+  "log": "full_b8_sampling_tests.log",
+  "server_manifest": "full_b8_async_command.json"
+}

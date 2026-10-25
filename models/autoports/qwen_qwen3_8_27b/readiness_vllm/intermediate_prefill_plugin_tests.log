@@ -1,0 +1,329 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/bringup/dependencies/vllm-tt-plugin
+configfile: ../../../pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 10-25 10:16:04 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 10:16:04 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 10:16:04 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-25 10:16:04 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 10:16:06 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 10:16:06 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 134 items
+
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-False] PASSED
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-True] PASSED
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-False] PASSED
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-True] PASSED
+tests/test_prefill_output_suppression.py::test_split_assigns_original_slots_when_original_call_used_default_slots PASSED
+tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask0] PASSED
+tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask1] PASSED
+tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask2] PASSED
+tests/test_model_runner.py::test_hybrid_kv_cache_uses_v029_tensor_layers PASSED
+tests/test_model_runner.py::test_kv_cache_layout_resolves_to_lbnhc_for_mixed_specs INFO 10-25 10:16:07 [utils.py:320] Using LBNHC KV cache layout.
+PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[0-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[2-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[5-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[6-False] PASSED
+tests/test_model_runner.py::test_resumed_replay_past_prompt_length_remains_prefill PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[0] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[1] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[2] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[5] PASSED
+tests/test_model_runner.py::test_structured_decode_build_captures_expected_grammar_request_ids PASSED
+tests/test_model_runner.py::test_final_one_token_prompt_chunk_stays_prefill PASSED
+tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[False] PASSED
+tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[True] PASSED
+tests/test_model_runner.py::test_steady_block_step_builds_decode_input PASSED
+tests/test_model_runner.py::test_block_resume_replay_past_one_canvas_remains_prefill PASSED
+tests/test_model_runner.py::test_decode_with_bad_words_carries_the_output_history_without_penalties PASSED
+tests/test_model_runner.py::test_apply_sampled_token_updates_request_state PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-None] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-True] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-False] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-None] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-True] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-False] PASSED
+tests/test_model_runner.py::test_prefill_mrope_updates_only_submitted_request_rows PASSED
+tests/test_lane_model_runner.py::test_lane_step_rejects_request_specific_rope PASSED
+tests/test_lane_model_runner.py::test_extract_output_device_decode_returns_scheduled_rows_in_order PASSED
+tests/test_lane_model_runner.py::test_extract_output_device_prefill_returns_front_packed_tokens PASSED
+tests/test_lane_model_runner.py::test_extract_output_host_decode_samples_scheduled_rows PASSED
+tests/test_lane_model_runner.py::test_extract_output_host_prefill_scatters_logits_to_stable_rows PASSED
+tests/test_lane_model_runner.py::test_extract_output_skips_all_intermediate_prefill_rows PASSED
+tests/test_lane_model_runner.py::test_build_host_generators_preserves_intermediate_request_rng PASSED
+tests/test_lane_model_runner.py::test_get_output_tokens_skips_all_intermediate_prefill_rows PASSED
+tests/test_lane_model_runner.py::test_finish_lane_sync_suppresses_intermediate_prefill_output PASSED
+tests/test_lane_model_runner.py::test_submit_prefill_forwards_plan_empty_slots_to_model PASSED
+tests/test_lane_model_runner.py::test_submit_decode_forwards_slot_remap_to_model[True] INFO 10-25 10:16:07 [tt/async_decode.py:1337] TT model FakeModel uses the legacy decode input reload contract under synchronous scheduling; async overlap is disabled.
+PASSED
+tests/test_lane_model_runner.py::test_submit_decode_forwards_slot_remap_to_model[False] INFO 10-25 10:16:07 [tt/async_decode.py:1337] TT model FakeModel uses the legacy decode input reload contract under synchronous scheduling; async overlap is disabled.
+PASSED
+tests/test_lane_model_runner.py::test_async_lane_decode_uses_batch_extraction PASSED
+tests/test_lane_input_batch.py::test_requests_land_in_their_lane_chunk PASSED
+tests/test_lane_input_batch.py::test_existing_requests_keep_row_on_admission_and_removal PASSED
+tests/test_lane_input_batch.py::test_condense_is_noop PASSED
+tests/test_lane_input_batch.py::test_apply_step_plan_places_new_requests_and_reports_layout_change PASSED
+tests/test_lane_input_batch.py::test_apply_step_plan_finished_request_releases_slot PASSED
+tests/test_lane_input_batch.py::test_lane_prefill_input_ends_at_scheduled_chunk_boundary PASSED
+tests/test_lane_input_batch.py::test_lane_structured_decode_captures_expected_grammar_request_ids PASSED
+tests/test_lane_input_batch.py::test_slot_grammar_bitmask_default_preserves_non_strict_mapping PASSED
+tests/test_lane_input_batch.py::test_sparse_two_lane_grammar_uses_submitted_row_snapshot PASSED
+tests/test_lane_input_batch.py::test_apply_step_plan_preempted_request_frees_its_row_and_keeps_its_state PASSED
+tests/test_lane_input_batch.py::test_lane_full_raises PASSED
+tests/test_lane_input_batch.py::test_worker_guard_neutralizes_logprobs_for_block_output PASSED
+tests/test_lane_input_batch.py::test_worker_guard_clamps_max_tokens_for_block_output PASSED
+tests/test_lane_input_batch.py::test_worker_guard_preserves_max_tokens_that_already_fit PASSED
+tests/test_lane_input_batch.py::test_lane_batch_forwards_the_logprobs_guard PASSED
+tests/test_lane_input_batch.py::test_merged_lane_sampling_equals_per_request PASSED
+tests/test_lane_input_batch.py::test_merged_sampling_correct_after_free_and_reuse_same_step PASSED
+tests/test_lane_input_batch.py::test_max_num_logprobs_over_gappy_layout PASSED
+tests/test_lane_input_batch.py::test_merged_sampling_metadata_filters_generators_to_scheduled_rows PASSED
+tests/test_lane_input_batch.py::test_merged_sampling_metadata_clones_intermediate_generators PASSED
+tests/test_lane_input_batch.py::test_scheduled_seeded_row_isolated_from_unscheduled_random_row PASSED
+tests/test_lane_input_batch.py::test_runner_is_lane_mode_property PASSED
+tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[False-20] PASSED
+tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[False-64] PASSED
+tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[True-20] PASSED
+tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[True-64] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-False-False] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-True-False] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-True-True] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-False-False] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-True-False] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-True-True] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-False-False] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-True-False] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-True-True] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[True-sp0] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp1] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp2] PASSED
+tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp3] PASSED
+tests/test_lane_input_batch.py::test_compact_metadata_omits_only_noop_filters PASSED
+tests/test_lane_input_batch.py::test_compact_mixed_greedy_random_preserves_logprobs[raw_logprobs] PASSED
+tests/test_lane_input_batch.py::test_compact_mixed_greedy_random_preserves_logprobs[processed_logprobs] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False-0] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False-42] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False--2] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False-1099511627776] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True-0] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True-42] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True--2] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True-1099511627776] PASSED
+tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[False-None] PASSED
+tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[False-32] PASSED
+tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[True-None] PASSED
+tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[True-32] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_ignores_stale_and_unscheduled_seeded_rows[False] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_ignores_stale_and_unscheduled_seeded_rows[True] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_moves_unseeded_companion_with_seeded_row[False] PASSED
+tests/test_seeded_sampling_policy.py::test_host_policy_moves_unseeded_companion_with_seeded_row[True] PASSED
+tests/test_seeded_sampling_policy.py::test_explicit_host_policy_includes_seeded_greedy_requests[0.0-5] PASSED
+tests/test_seeded_sampling_policy.py::test_explicit_host_policy_includes_seeded_greedy_requests[1.0-1] PASSED
+tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows0-auto] PASSED
+tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows0-host] PASSED
+tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows1-auto] PASSED
+tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows1-host] PASSED
+tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows2-auto] PASSED
+tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows2-host] PASSED
+tests/test_seeded_sampling_policy.py::test_policy_survives_config_pickle[auto] PASSED
+tests/test_seeded_sampling_policy.py::test_policy_survives_config_pickle[host] PASSED
+tests/test_seeded_sampling_policy.py::test_policy_defaults_to_auto PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[None] PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[True] PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[False] PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[0] PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[device] PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[HOST] PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[invalid6] PASSED
+tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[invalid7] PASSED
+tests/test_stage_inputs.py::test_stage_inputs_follow_the_request_until_it_finishes PASSED
+tests/test_stage_inputs.py::test_a_model_without_the_capability_gets_no_stage_inputs_keyword PASSED
+tests/test_stage_inputs.py::test_a_model_without_the_capability_serves_a_request_that_carries_a_payload PASSED
+tests/test_stage_inputs.py::test_the_builder_keeps_no_payload_without_the_capability PASSED
+tests/test_stage_inputs.py::test_a_serialized_vllm_omni_payload_reaches_prefill_as_a_dict SKIPPED
+tests/test_stage_inputs.py::test_the_resolved_capability_is_stored_on_the_config[None-False] PASSED
+tests/test_stage_inputs.py::test_the_resolved_capability_is_stored_on_the_config[capabilities1-False] PASSED
+tests/test_stage_inputs.py::test_the_resolved_capability_is_stored_on_the_config[capabilities2-True] PASSED
+tests/test_stage_inputs.py::test_a_non_boolean_declaration_is_refused PASSED
+tests/test_stage_inputs.py::test_lane_mode_refuses_the_capability PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/bringup/dependencies/vllm-tt-plugin/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.09s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-False-False]
+0.04s call     tests/test_lane_input_batch.py::test_merged_lane_sampling_equals_per_request
+0.02s setup    tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-False]
+0.02s call     tests/test_lane_input_batch.py::test_merged_sampling_correct_after_free_and_reuse_same_step
+0.01s call     tests/test_lane_input_batch.py::test_scheduled_seeded_row_isolated_from_unscheduled_random_row
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-True-False]
+0.01s call     tests/test_lane_input_batch.py::test_requests_land_in_their_lane_chunk
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-False-False]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-True-False]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-True-True]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-False-False]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-True-True]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-True-False]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-True-True]
+0.01s call     tests/test_lane_input_batch.py::test_compact_mixed_greedy_random_preserves_logprobs[processed_logprobs]
+0.01s call     tests/test_lane_input_batch.py::test_compact_mixed_greedy_random_preserves_logprobs[raw_logprobs]
+0.01s call     tests/test_lane_input_batch.py::test_merged_sampling_metadata_clones_intermediate_generators
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[True-sp0]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp1]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp3]
+0.01s call     tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[False-20]
+0.01s call     tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp2]
+0.01s call     tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[False-64]
+0.01s call     tests/test_lane_input_batch.py::test_lane_prefill_input_ends_at_scheduled_chunk_boundary
+0.01s call     tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[True-64]
+=========================== short test summary info ============================
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-False]
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-True]
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-False]
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-True]
+PASSED tests/test_prefill_output_suppression.py::test_split_assigns_original_slots_when_original_call_used_default_slots
+PASSED tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask0]
+PASSED tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask1]
+PASSED tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask2]
+PASSED tests/test_model_runner.py::test_hybrid_kv_cache_uses_v029_tensor_layers
+PASSED tests/test_model_runner.py::test_kv_cache_layout_resolves_to_lbnhc_for_mixed_specs
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[0-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[2-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[5-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[6-False]
+PASSED tests/test_model_runner.py::test_resumed_replay_past_prompt_length_remains_prefill
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[0]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[1]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[2]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[5]
+PASSED tests/test_model_runner.py::test_structured_decode_build_captures_expected_grammar_request_ids
+PASSED tests/test_model_runner.py::test_final_one_token_prompt_chunk_stays_prefill
+PASSED tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[False]
+PASSED tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[True]
+PASSED tests/test_model_runner.py::test_steady_block_step_builds_decode_input
+PASSED tests/test_model_runner.py::test_block_resume_replay_past_one_canvas_remains_prefill
+PASSED tests/test_model_runner.py::test_decode_with_bad_words_carries_the_output_history_without_penalties
+PASSED tests/test_model_runner.py::test_apply_sampled_token_updates_request_state
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-None]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-True]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-False]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-None]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-True]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-False]
+PASSED tests/test_model_runner.py::test_prefill_mrope_updates_only_submitted_request_rows
+PASSED tests/test_lane_model_runner.py::test_lane_step_rejects_request_specific_rope
+PASSED tests/test_lane_model_runner.py::test_extract_output_device_decode_returns_scheduled_rows_in_order
+PASSED tests/test_lane_model_runner.py::test_extract_output_device_prefill_returns_front_packed_tokens
+PASSED tests/test_lane_model_runner.py::test_extract_output_host_decode_samples_scheduled_rows
+PASSED tests/test_lane_model_runner.py::test_extract_output_host_prefill_scatters_logits_to_stable_rows
+PASSED tests/test_lane_model_runner.py::test_extract_output_skips_all_intermediate_prefill_rows
+PASSED tests/test_lane_model_runner.py::test_build_host_generators_preserves_intermediate_request_rng
+PASSED tests/test_lane_model_runner.py::test_get_output_tokens_skips_all_intermediate_prefill_rows
+PASSED tests/test_lane_model_runner.py::test_finish_lane_sync_suppresses_intermediate_prefill_output
+PASSED tests/test_lane_model_runner.py::test_submit_prefill_forwards_plan_empty_slots_to_model
+PASSED tests/test_lane_model_runner.py::test_submit_decode_forwards_slot_remap_to_model[True]
+PASSED tests/test_lane_model_runner.py::test_submit_decode_forwards_slot_remap_to_model[False]
+PASSED tests/test_lane_model_runner.py::test_async_lane_decode_uses_batch_extraction
+PASSED tests/test_lane_input_batch.py::test_requests_land_in_their_lane_chunk
+PASSED tests/test_lane_input_batch.py::test_existing_requests_keep_row_on_admission_and_removal
+PASSED tests/test_lane_input_batch.py::test_condense_is_noop
+PASSED tests/test_lane_input_batch.py::test_apply_step_plan_places_new_requests_and_reports_layout_change
+PASSED tests/test_lane_input_batch.py::test_apply_step_plan_finished_request_releases_slot
+PASSED tests/test_lane_input_batch.py::test_lane_prefill_input_ends_at_scheduled_chunk_boundary
+PASSED tests/test_lane_input_batch.py::test_lane_structured_decode_captures_expected_grammar_request_ids
+PASSED tests/test_lane_input_batch.py::test_slot_grammar_bitmask_default_preserves_non_strict_mapping
+PASSED tests/test_lane_input_batch.py::test_sparse_two_lane_grammar_uses_submitted_row_snapshot
+PASSED tests/test_lane_input_batch.py::test_apply_step_plan_preempted_request_frees_its_row_and_keeps_its_state
+PASSED tests/test_lane_input_batch.py::test_lane_full_raises
+PASSED tests/test_lane_input_batch.py::test_worker_guard_neutralizes_logprobs_for_block_output
+PASSED tests/test_lane_input_batch.py::test_worker_guard_clamps_max_tokens_for_block_output
+PASSED tests/test_lane_input_batch.py::test_worker_guard_preserves_max_tokens_that_already_fit
+PASSED tests/test_lane_input_batch.py::test_lane_batch_forwards_the_logprobs_guard
+PASSED tests/test_lane_input_batch.py::test_merged_lane_sampling_equals_per_request
+PASSED tests/test_lane_input_batch.py::test_merged_sampling_correct_after_free_and_reuse_same_step
+PASSED tests/test_lane_input_batch.py::test_max_num_logprobs_over_gappy_layout
+PASSED tests/test_lane_input_batch.py::test_merged_sampling_metadata_filters_generators_to_scheduled_rows
+PASSED tests/test_lane_input_batch.py::test_merged_sampling_metadata_clones_intermediate_generators
+PASSED tests/test_lane_input_batch.py::test_scheduled_seeded_row_isolated_from_unscheduled_random_row
+PASSED tests/test_lane_input_batch.py::test_runner_is_lane_mode_property
+PASSED tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[False-20]
+PASSED tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[False-64]
+PASSED tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[True-20]
+PASSED tests/test_lane_input_batch.py::test_lane_top_k_uses_rows_in_submitted_step[True-64]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-False-False]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-True-False]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[unrestricted-True-True]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-False-False]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-True-False]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[filters-True-True]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-False-False]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-True-False]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_matches_full_slots_and_preserves_rng[penalties-True-True]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[True-sp0]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp1]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp2]
+PASSED tests/test_lane_input_batch.py::test_compact_host_sampling_keeps_stateful_processors_on_slot_rows[False-sp3]
+PASSED tests/test_lane_input_batch.py::test_compact_metadata_omits_only_noop_filters
+PASSED tests/test_lane_input_batch.py::test_compact_mixed_greedy_random_preserves_logprobs[raw_logprobs]
+PASSED tests/test_lane_input_batch.py::test_compact_mixed_greedy_random_preserves_logprobs[processed_logprobs]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False-0]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False-42]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False--2]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[False-1099511627776]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True-0]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True-42]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True--2]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_keeps_seeded_route_when_companions_change[True-1099511627776]
+PASSED tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[False-None]
+PASSED tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[False-32]
+PASSED tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[True-None]
+PASSED tests/test_seeded_sampling_policy.py::test_auto_policy_preserves_existing_seeded_routing[True-32]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_ignores_stale_and_unscheduled_seeded_rows[False]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_ignores_stale_and_unscheduled_seeded_rows[True]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_moves_unseeded_companion_with_seeded_row[False]
+PASSED tests/test_seeded_sampling_policy.py::test_host_policy_moves_unseeded_companion_with_seeded_row[True]
+PASSED tests/test_seeded_sampling_policy.py::test_explicit_host_policy_includes_seeded_greedy_requests[0.0-5]
+PASSED tests/test_seeded_sampling_policy.py::test_explicit_host_policy_includes_seeded_greedy_requests[1.0-1]
+PASSED tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows0-auto]
+PASSED tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows0-host]
+PASSED tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows1-auto]
+PASSED tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows1-host]
+PASSED tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows2-auto]
+PASSED tests/test_seeded_sampling_policy.py::test_seeded_policy_respects_device_grammar_routing[rows2-host]
+PASSED tests/test_seeded_sampling_policy.py::test_policy_survives_config_pickle[auto]
+PASSED tests/test_seeded_sampling_policy.py::test_policy_survives_config_pickle[host]
+PASSED tests/test_seeded_sampling_policy.py::test_policy_defaults_to_auto
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[None]
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[True]
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[False]
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[0]
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[device]
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[HOST]
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[invalid6]
+PASSED tests/test_seeded_sampling_policy.py::test_invalid_policy_is_rejected[invalid7]
+PASSED tests/test_stage_inputs.py::test_stage_inputs_follow_the_request_until_it_finishes
+PASSED tests/test_stage_inputs.py::test_a_model_without_the_capability_gets_no_stage_inputs_keyword
+PASSED tests/test_stage_inputs.py::test_a_model_without_the_capability_serves_a_request_that_carries_a_payload
+PASSED tests/test_stage_inputs.py::test_the_builder_keeps_no_payload_without_the_capability
+PASSED tests/test_stage_inputs.py::test_the_resolved_capability_is_stored_on_the_config[None-False]
+PASSED tests/test_stage_inputs.py::test_the_resolved_capability_is_stored_on_the_config[capabilities1-False]
+PASSED tests/test_stage_inputs.py::test_the_resolved_capability_is_stored_on_the_config[capabilities2-True]
+PASSED tests/test_stage_inputs.py::test_a_non_boolean_declaration_is_refused
+PASSED tests/test_stage_inputs.py::test_lane_mode_refuses_the_capability
+SKIPPED [1] tests/test_stage_inputs.py:244: could not import 'vllm_omni.engine.serialization': No module named 'vllm_omni'
+================== 133 passed, 1 skipped, 2 warnings in 3.72s ==================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

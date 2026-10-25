@@ -1,0 +1,43 @@
+Launching vLLM server for /workspace/.cache/qwen38-full on P300x2
+  cmd: /opt/venv/bin/python -m vllm.entrypoints.openai.api_server --model /workspace/.cache/qwen38-full --block_size 4096 --max_num_seqs 32 --port 8000 --max_model_len 262144 --additional-config '{"tt": {"sample_on_device_mode": "all", "trace_region_size": 134217728, "fabric_config": "FABRIC_1D_RING", "trace_mode": "decode_only"}}' --language-model-only --mamba-cache-mode align --mamba-block-size 4096 --max-num-batched-tokens 131072 --long-prefill-token-threshold 4096 --max-logprobs -1 --async-scheduling
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log
+Waiting up to 1800s for server to become ready...
+  Server ready after ~290s
+
+Server ready at http://localhost:8000
+Server is running. Press Ctrl-C (or send SIGTERM) to stop.
+
+Shutting down server (PID 1654037)...
+  Terminated cleanly.
+
+=== Server log tail (/workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/server.log, last 30 lines) ===
+(APIServer pid=1654037) INFO:     127.0.0.1:57044 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO:     127.0.0.1:57048 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO:     127.0.0.1:57058 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO:     127.0.0.1:57060 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO:     127.0.0.1:57070 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO:     127.0.0.1:57074 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO:     127.0.0.1:57086 - "POST /v1/completions HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO:     127.0.0.1:57096 - "GET /metrics HTTP/1.1" 200 OK
+(APIServer pid=1654037) INFO 10-25 12:10:33 [loggers.py:315] Engine 000: Avg prompt throughput: 13430.4 tokens/s, Avg generation throughput: 51.2 tokens/s, Running: 0 reqs, Waiting: 0 reqs, TT KV cache usage: 0.0%, Prefix cache hit rate: 45.2%
+(APIServer pid=1654037) INFO 10-25 12:10:43 [loggers.py:315] Engine 000: Avg prompt throughput: 0.0 tokens/s, Avg generation throughput: 0.0 tokens/s, Running: 0 reqs, Waiting: 0 reqs, TT KV cache usage: 0.0%, Prefix cache hit rate: 45.2%
+(APIServer pid=1654037) INFO 10-25 12:11:31 [launcher.py:129] [shutdown] API server: shutdown triggered
+(APIServer pid=1654037) INFO 10-25 12:11:31 [launcher.py:145] [shutdown] API server: stopping engine client mode=abort timeout=0s
+(APIServer pid=1654037) INFO 10-25 12:11:31 [core_client.py:744] [shutdown] MPClient: start timeout=0s
+(APIServer pid=1654037) INFO 10-25 12:11:31 [core_client.py:746] [shutdown] MPClient: stopping engine manager
+(APIServer pid=1654037) INFO 10-25 12:11:31 [utils.py:632] [shutdown] Process manager: send sigterm to process EngineCore
+(APIServer pid=1654037) WARNING 10-25 12:11:31 [utils.py:652] [shutdown] Process manager: force killing remaining processes count=1
+(APIServer pid=1654037) WARNING 10-25 12:11:31 [utils.py:657] [shutdown] Process manager: force killing remaining process EngineCore pid 1654081
+(EngineCore pid=1654081) INFO 10-25 12:11:31 [core.py:1342] [shutdown] EngineCore: trigger received signal=SIGTERM
+(EngineCore pid=1654081) INFO 10-25 12:11:31 [core.py:1493] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=1654081) INFO 10-25 12:11:31 [core.py:1524] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=1654081) INFO 10-25 12:11:31 [core.py:1355] [shutdown] EngineCore: exiting busy loop
+(APIServer pid=1654037) INFO 10-25 12:11:31 [core_client.py:748] [shutdown] MPClient: engine manager stopped
+(APIServer pid=1654037) INFO 10-25 12:11:31 [core_client.py:749] [shutdown] MPClient: cleaning up background resources
+(APIServer pid=1654037) INFO 10-25 12:11:31 [core_client.py:751] [shutdown] MPClient: complete
+(APIServer pid=1654037) INFO 10-25 12:11:31 [launcher.py:154] [shutdown] API server: engine client stopped
+(APIServer pid=1654037) INFO 10-25 12:11:31 [launcher.py:157] [shutdown] API server: signalling HTTP server shutdown
+(APIServer pid=1654037) INFO 10-25 12:11:31 [launcher.py:179] [shutdown] API server: shutting down FastAPI HTTP server
+(APIServer pid=1654037) INFO:     Shutting down
+(APIServer pid=1654037) INFO:     Waiting for application shutdown.
+(APIServer pid=1654037) INFO:     Application shutdown complete.

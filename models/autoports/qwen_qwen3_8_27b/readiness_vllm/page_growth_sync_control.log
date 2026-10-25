@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_serving_page_growth.py", line 237, in <module>
+    raise SystemExit(main())
+  File "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_serving_page_growth.py", line 124, in main
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.concurrency) as pool:
+UnboundLocalError: local variable 'concurrent' referenced before assignment

@@ -1,0 +1,9 @@
+
+=== Running plugin sampling tests ===
+  profile: smoke (4 target(s))
+  tt-max-num-seqs: 32
+  cmd: /opt/venv/bin/python -m pytest /workspace/bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch /workspace/bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy /workspace/bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab /workspace/bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_p -v --tt-server-url=http://localhost:8000 --tt-model-name=/workspace/.cache/qwen38-full --tt-max-num-seqs=32
+  log: /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/sampling_tests.log
+  FAIL (pytest exit 1) — inspect /workspace/models/autoports/qwen_qwen3_8_27b/readiness_vllm/sampling_tests.log
+
+Sampling tests failed — skipping remaining stages.

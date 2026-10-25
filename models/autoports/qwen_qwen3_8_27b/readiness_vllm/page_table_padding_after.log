@@ -1,0 +1,123 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /workspace/bringup/dependencies/vllm-tt-plugin
+configfile: ../../../pytest.ini
+plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, dash-2.15.0, github-actions-annotate-failures-0.3.0, timeout-2.4.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... INFO 10-25 10:21:25 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 10:21:25 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 10:21:25 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-25 10:21:25 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 10:21:28 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 10:21:28 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collected 42 items
+
+tests/test_block_table_padding.py::test_per_layer_tables_pad_once_per_group_and_preserve_values[shape0] PASSED
+tests/test_block_table_padding.py::test_per_layer_tables_pad_once_per_group_and_preserve_values[shape1] PASSED
+tests/test_block_table_padding.py::test_per_layer_tables_pad_once_per_group_and_preserve_values[shape2] PASSED
+tests/test_block_table_padding.py::test_missing_group_and_non_hybrid_tables_preserve_contract PASSED
+tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask0] PASSED
+tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask1] PASSED
+tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask2] PASSED
+tests/test_model_runner.py::test_hybrid_kv_cache_uses_v029_tensor_layers PASSED
+tests/test_model_runner.py::test_kv_cache_layout_resolves_to_lbnhc_for_mixed_specs INFO 10-25 10:21:29 [utils.py:320] Using LBNHC KV cache layout.
+PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[0-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[2-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[5-True] PASSED
+tests/test_model_runner.py::test_cached_chunked_prefill_classification[6-False] PASSED
+tests/test_model_runner.py::test_resumed_replay_past_prompt_length_remains_prefill PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[0] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[1] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[2] PASSED
+tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[5] PASSED
+tests/test_model_runner.py::test_structured_decode_build_captures_expected_grammar_request_ids PASSED
+tests/test_model_runner.py::test_final_one_token_prompt_chunk_stays_prefill PASSED
+tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[False] PASSED
+tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[True] PASSED
+tests/test_model_runner.py::test_steady_block_step_builds_decode_input PASSED
+tests/test_model_runner.py::test_block_resume_replay_past_one_canvas_remains_prefill PASSED
+tests/test_model_runner.py::test_decode_with_bad_words_carries_the_output_history_without_penalties PASSED
+tests/test_model_runner.py::test_apply_sampled_token_updates_request_state PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-None] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-True] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-False] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-None] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-True] PASSED
+tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-False] PASSED
+tests/test_model_runner.py::test_prefill_mrope_updates_only_submitted_request_rows PASSED
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-False] PASSED
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-True] PASSED
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-False] PASSED
+tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-True] PASSED
+tests/test_prefill_output_suppression.py::test_split_assigns_original_slots_when_original_call_used_default_slots PASSED
+tests/test_mamba_cache_bridge.py::test_mamba_allocator_receives_exact_scheduler_config PASSED
+tests/test_mamba_cache_bridge.py::test_mamba_tables_cover_raw_model_indices_not_attention_ordinals PASSED
+tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[1-72] INFO 10-25 10:21:29 [tt/worker.py:740] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'tests.test_mamba_cache_bridge.test_mamba_sparse_pool_reserves_every_group.<locals>.Model'>'.
+PASSED
+tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[32-289] INFO 10-25 10:21:29 [tt/worker.py:740] Getting max_tokens_all_users=262144 for number of blocks in KV cache from generator '<class 'tests.test_mamba_cache_bridge.test_mamba_sparse_pool_reserves_every_group.<locals>.Model'>'.
+PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:241
+  <frozen importlib._bootstrap>:241: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /workspace/bringup/dependencies/vllm-tt-plugin/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.03s setup    tests/test_block_table_padding.py::test_per_layer_tables_pad_once_per_group_and_preserve_values[shape0]
+
+(24 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED tests/test_block_table_padding.py::test_per_layer_tables_pad_once_per_group_and_preserve_values[shape0]
+PASSED tests/test_block_table_padding.py::test_per_layer_tables_pad_once_per_group_and_preserve_values[shape1]
+PASSED tests/test_block_table_padding.py::test_per_layer_tables_pad_once_per_group_and_preserve_values[shape2]
+PASSED tests/test_block_table_padding.py::test_missing_group_and_non_hybrid_tables_preserve_contract
+PASSED tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask0]
+PASSED tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask1]
+PASSED tests/test_model_runner.py::test_submit_prefill_exposes_intermediate_output_suppression[mask2]
+PASSED tests/test_model_runner.py::test_hybrid_kv_cache_uses_v029_tensor_layers
+PASSED tests/test_model_runner.py::test_kv_cache_layout_resolves_to_lbnhc_for_mixed_specs
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[0-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[2-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[5-True]
+PASSED tests/test_model_runner.py::test_cached_chunked_prefill_classification[6-False]
+PASSED tests/test_model_runner.py::test_resumed_replay_past_prompt_length_remains_prefill
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[0]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[1]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[2]
+PASSED tests/test_model_runner.py::test_completed_cached_request_builds_decode_input[5]
+PASSED tests/test_model_runner.py::test_structured_decode_build_captures_expected_grammar_request_ids
+PASSED tests/test_model_runner.py::test_final_one_token_prompt_chunk_stays_prefill
+PASSED tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[False]
+PASSED tests/test_model_runner.py::test_mixed_prefill_batch_keeps_scheduled_decode_row[True]
+PASSED tests/test_model_runner.py::test_steady_block_step_builds_decode_input
+PASSED tests/test_model_runner.py::test_block_resume_replay_past_one_canvas_remains_prefill
+PASSED tests/test_model_runner.py::test_decode_with_bad_words_carries_the_output_history_without_penalties
+PASSED tests/test_model_runner.py::test_apply_sampled_token_updates_request_state
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-None]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-True]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[False-False]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-None]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-True]
+PASSED tests/test_model_runner.py::test_device_penalties_follow_model_capability[True-False]
+PASSED tests/test_model_runner.py::test_prefill_mrope_updates_only_submitted_request_rows
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-False]
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[False-True]
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-False]
+PASSED tests/test_prefill_output_suppression.py::test_mixed_prefill_only_samples_final_rows_with_original_state_slots[True-True]
+PASSED tests/test_prefill_output_suppression.py::test_split_assigns_original_slots_when_original_call_used_default_slots
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_allocator_receives_exact_scheduler_config
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_tables_cover_raw_model_indices_not_attention_ordinals
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[1-72]
+PASSED tests/test_mamba_cache_bridge.py::test_mamba_sparse_pool_reserves_every_group[32-289]
+======================== 42 passed, 2 warnings in 4.40s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
