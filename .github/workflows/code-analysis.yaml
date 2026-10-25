@@ -91,6 +91,14 @@ on:
         type: boolean
         default: false
         description: "Force a full scan even if no C++ changes are detected"
+      clang-tidy-version:
+        required: false
+        type: choice
+        default: "20"
+        options:
+          - "20"
+          - "23"
+        description: "clang-tidy version for the full scan (e.g. to warm ct23 against a chosen ref without pushing to it)"
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml internally.
