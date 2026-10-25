@@ -100,6 +100,61 @@ def pos_buckets(max_pos, factor=2):
     return sorted({int(x) for x in raw.split(",") if x.strip() and 0 < int(x) < int(max_pos)})
 
 
+def ids_sort(ids):
+    """ids uint32 ROW_MAJOR [R,1,1,k] -> the same ids ascending per row (sentinels 0xFFFFFFFF last): ONE JIT program, one core per row, 3-pass radix sort (tt/mhc_kernels/ids_sort.cpp)."""
+    import struct  # noqa: F401
+
+    from models.demos.blackhole.deepseek_v41_flash.tt.mhc_collapse import _acc, _cb, _hash, _kernel
+
+    shape = [int(v) for v in ids.shape]
+    k = shape[-1]
+    R = 1  # pages: one row of k ids per page (the ids are [R,1,1,k] or [1,1,R,k])
+    for v in shape[:-1]:
+        R *= v
+    assert ids.dtype == ttnn.uint32 and ids.layout == ttnn.ROW_MAJOR_LAYOUT and k % 2 == 0
+    mesh = ids.device()
+    out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
+    grid = mesh.compute_with_storage_grid_size()
+    cores = [(cx, cy) for cy in range(grid.y) for cx in range(grid.x)][: min(R, grid.x * grid.y)]
+    nc = len(cores)
+    core_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(cx, cy), ttnn.CoreCoord(cx, cy)) for cx, cy in cores])
+    rt = ttnn.RuntimeArgs()
+    for t, (cx, cy) in enumerate(cores):
+        rt[cx][cy] = [t, nc, len(range(t, R, nc))]
+    u32 = ttnn.uint32
+    cbs = [_cb(core_set, 0, 1, k * 4, u32), _cb(core_set, 1, 1, k * 4, u32), _cb(core_set, 2, 1, 256 * 4, u32)]
+    ct = [0, 1, 2, k] + _acc(ids) + _acc(out)
+    kern = _kernel("ids_sort.cpp", core_set, ct, rt, None, ttnn.ReaderConfigDescriptor(), common=[ids.buffer_address(), out.buffer_address()])
+    prog = ttnn.ProgramDescriptor(kernels=[kern], semaphores=[], cbs=cbs)
+    prog.custom_program_hash = _hash(0x1D5, R, k, tuple(_acc(ids)), tuple(_acc(out)))
+    ttnn.generic_op([ids, out], prog)
+    return out
+
+
+def canonical_ids(ids):
+    """Selected entry ids [R,1,1,topk] uint32 row-major -> the same ids in ASCENDING order (sentinels last).
+
+    ``topk_large_indices`` returns the set of the top-k entries in score order, and entries with EQUAL (bf16) scores come out in an order that depends on how the scanned width is cut into
+    chunks and merge segments (a valid length of more than 32 chunks = 32768 entries takes a different merge tree than a shorter one): the plain step (valid length = its own batch maximum)
+    and a verify block (valid length = the block's maximum, up to k entries more) then hand ``sparse_sdpa`` the same keys in a different order, whose fp32 accumulation differs in the last
+    bits (seen at the 64k boundary: position 65536 = 32768 entries; same id SET, order differs). ``paged_kv_step`` consumes the ids in order and skips any id >= N, so sorting them makes the
+    key list a function of the set only. DSV41_IDX_SORT=0 restores the unsorted ids, =ttnn sorts with ``ttnn.sort`` (~290 us instead of the JIT kernel).
+    """
+    mode = os.environ.get("DSV41_IDX_SORT", "1")
+    if mode == "0":
+        return ids
+    if mode != "ttnn":
+        return ids_sort(ids)
+    shape = [int(v) for v in ids.shape]
+    k = shape[-1]
+    R = ids.volume() // k
+    f = ttnn.minimum(ttnn.typecast(ids, ttnn.float32), 8388608.0)
+    f = ttnn.to_layout(ttnn.reshape(f, (1, 1, R, k)), ttnn.TILE_LAYOUT)
+    srt, _ = ttnn.sort(f, dim=-1, descending=False)
+    u = ttnn.typecast(ttnn.to_layout(srt, ttnn.ROW_MAJOR_LAYOUT), ttnn.uint32)
+    return ttnn.reshape(u, shape)
+
+
 def mask_scores(scores, nvalid, ar):
     """Rank-masking of a ragged batch: scores [U,1,1,n] row-major, nvalid float32 [U,1,1,1] tile, ar [1,1,1,n] float32 (entries >= the user's valid count -> -1e30), -> bf16 row-major
     [1,1,U,n]. The users are laid out as ROWS of one tile tensor: a [U,1,1,n] tile tensor pads every user's single row to 32 (32 x the bytes: 768 MiB at 24 verify rows x 262144 entries,
@@ -477,14 +532,15 @@ class DSV41DecodeIndexer:
                         )
                         row = ttnn.to_layout(ttnn.typecast(masked, ttnn.bfloat16), ttnn.ROW_MAJOR_LAYOUT)
                     ids.append(ttnn.experimental.topk_large_indices(row, k=self.topk, valid_length_tensor=st["valid"]))
-                return ttnn.concat(ids, dim=0)
+                return canonical_ids(ttnn.concat(ids, dim=0))
             scores = rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=0)  # [U,1,1,T] row-major
         if (
             "nvalid" in st
         ):  # ragged batch: entries >= the user's own valid count must never be ranked (the shared valid length is the batch maximum)
             scores = mask_scores(scores, st["nvalid"], self._arange_for(self.n_score))
         ids = ttnn.experimental.topk_large_indices(scores, k=self.topk, valid_length_tensor=st["valid"])
-        return ids if ids.shape[0] == scores.shape[0] else ttnn.reshape(ids, [scores.shape[0], 1, 1, self.topk])
+        ids = ids if ids.shape[0] == scores.shape[0] else ttnn.reshape(ids, [scores.shape[0], 1, 1, self.topk])
+        return canonical_ids(ids)
 
     def forward(self, x, qr, st, return_scores=False):
         q, w = self.project(x, qr, st)
