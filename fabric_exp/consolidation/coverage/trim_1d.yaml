@@ -1,0 +1,22 @@
+# Coverage job input (cov_device_runs.sh): channel-trimming capture, then a replay that rebuilds the routers from the
+# captured profile (trimmed routers). The replay must send on exactly the channels the capture saw, so the traffic is
+# deterministic:
+#   - all_to_all takes its pairs from route_manager_.get_all_to_all_unicast_pairs() and draws nothing from the
+#     builder's generator (tt_fabric_test_config.cpp, expand_one_or_all_to_all_unicast).
+#   - size and num_packets are set, so get_random_in_range is not used for them (:2839, :2844).
+#   - num_links is 1 (the default), so every flow uses the same link in both runs.
+# Do not use full_device_random_pairing (or any other random pattern) here. The builder's generator advances per
+# expanded test (:1522, :2208), so capture and replay pair the devices differently, and the replay sends on channels
+# that were trimmed away: the replay hangs (job 271).
+Tests:
+  - name: "CovTrim1d"
+    fabric_setup:
+      topology: Linear
+      enable_channel_trimming: true
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 10
+    patterns:
+      - type: all_to_all

@@ -1,0 +1,43 @@
+# VC1 sanity only (two 2x2 meshes; see vc1_split.yaml): the data-checked multi-mesh all-to-all (4 packet types x
+# 1 KiB / 4 KiB) and inter-mesh neighbor exchange. Both VC1 hangs (RESULTS §90, §92) happened in this group, at the
+# first 4 KiB all-to-all. Used for repeated runs (base rate) with vc1_lib.sh vc1_repeat.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: MultiMeshAllToAll
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+    size:
+    - 1024
+    - 4096
+  defaults:
+    ftype: unicast
+    num_packets: 100
+  patterns:
+  - type: all_to_all
+- name: MultiMeshNeighborExchangeInter
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: unicast
+    size: 32
+    num_packets: 3000
+  patterns:
+  - type: neighbor_exchange
+    mesh_scope: inter_mesh

@@ -1,0 +1,901 @@
+channel_trimming_capture:
+  chip_7:
+    eth_channel_4:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_6:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_9:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_11:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+  chip_3:
+    eth_channel_4:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_5:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_6:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_7:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_8:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_10:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+  chip_1:
+    eth_channel_4:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_5:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_6:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_7:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_8:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_10:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+  chip_5:
+    eth_channel_5:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_7:
+      direction: SOUTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_9:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_11:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+  chip_6:
+    eth_channel_5:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_7:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_9:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_11:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+  chip_2:
+    eth_channel_4:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_5:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_6:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_7:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_8:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_10:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+  chip_0:
+    eth_channel_4:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_5:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_6:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_7:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_8:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_10:
+      direction: EAST
+      sender_channel_used_bitfield: 0x0003
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+        - id: 1
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: [0]
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0002
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+  chip_4:
+    eth_channel_4:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_6:
+      direction: NORTH
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_9:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0001
+      sender_channels:
+        - id: 0
+          min_packet_size_bytes: 1072
+          max_packet_size_bytes: 1072
+          forwarded_from_receiver_vcs: []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0001
+      noc_send_types_by_vc:
+        - vc: 0
+          types: [NOC_UNICAST_WRITE]
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []
+    eth_channel_11:
+      direction: WEST
+      sender_channel_used_bitfield: 0x0000
+      sender_channels:
+        []
+      sender_channel_forwarded_to_by_vc:
+        - vc: 0
+          bitfield: 0x0000
+        - vc: 1
+          bitfield: 0x0000
+        - vc: 2
+          bitfield: 0x0000
+      receiver_channel_data_forwarded_bitfield: 0x0000
+      noc_send_types_by_vc:
+        - vc: 0
+          types: []
+        - vc: 1
+          types: []
+        - vc: 2
+          types: []

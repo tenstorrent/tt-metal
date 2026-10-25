@@ -481,6 +481,9 @@ public:
 
     void set_firmware_context_switch_interval(size_t interval);
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
+    // Ethernet TX queue keepalive period in cycles (ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT), set by the router while it
+    // runs. 0 leaves the firmware's value.
+    void set_eth_txq_seq_update_timeout(uint32_t cycles);
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
@@ -542,6 +545,7 @@ public:
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
+    uint32_t eth_txq_seq_update_timeout = 0;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;

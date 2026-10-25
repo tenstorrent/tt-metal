@@ -1039,12 +1039,18 @@ constexpr bool skip_idle_bit_test = [] {
     return n != 0;
 }();
 
+constexpr uint32_t grouped_free_slots_imm_mask = 0x7FFu;
+static_assert(
+    grouped_free_slots_imm_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1),
+    "grouped_free_slots_imm_mask must fit within REMOTE_DEST_WORDS_FREE_WIDTH");
+
 template <size_t CH>
 FORCE_INLINE bool channel_all_slots_free(uint32_t raw) {
+    static_assert(SENDER_NUM_BUFFERS_ARRAY[CH] <= grouped_free_slots_imm_mask);
     if constexpr (skip_idle_bit_test) {
         return (raw & SENDER_NUM_BUFFERS_ARRAY[CH]) != 0;
     } else {
-        return (raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1)) == SENDER_NUM_BUFFERS_ARRAY[CH];
+        return (raw & grouped_free_slots_imm_mask) == SENDER_NUM_BUFFERS_ARRAY[CH];
     }
 }
 
@@ -1075,12 +1081,13 @@ template <
 FORCE_INLINE bool sender_channel_try_send(
     SenderChannelT& local_sender_channel,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
-    uint32_t sender_channel_free_slots_stream_id,
     SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
     PerfTelemetryRecorder& perf_telemetry_recorder,
     LocalTelemetryT& local_fabric_telemetry,
     bool has_unsent_packet,
     int32_t& completions_since_last_check) {
+    constexpr uint32_t sender_channel_free_slots_stream_id =
+        sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)];
     constexpr bool use_bubble_flow_control =
         sender_channel_is_traffic_injection_channel[sender_channel_index] && enable_deadlock_avoidance;
     static_assert(
@@ -1173,7 +1180,7 @@ FORCE_INLINE bool sender_channel_try_send(
         std::atomic_signal_fence(std::memory_order_seq_cst);
 
         outbound_to_receiver_channel_pointers.num_free_slots--;
-        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        increment_local_update_ptr_val<sender_channel_free_slots_stream_id>(1);
         std::atomic_signal_fence(std::memory_order_seq_cst);
 
         if (static_cast<int32_t>(txq_status_raw << (31 - ETH_TXQ_STATUS_CMD_ONGOING_BIT)) < 0) [[unlikely]] {
@@ -1201,7 +1208,7 @@ FORCE_INLINE bool sender_channel_try_send(
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
         }
-        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+        increment_local_update_ptr_val<sender_channel_free_slots_stream_id>(1);
     }
 
     phase_profiler.close<PHASE_TX_SEND>(send_start);
@@ -1281,11 +1288,14 @@ FORCE_INLINE
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry,
         uint32_t grouped_free_slots_raw = 0) {
+    static_assert(WorkerInterfaceT::num_buffers <= grouped_free_slots_imm_mask);
     uint32_t free_slots;
     if constexpr (sender_channel_index < grouped_packet_check_channels) {
-        free_slots = grouped_free_slots_raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
+        free_slots = grouped_free_slots_raw & grouped_free_slots_imm_mask;
     } else {
-        free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
+        constexpr uint32_t stream_id =
+            sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)];
+        free_slots = get_ptr_val<stream_id>();
     }
     const bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
 
@@ -1294,7 +1304,6 @@ FORCE_INLINE
         sender_channel_try_send<sender_channel_index, to_receiver_pkts_sent_id, enable_first_level_ack>(
             local_sender_channel,
             outbound_to_receiver_channel_pointers,
-            sender_channel_free_slots_stream_id,
             sender_channel_from_receiver_credits,
             perf_telemetry_recorder,
             local_fabric_telemetry,
@@ -1338,7 +1347,7 @@ FORCE_INLINE
         SenderChannelT& local_sender_channel,
         WorkerInterfaceT& local_sender_channel_worker_interface,
         ReceiverPointersT& outbound_to_receiver_channel_pointers,
-        uint32_t sender_channel_free_slots_stream_id,
+        [[maybe_unused]] uint32_t sender_channel_free_slots_stream_id,
         SenderChannelFromReceiverCreditsT& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry,
@@ -1351,11 +1360,14 @@ FORCE_INLINE
         }
         has_unsent_packet = !all_slots_free;
     } else {
+        static_assert(WorkerInterfaceT::num_buffers <= grouped_free_slots_imm_mask);
         uint32_t free_slots;
         if constexpr (sender_channel_index < grouped_packet_check_channels) {
-            free_slots = grouped_free_slots_raw & ((1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1);
+            free_slots = grouped_free_slots_raw & grouped_free_slots_imm_mask;
         } else {
-            free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
+            constexpr uint32_t stream_id =
+                sender_channel_free_slots_stream_ids[fabric_position_for_compact_sender(sender_channel_index)];
+            free_slots = get_ptr_val<stream_id>();
         }
         has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     }
@@ -1365,7 +1377,6 @@ FORCE_INLINE
         sender_channel_try_send<sender_channel_index, to_receiver_pkts_sent_id, enable_first_level_ack>(
             local_sender_channel,
             outbound_to_receiver_channel_pointers,
-            sender_channel_free_slots_stream_id,
             sender_channel_from_receiver_credits,
             perf_telemetry_recorder,
             local_fabric_telemetry,

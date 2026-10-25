@@ -551,6 +551,11 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         constexpr uint32_t k_BlackholeFabricRouterContextSwitchInterval = 32;
         edm_builder->set_firmware_context_switch_interval(k_BlackholeFabricRouterContextSwitchInterval);
         edm_builder->set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE);
+        // An idle TX queue returns the acknowledgements for its paired RX queue only in a keepalive. At the
+        // firmware's period (8000 cycles) that caps one-way traffic; 1000 lifts the cap and costs the link nothing
+        // measurable.
+        constexpr uint32_t k_BlackholeEthTxqSeqUpdateTimeout = 1000;
+        edm_builder->set_eth_txq_seq_update_timeout(k_BlackholeEthTxqSeqUpdateTimeout);
     }
 
     // Create tensix builder if needed

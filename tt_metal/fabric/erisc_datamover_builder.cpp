@@ -1326,6 +1326,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_DOWNSTREAM_SENDERS_VC1"] = num_vc1_downstream_edms;
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
+    named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = this->eth_txq_seq_update_timeout;
+    // Study override (0 = the firmware's value); not for mainline.
+    if (std::getenv("TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT")) {
+        named_args["ETH_TXQ_SEQ_UPDATE_TIMEOUT"] = fabric_experiment_env("TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT");
+    }
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
     named_args["ENABLE_DEADLOCK_AVOIDANCE"] = final_enable_deadlock_avoidance ? 1 : 0;
     named_args["ENABLE_SPEEDY_VC0"] = enable_speedy_vc0 ? 1 : 0;
@@ -1968,6 +1973,10 @@ void FabricEriscDatamoverBuilder::set_wait_for_host_signal(bool wait_for_host_si
 
 void FabricEriscDatamoverBuilder::set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type) {
     this->firmware_context_switch_type = type;
+}
+
+void FabricEriscDatamoverBuilder::set_eth_txq_seq_update_timeout(uint32_t cycles) {
+    this->eth_txq_seq_update_timeout = cycles;
 }
 
 void FabricEriscDatamoverBuilder::apply_channel_trimming_overrides(const ChannelTrimmingOverrides& overrides) {

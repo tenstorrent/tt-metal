@@ -1,0 +1,87 @@
+# VC1 on the P150x8: two 2x2 meshes (p150x8_2x2_split_mgd.textproto, one MPI rank each, launched with ttrun.py and
+# p150x8_2x2_split_rank_bindings.yaml). Device ids are [mesh_id, chip]; chips are row-major in each 2x2 mesh.
+# First the multi-mesh sanity patterns (data checked, intra- and inter-mesh), then benchmark rows: intra-mesh 1-hop
+# E/W and N/S, intra-mesh multicast. No inter-mesh benchmark: the harness's BandwidthProfiler aborts on inter-mesh
+# patterns (bad optional access in trace_line_or_mesh_traffic_path, job 216).
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "MultiMeshAllToAll"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 100
+    patterns:
+      - type: all_to_all
+
+  - name: "MultiMeshNeighborExchangeInter"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 3000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "VC1Mesh1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "VC1Mesh1HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 2]
+
+  - name: "VC1MeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [4352]
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+    patterns:
+      - type: all_to_all
+        iterations: 1
+        mesh_scope: intra_mesh

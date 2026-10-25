@@ -1,0 +1,152 @@
+# 1D (Linear / Ring / NeighborExchange) throughput on the 2x4 P150x8 mesh, 1 link, 4352 B (the default 1D payload, as 2D).
+# Chip ids are row-major: [0, 0..3] is the top row, [0, 4..7] the bottom row. Unicast rows mirror exp_2d_4352.yaml;
+# the multicast / half-ring / neighbor rows are exp_base.yaml's patterns (§1) at 4352 B.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  # One flow, one hop east-west
+  - name: "Linear1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  # One flow, one hop north-south
+  - name: "Linear1HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+
+  # Two flows, one hop east-west in both directions
+  - name: "Linear1HopEWBidir"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 0]
+
+  # One flow, three hops east-west: chips 1 and 2 forward only
+  - name: "Linear3HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  # Every chip multicasts along its lines (all_to_all)
+  - name: "LinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+    patterns:
+      - type: all_to_all
+        iterations: 1
+
+  # Multicast in one direction along each line
+  - name: "UnidirLinearMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Linear
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+    patterns:
+      - type: unidirectional_linear
+        iterations: 1
+
+  # Ring topology, half-ring multicast
+  - name: "HalfRingMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Ring
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: mcast
+      num_packets: 50000
+    patterns:
+      - type: half_ring
+        iterations: 1
+
+  # Neighbor exchange (speedy single-channel routers)
+  - name: "NeighborExchange"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: NeighborExchange
+    parametrization_params:
+      num_links: [1]
+      ntype: [unicast_write, unicast_scatter_write]
+      size: [4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    patterns:
+      - type: neighbor_exchange
+        iterations: 1

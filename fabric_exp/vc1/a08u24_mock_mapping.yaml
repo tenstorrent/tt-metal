@@ -1,0 +1,5 @@
+# Mock cluster for the VC1 split (CPU only): both ranks see this host's cluster descriptor; TT_VISIBLE_DEVICES in the
+# rank bindings picks each rank's four chips. Used to reproduce control-plane placement without the device.
+rank_to_cluster_mock_cluster_desc:
+  0: "fabric_exp/a08u24_cluster_desc.yaml"
+  1: "fabric_exp/a08u24_cluster_desc.yaml"

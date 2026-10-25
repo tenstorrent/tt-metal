@@ -4461,6 +4461,1457 @@ Cost per flushed signal ((flushed − unflushed) × chunk):
 - Measuring it needs a fused-scatter traffic type in the stream test, built in the streams worktree first, plus rows for
   every packet and for a chunk ending in a fused scatter.
 
+## 76. 1D on the current tree: bandwidth vs main, which ERISC binds, per-packet split
+
+**Setup** (`fabric_exp/p76_runs.sh` v/a/b, `p76_compare.py`; broker jobs 190–192, all passed):
+- The tree at checkpoint `5ef745cb2a0`: v2 + s74, flags 13129088, keepalive 1000, telemetry off.
+- `fabric_exp/exp_1d_4352.yaml` (4352 B, the 1D default payload as in 2D):
+  - Linear 1-hop E/W, N/S, bidirectional, and 3-hop (mirrors of the 2D rows);
+  - `exp_base.yaml`'s linear and unidirectional multicast, half ring and neighbor exchange;
+  - write + scatter for every row.
+- "main" is the same-tree stock router (v1 kernel, no flags) at the firmware keepalive, as in §44.
+- **1D validation on v2:** `test_fabric_sanity_at_least_2x2_mesh.yaml` (Linear, Ring, Mesh), 181/181.
+- **Channel depths,** from the router builds' template symbols:
+
+  | Topology | worker slots | forwarding slots | receiver slots | trids |
+  | --- | ---: | ---: | ---: | ---: |
+  | Linear | 16 | 16 | 32 | 16 |
+  | Ring (deadlock avoidance on) | 16 | 16 | 32 | 8 |
+  | Neighbor exchange (speedy, one sender channel) | 32 | | 32 | 16 |
+  | 2D | 17 | 16 × 3 | 16 | 16 |
+
+**Bandwidth** (cycles/packet, payload GB/s), with the +20 spin response on E0 / E1:
+
+| Row | main | main + keepalive | current | vs main | E0 / E1 response | binds |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| 1-hop write E/W (N/S identical) | 187.6 (31.3) | 168.4 | **137.6 (42.7)** | +36% | +9.7 / +8.5 | neither: worker credit loop |
+| 1-hop scatter | 194.4 (30.2) | 194.5 | **167.1 (35.2)** | +16% | 0 / +31.5 | E1 |
+| bidirectional write | 168.0 (35.0) | 168.0 | **146.9 (40.0)** | +14% | +5.1 / +3.4 | neither |
+| 3-hop write | 187.6 (31.3) | 166.6 | **146.8 (40.0)** | +28% | +7.8 / +21.2 | E1 |
+| linear multicast write / scatter | 163.4 / 220.8 | same | **149.2 / 196.3** | +10% / +13% | +5.5 / +20.8; 0 / +32 | E1 |
+| unidirectional multicast write / scatter | 206.2 / 273.5 | same | **196.4 / 255.3** | +5% / +7% | −2 / +22.5; 0 / +32 | E1 |
+| half-ring multicast write / scatter | 249.5 / 299.2 | 247.9 / 297.5 | **229.9 / 284.2** | +9% / +5% | +16.6 / +28.4; +11.6 / +25.8 | both |
+| neighbor exchange write / scatter | 124.8 / 153.9 | same | **125.0 / 146.0** | 0% / +5% | +29.9 / +1.3; +10 / +35 | E0 (at the wire) / E1 |
+
+**E0 per packet:**
+- 1-hop write: send 47.6, credit returns 6.2 (0.19/packet), visits 121.8 at 2.31 visits per packet. That is two
+  channels against 2D's four, so the overhead is ~68 here against 2D's ~70.
+- Half ring: credit returns 27.9 at 1.7 per packet. The ring returns credits per packet.
+- Unidirectional multicast forwarder: the connection body runs 1.5 times per packet (18.3). It is a router with no
+  worker connected, so `check_worker_connections` runs on every pass. E0 does not bind there.
+- Neighbor exchange (speedy path): send 61.4, visits 130.1.
+
+**E1 per packet** (1-hop receiver / forwarder):
+
+| Row | decode/admit | forward | local | completion |
+| --- | ---: | ---: | ---: | ---: |
+| 1-hop write | 15.2 | | 47.1 | 15.5 (0.27) |
+| 1-hop scatter | 15.1 | | 100.0 | 15.2 |
+| 3-hop forwarder | 28.5 | 66.0 | | 15.6 |
+| linear / unidirectional multicast forwarder | 29.0 | 58.0 | 41.2 | 15.8 |
+| half-ring forwarder | 27.4 | 75.0 | 49.2 | 20.0 (1.0) |
+
+The 1-hop decode is 15 against 2D's 20 (E/W) and 27 (N/S).
+
+**What it shows:**
+- **1-hop writes are bound by the worker credit loop, not by an ERISC.**
+  - E0 needs ~122 per packet and E1 ~129, against a 137.6 interval. +20 on either ERISC adds only ~9.
+  - E0 is never blocked on receiver credit or the TX queue. Its extra 0.2 passes per packet find the worker channel
+    empty.
+  - A worker slot frees only when the far E1's completion returns, so 16 slots cap the rate at about one 4 KiB
+    round trip (~2,300 cycles) / 16 ≈ 140.
+  - 2D escapes this with 17 worker slots, because the Mesh allocator gives every spare slot to the worker channel.
+  - Linear takes the first option that fits, {16 sender, 32 receiver} (64 slots of 80–81). Nothing gives it the ~17
+    spare slots. The §27 `TT_FABRIC_EXP_WORKER_SLOTS` knob sits in the same Mesh-only branch.
+  - Expected with ≥ 24 worker slots: 1-hop at E1's ~129 (45 GB/s). Untested.
+- **Every forwarded, multicast and scatter row is E1-bound,** with 2D's costs. Local write 47, scatter 100, forward
+  58–66 (75 on the ring), decode 28–29 on forwarders.
+- **The ring costs more per packet:** forward 75, completion every packet (20, no batching), credit returns 1.7 per
+  packet on E0. Both ERISCs are near their limit.
+- **Neighbor exchange is at the wire** (125.0); its scatter row is E1-bound (+5% over main).
+- **None of the flushed-atomic work reaches 1D.** `can_defer_local_atomic_flush()` is compiled only under
+  `FABRIC_2D`, so 1D flushed atomics pay the pre-§63 cost. The s74 `>=` slot condition is not exercised by 1D
+  either.
+
+## 77. The user's s77: compile-time stream ids win; dropping the sender slot table costs up to 21 on E0
+
+**Change (s77, the user's):** three parts on top of the committed tree (s74c, 5ef745cb2a0).
+- `StaticSizedSenderEthChannel` drops the `SlotAddresses` table and buffer index. It keeps only the cached slot
+  address, first / last slot and stride, and advances by stride everywhere (speedy path included). The E0 stack frame
+  shrinks 304–320 bytes on every 2D config.
+- `sender_channel_try_send` and both sender steps take the free-slots stream id at compile time
+  (`increment_local_update_ptr_val<id>`, `get_ptr_val<id>`). The per-send update becomes `li; lui; sw` instead of a
+  stack reload of the id plus `zext / slli / add` (6 → 3 instructions).
+- `[[unlikely]]` removed from the pending-atomic branches (E1) and the two TXQ-status checks (E0).
+
+**Review:** all three are behavior-preserving.
+- The runtime array passed to the steps (`local_sender_channel_free_slots_stream_ids`) is a straight copy of the
+  constexpr `sender_channel_free_slots_stream_ids`, and the steps' only call site indexes it with the same
+  `fabric_position_for_compact_sender(sender_channel_index)`.
+- No caller uses the removed members. The mux, relay and UDM kernels call `get_buffer_address(BufferIndex)` on
+  `EthChannelBuffer` (the receiver-side class), which keeps its table.
+
+**Runs** (`dq77_runs.sh` a–e, jobs 193–197, `dq77_compare.py`). To split the change:
+- s77u = s77 with the hints restored;
+- s77t = slot-table removal alone;
+- s77s = compile-time stream ids alone;
+- s77sn = s77s without the hints.
+
+Control s74c ×3, s77 ×2, s77s ×2, others ×1; run spread ≤ 0.4 except the noisy chunk-4 flushed rows.
+
+| Row (cycles/packet) | s74c | s77t | s77s | s77sn | s77u | s77 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mesh 1-hop E/W write 4352 | 132.3 | 147.5 | **132.0** | 132.1 | 135.4 | 140.1 |
+| Mesh 1-hop N/S write 4352 | 133.3 | 149.0 | **133.2** | 134.2 | 135.8 | 138.3 |
+| Mesh 1-hop E/W bidir write | **138.4** | 149.5 | 139.1 | 139.8 | 140.3 | 141.8 |
+| E/W write 16–1024 B | 128.0 | 148.8 | **123.8** | **123.8** | 135.4 | 140.6 |
+| N/S write 16–1024 B | 128.3 | 150.0 | **124.0** | 128.2 | 135.2 | 138.2 |
+| Forwarded write 16–1024 B | 111.9 | 123.6 | 111.9 | **111.6** | 115.6 | 119.3 |
+| E/W fused (E1) | 155.2 | 155.2 | 155.2 | **153.8** | 155.2 | 153.8 |
+| E/W fused, flushed every packet | 441.3 | | 441.5 | **434.9** | 441.1 | 434.7 |
+| N/S atomic | 138.9 | 148.8 | 138.9 | 141.4 | 138.8 | 141.4 |
+| Linear 1-hop write (1D) | 137.7 | | **136.1** | **136.1** | 136.5 | 136.5 |
+| Mean vs s74c: 2D 4352 / mix | | +5.3 / +11.7 | **−0.0 / −1.2** | +0.1 / −0.6 | +0.9 / +3.2 | +2.1 / +5.8 |
+| Mean vs s74c: flushmix / flushmix4 / 1D | | | **−0.7 / −1.4 / −0.8** | −0.6 / −1.2 / −0.7 | +0.7 / +2.2 / −0.6 | +2.1 / −0.2 / −0.6 |
+
+Validation:
+- s77: stream 10/10, mesh 96/96, 1D sanity 181/181.
+- s77s: the same three suites, all passing.
+- Every benchmark suite of every variant passes.
+
+**What it shows:**
+- **As submitted, s77 is slower on every E0-bound row.** 1-hop E/W write +7.8, small writes +12.6 E/W and +9.9 N/S,
+  forwarded small writes +7.4. E1-bound rows move ≤ 1.4 either way.
+- **The compile-time stream ids are a clean win (s77s).**
+  - Small writes: −4.2 E/W, −4.3 N/S.
+  - Mix −1.2 mean, flushed mixes −0.7 / −1.4, 1D −0.8 (1-hop −1.6).
+  - 4352 B 2D flat, except bidir +0.7.
+  - E0 is 2–9 instructions smaller; E1 is unchanged.
+- **The slot-table removal alone (s77t) costs 15 on 4 KiB writes and 21 on small writes,** though the removed code
+  never ran in the loop. With the stream ids on top (s77u), the loss is still 3–7.
+  - With the table gone, the 16-byte channel struct gets scalarized. Stride and bounds become constants: s77u
+    advances by an immediate 4448. Each channel's slot pointer moves into a register.
+  - That reshuffles register allocation across E0's whole loop:
+    - s77u keeps `channel_connection_established` on the stack: a load plus a store every pass.
+    - s77t spills the TXQ status two instructions after reading it.
+  - Hot-path instruction counts and stack accesses stay within a few instructions of the control in all five builds
+    (worker send 46–50 against 47), so the cycle loss is not explained by instruction count. No single instruction
+    pattern predicts it: s77s, the fastest build, uses the TXQ status sooner than the control. Same E0 layout
+    sensitivity as §32.
+- **Dropping `[[unlikely]]` is mixed (s77s → s77sn):**
+  - E/W fused −1.4 and E/W fused flushed −6.6 (E1);
+  - N/S small writes +4.2, N/S atomic +2.5, N/S scatter and fused +1.2 to +1.3;
+  - E0 +42 to +52 instructions on most 2D configs.
+  - Mean slightly worse than s77s.
+- **Recommendation: take s77s** (`variants/s77s/`): compile-time stream ids, slot table kept, hints kept.
+  - The table removal is a footprint cleanup whose cost depends on register allocation. The no-allocation-dependent-
+    changes rule rules it out as built.
+  - The hint removal trades N/S for E/W fused rows.
+
+## 78. The user's s78 (word load + lean sender channels) and a `noinline` main loop: neither beats s77s
+
+**Change (s78, the user's):** s77s plus two parts.
+- **Word load:** the pre-send payload size is read as the whole 4 B word at header offset 40 (`lw`), inside the
+  fence, and masked (`& 0xFFFF`) after the TX-queue busy test. The `PacketHeaderBaseT` alias moves out of
+  `#if defined(FABRIC_2D)` so 1D builds see it.
+- **Lean channels:** v2's sender channels become the 4 B `LeanStrideSenderEthChannel` (cached slot address only) and
+  advance with `advance_to_next_cached_buffer_slot_addr_by_stride_ct<base, channel_buffer_size>()`, in
+  `sender_channel_try_send` and, under `FABRIC_ERISC_ROUTER_V2`, in the speedy path. v1 is unchanged. This is §32's
+  bit-24 channel type, which §50 removed from v2.
+
+**Review:** both parts are behavior-preserving.
+- Offset 40 is 4 B-aligned in both header types; `PackedHeaderWord40` asserts it, but only in 2D. The `src_ch_id`
+  byte store to offset 43 comes after the load, and the mask keeps only bytes 40–41.
+- Every v2 sender channel is initialised from `channel_allocs` with `channel_buffer_size` as its stride, so the
+  compile-time bounds match the runtime ones. The speedy path (VC2) was the reason v1 kept the full class there; the
+  `FABRIC_ERISC_ROUTER_V2` branch covers it.
+- In s77s the `zext.h` sits after the CMD and STATUS loads (`lhu; lw CMD; lw STATUS; zext.h`), not between the L1
+  load and the TX-queue loads. In s78 it moves after the busy test, as intended.
+
+**`noinline` A/B** (the user's question): `run_fabric_edm_main_loop` marked `__attribute__((noinline))` instead of
+`FORCE_INLINE`, on both ERISCs (s78n, s77si). Then on E0 only (s78n0, s77si0), using an `if constexpr (MY_ERISC_ID == 0)`
+dispatch to a `noinline` wrapper while E1 keeps the inline call.
+- The out-of-line builds pass a stack check in the run script: the three largest frames plus 256 B leave ≥ 940 B of
+  local memory free.
+- In the E0-only builds, E1's instruction count changes by +8 to +28 on most configs, against +18 to +108 when both
+  ERISCs go out of line. The wrapper passes the volatile termination-signal pointer by reference, so E1 is not
+  byte-identical.
+
+**Runs** (`dq78_runs.sh` a–c, jobs 198–200, `dq78_compare.py`):
+- Split builds: s78w = word load alone, s78l = lean channels alone.
+- Runs: s77s ×2 (this session's control plus §77's `dq77sv`), s78 ×2, others ×1. Run spread is ≤ 0.2, except the
+  chunk-4 flushed rows (up to 12).
+
+| Row (cycles/packet) | s77s | s78w | s78l | s78 | s78n | s78n0 | s77si | s77si0 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mesh 1-hop E/W write 4352 | 132.0 | 132.0 | 135.4 | 131.2 | 131.6 | **131.2** | 132.5 | 132.1 |
+| Mesh 1-hop N/S write 4352 | 133.2 | 133.3 | 135.8 | 133.6 | 132.7 | **131.6** | 133.5 | 132.6 |
+| E/W write 16 B | 123.8 | 123.8 | 135.4 | 130.1 | 120.1 | **118.9** | 122.3 | 124.9 |
+| N/S write 16 B | 124.0 | 124.0 | 135.2 | 130.3 | 125.4 | **122.7** | 125.7 | 126.0 |
+| Forwarded write 16 B | **111.9** | **111.9** | 115.7 | **111.8** | 115.6 | 113.1 | 115.6 | 113.1 |
+| E/W atomic | **129.4** | **129.4** | 135.0 | 130.1 | 133.1 | 130.5 | 133.0 | 130.5 |
+| E/W scatter 4352 (E1) | **165.2** | **165.2** | **165.2** | **165.2** | 175.1 | 166.4 | 175.1 | 166.4 |
+| 1D Linear 1-hop write | 136.1 | 136.1 | 136.5 | 136.4 | **134.2** | 135.4 | **134.2** | 135.5 |
+| 1D unidir multicast write | 196.3 | 196.2 | **195.9** | 196.0 | 209.3 | 196.1 | 209.3 | 196.1 |
+| 1D neighbor exchange write | **124.9** | 125.0 | **124.9** | **124.9** | 133.2 | 135.1 | 131.5 | 131.6 |
+| Mean vs s77s: 2D 4352 / mix | | +0.0 / +0.0 | +0.9 / +4.4 | +0.1 / +1.7 | +4.5 / +1.7 | +0.4 / **−0.5** | +4.6 / +2.2 | +0.6 / +0.9 |
+| Mean vs s77s: flushmix / 1D | | +0.0 / +0.0 | +1.5 / +0.1 | +0.6 / +0.1 | +0.4 / +1.6 | **−0.6** / +0.9 | +1.3 / +1.5 | +0.5 / +0.7 |
+
+Small writes at 256 and 1024 B are within 2.1 of the 16 B rows in every build.
+
+Validation:
+- s78, s78n, s77si, s78n0 and s77si0 each pass stream 10/10, mesh 96/96 and 1D sanity 181/181.
+- Every benchmark suite of every variant passes.
+
+**What it shows:**
+- **The word load changes nothing.** s78w is within 0.1 of s77s on every row, and E0 has the same instruction count.
+  Before the change, the `zext.h` already waited on the L1 load while the STATUS load was outstanding.
+- **The lean channels lose again (s78l), the third time after §32 and §77's s77t.**
+  - Small writes +11.6 E/W and +11.2 N/S, forwarded +3.8, E/W atomic +5.6, 1-hop 4352 B +3.4.
+  - E0 is 4–38 instructions and 128–320 B of frame smaller. E1 is unchanged.
+  - The loop's stack loads barely move (34 → 32 on the hot E/W config). In s78, the compile-time last-slot address is
+    materialised once and spilled, so the wrap test still reloads it from the stack.
+- **s78 is +6.3 on small writes against s77s,** half of s78l's loss. 1-hop 4352 B E/W is −0.8. The word load is
+  neutral on its own, but combined with the lean channel type it lands on a different allocation.
+- **`noinline` on both ERISCs is ruled out.**
+  - E1 grows by 18–108 instructions. Every E1-bound scatter row is +6 to +10, and 1D multicast is +7 to +13.
+  - E/W small writes do improve: 120.1 (s78n) and 122.3 (s77si) against s77s's 123.8.
+- **`noinline` on E0 alone depends on the base build:**
+  - **On s78 (s78n0)**, it gives the best small writes so far: E/W 118.9 (−4.9 against s77s), N/S 122.7 (−1.3), and
+    1-hop 4352 B −0.8 E/W and −1.6 N/S.
+    - Forwarded +1.2, atomics +0.5 to +1.3 and fused +1.3.
+    - 2D scatter +1.2, from E1's small code change or E0.
+    - 1D neighbor exchange +10.2 write and +6.0 scatter.
+  - **On s77s (s77si0)** it is worse almost everywhere: small writes +1.1 E/W and +2.0 N/S, forwarded +1.2, neighbor
+    exchange +6.7.
+  - Out of line, E0's loop trades stack loads for loads through the argument pointers. On the hot config, sp loads
+    drop from 32–34 to 12–18 while other loads rise from 27 to 42–46, so total memory traffic is about the same.
+  - The neighbor-exchange loss shows in all four out-of-line builds, so it is the one effect that does not depend on
+    allocation.
+- **Recommendation: stay on s77s.**
+  - The word load is neutral; keep it only for readability, with an alignment `static_assert` in 1D builds too.
+  - The lean channels are ruled out a third time.
+  - `noinline` helps E0 only when combined with lean channels, and the sign of that change flips with the base build,
+    which the no-allocation-dependent-changes rule rules out. It also costs 1D neighbor exchange 6.6–10.2 in every build.
+
+## 79. The user's s79 (cold connection helpers + 0x7FF free-slots mask): the mask alone wins, the helpers lose
+
+**Change (s79, the user's):** s77s plus two parts, both aimed at stack traffic in E0's loop.
+- **Cold connection helpers:** `run_worker_sender_step` keeps the disconnected poll inline and moves the two
+  transition bodies into `__attribute__((noinline))` `establish_worker_connection_cold` /
+  `teardown_worker_connection_cold`, which take only the worker interface. They replace the inlined
+  `check_worker_connections` call. The aim is to remove the per-pass `li a6,1; sw a6,12(sp)` (the merged store of
+  `channel_connection_established = true`).
+- **Narrow mask:** the grouped free-slots value is masked with `grouped_free_slots_imm_mask = 0x7FF` instead of the
+  17-bit field mask `(1 << REMOTE_DEST_WORDS_FREE_WIDTH) - 1`. 0x1FFFF does not fit `andi`'s 12-bit signed immediate,
+  so s77s keeps it in a stack slot and reloads it every pass (`lw t6,56(sp); and`). It applies in
+  `channel_all_slots_free` and in both sender steps. The change carries `static_assert`s that the mask fits the field
+  and every channel's `num_buffers` fits the mask.
+
+**Review:** both parts are behavior-preserving.
+- The helpers reproduce `check_worker_connections` exactly: poll `connection_live_semaphore` while disconnected,
+  test for a teardown request while connected. The teardown flag is now read once per pass instead of twice (the
+  outer `||` and the inner `else if` both read it before).
+- `PHASE_TX_CONN` now times only the two transitions, not the disconnected poll. This matters only in phase-profiler
+  builds.
+- The free-slots counter stays within [0, `num_buffers`] (it starts at `num_buffers`, and a slot is taken only when one
+  is free). Bits 11–16 are therefore always zero and the narrow mask gives the same value. The upper register fields
+  (bit 17 and up) still need masking, and they are.
+
+**Runs** (`dq79_runs.sh` a and b, jobs 203–204, `dq79_compare.py`):
+- Split builds: s79c = connection helpers alone, s79m = mask alone.
+- Runs: s77s ×3 (this job's control plus §77's `dq77sv` and §78's `dq77s3`), all others ×2. Run spread is 0.0 on
+  every 2D row except the chunk-4 flushed rows (up to 12). 1D half-ring multicast had a one-run outlier of up to 6.0,
+  in s79m scatter and s79c write.
+- Validation (s79): stream 10/10, mesh 96/96, 1D sanity 181/181. Every benchmark suite of every variant passes.
+- Stack check: every new router ELF leaves ≥ 1052 B of local memory free.
+
+| Row (cycles/packet) | s77s | s79c | s79m | s79 |
+| --- | ---: | ---: | ---: | ---: |
+| Mesh 1-hop E/W write 4352 | 132.0 | **131.7** | 132.2 | 132.1 |
+| Mesh 1-hop N/S write 4352 | 133.3 | **132.2** | 133.1 | 133.1 |
+| Mesh 3-hop E/W write 4352 | 147.8 | 148.1 | **146.9** | 147.8 |
+| E/W write 16 B | 123.8 | 124.3 | **121.7** | 127.4 |
+| E/W write 1024 B | 124.0 | 124.4 | **122.8** | 127.5 |
+| E/W mix of 4 sizes | 124.3 | 124.4 | **122.2** | 127.6 |
+| N/S write 16 B | 124.0 | 125.5 | **123.9** | 127.5 |
+| Forwarded write 16 B | **111.9** | **111.9** | **111.9** | 112.3 |
+| E/W atomic | 129.4 | **129.3** | **129.3** | 129.6 |
+| Mean vs s77s: 2D 4352 / mix | | −0.11 / +0.17 | −0.07 / **−0.36** | −0.06 / +1.00 |
+| Mean vs s77s: flushmix / 1D | | +0.03 / +0.10 | **−0.25** / +0.16 | +0.47 / +0.03 |
+
+The 1D means are within the half-ring outliers; every other 1D row is within 0.3 of s77s in every build. E1 is
+byte-for-byte the same size in all three builds (0 instructions on every config), so every difference is on E0.
+
+**E0 loop on the hot E/W config** (`10733501891889981293`):
+
+| Build | Loop instructions | sp loads | sp stores | Mask | Per-pass `established` store |
+| --- | ---: | ---: | ---: | --- | --- |
+| s77s | 227 | 34 | 7 | `lw t6,56(sp); and` | `li a6,1; sw a6,12(sp)` |
+| s79m | 226 | 33 | 6 | `andi t1,t1,2047` | gone |
+| s79c | 244 | 26 | 6 | `lw a4,24(sp); and` | gone |
+| s79 | 241 | 25 | 6 | `andi a5,a5,2047` | gone |
+
+- The helpers add 25–77 instructions to E0 across configs; the mask removes 1–9.
+- In s79c and s79, GCC duplicates the TX-queue issue, completion read and `did_something` code inside the loop. That
+  accounts for the +17 loop instructions, despite 8 fewer stack loads. The calls themselves sit outside the loop.
+
+**What it shows:**
+- **The mask alone is the best build so far on E/W small writes (s79m).**
+  - E/W 16 B −2.1, 1024 B −1.2, mix of 4 sizes −2.1, 3-hop E/W −0.9.
+  - N/S and forwarded rows are unchanged.
+  - It also removes the per-pass `established` store that the helpers targeted: with the mask constant no longer held
+    in a stack slot, the flag no longer lands there either.
+- **The helpers lose on their own (s79c).** Small writes +0.5 E/W and +1.5 N/S, against 1-hop 4352 B −0.3 E/W and −1.1
+  N/S. They remove the store and 8 stack loads, but the duplicated send path costs more.
+- **Together they are worse than either alone (s79):** small writes +3.6 E/W and +3.5 N/S, forwarded +0.4. Adding the
+  mask on top of the helpers costs 3.1 on E/W 16 B, where on s77s it saves 2.1. As in §78, E0's cycle cost follows the
+  loop's layout, not its instruction or spill counts.
+- **Recommendation: take the mask alone (s79m) as the new base, and drop the helpers.**
+  - The mask removes work on every pass and is safe by the counter bound, so it is not an allocation trick.
+  - The size of its gain still depends on allocation (it reverses on the helper layout), so don't treat −2.1 as
+    banked for later changes.
+
+## 80. Why 3-hop E/W writes run ~16 slower than 1-hop, and a follow-up: cached downstream credits on E1 (not yet run)
+
+**Question (the user's):** 3-hop E/W writes run at 147.8 against 132.0 for 1-hop (s77s, 4352 B). The middle routers'
+E1 forwards instead of delivering locally, which is a write plus a doorbell, so why does it cost that much?
+
+**Answer** (no new runs: §27, §54, §72, §73, plus the s79m disassembly below): the forward costs the middle router's E1
+~24 more per packet than a local write. E1 has ~13 of slack on a 1-hop write, so in 3-hop it becomes the slowest
+stage. Two more limits sit right behind it.
+
+| Per packet (cycles) | 1-hop E/W (chip 1's West router delivers) | 3-hop (chips 1–2's West router forwards) |
+| --- | ---: | ---: |
+| E1 decode/admit (§72 profile) | 20.1 | 30.3 |
+| E1 local write / forward (§72 profile) | 46.1 | 60.0 |
+| E1 busy (§72, +20 spin slack test) | ~115–120 | ~140 |
+| E0 busy (same test) | ~129 (binds) | ~135 |
+| Credit-loop floor | 17 worker slots → ~124–130 | 16 forwarding slots → ~135–140 |
+| Measured | 132.0 | 146.9–148.8 |
+
+§72 ran on s71 (3-hop 148.8). E1's receive path has barely changed since: 3-hop is 147.8 on s77s and 146.9 on s79m.
+
+**Why the forward costs E1 more:**
+- **Admission (+10).** For a local-only packet, `admit_2d_dispatch` returns true at compile time. For a forward, it
+  reads the downstream channel's free-slot stream register and branches on it at once (`lui; lw 1188(0xffb45000);
+  slli; beqz`), so E1 waits out the stream-register read (~7–9, §17 / §55).
+- **The forward itself (+14).** Disassembly: s79m E1, config `10856749301170935304` (chip 1's West router, eth channel
+  4). This is the same binary that delivers locally in the 1-hop test; only the branch differs.
+  - Local write (`0xd514–0xd578`): 26 instructions, one NoC command (one command-buffer-ready poll, 7 register
+    stores, 2 counter updates).
+  - Forward (`0xdcb8–0xdd64`): 44 instructions and two NoC commands, the data write and the doorbell. Each has its own
+    ready poll and issued-counter update.
+  - The `EdmToEdmSender` state lives in E1's stack frame, so the forward adds six stack loads and a store: slot
+    index byte → slot address table (a dependent chain ahead of the data write), the index reload, wrap and store,
+    both command-buffer ids, and the local credit pointer.
+  - The doorbell's own register write is one store (stateful API: E/W routers have one live downstream). What it adds
+    is the second ready poll and the bookkeeping.
+- **The forwarding channels are one slot shallower.** The Mesh allocator gives the one spare slot to the worker
+  channel (17), and the forwarding channels keep 16. A forwarding credit loop is ~2,150–2,220 cycles (§27: 8 and
+  11 slots), so 16 slots floor at ~135–140 even with infinitely fast cores.
+- **The middle router's E0 is no lighter than chip 0's.** It still visits the idle worker channel on every pass
+  (~35 per pass, including the ~13-cycle connection poll, which stays per pass), and makes ~1.5 passes per packet
+  (§73).
+- **No core is at 148 by itself.** E1 is ~140, E0 ~135 and the credit floor ~135–140. That three such close limits,
+  with completions coming back 4 at a time, settle ~8 above the slowest is an inference, not a measurement.
+
+**Follow-up (deferred by the user 2026-10-24; other changes first): cache downstream credits on E1.**
+- **Change.**
+  - Keep a loop-carried count of known-free downstream slots per live downstream.
+  - Admission tests the count. It re-reads the stream register only when the count is zero, and each forward
+    decrements the count.
+  - Keep the existing per-packet local decrement of the register, so the register stays the source of truth. That
+    means no protocol change, and teardown and assert reads stay correct.
+  - Also refresh the count on idle E1 iterations (no packet), so the read stays off the packet path after a lull.
+- **Where.**
+  - `admit_2d_dispatch`: the single-live E/W path and the multi-live N/S path (`free_0..3`).
+  - 1D `can_forward_packet_completely` → `edm_has_space_for_packet`, which does the same read-then-test.
+- **Not a wasted branch on single-flow forwarding.**
+  - Credits arrive about 4 at a time. E0 returns `completions_since_last_check` as one +N write, and bit 22 acks 4
+    per frame (0.23 credit frames per packet on the 3-hop middle E0, §72).
+  - A reload takes everything that is free, not just the latest arrival.
+  - When E1 binds, the downstream channel drains ahead of it, so one read covers many packets. When the downstream
+    binds, E1 is waiting for credits anyway.
+  - Worst case (a reload every packet) is today's read plus one predictable branch.
+- **Expected.**
+  - 3-hop: the channel runs nearly full (~15.7 of 16 slots in flight at ~140 per packet), so a reload finds about
+    one batch. That spreads the read over ~4 packets and saves E1 ~5–7 per packet.
+  - The 3-hop interval should move less, a few cycles rather than 16, because the 16-slot floor and E0 are close
+    behind.
+  - Largest gains where E1 also delivers locally (the multicast forwarder; mixed local + forwarded traffic), since
+    credits pile up during local work.
+  - 1D multi-hop should gain too (E1-bound, §76).
+- **Optional second step.** Consume credits in bulk at reload (read V, write −V, cache V) to also drop the
+  per-packet register decrement and its stack-pointer load. Anything that reads the register as "free slots"
+  (teardown or drain checks, asserts) must then add the cached count back.
+- **Risk.**
+  - It adds one loop-carried value per live downstream on E1.
+  - If GCC spills it, the test becomes a local-memory load, still cheaper than the stream-register read, so the
+    gain shouldn't hinge on allocation.
+  - Check E1's stack frames (the `dq79_runs.sh` stack check) and the E1 receive path in the disassembly.
+- **Runs when picked up.**
+  - A variant on top of s79m, with validation (stream, mesh, 1D sanity) and the 4352 / mix / flushmix / 1D suites
+    against s79m.
+  - Rows to watch: 3-hop E/W, multicast, the forwarded (`FWD_*`) rows and 1D multi-hop.
+  - A +20 RX-delay slack test on 3-hop, to see whether the bound moves to E0 or to the 16-slot credit floor.
+
+## 81. The user's s80 (de-templated forwarding channels in an unroll-1 loop): correct, but small writes +1.8 to +2.9
+
+**Change (s80, the user's, on top of s79m):** E0's forwarding sender channels move out of the templated
+`run_sender_channel_step` / `run_forwarding_sender_step` path.
+- **State:** one `ForwardingSenderChannelState` per forwarding channel. It holds the slot cursor, first and last slot,
+  stride, sent and processed counts, the completion-counter pointer, the free-slots stream base, the upstream credit
+  address, the channel index, `num_buffers` and two flags.
+- **Init:** filled once before the main loop by a `noinline`, `-Os` init function. The aim is to keep `-ftree-sra` from
+  promoting the channels' counts into loop-carried registers.
+- **Step:** one `FORCE_INLINE` `run_forwarding_sender_step_runtime`, stepped over the VC0 forwarding channels in a
+  `#pragma GCC unroll 1` loop (VC1 the same way). In 1D, with one forwarding channel, it is called directly.
+- **Scope:** only when every serviced forwarding channel skips the liveness check, uses counter credits and has no
+  first-level ack. Otherwise the templated path remains.
+- **Also:** the unused cold-helper templates left in s79m are removed, and `skip_idle_bit_test` now also yields the
+  slot mask.
+
+**Review:** the runtime step does exactly what the templated one does.
+- It has the same idle test (bit test or masked compare), receiver-space test, BH pre-send TX-queue/status reads and
+  busy bail-out, and the same send.
+- The slot cursor wraps with the same stride (`channel_buffer_size`, as in `local_sender_channels.init`).
+- The overlapped completion read, local free-slot increment and remote packets-sent register write are unchanged.
+- The non-overlapped completion read and the `+N` credit write to the upstream credit stream match the s79m path
+  (`notify_persistent_connection_of_free_space_impl`).
+- The upstream credit address is copied after `wait_for_static_connection_to_ready` has cached it. Nothing else in the
+  router reads the forwarding channels' old sender channel or credit state.
+- The non-bit-test path gains an early return when the channel is idle with nothing pending. Its behavior is
+  unchanged.
+
+**Runs** (`dq80_runs.sh` a, job 205, `dq80_compare.py`):
+- s79m ×3 (§79's two plus a same-job control, which matched to 0.0 on the small-write rows) and s80 ×2. Run spread
+  is ≤ 0.2 on every 2D row except the chunk-4 flushed rows.
+- Validation (s80): stream 10/10, mesh 96/96, 1D sanity 181/181. Every suite passes.
+- Stack: the smallest margin drops from 1052 B to 908 B (E0 config `14376931258930336131`, frame 1424 → 1568).
+- E1 is unchanged on every config (same instruction stream).
+
+| Row (cycles/packet) | s79m | s80 |
+| --- | ---: | ---: |
+| E/W write 16 B / 256 B | 121.7 / 121.7 | 124.6 / 124.6 |
+| E/W write 1024 B / mix of 4 sizes | 122.8 / 122.2 | 124.8 / 124.7 |
+| N/S write 16 B / 1024 B | 123.9 / 124.9 | 125.7 / 126.1 |
+| Forwarded write 16 B / 4352 B | 111.9 / 125.7 | 111.9 / 125.7 |
+| Mesh 1-hop E/W / N/S write 4352 | 132.2 / 133.1 | 132.0 / 132.5 |
+| Mesh 3-hop E/W write 4352 | 146.9 | 148.0 |
+| Linear 3-hop E/W write 4352 | 145.7 | 147.1 |
+| Mean vs s79m: 4352 / mix / flushmix / flushmix4 / 1D | | +0.02 / +0.68 / +0.43 / +0.50 / −0.03 |
+
+**E0 code** (hot E/W config `10733501891889981293`: worker channel sending, three forwarding channels idle):
+
+| | s79m | s80 |
+| --- | ---: | ---: |
+| Loop instructions | 226 | 231 |
+| sp loads / stores in the loop | 33 / 6 | 42 / 10 |
+| Worker channel's sent / processed counts | `32(sp)` / `28(sp)` | `16(sp)` / `8(sp)`, plus a new store and reload of `8(sp)` around the completion read |
+| Idle forwarding visit | bit test, sent ≠ processed in registers | bit test, then two stack loads (sent, processed) and a compare, per channel |
+| .text on 2D configs | | +9 to +23 instructions |
+| Two largest frames | | +32 to +144 B |
+
+**What it shows:**
+- **The registers freed from the forwarding channels did not reach the worker channel.** Its counts stay on the
+  stack, so the sending pass is no cheaper. Every idle forwarding visit now waits on two stack loads before its
+  branch. On the E0-bound small-write rows that costs ~3 cycles per pass (three idle channels): E/W +2.9, N/S +1.8.
+- **The `unroll 1` loop is still peeled.** The step body appears three times in the hot config, each copy with its
+  own fixed stack offsets (`352/356`, `400/404`, `448/452`). So the code-size benefit of a single body did not
+  happen either.
+- **Forwarding gains nothing.** Forwarded writes are flat, while 3-hop (+1.1) and linear 3-hop (+1.4) are slightly
+  slower: the middle router's E0 now loads its active channel's counts from memory.
+- **Recommendation: stay on s79m.** This is consistent with §77/§78: moving channel state into memory to steer
+  `-ftree-sra` changes which values sit in registers, but not in the direction the hot path needs.
+
+## 82. Consolidation Phase 0: s79m's performance holds under small edits and compiler settings, but not at -Os
+
+**Context:** first step of the consolidation work (`consolidation/PLAN.md`). The goals, in order, are a router whose
+performance does not swing with unrelated edits or toolchain changes, then a mainline-worthy source, then further
+cuts. Phase 0 measures how stable today's build is and builds the tools to measure it for new designs. The written
+companions are `consolidation/ROUTER_MAP.md` (what each ERISC does per pass and per packet, essential vs overhead)
+and `consolidation/LEDGER.md` (every experiment in §1–§81, classified). ERISC-only mode; the DRISC line is out of scope.
+
+**Tools** (`consolidation/`):
+- **Offline builds** (`offline_build.py`). The JIT's compile and link commands were logged once per opt level
+  (`TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1`, fresh kernel cache) for the 440 router kernels the 4352, mix, flushmix,
+  flushmix4, 1D and three validation suites use. The tool rebuilds any variant on a copy of `tt_metal/fabric` for all
+  440 in ~25 s, at the logged opt level, another one, or with extra flags. It is exact: 440/440 at -O3 and 440/440 at
+  -Os have the same `.text`, at the same addresses, as the hardware-built ELFs.
+- **Code comparison:** `codegen_diff.py` (how many configs changed, and how many instructions differ in the hot E0 and
+  E1), `textcmp.sh`. **Benign edits:** `perturb.py`.
+- **ELF injection** (`p0c_runs.sh`). Offline-built ELFs copied over the router ELFs in a warm kernel cache are used as
+  they are: the tree and the dependency hashes are unchanged, so the JIT does not rebuild. Checked on job 208: no
+  router kernel recompiled, the cache still held the injected ELFs, and the runtime's load dumps (`.xip.elf`) carry
+  the injected code. Any offline build can run on hardware this way without touching the tree.
+- **Gotcha:** `TT_METAL_FABRIC_OPT_LEVEL` with a warm cache reuses the ELFs built at the other level; no router kernel
+  is recompiled, so the kernel cache key does not include the opt level. Job 206's -O2 and -Os runs were therefore
+  -O3 repeats (relabeled `p0o3b_`, `p0o3c_`). Each level now gets its own cache.
+
+**Static counts do not predict cycles/packet.** On the 17 variants from s74c to s80 that have both saved ELFs and
+hardware numbers, loop size and stack traffic in the hot E/W E0 (the `loopstat` heuristic) do not order the E/W 16 B
+write:
+- s78 and s78l have the same loop (372 instructions, 41 sp loads, 11 stores), but run at 130.1 and 135.4.
+- s79m has more loop instructions and sp loads than s77s (379 / 47 vs 345 / 44) and is 2.1 faster.
+- s78n0, with 16 sp loads, runs at 118.9.
+
+So offline builds can say whether and where code moved, but only hardware says what that costs.
+
+**Runs** (`p0a_runs.sh`, `p0b_runs.sh`, `p0c_runs.sh`; jobs 206–208; `p0_compare.py`):
+- **Router:** s79mc, i.e. s79m with two unused templates removed. Its code is identical to s79m's on all 320 configs
+  both have.
+- **-O3 baseline:** 7 runs (§79's three plus four here). The run-to-run spread has a median of 0.06–0.14 per suite,
+  except the chunk-4 flushed rows (6.2) and the half-ring rows (up to 8.5).
+- **Validation:** passes at -O3, -O2 and -Os: stream 10/10, mesh 96/96, 1D sanity 181/181 at each level.
+- **Stack:** smallest margin 1052 B at -O3; 1036 B with the `field` edit.
+
+| Build (all from the same source unless noted) | Hot E0 / E1 instructions that differ | 4352 | mix | flushmix | 1D | E/W 16 B | N/S 16 B | FWD 16 B |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| -O3 (production without VC1) | — | 0 | 0 | 0 | 0 | 121.7 | 123.9 | 111.9 |
+| `reorder`: two sender-channel members swapped | 17 / 0 | −0.02 | −0.00 | +0.03 | −0.11 | 121.7 | 123.8 | 111.9 |
+| `field`: one member added, set at init, never read | 66 / 0 (frame +16 B) | −0.01 | −0.00 | +0.01 | −0.08 | 121.7 | 123.9 | 111.9 |
+| `-fira-algorithm=priority` | 40 / 14 | −0.00 | −0.00 | +0.01 | −0.14 | 121.7 | 123.9 | 111.9 |
+| `-fno-schedule-insns2` | 52 / 32 | −0.01 | +0.01 | +0.01 | −0.11 | 121.7 | 123.9 | 111.9 |
+| `-fno-gcse` | 302 / 240 | −0.00 | −0.01 | +0.06 | −0.13 | 121.6 | 123.9 | 111.9 |
+| `-fno-tree-loop-im` | 10 / 10 | −0.01 | −0.00 | +0.03 | −0.12 | 121.7 | 123.8 | 111.9 |
+| -O2 | (whole kernel) | +3.83 | +3.94 | +2.59 | +2.55 | 125.0 | 127.7 | 117.4 |
+| -Os (production with VC1) | (whole kernel) | +25.33 | +27.85 | +21.98 | +19.14 | 146.9 | 152.1 | 145.8 |
+
+The suite columns are mean changes vs -O3 in cycles/packet; flushmix4 is left out because of its noise. The 1D
+means for the edits and flags are pulled by the noisy half-ring rows; every other 1D row is within ±0.3.
+
+More rows at -O3 / -O2 / -Os:
+
+| Row | -O3 | -O2 | -Os |
+| --- | ---: | ---: | ---: |
+| Mesh 1-hop E/W write 4352 | 132.2 | 132.4 | 147.2 |
+| Mesh 3-hop E/W write 4352 | 146.9 | 150.7 | 170.2 |
+| Mesh multicast write 4352 | 140.7 | 143.3 | 166.5 |
+| E/W scatter 4352 / fused 4352 | 165.3 / 155.2 | 170.8 / 160.8 | 199.0 / 190.1 |
+| Linear 3-hop E/W write 4352 | 145.7 | 149.6 | 169.4 |
+| Neighbor exchange write | 125.0 | 125.9 | 130.9 |
+
+E0 `.text`, median (max) over its 160 configs: 8,708 (12,196) B at -O3, 7,394 (10,092) B at -O2, and 7,174 (8,936) B
+at -Os.
+
+**What it shows:**
+- **s79m is not fragile to incidental changes.** Two struct edits, and four compiler settings that each change 10–302
+  instructions of the hot E0, leave every suite within noise. Earlier swings came from edits that changed the main
+  loop's structure:
+  - the channel state shrinking until it was split into registers (§77 +21, §78 +11.5);
+  - code reaching into the loop (§79);
+  - the forwarding state moving to memory (§81).
+
+  The sensitivity has steep edges near the current build rather than a smooth slope. Random benign edits did not
+  find one; structural edits did.
+- **The steepest edge found so far is the optimization level.**
+  - -Os costs +19 to +28 per suite: E/W small writes +21% (121.7 → 146.9), forwarded writes +30%.
+  - -O2 costs +2.5 to +3.9.
+  - Production builds the router at -Os whenever VC1 is active (`get_kernel_opt_level`), so a VC1 router runs this
+    source about 20% slower than every number in this study.
+  - The -O3 code is only ~20% larger than the -Os code here. Whether VC1 configs fit at -O3 or -O2 on Blackhole has
+    not been checked.
+- **For Phase 1, stability is measured where the edges are.** Each candidate runs on hardware at -O3, -O2 and -Os.
+  It also runs with edits of the kind that moved s79m before, such as a call reaching into the main loop or smaller
+  channel state, rather than random edits. Offline builds show where the code moved.
+- **Two items from the Phase 0 documents need a decision before Phase 1:**
+  - The test kernel sends every flushed packet as `FLUSH_RELAXED` (`kActiveFlushMode`,
+    `tt_fabric_test_kernels_utils.hpp`). So the validation yamls never exercise the default STRICT flush.
+  - s79mc still carries six `[[unlikely]]` hints, five of them added by the study: on the two E0 TX-queue status checks
+    and on three E1 pending-atomic branches. They are layout hints.
+
+## 83. Consolidation Phase 1, round 0: references on s79m (hook probe, no layout hints, STRICT flushes)
+
+**Context:** Phase 1 builds a new kernel file, v3, starting from v3a, a faithful consolidation of s79m. Branch
+hints are out (the user's call), and so is the experiment machinery. Before any v3 candidate, three references on
+s79mc:
+- **hook:** s79mc plus `perturb.py hook`. That is a `noinline` debug call inside the main loop, on a value read once
+  before the loop that is never `0x5AFE`: the kind of hook a contributor adds. Offline, it changes 1,274 of the hot
+  E0's 2,523 instructions and 1,865 of the middle E1's 1,909. By itself it costs one compare per pass.
+- **nohint:** s79mc without the five `[[unlikely]]` hints the study added (two E0 TX-queue status checks, three E1
+  pending-atomic branches).
+- **strict:** s79mc with the test kernel sending flushed packets as `FLUSH_STRICT`, the default, instead of
+  `FLUSH_RELAXED` (`kActiveFlushMode`). Every validation yaml so far ran RELAXED.
+
+New tools (`consolidation/`):
+- `swap.py` swaps any variant (router, headers, test kernels) into the tree and restores it.
+- `jobs_lib.sh` holds the job functions.
+- `compare.py` compares any set of builds.
+- Offline builds now overlay a snapshot of `tt_metal/fabric` (taken at s79mc), so device jobs that swap files cannot
+  leak into them.
+
+**Runs** (`p1r0_runs.sh`, job 209): hook and nohint ran the benchmarks at -O3; strict ran validation plus the
+flushed-signal suites. Every suite passed. The STRICT validation is new: stream 10/10, mesh 96/96, 1D sanity 181/181.
+
+| Row (cycles/packet) | s79m (7 runs) | hook | nohint | strict |
+| --- | ---: | ---: | ---: | ---: |
+| E/W write 16 B / mix of 4 sizes | 121.7 / 122.2 | 126.1 / 126.3 | 121.6 / 122.2 | |
+| N/S write 16 B / 1024 B | 123.9 / 125.0 | 126.7 / 127.0 | 127.2 / 127.5 | |
+| Forwarded write 16 B | 111.9 | 115.1 | 111.6 | |
+| Mesh 3-hop E/W / multicast write 4352 | 146.9 / 140.7 | 149.3 / 142.4 | 146.8 / 140.2 | |
+| Neighbor exchange write | 125.0 | 128.5 | 125.0 | |
+| E/W fused 4352 flushed / unflushed | 442.2 / 155.2 | 442.3 / 158.4 | 434.8 / 153.9 | 437.9 / |
+| E/W / N/S chunk-8 fused, flushed | 137.9 / 144.8 | | 137.7 / 146.4 | 146.3 / 166.5 |
+| N/S chunk-8 atomic, flushed | 136.1 | | 138.3 | 153.0 |
+| E/W / N/S chunk-4 fused, flushed | 156.7 / 166.0 | | | 180.3 / 210.2 |
+| Suite means vs s79m: 4352 / mix / flushmix / 1D | | +0.99 / +2.16 / +1.27 / +0.79 | +0.06 / +0.47 / +0.02 / −0.08 | flushmix +3.46 |
+
+**What it shows:**
+- **The hook moves s79m by up to +4.4 (E/W small writes), about 3 of it beyond the probe's own compare.** That is
+  the yardstick a v3 design has to beat: the same hook should cost it no more than the compare.
+- **The hints were doing something, but not consistently.**
+  - Without them, N/S rows lose 1–3.3: small writes +3.3, N/S atomics +2.5.
+  - E/W rows are flat, and E/W flushed fused writes gain 7.4.
+  - v3 drops them, as decided, so the N/S cost has to come back through structure.
+- **STRICT flushes cost more on chunked flushed signals:** +8.4 (E/W) and +21.7 (N/S) at chunk 8, +24 and +44 at
+  chunk 4. That is the RELAXED bypass of §70–§74. The router passes validation either way. From here on, v3 is
+  validated with both modes.
+
+## 84. VC1 on the P150x8 (two 2x2 meshes): it runs once the rank bindings use chip ids; -O3 does not fit
+
+**Harness** (`fabric_exp/vc1/`, `consolidation/vc1_runs.sh`). The P150x8 is split into two 2x2 meshes, one MPI rank
+each (`ttrun.py` legacy mode with a rank binding), so the routers carry VC1.
+- **First three attempts (jobs 210, 211, 213) stopped in the control plane:** `SAT placement: mesh 'M0' has no PGD
+  grouping and no embeddable MGD fallback`.
+- **The descriptor was correct:** each face of the cube is a 2x2 ring of 2-link edges.
+- **The rank bindings were the cause.** They listed each face's PCIe ids (`0,1,2,7` / `3,4,5,6`), but the mapper reads
+  `TT_VISIBLE_DEVICES` as cluster-descriptor chip ids. As chip ids, `{0,1,2,7}` is not a face.
+- **Found offline.** tt-metal's mock cluster (`--mock-cluster-rank-binding`, this host's cluster descriptor;
+  `vc1_mock.sh`) reproduces the failure CPU-only in a second. With chip ids `0,1,2,3` / `4,5,6,7` it places both
+  meshes. The board type (eight single-chip `p150` boards, every `asic_location` 0) does not matter.
+- **ttrun's discovery mode cannot split one host:** it needs one host per rank.
+- **The test harness aborts on inter-mesh benchmark patterns** (`BandwidthProfiler::trace_line_or_mesh_traffic_path`,
+  `bad optional access`). The yaml now runs inter-mesh traffic only in the data-checked sanity tests.
+
+**Run** (job 216; the tree's router, s79mc, run as v2; 13129088; keepalive 1000; telemetry off):
+
+| Level | Result |
+| --- | --- |
+| default (builder picks -Os because VC1 is active) | Multi-mesh sanity: all-to-all (all, intra and inter), 4 packet types × 1/4 KiB, plus inter-mesh neighbor exchange × 4 types. All 12 finished on both ranks without error. Intra-mesh benchmarks ran (numbers lost: the per-test CSV was overwritten by the next level) |
+| -O3 | Does not load: `Program size (30048) too large for kernel config buffer (26624) on ACTIVE_ETH` |
+| -O2 | Same sanity tests, all finished. Benchmarks below |
+
+| -O2, VC1-enabled routers | cycles/packet | VC0-only 2x4 mesh at -O2 (§82) |
+| --- | ---: | ---: |
+| 1-hop E/W write 16 B / 4352 B | 234.5 / 253.7 (23.2 GB/s) | 125.0 / 132.4 |
+| 1-hop N/S write 16 B / 4352 B | 236.3 / 261.7 | 127.7 / 134.1 |
+
+**Code size.** The kernel config buffer holds both ERISCs' binaries, so the limit is on E0 + E1 together. Measured
+as the largest E0 plus the largest E1 over the 48 + 48 VC1 kernels, in loadable bytes:
+
+| | -O3 | -O2 | -Os |
+| --- | ---: | ---: | ---: |
+| s79mc | 29,604 (does not fit) | 26,064 (fits, ~0.5 KB spare) | 24,004 |
+| v3a | 29,704 | 26,152 | |
+
+Offline builds of the 96 VC1 kernels (now in `offline/cmds.json`, hashes in `offline/vc1_hashes.txt`) match the
+hardware-built ones exactly at -O2.
+
+**What it shows:**
+- **Correction (§86): E0's CPU binds these rows, not slots.**
+  - A VC1 E0 has 4 VC0 and 3 VC1 sender channels and 2 receiver channels in the same L1.
+  - Main's allocator gives the VC0 worker channel 51 slots (every spare slot goes to it, main's rule), the VC0
+    forwarding channels 4 each, the VC1 senders 2 each, and the receivers 8 (VC0) and 4 (VC1).
+  - I first read the 234–262 cycles/packet as slot-bound: 8 receiver slots at a ~2,150-cycle credit loop allow ~270.
+    That was wrong. v3l (§86) runs the same rows at 199–227, so the credit loop on these 1-hop flows is shorter than
+    that, and E0's per-pass work over 7 channels is what binds. The VC1 channels' free-slot reads are not grouped and
+    are used at once.
+- **-O3 needs about 3 KB less code to fit with VC1, and -O2 fits with only ~0.5 KB to spare.** A v3 design whose code
+  does not grow with the channel count could let VC1 routers build at -O2 or -O3 instead of -Os.
+
+## 85. Phase 1, round 2: v3u (one runtime table for every E0 sender channel) is correct and stable across opt levels, but ~30 slower on VC0 E0-bound rows; faster on VC1
+
+**v3a** (consolidation reference, `variants/v3a`, `consolidation/V3A_NOTES.md`). It is s79mc as the new v3 kernel file,
+with no experiment flags, DRISC code, profiler hooks or study-added hints. On all 440 VC0 configs at -O3, -O2 and -Os
+it compiles to s79mc-without-hints instruction for instruction, so its -O3 numbers are §83's nohint row. It builds for
+all 96 VC1 configs. v1 and v2 compile unchanged with its header edits.
+
+**v3u** (agent design, `variants/v3u`, `consolidation/V3U_NOTES.md`). On two-ERISC Blackhole E0s with counter credits
+(168 of 208 logged E0 configs: 1D, ring, 2D and 2D-VC1), E0 runs one `noinline` program instead of v3a's main loop.
+- **Table:** every sender channel (worker, forwarding, VC0 and VC1) is a 32 B entry in a stack array.
+- **Each pass:**
+  - one grouped read of all free-slot registers, through a small documented inline-asm load-group primitive;
+  - a work mask (unsent | pending completions), kept in a register;
+  - a `ctz` loop visiting only channels with work, through one step body per VC.
+- **Worker connection check:** still every pass, but its semaphore is read before the visits.
+- **Unchanged:** E1 is identical to v3a.
+- **Code size:** the VC1 E0 + E1 is 25,496 B at -O3 (fits the 26,624 B buffer; v3a 29,704 does not).
+
+**Runs** (jobs 218, 220, 221, 217; `p1r2_runs.sh`, `p1vc1_runs.sh`; `compare.py`).
+- **v3u validation passes:**
+  - RELAXED: stream 10/10, mesh 96/96, 1D sanity 181/181;
+  - STRICT: the same, plus the flushed-signal suites;
+  - VC1 multi-mesh sanity at -Os, -O2 and -O3 (34 test completions over both ranks each).
+- **v3a's references:** -O2, -Os and the hook probe.
+
+| Row (cycles/packet) | v3a -O3 | v3a -O2 | v3a -Os | v3a hook | v3u -O3 | v3u -O2 | v3u -Os | v3u hook |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| E/W write 16 B | 121.6 | 123.1 | 146.9 | 126.1 | 153.8 | 152.3 | 154.3 | 171.8 |
+| N/S write 16 B | 127.2 | 129.3 | 156.2 | 131.9 | 153.0 | 151.2 | 156.6 | 170.9 |
+| Forwarded write 16 B | 111.6 | 117.3 | 145.7 | 117.3 | 141.0 | 141.7 | 146.0 | 152.4 |
+| Mesh 1-hop E/W write 4352 | 132.3 | 133.3 | 147.2 | 132.5 | 151.7 | 150.6 | 154.5 | 169.4 |
+| Mesh 3-hop E/W write 4352 | 146.8 | 150.0 | 170.4 | 149.5 | 155.0 | 158.2 | 170.9 | 168.7 |
+| Mesh multicast write 4352 | 140.2 | 143.0 | 166.5 | 143.2 | 167.9 | 170.2 | 176.5 | 179.7 |
+| E/W scatter / fused 4352 | 164.9 / 153.9 | 170.6 / 159.6 | 198.9 / 190.0 | | 164.9 / 153.9 | 170.7 / 159.7 | 199.4 / 190.5 | 168.7 / 168.2 |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / 1D | | +3.5 / +3.5 / +2.2 / +2.6 | +26.1 / +28.7 / +23.4 / +19.2 | +1.8 / +3.2 / +1.4 / +0.9 | +8.6 / +19.2 / +11.8 / +3.4 | +11.7 / +19.6 / +11.8 / +5.8 | +28.7 / +30.5 / +25.1 / +22.5 | +17.6 / +32.6 / +25.9 / +6.5 |
+
+| VC1 router, two 2x2 meshes (cycles/packet) | s79mc -Os | v3a -Os | v3a -O2 | v3u -Os | v3u -O2 | v3u -O3 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1-hop E/W write 16 B / 4352 B | 233.7 / 258.7 | 233.7 / 258.5 | 234.5 / 253.9 | 227.6 / 250.9 | 221.1 / 246.9 | 219.0 / 245.3 |
+| 1-hop N/S write 16 B / 4352 B | 236.0 / 267.1 | 236.2 / 266.3 | 236.2 / 261.9 | 230.9 / 255.7 | 225.1 / 249.3 | 221.9 / 246.7 |
+| Intra-mesh multicast 4352 (noisy) | 297.5 | 318.5 | 290.8 | 323.3 | 294.2 | 302.5 |
+
+**What it shows:**
+- **v3u's E0 no longer depends on the opt level, but it runs at about v3a's -Os speed** at every level (E/W 16 B:
+  153.8 / 152.3 / 154.3). It is stable, but on VC0 configs it is ~30 slower than v3a at -O3/-O2 and about even at -Os.
+- **The hook moves v3u far more than v3a** (+18 vs +4.5 on E/W 16 B). The cold call lands in the hot program, and E0
+  then becomes the bound on the E1-bound rows too. So a uniform table is not automatically robust: what the hot path
+  depends on matters, not just how big it is.
+- **On VC1 routers v3u is faster:** −6 to −15 at the same level, and it can build at -O3. With 7 sender channels,
+  visiting only channels with work saves more than the table costs, even on slot-bound rows.
+- **Next:** v3u2 (the agent's second iteration, aiming at the ~30 on VC0 while keeping channel-count-independent code
+  size). The other two designs, v3l (lean specialized E0) and v3e1 (E1), are still being written.
+
+## 86. Phase 1, round 3: v3l (lean specialized E0): best worker path and best VC1 so far; forwarding visits through a call cost 19–41
+
+**v3l** (agent design, `variants/v3l`, `consolidation/V3L_NOTES.md`). On every non-speedy two-ERISC E0 (168 of 208
+logged configs), a new `noinline` program `e0::run_main_loop` owns E0's state; v3a's init, router commands and outer
+loop are kept. E1 is v3a's on every config.
+- **Each pass:**
+  1. VC0's fenced group of four free-slot reads.
+  2. The worker channel, inline and compile-time specialized. The connection poll is one load and one compare;
+     open and close are a `noinline` call.
+  3. One test for all VC0 forwarding channels: the AND of their free-slot values plus one in-flight word.
+  4. Only if that test fails, each forwarding channel with work is visited through one shared `noinline` body that
+     takes the channel index at run time, with state in a per-channel record.
+  5. VC1 the same way, after a second read group.
+- **Size:** the 2D E/W hot loop is 92 instructions with 8 stack loads (v3a: 226 with 33). VC1 E0 + E1 is 26,096 B at
+  -O3 (fits, 528 B spare).
+
+**Runs** (jobs 222, 223; `p1r3_runs.sh`).
+- **Validation passes:**
+  - RELAXED: stream 10/10, mesh 96/96, 1D sanity 181/181;
+  - STRICT: the same, plus the flushed-signal suites;
+  - VC1 multi-mesh sanity at -Os, -O2 and -O3.
+
+| Row (cycles/packet) | v3a -O3 / -O2 / -Os | v3l -O3 / -O2 / -Os | v3l hook | v3u -O3 |
+| --- | --- | --- | ---: | ---: |
+| E/W write 16 B | 121.6 / 123.1 / 146.9 | **117.2** / 120.4 / 146.1 | 120.8 | 153.8 |
+| N/S write 16 B | 127.2 / 129.3 / 156.2 | **124.3** / 128.7 / 156.7 | 124.4 | 153.0 |
+| E/W mix of 4 sizes | 122.2 / 124.4 / 147.0 | **120.1** / 123.3 / 146.2 | 124.0 | 154.1 |
+| Mesh 1-hop E/W write 4352 | 132.3 / 133.3 / 147.2 | **129.6** / 131.2 / 146.3 | 131.8 | 151.7 |
+| Forwarded write 16 B | 111.6 / 117.3 / 145.7 | 130.9 / 132.1 / 146.1 | 132.9 | 141.0 |
+| Mesh 3-hop E/W write 4352 | 146.8 / 150.0 / 170.4 | 172.3 / 169.6 / 172.6 | 173.4 | 155.0 |
+| Mesh multicast write 4352 | 140.2 / 143.0 / 166.5 | 181.5 / 182.4 / 185.5 | 183.8 | 167.9 |
+| E/W scatter / fused 4352 | 164.9 / 153.9 | 165.0 / 154.0 | 168.8 / 160.7 | 164.9 / 153.9 |
+| Linear 3-hop E/W write 4352 | 145.7 / 149.6 / 169.4 | 150.1 / 153.2 / 169.7 | 151.3 | 150.2 |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | | +7.1 / +2.3 / −1.2 / +0.7 / +0.7 | +9.2 / +4.5 / +0.4 / +3.0 / +1.8 | +8.6 / +19.2 / +11.8 / +8.2 / +3.4 |
+
+| VC1 router (cycles/packet) | v3a -Os / -O2 | v3u -Os / -O3 | v3l -Os / -O2 / -O3 |
+| --- | --- | --- | --- |
+| 1-hop E/W write 16 B | 233.7 / 234.5 | 227.6 / 219.0 | **202.3 / 200.5 / 199.1** |
+| 1-hop E/W write 4352 | 258.5 / 253.9 | 250.9 / 245.3 | **227.6 / 225.7 / 224.5** |
+| 1-hop N/S write 16 B | 236.2 / 236.2 | 230.9 / 221.9 | **217.1 / 203.1 / 200.8** |
+| Intra-mesh multicast 4352 (noisy) | 318.5 / 290.8 | 323.3 / 302.5 | 297.4 / 289.5 / 287.0 |
+
+**What it shows:**
+- **The worker path is the best E0 so far.** E/W 16 B at 117.2 beats s79m's 121.7, and the hook probe costs it 3.6, as
+  for v3a. A specialized inline worker visit with a small hot-path state works.
+- **A call per forwarding visit is too expensive.** It costs 19–41 on forwarded, 3-hop and multicast rows. v3u's
+  inlined runtime body lost less there (141 / 155 / 168).
+- **-Os still costs v3l's E0 ~29**, as for v3a; v3u is flat but slow. No design yet has a fast hot path that is the same
+  at -O3 and -Os.
+- **VC1 routers gain 31 cycles/packet** (E/W 16 B 233.7 → 202.3 at -Os). So E0 binds there (correction in §84).
+- **Next:** v3l2 (inline, compile-time specialized forwarding visits behind the same combined test, VC1 within the
+  buffer at -O3, and the -Os cost explained) and v3u2 (a runtime-indexed forwarding body that costs what v3a's inline
+  visits cost, possibly with v3l's worker path). v3e1 (E1) is still being written.
+
+## 87. Phase 1, round 4: v3e1 (E1 program rewrite): forwarding and multicast faster, local delivery slower, VC1 large packets much slower; and a VC1 admission bug in v2
+
+**v3e1** (agent design, `variants/v3e1`, `consolidation/V3E1_NOTES.md`). In two-ERISC mode, E1 runs its own program
+(`e1_kernel_main`): its own part of init (same order, same ERISC syncs), its own downstream connections, and a new
+receive loop. It covers 2D VC0, 1D line and VC1 including intermesh routers; ring, speedy, single-ERISC, VC2, UDM and
+mux keep v3a's code. E0 is v3a's on every config.
+- **Packets-received register:** read only when a cached count of present packets runs out. Still decremented once
+  per packet.
+- **Slot address:** a running pointer over the compile-time ring.
+- **Forwarding admission:** a cached downstream free-slot count, re-read only at zero (§80's idea, first time run).
+- **The forward itself:** through E1-owned per-downstream cursors with compile-time command buffers.
+- **Completion check:** exact, over every slot of a batch (four trid statuses plus TXQ CMD/STATUS in one grouped
+  read). v3a checks only the last slot.
+- **VC1 builds:** local delivery, admission and forwarding go through one out-of-line body shared by both receiver
+  channels.
+- **Code size:** VC1 E0 + E1 is 26,060 B at -O3 (fits).
+
+**VC1 admission bug in v2/v3a (study-introduced).**
+- Main's `admit_2d_dispatch` asks each downstream interface for space (`downstreams_have_space`), so each receiver
+  channel checks its own VC.
+- The study's compile-time version (§53) reads `vc0_local_free_slots_stream_id<…>` for every receiver channel. So
+  on a VC1 router, the VC1 receiver channel admits a forward when VC0's downstream has space, whatever VC1's
+  downstream holds.
+- s79m and v3a have it. The VC1 sanity runs pass, presumably because VC1 never backs up there.
+- v3e1 uses each VC's own streams. Any v3 must carry the fix.
+
+**Runs** (jobs 224, 225; `p1r4_runs.sh`).
+- **Validation passes:**
+  - RELAXED: stream 10/10, mesh 96/96, 1D sanity 181/181;
+  - STRICT: the same, plus the flushed-signal suites;
+  - VC1 multi-mesh sanity at -Os, -O2 and -O3.
+
+| Row (cycles/packet) | v3a -O3 / -O2 / -Os | v3e1 -O3 / -O2 / -Os |
+| --- | --- | --- |
+| Mesh 3-hop E/W write 4352 | 146.8 / 150.0 / 170.4 | **144.3 / 146.9 / 163.0** |
+| Mesh multicast write / scatter 4352 | 140.2 / 143.0 / 166.5; 185.1 | **136.6 / 138.7 / 158.2; 178.5** |
+| Linear multicast write / scatter | 149.3 / 196.2 | **144.3 / 188.7** |
+| Unidir linear multicast write / scatter | 196.3 / 255.4 | **188.6 / 228.1** |
+| Linear 3-hop E/W write 4352 | 145.7 / 149.6 / 169.4 | 146.5 / 149.0 / **161.6** |
+| E/W atomic / N/S atomic | 128.9 / 141.4 | 136.6 / 146.5 |
+| E/W scatter / fused 4352 | 164.9 / 153.9 | 168.9 / 157.0 |
+| 3-hop scatter / linear 3-hop scatter | 164.9 / 167.1 | 170.9 / 174.6 |
+| Chunk-4 fused flushed E/W / N/S | 153.2 / 160.8 | 162.5 / 173.2 |
+| E/W / N/S write 16 B | 121.6 / 127.2 | 122.6 / 130.7 |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | | +0.9 / +2.7 / +2.9 / +7.4 / −0.8 (hook: +2.0 / +5.1 / +4.6 / +8.6 / +0.7) |
+
+| VC1 router (cycles/packet) | v3a -Os / -O2 | v3e1 -Os / -O2 / -O3 |
+| --- | --- | --- |
+| 1-hop E/W write 16 B / 4352 | 233.7 / 234.5; 258.5 / 253.9 | 237.4 / 236.4 / 232.4; 255.3 / 321.4 / 332.2 |
+| 1-hop N/S write 16 B / 4352 | 236.2 / 236.2; 266.3 / 261.9 | 245.7 / 236.6 / 233.6; 299.3 / 339.0 / 331.8 |
+| Intra-mesh multicast 4352 | 318.5 / 290.8 | 415.7 / 349.0 / 349.0 |
+
+**What it shows:**
+- **The forwarding work pays.** The cached downstream credits and E1-owned forwarding state cut multicast and
+  multi-hop at every level (−4 to −8 at -O3/-Os, −27 on unidirectional linear multicast scatter). That is the first
+  measurement of §80's idea.
+- **Local delivery got slower** (atomic +5 to +8, scatter/fused +2 to +6, chunk-4 flushed +9 to +12). Suspects: the
+  exact completion check (six grouped reads per batch) and the loop shape around local delivery. Under review.
+- **VC1 large packets are much slower** (E/W 4352: 255–332 vs 254–259). The benchmarks are intra-mesh, so this is
+  VC0 traffic on routers that also carry a VC1 receiver channel. In VC1 builds both channels go through shared
+  out-of-line bodies.
+- **Next:** v3e1b, keeping the forwarding gains and the VC1 fix and recovering local delivery and VC1.
+
+## 88. Phase 1, round 5: the whole -Os penalty is E1's; v3l2 (v3l's worker path + inline forwarding) lands near v3a and fits VC1 at -O3
+
+**Which ERISC makes -Os slow** (job 226, `p1r5_runs.sh c`). The test uses ELF injection, so the source is the same in
+every build. v3l was swapped in and its -O3 kernels built in a fresh cache. Then two mixed sets from the offline
+builds were injected:
+- E0 at -Os with E1 at -O3;
+- E0 at -O3 with E1 at -Os.
+
+No router kernel was recompiled, and the cache still held all 80 injected ELFs after the runs. The sets' -O3 halves
+are identical to the offline v3l -O3 build on all 536 kernels.
+
+| Row (cycles/packet) | all -O3 | E0 -Os, E1 -O3 | E0 -O3, E1 -Os | all -Os |
+| --- | ---: | ---: | ---: | ---: |
+| E/W write 16 B | 117.2 | **114.3** | 146.1 | 146.1 |
+| N/S write 16 B | 124.3 | 124.4 | 156.5 | 156.7 |
+| Forwarded write 16 B | 130.9 | **125.3** | 146.0 | 146.1 |
+| Mesh 1-hop E/W write 4352 | 129.6 | 129.0 | 146.3 | 146.3 |
+| Mesh 3-hop E/W write 4352 | 172.3 | **166.5** | 173.4 | 172.6 |
+| E/W scatter / fused 4352 | 165.0 / 154.0 | 165.2 / 154.1 | 199.4 / 190.3 | 199.5 / 190.4 |
+| Suite means vs all -O3: 4352 / mix | | −0.6 / −2.0 | +21.0 / +26.6 | +21.1 / +26.7 |
+
+- **E1 accounts for all of the -Os penalty** (~20%, production's level whenever VC1 is active).
+- **v3l's E0 is not -Os-sensitive at all;** it is faster at -Os on worker and forwarding rows.
+- This also explains why v3a and v3l land within a cycle of each other at -Os despite very different E0 code: E1
+  binds there.
+- -Os robustness is therefore an E1 design goal (passed to the v3e1 iteration).
+
+**v3l2** (agent design, `variants/v3l2`, `consolidation/V3L_NOTES.md` §7). It keeps v3l's worker path and its one
+combined test per VC.
+- **Forwarding visits:** when the combined test fails, each forwarding channel with work runs compile-time
+  specialized code inline in the pass, with no call and no runtime index.
+- **Out of line, off the pass path:** the upstream-router credit write, the busy spin, connection open/close and the
+  static-connection wait.
+- **E0 init sets up only the sender side.** The receiver-side adapters, semaphores and headers are E1's; E1's code is
+  unchanged. E0's deepest stack is 800 B (v3a 1,408).
+- **Code size:** VC1 E0 + E1 is 25,836 B at -O3 (fits).
+
+**Runs** (jobs 227, 228).
+- **Validation passes:**
+  - RELAXED: stream 10/10, mesh 96/96, 1D sanity 181/181;
+  - STRICT: the same, plus the flushed-signal suites;
+  - VC1 sanity at -Os, -O2 and -O3.
+
+| Row (cycles/packet) | v3a -O3 / -Os | v3l -O3 | v3l2 -O3 / -O2 / -Os | v3l2 hook |
+| --- | --- | ---: | --- | ---: |
+| E/W write 16 B | 121.6 / 146.9 | 117.2 | 120.9 / 120.9 / 146.0 | 124.7 |
+| N/S write 16 B | 127.2 / 156.2 | 124.3 | 125.3 / 128.7 / 156.4 | 126.0 |
+| Forwarded write 16 B | 111.6 / 145.7 | 130.9 | 119.5 / 117.5 / 145.9 | 124.0 |
+| Mesh 1-hop E/W write 4352 | 132.3 / 147.2 | 129.6 | 131.5 / 131.8 / 146.1 | 132.6 |
+| Mesh 3-hop E/W write 4352 | 146.8 / 170.4 | 172.3 | 149.9 / 152.7 / 170.7 | 154.0 |
+| Mesh multicast write 4352 | 140.2 / 166.5 | 181.5 | 145.4 / 145.1 / 166.5 | 152.2 |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | | +7.1 / +2.3 / −1.2 / +0.7 / +0.7 | +0.7 / +0.8 / −0.4 / +1.4 / +0.2 | hook vs v3l2: +2.5 / +2.8 / +1.8 / +2.9 / +1.0 |
+
+| VC1 router (cycles/packet) | v3a -Os | v3l -Os / -O3 | v3l2 -Os / -O2 / -O3 |
+| --- | ---: | --- | --- |
+| 1-hop E/W write 16 B / 4352 | 233.7 / 258.5 | 202.3 / 199.1; 227.6 / 224.5 | 214.1 / 202.4 / 200.7; 239.7 / 224.4 / 221.5 |
+| 1-hop N/S write 16 B / 4352 | 236.2 / 266.3 | 217.1 / 200.8; 241.7 / 226.2 | 224.1 / 203.5 / 202.9; 248.6 / 227.6 / 224.6 |
+
+**What it shows:**
+- **Inline forwarding visits recover most of v3l's forwarding loss** (multicast 181.5 → 145.4, 3-hop 172.3 → 149.9),
+  but forwarding stays 3–8 above v3a.
+- **The worker gain mostly goes back** (E/W 16 B 117.2 → 120.9). The agent attributes this to the forwarding
+  channels' state now competing for registers in the same pass, so the worker's counts sit on the stack.
+- **On VC0 rows v3l2 is roughly even with v3a.** Its gains are structural: it fits VC1 at -O3, VC1 rows are 30–33
+  faster than v3a at -O2/-O3, E0 init is smaller, and it is as stable as v3a under the hook (+1 to +3).
+
+## 89. Phase 1, round 6: v3u2 (runtime forwarding table, specialized worker): best worker rows at -O3, but not at -O2; multicast +29
+
+**v3u2** (agent design, `variants/v3u2`, `consolidation/V3U_NOTES.md` §12–13). It follows the agent's own accounting
+of v3u's ~30-cycle loss: ~22 from the runtime channel index and the nested visit loop, and ~11 from load groups
+serialized by a spilled constant and by the size's zero-extension.
+- **Worker channel:** inline through the step body with a compile-time index. The connection check is one compare.
+  The semaphore is read in the send's first load group.
+- **Forwarding channels:** one combined test, then one visit per loop iteration in rounds, through a per-VC working
+  copy of the channel state. Swapping the copy costs ~17 instructions when the visited channel changes.
+- **Code size:** 2 step bodies on VC0 configs, 3 on VC1. VC1 E0 + E1 is 26,116 B at -O3 (fits).
+- **Caveat:** the agent chose among source variants that differed only in what GCC kept in registers.
+
+**Runs** (jobs 229, 230).
+- **Validation passes:**
+  - RELAXED and STRICT validation (stream, mesh, 1D sanity, flushed-signal suites);
+  - VC1 sanity at -Os, -O2 and -O3.
+
+| Row (cycles/packet) | v3a -O3 / -O2 / -Os | v3l2 -O3 / -O2 | v3u2 -O3 / -O2 / -Os | v3u2 hook |
+| --- | --- | --- | --- | ---: |
+| E/W write 16 B | 121.6 / 123.1 / 146.9 | 120.9 / 120.9 | **116.8** / 121.2 / 146.0 | 120.2 |
+| N/S write 16 B | 127.2 / 129.3 / 156.2 | 125.3 / 128.7 | **124.3** / 128.6 / 156.5 | 124.4 |
+| E/W mix of 4 sizes | 122.2 / 124.4 / 147.0 | 121.5 / 123.7 | **118.6** / 123.4 / 146.1 | 122.9 |
+| Forwarded write 16 B | 111.6 / 117.3 / 145.7 | 119.5 / 117.5 | 112.8 / 117.3 / 145.9 | 119.9 |
+| Mesh 1-hop E/W write 4352 | 132.3 / 133.3 / 147.2 | 131.5 / 131.8 | 131.0 / 132.1 / 146.1 | 131.0 |
+| Mesh 3-hop E/W write 4352 | 146.8 / 150.0 / 170.4 | 149.9 / 152.7 | 151.2 / 154.8 / 170.9 | 152.4 |
+| Mesh multicast write 4352 | 140.2 / 143.0 / 166.5 | 145.4 / 145.1 | 169.6 / 174.1 / 187.7 | 175.5 |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | | +0.7 / +0.8 / −0.4 / +1.4 / +0.2 | +3.3 / −1.1 / −0.8 / −0.4 / +0.2 | hook vs v3u2: +2.1 / +3.0 / +1.9 / +4.4 / +0.8 |
+
+| VC1 router (cycles/packet) | v3a -Os | v3l2 -Os / -O2 / -O3 | v3u2 -Os / -O2 / -O3 |
+| --- | ---: | --- | --- |
+| 1-hop E/W write 16 B / 4352 | 233.7 / 258.5 | 214.1 / 202.4 / 200.7; 239.7 / 224.4 / 221.5 | 224.8 / 206.9 / 203.9; 254.2 / 233.5 / 231.8 |
+| 1-hop N/S write 16 B / 4352 | 236.2 / 266.3 | 224.1 / 203.5 / 202.9; 248.6 / 227.6 / 224.6 | 226.6 / 208.0 / 205.2; 252.9 / 231.2 / 228.2 |
+
+**What it shows:**
+- **At -O3 v3u2 has the best worker rows of any design** (E/W 16 B 116.8), and forwarded 16 B is back at v3a's level.
+- **The worker gain does not survive -O2** (121.2, v3a's level). It came from one allocation outcome, the kind of
+  dependence the consolidation is meant to remove.
+- **Multicast is +29 at every level.** That is the working-copy swap when consecutive forwarding visits alternate
+  channels, and E0 binds multicast even at -Os.
+- **Next:** v3u3 must remove the swap cost and prefer a worker path that is the same at -O3 and -O2.
+
+## 90. Phase 1, round 7: v3u3 fixed v3u2's -O2 and swap costs, then hung on VC1 at -Os: ruled out
+
+**v3u3** (agent design, `variants/v3u3`, `consolidation/V3U_NOTES.md` §14). Two changes from v3u2:
+- **Free-slot group read:** feeds three plain values (worker idle bit, forwarding idle bits, AND of the forwarding
+  values) instead of an array. At -O2 the array went to the stack.
+- **Forwarding state:** read and written in place in the per-channel table by runtime index. There is no working
+  copy and no swap.
+
+Offline, the worker, forwarding, idle and VC1 hot paths compile line for line the same at -O3 and -O2 (register
+names aside). VC1 E0 + E1 is 25,832 B at -O3.
+
+**Runs** (jobs 231, 232).
+- **Validation:** RELAXED and STRICT pass (stream, mesh, 1D sanity, flushed-signal suites).
+- **VC1 at the default level (-Os) hung.** Both ranks stopped after 9 test completions, in
+  `MultiMeshAllToAll_size_4096_ntype_unicast_write` (data-checked sanity), and the run hit its 600 s timeout. The
+  broker then held the device for an Ethernet/fabric fault and it recovered by itself after ~4 minutes; no reset was
+  needed.
+- v3u2 passed the same VC1 tests at all three levels, so the cause is in v3u3's two changes. A root-cause review is
+  offline, with no new variant.
+
+| Row (cycles/packet) | v3a -O3 / -O2 | v3u2 -O3 / -O2 | v3u3 -O3 / -O2 | v3u3 hook |
+| --- | --- | --- | --- | ---: |
+| E/W write 16 B | 121.6 / 123.1 | 116.8 / 121.2 | **116.1 / 119.0** | 119.3 |
+| N/S write 16 B | 127.2 / 129.3 | 124.3 / 128.6 | 124.3 / 128.7 | 124.3 |
+| Forwarded write 16 B | 111.6 / 117.3 | 112.8 / 117.3 | 120.9 / 121.3 | 124.6 |
+| Mesh 1-hop E/W write 4352 | 132.3 / 133.3 | 131.0 / 132.1 | 130.5 / 131.8 | 131.9 |
+| Mesh 3-hop E/W write 4352 | 146.8 / 150.0 | 151.2 / 154.8 | 154.2 / 156.8 | 155.4 |
+| Mesh multicast write 4352 | 140.2 / 143.0 | 169.6 / 174.1 | 161.4 / 162.8 | 165.0 |
+
+**What it shows:**
+- **Both fixes worked as designed.** The worker lead now mostly survives -O2 (119.0 vs v3a 123.1). Multicast
+  recovered 8 of v3u2's +29, but forwarding paid ~+9.
+- **A design that hangs is out (the study's rule).** v3u3 and any combination using its E0 (v3u3e1b) are not run
+  again.
+- **Remaining E0 candidates:** v3l2, and v3u2 if multicast is acceptable (it is not: +29).
+
+## 91. Phase 1, round 8: v3e1b (E1 iteration): -Os penalty roughly halved, VC1 recovered and better than v3a, forwarding gains kept
+
+**v3e1b** (agent design, `variants/v3e1b`, `consolidation/V3E1_NOTES.md` §9). It keeps v3e1's E1 program and VC1
+admission fix, with five changes:
+- **Cheaper exact completion check.** Each retired slot records which command buffer reads its data. A batch with no
+  slot that reads data (atomics, inline writes) needs no transaction-id read. Otherwise the newest reading slot's ID
+  is read, plus a second read only if an older slot used the other command buffer. The TX queue is read after.
+- **One credit of 4** for a uniform full batch.
+- **Plain local writes issued directly,** not through the send-type jump table.
+- **VC1:** channel 0 runs inline code, as on a VC0-only router; only the VC1 channel uses the shared out-of-line
+  bodies.
+- **A slot-add fix for 2-slot rings:** v3a's `wrap_increment_n<2>` ignores the increment; no logged config hits it.
+
+The agent's -O3/-Os per-packet path counts for a 16 B local write: mid-W E1 72.5 / 82.3 instructions (v3a
+83.8 / 104.5), 1D 75.3 / 80.0 (v3a 78.5 / 104.0). What -Os stops doing is loop unrolling, block duplication for jump
+threading, and frequency-aware allocation; the new structure depends on none of them. E0 is v3a's on every config.
+
+**Runs** (jobs 233, 234).
+- **Validation passes:**
+  - RELAXED and STRICT validation (stream, mesh, 1D sanity, flushed-signal suites);
+  - VC1 sanity at -Os and -O2.
+- VC1 at -O3 was not run: with v3a's E0 the pair is 29,136 B.
+
+| Row (cycles/packet) | v3a -O3 / -O2 / -Os | v3e1 -O3 / -Os | v3e1b -O3 / -O2 / -Os | v3e1b hook |
+| --- | --- | --- | --- | ---: |
+| E/W write 16 B | 121.6 / 123.1 / 146.9 | 122.6 / 149.6 | 121.4 / – / 147.0 | 125.9 |
+| N/S write 16 B | 127.2 / 129.3 / 156.2 | 130.7 / 153.3 | 126.8 / – / 147.0 | 131.8 |
+| Forwarded write 16 B | 111.6 / 117.3 / 145.7 | 114.1 / 146.3 | 112.0 / – / **130.6** | 113.4 |
+| Mesh 3-hop E/W write 4352 | 146.8 / 150.0 / 170.4 | 144.3 / 163.0 | **143.4** / – / **150.7** | 144.7 |
+| Mesh multicast write 4352 | 140.2 / 143.0 / 166.5 | 136.6 / 158.2 | **137.5** / – / **148.7** | 139.0 |
+| E/W scatter / fused 4352 | 164.9 / 153.9; −Os 198.9 / 190.0 | 168.9 / 157.0 | 167.7 / 155.2; −Os **179.5 / 169.8** | 168.4 / 158.0 |
+| E/W / N/S atomic | 128.9 / 141.4 | 136.6 / 146.5 | 132.4 / **135.8** | |
+| Chunk-4 fused flushed E/W / N/S | 153.2 / 160.8 | 162.5 / 173.2 | 158.3 / 171.9 | |
+| Unidir linear multicast write / scatter | 196.3 / 255.4 | 188.6 / 228.1 | 189.0 / 233.8 | |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | -O2 +3.5 / +3.5 / +2.2 / +4.1 / +2.6; -Os +26.1 / +28.7 / +23.4 / +31.6 / +19.2 | -O3 +0.9 / +2.7 / +2.9 / +7.4 / −0.8 | -O3 +0.5 / +0.6 / −0.3 / +4.0 / −0.9; -O2 +1.7 / +1.7 / −0.3 / +2.0 / +1.3; **-Os +11.5 / +17.4 / +10.8 / +11.1 / +7.7** | |
+
+| VC1 router (cycles/packet) | v3a -Os / -O2 | v3e1 -Os / -O2 | v3e1b -Os / -O2 |
+| --- | --- | --- | --- |
+| 1-hop E/W write 16 B / 4352 | 233.7 / 234.5; 258.5 / 253.9 | 237.4 / 236.4; 255.3 / 321.4 | 227.0 / 232.8; **246.2 / 247.0** |
+| 1-hop N/S write 16 B / 4352 | 236.2 / 236.2; 266.3 / 261.9 | 245.7 / 236.6; 299.3 / 339.0 | 232.0 / 233.0; **250.3 / 248.6** |
+| Intra-mesh multicast 4352 | 318.5 / 290.8 | 415.7 / 349.0 | 290.3 / 310.5 |
+
+**What it shows:**
+- **The E1 structure, not the opt level, was most of the -Os penalty.** v3e1b's -Os cost is about half of v3a's on
+  every suite. E1-bound rows at -Os are 15–20 better than v3a's.
+- **At -O3 and -O2 v3e1b is level with or better than v3a** on suite means. It keeps most of v3e1's forwarding gains
+  and fixes its local-delivery and VC1 regressions, except scatter (+3) and chunk-4 flushed signals (+5 to +11).
+- **E/W 16 B at -Os is still 147.** In this build E0 is v3a's, whose -Os behavior has not been measured on its own.
+  The v3l2 + v3e1b combination (`variants/v3l2e1b`, an exact composition: E0 identical to v3l2 and E1 identical to
+  v3e1b on every config; VC1 E0 + E1 25,268 B at -O3) is the next run.
+
+## 92. Phase 1, round 9: v3l2 + v3e1b removes most of the -Os penalty on VC0 routers, then hangs on VC1 at -Os like v3u3
+
+**v3l2e1b** (`variants/v3l2e1b`). A three-way merge of v3l2 and v3e1b over v3a: it merged cleanly, and the only
+differing file is the router. It is an exact composition: E0 is identical to v3l2 on all 208 E0 configs, and E1 is
+identical to v3e1b on all 328 E1 configs, at -O3. VC1 E0 + E1 is 25,268 B at -O3. (v3u3 + v3e1b also built as an
+exact composition but is not run; see §90.)
+
+**Runs** (jobs 241, 242).
+- **Validation passes:** RELAXED and STRICT (stream, mesh, 1D sanity, flushed-signal suites).
+
+| Row (cycles/packet) | v3a -O3 / -O2 / -Os | v3e1b -Os | v3l2e1b -O3 / -O2 / -Os | v3l2e1b hook |
+| --- | --- | ---: | --- | ---: |
+| E/W write 16 B | 121.6 / 123.1 / 146.9 | 147.0 | 120.8 / 119.3 / **122.6** | 124.4 |
+| N/S write 16 B | 127.2 / 129.3 / 156.2 | 147.0 | **121.3 / 119.5 / 127.4** | 124.4 |
+| Forwarded write 16 B | 111.6 / 117.3 / 145.7 | 130.6 | 119.4 / 118.4 / 130.8 | 124.0 |
+| Mesh 1-hop E/W write 4352 | 132.3 / 133.3 / 147.2 | 147.1 | 131.7 / 131.2 / 131.5 | 130.1 |
+| Mesh 3-hop E/W write 4352 | 146.8 / 150.0 / 170.4 | 150.7 | 146.9 / 147.1 / 152.1 | 149.9 |
+| Mesh multicast write 4352 | 140.2 / 143.0 / 166.5 | 148.7 | 143.6 / 143.3 / 153.6 | 149.6 |
+| E/W scatter / fused 4352 | 164.9 / 153.9; −Os 198.9 / 190.0 | 179.5 / 169.8 | 167.7 / 155.2; −Os 179.1 / 169.8 | 168.6 / 158.4 |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | -Os +26.1 / +28.7 / +23.4 / +31.6 / +19.2 | +11.5 / +17.4 / +10.8 / +11.1 / +7.7 | -O3 +1.4 / +0.7 / −0.8 / +1.9 / −0.5; -O2 +2.0 / +0.7 / −1.2 / +1.7 / +1.9; **-Os +8.0 / +8.8 / +4.5 / +6.7 / +8.3** | +1.4 / +2.4 / −0.8 / +1.7 / +2.3 |
+
+- **VC1 at the default level (-Os) hung.** Rank 1 finished `MultiMeshAllToAll_size_4096_ntype_unicast_write`; rank 0
+  (mesh 0, chips 0–3) never did, after 9 completions. The run hit its 600 s timeout and the tree was restored. This is
+  the same place and the same rank as v3u3's hang (§90).
+
+**The two VC1 hangs** (all at the default level, -Os, `fabric_exp/vc1/vc1_split.yaml`):
+
+| Run | E0 | E1 | Result |
+| --- | --- | --- | --- |
+| v3a, v3u2, v3l2 | v3a / v3u2 / v3l2 | v3a's (VC1 admission bug, §87) | passed (34 completions) |
+| v3e1, v3e1b | v3a | v3e1 / v3e1b (own-VC admission) | passed |
+| v3u3 | v3u3 | v3a's | **hung** |
+| v3l2e1b | v3l2 | v3e1b | **hung** |
+
+- **The admission bug is confirmed in the hardware binary.** The VC1 E1 that ran with v3u3 (config
+  `10565308837383794061`) reads the downstream free-slot register (offset 1188) only for streams 4, 5 and 6. Streams
+  10–13, VC1's downstream registers, are never read, so the VC1 receiver channel admits forwards on VC0's credits.
+- **But the admission bug is not the whole story.** v3l2e1b's E1 checks each VC's own streams and still hung.
+- Both hangs pair a faster E0 with an E1 and stop at the first 4 KiB all-to-all, which suggests a timing-dependent
+  fault that faster routers expose.
+- An offline root cause is in progress (three audits: cross-config comparison of the exact binaries, E1 VC1 and
+  intermesh paths, and E0/E1 init ownership in the combination). Under the study's rule both configurations are out
+  until it is found. No further VC1 runs of new designs until then.
+
+**Root-cause audits (offline, three agents; no device runs):**
+- **Init:** v3e1b's E1 does every receiver-side init write that v3l2's E0 dropped, with the same values and in the
+  same phase between ERISC syncs. The one write neither does (remote receiver header zeroing) has the same addresses
+  as the local zeroing in every logged config.
+- **Binaries:** every binary in both hung runs also ran in a passing pairing.
+  - v3l2's E0 passed with v3a's E1; v3e1b's E1 passed with v3a's E0.
+  - v3a's E1 passed with four E0s and hung only with v3u3's.
+  - So neither hang is a fixed property of one program.
+- **Confirmed defect:** v3a's/v2's VC1 admission (§87). It explains a v3u3-style hang: a forward overwrites an unsent
+  packet in a 2-slot VC1 channel, a packet is lost, and the routers stay alive. That matches the broker seeing every
+  ERISC still advancing. It does not apply to v3l2e1b, whose E1 checks each VC's own credits.
+- **Robustness hazard in the lean E0s** (v3l2, v3u2, v3u3). The "all slots free" test on 2-slot VC1 channels is one
+  bit (`raw & 2`), where v3a uses a masked compare. If an upstream over-fills the channel, the register wraps, the bit
+  reads "idle", and the channel is never served again: a permanent stall instead of v3a's wrong-but-moving behavior.
+  The fix is v3a's exact predicates (v3l2b, being built offline).
+- **Unexplained:** what lost a packet or credit in v3l2e1b. v3l2e1b is the first pairing in which an E1 reads the
+  VC1 router-to-router credits that a lean E0 returns, but no defect was found in that path.
+  - One shared condition: 4 KiB is the first test where a fabric packet spans two Ethernet packets, under the
+    study's keepalive of 1000.
+  - Base rate so far: 2 hangs in 24 VC1 runs reaching this test.
+
+**What it shows (VC0 configs):**
+- **A -Os-robust E0 plus the restructured E1 removes most of the -Os penalty.** E/W 16 B is 122.6 at -Os against
+  v3a's 146.9, and suite means at -Os are +4.5 to +8.8 against v3a's +19 to +32.
+- **-O3 and -O2 stay level with v3a,** with N/S small writes 6 better.
+- That is the consolidation's stability goal on VC0 routers, pending the VC1 hang.
+
+## 93. Phase 1, round 10: the VC1 hang has a fix (exact idle tests in the lean E0); v3l2be1b passes everything and is the lead v3 candidate
+
+**Root cause, as far as the evidence goes.** Three offline audits are summarized in §92. Two hardware tests follow,
+both repeat runs of the VC1 data-checked sanity group (`fabric_exp/vc1/vc1_sanity.yaml`) at the default level (-Os),
+stopping at the first hang (`p1rep_runs.sh`, jobs 248–249).
+
+| Router | E0 | E1 | VC1 sanity repeats |
+| --- | --- | --- | --- |
+| v3a (base rate) | v3a's | v3a's | 10 of 10 clean (all 3 earlier v3a-based VC1 runs also passed) |
+| v3l2be1b | v3l2b: v3l2 with v3a's exact idle tests | v3e1b's | 10 of 10 clean (v3l2e1b hung on its only run) |
+
+- **Not a shared fault.** At v3a's speed there is no sign of a below-the-router fault that would hit every design.
+- **The lean E0s had a stall mechanism.** v3l2, v3u2 and v3u3 tested "2-slot VC1 channel all free" with one bit.
+  When the free-slot register goes out of range (an over-fill), that bit reads "idle" and the channel is never served
+  again. v3a's masked compare keeps serving it.
+- **v3l2b** (`variants/v3l2b`, `V3L_NOTES.md` §10) uses v3a's exact predicates everywhere. 2D VC0-only and 1D E0s
+  are byte-identical to v3l2; VC1 routers pay 1–3 instructions on idle tests.
+- **v3l2be1b,** with that E0, passes where v3l2e1b hung.
+- **What over-filled a channel in v3l2e1b is still unexplained.** Its E1 checks each VC's own credits. The exact
+  test removes the permanent stall either way.
+- For v3u3 the over-fill source is the v2/v3a VC1 admission bug (§87), which is still in the tree's v2.
+
+**v3l2be1b** (`variants/v3l2be1b`). An exact composition: E0 identical to v3l2b on every E0 config and E1 identical to
+v3e1b on all 328 E1 configs, at -O3, -O2 and -Os. VC1 E0 + E1 is 25,340 B at -O3.
+
+**Full protocol** (jobs 250, 251).
+- **Validation passes:**
+  - RELAXED: stream 10/10, mesh 96/96, 1D sanity 181/181;
+  - STRICT: the same, plus the flushed-signal suites;
+  - VC1 sanity at -Os, -O2 and -O3 (34 completions each).
+
+| Row (cycles/packet) | v3a -O3 / -O2 / -Os | v3l2be1b -O3 / -O2 / -Os | v3l2be1b hook |
+| --- | --- | --- | ---: |
+| E/W write 16 B | 121.6 / 123.1 / 146.9 | 120.8 / 119.3 / **122.6** | 124.4 |
+| N/S write 16 B | 127.2 / 129.3 / 156.2 | **121.2 / 119.5 / 127.3** | 124.4 |
+| Forwarded write 16 B | 111.6 / 117.3 / 145.7 | 119.4 / 118.3 / 130.5 | 124.2 |
+| Mesh 1-hop E/W write 4352 | 132.3 / 133.3 / 147.2 | 131.7 / 131.2 / 131.5 | 130.4 |
+| Mesh 3-hop E/W write 4352 | 146.8 / 150.0 / 170.4 | 146.9 / 147.1 / 152.0 | 149.9 |
+| Mesh multicast write 4352 | 140.2 / 143.0 / 166.5 | 143.7 / 143.7 / 153.6 | 149.5 |
+| E/W scatter / fused 4352 | 164.9 / 153.9; -Os 198.9 / 190.0 | 167.6 / 155.1; -Os 179.2 / 169.6 | 168.6 / 158.5 |
+| Linear 3-hop E/W write 4352 | 145.7 / 149.6 / 169.4 | 146.8 / 146.7 / 152.7 | 149.3 |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | -O2 +3.5 / +3.5 / +2.2 / +4.1 / +2.6; -Os +26.1 / +28.7 / +23.4 / +31.6 / +19.2 | -O3 +1.4 / +0.7 / −0.8 / 0.0 / −0.4; -O2 +2.0 / +0.7 / −1.2 / +3.0 / +1.6; **-Os +8.0 / +8.8 / +4.2 / +6.8 / +7.7** | +1.4 / +2.4 / −0.9 / +2.5 / +2.6 |
+
+| VC1 router (cycles/packet) | v3a -Os / -O2 | v3l2be1b -Os / -O2 / -O3 |
+| --- | --- | --- |
+| 1-hop E/W write 16 B / 4352 | 233.7 / 234.5; 258.5 / 253.9 | **208.7 / 199.5 / 199.6; 230.7 / 218.4 / 219.1** |
+| 1-hop N/S write 16 B / 4352 | 236.2 / 236.2; 266.3 / 261.9 | **211.8 / 201.5 / 201.3; 232.2 / 218.4 / 218.6** |
+| Intra-mesh multicast 4352 | 318.5 / 290.8 | 318.3 / 279.5 / 276.9 |
+
+**What it shows:**
+- **v3l2be1b meets the consolidation's goals on what we can measure:**
+  - level with v3a at -O3 and -O2;
+  - about 70% of the -Os penalty gone;
+  - as stable as v3a under the hook;
+  - 25–40 faster on VC1 routers, which now fit at -O3;
+  - the VC1 admission bug fixed;
+  - correct in both flush modes and on VC1.
+- **Remaining gaps vs v3a at -O3:** forwarded writes +7.8 (v3l2's E0 forwarding visits), multicast +3.5, scatter +2.7.
+  These are next.
+
+## 94. Phase 1, round 11: gaps closed (v3l3be1c beats v3a at every level), a mainline review with a latent bug, a measured fragility, and a third VC1 hang
+
+Two tracks ran in parallel from v3l2be1b (user, 2026-10-25): close its gaps, and review it for mainline.
+
+**Gap closing** (agent designs, offline, each confined to one ERISC; `V3L_NOTES.md` §11, `V3E1_NOTES.md` §10).
+- **v3l3 (E0):**
+  - No calls on the pass's path: the upstream credit write and the TX-queue wait are inline again, as in v3a.
+  - The idle-context-switch flag is set only when a send yields; a round that sent is detected by its sent counts.
+  - VC0's combined "any forwarding work" test is dropped (VC1 keeps it).
+  - **v3l3b** is the same but keeps the combined test on VC0.
+- **v3e1c (E1):** scatter, atomic and fused writes are issued directly, without the shared send-type dispatch.
+  - Scatter updates the software NoC write counters once per packet instead of once per chunk.
+  - **v3e1d** is a control with the scatter change only.
+- **Merges** over v3l2be1b with `git merge-file`:
+  - v3l3e1c and v3l3be1c are exact compositions: each ERISC's ELF is PT_LOAD-identical to its parent's on every config at -O3, -O2 and -Os.
+  - VC1 E0 + E1 at -O3: 25,304 B and 25,360 B (limit 26,624).
+
+**Runs** (jobs 252–257, 263, 264). Every variant passes RELAXED and STRICT validation.
+
+| Row (cycles/packet) | v3a -O3 | v3l2be1b -O3 | v3l3 -O3 | v3e1c -O3 | **v3l3be1c -O3 / -O2 / -Os** | v3l3be1c hook |
+| --- | ---: | ---: | ---: | ---: | --- | ---: |
+| E/W write 16 B | 121.7 | 120.8 | 115.6 | 120.8 | **116.0 / 115.6 / 118.4** | 117.7 |
+| N/S write 16 B | 123.9 | 121.2 | 117.9 | 121.0 | **116.9 / 116.2 / 126.0** | 118.5 |
+| Forwarded write 16 B | 111.9 | 119.4 | 112.3 | 119.3 | **112.5** / 117.2 / 126.9 | 114.1 |
+| Mesh 3-hop E/W write 4352 | 146.9 | 146.9 | 144.4 | 146.9 | **145.4** / 147.3 / 147.7 | 146.0 |
+| Mesh multicast write 4352 | 140.7 | 143.7 | 138.5 | 143.8 | **139.0** / 142.4 / 143.6 | 142.3 |
+| E/W / N/S scatter 4352 | 165.3 / 176.1 | 167.6 / 180.9 | 167.6 / – | 157.6 / 164.4 | **158.1 / 164.3** (-O3) | 154.0 / – |
+| E/W / N/S atomic | 129.3 / 138.9 | 132.3 / 135.6 | 131.3 / 134.7 | 125.6 / 128.1 | **124.5 / 126.9** (-O3) | |
+| Forwarded fused 4352 | 155.2 | 160.8 | 160.6 | 160.9 | 160.8 / 166.1 / 179.7 | |
+| Suite means vs v3a -O3: 4352 / mix / flushmix / flushmix4 / 1D | | +1.4 / +1.2 / −0.8 / −1.9 / −0.5 | +0.3 / −1.3 / −1.7 / −0.3 / −0.9 | −3.1 / −1.1 / −3.2 / −0.7 / −1.2 | **-O3 −4.2 / −3.6 / −4.2 / −0.1 / −1.5; -O2 −2.3 / −2.1 / −4.1 / −0.6 / −1.6; -Os −0.3 / +4.7 / +0.9 / +3.9 / +1.9** | −6.4 / −3.1 / −3.5 / −0.2 / −1.9 |
+
+v3a's own means at -O2 are +3.5 / +3.9 / +2.2 / +2.3 / +2.5, and at -Os +26 / +29 / +23 / +30 / +19.
+
+| VC1 router (cycles/packet) | v3a -Os / -O2 | v3l2be1b -Os / -O2 / -O3 | v3l3be1c -Os / -O2 / -O3 |
+| --- | --- | --- | --- |
+| 1-hop E/W 16 B / 4352 | 233.7 / 234.5; 258.5 / 253.9 | 208.7 / 199.5 / 199.6; 230.7 / 218.4 / 219.1 | 197.9 / 201.3 / 201.3; 217.7 / 213.1 / 214.8 |
+| 1-hop N/S 16 B / 4352 | 236.2 / 236.2; 266.3 / 261.9 | 211.8 / 201.5 / 201.3; 232.2 / 218.4 / 218.6 | 210.4 / 201.2 / 201.9; 226.5 / 215.0 / 215.2 |
+
+- **v3l3be1c closes every gap but one, and beats v3a at all three opt levels.**
+  - At -Os it is at v3a's -O3 level; v3a's -Os penalty was 19–30.
+  - The hook probe does not cost it anything.
+  - VC1 sanity passes at -Os, -O2 and -O3 (once each).
+  - Remaining: forwarded fused writes, +5.6 at -O3 and more at -Os (E1).
+- **E1's forwarding path still changes with opt level:** forwarded 16 B is 112 at -O3, 117 at -O2 (with v3a's E1 too) and 127 at -Os.
+- **v3e1c's atomic and fused arms pay for themselves:** v3e1d (scatter only) gets the scatter rows but loses atomics (+8).
+
+**Which ERISC carries the remaining -Os cost** (job 267, `p1r11_runs.sh inj`, mixed-level ELF injection as in §88, v3l3be1c).
+- No router recompiles, and the injected ELFs are still in the cache after the runs.
+- The fresh -O3 build matches round a's -O3 within 0.1 on every suite mean.
+
+| Row (cycles/packet) | all -O3 | E0 -Os, E1 -O3 | E0 -O3, E1 -Os | all -Os |
+| --- | ---: | ---: | ---: | ---: |
+| E/W / N/S write 16 B | 116.0 / 116.9 | 114.5 / 115.6 | 121.3 / 126.4 | 118.4 / 126.0 |
+| Forwarded write 16 B / fused / atomic | 112.5 / 160.8 / 125.3 | 112.4 / 160.8 / 125.3 | 126.9 / 179.7 / 140.9 | 126.9 / 179.7 / 140.8 |
+| E/W fused / N/S atomic | 155.2 / 126.9 | 154.9 / 126.7 | 167.8 / 137.5 | 167.8 / 137.1 |
+| HalfRing multicast write | 226.8 | 227.0 | 240.9 | 240.7 |
+| Suite means vs all -O3: 4352 / mix / 1D | | +0.1 / −0.6 / +0.5 | +4.1 / +8.6 / +3.0 | +3.9 / +8.2 / +3.4 |
+
+- **E0 is -Os-robust**, and slightly faster at -Os.
+- **All of v3l3be1c's remaining -Os cost is E1's.** Along with the -O2 step on forwarded rows and v3r2's E1 sensitivity, this is the next E1 iteration (`v3t`): an E1 hot loop insulated from cold code, and per-packet paths that do not depend on opt-level transformations.
+
+**A third VC1 hang (v3l3, job 254).**
+- The hang:
+  - v3l3 (with v3e1b's E1) passed VC1 at -Os and -O2.
+  - At -O3, rank 1 never finished `MultiMeshAllToAll_size_4096_ntype_unicast_scatter_write`. Rank 0 finished it.
+- After the job:
+  - The broker's fabric check failed, so it held the device and reset it (`tt-smi -r`, about 5 minutes).
+  - **This hang needed a reset; the earlier ones did not.**
+- All three hangs are in the 4 KiB inter-mesh all-to-all:
+  - v3u3, -Os, rank 0, write;
+  - v3l2e1b, -Os, rank 0, write;
+  - v3l3, -O3, rank 1, scatter.
+- v3l3 has v3a's exact idle predicates, so the §93 fix is not the whole story.
+- v3l3b, whose E0 differs only in VC0's idle test, passed VC1 at all three levels, once each.
+- v3l3 and v3l3e1c are blocked pending cause.
+- User decision: capture the hang state.
+  - Re-run v3l3's VC1 sanity at -O3 up to 10 times.
+  - On a hang, kill the test and read every router's credit registers and channel headers with tt-exalens (read only).
+  - The tool is being built (`hang_capture.py`, `hang_decode.py`, `vc1_capture_lib.sh`).
+
+**Hang capture (user-approved) and VC1 repeats** (jobs 268–270).
+- **The tool** (`hang_capture.py`, `hang_decode.py`, `vc1_capture_lib.sh`, `p1cap_runs.sh`):
+  - It reads every link's Ethernet core on all 8 chips through tt-exalens in safe mode, read only:
+    - stream registers;
+    - the full 512 KiB of L1;
+    - the TX-queue registers;
+    - the heartbeat.
+  - The decoder matches each core's E0/E1 image to its config. It prints every channel's credits, slot headers and counters, and each downstream copy against its downstream register.
+- **Self-test** on an idle device after a v3l3 -O3 run: 48 routers in 1.7 s, 0 read errors, every config matched, and the device stayed healthy.
+- **Repeats:**
+  - **v3l3 at -O3:** 10 of 10 clean, 11 counting the self-test. The hang did not reproduce.
+  - **v3l3be1c:** 10 of 10 clean at each of -Os, -O2 and -O3.
+- **Hang rate:** 3 hangs in about 110 VC1 runs that reached the 4 KiB all-to-all.
+  - All three were in a round's full VC1 run (`vc1_split.yaml`), none in a repeat.
+  - The capture is now armed in every round's VC1 runs (`round.sh b` uses `run_vc1_cap`), so the next one is recorded.
+  - v3l3 stays blocked.
+
+**Compile coverage** (review agent, `consolidation/coverage.py`, V3_REVIEW.md "Compile coverage").
+- **Method:** the CPU-only mock cluster builds the router for every link and logs the commands. Types the host never emits are synthesized from the builder source. In all: 1,227 configs over 39 cases, for v3sb and v3a, at all three levels.
+- **Blackhole:** v3sb builds everything reachable:
+  - 1D line and ring, 2D mesh and torus;
+  - telemetry, perf telemetry, code profiling, trimming capture;
+  - tensix mux, single-ERISC, VC1 (two- and single-ERISC);
+  - the data cache and spin-wait flags (synthesized);
+  - UDM (synthesized).
+- **Wormhole:** v3sb builds 1D, ring, 2D, instrumentation and tensix mux.
+- **One new failure, VC2:** v3 does not compile there (v3a does). `receiver_erisc::run_kernel` is still type-checked under VC2.
+  - Fix: guard it with `receiver_erisc::runs`' condition; tested, VC2 then builds 56/56.
+  - It goes into v3t.
+- **Inherited from main, v3a identical:**
+  - `fuse_receiver_flush_and_completion_ptr == 0` does not compile; the builder never emits it.
+  - Wormhole VC1 overflows IRAM at -O3/-O2 on 4–5 of 20 configs; production builds VC1 at -Os.
+- Trimming replay needs a device run (job 271, logging only, no swap).
+
+**The production keepalive** (job 272, `p1r11_runs.sh ka0`).
+- Every number in this study uses a sequence-update timeout ("keepalive") of 1000 cycles, the study's knob `TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT`. Main leaves the firmware's 8000.
+- With 0, the router keeps the firmware value. Run at -O3, benchmark suites:
+
+| Row (cycles/packet) | v3a: 1000 / firmware 8000 | v3l3be1c: 1000 / firmware 8000 |
+| --- | --- | --- |
+| Mesh 1-hop, 3-hop E/W write 4352; scatter, fused 4352; chunked flushed fused | 132–165 / **187.6** | 131–158 / **187.6** |
+| E/W / N/S write 16 B | 121.7 / 128.7; 123.9 / 131.5 | 116.0 / 125.6; 116.9 / 126.0 |
+| Forwarded write 16 B | 111.9 / 125.1 | 112.5 / 125.1 |
+| Mesh multicast write 4352; bidirectional neighbor exchange | 140.7 / 140.2; 125.0 / 125.0 | 139.0 / 138.9; 125.0 / 125.0 |
+| Suite means vs v3a at 1000 (4352 / mix / flushmix / flushmix4 / 1D) | +20.7 / +24.5 / +40.1 / +39.1 / +12.8 | +19.7 / +23.1 / +38.6 / +39.1 / +11.3 |
+
+- **With the firmware keepalive, one-way traffic is floored by the Ethernet sequence-update round trip** (187.6 at 4 KiB, §16). v3 and v3a are then identical on every large-packet row. v3's gains show only where the floor does not bind: small writes are 3–6 better, multicast about the same.
+- **Bidirectional traffic is unaffected,** because acknowledgements ride on the reverse data.
+- So the keepalive is a separate lever, larger than the router changes on one-way flows. For mainline it needs to be a real host setting (V3_REVIEW must-fix 3), and it would also benefit main's router.
+
+**Mainline review** (agent, `consolidation/V3_REVIEW.md`).
+- **Latent bug (confirmed):**
+  - A deferred flushed atomic stays staged in `write_at_cmd_buf` until it fires, so nothing else may use that buffer meanwhile.
+  - E1's bypass test excludes intermesh egress. The generic loop's copy does not, so an intermesh-exit packet's credit write can overwrite the staged atomic.
+  - This comes from the study's deferral, so main is unaffected, but the tree's v2 has it too.
+  - No logged config reaches it. Fixed in v3r.
+- **Must-fix before a PR:**
+  - The two init paths must make the same six ERISC syncs, which is unchecked.
+  - The router reads study-only compile-time args. That includes the keepalive, `EXP_SEQ_UPDATE_TIMEOUT`, which is 1000 in every measurement; the firmware default is 8000.
+  - Only Blackhole was ever compiled: no Wormhole, UDM, VC2, profiling, data cache or spin-wait builds.
+  - `NocFlushType` is a packet-header API change and needs its own PR.
+- **v3r:**
+  - Renames: `sender_erisc` and `receiver_erisc` namespaces, applied by `v3r_renames.py`.
+  - The two programs move into their own headers; the .cpp goes from 5,879 to 3,945 lines.
+  - A file overview, with the unstated invariants written down.
+  - Study scaffolding and dead code removed.
+  - **PT_LOAD-identical to v3l2be1b on every config at all three levels.**
+- **v3s and v3sb:** v3l3e1c and v3l3be1c ported onto v3r. Each is PT_LOAD-identical to its merge at all levels.
+
+**Measured fragility: v3r2** (jobs 265, 266). v3r2 is v3r plus six semantically null cleanups, and every ELF changes:
+- plain functions instead of dummy templates;
+- `optimize("Os")` attributes removed;
+- an inline heartbeat helper;
+- an unused parameter removed;
+- plain bit tests;
+- plain pointers in init and one shared handshake.
+
+| vs v3l2be1b (same code otherwise) | 4352 / mix / flushmix / flushmix4 / 1D means | Scatter rows |
+| --- | --- | --- |
+| -O3 | +1.1 / −0.3 / −0.1 / +2.8 / +1.9 | +4 to +6 |
+| -O2 | +0.7 / +1.1 / +1.5 / +0.5 / +0.6 | +3 |
+| -Os | 0.0 / 0.0 / +0.1 / +1.1 / −0.6 | 0 |
+
+- **What moved:** E1-bound rows. E0's main loop is its own function, and its rows did not move. E1's loop is inlined into `kernel_main`, so cold init edits re-lay it out.
+- **This is goal 1's failure mode, measured.**
+- The structural fix to try: E1's main loop in its own function. The check is whether v3r2's edits then leave the loop's code unchanged.
+- VC1 passes on v3r2 at all three levels.
+
+## 95. Phase 1, round 12: v3t holds its gains at every opt level and under cleanup edits; the keepalive becomes a host setting
+
+**v3t** (E1 only, on v3sb; `V3E1_NOTES.md` §11). Its aims:
+- E1's main loop does not move under cold edits;
+- E1's per-packet paths do not depend on -O3-only transformations.
+
+What changed:
+- `receiver_erisc::run_main_loop` is its own `noinline` function, with no multiplication by a constant that is not a
+  power of two inside it.
+  - GCC expands such multiplies through a cost cache shared by every function in the unit. An unrelated edit
+    elsewhere can flip one from `mul` to shift + add, which renumbers registers and re-lays out the whole loop (§11.1).
+- Full completion batches have a fast path.
+- 1D decides once from the route value.
+- 2D deliver-only packets test the forward bits once.
+- The rare send types leave the loop.
+- VC2 builds again (the coverage fix, §94).
+
+Controls:
+- **v3t2** = v3t plus v3r2's six null cleanups (§94), made by `v3r_renames.py join` → `derive_edits.py all` → `split`.
+  Offline, v3t's loop code is unchanged under each edit at every level; only its start address moves.
+- **v3tb** = v3t with the loop inlined again, which measures the function boundary.
+
+**Runs** (jobs 277–281, `round.sh`; labels p12t, p12t2, p12tb). Every variant passes RELAXED and STRICT validation.
+VC1 (full `vc1_split.yaml`, capture armed) finishes 34/34 at -Os, -O2 and -O3 for v3t and for v3t2.
+
+| Row (cycles/packet) | v3a -O3 | v3sb -O3 / -O2 / -Os | **v3t -O3 / -O2 / -Os** | v3t2 -O3 | v3tb -O3 |
+| --- | ---: | --- | --- | ---: | ---: |
+| E/W write 16 B | 121.7 | 116.0 / 115.6 / 118.4 | **115.4 / 115.2 / 115.3** | 115.0 | 114.0 |
+| N/S write 16 B | 123.9 | 116.9 / 116.2 / 126.0 | **117.2 / 116.1 / 123.1** | 117.0 | 119.9 |
+| Forwarded write 16 B | 111.9 | 112.5 / 117.2 / 126.9 | **111.0 / 112.0 / 113.5** | 110.9 | 109.5 |
+| Mesh 1-hop E/W write 4352 | 132.2 | 131.1 / 130.6 / 129.0 | **127.8 / 128.9 / 127.6** | 128.5 | 128.5 |
+| Mesh 3-hop E/W write 4352 | 146.9 | 145.4 / 147.3 / 147.7 | **143.9 / 145.9 / 146.0** | 143.8 | 144.3 |
+| Mesh multicast write 4352 | 140.7 | 139.2 / 142.4 / 143.6 | **138.9 / 141.9 / 140.4** | 138.8 | 139.4 |
+| E/W scatter 4352 | 165.3 | 158.1 / 156.6 / 164.0 | **151.1 / 153.8 / 154.8** | 151.1 | 149.2 |
+| N/S scatter 4352 | 176.1 | 164.3 / 175.1 / 170.3 | **154.8 / 155.6 / 166.7** | 154.7 | 157.1 |
+| E/W / N/S atomic | 129.3 / 138.9 | 124.5 / 126.9 (-O3) | **126.6 / 127.3** (-O3); 127.6 / 134.4 (-Os) | 126.6 / 127.3 | 124.7 / 131.3 |
+| Forwarded fused 4352 | 155.2 | 160.8 / 166.1 / 179.7 | **159.8 / 159.8 / 159.6** | 159.8 | 156.6 |
+| Half-ring multicast write (1D) | 227.5 | 226.0 / 226.9 / 240.7 | 226.2 / 226.7 / 240.7 | 227.8 | 225.8 |
+
+| Suite means vs v3a -O3 (4352 / mix / flushmix / flushmix4 / 1D) | -O3 | -O2 | -Os |
+| --- | --- | --- | --- |
+| v3sb | −4.2 / −3.6 / −4.2 / −0.1 / −1.5 | −2.3 / −2.1 / −4.1 / −0.6 / −1.6 | −0.3 / +4.7 / +0.9 / +3.9 / +1.9 |
+| **v3t** | **−8.4 / −4.8 / −3.8 / −0.5 / −6.8** | **−6.6 / −4.5 / −3.9 / −1.0 / −6.3** | **−5.4 / −2.1 / −1.3 / +0.5 / −1.4** |
+| v3t2 (v3t + six cleanups) | −8.4 / −4.9 / −3.9 / −2.9 / −6.6 | −6.7 / −4.5 / −3.8 / −1.5 / −6.3 | −5.3 / −2.1 / −1.3 / +0.1 / −1.8 |
+| v3tb (loop inlined) | −8.2 / −4.9 / −3.7 / −1.8 / −4.4 | | |
+| v3t hook | −6.0 / −2.3 / −2.7 / −1.6 / −5.2 | | |
+
+(flushmix4 has 4 rows and a run-to-run spread of 6.2; its mean is noise at this size.)
+
+| VC1 router (cycles/packet) | v3sb -Os / -O2 / -O3 | v3t -Os / -O2 / -O3 |
+| --- | --- | --- |
+| 1-hop E/W 16 B; 4352 | 197.9 / 201.3 / 201.3; 217.7 / 213.1 / 214.8 | 199.5 / 201.2 / 201.5; 214.5 / 214.2 / 214.0 |
+| 1-hop N/S 16 B; 4352 | 210.4 / 201.2 / 201.9; 226.5 / 215.0 / 215.2 | 201.5 / 200.1 / 198.9; 219.3 / 213.9 / 213.7 |
+
+- **v3t is the best build at every level.**
+  - At -Os it beats v3a at -O3 on every suite but flushmix4 (+0.5, within that suite's noise).
+  - v3sb's -Os cost (+4.7 on mix) is gone. Forwarded rows are now nearly level-independent: 16 B 111.0 / 112.0 / 113.5
+    (v3sb 112.5 / 117.2 / 126.9); fused 159.8 at all three levels (v3sb 160.8 / 166.1 / 179.7).
+  - Scatter gains another 7 to 10.
+  - 1D gains 4 to 5 on means at -O3/-O2.
+- **The stability test passes on hardware.** v3t2 matches v3t within 0.4 on every mean at every level (except the
+  noisy flushmix4), and within 0.4 on the scatter rows. v3r2's same six edits had cost +1 to +2 on means and +4 to +6
+  on scatter (§94).
+- **The function boundary costs nothing on the means** (v3tb within 0.2 on 2D, mix and flushmix) and is needed for
+  insulation (V3E1_NOTES §11.3). Inlining helps a few forwarding rows (FWD 16 B 109.5, forwarded fused 156.6). It
+  costs 2.4 on the 1D mean and on N/S rows (N/S 16 B 119.9, N/S atomic 131.3).
+- **Left over:**
+  - N/S rows still lose 3 to 11 at -Os (N/S 16 B 123.1, N/S scatter 166.7, N/S fused 173.2).
+  - Half-ring multicast loses 14 at -Os, as with v3sb.
+  - Forwarded fused is +4.6 vs v3a at every level.
+  - E/W atomic is +2.1 vs v3sb at -O3, N/S +0.4; both still beat v3a, by 2.7 and 11.6.
+- **The hook probe now costs about 2.5 on 2D means** (v3sb: none).
+  - The probe is a noinline call per pass in each ERISC's loop.
+  - v3t2's hook costs the same as v3t's; v3tb's costs more (+2.7 to +3.6 on the 2D suites).
+  - Not explained yet (no disassembly read). A call per pass is real added work, so some cost is expected. v3sb's
+    free hook may have been the exception.
+- **Compiler assumption to note.** The insulation rule "no constant multiplications inside the loop function" is
+  written against one GCC behavior: the synth_mult cost cache. It is a rule about what to keep out of the hot
+  function, not a steering trick: no attributes, pinning or hints. If a toolchain stops sharing that cache, the rule is
+  harmless. If a toolchain adds another unit-global cache like it, cold edits could move the loop again; the v3t2-style
+  edit test (offline, `fncmp.py`) is what catches that.
+
+**Channel-trimming replay hangs on the tree's v1 too** (job 282, `trimdiag_runs.sh`).
+- Setup:
+  - the 1D trimming suite (`coverage/trim_1d.yaml`, deterministic all-to-all: capture, then replay of the captured
+    profile);
+  - kernel v1, every study flag off, the firmware keepalive, a fresh cache.
+- Result: the capture finished and the replay hung. The read-only capture recorded all 48 routers (0 errors,
+  `results/trimdiag_v1_hangcap`), and the device stayed healthy.
+- So the replay hang (jobs 271, 276 on the tree's v2) is not the v3 router's. It is in main's trimming flow, main's
+  router, or the study's host changes. Step 2 (v3l3be1c) did not run, by design.
+- Trimmed builds stay covered by compile coverage only (§94: 120/120 2D, 48/48 1D).
+
+**The keepalive becomes a host setting** (user, 2026-10-25: include it in v3).
+- **Host** (in the tree, used by every router version):
+  - `FabricEriscDatamoverBuilder::set_eth_txq_seq_update_timeout(cycles)`; the default 0 leaves the firmware's value.
+  - The builder passes it as the named compile-time arg `ETH_TXQ_SEQ_UPDATE_TIMEOUT`, next to `SWITCH_INTERVAL`.
+  - `compute_mesh_router_builder.cpp` sets 1000 in the Blackhole block that already sets the context-switch interval,
+    the same pattern as main.
+  - Wormhole keeps the firmware value: not measured there, and Wormhole tunnels host access over Ethernet.
+  - Study-only override: when `TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT` is set, it replaces the setting, so the logged
+    protocol (1000) and the ka0 runs (0 = firmware) still work. It goes in the PR's drop list with the other study
+    knobs.
+- **Router: v3tk** = v3t reading `ETH_TXQ_SEQ_UPDATE_TIMEOUT` instead of the study arg, with a comment that says what
+  the keepalive does.
+  - PT_LOAD-identical to v3t on every config at -O3, -O2 and -Os (536/536/534).
+  - `offline_build.add_host_setting_args` gives logged configs the value today's host would pass.
+- **What the host passes** (CPU-only mock runs of the rebuilt host without the override; `consolidation/scratch_tools/ka13/mock_ka.py`):
+
+  | Case | Value passed |
+  | --- | --- |
+  | Blackhole 2D (80 configs), 1D (80), VC1 (96), single-ERISC 2D (40) | 1000 |
+  | Wormhole 1D (28) | 0 |
+
+  `EXP_SEQ_UPDATE_TIMEOUT` is then 0, so v1, v2 and v3a keep the firmware's 8000 unless the override is set.
+- **Hardware:** v3tk without the override (`KA_ENV=`, jobs 283 and 284; labels p13k*).
+  - The router got the host's value in every built config: `ETH_TXQ_SEQ_UPDATE_TIMEOUT` 1000 and
+    `EXP_SEQ_UPDATE_TIMEOUT` 0. That covers 440 VC0 configs (-O3), 320 hook configs and 288 VC1 configs.
+  - Correctness: validation passes with RELAXED and STRICT flushes, and VC1 finishes 34/34 at -Os, -O2 and -O3.
+  - Performance: it reproduces v3t.
+    - Suite means are within 0.25 of v3t's at -O3, 0.15 at -O2 and 0.3 at -Os, except flushmix4 (noise).
+    - Key rows are within 0.5, and the VC1 1-hop rows within 0.5 except one (N/S 4352 at -O2, 217.8 vs 213.9).
+  - The hook also reproduces (+2.1 / +2.5 / +1.2 / −0.5 / +1.4 vs v3t's +2.4 / +2.5 / +1.2 / −1.1 / +1.7), so the
+    hook cost above is not noise.
+- **So the keepalive needs no study knob any more:** the v3 router plus this host change gives the measured numbers.
+  - The firmware value stays available. Pass 0 to `set_eth_txq_seq_update_timeout`, or leave the builder's default.
+  - Not covered: Wormhole (left at the firmware value), and long runs with firmware interaction (§16's caveat).
+    Every study run since §16 used 1000, and the VC1 runs repeat at it.
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then

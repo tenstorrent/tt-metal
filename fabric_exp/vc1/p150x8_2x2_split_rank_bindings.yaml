@@ -1,0 +1,16 @@
+# Two processes on bh-lb-120-a08u24, one 2x2 mesh each: cluster-descriptor chips {0,1,2,3} and {4,5,6,7}, two opposite
+# faces of the cube (fabric_exp/a08u24_cluster_desc.yaml). TT_VISIBLE_DEVICES here are read as those chip ids: with the
+# PCIe ids of the same chips ("0,1,2,7" | "3,4,5,6", kept in *_pcie_ids.yaml.bak) the topology mapper could not place
+# the meshes (jobs 210/213; reproduced and fixed on a mock of this host, vc1_mock.sh).
+rank_bindings:
+  - rank: 0
+    mesh_id: 0
+    env_overrides:
+      TT_VISIBLE_DEVICES: "0,1,2,3"
+
+  - rank: 1
+    mesh_id: 1
+    env_overrides:
+      TT_VISIBLE_DEVICES: "4,5,6,7"
+
+mesh_graph_desc_path: "fabric_exp/vc1/p150x8_2x2_split_mgd.textproto"
