@@ -48,9 +48,9 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
 # glue track (GLUE_EPI_L1=1): the post-combine reduce-scatter output [S, emb/tp] goes to L1; the final add
 # reads it once. Read here, not in the shared TtReduceModule, so other models that use that module keep DRAM.
-_GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "0") == "1"
+_GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: build post_combine_reduce's [1, 1, S, k, 1] weights inside the dispatch || shared-expert window.
-_GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "0") == "1"
+_GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "1") == "1"
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
