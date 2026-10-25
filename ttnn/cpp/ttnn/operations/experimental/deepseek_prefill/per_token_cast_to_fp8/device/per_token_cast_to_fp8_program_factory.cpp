@@ -6,6 +6,7 @@
 
 #include <array>
 #include <bit>
+#include <cstdlib>
 #include <map>
 #include <string>
 
@@ -354,7 +355,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         rows_per_plane = static_cast<uint32_t>(input_shape[input_shape.size() - 2]);  // R = rows in one [R,H] plane
         const uint32_t num_planes = M / rows_per_plane;        // trailing [R,H] planes (1 for a 2D input)
         row_tiles_per_plane = div_up(rows_per_plane, tile_h);  // tile-rows per plane (R padded up to tile_h)
-        total_units = num_planes * row_tiles_per_plane * chunks_per_row;
+        total_units = num_planes * row_tiles_per_plane * chunks_per_row;  // in chunks; divided by Q_UNIT below
         scale_scratch_bytes = tile_h * scale_page_bytes;  // one plane's tile-row = tile_h scale rows
         defines["INPUT_TILE_LAYOUT"] = "1";
     } else {
@@ -380,7 +381,11 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
             defines["FAST_BLOCK4"] = "1";
             defines["Q_SFPU_AMAX"] = "1";  // the 4-tile fold only exists in the SFPU amax path
         }
-        if (tile_layout && attrs.token_count_aware) {
+        // The static (not count-aware) TILE path takes the same 2-chunk units and 4-unit write groups (fp8wire Q1 on
+        // the MoE x: 128 B row writes made it NoC-write bound, 48 us for 640 x 6144). The compute is told its first
+        // unit so it closes write groups at the same row boundaries as the writer.
+        const bool static_grouped = tile_layout && !attrs.token_count_aware && std::getenv("TT_FP8_Q1_UNGROUPED") == nullptr;
+        if (tile_layout && (attrs.token_count_aware || static_grouped)) {
             // Units of 2 chunks (256 columns) of one tile-row: 256-B row writes, and enough units per core to even
             // out the work (K3 Q2: 1 chunk 102 us, 2 chunks 91 us, 4 chunks 92 us, 7 chunks 100 us).
             uint32_t q_unit = 2;
@@ -397,6 +402,10 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
                 defines["Q_UPR"] = std::to_string(chunks_per_row / q_unit);
             }
         }
+    }
+
+    if (tile_layout && !attrs.token_count_aware && defines.contains("Q_UNIT")) {
+        total_units /= std::stoul(defines.at("Q_UNIT"));  // units of Q_UNIT chunks (chunks_per_row % Q_UNIT == 0)
     }
 
     Program program{};
@@ -487,7 +496,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
             continue;
         }
         if (tile_layout) {
-            num_blocks = core_units;  // the work unit is already a 128-block
+            num_blocks = core_units;  // the work unit is already a 128-block (Q_UNIT of them when grouped)
             SetRuntimeArgs(program, k.reader, core, {src_addr, offset, num_blocks});
             SetRuntimeArgs(
                 program,
@@ -499,7 +508,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
             SetRuntimeArgs(program, k.reader, core, {src_addr, num_blocks, offset, core_units, H});
             SetRuntimeArgs(program, k.writer, core, {dst_e4m3_addr, dst_scale_addr, num_blocks, offset, core_units, H});
         }
-        SetRuntimeArgs(program, k.compute, core, {num_blocks});
+        SetRuntimeArgs(program, k.compute, core, {num_blocks, offset});
         offset += core_units;
     }
 

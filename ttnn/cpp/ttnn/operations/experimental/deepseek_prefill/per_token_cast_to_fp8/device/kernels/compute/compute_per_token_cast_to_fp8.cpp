@@ -182,7 +182,8 @@ void kernel_main() {
     // column of a Q_WGROUP * unit wide row, so the writer moves one run of up to Q_WGROUP units per row.
     constexpr uint32_t group_tiles = Q_WGROUP * unit_tiles;
 #ifndef TOKEN_COUNT_AWARE
-    constexpr uint32_t first_unit = 0;
+    // Static split: the host passes this core's first global unit, so write groups close at row boundaries.
+    const uint32_t first_unit = get_arg_val<uint32_t>(1);
 #endif
     uint32_t group_pos = 0;
     for (uint32_t unit = 0; unit < num_blocks; ++unit) {
