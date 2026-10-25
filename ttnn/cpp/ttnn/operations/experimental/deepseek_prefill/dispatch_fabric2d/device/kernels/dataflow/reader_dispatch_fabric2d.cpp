@@ -303,6 +303,49 @@ FORCE_INLINE uint32_t share_end(uint32_t n, uint32_t idx, uint32_t count, uint32
     return slice_begin(n, idx + 1, count);
 }
 
+// The reader -> sender queue of queue_depth entries. Two monotonic counters with one writer each: this side
+// owns `filled`, the sender owns `freed`, and each uses the difference, so neither needs an atomic
+// read-modify-write. `claimed` runs ahead of `published` so several token reads are in flight at once.
+struct TokenQueue {
+    uint32_t claimed = 0;
+    // Entries whose fwd_meta is written. Only these are published: when a blocked claim flushes, other
+    // claimed entries may not have their command word yet.
+    uint32_t ready = 0;
+    uint32_t published = 0;
+
+    uint32_t claim_entry() {
+        volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr);
+        while (true) {
+            invalidate_l1_cache();
+            if (claimed - *freed < ct.queue_depth) {
+                return claimed++ % ct.queue_depth;
+            }
+            // Publish before blocking, or the sender and this reader wait on each other.
+            flush_publish();
+        }
+    }
+
+    // The entry's fwd_meta is written; it may now be published.
+    void mark_ready() { ready++; }
+
+    // Returns the capacity of claims never marked ready. The sender never saw them.
+    void release_unready() {
+        ASSERT(claimed >= ready);
+        claimed = ready;
+    }
+
+    void flush_publish() {
+        if (published == ready) {
+            return;
+        }
+        // The tokens have to be in L1 before the sender is told the entries are filled.
+        noc_async_read_barrier();
+        noc_semaphore_inc(get_noc_addr(ct.filled_addr), ready - published);
+        published = ready;
+    }
+};
+
+
 // chunk: one stream's slice of the run for one (origin, expert); a descriptor expands into experts_per_chip
 // chunks, one per expert on the destination.
 uint32_t chunk_len(const Scratch& c, uint32_t origin_pos, uint32_t e, uint32_t idx, uint32_t count) {
