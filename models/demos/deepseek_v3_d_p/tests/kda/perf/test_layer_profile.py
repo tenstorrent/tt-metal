@@ -8,11 +8,13 @@ chip it records every program's start and end, and writes the JSON to KDA_PROFIL
 generated/kda_profile.json): the per-op times, the gaps between programs and the skew between chips.
 
 KDA_PROFILE_TOKENS sets the chunk length (default 5120; multiples of 256 from 1024), KDA_PROFILE_REPLAYS the replays
-and KDA_PROFILE_CALLS the calls each replay runs back to back.
+and KDA_PROFILE_CALLS the calls each replay runs back to back. KDA_PROFILE_DELAY=point:delay_us:chips (see
+delay_injection.DelayConfig) profiles the layer with that delay injected, its spin program recorded as one more program.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import statistics
@@ -23,6 +25,7 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.perf.delay_injection import DelayConfig
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
     _L1_SMALL_SIZE,
     _capture_layer_trace,
@@ -37,6 +40,7 @@ _REPLAYS = int(os.environ.get("KDA_PROFILE_REPLAYS", "5"))
 # Calls per replay, run back to back without a host sync between them, so the chips reach their steady-state skew.
 _CALLS = int(os.environ.get("KDA_PROFILE_CALLS", "4"))
 _OUT = Path(os.environ.get("KDA_PROFILE_OUT", "generated/kda_profile.json"))
+_DELAY = os.environ.get("KDA_PROFILE_DELAY")
 _SP = 8
 _SETTLE_SECONDS = 0.5
 _TIMEOUT_SECONDS = 20.0
@@ -106,15 +110,16 @@ def test_kimi_k3_layer_profile(mesh_device: ttnn.MeshDevice, device_params: dict
     actual_start = 4 * local_rows + (local_rows // 2) // 32 * 32
     case = make_synthetic_kimi_k3_test_case(sequence=_TOKENS)
     layer, hidden_tt = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=1, cache_weights=False)
-    trace = _capture_layer_trace(mesh_device, layer, hidden_tt, actual_start, actual_start + _TOKENS)
-    replays = []
-    try:
-        _replay_records(mesh_device, trace.trace_id)  # first-replay jitter
-        for _ in range(_REPLAYS):
-            wall_ms, records = _replay_records(mesh_device, trace.trace_id)
-            replays.append({"wall_ms": wall_ms, "records": records})
-    finally:
-        _release_layer_trace(mesh_device, trace)
+    with DelayConfig.parse(_DELAY).inject(layer) if _DELAY else contextlib.nullcontext():
+        trace = _capture_layer_trace(mesh_device, layer, hidden_tt, actual_start, actual_start + _TOKENS)
+        replays = []
+        try:
+            _replay_records(mesh_device, trace.trace_id)  # first-replay jitter
+            for _ in range(_REPLAYS):
+                wall_ms, records = _replay_records(mesh_device, trace.trace_id)
+                replays.append({"wall_ms": wall_ms, "records": records})
+        finally:
+            _release_layer_trace(mesh_device, trace)
     _OUT.parent.mkdir(parents=True, exist_ok=True)
     _OUT.write_text(
         json.dumps(
@@ -123,6 +128,7 @@ def test_kimi_k3_layer_profile(mesh_device: ttnn.MeshDevice, device_params: dict
                 "local_rows": local_rows,
                 "calls_per_replay": _CALLS,
                 "actual_start": actual_start,
+                "delay": _DELAY,
                 # Chip ids in row-major mesh order: index // 4 is the SP rank, index % 4 the TP rank.
                 "mesh_device_ids": [int(i) for i in mesh_device.get_device_ids()],
                 "replays": replays,
