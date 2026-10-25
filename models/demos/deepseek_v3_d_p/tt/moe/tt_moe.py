@@ -43,6 +43,15 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # glue track: workers per link for the MoE x all-gather over TP; "0" = op default.
 _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
+# overlap track (prototype): run the TP all-gather of x on the free x=11 column while the router chain (gate mm,
+# gate all-reduce, grouped top-k, bincount, cumsum, index untilize) runs on x 0..10. TT_GLM_ROUTER_OVERLAP=1 enables;
+# TT_GLM_ROUTER_XAG_TOPO = linear (default: a Ring AG concurrent with the gate's axis-1 all-gather risks the EDM
+# credit-cycle deadlock documented for the shared-expert RS) | ring; TT_GLM_ROUTER_XAG_WORKERS (default 1: no mux,
+# 2 links x 2 directions = 4 cores) and TT_GLM_ROUTER_XAG_LINKS (default = col links) size it to fit 10 cores.
+_ROUTER_OVERLAP = os.environ.get("TT_GLM_ROUTER_OVERLAP", "0") == "1"
+_ROUTER_XAG_TOPO = os.environ.get("TT_GLM_ROUTER_XAG_TOPO", "linear").lower()
+_ROUTER_XAG_WORKERS = int(os.environ.get("TT_GLM_ROUTER_XAG_WORKERS", "1"))
+_ROUTER_XAG_LINKS = int(os.environ.get("TT_GLM_ROUTER_XAG_LINKS", "0")) or None
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
@@ -491,6 +500,20 @@ class TtMoe(LightweightModule):
             self.shared_sd_cores = None
             logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
 
+        # Router-overlap manager (prototype, see _ROUTER_OVERLAP): one per mesh, cached on TT_CCL.
+        self.router_overlap = None
+        if _ROUTER_OVERLAP and self.overlap_shared_expert_with_dispatch and mesh_device.shape[1] > 1:
+            cached = getattr(self.tt_ccl, "_router_overlap", None)
+            if cached is None:
+                g = mesh_device.compute_with_storage_grid_size()
+                main = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 2, g.y - 1))})
+                col = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(g.x - 1, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+                mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([main]), ttnn.SubDevice([col])], 0)
+                cached = dict(manager_id=mgr, main_cores=main, xag_sd=ttnn.SubDeviceId(1))
+                self.tt_ccl._router_overlap = cached
+                logger.info(f"TtMoe: router overlap manager main=x0..{g.x - 2}, x-gather column x={g.x - 1}")
+            self.router_overlap = cached
+
         # Initialize dispatch module (row axis: axis 0)
         self.dispatch_module = TtDispatchModule(
             mesh_device=mesh_device,
@@ -910,6 +933,31 @@ class TtMoe(LightweightModule):
             else:
                 padding_config = self.gate.build_padding_config(actual_isl, padding_side, actual_start or 0)
 
+        router_overlap = self.router_overlap if (self.router_overlap is not None and not return_intermediates) else None
+        x_gathered = None
+        if router_overlap is not None:
+            # Fork: the x all-gather (needed only by dispatch / shared expert) on the x=11 column, issued FIRST so
+            # its go signal never queues behind a router op; the router chain follows on x0..10 (every op in it
+            # either takes SD0 by default or uses <= 110 column-major / origin-anchored cores). The dispatch
+            # region's manager load below is the join.
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(router_overlap["manager_id"])
+            else:
+                self.mesh_device.load_sub_device_manager(router_overlap["manager_id"])
+            ttnn.tracy_message("`TT_SIGNPOST: router_overlap_start`")
+            x_gathered = ttnn.experimental.all_gather_async(
+                x,
+                dim=-1,
+                cluster_axis=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                num_links=_ROUTER_XAG_LINKS or self.col_num_links,
+                topology=ttnn.Topology.Ring if _ROUTER_XAG_TOPO == "ring" else ttnn.Topology.Linear,
+                num_workers_per_link=_ROUTER_XAG_WORKERS,
+                subdevice_id=router_overlap["xag_sd"],
+            )
+            self.gate.reduce_sub_core_grids = router_overlap["main_cores"]
+
         scores, indices, gate_logits = self.gate(
             ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),
             actual_isl=actual_isl,
@@ -971,7 +1019,9 @@ class TtMoe(LightweightModule):
         # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
-        if self.mesh_device.shape[1] > 1:
+        if x_gathered is not None:
+            x = x_gathered
+        elif self.mesh_device.shape[1] > 1:
             x = ttnn.experimental.all_gather_async(
                 x,
                 dim=-1,  # Gather along emb_dim

@@ -945,11 +945,13 @@ class TtMoEGatePrefill(LightweightModule):
             )
             ttnn.deallocate(logits)
             # gathered aliases the persistent buffer: do not free it.
+            reduce_grid = getattr(self, "reduce_sub_core_grids", None)  # set by TtMoe's router overlap
             summed = ttnn.experimental.fast_reduce_nc(
                 gathered,
                 dims=[1],
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self._ar_reduce_kernel_config,
+                **({"sub_core_grids": reduce_grid} if reduce_grid is not None else {}),
             )
             return ttnn.reshape(summed, (rows, n))
         if tp > 1:
