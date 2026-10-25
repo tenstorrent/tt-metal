@@ -805,9 +805,10 @@ class ttMLA:
         # Debug/reference: MLA_SEQQ_QA=allreduce keeps the head-sharded path's q_a stem (all-reduce + norm of all
         # S/sp rows) and partitions the rows afterwards, isolating the reduce-scatter summation order.
         self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
-        # MLA_SEQQ_L1=1: the seq-path rope output (~98 KB/core, untilized from L1 to DRAM: sparse_sdpa wants its q in
-        # DRAM) and the tilized sparse_sdpa output (~87 KB/core, wkv_b2's in0) live in L1 instead of DRAM (R0,
-        # bit-exact: rope 60->47, untilize 57->52, tilize+wkv_b2 115->84 us). Opt-in until checked in-model.
+        # MLA_SEQQ_L1=1: the tilized sparse_sdpa output (~87 KB/core, wkv_b2's in0) lives in L1, only for the wkv_b2
+        # matmul (R0, bit-exact: tilize + wkv_b2 115 -> 84 us). The rope output must NOT go to L1: it is built before
+        # the kv stem and lives through the KVPE gather / top-k overlap region, and on best its 98 KB/core clashed with
+        # the gather/push programs' static CBs (grid rows 0-1), eager and traced (seqq-l1-b6-4).
         self._seq_q_l1 = self._seq_q and os.getenv("MLA_SEQQ_L1", "0") not in ("", "0")
         assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
         if self._seq_q:
@@ -2408,8 +2409,11 @@ class ttMLA:
         # there is no transient buffer here any more.
         ttnn.deallocate(tt_q)
         if self._seq_q:
-            # All heads of this TP quarter's rows: project, then restore the head-sharded layout.
-            return self._seq_to_heads(self._apply_wkv_b2(attn_out, attn_out.shape[2]))
+            # All heads of this TP quarter's rows: project, then restore the head-sharded layout. attn_out is freed
+            # before the all-to-all (under MLA_SEQQ_L1 it is an L1 buffer and must not outlive wkv_b2).
+            v = self._apply_wkv_b2(attn_out, attn_out.shape[2])
+            ttnn.deallocate(attn_out)
+            return self._seq_to_heads(v)
         return self._apply_wkv_b2(attn_out, seq_len_local)
 
     def _select_and_gather_overlapped(
@@ -2884,7 +2888,6 @@ class ttMLA:
             rope_tensors["trans_matrix"],
             kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
             cluster_axis=self.sp_axis,
-            memory_config=ttnn.L1_MEMORY_CONFIG if self._seq_q_l1 else None,
             seq_subshard_axis=self.tp_axis,
             concat_prefix=tt_q_nope_abs,
         )
@@ -2967,13 +2970,7 @@ class ttMLA:
         # (_q_stem_seq) is built TP-sequence-sharded with all heads: _sparse_q_seq passes it through, and the
         # caller (_finish_sparse_chunked_attn) restores heads after wkv_b2 instead of here.
         q_seq_sharded = self._sparse_q_seq(q) if q_seq is None else q_seq
-        # the op is ROW_MAJOR-only; q comes in TILE
-        # (sparse_sdpa requires its q in DRAM: under MLA_SEQQ_L1 the L1 rope output is untilized straight to DRAM.)
-        q_rm = ttnn.to_layout(
-            q_seq_sharded,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if getattr(self, "_seq_q_l1", False) else None,
-        )
+        q_rm = ttnn.to_layout(q_seq_sharded, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
 
