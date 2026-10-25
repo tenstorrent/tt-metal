@@ -2205,7 +2205,14 @@ class ttMLA:
                 topo = {"linear": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}.get(
                     os.getenv("TT_GLM_OVERLAP_A2A_TOPO", "default").lower()
                 )
-                q_seq = self._sparse_q_seq(tt_q, subdevice_id=resources.topk_subdevice_id, topology=topo)
+                # Diagnostic: TT_GLM_OVERLAP_A2A_SD=gather runs the a2a AFTER the push on the same (gather) sub-device,
+                # i.e. the region without any concurrency (allopt's full-layer arrangement).
+                a2a_sd = (
+                    resources.gather_subdevice_id
+                    if os.getenv("TT_GLM_OVERLAP_A2A_SD", "topk").lower() == "gather"
+                    else resources.topk_subdevice_id
+                )
+                q_seq = self._sparse_q_seq(tt_q, subdevice_id=a2a_sd, topology=topo)
                 if mode == "a2a_untilize":
                     q_rm = ttnn.to_layout(q_seq, ttnn.ROW_MAJOR_LAYOUT, sub_core_grids=resources.topk_core_grid)
                     ttnn.deallocate(q_seq)
