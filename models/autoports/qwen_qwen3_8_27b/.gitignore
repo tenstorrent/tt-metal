@@ -1,0 +1,11 @@
+# Large reproducible capture intermediates stay local; checked-in compact evidence
+# includes ops.csv, filtered reports, source provenance and correctness results.
+doc/functional_decoder/tracy/*/.logs/
+doc/functional_decoder/tracy/*/reports/
+doc/functional_decoder/tracy/linear_b1/
+doc/functional_decoder/*debug/*session*/
+__pycache__/
+
+doc/functional_decoder/tracy/linear_b32/
+doc/functional_decoder/synthetic_cases/*current
+doc/functional_decoder/synthetic_cases/.lock

@@ -1,0 +1,993 @@
+diff --git a/docs/MODEL_EXECUTION.md b/docs/MODEL_EXECUTION.md
+index af67e0d..8075758 100644
+--- a/docs/MODEL_EXECUTION.md
++++ b/docs/MODEL_EXECUTION.md
+@@ -22,7 +22,8 @@ The plugin rejects encoder-decoder models and `prompt_embeds` input.
+   interpret an inactive row as a live request or modify another request's state.
+ - `page_table` is the first KV group's integer logical-to-physical block
+   table. If the resolved cache has multiple groups, the plugin also sends
+-  `page_tables_per_layer`, ordered by attention-layer index. The model adapter
++  `page_tables_per_layer`, ordered by attention-layer index for attention-only
++  models, or raw model-layer index for mixed `MambaSpec`/attention models. The model adapter
+   must use the page table for each layer. See [KV setup](MODEL_SETUP.md).
+ 
+ `TTModelInput` is an internal plugin payload. The model adapter receives the
+@@ -46,6 +47,7 @@ keyword arguments below, not a `TTModelInput` object. Source:
+ | `empty_slots` | When supplied, one destination device-state slot per submitted row. Preserve state belonging to other slots. |
+ | `page_tables_per_layer` | Supplied for multiple KV groups, as described above. |
+ | `sampling_params` | Supplied only when this prefill uses device sampling. See the sampling section. |
++| `intermediate_prefill_mask` | Supplied when any row is an intermediate prompt chunk. True rows update cache/state but emit no token; their output is discarded. Adapters may omit sampling and host readback for those rows. An all-intermediate call may return a small host placeholder because the runner does not inspect its logits. Mixed batches still require valid host logits for final rows when `sampling_params` is absent. |
+ | `stage_inputs` | Supplied only when the model declares `supports_stage_inputs`. One entry per row: the request's stage payload as a plain dict, or `None`. The same payload arrives with every prefill of a request, so a chunked or resumed prefill sees it again. Decode receives none; see [stage inputs](MODEL_LIFECYCLE.md#stage-inputs). |
+ 
+ For row `i`, `prefill_forward` computes
+@@ -56,9 +58,14 @@ Resume prefill can replay generated tokens to rebuild KV state.
+ 
+ The model adapter returns host logits `[B, 1, V]` for host sampling, or sampled
+ token IDs for device sampling. The plugin has no separate prefill readback
+-hook. `TTModelRunner` suppresses output for intermediate prefill chunks and
+-selects host sampling when a submitted prefill contains intermediate chunks,
+-so intermediate chunks must not advance a device sampler.
++hook. `TTModelRunner` suppresses output for intermediate prefill chunks. A mixed
++scheduler batch is submitted as intermediate rows first, without sampling
++parameters, then final rows with the selected host/device sampling route.
++Both calls retain their original `empty_slots`, per-layer tables and row-specific
++metadata. Final outputs are scattered back into scheduler row order; intermediate
++outputs are discarded. Thus an unfinished row does not force a final row onto
++host sampling, and intermediate chunks do not invoke a device sampler. An adapter
++may use `intermediate_prefill_mask` to skip their otherwise-unused logits readback.
+ 
+ ### Multimodal inputs and request-specific RoPE
+ 
+diff --git a/docs/MODEL_LIFECYCLE.md b/docs/MODEL_LIFECYCLE.md
+index e08f746..d86ac69 100644
+--- a/docs/MODEL_LIFECYCLE.md
++++ b/docs/MODEL_LIFECYCLE.md
+@@ -45,6 +45,11 @@ Device-state slots identify adapter-owned request state. A prefill row is not
+ necessarily the slot that owns that request. KV page addresses and state slots
+ serve different purposes; the adapter must honor both.
+ 
++In front-packed execution, a continuing prefill retains its existing state
++slot even when its submitted row changes. New prefills receive unowned slots;
++the runner reserves all continuing owners before placing any new request.
++Prefill itself does not transport existing state between slots.
++
+ | Interface | Adapter responsibility |
+ |---|---|
+ | `prefill_forward(empty_slots=[...])` | Write each prefill row's state into the corresponding destination slot; preserve live state in other slots. Stateless adapters can ignore `empty_slots`. |
+diff --git a/docs/MODEL_SETUP.md b/docs/MODEL_SETUP.md
+index 81eaba9..c43d779 100644
+--- a/docs/MODEL_SETUP.md
++++ b/docs/MODEL_SETUP.md
+@@ -105,6 +105,25 @@ For per-layer specifications, use names containing `layers.<index>`, such as
+ groups. `UniformTypeKVCacheSpecs` can carry different per-layer shapes within
+ one group. The worker advertises only the vLLM `LBNHC` cache layout.
+ 
++Mixed recurrent/attention models may also return `MambaSpec`. Such an adapter
++implements `allocate_hybrid_kv_cache(kv_cache_config)`, which receives the exact
++upstream cache configuration instead of attention-only shape triples. Its opaque
++return value is passed unchanged as `kv_cache`. Layer names use raw model-layer
++indices and cover every layer. For these models `page_tables_per_layer` likewise
++contains every raw model layer, including recurrent layers; each table uses its
++group's block size. The adapter owns device storage, restoration and checkpoint
++writes, while upstream owns block IDs, hashing, sharing and eviction. Separate
++physical TT buffers may implement upstream's shared virtual allocation, but their
++actual memory must be accounted for rather than inferred from the planner bytes.
++
++With `mamba_cache_mode="align"`, the TT pool budget adds two recurrent state
++blocks plus declared speculative/prefill-checkpoint blocks per recurrent group
++and concurrent request, plus the null block. This reserves scheduler IDs; it is
++not a physical memory-fit guarantee. Adapters must save exact boundary states
++before they become cache hits, restore cached state into independent live slots,
++and preserve immutable shared checkpoints. A declaration of prefix-cache support
++alone does not implement these operations.
++
+ A stage with no token KV cache, such as an audio decoder, uses a `TTWorker`
+ subclass that sets `uses_token_kv_cache = False`. That worker sizes no KV pool
+ and reports an empty KV specification. vLLM then treats the stage as
+diff --git a/src/vllm_tt_plugin/input_batch.py b/src/vllm_tt_plugin/input_batch.py
+index 1921564..dda81e2 100644
+--- a/src/vllm_tt_plugin/input_batch.py
++++ b/src/vllm_tt_plugin/input_batch.py
+@@ -1391,16 +1391,16 @@ class TTLaneInputBatch(InputBatch):
+         has_structured = has_structured_outputs(
+             runner.requests, scheduler_output, bitmask
+         )
+-        perform_device_sampling = runner.check_perform_device_sampling(
++        sampling_rows = [
++            row for i, row in enumerate(rows) if not bool(intermediate_prefill_mask[i])
++        ]
++        perform_device_sampling = bool(
++            sampling_rows
++        ) and runner.check_perform_device_sampling(
+             is_decode=False,
+             has_structured_outputs=has_structured,
+-            sampling_rows=rows,
++            sampling_rows=sampling_rows,
+         )
+-        if intermediate_prefill_mask.any():
+-            # Device sampling advances device RNG state for every row it reads,
+-            # which an intermediate chunk must not do. Host sampling can hand
+-            # those rows a generator clone instead.
+-            perform_device_sampling = False
+ 
+         # Device-side penalties only; host sampling rebuilds these in
+         # ``build_merged_sampling_metadata`` (over the full slot batch), so
+diff --git a/src/vllm_tt_plugin/model_runner.py b/src/vllm_tt_plugin/model_runner.py
+index 82feb5e..4162b5d 100644
+--- a/src/vllm_tt_plugin/model_runner.py
++++ b/src/vllm_tt_plugin/model_runner.py
+@@ -20,6 +20,7 @@ from vllm.utils.math_utils import cdiv
+ from vllm.v1.kv_cache_interface import (
+     AttentionSpec,
+     KVCacheConfig,
++    MambaSpec,
+     UniformTypeKVCacheSpecs,
+ )
+ from vllm.v1.outputs import (
+@@ -76,6 +77,7 @@ from vllm_tt_plugin.model_input import (
+     slice_tt_sampling_params,
+ )
+ from vllm_tt_plugin.platform import TTPlatform
++from vllm_tt_plugin.prefill import submit_prefill_chunks
+ from vllm_tt_plugin.spec_accept import accept_sampled_drafts, spec_sampling_inputs
+ from vllm_tt_plugin.spec_admission import method_requirements
+ from vllm_tt_plugin.spec_decode import (
+@@ -708,8 +710,15 @@ class TTModelRunner:
+         # worker loads the model.
+         self._layer_to_group_idx: list[int] | None = None
+         if len(kv_cache_groups) > 1:
+-            num_layers = self.model_config.get_num_layers_by_block_type(
+-                self.parallel_config, "attention"
++            has_mamba = any(
++                isinstance(g.kv_cache_spec, MambaSpec) for g in kv_cache_groups
++            )
++            num_layers = (
++                self.model_config.get_num_layers(self.parallel_config)
++                if has_mamba
++                else self.model_config.get_num_layers_by_block_type(
++                    self.parallel_config, "attention"
++                )
+             )
+             mapping: list[int | None] = [None] * num_layers
+             for g_idx, group in enumerate(kv_cache_groups):
+@@ -740,10 +749,11 @@ class TTModelRunner:
+             # full layers 1x512). We unwrap it to per-layer specs in
+             # ``_build_per_layer_specs``, so accept it here too.
+             if not isinstance(
+-                group.kv_cache_spec, (AttentionSpec, UniformTypeKVCacheSpecs)
++                group.kv_cache_spec, (AttentionSpec, MambaSpec, UniformTypeKVCacheSpecs)
+             ):
+                 raise TypeError(
+-                    f"Expected AttentionSpec/UniformTypeKVCacheSpecs for group "
++                    "Expected AttentionSpec/MambaSpec/UniformTypeKVCacheSpecs "
++                    "for group "
+                     f"{group.layer_names}, got {type(group.kv_cache_spec).__name__}"
+                 )
+ 
+@@ -771,6 +781,20 @@ class TTModelRunner:
+         the older ``allocate_kv_cache(shape, dtype, num_layers)`` signature
+         and we adapt to it here, asserting the per-layer specs are uniform.
+         """
++        if any(
++            isinstance(g.kv_cache_spec, MambaSpec)
++            for g in kv_cache_config.kv_cache_groups
++        ):
++            allocate = getattr(self.model, "allocate_hybrid_kv_cache", None)
++            if not callable(allocate):
++                raise TypeError(
++                    f"{type(self.model).__name__} exposes MambaSpec but does not "
++                    "implement allocate_hybrid_kv_cache(kv_cache_config)"
++                )
++            # Mamba state shapes, per-group block sizes and raw model-layer
++            # indices cannot be represented by the attention-only shape API.
++            return allocate(kv_cache_config)
++
+         num_layers = self.model_config.get_num_layers_by_block_type(
+             self.parallel_config, "attention"
+         )
+@@ -808,7 +832,6 @@ class TTModelRunner:
+         """
+         if self._layer_to_group_idx is None:
+             return None
+-        result = [block_tables_per_group[g] for g in self._layer_to_group_idx]
+         # Pad to the warmup shape ``[max_batch, max_num_blocks_per_req]``.
+         # The model side (``Transformer._page_tables_to_ttnn``) allocates
+         # *persistent* ttnn device tensors at this shape during warmup so
+@@ -820,20 +843,23 @@ class TTModelRunner:
+         # active block count.
+         max_batch = self.tt_max_batch_size
+         target_shape = (max_batch, self.max_num_blocks_per_req)
+-        padded = []
+-        for bt in result:
++        # Tables are shared read-only by layers in the same cache group.
++        # Reuse the padded tensor just as the already-shaped fast path does.
++        padded = {}
++        for group in dict.fromkeys(self._layer_to_group_idx):
++            bt = block_tables_per_group[group]
+             if bt is None:
+-                padded.append(None)
++                padded[group] = None
+                 continue
+             if bt.shape == target_shape:
+-                padded.append(bt)
++                padded[group] = bt
+                 continue
+             full = torch.zeros(target_shape, dtype=bt.dtype)
+             rows = min(bt.shape[0], target_shape[0])
+             cols = min(bt.shape[1], target_shape[1])
+             full[:rows, :cols] = bt[:rows, :cols]
+-            padded.append(full)
+-        return padded
++            padded[group] = full
++        return [padded[group] for group in self._layer_to_group_idx]
+ 
+     def _build_per_layer_specs(
+         self, kv_cache_config: KVCacheConfig, num_layers: int
+@@ -1266,14 +1292,14 @@ class TTModelRunner:
+             self._req_state_slot.pop(req_id, None)
+ 
+     def _alloc_prefill_state_slots(self, row_req_ids: list[str]) -> list[int]:
+-        """Pick each prefilling request's state slot, skipping slots that live
+-        off-batch requests own. Prefers its own row (where it decodes), so the
+-        steady state moves nothing.
+-
+-        Exhaustion is unreachable: holders and prefills are disjoint and both count
+-        against ``max_num_seqs``, which is ``n_slots``. Getting here means the map has
+-        stopped describing the device, and nothing on the host can recover it, so fail
+-        rather than guess and return plausible, wrong text.
++        """Keep continuing prefills in their existing state slots. New requests
++        prefer their packed row, skipping every live owner's slot, including
++        continuations later in this prefill batch.
++
++        Exhaustion is unreachable: holders and new prefills are disjoint and both
++        count against ``max_num_seqs``, which is ``n_slots``. Getting here means the
++        map has stopped describing the device, and nothing on the host can recover
++        it, so fail rather than guess and return plausible, wrong text.
+         """
+         n_slots = self.tt_per_lane_max_num_seqs
+         if len(row_req_ids) > n_slots:
+@@ -1285,11 +1311,15 @@ class TTModelRunner:
+         held = {
+             slot
+             for req_id, slot in self._req_state_slot.items()
+-            if req_id not in prefilling and req_id in self.requests
++            if req_id in self.requests or req_id in prefilling
+         }
+         slots: list[int] = []
+         for row, req_id in enumerate(row_req_ids):
+-            if row not in held:
++            if req_id in self._req_state_slot:
++                # Prefill has no slot-remap input: ownership cannot change until
++                # decode explicitly gathers the continuing request's state.
++                slot = self._req_state_slot[req_id]
++            elif row not in held:
+                 slot = row
+             else:
+                 free = [s for s in range(n_slots) if s not in held]
+@@ -2337,18 +2367,22 @@ class TTModelRunner:
+                 expected_structured_output_request_ids=structured_output_req_ids,
+             )
+ 
+-        perform_device_sampling = self.check_perform_device_sampling(
++        sampling_rows = req_indices
++        if intermediate_prefill_mask is not None and intermediate_prefill_mask.any():
++            sampling_rows = [
++                row
++                for i, row in enumerate(req_indices)
++                if not bool(intermediate_prefill_mask[i])
++            ]
++        perform_device_sampling = len(
++            sampling_rows
++        ) > 0 and self.check_perform_device_sampling(
+             is_decode=not is_prompt,
+             has_structured_outputs=has_structured,
+-            sampling_rows=req_indices,
++            sampling_rows=sampling_rows,
+         )
+         if has_structured and not has_scheduled_structured:
+             perform_device_sampling = False
+-        if intermediate_prefill_mask is not None and intermediate_prefill_mask.any():
+-            # Device sampling advances device RNG state for every row it reads,
+-            # which an intermediate chunk must not do. Host sampling can hand
+-            # those rows a generator clone instead.
+-            perform_device_sampling = False
+         if spec_mode == ACCEPT_MODE_LOGITS:
+             # The host walk samples from the logits this verify returns, so the
+             # model must not sample on device, and the rows' generators have
+@@ -3733,6 +3767,11 @@ class TTModelRunner:
+             "prompt_lens": model_input.prompt_lens,
+             "start_pos": model_input.input_positions,
+         }
++        intermediate = getattr(model_input, "intermediate_prefill_mask", None)
++        if intermediate is not None and bool(intermediate.any()):
++            # These rows update cache/state but emit no token. Expose the existing
++            # suppression decision so adapters can omit unnecessary readback.
++            kwargs["intermediate_prefill_mask"] = intermediate
+         # Hybrid attention models route per-layer block tables; the
+         # runner already expanded ``block_tables_per_group`` into a
+         # per-layer list at submission time when the kv_cache_config has
+@@ -3773,13 +3812,15 @@ class TTModelRunner:
+             kwargs["empty_slots"] = list(empty_slots)
+ 
+         if self.request_specific_rope:
+-            tt_out, rope_deltas = self.model.prefill_forward(**kwargs)
++            tt_out, rope_deltas = submit_prefill_chunks(
++                self.model, kwargs, request_specific_rope=True
++            )
+             # Store rope_deltas for each prefilled request
+-            for i, req_id in enumerate(self.input_batch.req_ids):
++            for i, req_id in enumerate(model_input.row_req_ids):
+                 self.requests[req_id].mrope_position_delta = rope_deltas[i].item()
+             self.async_decode.note_prefill_submitted()
+             return tt_out
+-        tt_out = self.model.prefill_forward(**kwargs)
++        tt_out = submit_prefill_chunks(self.model, kwargs, request_specific_rope=False)
+         self.async_decode.note_prefill_submitted()
+         return tt_out
+ 
+diff --git a/src/vllm_tt_plugin/platform.py b/src/vllm_tt_plugin/platform.py
+index 3cc6ffb..1437cd0 100644
+--- a/src/vllm_tt_plugin/platform.py
++++ b/src/vllm_tt_plugin/platform.py
+@@ -268,6 +268,17 @@ def _apply_chunked_prefill_policy(
+     # rejects the flag outright when one item exceeds the token budget, so it
+     # stays off for every model that does not reach here.
+     scheduler_config.disable_chunked_mm_input = True
++    if (
++        getattr(getattr(vllm_config, "cache_config", None), "mamba_cache_mode", None)
++        == "align"
++    ):
++        from vllm.model_executor.models.interfaces import supports_multimodal
++
++        # Align mode requires unrestricted token chunk boundaries. A resolved
++        # text-only adapter has no multimodal embeddings to split, even when
++        # its upstream HF architecture is multimodal.
++        if not supports_multimodal(model_class):
++            scheduler_config.disable_chunked_mm_input = False
+ 
+     # The only signal from outside the process that chunked prefill is active and
+     # at what budget: the scheduler config is absent from /metrics and an
+diff --git a/src/vllm_tt_plugin/prefill.py b/src/vllm_tt_plugin/prefill.py
+new file mode 100644
+index 0000000..d8d6d5c
+--- /dev/null
++++ b/src/vllm_tt_plugin/prefill.py
+@@ -0,0 +1,86 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Submit mixed prompt chunks without sampling unfinished requests."""
++
++from dataclasses import fields
++from typing import Any
++
++import torch
++
++
++def _rows(value: Any, rows: list[int]) -> Any:
++    if isinstance(value, (list, tuple)):
++        return [value[i] for i in rows]
++    return value[rows]
++
++
++def _scatter_output(value: Any, rows: list[int], count: int) -> Any:
++    """Expand materialized tokens/logits and optional device logprob payloads."""
++    if value is None:
++        return None
++    if isinstance(value, tuple):
++        return tuple(_scatter_output(part, rows, count) for part in value)
++    if not isinstance(value, torch.Tensor) or value.shape[0] != len(rows):
++        raise ValueError(
++            "Split prefill requires host tensor outputs in submitted-row order"
++        )
++    result = value.new_zeros((count, *value.shape[1:]))
++    result[rows] = value
++    return result
++
++
++def submit_prefill_chunks(model, kwargs: dict, *, request_specific_rope: bool):
++    """Split intermediate/final rows while retaining scheduler-owned state slots.
++
++    Intermediate calls omit sampling parameters; final calls retain the selected
++    sampling route. Legacy adapters can return logits for intermediate calls,
++    which are discarded. Adapters accepting the suppression mask may omit that
++    readback. No masked-device-sampling capability is assumed.
++    """
++    mask = kwargs.get("intermediate_prefill_mask")
++    if mask is None or not bool(mask.any()) or bool(mask.all()):
++        return model.prefill_forward(**kwargs)
++    count = len(mask)
++    final_rows = torch.nonzero(~mask, as_tuple=False).flatten().tolist()
++    intermediate_rows = torch.nonzero(mask, as_tuple=False).flatten().tolist()
++    rope_output = None
++    final_output = None
++    for rows, suppressed in ((intermediate_rows, True), (final_rows, False)):
++        selected = {}
++        for key, value in kwargs.items():
++            if key in ("kv_cache", "enable_trace") or value is None:
++                selected[key] = value
++            elif key == "sampling_params":
++                if not suppressed:
++                    selected[key] = type(value)(
++                        **{
++                            field.name: (
++                                _rows(getattr(value, field.name), rows)
++                                if getattr(value, field.name) is not None
++                                else None
++                            )
++                            for field in fields(value)
++                        }
++                    )
++            elif key == "page_tables_per_layer":
++                selected[key] = [
++                    None if table is None else table[rows] for table in value
++                ]
++            elif key == "intermediate_prefill_mask":
++                if suppressed:
++                    selected[key] = mask[rows]
++            else:
++                # Execution inputs and multimodal/stage fields are row-aligned.
++                selected[key] = _rows(value, rows)
++        selected["empty_slots"] = _rows(
++            kwargs.get("empty_slots", list(range(count))), rows
++        )
++        output = model.prefill_forward(**selected)
++        if request_specific_rope:
++            output, deltas = output
++            if rope_output is None:
++                rope_output = deltas.new_zeros((count, *deltas.shape[1:]))
++            rope_output[rows] = deltas
++        if not suppressed:
++            final_output = _scatter_output(output, final_rows, count)
++    return (final_output, rope_output) if request_specific_rope else final_output
+diff --git a/src/vllm_tt_plugin/worker.py b/src/vllm_tt_plugin/worker.py
+index 610d56b..e490956 100644
+--- a/src/vllm_tt_plugin/worker.py
++++ b/src/vllm_tt_plugin/worker.py
+@@ -27,6 +27,7 @@ from vllm.v1.kv_cache_interface import (
+     FullAttentionSpec,
+     KVCacheConfig,
+     KVCacheSpec,
++    MambaSpec,
+     MLAAttentionSpec,
+     SlidingWindowSpec,
+     UniformTypeKVCacheSpecs,
+@@ -815,6 +816,19 @@ def get_num_available_blocks_tt(vllm_config: VllmConfig, num_devices: int = 1) -
+         else None
+     )
+     if specs:
++        # A sparse recurrent group owns current/previous state blocks in
++        # addition to attention history. IDs come from the same global pool,
++        # so reserve them per group and per potentially active request.
++        mamba_blocks_per_request = sum(
++            2
++            + group.kv_cache_spec.num_speculative_blocks
++            + group.kv_cache_spec.num_prefill_checkpoint_blocks
++            for group in _kv_cache_groups_for_sizing(vllm_config, specs)[1]
++            if isinstance(group.kv_cache_spec, MambaSpec)
++            and group.kv_cache_spec.mamba_cache_mode == "align"
++        )
++        if mamba_blocks_per_request:
++            num_tt_blocks += max_batch * mamba_blocks_per_request + 1
+         output_reservation_blocks = (
+             math.ceil(per_user_output_reservation / cache_config.block_size) * max_batch
+         )
+diff --git a/tests/test_block_table_padding.py b/tests/test_block_table_padding.py
+new file mode 100644
+index 0000000..c67c3b1
+--- /dev/null
++++ b/tests/test_block_table_padding.py
+@@ -0,0 +1,47 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Group-shared page tables require at most one padded allocation per group."""
++
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import pytest
++import torch
++
++from vllm_tt_plugin.model_runner import TTModelRunner
++
++
++@pytest.mark.parametrize("shape", [(1, 3), (32, 9), (35, 12)])
++def test_per_layer_tables_pad_once_per_group_and_preserve_values(shape):
++    groups = [torch.full(shape, i + 1, dtype=torch.int32) for i in range(4)]
++    original = [table.clone() for table in groups]
++    mapping = [i % 4 for i in range(64)]
++    runner = SimpleNamespace(
++        _layer_to_group_idx=mapping,
++        tt_max_batch_size=32,
++        max_num_blocks_per_req=9,
++    )
++    with patch("torch.zeros", wraps=torch.zeros) as zeros:
++        output = TTModelRunner._block_tables_per_layer(runner, groups)
++    assert zeros.call_count == (0 if shape == (32, 9) else 4)
++    for layer, group in enumerate(mapping):
++        expected = torch.zeros(32, 9, dtype=torch.int32)
++        rows, cols = min(shape[0], 32), min(shape[1], 9)
++        expected[:rows, :cols] = group + 1
++        assert torch.equal(output[layer], expected)
++        assert output[layer] is output[group]
++    assert all(torch.equal(table, before) for table, before in zip(groups, original))
++
++
++def test_missing_group_and_non_hybrid_tables_preserve_contract():
++    runner = SimpleNamespace(
++        _layer_to_group_idx=[0, 1, 0, 1],
++        tt_max_batch_size=2,
++        max_num_blocks_per_req=3,
++    )
++    table = torch.ones(2, 3, dtype=torch.int32)
++    output = TTModelRunner._block_tables_per_layer(runner, [table, None])
++    assert output[0] is table and output[2] is table
++    assert output[1] is None and output[3] is None
++    runner._layer_to_group_idx = None
++    assert TTModelRunner._block_tables_per_layer(runner, [table]) is None
+diff --git a/tests/test_chunked_prefill_policy.py b/tests/test_chunked_prefill_policy.py
+index b3d502b..7f5a13b 100644
+--- a/tests/test_chunked_prefill_policy.py
++++ b/tests/test_chunked_prefill_policy.py
+@@ -51,6 +51,30 @@ def test_declared_support_keeps_chunked_prefill():
+     assert config.scheduler_config.disable_chunked_mm_input is True
+ 
+ 
++def test_text_adapter_align_cache_allows_block_boundaries_despite_hf_metadata():
++    config = _vllm_config()
++    config.cache_config = SimpleNamespace(mamba_cache_mode="align")
++    config.model_config.is_multimodal_model = True
++
++    _apply(config, {"supports_chunked_prefill": True})
++
++    assert config.scheduler_config.enable_chunked_prefill is True
++    assert config.scheduler_config.disable_chunked_mm_input is False
++
++
++def test_multimodal_adapter_align_cache_keeps_embedding_split_restriction():
++    class MultimodalAdapter:
++        supports_multimodal = True
++
++    config = _vllm_config()
++    config.cache_config = SimpleNamespace(mamba_cache_mode="align")
++    _apply_chunked_prefill_policy(
++        config, {"supports_chunked_prefill": True}, MultimodalAdapter
++    )
++
++    assert config.scheduler_config.disable_chunked_mm_input is True
++
++
+ def test_declared_support_leaves_the_scheduler_budget_alone():
+     # Resume offsets are floored by the tt-metal generator, so the plugin
+     # passes max_num_batched_tokens through. That includes vLLM's unset
+diff --git a/tests/test_mamba_cache_bridge.py b/tests/test_mamba_cache_bridge.py
+new file mode 100644
+index 0000000..3807a20
+--- /dev/null
++++ b/tests/test_mamba_cache_bridge.py
+@@ -0,0 +1,153 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Mixed attention/recurrent cache ownership without TT hardware."""
++
++from types import SimpleNamespace
++from unittest.mock import patch
++
++import pytest
++import torch
++from vllm.v1.kv_cache_interface import (
++    FullAttentionSpec,
++    KVCacheConfig,
++    KVCacheGroupSpec,
++    MambaSpec,
++)
++
++from vllm_tt_plugin.model_runner import TTModelRunner
++from vllm_tt_plugin.worker import get_num_available_blocks_tt
++
++
++def _specs():
++    attention = FullAttentionSpec(
++        block_size=4096, num_kv_heads=4, head_size=256, dtype=torch.bfloat16
++    )
++    recurrent = MambaSpec(
++        block_size=4096,
++        shapes=((3, 2560), (12, 128, 128)),
++        dtypes=(torch.bfloat16, torch.float32),
++        page_size_padded=attention.page_size_bytes,
++        mamba_cache_mode="align",
++    )
++    return {
++        f"model.layers.{i}.state": attention if i % 4 == 3 else recurrent
++        for i in range(64)
++    }
++
++
++def test_mamba_allocator_receives_exact_scheduler_config():
++    specs = _specs()
++    config = KVCacheConfig(
++        num_blocks=9,
++        kv_cache_tensors=[],
++        kv_cache_groups=[
++            KVCacheGroupSpec(["model.layers.0.state"], specs["model.layers.0.state"]),
++            KVCacheGroupSpec(["model.layers.3.state"], specs["model.layers.3.state"]),
++        ],
++    )
++    TTModelRunner._validate_kv_cache_groups(config.kv_cache_groups)
++    owned = object()
++    received = []
++    model = SimpleNamespace(
++        allocate_hybrid_kv_cache=lambda value: received.append(value) or owned
++    )
++    assert (
++        TTModelRunner._allocate_kv_caches(SimpleNamespace(model=model), config) is owned
++    )
++    assert received == [config]
++    assert received[0] is config
++    with pytest.raises(TypeError, match="allocate_hybrid_kv_cache"):
++        TTModelRunner._allocate_kv_caches(SimpleNamespace(model=object()), config)
++
++
++def test_mamba_tables_cover_raw_model_indices_not_attention_ordinals():
++    specs = _specs()
++    full = [name for name, spec in specs.items() if isinstance(spec, FullAttentionSpec)]
++    linear = [name for name, spec in specs.items() if isinstance(spec, MambaSpec)]
++    groups = [KVCacheGroupSpec(full, specs[full[0]])]
++    groups.extend(
++        KVCacheGroupSpec(linear[start : start + 16], specs[linear[0]])
++        for start in range(0, 48, 16)
++    )
++    config = KVCacheConfig(num_blocks=289, kv_cache_tensors=[], kv_cache_groups=groups)
++    runner = SimpleNamespace(
++        tt_max_batch_size=2,
++        _is_lane_mode=False,
++        vocab_size=32,
++        _host_logitsprocs=None,
++        _is_block_output_model=False,
++        _output_tokens_per_step=1,
++        parallel_config=object(),
++        cache_config=SimpleNamespace(block_size=4096),
++        scheduler_config=SimpleNamespace(max_num_batched_tokens=4096),
++        model_config=SimpleNamespace(
++            max_model_len=262144,
++            get_num_layers=lambda _: 64,
++            get_num_layers_by_block_type=lambda *_: 16,
++        ),
++        _validate_kv_cache_groups=TTModelRunner._validate_kv_cache_groups,
++        _allocate_kv_caches=lambda config: object(),
++    )
++    with patch("vllm_tt_plugin.model_runner.InputBatch", return_value=object()):
++        TTModelRunner.initialize_kv_cache(runner, config)
++    tables = [torch.full((2, 64), i, dtype=torch.int32) for i in range(4)]
++    expanded = TTModelRunner._block_tables_per_layer(runner, tables)
++    assert len(expanded) == 64
++    for raw_index in range(64):
++        group = next(
++            i
++            for i, g in enumerate(groups)
++            if f"model.layers.{raw_index}.state" in g.layer_names
++        )
++        assert torch.equal(expanded[raw_index], tables[group])
++
++
++@pytest.mark.parametrize("batch,expected", [(1, 72), (32, 289)])
++def test_mamba_sparse_pool_reserves_every_group(batch, expected):
++    from vllm.v1.kv_cache_layout import KVCacheLayout
++
++    specs = _specs()
++    cache = SimpleNamespace(
++        block_size=4096,
++        num_gpu_blocks_override=None,
++        kv_cache_layout="LBNHC",
++        prefix_cache_retention_interval=None,
++        mamba_cache_mode="align",
++    )
++    cache.get_resolved_kv_cache_layout = lambda: KVCacheLayout.LBNHC
++    cfg = SimpleNamespace(
++        model_config=SimpleNamespace(
++            model="hybrid-test",
++            max_model_len=262144,
++            original_max_model_len=262144,
++            get_sliding_window=lambda: None,
++        ),
++        scheduler_config=SimpleNamespace(
++            max_num_seqs=batch, disable_hybrid_kv_cache_manager=False
++        ),
++        parallel_config=SimpleNamespace(
++            data_parallel_size=1, decode_context_parallel_size=1
++        ),
++        cache_config=cache,
++        attention_config=SimpleNamespace(hisparse_config=None),
++        additional_config={},
++        speculative_config=None,
++        kv_transfer_config=None,
++        max_in_flight_tokens=4096,
++    )
++
++    class Model:
++        _HYBRID_KV_CACHE_GROUPS_ENABLED = True
++
++        @staticmethod
++        def get_max_tokens_all_users(**kwargs):
++            return kwargs["max_model_len"]
++
++        @staticmethod
++        def get_kv_cache_spec(config):
++            return specs
++
++    with patch(
++        "vllm_tt_plugin.worker.get_model_architecture", return_value=(Model, "test")
++    ):
++        assert get_num_available_blocks_tt(cfg, num_devices=4) == expected
+diff --git a/tests/test_model_runner.py b/tests/test_model_runner.py
+index 82cdf6a..5b66c60 100644
+--- a/tests/test_model_runner.py
++++ b/tests/test_model_runner.py
+@@ -32,6 +32,42 @@ DP_SIZE = 1
+ SAMPLED_TOKEN_ID = 42
+ # endregion Constants
+ 
++
++@pytest.mark.parametrize("mask", [[True, True], [True, False], [False, False]])
++def test_submit_prefill_exposes_intermediate_output_suppression(mask):
++    received = []
++    runner = SimpleNamespace(
++        kv_caches=object(),
++        trace_mode="decode_only",
++        request_specific_rope=False,
++        model=SimpleNamespace(prefill_forward=lambda **kwargs: received.append(kwargs)),
++        async_decode=SimpleNamespace(note_prefill_submitted=lambda: None),
++    )
++    model_input = SimpleNamespace(
++        input_tokens=torch.ones(2, 16, dtype=torch.int32),
++        block_tables=torch.ones(2, 1, dtype=torch.int32),
++        prompt_lens=[16, 16],
++        input_positions=[0, 0],
++        block_tables_per_layer=None,
++        multi_modal_kwargs={},
++        stage_inputs=None,
++        perform_device_sampling=False,
++        prefill_empty_slots=[1, 0],
++        intermediate_prefill_mask=torch.tensor(mask),
++    )
++    TTModelRunner.submit_prefill(runner, model_input, [2])
++    if any(mask) and not all(mask):
++        assert [call["empty_slots"] for call in received] == [[1], [0]]
++        assert received[0]["intermediate_prefill_mask"].tolist() == [True]
++        assert "intermediate_prefill_mask" not in received[1]
++    else:
++        assert received[0]["empty_slots"] == [1, 0]
++        if any(mask):
++            assert received[0]["intermediate_prefill_mask"].tolist() == mask
++        else:
++            assert "intermediate_prefill_mask" not in received[0]
++
++
+ # region Test helpers
+ 
+ 
+@@ -345,7 +381,8 @@ def test_final_one_token_prompt_chunk_stays_prefill():
+     assert model_input.intermediate_prefill_mask.tolist() == [False]
+ 
+ 
+-def test_mixed_prefill_batch_keeps_scheduled_decode_row():
++@pytest.mark.parametrize("device_sampling", [False, True])
++def test_mixed_prefill_batch_keeps_scheduled_decode_row(device_sampling):
+     """A scheduled row must never be dropped from a prefill step: the output
+     row count desyncs and the dropped token is never rescheduled."""
+     batch, chunking = _batch_with_one_request(8, 0, num_computed_tokens=2)
+@@ -361,12 +398,20 @@ def test_mixed_prefill_batch_keeps_scheduled_decode_row():
+     )
+     batch.add_request(steady)
+ 
+-    model_input = _prepare(
+-        _fake_runner(batch, chunking), ("r", 2, 2, 0), ("r2", 1, 8, 1)
+-    )
++    runner = _fake_runner(batch, chunking)
++    sampling_calls = []
++
++    def choose_sampling(**kwargs):
++        sampling_calls.append(kwargs)
++        return device_sampling
++
++    runner.check_perform_device_sampling = choose_sampling
++    model_input = _prepare(runner, ("r", 2, 2, 0), ("r2", 1, 8, 1))
+ 
+     # Chunk end 2+2=4 (mid-prompt) and the steady row's 8+1=9 both stay.
+     assert sorted(model_input.prompt_lens.tolist()) == [4, 9]
++    assert model_input.perform_device_sampling is device_sampling
++    assert sampling_calls[0]["sampling_rows"] == [1]
+ 
+ 
+ def test_steady_block_step_builds_decode_input():
+@@ -480,3 +525,38 @@ def test_device_penalties_follow_model_capability(declared, has_penalties):
+     )
+     expected = not (has_penalties and declared is False)
+     assert TTModelRunner.check_perform_device_sampling(runner, True, False) is expected
++
++
++def test_prefill_mrope_updates_only_submitted_request_rows():
++    requests = {
++        key: SimpleNamespace(mrope_position_delta=-1)
++        for key in ("decode", "last", "first")
++    }
++    runner = SimpleNamespace(
++        kv_caches=object(),
++        trace_mode="decode_only",
++        request_specific_rope=True,
++        input_batch=SimpleNamespace(req_ids=["decode", "last", "first"]),
++        requests=requests,
++        model=SimpleNamespace(
++            prefill_forward=lambda **kwargs: (torch.ones(2, 1), torch.tensor([17, 23]))
++        ),
++        async_decode=SimpleNamespace(note_prefill_submitted=lambda: None),
++    )
++    model_input = SimpleNamespace(
++        input_tokens=torch.ones(2, 16, dtype=torch.int32),
++        block_tables=torch.ones(2, 1, dtype=torch.int32),
++        prompt_lens=[16, 16],
++        input_positions=[0, 0],
++        block_tables_per_layer=None,
++        multi_modal_kwargs={},
++        stage_inputs=None,
++        perform_device_sampling=False,
++        prefill_empty_slots=[2, 1],
++        intermediate_prefill_mask=None,
++        row_req_ids=["first", "last"],
++    )
++    TTModelRunner.submit_prefill(runner, model_input, [2])
++    assert requests["decode"].mrope_position_delta == -1
++    assert requests["first"].mrope_position_delta == 17
++    assert requests["last"].mrope_position_delta == 23
+diff --git a/tests/test_prefill_output_suppression.py b/tests/test_prefill_output_suppression.py
+new file mode 100644
+index 0000000..3da09a6
+--- /dev/null
++++ b/tests/test_prefill_output_suppression.py
+@@ -0,0 +1,96 @@
++# SPDX-License-Identifier: Apache-2.0
++# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
++"""Mixed prompt chunks preserve slots, row metadata and final sampling route."""
++
++from dataclasses import dataclass
++from types import SimpleNamespace
++
++import pytest
++import torch
++
++from vllm_tt_plugin.prefill import submit_prefill_chunks
++
++
++@dataclass
++class Params:
++    seed: list
++    temperature: list
++    optional: object = None
++
++
++@pytest.mark.parametrize("rope", [False, True])
++@pytest.mark.parametrize("logprobs", [False, True])
++def test_mixed_prefill_only_samples_final_rows_with_original_state_slots(
++    rope, logprobs
++):
++    calls = []
++    sampled = []
++
++    def forward(**kwargs):
++        calls.append(kwargs)
++        ids = kwargs["tokens"][:, 0]
++        if "sampling_params" in kwargs:
++            sampled.extend(kwargs["sampling_params"].seed)
++            output = ids[:, None] + 10
++            if logprobs:
++                output = (output, (ids[:, None].float(), ids[:, None] + 100))
++        else:
++            # An old adapter may return full logits. They must be discarded.
++            output = torch.full((len(ids), 1, 9), float("nan"))
++        return (output, ids + 20) if rope else output
++
++    kwargs = dict(
++        tokens=torch.tensor([[0, 1], [2, 3], [4, 5]]),
++        page_table=torch.tensor([[10], [11], [12]]),
++        page_tables_per_layer=[torch.tensor([[30], [31], [32]]), None],
++        kv_cache=object(),
++        enable_trace=True,
++        start_pos=[0, 128, 256],
++        prompt_lens=[2, 130, 258],
++        empty_slots=[4, 1, 6],
++        sampling_params=Params([100, 101, 102], [0.0, 0.0, 0.0]),
++        intermediate_prefill_mask=torch.tensor([True, False, True]),
++        stage_inputs=[{"request": i} for i in range(3)],
++        pixel_values=[None, ["image"], None],
++    )
++    result = submit_prefill_chunks(
++        SimpleNamespace(prefill_forward=forward), kwargs, request_specific_rope=rope
++    )
++    assert sampled == [101]
++    assert [call["empty_slots"] for call in calls] == [[4, 6], [1]]
++    assert calls[0]["intermediate_prefill_mask"].tolist() == [True, True]
++    assert "sampling_params" not in calls[0]
++    assert "intermediate_prefill_mask" not in calls[1]
++    assert calls[1]["page_tables_per_layer"][0].tolist() == [[31]]
++    assert calls[1]["stage_inputs"] == [{"request": 1}]
++    assert calls[1]["pixel_values"] == [["image"]]
++    assert calls[0]["kv_cache"] is kwargs["kv_cache"]
++    if rope:
++        result, deltas = result
++        assert deltas.tolist() == [20, 22, 24]
++    if logprobs:
++        result, (values, indices) = result
++        assert values.tolist() == [[0.0], [2.0], [0.0]]
++        assert indices.tolist() == [[0], [102], [0]]
++    assert result.tolist() == [[0], [12], [0]]
++    assert kwargs["sampling_params"].seed == [100, 101, 102]
++
++
++def test_split_assigns_original_slots_when_original_call_used_default_slots():
++    calls = []
++
++    def forward(**kwargs):
++        calls.append(kwargs)
++        return torch.ones(len(kwargs["tokens"]), 1)
++
++    output = submit_prefill_chunks(
++        SimpleNamespace(prefill_forward=forward),
++        dict(
++            tokens=torch.zeros(2, 4),
++            sampling_params=Params([2, 3], [0.0, 0.0]),
++            intermediate_prefill_mask=torch.tensor([True, False]),
++        ),
++        request_specific_rope=False,
++    )
++    assert [call["empty_slots"] for call in calls] == [[0], [1]]
++    assert output.tolist() == [[0.0], [1.0]]
+diff --git a/tests/test_state_slots.py b/tests/test_state_slots.py
+index fcd10c6..36a4758 100644
+--- a/tests/test_state_slots.py
++++ b/tests/test_state_slots.py
+@@ -165,6 +165,46 @@ def test_accepting_the_decode_remap_advances_the_ownership_map():
+     assert r._req_state_slot["A"] == 0 and r._req_state_slot["B"] == 1
+ 
+ 
++def test_continuing_prefill_keeps_state_after_a_peer_finishes():
++    """Packing a partial prompt into row zero does not move its device state."""
++    r = _runner(slots=2)
++    assert _prefill(r, ["A", "B"]) == [0, 1]
++    state = ["A", "B"]
++    _release(r, finished=["A"])
++    r.requests.pop("A")
++
++    assert _prefill(r, ["B"]) == [1]
++    _assert_state_found(r, state)
++    state = _gather(state, _decode(r, ["B"]))
++    _assert_state_found(r, state)
++    assert state[0] == "B"
++
++
++def test_reordered_prefill_continuations_keep_their_slots():
++    r = _runner(slots=3)
++    assert _prefill(r, ["A", "B", "C"]) == [0, 1, 2]
++    state = ["A", "B", "C"]
++
++    assert _prefill(r, ["C", "A", "B"]) == [2, 0, 1]
++    _assert_state_found(r, state)
++    state = _gather(state, _decode(r, ["C", "A", "B"]))
++    _assert_state_found(r, state)
++    assert state == ["C", "A", "B"]
++
++
++def test_new_prefill_reserves_later_continuations_before_assigning_slots():
++    r = _runner(slots=3)
++    assert _prefill(r, ["A", "B"]) == [0, 1]
++    state = ["A", "B", None]
++
++    assert _prefill(r, ["NEW", "A"]) == [2, 0]
++    state[2] = "NEW"
++    _assert_state_found(r, state)
++    state = _gather(state, _decode(r, ["NEW", "A", "B"]))
++    _assert_state_found(r, state)
++    assert state == ["NEW", "A", "B"]
++
++
+ def test_release_keeps_a_merely_unscheduled_request():
+     """Every prefill step leaves the whole decode batch unscheduled, and that state is
+     still live. The release predicate must not read "unscheduled" as "dead"."""
