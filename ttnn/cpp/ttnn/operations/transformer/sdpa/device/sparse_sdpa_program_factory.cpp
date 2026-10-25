@@ -136,13 +136,23 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     };
     cb(cb_q_rm, q_row_bytes, H, q_rm_df);              // cb_q_rm : H row-sticks (native Q dtype: fp8 or bf16)
     cb(cb_q_in, q_in_tile_bytes, Sqt * DHt, q_in_df);  // cb_q_in : [Sqt,DHt] (bfp8 when Q is fp8)
+    // Batched K reconstruct (one tilize / scale-multiply init per k-chunk instead of per 32-row slab) when the KV rows
+    // come from L1 (the sparse KV push's compact front): there the op is compute-bound and the per-slab init/reconfig
+    // overhead shows (measured 614 -> 531 us for GLM on 96 cores). DRAM-gathered KV keeps the per-slab path, which
+    // overlaps better with the bandwidth-bound gather and needs less L1.
+    const uint32_t Skt_ = k_chunk / tt::constants::TILE_WIDTH;
+    const uint32_t kdeq_mode = ::sparse_sdpa::kdeq_batch_mode();
+    const bool kv_in_l1 = t.kv.memory_config().buffer_type() == tt::tt_metal::BufferType::L1;
+    const bool kdeq_batch = scaled_kv && ::sparse_sdpa::KDEQ_SLABS % Skt_ == 0 &&
+                            (kdeq_mode == 2 || (kdeq_mode == 1 && kv_in_l1));
+    const uint32_t krm_slabs = kdeq_batch ? ::sparse_sdpa::KDEQ_SLABS : ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH;
     if (scaled_kv) {
         // One double-buffered allocation with an owning FP8 FIFO and a format-only BF16 RoPE alias. Both use
         // the physical packed-page stride. Only cb_k_rm advances FIFO state; compute derives the alias read
         // pointer from the owner before reading RoPE. This lets the reader gather slab N+1 while compute
         // reconstructs slab N without independent alias pointers drifting at the ring wrap.
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = packed_page_bytes * tt::constants::TILE_HEIGHT * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
+            .total_size = packed_page_bytes * tt::constants::TILE_HEIGHT * krm_slabs,
             .core_ranges = core_grid,
             .format_descriptors = {{
                 tt::tt_metal::CBFormatDescriptor{
@@ -179,8 +189,8 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     cb(cb_kreq, ::sparse_sdpa::gather_request::PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     cb(cb_kack, ::sparse_sdpa::ACK_PAGE_BYTES, ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, bf);
     if (scaled_kv) {
-        cb(cb_k_scale_bcast, fp32_tile_bytes, scale_blocks * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH, fp32);
-        cb(cb_k_latent_tile, k_in_tile_bytes, vDHt, tt::DataFormat::Bfp8_b);
+        cb(cb_k_scale_bcast, fp32_tile_bytes, scale_blocks * krm_slabs, fp32);
+        cb(cb_k_latent_tile, k_in_tile_bytes, vDHt * (kdeq_batch ? Skt : 1u), tt::DataFormat::Bfp8_b);
         cb(cb_k_rope_tile, tile_bytes, Skt * (DHt - vDHt), bf);
     }
 
@@ -364,6 +374,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
          cb_merge_ctrl,
          cb_mmax,
          cb_corr2});
+    compute_ct.push_back(static_cast<uint32_t>(kdeq_batch));
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");
