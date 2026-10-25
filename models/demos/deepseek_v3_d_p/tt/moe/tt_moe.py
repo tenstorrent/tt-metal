@@ -52,7 +52,9 @@ _GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "1") 
 # 1x<block> power-of-two scales packed in the row) before the dispatch window, dispatch_fabric2d moves the packed
 # [e4m3 | fp32 scales] rows byte for byte (half the link bytes), DQ1 (per_token_cast_back) dequantizes the valid
 # rows to bf8 tiles for the overlapped routed expert (bf16 rows for the separate one). Off by default.
-_GLM_FP8_DISPATCH = os.environ.get("GLM_FP8_DISPATCH", "0") == "1"
+# Default: the model config's MOE_FP8_DISPATCH_WIRE (TtMoe's fp8_dispatch_wire; on for GLM 5.3). GLM_FP8_DISPATCH=0 / =1
+# overrides it for every model.
+_GLM_FP8_DISPATCH_ENV = os.environ.get("GLM_FP8_DISPATCH")
 _GLM_FP8_SCALE_BLOCK = int(os.environ.get("GLM_FP8_SCALE_BLOCK", "128"))
 # DQ1 output for the overlapped routed expert: 1 = bf8 TILE (half the bytes, no tilize in the RE), 0 = bf16 rows.
 _GLM_FP8_DQ1_TILE = os.environ.get("GLM_FP8_DQ1_TILE", "1") == "1"
@@ -258,6 +260,7 @@ class TtMoe(LightweightModule):
         max_gate_seq_len_per_chip: Optional[int] = None,
         overlap_routed_expert_with_combine: Optional[bool] = False,
         moe_transport: Optional[str] = "direct",
+        fp8_dispatch_wire: bool = False,
         combine_fwd_reduction: Optional[int] = None,
     ):
         """
@@ -372,6 +375,10 @@ class TtMoe(LightweightModule):
                 num_experts_per_tok <= DISPATCH_FABRIC2D_MAX_TOPK, and a fabric max payload that fits
                 a whole routed_emb_dim bf16 token padded to 64 B plus a 64 B routing tail: open the
                 mesh with init_helpers.moe_fabric_payload_size for a model that opts in.
+            fp8_dispatch_wire: on the fabric2d transport, quantize the routed-side rows to FP8_E4M3 with a power-of-two
+                fp32 scale per GLM_FP8_SCALE_BLOCK (128) elements packed in the row (Q1), dispatch those rows (half the
+                link bytes), and dequantize the valid ones to bf8 tiles for the routed expert (DQ1). Blackhole only.
+                The env GLM_FP8_DISPATCH=0/1 overrides it.
             combine_fwd_reduction: combine_fabric2d's fwd_reduction, the model's COMBINE_FWD_REDUCTION.
                 Needed only when the transport resolves to "fabric2d".
         """
@@ -527,7 +534,9 @@ class TtMoe(LightweightModule):
             if fabric2d_error is not None:
                 logger.info(f"TtMoe: running dispatch and combine, not the fabric2d ops: {fabric2d_error}")
         self.moe_transport = moe_transport
-        self.dispatch_fp8 = _GLM_FP8_DISPATCH and moe_transport == "fabric2d" and is_blackhole()
+        if _GLM_FP8_DISPATCH_ENV is not None:
+            fp8_dispatch_wire = _GLM_FP8_DISPATCH_ENV == "1"
+        self.dispatch_fp8 = fp8_dispatch_wire and moe_transport == "fabric2d" and is_blackhole()
         self.fp8_scale_block = _GLM_FP8_SCALE_BLOCK
         if self.dispatch_fp8:
             if self.fp8_scale_block not in (32, 64, 128):

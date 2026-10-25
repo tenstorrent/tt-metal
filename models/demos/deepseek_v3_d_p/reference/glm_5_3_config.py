@@ -36,6 +36,10 @@ class GLM53Config:
     # Opts this model into TtMoe's fabric2d transport (dispatch_fabric2d / combine_fabric2d) wherever the mesh can
     # run it (Blackhole, axis 0 wired into a ring). Every other config runs dispatch and combine.
     MOE_FABRIC2D_TRANSPORT = True
+    # Opts this model into TtMoe's fp8 dispatch wire on dispatch_fabric2d: Q1 (per_token_cast_to_fp8, pow2 1x128
+    # scales packed in the row), half the link bytes, DQ1 (per_token_cast_back) to bf8 tiles for the routed expert.
+    # R3 -2.3%, accuracy neutral (fp8wire, 2026-10-25). GLM_FP8_DISPATCH=0 turns it off.
+    MOE_FP8_DISPATCH_WIRE = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration

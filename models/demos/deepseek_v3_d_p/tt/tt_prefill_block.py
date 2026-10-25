@@ -521,6 +521,8 @@ class TtPrefillBlock(LightweightModule):
             overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
             # Likewise only configs that opt in (Kimi K2.7, GLM 5.3) run dispatch_fabric2d / combine_fabric2d.
             moe_transport=moe_transport_arg(model_cfg),
+            # fp8 dispatch wire (GLM 5.3 opts in; GLM_FP8_DISPATCH=0/1 overrides). Only on the fabric2d transport.
+            fp8_dispatch_wire=getattr(model_cfg, "MOE_FP8_DISPATCH_WIRE", False),
             combine_fwd_reduction=getattr(model_cfg, "COMBINE_FWD_REDUCTION", None),
             num_links=num_links,
             topology=topology,
