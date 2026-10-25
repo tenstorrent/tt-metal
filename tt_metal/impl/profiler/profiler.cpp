@@ -67,6 +67,17 @@
 #pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
 
+// longctx (prof9 only): opt-in tolerance of orphan / mismatched device markers in host post-processing, with counts.
+#include <atomic>
+#include <cstdlib>
+namespace {
+std::atomic<uint64_t> lc_zone_ends_total{0}, lc_orphan_ends{0}, lc_id_mismatch{0}, lc_unclosed_starts{0};
+bool lc_profiler_tolerate() {
+    static const bool on = [] { const char* v = std::getenv("LC_PROFILER_TOLERATE"); return v && std::string(v) == "1"; }();
+    return on;
+}
+}  // namespace
+
 namespace tt::tt_metal {
 
 namespace {
@@ -2200,8 +2211,17 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
+                lc_zone_ends_total.fetch_add(1, std::memory_order_relaxed);
                 if (start_marker_stack.empty()) {
                     // Orphan ZONE_END from a dropped-marker run; skip instead of fatal.
+                    // longctx (prof9 only): LC_PROFILER_TOLERATE=1 also skips orphans without a recorded drop, counted.
+                    if (lc_profiler_tolerate()) {
+                        if (lc_orphan_ends.fetch_add(1, std::memory_order_relaxed) < 5) {
+                            log_warning(tt::LogMetal, "[longctx] skipping orphan end marker: {}", marker.to_string());
+                        }
+                        device_marker_it = next_device_marker_it;
+                        continue;
+                    }
                     if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
                         TT_FATAL(
                             false,
@@ -2216,6 +2236,13 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 if (!env_.get_rtoptions().get_profiler_trace_only()) {
                     if (start_marker_it->marker_id != marker.marker_id) {
+                        if (lc_profiler_tolerate()) {
+                            if (lc_id_mismatch.fetch_add(1, std::memory_order_relaxed) < 5) {
+                                log_warning(tt::LogMetal, "[longctx] skipping end marker with mismatched id: {}", marker.to_string());
+                            }
+                            device_marker_it = next_device_marker_it;
+                            continue;
+                        }
                         if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
                             TT_FATAL(
                                 false,
@@ -2355,8 +2382,16 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         device_marker_it = next_device_marker_it;
     }
 
+    lc_unclosed_starts.fetch_add(start_marker_stack.size(), std::memory_order_relaxed);
+    if (lc_profiler_tolerate()) {
+        log_warning(
+            tt::LogMetal,
+            "[longctx] marker tolerance totals so far: zone ends processed {}, orphan ends skipped {}, id-mismatch ends "
+            "skipped {}, unclosed starts {}",
+            lc_zone_ends_total.load(), lc_orphan_ends.load(), lc_id_mismatch.load(), lc_unclosed_starts.load());
+    }
     if (!start_marker_stack.empty()) {
-        if (this->had_dropped_markers.load(std::memory_order_relaxed)) {
+        if (this->had_dropped_markers.load(std::memory_order_relaxed) || lc_profiler_tolerate()) {
             log_warning(
                 tt::LogMetal,
                 "{} start markers detected without corresponding end markers (some end markers were "
