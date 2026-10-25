@@ -427,6 +427,7 @@ public:
             return false;
         }
         generation_ = static_cast<uint32_t>(next >> 32);
+        use_++;
         return true;
     }
 
@@ -501,7 +502,7 @@ public:
 
     // Runs all calls of participant `node` in order, so that calls for one worker never overlap.
     void run_if_unclaimed(size_t node) noexcept {
-        if (claims_[node].generation.exchange(generation_, std::memory_order_acq_rel) == generation_) {
+        if (claims_[node].use.exchange(use_, std::memory_order_acq_rel) == use_) {
             return;
         }
         for (uint32_t call = first_call_[node]; call != NONE; call = next_call_[call]) {
@@ -537,23 +538,25 @@ private:
 
     // Wakes `node`, or its children in its place if the caller already claimed it.
     void wake_subtree(size_t node) noexcept {
-        if (claims_[node].generation.load(std::memory_order_relaxed) != generation_) {
+        if (claims_[node].use.load(std::memory_order_relaxed) != use_) {
             participants_[node]->wake();
             return;
         }
         for_each_child(node, [this](size_t child) { wake_subtree(child); });
     }
 
-    // Holds the generation of the last use that claimed the participant, so a new use starts unclaimed.
+    // Holds the last use that claimed the participant, so a new use starts unclaimed. 64-bit, unlike the published
+    // generation, so that it never wraps.
     struct alignas(64) Claim {
-        std::atomic<uint32_t> generation = 0;
+        std::atomic<uint64_t> use = 0;
     };
 
     static constexpr uint64_t HOLDERS = 0xffffffffULL;
 
     // (generation << 32) | holders: the caller that acquired the job and the workers taking part.
     std::atomic<uint64_t> state_ = 0;
-    uint32_t generation_ = 0;  // Of the current use; set by the caller on acquire, read by holders.
+    uint32_t generation_ = 0;  // Of the current use, as published; set by the caller on acquire, read by holders.
+    uint64_t use_ = 0;         // Counts the job's uses, for claims; set by the caller on acquire, read by holders.
     uint32_t slot_ = 0;
     // Valid until the caller returns, which happens only after every claimed call has finished.
     const std::function<void(size_t)>* fn_ = nullptr;
@@ -699,6 +702,14 @@ public:
             return;
         }
         auto* job = acquire_job();
+        if (job == nullptr) {
+            // Every job is held, e.g. by the parallel_for calls this one is nested in: run the calls here.
+            for (const uint32_t device_id : device_ids) {
+                worker_of(device_id);  // Throws for a device the pool does not serve, as planning would.
+            }
+            run_on_caller(device_ids.size(), fn);
+            return;
+        }
         try {
             job->plan(fn, device_ids, [this](uint32_t device_id) { return workers_[worker_of(device_id)].get(); });
         } catch (...) {
@@ -752,26 +763,26 @@ public:
 
 private:
     void allocate_jobs() {
-        // A worker holds at most one job, while it takes part; each concurrent caller holds one more.
+        // A worker holds at most one job, while it takes part; each concurrent or nested caller holds one more.
         jobs_.resize(num_workers_ + 2);
         for (uint32_t slot = 0; slot < jobs_.size(); slot++) {
             jobs_[slot] = std::make_unique<ParallelJob>(num_workers_, slot);
         }
     }
 
-    // A job nobody holds, starting from the one used last: it is the most likely to still be in cache.
+    // A job nobody holds, starting from the one used last: it is the most likely to still be in cache. nullptr if
+    // all are held.
     ParallelJob* acquire_job() {
         const auto size = static_cast<uint32_t>(jobs_.size());
         uint32_t slot = last_job_.load(std::memory_order_relaxed);
-        for (uint32_t probes = 1; !jobs_[slot]->try_acquire(); probes++) {
-            slot = slot + 1 == size ? 0 : slot + 1;
-            // All held: workers still taking part release theirs shortly.
-            if (probes % size == 0) {
-                ttsl::pause();
+        for (uint32_t probe = 0; probe < size; probe++) {
+            if (jobs_[slot]->try_acquire()) {
+                last_job_.store(slot, std::memory_order_relaxed);
+                return jobs_[slot].get();
             }
+            slot = slot + 1 == size ? 0 : slot + 1;
         }
-        last_job_.store(slot, std::memory_order_relaxed);
-        return jobs_[slot].get();
+        return nullptr;
     }
 
     void map_device(uint32_t device_id, uint32_t worker) {

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <thread>
@@ -281,6 +282,23 @@ TEST(ThreadPoolTest, ParallelForChangingDevices) {
     }
     EXPECT_EQ(violations.load(), 0u);
     EXPECT_EQ(runs.load(), NUM_FAN_OUTS * forward.size());
+}
+
+// parallel_for nested in its own callbacks, deeper than the pool keeps jobs for, still runs every call.
+TEST(ThreadPoolTest, ParallelForNested) {
+    auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
+    const std::vector<uint32_t> device_ids = {0, 1};
+    constexpr uint32_t DEPTH = 8;
+    std::atomic<uint32_t> leaves = 0;
+    std::function<void(uint32_t)> nest = [&](uint32_t depth) {
+        if (depth == 0) {
+            leaves++;
+            return;
+        }
+        thread_pool->parallel_for(device_ids, [&nest, depth](size_t) { nest(depth - 1); });
+    };
+    nest(DEPTH);
+    EXPECT_EQ(leaves.load(), 1u << DEPTH);
 }
 
 // Destroying the pool right after a fan-out, while workers may still hold the job, is safe.
