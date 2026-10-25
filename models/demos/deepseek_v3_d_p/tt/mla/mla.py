@@ -44,8 +44,9 @@ _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
 # di/dt / throttling, so the keep decision is the L78 interleaved ABAB.
 _MLA_OPROJ_GRID12 = os.environ.get("MLA_OPROJ_GRID12", "1") == "1"
 # mm track: o_proj weight laid out DRAM WIDTH_SHARDED ([K, N/banks] per bank, device tile copy, bit-identical tiles) so
-# the 2D mcast in1 senders read it bank by bank (R0 12x10: 118.1 -> 115.1 us, 11x10: 128.0 -> 126.8 us).
-_MLA_OPROJ_WS = os.environ.get("MLA_OPROJ_WS", "0") == "1"
+# the 2D mcast in1 senders read it bank by bank (MLA_OPROJ_WS=0 disables). L10 on 12x10: 117.3 -> 114.2 us per layer,
+# KVPE bit-identical (R0 12x10: 118.1 -> 115.1 us, 11x10: 128.0 -> 126.8 us).
+_MLA_OPROJ_WS = os.environ.get("MLA_OPROJ_WS", "1") == "1"
 # glue track: seqq q_a norm on its 160 rows width-sharded over this many cores (0 = interleaved rms_norm, 5 cores).
 _GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "32"))
 # glue track: workers per link for the seqq q_a reduce-scatter over rows; 0 = op default.
