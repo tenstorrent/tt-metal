@@ -398,7 +398,11 @@ void kernel_main() {
         }
     }
 
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+    // Subtract only this launch's ready credits instead of resetting. The semaphore is shared by
+    // every launch of the cached op, and a persistent output lets a faster rank send the next
+    // launch's increments before this reader exits; a reset would erase them and the next launch
+    // would wait forever (the host-side startup barrier is skipped for persistent outputs).
+    noc_semaphore_inc(get_noc_addr(out_ready_sem), uint32_t{0} - sem_target);
 
     // Flush any outstanding NOC transactions before the kernel exits. In the fused path
     // OpSignaler issues non-posted atomic semaphore increments over NOC; without waiting for
