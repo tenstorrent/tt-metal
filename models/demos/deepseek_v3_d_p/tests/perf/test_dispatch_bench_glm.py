@@ -374,6 +374,7 @@ def test_dispatch_bench(mesh_device, device_params):
                         assert rb.passed and rm.passed, f"fab2d {spec} output mismatch"
                     for o in outs:
                         ttnn.deallocate(o)
+                    _beat(f"fab2d {spec} eager")
                     if os.environ.get("DB_PROFILE", "0") == "1":
                         # Device-profiler mode: a few synced eager launches, then dump zones (no trace).
                         ttnn.ReadDeviceProfiler(mesh_device)
