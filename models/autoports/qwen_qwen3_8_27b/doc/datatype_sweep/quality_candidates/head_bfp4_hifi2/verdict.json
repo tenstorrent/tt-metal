@@ -1,0 +1,7 @@
+{
+  "config_id": "head_bfp4_hifi2",
+  "status": "rejected",
+  "reason": "Long narrative never reaches final-answer text within1024 tokens; same-prompt HF512 and prior TT1024 reach final-answer text. Shared structured output passes.",
+  "evidence": "quality_candidates/head_bfp4_hifi2/quality_gate_failure.json",
+  "scope": "Full64 free-running precision selection at unchanged prompt/cap; not a numerical readiness rejection"
+}

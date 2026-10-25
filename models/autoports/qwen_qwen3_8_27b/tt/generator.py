@@ -367,7 +367,13 @@ class Generator(GeneratorContract):
         # In-place reset preserves cache addresses and existing trace bindings.
         for state in self.kv_cache:
             for value in vars(state).values():
-                ttnn.copy(ttnn.zeros_like(value), value)
+                if value.dtype == ttnn.bfloat4_b:
+                    # zeros_like packs BF4 on the host. Same-dtype device fill
+                    # overwrites this interleaved paged cache without rebinding
+                    # addresses referenced by live traces; reset is CQ-ordered.
+                    ttnn.fill(value, 0.0, output_tensor=value)
+                else:
+                    ttnn.copy(ttnn.zeros_like(value), value)
         self.refresh(torch.zeros(self.batch_size,dtype=torch.int32), self.positions)
         self.refresh(torch.zeros(self.batch_size,1,dtype=torch.int32), self.rope_indices)
         self.refresh(torch.zeros(1,1,1,self.batch_size,dtype=torch.int32), self.tokens)
@@ -690,7 +696,8 @@ def build_generator(model_dir, mesh_device, **kwargs):
     checkpoint = str(kwargs.pop('checkpoint', Path('.cache/qwen38-full')))
     indices = kwargs.pop('layer_indices',None)
     prepare = kwargs.pop('prepare',True)
-    model = Model(checkpoint,mesh_device,layer_indices=indices)
+    precision_config = kwargs.pop('precision_config', None)
+    model = Model(checkpoint,mesh_device,layer_indices=indices,precision_config=precision_config)
     generator = Generator(model,checkpoint,**kwargs)
     if prepare:
         generator.prepare_decode()

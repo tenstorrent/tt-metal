@@ -1,0 +1,596 @@
+{
+  "capacity_tokens": 4352,
+  "capacity_alignment": 256,
+  "layer_type": "linear_attention",
+  "seq": 4095,
+  "batch": 1,
+  "steps": 4,
+  "layout": "phase_specific",
+  "fused": null,
+  "stack": false,
+  "split_prefill": 0,
+  "policy": {
+    "attention_dtype": "bfloat8_b",
+    "mlp_dtype": "bfloat8_b",
+    "down_dtype": "bfloat8_b"
+  },
+  "provenance": {
+    "tests/run_multichip_decoder.py": "b0dae32ef8060644693ab295312956df84fe76fa1f2e280ae1b019c62f49c4ae",
+    "tt/multichip_decoder.py": "cdfeb0495f672a0f4b086b0e22317111626aeab50cead8860d9d5e82791837f0",
+    "tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c",
+    "tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd"
+  },
+  "baseline": {
+    "watcher_stress_replays": 0,
+    "async_stress": null,
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 804.0601387619972,
+    "decode_host_us": [
+      804.360955953598,
+      796.8461140990257,
+      794.9329447001219,
+      804.0601387619972
+    ],
+    "median_decode_host_us": 804.0601387619972,
+    "prefill_host_us": 17692.461144179106,
+    "prefill_host_times_us": [
+      17692.461144179106
+    ],
+    "restored_replays_bitwise": 3,
+    "replica_equality": false,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 320553472,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_weights": {
+        "reported_allocated_bytes_per_bank": 0,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      },
+      "after_trace": {
+        "allocated_bytes": 378680832,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_trace": {
+        "reported_allocated_bytes_per_bank": 6144,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      }
+    },
+    "effective_policy": {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat8_b",
+      "packed_mlp": true,
+      "prefill_chunk": 1280,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 10,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "out": {
+        "cores": 64,
+        "block": 3,
+        "prefill_block": 32,
+        "readers": 2
+      },
+      "down": {
+        "cores": 68,
+        "block": 8,
+        "prefill_block": 32,
+        "readers": 2
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 2,
+      "history_tile_tail": true,
+      "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "prefill_norm_max_tokens": 1280,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5
+    },
+    "decode_residual_layout": "replicated",
+    "effective_decode_policy": {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat8_b",
+      "packed_mlp": true,
+      "prefill_chunk": 1280,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 10,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "out": {
+        "cores": 64,
+        "block": 3,
+        "prefill_block": 32,
+        "readers": 2
+      },
+      "down": {
+        "cores": 68,
+        "block": 8,
+        "prefill_block": 32,
+        "readers": 2
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 2,
+      "history_tile_tail": true,
+      "policy_name": "p300c_bfp4_lofi_phase_specific_v1",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2
+      },
+      "prefill_norm_max_tokens": 1280,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5
+    },
+    "effective_sdpa_chunks": [
+      null
+    ]
+  },
+  "multichip": {
+    "watcher_stress_replays": 0,
+    "async_stress": null,
+    "page_remap_exact": false,
+    "ragged_positions": false,
+    "last_decode_host_us": 585.3709299117327,
+    "decode_host_us": [
+      595.9710106253624,
+      594.6990568190813,
+      585.1809401065111,
+      585.3709299117327
+    ],
+    "median_decode_host_us": 594.6990568190813,
+    "prefill_host_us": 6509.296130388975,
+    "prefill_host_times_us": [
+      6509.296130388975
+    ],
+    "restored_replays_bitwise": 3,
+    "replica_equality": true,
+    "runtime_fallback_audit": true,
+    "memory": {
+      "before_weights": {
+        "allocated_bytes": 0,
+        "capacity_bytes": 34178731008
+      },
+      "after_weights": {
+        "allocated_bytes": 225788416,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_weights": {
+        "reported_allocated_bytes_per_bank": 278912,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      },
+      "after_trace": {
+        "allocated_bytes": 244136448,
+        "capacity_bytes": 34178731008
+      },
+      "l1_after_trace": {
+        "reported_allocated_bytes_per_bank": 319872,
+        "reported_capacity_bytes_per_bank": 1461120,
+        "reported_num_banks": 110
+      }
+    },
+    "effective_policy": {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat8_b",
+      "attention_dtype": "bfloat8_b",
+      "down_dtype": "bfloat8_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat8_b",
+      "packed_mlp": true,
+      "prefill_chunk": 4096,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 4,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 8,
+        "block": 10,
+        "readers": 1,
+        "prefill_block": 8,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 8,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 1,
+      "history_tile_tail": true,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v5",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 10,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 10,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "prefill_norm_max_tokens": 1280,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5,
+      "direct_all_reduce": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "prefill_ccl_workers": 8,
+      "prefill_native_rs": true,
+      "prefill_rs_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 4,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "decode_rs_geometry": {
+        "grid": [
+          10,
+          1
+        ],
+        "out_k": 6,
+        "down_k": 17,
+        "subh": 1,
+        "subw": 4
+      },
+      "packed_decode_rope_min_batch": 4,
+      "packed_prefill_rope_min_batch": 8,
+      "prefill_ccl_dtype": "bfloat8_b",
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "residual_layout": "replicated",
+      "sharded_decode_min_batch": 8,
+      "packed_decode_conv": true,
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      }
+    },
+    "unique_ccl_contexts": 1,
+    "decode_residual_layout": "replicated",
+    "effective_decode_policy": {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat8_b",
+      "attention_dtype": "bfloat8_b",
+      "down_dtype": "bfloat8_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat8_b",
+      "packed_mlp": true,
+      "prefill_chunk": 4096,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 4,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 8,
+        "block": 10,
+        "readers": 1,
+        "prefill_block": 8,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 8,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 1,
+      "history_tile_tail": true,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v5",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 10,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 10,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "prefill_norm_max_tokens": 1280,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5,
+      "direct_all_reduce": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "prefill_ccl_workers": 8,
+      "prefill_native_rs": true,
+      "prefill_rs_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 4,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "decode_rs_geometry": {
+        "grid": [
+          10,
+          1
+        ],
+        "out_k": 6,
+        "down_k": 17,
+        "subh": 1,
+        "subw": 4
+      },
+      "packed_decode_rope_min_batch": 4,
+      "packed_prefill_rope_min_batch": 8,
+      "prefill_ccl_dtype": "bfloat8_b",
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "residual_layout": "replicated",
+      "sharded_decode_min_batch": 8,
+      "packed_decode_conv": true,
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      }
+    },
+    "effective_sdpa_chunks": [
+      null
+    ],
+    "scratch_workspace": {
+      "owners": 1,
+      "unique_pools": 1,
+      "slots": 2,
+      "bytes_per_device": 1392640,
+      "batch_capacity": 32,
+      "mesh_lifetime_owned": true,
+      "paired_roles": [
+        "out",
+        "down"
+      ],
+      "prefill_rs_dram_bytes_per_device": 55705600,
+      "prefill_rs_roles": [
+        "down",
+        "out"
+      ],
+      "native_rs_batches": [
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28,
+        29,
+        30,
+        31,
+        32
+      ],
+      "native_rs_dram_bytes_per_device": 16384000,
+      "native_rs_l1_reserved_bytes_per_bank": 102400
+    }
+  },
+  "prefill_pcc": 0.9998032421760217,
+  "decode_pcc": [
+    0.9998367105899787,
+    0.9998382003396454,
+    0.999885223017413,
+    0.9997926656661946
+  ],
+  "state_pcc": {
+    "conv": 0.998979699181875,
+    "recurrent": 0.997182155272599
+  },
+  "state_shapes": {
+    "conv": [
+      1,
+      3,
+      10240
+    ],
+    "recurrent": [
+      1,
+      48,
+      128,
+      128
+    ]
+  }
+}

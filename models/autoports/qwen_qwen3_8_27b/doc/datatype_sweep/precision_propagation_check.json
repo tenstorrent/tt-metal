@@ -1,0 +1,133 @@
+{
+  "status": "pass",
+  "selected_config": "head_bfp8_hifi2",
+  "checks": [
+    {
+      "batch": 1,
+      "status": "pass",
+      "observed_group_phases": [
+        [
+          "attention",
+          "fused_prefill"
+        ],
+        [
+          "attention",
+          "projection"
+        ],
+        [
+          "down",
+          "fused_prefill"
+        ],
+        [
+          "down",
+          "projection"
+        ],
+        [
+          "head",
+          "head"
+        ],
+        [
+          "mlp",
+          "projection"
+        ]
+      ],
+      "evidence": "selected/benchmark_b1_perf.json"
+    },
+    {
+      "batch": 8,
+      "status": "pass",
+      "observed_group_phases": [
+        [
+          "attention",
+          "fused_decode"
+        ],
+        [
+          "attention",
+          "projection"
+        ],
+        [
+          "down",
+          "fused_decode"
+        ],
+        [
+          "down",
+          "projection"
+        ],
+        [
+          "head",
+          "head"
+        ],
+        [
+          "mlp",
+          "projection"
+        ]
+      ],
+      "evidence": "selected/benchmark_b8_perf.json"
+    },
+    {
+      "batch": 16,
+      "status": "pass",
+      "observed_group_phases": [
+        [
+          "attention",
+          "fused_decode"
+        ],
+        [
+          "attention",
+          "projection"
+        ],
+        [
+          "down",
+          "fused_decode"
+        ],
+        [
+          "down",
+          "projection"
+        ],
+        [
+          "head",
+          "head"
+        ],
+        [
+          "mlp",
+          "projection"
+        ]
+      ],
+      "evidence": "selected/benchmark_b16_perf.json"
+    },
+    {
+      "batch": 32,
+      "status": "pass",
+      "observed_group_phases": [
+        [
+          "attention",
+          "fused_decode"
+        ],
+        [
+          "attention",
+          "projection"
+        ],
+        [
+          "down",
+          "fused_decode"
+        ],
+        [
+          "down",
+          "projection"
+        ],
+        [
+          "head",
+          "head"
+        ],
+        [
+          "mlp",
+          "projection"
+        ]
+      ],
+      "evidence": "selected/benchmark_b32_perf.json"
+    }
+  ],
+  "normal_default_construction": "run_full_validation build_generator without precision override; matching artifact in selected_validation/precision_runtime.json",
+  "scope": "Actual weight/cache/sampler/workspace dtypes and ordinary/fused kernel fidelity/input arguments. Fixed BF16 residual/norm and FP32 recurrence are also enforced constructor invariants.",
+  "later_adapter_contract": "No vLLM integration in stage08; later adapter must use the same default build_generator/Model loader."
+}

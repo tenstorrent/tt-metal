@@ -1,0 +1,26 @@
+{
+  "structured": {
+    "tt": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/baseline/qualitative/structured_tt.json",
+    "previous_tt": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/structured_tt.json",
+    "hf": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/structured_hf.json",
+    "hf_sha256": "59406c9f3b8349d277e31612e828ad4f52572cfeb68e23fb47b4fc18d5454a33",
+    "prior_tokens_exact": true,
+    "prompt_tokens_exact": true
+  },
+  "explain": {
+    "tt": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/baseline/qualitative/explain_tt.json",
+    "previous_tt": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/explain_tt.json",
+    "hf": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/explain_hf.json",
+    "hf_sha256": "9f9e5716bb04a3d7cc5722180c2f03530ecc3d871f3b01f8be62bad7271c5f4c",
+    "prior_tokens_exact": true,
+    "prompt_tokens_exact": true
+  },
+  "code": {
+    "tt": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/baseline/qualitative/code_tt.json",
+    "previous_tt": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/code_tt.json",
+    "hf": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/code_hf.json",
+    "hf_sha256": "52d42c0b792013457ebc34bd9c458a564425e3254ccebdc99b4a0cc3fc5e195f",
+    "prior_tokens_exact": true,
+    "prompt_tokens_exact": true
+  }
+}

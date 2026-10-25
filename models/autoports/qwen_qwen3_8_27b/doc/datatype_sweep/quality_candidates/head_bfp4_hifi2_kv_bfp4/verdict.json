@@ -1,0 +1,11 @@
+{
+  "status": "fail_quality",
+  "config_id": "head_bfp4_hifi2_kv_bfp4",
+  "reason": "Shared structured prompt has no final JSON by128 tokens; same-prompt HF and baseline return exact4/3 counts at that cap. Long narratives and factual retrieval pass.",
+  "case": "structured",
+  "tt": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/quality_candidates/head_bfp4_hifi2_kv_bfp4/qualitative/structured_tt.json",
+  "hf": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/structured_hf.json",
+  "previous_tt": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/baseline/qualitative/structured_tt.json",
+  "prompt_tokens_exact": true,
+  "token_budget": 128
+}

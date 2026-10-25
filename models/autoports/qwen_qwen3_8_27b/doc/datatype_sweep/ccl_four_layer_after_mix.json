@@ -1,0 +1,7 @@
+{
+  "scope": "Reduced real layers0/1/2/3, full head and request owner; runtime/trace check only",
+  "status": "runtime_failure",
+  "config": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/decode_ccl_bf16.json",
+  "error_type": "RuntimeError",
+  "error": "TT_THROW @ /workspace/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3096: tt::exception\ninfo:\nStatically allocated dataflow buffers in program 17658 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1140096 and static dataflow buffer region ends at 1195136\nbacktrace:\n --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xad8fc3) [0x73f68c0d8fc3]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::experimental::MakeMeshWorkloadFromSpecs(tt::tt_metal::distributed::MeshDevice&, std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, tt::tt_metal::experimental::ProgramSpec, std::hash<tt::tt_metal::distributed::MeshCoordinateRange>, std::equal_to<tt::tt_metal::distributed::MeshCoordinateRange>, "
+}

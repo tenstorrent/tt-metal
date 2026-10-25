@@ -1,0 +1,85 @@
+{
+  "status": "complete",
+  "scope": "Long qualitative/factual closure, not a performance measurement",
+  "backend": "hf",
+  "case_artifact": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/agent_long_cases.json",
+  "case_artifact_sha256": "e50b91ee5611f7adc6cf57de89c8993ad217d9b2b35c886298ed8eb7efbf96cd",
+  "thinking_policy": "Per-case explicit setting, verified identically for HF and TT",
+  "stop_on_eos": true,
+  "greedy": true,
+  "max_new_tokens": 128,
+  "cases": [
+    {
+      "name": "agent_history_32769",
+      "input_tokens": 32769,
+      "input_sha256": "0d9a7a67e3d4c11bb08830ce4788df2ac22a09839d7d5867799e84ad1bde8756",
+      "enable_thinking": false,
+      "tokens": [
+        90,
+        198,
+        220,
+        328,
+        4826,
+        763,
+        328,
+        34,
+        32112,
+        487,
+        198,
+        220,
+        328,
+        395,
+        763,
+        220,
+        22,
+        18,
+        16,
+        24,
+        11,
+        198,
+        220,
+        328,
+        7862,
+        763,
+        328,
+        44,
+        8565,
+        1,
+        198,
+        92,
+        248046
+      ],
+      "text": "{\n  \"project\": \"Cedar\",\n  \"port\": 7319,\n  \"owner\": \"Mira\"\n}<|im_end|>",
+      "expected_facts": {
+        "project": "Cedar",
+        "port": 7319,
+        "owner": "Mira"
+      },
+      "parsed_json": {
+        "project": "Cedar",
+        "port": 7319,
+        "owner": "Mira"
+      },
+      "strict_json": true,
+      "facts_exact": true
+    }
+  ],
+  "checkpoint": ".cache/qwen38-full",
+  "torch_version": "2.11.0+cpu",
+  "checkpoint_metadata_sha256": {
+    "config.json": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+    "generation_config.json": "e70c136c1b78ddc1fb0905bac8e733a4dc448d4f852a5dd75143fffc70be550e",
+    "model.safetensors.index.json": "77042094076611b69791a610065f28b7013b8c621795fa86ddccc8bac7d1b9df"
+  },
+  "source_sha256": {
+    "/workspace/models/autoports/qwen_qwen3_8_27b/tests/run_long_quality_cases.py": "08dba2c0e7c3999d0062360a34edf40573bf64d0de579ab005aa5bb584f4e22b",
+    "models/autoports/qwen_qwen3_8_27b/tests/hf_text.py": "832d9ea9bae62c28811c9bef63170313fc13768f8002399f6bda0e9fc45f8552"
+  },
+  "transformers_version": "5.12.1",
+  "eos_ids": [
+    248044,
+    248046
+  ],
+  "dtype": "torch.bfloat16",
+  "qualitative_verdict": "Read completions and paired HF evidence; completion alone is not a quality pass"
+}

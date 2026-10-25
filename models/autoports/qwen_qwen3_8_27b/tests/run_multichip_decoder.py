@@ -46,6 +46,7 @@ def main():
     p.add_argument('--stack',action='store_true')
     p.add_argument('--split-prefill',type=int,default=0)
     p.add_argument('--policy',default='{}')
+    p.add_argument('--baseline-policy',default='{}',help='Optional same-precision single-chip control; default preserves prior BFP4 control')
     p.add_argument('--ragged',action='store_true')
     p.add_argument('--profile',action='store_true')
     p.add_argument('--output',required=True)
@@ -107,13 +108,13 @@ def main():
                     'reported_capacity_bytes_per_bank':view.total_bytes_per_bank,'reported_num_banks':view.num_banks}
             memory={'before_weights':allocated()}
             model=cls.from_state_dict(weights,hf_config=cfg,layer_idx=args.layer,mesh_device=mesh,
-                **({'policy':{'residual_layout':args.layout,**json.loads(args.policy)}} if n==4 else {}))
+                **({'policy':{'residual_layout':args.layout,**json.loads(args.policy)}} if n==4 else {'policy':json.loads(args.baseline_policy)}))
             if args.stack:
                 assert not args.fused and not args.remap
                 other=3 if args.layer==0 else 0
                 next_model=cls.from_state_dict(load_file(f'.cache/qwen38-weights/layer_{other}.safetensors'),
                     hf_config=cfg,layer_idx=other,mesh_device=mesh,
-                    **({'policy':{'residual_layout':args.layout,**json.loads(args.policy)},'ccl_workspace':model.ar_workspace} if n==4 else {}))
+                    **({'policy':{'residual_layout':args.layout,**json.loads(args.policy)},'ccl_workspace':model.ar_workspace} if n==4 else {'policy':json.loads(args.baseline_policy)}))
                 model=DecoderStack([model,next_model])
             if n==4 and args.fused: model.prepare_fused(args.batch,args.fused)
             background_l1=None

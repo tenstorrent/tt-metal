@@ -1,0 +1,669 @@
+{
+  "scope": "Reduced real layers0/1/2/3, full head and request owner; runtime/trace check only",
+  "status": "pass",
+  "config": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/kv_bf16.json",
+  "context": 262144,
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_8_27b/tt/precision.py": "9e139bbbacf236cadbef49ab94cb013085f307be8cd0dce105a6b5af665fd49d",
+    "models/autoports/qwen_qwen3_8_27b/tt/lm_head.py": "53140434152bd7b3d9b387cc2bd4968697c32fb5fa03963e8f89c75c0df90c8e",
+    "models/autoports/qwen_qwen3_8_27b/tt/generator.py": "2ff93d3cd0774c683c0c01ca67073f13324ea88687f2c7d3aee9aa8a745c130c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd",
+    "models/autoports/qwen_qwen3_8_27b/tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": "86131796dd076675f915f1b6a62278c8af2c78d25f467a052f1d51d8e59e777b",
+    "models/autoports/qwen_qwen3_8_27b/tt/sampling_ccl.py": "1c652512bb91cec3692d95211c49808fbe1553173155365bf3c73d4414421694",
+    "models/autoports/qwen_qwen3_8_27b/tt/model.py": "d40b195400d64d379c0f05f9cdf518cd563540448cbe162de63380954c9fb19c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "models/autoports/qwen_qwen3_8_27b/tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "models/autoports/qwen_qwen3_8_27b/tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9"
+  },
+  "policies": [
+    {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat16",
+      "packed_mlp": true,
+      "prefill_chunk": 4096,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 4,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 16,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 8,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 1,
+      "history_tile_tail": true,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v5",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "prefill_norm_max_tokens": 1280,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5,
+      "direct_all_reduce": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "prefill_ccl_workers": 8,
+      "prefill_native_rs": true,
+      "prefill_rs_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 4,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "decode_rs_geometry": {
+        "grid": [
+          10,
+          1
+        ],
+        "out_k": 6,
+        "down_k": 17,
+        "subh": 1,
+        "subw": 4
+      },
+      "packed_decode_rope_min_batch": 4,
+      "packed_prefill_rope_min_batch": 8,
+      "prefill_ccl_dtype": "bfloat8_b",
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "residual_layout": "replicated",
+      "sharded_decode_min_batch": 8,
+      "packed_decode_conv": true,
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "fused_fidelity": "LoFi",
+      "fused_prefill_fidelity": "LoFi",
+      "attention_activation": "bfloat16",
+      "mlp_activation": "bfloat16",
+      "precision_prefill_activation": "bfloat8_b"
+    },
+    {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat16",
+      "packed_mlp": true,
+      "prefill_chunk": 4096,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 4,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 16,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 8,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 1,
+      "history_tile_tail": true,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v5",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "prefill_norm_max_tokens": 1280,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5,
+      "direct_all_reduce": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "prefill_ccl_workers": 8,
+      "prefill_native_rs": true,
+      "prefill_rs_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 4,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "decode_rs_geometry": {
+        "grid": [
+          10,
+          1
+        ],
+        "out_k": 6,
+        "down_k": 17,
+        "subh": 1,
+        "subw": 4
+      },
+      "packed_decode_rope_min_batch": 4,
+      "packed_prefill_rope_min_batch": 8,
+      "prefill_ccl_dtype": "bfloat8_b",
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "residual_layout": "replicated",
+      "sharded_decode_min_batch": 8,
+      "packed_decode_conv": true,
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "fused_fidelity": "LoFi",
+      "fused_prefill_fidelity": "LoFi",
+      "attention_activation": "bfloat16",
+      "mlp_activation": "bfloat16",
+      "precision_prefill_activation": "bfloat8_b"
+    },
+    {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat16",
+      "packed_mlp": true,
+      "prefill_chunk": 4096,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 4,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 16,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 8,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 1,
+      "history_tile_tail": true,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v5",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "prefill_norm_max_tokens": 1280,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5,
+      "direct_all_reduce": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "prefill_ccl_workers": 8,
+      "prefill_native_rs": true,
+      "prefill_rs_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 4,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "decode_rs_geometry": {
+        "grid": [
+          10,
+          1
+        ],
+        "out_k": 6,
+        "down_k": 17,
+        "subh": 1,
+        "subw": 4
+      },
+      "packed_decode_rope_min_batch": 4,
+      "packed_prefill_rope_min_batch": 8,
+      "prefill_ccl_dtype": "bfloat8_b",
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "residual_layout": "replicated",
+      "sharded_decode_min_batch": 8,
+      "packed_decode_conv": true,
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "fused_fidelity": "LoFi",
+      "fused_prefill_fidelity": "LoFi",
+      "attention_activation": "bfloat16",
+      "mlp_activation": "bfloat16",
+      "precision_prefill_activation": "bfloat8_b"
+    },
+    {
+      "dram_sharded": true,
+      "fidelity": "LoFi",
+      "mlp_dtype": "bfloat4_b",
+      "attention_dtype": "bfloat4_b",
+      "down_dtype": "bfloat4_b",
+      "block": 4,
+      "sharded_norm": true,
+      "carry_residual": true,
+      "kv_dtype": "bfloat16",
+      "packed_mlp": true,
+      "prefill_chunk": 4096,
+      "prefill_grid": [
+        11,
+        10
+      ],
+      "prefill_block": 4,
+      "inplace_recurrence": true,
+      "mix": {
+        "cores": 8,
+        "block": 20,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b",
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 4,
+        "prefill_l1": true,
+        "prefill_l1_max_tokens": 4096
+      },
+      "gateup": {
+        "cores": 80,
+        "block": 2,
+        "readers": 2,
+        "prefill_block": 4,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "out": {
+        "cores": 8,
+        "block": 6,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "down": {
+        "cores": 8,
+        "block": 17,
+        "readers": 1,
+        "prefill_block": 4
+      },
+      "l1_intermediates": true,
+      "sdpa_cores": 32,
+      "separate_prefill": true,
+      "prefill_sharded_norm": true,
+      "prefill_norm_block": true,
+      "prefill_sdpa_q": 128,
+      "prefill_sdpa_k": 256,
+      "prefill_sdpa_approx": true,
+      "prefill_subh": 1,
+      "history_tile_tail": true,
+      "policy_name": "tp4_p300c_bfp4_lofi_compact_v5",
+      "gate": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "up": {
+        "cores": 80,
+        "block": 2,
+        "readers": 1,
+        "prefill_block": 20,
+        "prefill_grid": [
+          11,
+          8
+        ],
+        "prefill_subh": 8,
+        "prefill_out_block_h": 8,
+        "prefill_out_subblock_w": 1,
+        "prefill_activation": "bfloat8_b",
+        "prefill_ccl_dtype": "bfloat8_b"
+      },
+      "prefill_norm_max_tokens": 1024,
+      "l1_mlp": true,
+      "prefill_unit_subw": 5,
+      "direct_all_reduce": true,
+      "ccl_dtype": "bfloat8_b",
+      "pooled_all_reduce": true,
+      "ar_fused_move": true,
+      "prefill_ccl_workers": 8,
+      "prefill_native_rs": true,
+      "prefill_rs_geometry": {
+        "grid": [
+          11,
+          8
+        ],
+        "out_k": 4,
+        "down_k": 17,
+        "block_h": 4,
+        "subh": 2,
+        "subw": 3
+      },
+      "decode_rs_geometry": {
+        "grid": [
+          10,
+          1
+        ],
+        "out_k": 24,
+        "down_k": 17,
+        "subh": 1,
+        "subw": 4
+      },
+      "packed_decode_rope_min_batch": 4,
+      "packed_prefill_rope_min_batch": 8,
+      "prefill_ccl_dtype": "bfloat8_b",
+      "sdpa_fidelity": "LoFi",
+      "sdpa_fp32": false,
+      "residual_layout": "replicated",
+      "sharded_decode_min_batch": 8,
+      "packed_decode_conv": true,
+      "batched_native_rs": {
+        "persistent_ccl": false,
+        "persistent_gather": false,
+        "ccl_dtype": null,
+        "compact_column_gather": true,
+        "compact_gather_move": true,
+        "fused_intermediate_dram": true,
+        "fused_compact_input": true
+      },
+      "fused_fidelity": "LoFi",
+      "fused_prefill_fidelity": "LoFi",
+      "attention_activation": "bfloat16",
+      "mlp_activation": "bfloat16",
+      "precision_prefill_activation": "bfloat8_b",
+      "sdpa_chunk": 128
+    }
+  ],
+  "cases": [
+    {
+      "length": 1,
+      "exact_repeat": true,
+      "all_rank_cache_reset_exact_zero": true,
+      "cache_addresses_unchanged": true,
+      "trace_ids": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ],
+      "captures": 3
+    },
+    {
+      "length": 33,
+      "exact_repeat": true,
+      "all_rank_cache_reset_exact_zero": true,
+      "cache_addresses_unchanged": true,
+      "trace_ids": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ],
+      "captures": 3
+    },
+    {
+      "length": 4095,
+      "exact_repeat": true,
+      "all_rank_cache_reset_exact_zero": true,
+      "cache_addresses_unchanged": true,
+      "trace_ids": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ],
+      "captures": 3
+    },
+    {
+      "length": 4096,
+      "exact_repeat": true,
+      "all_rank_cache_reset_exact_zero": true,
+      "cache_addresses_unchanged": true,
+      "trace_ids": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ],
+      "captures": 3
+    },
+    {
+      "length": 4097,
+      "exact_repeat": true,
+      "all_rank_cache_reset_exact_zero": true,
+      "cache_addresses_unchanged": true,
+      "trace_ids": [
+        "MeshTraceId(0)",
+        "MeshTraceId(1)",
+        "MeshTraceId(2)"
+      ],
+      "captures": 3
+    }
+  ],
+  "native_end": {
+    "input_tokens": 262141,
+    "output_tokens": 3,
+    "final_decode_input_position": 262143,
+    "final_next_positions": [
+      262144
+    ],
+    "finite": true,
+    "exact_repeat": true,
+    "trace_ids_unchanged": true,
+    "captures_unchanged": true
+  }
+}

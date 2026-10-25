@@ -83,6 +83,33 @@ class MultichipDecoder(OptimizedDecoder):
                                       prefill_l1=True, prefill_l1_max_tokens=4096)
         if policy:
             self.policy.update(copy.deepcopy(policy))
+        if self.policy.get('precision_prefill_activation'):
+            for role in ('mix', 'gateup', 'gate', 'up'):
+                self.policy[role]['prefill_activation'] = self.policy['precision_prefill_activation']
+        # The inherited BFP4 reader geometry does not fit larger BFP8 tiles.
+        # Resolve after dtype overrides and before packing/copying phase views.
+        # Preserve explicit legal alternatives used by precision microchecks.
+        if self.policy['attention_dtype'] == 'bfloat8_b':
+            if self.policy['mix']['block'] == 20 and self.policy['mix']['readers'] == 1:
+                self.policy['mix']['block'] = 10
+            if self.layer_type == 'linear_attention' and self.policy['mix'].get('prefill_block') == 16:
+                self.policy['mix']['prefill_block'] = 8
+        if self.policy['mlp_dtype'] == 'bfloat8_b':
+            for role in ('gate', 'up'):
+                if self.policy[role].get('prefill_block') == 20:
+                    self.policy[role]['prefill_block'] = 10
+        if self.policy.get('ccl_dtype') == 'bfloat16':
+            if self.policy['mix']['block'] == 20 and self.policy['mix']['readers'] == 1:
+                self.policy['mix']['block'] = 10
+            if self.layer_type == 'linear_attention' and self.policy['mix'].get('prefill_block') == 16:
+                self.policy['mix']['prefill_block'] = 8
+        if (self.policy['down_dtype'] == 'bfloat8_b' or self.policy.get('ccl_dtype') == 'bfloat16') and self.policy['down']['readers'] == 1:
+            # K/shard width is17 tiles; halving to8 would be illegal.
+            self.policy['down']['readers'] = 2
+        if self.layer_type == 'full_attention' and self.policy.get('kv_dtype') == 'bfloat16':
+            # Native page-table staging plus BF16 K/V double buffers exceed L1
+            # at K256/C32. K128 retains the existing core cap and page guard.
+            self.policy['sdpa_chunk'] = min(self.policy.get('sdpa_chunk', 256), 128)
         if self.policy["residual_layout"] != "phase_specific":
             self.policy["prefill_native_rs"]=False
         self.ar_workspace=None
@@ -103,7 +130,8 @@ class MultichipDecoder(OptimizedDecoder):
             self.sdpa_ckc=ttnn.WormholeComputeKernelConfig(
                 math_fidelity=getattr(ttnn.MathFidelity,self.policy["sdpa_fidelity"]),
                 math_approx_mode=False,fp32_dest_acc_en=self.policy.get("sdpa_fp32",True),packer_l1_acc=True)
-        self.matmul_ckc = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.LoFi,
+        self.matmul_ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=getattr(ttnn.MathFidelity, self.policy.get('fused_prefill_fidelity', 'LoFi')),
             math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=True)
         prefix = f"model.language_model.layers.{layer_idx}."
         if not any(k.startswith(prefix) for k in state_dict): prefix = ""

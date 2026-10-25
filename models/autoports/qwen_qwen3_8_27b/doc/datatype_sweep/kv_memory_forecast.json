@@ -1,0 +1,35 @@
+{
+  "capacity_bytes_per_device": 34178731008,
+  "rows": [
+    {
+      "kv_dtype": "bfloat4_b",
+      "kv_bytes_per_token_per_device": 4608,
+      "native_context": 262144,
+      "native_kv_bytes_per_device": 1207959552,
+      "target_pool_tokens": 1048576,
+      "target_kv_bytes_per_device": 4831838208,
+      "estimated_b32_peak_bytes": 24111618560.0,
+      "basis": "Stage07 measured peak plus physical tiled KV delta at B32/context33024. Estimate only; unchanged weights and transient allocation assumed. Not evidence of a physical capacity limit."
+    },
+    {
+      "kv_dtype": "bfloat8_b",
+      "kv_bytes_per_token_per_device": 8704,
+      "native_context": 262144,
+      "native_kv_bytes_per_device": 2281701376,
+      "target_pool_tokens": 1048576,
+      "target_kv_bytes_per_device": 9126805504,
+      "estimated_b32_peak_bytes": 28440140288.0,
+      "basis": "Stage07 measured peak plus physical tiled KV delta at B32/context33024. Estimate only; unchanged weights and transient allocation assumed. Not evidence of a physical capacity limit."
+    },
+    {
+      "kv_dtype": "bfloat16",
+      "kv_bytes_per_token_per_device": 16384,
+      "native_context": 262144,
+      "native_kv_bytes_per_device": 4294967296,
+      "target_pool_tokens": 1048576,
+      "target_kv_bytes_per_device": 17179869184,
+      "estimated_b32_peak_bytes": 36556118528.0,
+      "basis": "Stage07 measured peak plus physical tiled KV delta at B32/context33024. Estimate only; unchanged weights and transient allocation assumed. Not evidence of a physical capacity limit."
+    }
+  ]
+}

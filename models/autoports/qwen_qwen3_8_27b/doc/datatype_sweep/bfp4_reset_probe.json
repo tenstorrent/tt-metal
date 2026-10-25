@@ -1,0 +1,44 @@
+{
+  "scope": "BFP4 paged KV reset primitive on all TP4 ranks; not full-model performance",
+  "cases": [
+    {
+      "shape": [
+        1,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT4_B",
+      "all_four_ranks_exact_zero": true,
+      "buffer_addresses_unchanged": true,
+      "ranks": 4,
+      "repetitions": 3,
+      "host_wall_fill_ms": [
+        3.0913210939615965,
+        0.19929185509681702,
+        0.18626684322953224
+      ],
+      "timing_scope": "Primitive diagnostic; CPU HF control may run concurrently; not ranking evidence"
+    },
+    {
+      "shape": [
+        8192,
+        1,
+        32,
+        256
+      ],
+      "dtype": "DataType.BFLOAT4_B",
+      "all_four_ranks_exact_zero": true,
+      "buffer_addresses_unchanged": true,
+      "ranks": 4,
+      "repetitions": 3,
+      "host_wall_fill_ms": [
+        0.5661561153829098,
+        0.5504561122506857,
+        0.5575499963015318
+      ],
+      "timing_scope": "Primitive diagnostic; CPU HF control may run concurrently; not ranking evidence"
+    }
+  ],
+  "status": "pass"
+}

@@ -1,0 +1,30 @@
+{
+  "source": "teacher_forcing_token_out",
+  "input_tokens": [
+    203
+  ],
+  "output_tokens": 100,
+  "output_lengths": [
+    100
+  ],
+  "batch": 1,
+  "concurrency": 1,
+  "ttft_ms": 146.7405769508332,
+  "decode_seconds": 2.734898403985426,
+  "decode_tps_per_user": 36.19878524764665,
+  "steady_state_counters": {
+    "model_replays": 99,
+    "sampling_replays": 99,
+    "token_refreshes": 100,
+    "position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "readbacks": 100,
+    "captures": 0,
+    "host_copies_total": 100
+  },
+  "decode_trace": "MeshTraceId(0)",
+  "sampling_trace": "MeshTraceId(1)",
+  "blocking_replay": false,
+  "host_sampling": false,
+  "stop_on_eos": true
+}

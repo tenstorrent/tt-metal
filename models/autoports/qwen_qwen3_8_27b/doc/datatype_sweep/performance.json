@@ -1,0 +1,71 @@
+{
+  "selected_config": "head_bfp8_hifi2",
+  "measurements": [
+    {
+      "batch": 1,
+      "concurrency": 1,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 431.26330710947514,
+      "decode_tps": 36.17090288005509,
+      "evidence": "datatype_sweep/selected/benchmark_b1_perf.json",
+      "measurement_regime": "warmed token-out; no inner-loop host refresh/readback; EOS disabled"
+    },
+    {
+      "batch": 8,
+      "concurrency": 8,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 3565.3520219493657,
+      "decode_tps": 21.334866949372085,
+      "evidence": "datatype_sweep/selected/benchmark_b8_perf.json",
+      "measurement_regime": "warmed token-out; no inner-loop host refresh/readback; EOS disabled"
+    },
+    {
+      "batch": 16,
+      "concurrency": 16,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 7305.289989104494,
+      "decode_tps": 13.859687828814785,
+      "evidence": "datatype_sweep/selected/benchmark_b16_perf.json",
+      "measurement_regime": "warmed token-out; no inner-loop host refresh/readback; EOS disabled"
+    },
+    {
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 4096,
+      "output_tokens": 128,
+      "repetitions": 3,
+      "source": "autoregressive",
+      "ttft_ms": 14741.964365821332,
+      "decode_tps": 8.899520501724194,
+      "evidence": "datatype_sweep/selected/benchmark_b32_perf.json",
+      "measurement_regime": "warmed token-out; no inner-loop host refresh/readback; EOS disabled"
+    },
+    {
+      "batch": 32,
+      "concurrency": 32,
+      "input_tokens": 32768,
+      "output_tokens": 128,
+      "repetitions": 1,
+      "source": "autoregressive",
+      "ttft_ms": 146763.2832499221,
+      "decode_tps": 7.462566153530859,
+      "evidence": "datatype_sweep/selected/benchmark_b32_perf.json",
+      "measurement_regime": "warmed token-out; no inner-loop host refresh/readback; EOS disabled"
+    }
+  ],
+  "workload": {
+    "target_concurrency": 32,
+    "working_set_tokens": 32768,
+    "typical_context_tokens": 4096,
+    "source": "planning estimate"
+  }
+}

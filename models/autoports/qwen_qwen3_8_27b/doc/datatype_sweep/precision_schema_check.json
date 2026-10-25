@@ -1,0 +1,22 @@
+{
+  "status": "pass",
+  "validated_configs": [
+    "baseline_bfp4_lofi",
+    "bfp4_hifi2",
+    "bfp8_hifi2",
+    "bfp8_lofi",
+    "decode_activation_bfp8",
+    "decode_ccl_bf16",
+    "head_bfp4_hifi2",
+    "head_bfp4_hifi2_kv_bfp4",
+    "head_bfp4_lofi",
+    "head_bfp4_lofi_kv_bfp4",
+    "head_bfp8_hifi2",
+    "head_bfp8_lofi",
+    "kv_bf16",
+    "kv_bfp4"
+  ],
+  "layer_exception_translation": true,
+  "fixed_residual_recurrence_rejection": true,
+  "scope": "Offline contract validation; actual runtime propagation checked separately"
+}

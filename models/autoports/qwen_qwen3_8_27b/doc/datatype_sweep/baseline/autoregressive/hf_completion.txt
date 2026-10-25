@@ -1,0 +1,3 @@
+We need solve math problem. Need reason step by step. Let's parse carefully.
+
+Problem: Every morning Aya goes for a 9-km-long walk and stops at coffee shop afterwards. When she walks at constant speed s km/h, the walk takes her 4 hours, including t minutes spent in coffee shop. When she walks s+2 km/h, the walk takes her 2 hours and 24 minutes, including t minutes spent in coffee shop. Suppose Aya walks

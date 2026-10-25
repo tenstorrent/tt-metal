@@ -1,0 +1,7 @@
+{
+  "config_id": "head_bfp8_lofi",
+  "status": "rejected",
+  "reason": "Structured128 output begins correct JSON but truncates before completion; exact-prompt HF and baseline complete JSON within128.",
+  "evidence": "quality_candidates/head_bfp8_lofi/quality_gate_failure.json",
+  "scope": "Full64 free-running precision selection at unchanged prompt/cap; not a numerical readiness rejection"
+}

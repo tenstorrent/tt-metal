@@ -1,0 +1,29 @@
+{
+  "status": "pass_with_documented_advisories",
+  "checks": [
+    {
+      "command": "python .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/scripts/check_agentic_serving.py --model-dir models/autoports/qwen_qwen3_8_27b --stage full-model",
+      "chunk_id": "885da4",
+      "wall_time_seconds": 0.000010671,
+      "exit_code": 1,
+      "original_token_count": 327,
+      "output": "ADVISORY: weight family 'in_norm' is held more than once: Inherited replicated/sharded norm representations for phase-specific residual contracts; each named row counts only its own bytes.\nADVISORY: weight family 'post_norm' is held more than once: Inherited replicated/sharded norm representations for phase-specific residual contracts; each named row counts only its own bytes.\nADVISORY: weight family 'gate' is held more than once: Measured inherited separate prefill and packed decode representations; each named row counts only its own bytes, sum once. See optimized_multichip_decoder/prefill_projection_selection.json.\nADVISORY: weight family 'up' is held more than once: Measured inherited separate prefill and packed decode representations; each named row counts only its own bytes, sum once. See optimized_multichip_decoder/prefill_projection_selection.json.\nADVISORY: weight family 'gateup' is held more than once: Measured inherited separate prefill and packed decode representations; each named row counts only its own bytes, sum once. See optimized_multichip_decoder/prefill_projection_selection.json.\nADVISORY: weight family 'norm_shards' is held more than once: Inherited replicated/sharded norm representations for phase-specific residual contracts; each named row counts only its own bytes.\n"
+    },
+    {
+      "command": "python .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/scripts/check_context_contract.py --model-dir models/autoports/qwen_qwen3_8_27b --stage full-model --require-contract --strict-caps",
+      "chunk_id": "1346f5",
+      "wall_time_seconds": 0.000008556,
+      "exit_code": 0,
+      "original_token_count": 28,
+      "output": "Context contract OK for models/autoports/qwen_qwen3_8_27b: target=262144, supported=262144 (full HF context).\n"
+    },
+    {
+      "command": "python .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/check_degenerate_output.py models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/selected_validation --scope autoregressive --missing-artifacts critical --json models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/degenerate_output_check.json",
+      "chunk_id": "6eebba",
+      "wall_time_seconds": 0.000015199,
+      "exit_code": 0,
+      "original_token_count": 124,
+      "output": "measured: tt free-running completion [models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/selected_validation/autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 79, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0759}\nmeasured: hf/tt token agreement (informational) [models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/selected_validation/autoregressive/autoregressive_meta.json] {'matching_tokens': 15, 'compared_tokens': 100}\n\nNo degenerate output detected.\n"
+    }
+  ]
+}

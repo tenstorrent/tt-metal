@@ -1,0 +1,3 @@
+*.log
+*.allocations.json.gz
+!sweep_results.csv

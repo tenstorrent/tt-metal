@@ -1,0 +1,184 @@
+{
+  "config_id": "kv_bf16",
+  "precision_config": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/kv_bf16.json",
+  "dtype_policy": {
+    "schema_version": 1,
+    "config_id": "kv_bf16",
+    "weight_groups": {
+      "attention": "bfloat4_b",
+      "mlp": "bfloat4_b",
+      "down": "bfloat4_b",
+      "embedding": "bfloat16",
+      "head": "bfloat16",
+      "norm": "bfloat16"
+    },
+    "layer_exceptions": {},
+    "compute_fidelities": {
+      "projection": "LoFi",
+      "fused_prefill": "LoFi",
+      "fused_decode": "LoFi",
+      "sdpa": "LoFi",
+      "head": "HiFi4",
+      "norm": "HiFi4"
+    },
+    "activation_dtype": {
+      "prefill_column": "bfloat8_b",
+      "ordinary_attention": "bfloat16",
+      "ordinary_mlp": "bfloat16",
+      "fused_row": "bfloat16"
+    },
+    "residual_dtype": "bfloat16",
+    "ccl_dtype": {
+      "decode_b1": "bfloat8_b",
+      "prefill": "bfloat8_b",
+      "native_batched": "bfloat16"
+    },
+    "kv_cache_dtype": "bfloat16",
+    "logits_sampling": {
+      "logits": "bfloat16",
+      "sampling": "bfloat16",
+      "token_ids": "uint32"
+    },
+    "recurrent_state_dtype": "float32",
+    "max_context": 262144
+  },
+  "compute_fidelity_policy": {
+    "projection": "LoFi",
+    "fused_prefill": "LoFi",
+    "fused_decode": "LoFi",
+    "sdpa": "LoFi",
+    "head": "HiFi4",
+    "norm": "HiFi4"
+  },
+  "status": "runtime_failure",
+  "command": "docker exec qwen38-functional-build bash models/autoports/qwen_qwen3_8_27b/tests/optimized_multichip_env.sh python -m models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate --config models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/kv_bf16.json --output models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/results/kv_bf16.json --wait-for-control models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/cpu_control_finished.json",
+  "hardware": "4 x Blackhole p300c",
+  "mesh": [
+    1,
+    4
+  ],
+  "commit": "af283dd6d375f8f7ffe057b2c1e271f9e4aef3e9",
+  "branch": "exp26-qwen38-bringup",
+  "environment": {
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0",
+    "TT_METAL_WATCHER": null,
+    "TT_METAL_DEVICE_PROFILER": null
+  },
+  "runner_sha256": "b17ed69113efae4d601999ab739f6eb61a9c41b936c547c91fec5c04b2dc259c",
+  "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+  "reference_sha256": "e16f1192147d682eaa91d1957e5d5e39a981dcde106b6364b2255f8cc7d8aa1f",
+  "measurement_regime": "traced_teacher_forcing",
+  "batch": 1,
+  "input_tokens": 203,
+  "generated_tokens": 100,
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_8_27b/tt/precision.py": "9e139bbbacf236cadbef49ab94cb013085f307be8cd0dce105a6b5af665fd49d",
+    "models/autoports/qwen_qwen3_8_27b/tt/lm_head.py": "53140434152bd7b3d9b387cc2bd4968697c32fb5fa03963e8f89c75c0df90c8e",
+    "models/autoports/qwen_qwen3_8_27b/tt/generator.py": "2ff93d3cd0774c683c0c01ca67073f13324ea88687f2c7d3aee9aa8a745c130c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd",
+    "models/autoports/qwen_qwen3_8_27b/tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": "2ae56fcf03566430703bdc8217e8f97cb88d42e2950c94a41c565ac3d11b2788",
+    "models/autoports/qwen_qwen3_8_27b/tt/sampling_ccl.py": "1c652512bb91cec3692d95211c49808fbe1553173155365bf3c73d4414421694",
+    "models/autoports/qwen_qwen3_8_27b/tt/model.py": "d40b195400d64d379c0f05f9cdf518cd563540448cbe162de63380954c9fb19c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "models/autoports/qwen_qwen3_8_27b/tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "models/autoports/qwen_qwen3_8_27b/tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9"
+  },
+  "prepared_kernel_precision_calls": [
+    {
+      "op": "linear",
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "input_shape": [
+        1,
+        1,
+        1,
+        5120
+      ],
+      "weight_shape": [
+        5120,
+        4608
+      ],
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": false,
+      "calls": 3
+    },
+    {
+      "op": "linear",
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "input_shape": [
+        1,
+        1,
+        1,
+        1536
+      ],
+      "weight_shape": [
+        1536,
+        5120
+      ],
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": false,
+      "calls": 3
+    },
+    {
+      "op": "linear",
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "input_shape": [
+        1,
+        1,
+        1,
+        5120
+      ],
+      "weight_shape": [
+        5120,
+        8704
+      ],
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": false,
+      "calls": 3
+    },
+    {
+      "op": "linear",
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "input_shape": [
+        1,
+        1,
+        1,
+        4352
+      ],
+      "weight_shape": [
+        4352,
+        5120
+      ],
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": false,
+      "calls": 3
+    },
+    {
+      "op": "linear",
+      "input_dtype": "DataType.BFLOAT16",
+      "weight_dtype": "DataType.BFLOAT4_B",
+      "input_shape": [
+        1,
+        1,
+        1,
+        5120
+      ],
+      "weight_shape": [
+        5120,
+        3584
+      ],
+      "math_fidelity": "MathFidelity.LoFi",
+      "fp32_dest_acc_en": false,
+      "calls": 1
+    }
+  ],
+  "error_type": "RuntimeError",
+  "error": "TT_THROW @ /workspace/tt_metal/impl/program/program.cpp:2624: tt::exception\ninfo:\nStatically allocated circular buffers in program 782 clash with L1 buffers on core range [0-0 - 10-9]. L1 buffer allocated at 1065344 and static circular buffer region ends at 1083648\nbacktrace:\n --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xad8fc3) [0x7d6d824d8fc3]\n --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x2f0) [0x7d6d860a58f0]\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(+0x2eaadf3) [0x7d6d860aadf3]\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail54create_and_cache_mesh_workload_with_allocation_contextITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RNSI_13program_cache6detail12ProgramCacheERKNSQ_15ProgramCacheKeyERKT0_+0x639) [0x7d6d860a4b39]\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail17use_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES6_EEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSJ_12MeshWorkloadEE_EEvSB_SE_SG_SL_RKNS1_18ProgramCacheLookupERKT0_+0x165) [0x7d6d860a27f5]\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim25SdpaDecodeDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x81) [0x7d6d8609fab1]\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim25SdpaDecodeDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0xe8) [0x7d6d8608d6c8]\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn4prim11sdpa_decodeERKNS_6TensorES3_RKSt8optionalIS2_ES7_S7_S7_S7_bbRKSt6vectorIjSaIjEES4_IfES4_IjERKN2tt8tt_metal12MemoryConfigERKS4_INS_10operations11transformer17SDPAProgramConfigEENS_19ComputeKernelConfigEjS4_IbESR_SE_S4_INSL_26PagedCacheGeometryOverrideEESE_j+0x42c) [0x7d6d8608139c]\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn11transformer41paged_scaled_dot_product_attention_decodeERKNS_6TensorES3_S3_S3_bRKSt8optionalIS2_ES7_S7_S4_IfES4_IjERKS4_IN2tt8tt_metal12MemoryConfigEES4_INS_10operations11transformer17SDPAProgramConfigEES4_INS_19ComputeKernelConfigEES4_INSH_26PagedCacheGeometryOverrideEES9_j+0x28d) [0x7d6d8603944d]\n --- /workspace/ttnn/ttnn/_ttnn.so(+0x45b953) [0x7d6d8685b953]\n --- /workspace/ttnn/ttnn/_ttnn.so(+0x45b5a3) [0x7d6d8685b5a3]\n --- /workspace/ttnn/ttnn/_ttnn.so(+0x3ca9dd) [0x7d6d867ca9dd]\n --- python(_PyObject_Call_Prepend+0x116) [0x572"
+}

@@ -1,0 +1,39 @@
+{
+  "source_sha256": {
+    "models/autoports/qwen_qwen3_8_27b/tt/precision.py": "149e7d6556d72345eabc64e60c37fbcc755df9307177d16e367790f5697f3662",
+    "models/autoports/qwen_qwen3_8_27b/tt/lm_head.py": "53140434152bd7b3d9b387cc2bd4968697c32fb5fa03963e8f89c75c0df90c8e",
+    "models/autoports/qwen_qwen3_8_27b/tt/generator.py": "6cfca2c02aae45abcfc377aa586d7d1745061a031c63cfa0a62e9a33ca70fc04",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_prefill.py": "80de6c24646acd943025cadab48cc70b3fc93e3c83c4d2716c1c2c81df1a18bd",
+    "models/autoports/qwen_qwen3_8_27b/tt/decode_workspace.py": "bdf291c2e95e6f31a0842076a5a3176989c675035aa460a8bfb572490c4f3d80",
+    "models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py": "a50bd33ce6001933a41829e236ef61fe5da6133c539aadc7e87d5b1068c86a1c",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decode.py": "aaabf3a36c6029bdfbc97ce1342ed3931cd4da729f6a4939dc789ce5db193038",
+    "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": "c81169d020ebcd4f15d539e3d6167f3b42f303814a77fcf692a081229f5f2a8f",
+    "models/autoports/qwen_qwen3_8_27b/tt/sampling_ccl.py": "1c652512bb91cec3692d95211c49808fbe1553173155365bf3c73d4414421694",
+    "models/autoports/qwen_qwen3_8_27b/tt/model.py": "76fd9fa5b8eeef2b4d5f9929578e6925920f9e2234ef4501f9b3c3c98b65afcc",
+    "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py": "41ba2e2fec65d6c5bb7503a6ff1ca7a905a8164f349eb8ef9d8a399dccdefc6e",
+    "models/autoports/qwen_qwen3_8_27b/tt/fp32_recurrence.py": "ed602a0203895c94f7747e8d2c5b5ccd989d11bae713796ebd3b9254c676da77",
+    "models/autoports/qwen_qwen3_8_27b/tt/functional_decoder.py": "a0aa08c6d5dbd5296b57e602832b6c06e4cb1971f4c9b09eec783165e66768f9",
+    "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp": "be0d9ed714cfd13cb8129985fe8f9a5a2b92cdbe184587cc38b6c545d72ba54c"
+  },
+  "runtime_build": {
+    "cpp_library": "/workspace/build_Release/lib/_ttnncpp.so",
+    "cpp_library_sha256": "aca153162839c6b5134ac9b446dd32d1574441a9c58fd6bc9a6ffceec17028d4",
+    "build_provenance": "rotary_build_provenance.json"
+  },
+  "runner_prompt_fix": "readiness_preserve_prompt.patch preserves trailing HF chat-template newline; comparators unchanged",
+  "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+  "reference_sha256": "e16f1192147d682eaa91d1957e5d5e39a981dcde106b6364b2255f8cc7d8aa1f",
+  "runner_adapter": "Factory borrows one real all-layer generator; autoregressive HF control is the fresh exact-token100-step reference",
+  "tracking": true,
+  "skip_program_cache": false,
+  "counters": {
+    "model_replays": 579,
+    "sampling_replays": 584,
+    "token_refreshes": 100,
+    "position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "readbacks": 137,
+    "captures": 3,
+    "host_copies_total": 5406
+  }
+}

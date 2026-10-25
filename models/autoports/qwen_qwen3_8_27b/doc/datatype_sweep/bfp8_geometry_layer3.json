@@ -1,0 +1,130 @@
+{
+  "layer": 3,
+  "scope": "Reduced real-weight projection geometry check; not full-model performance",
+  "rows": [
+    {
+      "role": "mix",
+      "variant": "block10",
+      "traced_host_us": 91.42894297838211,
+      "pcc_same_dtype": 0.9999999999999998,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 10,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    },
+    {
+      "role": "mix",
+      "variant": "readers2",
+      "traced_host_us": 86.94917894899845,
+      "pcc_same_dtype": 0.9999043408665736,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4,
+        "weight_pad_readers": 2
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    },
+    {
+      "role": "mix",
+      "variant": "readers2",
+      "traced_host_us": 86.47523820400238,
+      "pcc_same_dtype": 0.9999043408665736,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 20,
+        "readers": 2,
+        "prefill_block": 4,
+        "weight_pad_readers": 2
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    },
+    {
+      "role": "mix",
+      "variant": "block10",
+      "traced_host_us": 88.79889734089375,
+      "pcc_same_dtype": 0.9999999999999998,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 10,
+        "readers": 1,
+        "prefill_block": 4,
+        "weight_pad_readers": 2
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    },
+    {
+      "role": "down",
+      "variant": "block10",
+      "traced_host_us": 93.84158067405224,
+      "pcc_same_dtype": 1.0,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    },
+    {
+      "role": "down",
+      "variant": "readers2",
+      "traced_host_us": 139.86873906105757,
+      "pcc_same_dtype": 1.0,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    },
+    {
+      "role": "down",
+      "variant": "readers2",
+      "traced_host_us": 151.9548799842596,
+      "pcc_same_dtype": 1.0,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    },
+    {
+      "role": "down",
+      "variant": "block10",
+      "traced_host_us": 100.76341684907675,
+      "pcc_same_dtype": 1.0,
+      "exact_replay": true,
+      "policy": {
+        "cores": 8,
+        "block": 17,
+        "readers": 2,
+        "prefill_block": 4
+      },
+      "weight_dtype": "DataType.BFLOAT8_B",
+      "fidelity": "LoFi"
+    }
+  ]
+}

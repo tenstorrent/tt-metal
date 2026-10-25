@@ -1,0 +1,12 @@
+{
+  "kind": "quality_rejection",
+  "case": "structured",
+  "reason": "No exact final JSON within shared128-token budget",
+  "expected": {
+    "alice_apples": 4,
+    "bob_apples": 3
+  },
+  "parsed": null,
+  "hf_control": "doc/optimized_full_model/qualitative/structured_hf.json",
+  "previous_control": "doc/datatype_sweep/baseline/qualitative/structured_tt.json"
+}

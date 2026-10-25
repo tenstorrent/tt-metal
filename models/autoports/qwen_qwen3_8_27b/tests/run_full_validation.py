@@ -29,6 +29,7 @@ parser=argparse.ArgumentParser()
 parser.add_argument('--output-dir',default='models/autoports/qwen_qwen3_8_27b/doc/full_model')
 parser.add_argument('--buffered-output',action='store_true')
 parser.add_argument('--long-cases',action='store_true',help='Run three long closure cases on the same default generator')
+parser.add_argument('--precision-long-cases',help='Additional prompt-correct cases for precision selection, with actual kernel-argument evidence')
 args=parser.parse_args()
 
 torch.set_num_threads(8)
@@ -40,7 +41,15 @@ reference=load_reference(reference_path)
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
 mesh=ttnn.open_mesh_device(ttnn.MeshShape(1,4),trace_region_size=0)
 try:
-    gen=build_generator(root,mesh,context_length=262144)
+    if args.precision_long_cases:
+        from .run_datatype_candidate import capture_precision_calls
+        precision_runtime={}
+        with capture_precision_calls(precision_runtime):
+            gen=build_generator(root,mesh,context_length=262144)
+        precision_runtime['config']=gen.model.precision_config
+        (out/'precision_runtime.json').write_text(json.dumps(precision_runtime,indent=2)+'\n')
+    else:
+        gen=build_generator(root,mesh,context_length=262144)
     print('FULL_READY',flush=True)
     provenance={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in [*(root/'tt').glob('*.py'),Path('ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp')]}
     with shared_factory(prefill,gen):
@@ -54,7 +63,7 @@ try:
     (out/'teacher_forcing_performance.json').write_text(json.dumps(gen.last_generation_metrics,indent=2)+'\n')
     for rows in (pre,dec):
         for row in rows:
-            assert row['top5']>=.98 and row['top100']==1.0,row
+            assert row['top1']>=.90 and row['top5']>=.98 and row['top100']==1.0,row
     entry=reference.entries[0]
     prompt_file=out/'aime24_rendered_prompt.txt';prompt_file.write_text(entry.prompt_text)
     def hf_control(*,hf_model_id,prompt_token_ids,max_new_tokens,device):
@@ -82,6 +91,54 @@ try:
         (out/'qualitative').mkdir(exist_ok=True)
         (out/'qualitative'/(item['id']+'_tt.json')).write_text(json.dumps(record,indent=2)+'\n')
         print('QUALITATIVE',item['id'],record['completion'],flush=True)
+        if args.precision_long_cases and item['id']=='structured':
+            final=record['completion'].split('</think>',1)[1] if '</think>' in record['completion'] else ''
+            for eos in gen.eos_token_ids:
+                final=final.replace(gen.tokenizer.decode([eos],skip_special_tokens=False),'')
+            try: parsed=json.loads(final.strip())
+            except (ValueError,TypeError): parsed=None
+            if parsed!={'alice_apples':4,'bob_apples':3}:
+                (out/'quality_gate_failure.json').write_text(json.dumps(dict(kind='quality_rejection',
+                    case='structured',reason='No exact final JSON within shared128-token budget',
+                    expected={'alice_apples':4,'bob_apples':3},parsed=parsed,
+                    hf_control='doc/optimized_full_model/qualitative/structured_hf.json',
+                    previous_control='doc/datatype_sweep/baseline/qualitative/structured_tt.json'),indent=2)+'\n')
+                raise AssertionError('Precision quality gate: structured final JSON absent/incorrect at128')
+    if args.precision_long_cases:
+        cases=json.loads(Path(args.precision_long_cases).read_text())
+        assert hashlib.sha256(gen.tokenizer.get_chat_template().encode()).hexdigest()==cases['chat_template_sha256']
+        rows=[]
+        trace_ids=[str(gen.model_trace),str(gen.sample_trace),str(gen.buffered_sample_trace)]
+        captures=gen.counters['captures']
+        for case in cases['cases']:
+            prompt=gen.tokenizer.apply_chat_template(case['messages'],tokenize=True,add_generation_prompt=True,
+                enable_thinking=case['enable_thinking'],return_dict=False)
+            assert prompt==case['input_tokens'] and len(prompt)==case['target_tokens']
+            tokens=gen.generate(prompt,1024,stop_on_eos=True)
+            text=gen.tokenizer.decode(tokens,skip_special_tokens=False)
+            plain=gen.tokenizer.decode(tokens,skip_special_tokens=True).strip()
+            row=dict(name=case['name'],input_tokens=len(prompt),input_sha256=case['input_sha256'],
+                     generated_tokens=tokens,completion=text,output_tokens=len(tokens),
+                     eos_terminated=bool(tokens) and tokens[-1] in gen.eos_token_ids)
+            if case['expected_facts'] is not None:
+                try:parsed=json.loads(plain)
+                except (ValueError,TypeError):parsed=None
+                row.update(parsed_json=parsed,expected_facts=case['expected_facts'],facts_exact=parsed==case['expected_facts'])
+            rows.append(row)
+            (out/'precision_long_quality.json').write_text(json.dumps(dict(cases=rows,
+                source=args.precision_long_cases,trace_ids=trace_ids,captures=captures),indent=2)+'\n')
+            if case['expected_facts'] is None and case['enable_thinking'] and (
+                '</think>' not in text or not text.split('</think>',1)[1].strip()):
+                (out/'quality_gate_failure.json').write_text(json.dumps(dict(kind='quality_rejection',
+                    case=case['name'],reason='No final-answer text within shared1024-token budget',
+                    hf_control='doc/full_model/benchmark_hf_control_512.json' if case['target_tokens']==4096 else 'doc/optimized_full_model/long_quality_cases_hf.json',
+                    previous_control='doc/optimized_full_model/default_long_quality_cases.json'),indent=2)+'\n')
+                raise AssertionError('Precision quality gate: long reply never reaches final answer')
+            assert trace_ids==[str(gen.model_trace),str(gen.sample_trace),str(gen.buffered_sample_trace)]
+            assert captures==gen.counters['captures']
+            if case['expected_facts'] is not None:
+                assert row['facts_exact'] and row['eos_terminated'],row
+            print('PRECISION_LONG_COMPLETION',case['name'],text,flush=True)
     if args.long_cases:
         case_path=root/'doc/full_model/long_quality_cases.json'
         cases=json.loads(case_path.read_text())

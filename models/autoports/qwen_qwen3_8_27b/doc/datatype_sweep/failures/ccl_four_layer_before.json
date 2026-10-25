@@ -1,0 +1,7 @@
+{
+  "scope": "Reduced real layers0/1/2/3, full head and request owner; runtime/trace check only",
+  "status": "runtime_failure",
+  "config": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/decode_ccl_bf16.json",
+  "error_type": "RuntimeError",
+  "error": "TT_THROW @ /workspace/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3096: tt::exception\ninfo:\nStatically allocated dataflow buffers in program 616 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 833152 and static dataflow buffer region ends at 852608\nbacktrace:\n --- /workspace/ttnn/ttnn/../../build/lib/libtt_metal.so(+0xad8fc3) [0x7a62226d8fc3]\n --- tt::tt_metal::detail::ProgramImpl::validate_dataflow_buffer_region(tt::tt_metal::IDevice const*)\n --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)\n --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)\n --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)\n --- /workspace/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapter"
+}

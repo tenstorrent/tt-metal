@@ -1,0 +1,27 @@
+{
+  "status": "fail_quality",
+  "config_id": "head_bfp4_lofi",
+  "case": "benchmark_question_4096",
+  "input_sha256": "ec5606540969599d781d96ad892b0cded3f605d8f000669886cfaad9411899e2",
+  "rule": "Open-ended thinking-enabled reply must reach coherent final-answer text within the shared1024-token TT budget; factual cases must return exact JSON and EOS. Do not extend only a failing candidate budget.",
+  "tt": {
+    "artifact": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/quality_candidates/head_bfp4_lofi/precision_long_quality.json",
+    "output_tokens": 1024,
+    "thinking_closed": false,
+    "eos": false
+  },
+  "previous_tt": {
+    "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/default_long_quality_cases.json",
+    "output_tokens": 1024,
+    "thinking_closed": true,
+    "thinking_end_character": 4750
+  },
+  "hf": {
+    "artifact": "models/autoports/qwen_qwen3_8_27b/doc/full_model/benchmark_hf_control_512.json",
+    "output_tokens": 512,
+    "thinking_closed": true,
+    "thinking_end_character": 1148,
+    "max_new_tokens": 512
+  },
+  "interpretation": "Low-precision head keeps revising its response plan and provides no final answer at cap. Both exact-prompt controls reach answer text. Readiness and factual retrieval pass; free-running budget regression rejects this policy."
+}

@@ -8,6 +8,7 @@ from safetensors import safe_open
 from transformers import AutoConfig
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
 from .multichip_decoder import MultichipDecoder
+from .precision import load_precision, decoder_policy
 
 
 class Checkpoint:
@@ -29,10 +30,13 @@ class Checkpoint:
 
 
 class Model:
-    def __init__(self, checkpoint, mesh_device, *, layer_indices=None):
+    def __init__(self, checkpoint, mesh_device, *, layer_indices=None, precision_config=None):
         self.mesh = mesh_device
+        self.precision_config = load_precision(precision_config)
         self.checkpoint = Checkpoint(checkpoint)
         self.config = AutoConfig.from_pretrained(checkpoint).text_config
+        if self.config.max_position_embeddings != self.precision_config['max_context']:
+            raise ValueError('Checkpoint context differs from the precision capability contract')
         self.layer_indices = list(range(self.config.num_hidden_layers)) if layer_indices is None else list(layer_indices)
         self.layers = []
         for i in self.layer_indices:
@@ -41,11 +45,16 @@ class Model:
             print(f'LOAD_LAYER {i}', flush=True)
             self.layers.append(MultichipDecoder.from_state_dict(weights, hf_config=self.config,
                 layer_idx=i, mesh_device=mesh_device,
+                policy=decoder_policy(self.precision_config, i),
                 ccl_workspace=self.layers[0].ar_workspace if self.layers else None))
         self.embedding = self.put(self.checkpoint.tensor('model.language_model.embed_tokens.weight'), shard=1,
                                   layout=ttnn.ROW_MAJOR_LAYOUT)
         head_key = 'model.language_model.embed_tokens.weight' if self.config.tie_word_embeddings else 'lm_head.weight'
-        self.head = self.put(self.checkpoint.tensor(head_key).T.contiguous(), shard=1)
+        self.head = self.put(self.checkpoint.tensor(head_key).T.contiguous(), shard=1,
+                             dtype=getattr(ttnn, self.precision_config['weight_groups']['head']))
+        self.head_ckc = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=getattr(ttnn.MathFidelity, self.precision_config['compute_fidelities']['head']),
+            math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=True)
         self.final_norm = self.put(1 + self.checkpoint.tensor('model.language_model.norm.weight').float())
         # Precomputed text-only MRoPE: the three position axes are identical.
         rope = Qwen3_5TextRotaryEmbedding(self.config)
@@ -84,7 +93,7 @@ class Model:
         hidden = ttnn.to_memory_config(hidden, ttnn.DRAM_MEMORY_CONFIG)
         hidden = ttnn.rms_norm(hidden, weight=self.final_norm, epsilon=self.config.rms_norm_eps,
                               compute_kernel_config=self.layers[0].ckc)
-        return ttnn.linear(hidden, self.head, compute_kernel_config=self.layers[0].ckc,
+        return ttnn.linear(hidden, self.head, compute_kernel_config=self.head_ckc, dtype=ttnn.bfloat16,
                            memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     def prefill_forward(self, tokens, *, positions, kv_cache, page_table, batch, length, start_position=0, logits_to_keep=None,

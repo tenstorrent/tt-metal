@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 import ttnn
 from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
-from models.autoports.qwen_qwen3_8_27b.tests.full_model_evidence import inventory,request_inventory,runtime_build
+from models.autoports.qwen_qwen3_8_27b.tests.full_model_evidence import inventory,request_inventory,runtime_build,tensor_bytes
 
 p=argparse.ArgumentParser()
 p.add_argument('--buffered-output',action=argparse.BooleanOptionalAction,default=True)
@@ -25,6 +25,7 @@ p.add_argument('--memory-audit',action='store_true')
 p.add_argument('--eos-control',action='store_true')
 p.add_argument('--qualitative-control-tokens',type=int,default=0)
 p.add_argument('--teacher-forcing-control',action='store_true')
+p.add_argument('--precision-evidence',action='store_true',help='Capture actual kernel dtype/fidelity arguments during untimed preparation only')
 a=p.parse_args()
 if a.teacher_forcing_control and a.batch!=1:
     p.error('--teacher-forcing-control requires batch1')
@@ -43,8 +44,27 @@ try:
     before=memory()
     weight_inventory=inventory(gen.model)
     request_buffers=request_inventory(gen)
-    gen.prepare_decode()
+    cache_inventory=[dict(layer=layer.layer_idx,field=field,**tensor_bytes(getattr(state,field)))
+        for layer,state in zip(gen.model.layers,gen.kv_cache)
+        for field in ('key','value','conv','recurrent') if hasattr(state,field)]
+    precision_calls={}
+    if a.precision_evidence:
+        from .run_datatype_candidate import capture_precision_calls
+        with capture_precision_calls(precision_calls):
+            gen.prepare_decode()
+    else:
+        gen.prepare_decode()
     after=memory()
+    owner=gen.model.layers[0].ar_workspace
+    precision_runtime=dict(
+        compute=[dict(layer=layer.layer_idx,norm=str(layer.ckc.math_fidelity),
+                      sdpa=str(layer.sdpa_ckc.math_fidelity),
+                      prefill_sdpa=str(layer.ckc.math_fidelity),
+                      fused_prefill=str(layer.matmul_ckc.math_fidelity)) for layer in gen.model.layers],
+        decode_ccl_dtype=str(owner.dtype),
+        prefill_ccl_dtypes=sorted({str(t.dtype) for pair in owner.prefill_rs_buffers.values() for t in pair}),
+        native_ccl_dtypes=sorted({str(t.dtype) for pair in owner.native_rs_buffers.get(a.batch,{}).values() for t in pair}),
+        sampling_dtypes={name:str(getattr(gen,name).dtype) for name in ('p','temp','tokens','output_history')})
     words=gen.tokenizer.encode('The research team records each observation carefully and checks the evidence before drawing conclusions. ',add_special_tokens=False)
     def make_prompt(length):
         body_length=max(1,length-48)
@@ -62,6 +82,10 @@ try:
         diagnostics={key:os.environ.get(key) for key in ('TT_METAL_WATCHER','TT_METAL_WATCHER_DEBUG_DELAY','TT_METAL_DEVICE_PROFILER','TT_METAL_TRACE_ALLOC_TRACEBACKS')},
         weight_inventory=weight_inventory,request_buffers=request_buffers,memory_before_preparation=before,memory_after_preparation=after,
         preparation_memory=getattr(gen,"last_preparation_memory",None),records=records,
+        precision_config=gen.model.precision_config,
+        cache_inventory=cache_inventory,
+        prepared_kernel_precision_calls=precision_calls.get('prepared_kernel_precision_calls'),
+        precision_runtime=precision_runtime,
         source_sha256=source_hashes,runtime_build=runtime_build())
     for length in a.lengths:
         prompt=make_prompt(length)

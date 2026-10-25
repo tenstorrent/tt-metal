@@ -1,0 +1,35 @@
+{
+  "status": "complete",
+  "rejected": {
+    "head_bfp4_lofi": {
+      "reason": "benchmark_question_4096 stays in thinking through1024; same-prompt HF512 and prior TT1024 reach final-answer text. Factual retrieval and readiness pass.",
+      "evidence": "quality_candidates/head_bfp4_lofi/precision_long_quality.json"
+    },
+    "head_bfp4_hifi2_kv_bfp4": {
+      "reason": "Shared structured prompt has no final JSON by128 tokens; same-prompt HF and baseline return exact4/3 counts at that cap. Long narratives and factual retrieval pass.",
+      "evidence": "quality_candidates/head_bfp4_hifi2_kv_bfp4/verdict.json"
+    },
+    "head_bfp4_lofi_kv_bfp4": {
+      "reason": "Shared structured prompt has no final JSON within128 tokens; exact-prompt HF and baseline produce4/3 JSON within that budget.",
+      "evidence": "quality_candidates/head_bfp4_lofi_kv_bfp4/quality_gate_failure.json"
+    },
+    "head_bfp4_hifi2": {
+      "reason": "Long narrative never reaches final-answer text within1024 tokens; same-prompt HF512 and prior TT1024 reach final-answer text. Shared structured output passes.",
+      "evidence": "quality_candidates/head_bfp4_hifi2/quality_gate_failure.json"
+    },
+    "head_bfp8_lofi": {
+      "reason": "Structured128 output begins correct JSON but truncates before completion; exact-prompt HF and baseline complete JSON within128.",
+      "evidence": "quality_candidates/head_bfp8_lofi/quality_gate_failure.json"
+    }
+  },
+  "candidate": "head_bfp8_hifi2",
+  "selected_config": "head_bfp8_hifi2",
+  "evidence": [
+    "precision_propagation_check.json",
+    "memory_capacity_plan.json",
+    "performance.json",
+    "final_checks.json",
+    "qualitative_verdict.md"
+  ],
+  "review": "stage_review.md:clean-pass"
+}

@@ -1,0 +1,139 @@
+{
+  "scope": "Real recorded layer3 numerical/replay checks; not full-model accuracy/performance",
+  "threshold": 0.995,
+  "status": "pass",
+  "cases": [
+    {
+      "evidence": "kv_bf16_native_s4095.json",
+      "batch": 1,
+      "prompt": 4095,
+      "capacity": 262144,
+      "minimum_pcc": 0.9993882552008889,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": false
+    },
+    {
+      "evidence": "kv_bf16_native_s1.json",
+      "batch": 1,
+      "prompt": 1,
+      "capacity": 262144,
+      "minimum_pcc": 0.9998004976544916,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": false
+    },
+    {
+      "evidence": "kv_bf16_native_s4096.json",
+      "batch": 1,
+      "prompt": 4096,
+      "capacity": 262144,
+      "minimum_pcc": 0.999388232008363,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": false
+    },
+    {
+      "evidence": "kv_bf16_native_s4097.json",
+      "batch": 1,
+      "prompt": 4097,
+      "capacity": 262144,
+      "minimum_pcc": 0.99938813361729,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": false
+    },
+    {
+      "evidence": "kv_bf16_native_s33.json",
+      "batch": 1,
+      "prompt": 33,
+      "capacity": 262144,
+      "minimum_pcc": 0.9995065528031434,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": false
+    },
+    {
+      "evidence": "kv_bf16_native_s255.json",
+      "batch": 1,
+      "prompt": 255,
+      "capacity": 262144,
+      "minimum_pcc": 0.999424923646064,
+      "chunks": [
+        128
+      ],
+      "page_remap": true,
+      "ragged": false
+    },
+    {
+      "evidence": "kv_bf16_native_s127.json",
+      "batch": 1,
+      "prompt": 127,
+      "capacity": 262144,
+      "minimum_pcc": 0.9994420457988146,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": false
+    },
+    {
+      "evidence": "kv_bf16_b8.json",
+      "batch": 8,
+      "prompt": 33,
+      "capacity": 32768,
+      "minimum_pcc": 0.9994618606086667,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": true
+    },
+    {
+      "evidence": "kv_bf16_b4.json",
+      "batch": 4,
+      "prompt": 33,
+      "capacity": 32768,
+      "minimum_pcc": 0.9994662586911177,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": true
+    },
+    {
+      "evidence": "kv_bf16_b16.json",
+      "batch": 16,
+      "prompt": 33,
+      "capacity": 32768,
+      "minimum_pcc": 0.9994580440126092,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": true
+    },
+    {
+      "evidence": "kv_bf16_b32.json",
+      "batch": 32,
+      "prompt": 33,
+      "capacity": 32768,
+      "minimum_pcc": 0.9994854724187315,
+      "chunks": [
+        128
+      ],
+      "page_remap": false,
+      "ragged": true
+    }
+  ]
+}

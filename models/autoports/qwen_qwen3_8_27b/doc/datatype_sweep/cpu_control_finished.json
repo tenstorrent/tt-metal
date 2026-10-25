@@ -1,0 +1,8 @@
+{
+  "status": "complete",
+  "exit_code": 0,
+  "process": "CPU-only HF32769 control; docker exec process confirmed exited",
+  "confirmed_exit_utc": "2026-10-25T06:48:01.461832+00:00",
+  "evidence": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/agent_long_hf.json",
+  "sha256": "1fd11f9926efca5921ae93b07d5b191eeaf2c8f2403739e628e4bec023a44e9c"
+}

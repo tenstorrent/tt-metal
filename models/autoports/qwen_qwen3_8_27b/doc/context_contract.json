@@ -5,7 +5,7 @@
   "largest_tested_prefill_context": 262144,
   "largest_tested_decode_context": 262144,
   "capability_reduction": null,
-  "status": "full_model_native_context_and_recorded_batch_pairs_verified",
+  "status": "datatype_sweep_selected_native_context_verified",
   "layer_types": [
     "linear_attention",
     "full_attention"
@@ -28,7 +28,7 @@
       "nonaligned_prefill_context": 262142
     }
   },
-  "comparison_scope": "All TT outputs computed; long HF reference compares final128 outputs using entire prefix. Decode compares all outputs at positions262142 and262143.",
+  "comparison_scope": "Selected precision all64-layer native capacity/finite checks; AIME24 readiness accuracy is separately measured at203 input tokens.",
   "stage_evidence": {
     "02-fused-decoder": {
       "supported_context": 262144,
@@ -1071,6 +1071,19 @@
         "optimized_full_model/benchmark_b16_perf.json",
         "optimized_full_model/benchmark_b32_perf.json"
       ]
+    },
+    "08-datatype-sweep": {
+      "selected_config": "head_bfp8_hifi2",
+      "kv_dtype": "bfloat8_b",
+      "supported_context": 262144,
+      "largest_tested_prefill_context": 262144,
+      "largest_tested_decode_context": 262144,
+      "kv_bytes_per_token_per_device": 8704.0,
+      "nonaligned_prefill": 262141,
+      "capability_reduction": null,
+      "evidence": "datatype_sweep/selected/benchmark_b1_perf.json:context_validation",
+      "memory_evidence": "datatype_sweep/memory_capacity_plan.json",
+      "construction": "tt.precision loads selected_precision_config.json by default; max_context must equal checkpoint262144"
     }
   },
   "stage05_prefill_policy": {
@@ -1136,5 +1149,39 @@
       "bound_basis": "Conservative512MiB scratch allowance for Q/K rotary permutations at B32/S4096, within existing12GiB activation/CCL reserve; not a measured full-stack peak. No new weights/cache/persistent buffers."
     }
   },
-  "largest_tested_context_scope": "Full all64layer B1 native prefill262144, nonaligned262141 plus3tokens, and explicit decode input262143 passed finite/capacity checks. HF accuracy at native context was not measured in this stage; prior per-layer accuracy is separately scoped."
+  "largest_tested_context_scope": "Selected precision all64-layer B1 prefill262144, nonaligned262141 plus3 generated tokens, explicit decode input262143; finite and capacity verified, no native-context HF accuracy claim.",
+  "precision_candidate_evidence": {
+    "head_bfp4_hifi2_kv_bfp4": {
+      "kv_dtype": "bfloat4_b",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "kv_bytes_per_token_per_device": 4608,
+      "native_kv_payload_bytes_per_device": 1207959552,
+      "target32x32768_kv_payload_bytes_per_device": 4831838208,
+      "basis": "Derived tiled payload:16 full-attention layers, K/V, one local KV head, D256, BF4 tile576 bytes per1024 values. Full64 native-sized allocation/preparation passed in candidate result; final selected-context/token-out ledger still pending.",
+      "evidence": "datatype_sweep/results/head_bfp4_hifi2_kv_bfp4.json",
+      "quality_status": "rejected"
+    },
+    "head_bfp4_lofi_kv_bfp4": {
+      "kv_dtype": "bfloat4_b",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "kv_bytes_per_token_per_device": 4608,
+      "native_kv_payload_bytes_per_device": 1207959552,
+      "target32x32768_kv_payload_bytes_per_device": 4831838208,
+      "basis": "Derived tiled payload:16 full-attention layers, K/V, one local KV head, D256, BF4 tile576 bytes per1024 values. Full64 native-sized allocation/preparation passed in candidate result; final selected-context/token-out ledger still pending.",
+      "evidence": "datatype_sweep/results/head_bfp4_lofi_kv_bfp4.json",
+      "quality_status": "rejected"
+    },
+    "head_bfp8_hifi2": {
+      "kv_dtype": "bfloat8_b",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "kv_bytes_per_token_per_device": 8704.0,
+      "native_kv_payload_bytes_per_device": 2281701376,
+      "quality_status": "passed",
+      "memory_status": "passed",
+      "evidence": "datatype_sweep/memory_capacity_plan.json"
+    }
+  }
 }

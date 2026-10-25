@@ -1,0 +1,12 @@
+[
+  {
+    "top1": 0.95,
+    "top5": 1.0,
+    "top100": 1.0,
+    "matches_top1": 95,
+    "matches_top5": 100,
+    "matches_top100": 100,
+    "total": 100,
+    "k": 100
+  }
+]

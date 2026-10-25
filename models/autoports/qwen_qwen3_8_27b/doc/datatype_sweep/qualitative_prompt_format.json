@@ -1,0 +1,41 @@
+{
+  "hf_model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "tokenizer": "Qwen2Tokenizer",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering": "AutoTokenizer.apply_chat_template(messages,tokenize=False,add_generation_prompt=True); encode without added special tokens",
+  "prompt_source": "../qualitative_prompts.json",
+  "generation": {
+    "do_sample": false,
+    "max_new_tokens": 128,
+    "tt_stop_on_eos": true,
+    "eos_ids": [
+      248046,
+      248044
+    ],
+    "eos_source": "Exact full checkpoint generation_config.json; both248046 and248044 are EOS. Reduced probe checkpoint has a different stop configuration.",
+    "output_window_steps": 16
+  },
+  "hf_control": "../optimized_full_model/qualitative/*_hf.json",
+  "tt_outputs": "selected_validation/qualitative/*_tt.json",
+  "main_reference": "../../readiness_aime24_chat.refpt.json",
+  "limitation": "Bounded128-token controls; explanation/code answers truncate in HF as well as TT.",
+  "hf_control_provenance": "../optimized_full_model/hf_control_provenance.json",
+  "stage": "08-datatype-sweep",
+  "long_prompt_source": "combined_long_cases.json",
+  "long_tt_outputs": "selected_validation/precision_long_quality.json",
+  "long_hf_controls": [
+    "../full_model/benchmark_hf_control_512.json",
+    "../optimized_full_model/long_quality_cases_hf.json",
+    "agent_long_hf.json"
+  ],
+  "long_generation": {
+    "do_sample": false,
+    "max_new_tokens": 1024,
+    "tt_stop_on_eos": true,
+    "enable_thinking": "Per-case value stored with exact rendered/tokenized input; narratives true, factual extraction false",
+    "hf_caps": "512 for narrative/record controls; see agent_long_hf.json for32769-token case"
+  },
+  "selection_status": "head_bfp8_hifi2_quality_passed"
+}

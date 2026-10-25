@@ -1,0 +1,7 @@
+{
+  "kind": "quality_rejection",
+  "case": "benchmark_question_4096",
+  "reason": "No final-answer text within shared1024-token budget",
+  "hf_control": "doc/full_model/benchmark_hf_control_512.json",
+  "previous_control": "doc/optimized_full_model/default_long_quality_cases.json"
+}

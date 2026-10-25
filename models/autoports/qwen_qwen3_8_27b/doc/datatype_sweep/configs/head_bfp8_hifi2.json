@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "config_id": "head_bfp8_hifi2",
+  "weight_groups": {
+    "attention": "bfloat4_b",
+    "mlp": "bfloat4_b",
+    "down": "bfloat4_b",
+    "embedding": "bfloat16",
+    "head": "bfloat8_b",
+    "norm": "bfloat16"
+  },
+  "layer_exceptions": {},
+  "compute_fidelities": {
+    "projection": "LoFi",
+    "fused_prefill": "LoFi",
+    "fused_decode": "LoFi",
+    "sdpa": "LoFi",
+    "head": "HiFi2",
+    "norm": "HiFi4"
+  },
+  "activation_dtype": {
+    "prefill_column": "bfloat8_b",
+    "ordinary_attention": "bfloat16",
+    "ordinary_mlp": "bfloat16",
+    "fused_row": "bfloat16"
+  },
+  "residual_dtype": "bfloat16",
+  "ccl_dtype": {
+    "decode_b1": "bfloat8_b",
+    "prefill": "bfloat8_b",
+    "native_batched": "bfloat16"
+  },
+  "kv_cache_dtype": "bfloat8_b",
+  "logits_sampling": {
+    "logits": "bfloat16",
+    "sampling": "bfloat16",
+    "token_ids": "uint32"
+  },
+  "recurrent_state_dtype": "float32",
+  "max_context": 262144
+}
