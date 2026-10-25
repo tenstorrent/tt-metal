@@ -587,7 +587,8 @@ void kernel_main() {
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]),
         (K_num_blocks > 1),
         (subblock_w > subblock_h ? subblock_w : subblock_h),
-        (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0)>();
+        (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
+        (subblock_w < subblock_h ? subblock_w : subblock_h)>();
     constexpr bool mm_forced_r = !mm_main_cell && ckernel::matmul_forced_r_cell_selected<
         MATH_FIDELITY,
         K_block_tiles,

@@ -111,7 +111,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim)):
             return []
         if dest_sync == DestSync.Half and forced_r_cell(
             math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
@@ -398,7 +398,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
                 math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
             ):
                 return [MATMUL_FORM_KEYS(1, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, "R")]
-            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim)):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
