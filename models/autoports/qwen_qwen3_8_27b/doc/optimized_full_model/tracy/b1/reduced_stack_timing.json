@@ -1,0 +1,79 @@
+{
+  "source": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/b1/reports/2026_10_25_04_20_12/ops_perf_results_2026_10_25_04_20_12.csv",
+  "device_header": "ARCH: blackhole, CHIP_FREQ[MHz]: 1350, Max Compute Cores: 120",
+  "clock_mhz": 1350.0,
+  "time_basis": "Maximum complete per-device reduced-stack firmware envelope, all operations and gaps included; per-chip cycles / MHz. Never combine clocks across ASICs.",
+  "ops_csv_sha256": "7e9b17d57edeacaaf9693bb72043e92353d5ed13cc008b49e097edd2b4c29754",
+  "phases": {
+    "prefill": {
+      "device_us": 16073.86,
+      "per_device": {
+        "0": {
+          "first_cycle": 431224570529,
+          "last_cycle": 431246237142,
+          "device_us": 16049.342962962963
+        },
+        "1": {
+          "first_cycle": 431629432188,
+          "last_cycle": 431651124021,
+          "device_us": 16068.024444444445
+        },
+        "2": {
+          "first_cycle": 431224308882,
+          "last_cycle": 431246003927,
+          "device_us": 16070.403703703703
+        },
+        "3": {
+          "first_cycle": 431408498000,
+          "last_cycle": 431430197711,
+          "device_us": 16073.86
+        }
+      },
+      "device_ops": 488,
+      "summed_kernel_us": 58329.349,
+      "trace_ids": [
+        "",
+        "1"
+      ],
+      "trace_replay_sessions": [
+        "",
+        "2"
+      ]
+    },
+    "decode": {
+      "device_us": 3120.0881481481483,
+      "per_device": {
+        "0": {
+          "first_cycle": 434100008662,
+          "last_cycle": 434104219509,
+          "device_us": 3119.145925925926
+        },
+        "1": {
+          "first_cycle": 434504892541,
+          "last_cycle": 434509099013,
+          "device_us": 3115.905185185185
+        },
+        "2": {
+          "first_cycle": 434099801382,
+          "last_cycle": 434104013501,
+          "device_us": 3120.0881481481483
+        },
+        "3": {
+          "first_cycle": 434284005625,
+          "last_cycle": 434288202353,
+          "device_us": 3108.6874074074076
+        }
+      },
+      "device_ops": 568,
+      "summed_kernel_us": 11948.876,
+      "trace_ids": [
+        "0",
+        "2"
+      ],
+      "trace_replay_sessions": [
+        "3"
+      ]
+    }
+  },
+  "scope": "Reduced full-model variant: real layers0/3 plus embedding, terminal and canonical sampler. NOT all64layers or a single-layer measurement."
+}

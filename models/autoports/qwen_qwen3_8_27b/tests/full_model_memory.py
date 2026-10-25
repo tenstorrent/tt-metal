@@ -10,6 +10,7 @@ import ttnn
 
 def allocation_peak(gen, prompt, evidence_path):
     gen.reset()
+    gen.refresh(torch.zeros(1,dtype=torch.int32),gen.output_index)
     ttnn.synchronize_device(gen.mesh)
     before=ttnn.get_memory_view(gen.mesh,ttnn.BufferType.DRAM)
     banks=before.num_banks
@@ -23,10 +24,10 @@ def allocation_peak(gen, prompt, evidence_path):
         gen.refresh(torch.full((gen.batch_size,),len(prompt[0]),dtype=torch.int32),gen.positions)
         gen.refresh(torch.full((gen.batch_size,1),len(prompt[0]),dtype=torch.int32),gen.rope_indices)
         gen._decode()
-        gen._sample(gen.logits)
+        gen._sample_buffered()
         if gen.batch_size>1:
             gen._decode(masked=True)
-            gen._sample(gen.logits)
+            gen._sample_buffered()
         ttnn.synchronize_device(gen.mesh)
     finally:
         graph=ttnn.graph.end_graph_capture()
@@ -60,7 +61,7 @@ def allocation_peak(gen, prompt, evidence_path):
     expected_device=gen.mesh.id()
     assert set(peak)=={expected_device},('Unexpected graph allocator domains',expected_device,peak)
     assert allocator_after-baseline==current[expected_device],('Allocation-event reconciliation failed',baseline,allocator_after,current)
-    return dict(scope='all64layer request reset, eager prefill, all-active/masked decode and common sampler allocation events; not device timing',
+    return dict(scope='all64layer request reset, eager prefill, all-active/masked decode and common sampler plus output collector allocation events; not device timing',
         input_tokens_per_user=len(prompt[0]),batch=gen.batch_size,num_banks=banks,
         baseline_allocated_bytes_per_device=baseline,additional_peak_bytes_by_graph_device=peak,
         peak_allocated_bytes_per_device_upper_bound=baseline+max(peak.values()),
@@ -74,7 +75,7 @@ def allocation_peak(gen, prompt, evidence_path):
 def release_trace_bytes(gen):
     ttnn.synchronize_device(gen.mesh)
     before=ttnn.get_memory_view(gen.mesh,ttnn.BufferType.DRAM)
-    ids=list(gen.decode_traces.values())+[gen.sample_trace]
+    ids=list(gen.decode_traces.values())+[gen.sample_trace,gen.buffered_sample_trace]
     for trace in ids:
         ttnn.release_trace(gen.mesh,trace)
     ttnn.synchronize_device(gen.mesh)

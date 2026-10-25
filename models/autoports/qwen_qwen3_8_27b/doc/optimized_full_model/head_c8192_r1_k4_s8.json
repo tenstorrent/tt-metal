@@ -1,0 +1,26 @@
+{
+  "config": {
+    "batch": 1,
+    "chunk": 8192,
+    "readers": 1,
+    "block": 4,
+    "cores": 8,
+    "output": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/head_c8192_r1_k4_s8.json"
+  },
+  "pcc": 1.0,
+  "argmax_equal": true,
+  "host_trace_us": {
+    "baseline": [
+      1683.8500602170825,
+      1683.2340904511511,
+      1683.5275501944125
+    ],
+    "candidate": [
+      2186.6689692251384,
+      2186.6391180083156,
+      2186.525489669293
+    ]
+  },
+  "scope": "LM-head only, reduced real hidden, BF16/HiFi4 FP32 same precision",
+  "tracking": "0"
+}

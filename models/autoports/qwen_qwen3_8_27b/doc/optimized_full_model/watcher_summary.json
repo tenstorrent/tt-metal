@@ -1,0 +1,29 @@
+{
+  "rows": [
+    {
+      "batch": 1,
+      "cases": 4,
+      "exact": true,
+      "tracking": "1",
+      "skip_program_cache": "0",
+      "watcher": "10",
+      "noinline": "1",
+      "disable_eth": null,
+      "minimum_recorded_stack_free_bytes": 1216,
+      "watcher_log": "watcher_b1/generated/watcher/watcher.log"
+    },
+    {
+      "batch": 32,
+      "cases": 10,
+      "exact": true,
+      "tracking": "1",
+      "skip_program_cache": "0",
+      "watcher": "10",
+      "noinline": "1",
+      "disable_eth": null,
+      "minimum_recorded_stack_free_bytes": 1216,
+      "watcher_log": "watcher_b32/generated/watcher/watcher.log"
+    }
+  ],
+  "initial_failure": "watcher_inline_firmware_size_failure.log; inline instrumentation exceeded Ethernet config; noinline retains checks and fits"
+}

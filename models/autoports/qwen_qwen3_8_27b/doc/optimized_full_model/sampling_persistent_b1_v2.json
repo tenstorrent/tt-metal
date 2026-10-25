@@ -1,0 +1,47 @@
+{
+  "scope": "Reduced real layers0/3 and full terminal; sampler-only host-wall comparison, not full-model performance",
+  "synthetic_vocabulary_boundary_cases": [
+    [
+      7
+    ],
+    [
+      62079
+    ],
+    [
+      62080
+    ],
+    [
+      124160
+    ],
+    [
+      186240
+    ],
+    [
+      248319
+    ]
+  ],
+  "batch": 1,
+  "semantics": "topk path uses k=1,p=0,temp=1; both select a diagnostic global maximum; first-index tie agreement recorded separately",
+  "rows": [
+    {
+      "strategy": "topk_k1",
+      "greedy_tokens": [
+        220
+      ],
+      "matches_first_index_host_argmax": true,
+      "host_wall_us_per_replay": 455.47909499146044,
+      "iterations": 1000
+    },
+    {
+      "strategy": "force_argmax",
+      "greedy_tokens": [
+        220
+      ],
+      "matches_first_index_host_argmax": true,
+      "host_wall_us_per_replay": 1623.2380690053105,
+      "iterations": 1000
+    }
+  ],
+  "fastest": "topk_k1",
+  "tracking": false
+}

@@ -1,0 +1,31 @@
+{
+  "config": {
+    "batch": 1,
+    "chunk": 8192,
+    "readers": 1,
+    "block": 4,
+    "cores": 8,
+    "fidelity": "HiFi2",
+    "generic": true,
+    "grid_x": 11,
+    "grid_y": 10,
+    "subblock": 3,
+    "output": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/head_generic_k4_hifi2.json"
+  },
+  "pcc": 0.9999929666519165,
+  "argmax_equal": true,
+  "host_trace_us": {
+    "baseline": [
+      1683.1748490221798,
+      1683.372629340738,
+      1682.8142595477402
+    ],
+    "candidate": [
+      1678.4938797354698,
+      1678.7007707171142,
+      1678.614211268723
+    ]
+  },
+  "scope": "LM-head only, reduced real hidden, BF16 weights/output and FP32 accumulation; baseline HiFi4, candidate fidelity in config",
+  "tracking": "0"
+}

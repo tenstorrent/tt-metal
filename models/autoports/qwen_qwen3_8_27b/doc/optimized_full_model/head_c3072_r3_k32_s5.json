@@ -1,0 +1,30 @@
+{
+  "config": {
+    "batch": 1,
+    "chunk": 3072,
+    "readers": 3,
+    "block": 32,
+    "cores": 5,
+    "generic": false,
+    "grid_x": 11,
+    "grid_y": 10,
+    "subblock": 3,
+    "output": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/head_c3072_r3_k32_s5.json"
+  },
+  "pcc": 0.9999995231628418,
+  "argmax_equal": true,
+  "host_trace_us": {
+    "baseline": [
+      1682.9755785875022,
+      1683.286470361054,
+      1682.9951107501984
+    ],
+    "candidate": [
+      2467.564009130001,
+      2469.008981715888,
+      2467.968580313027
+    ]
+  },
+  "scope": "LM-head only, reduced real hidden, BF16/HiFi4 FP32 same precision",
+  "tracking": "0"
+}

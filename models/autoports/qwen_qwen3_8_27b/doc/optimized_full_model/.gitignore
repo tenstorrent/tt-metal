@@ -1,0 +1,8 @@
+# Raw profiler captures remain local; compact reports and SHA receipts are committed.
+*.zst
+*.tracy
+**/.logs/
+**/reports/**/profile_log_device.csv
+**/reports/**/ops_perf_results_*.csv
+**/cpp_device_perf_report.csv
+**/ops.csv

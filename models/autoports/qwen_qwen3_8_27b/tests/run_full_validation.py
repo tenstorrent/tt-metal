@@ -26,12 +26,15 @@ def shared_factory(module,generator):
     finally: module._import_build_generator=original
 
 parser=argparse.ArgumentParser()
+parser.add_argument('--output-dir',default='models/autoports/qwen_qwen3_8_27b/doc/full_model')
+parser.add_argument('--buffered-output',action='store_true')
 parser.add_argument('--long-cases',action='store_true',help='Run three long closure cases on the same default generator')
 args=parser.parse_args()
 
 torch.set_num_threads(8)
 root=Path('models/autoports/qwen_qwen3_8_27b')
-out=root/'doc/full_model'
+out=Path(args.output_dir)
+out.mkdir(parents=True,exist_ok=True)
 reference_path=root/'readiness_aime24_chat.refpt'
 reference=load_reference(reference_path)
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
@@ -80,16 +83,16 @@ try:
         (out/'qualitative'/(item['id']+'_tt.json')).write_text(json.dumps(record,indent=2)+'\n')
         print('QUALITATIVE',item['id'],record['completion'],flush=True)
     if args.long_cases:
-        case_path=out/'long_quality_cases.json'
+        case_path=root/'doc/full_model/long_quality_cases.json'
         cases=json.loads(case_path.read_text())
         assert {case['name'] for case in cases['cases']}=={
             'benchmark_question_4096','benchmark_question_4095','distinct_records_4096'}
-        prefix_path=out/'native_prefill_geometry.json'
+        prefix_path=root/'doc/full_model/native_prefill_geometry.json'
         prefix_reference=json.loads(prefix_path.read_text())
         prefix_tokens=prefix_reference['variants']['out']['completion']['tokens']
         assert len(prefix_tokens)>=512
         assert hashlib.sha256(gen.tokenizer.get_chat_template().encode()).hexdigest()==cases['chat_template_sha256']
-        trace_ids=dict(model=str(gen.model_trace),sampling=str(gen.sample_trace))
+        trace_ids=dict(model=str(gen.model_trace),sampling=str(gen.sample_trace),buffered_sampling=str(gen.buffered_sample_trace))
         capture_count=gen.counters['captures']
         long_sources={**provenance,str(Path(__file__)):hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             'models/common/modules/sampling/sampling_1d.py':hashlib.sha256(Path('models/common/modules/sampling/sampling_1d.py').read_bytes()).hexdigest()}
@@ -140,7 +143,7 @@ try:
                     assert row['recorded_first512_exact'],'Default source changed recorded candidate512 trajectory'
                 if case['expected_facts'] is not None:
                     assert row['strict_json'] and row['facts_exact'] and row['eos_terminated'],row
-                assert trace_ids==dict(model=str(gen.model_trace),sampling=str(gen.sample_trace))
+                assert trace_ids==dict(model=str(gen.model_trace),sampling=str(gen.sample_trace),buffered_sampling=str(gen.buffered_sample_trace))
                 assert capture_count==gen.counters['captures']
                 print('DEFAULT_LONG_COMPLETION',case['name'],text,flush=True)
             long_record.update(status='complete',trace_ids_unchanged=True,capture_count_unchanged=True,

@@ -1,0 +1,37 @@
+[
+  {
+    "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/qualitative_prompt_format.json",
+    "copied_to": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative_prompt_format.json",
+    "sha256": "45c28d9999b237a82d2b8ed94c32a820a707b56b760538acfe7565cb1214a5c5",
+    "scope": "Prior prompt metadata augmented with exact full-checkpoint EOS source and16-step EOS collector. Original EOS set was already correct; HF controls remain byte-identical.",
+    "current_sha256": "e872509d07d6b568b73759b9d6ba8ad18899ad39875733a00c6cf2cf033ca083"
+  },
+  {
+    "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/long_quality_cases_hf.json",
+    "copied_to": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/long_quality_cases_hf.json",
+    "sha256": "7e815dcfc8d9758b272d7efd3bcff47fd8ad3acd4da8950027bccdb7bad40505",
+    "scope": "Existing exact-checkpoint HF control reused; no new HF run",
+    "current_sha256": "7e815dcfc8d9758b272d7efd3bcff47fd8ad3acd4da8950027bccdb7bad40505"
+  },
+  {
+    "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/qualitative/code_hf.json",
+    "copied_to": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/code_hf.json",
+    "sha256": "52d42c0b792013457ebc34bd9c458a564425e3254ccebdc99b4a0cc3fc5e195f",
+    "scope": "Existing exact-checkpoint HF control reused; no new HF run",
+    "current_sha256": "52d42c0b792013457ebc34bd9c458a564425e3254ccebdc99b4a0cc3fc5e195f"
+  },
+  {
+    "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/qualitative/explain_hf.json",
+    "copied_to": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/explain_hf.json",
+    "sha256": "9f9e5716bb04a3d7cc5722180c2f03530ecc3d871f3b01f8be62bad7271c5f4c",
+    "scope": "Existing exact-checkpoint HF control reused; no new HF run",
+    "current_sha256": "9f9e5716bb04a3d7cc5722180c2f03530ecc3d871f3b01f8be62bad7271c5f4c"
+  },
+  {
+    "source": "models/autoports/qwen_qwen3_8_27b/doc/full_model/qualitative/structured_hf.json",
+    "copied_to": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/qualitative/structured_hf.json",
+    "sha256": "59406c9f3b8349d277e31612e828ad4f52572cfeb68e23fb47b4fc18d5454a33",
+    "scope": "Existing exact-checkpoint HF control reused; no new HF run",
+    "current_sha256": "59406c9f3b8349d277e31612e828ad4f52572cfeb68e23fb47b4fc18d5454a33"
+  }
+]

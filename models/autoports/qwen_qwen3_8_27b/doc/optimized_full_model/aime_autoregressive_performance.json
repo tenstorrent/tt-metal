@@ -1,0 +1,38 @@
+{
+  "source": "autoregressive",
+  "input_tokens": [
+    203
+  ],
+  "output_tokens": 100,
+  "scheduled_output_tokens": 100,
+  "requested_output_tokens": 100,
+  "output_lengths": [
+    100
+  ],
+  "batch": 1,
+  "concurrency": 1,
+  "ttft_ms": 118.57115291059017,
+  "decode_seconds": 2.776502141961828,
+  "decode_tps_per_user": 35.65637443738773,
+  "steady_state_counters": {
+    "model_replays": 99,
+    "sampling_replays": 99,
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "page_table_refreshes": 0,
+    "readbacks": 7,
+    "captures": 0,
+    "host_copies_total": 6
+  },
+  "inner_loop_host_refreshes": 0,
+  "inner_loop_readbacks": 0,
+  "output_windows": 7,
+  "output_window_steps": 16,
+  "decode_trace": "MeshTraceId(0)",
+  "sampling_trace": "MeshTraceId(2)",
+  "blocking_replay": false,
+  "host_sampling": false,
+  "stop_on_eos": true,
+  "buffered_output": true,
+  "eos_policy": "trim at first EOS; finish current bounded output window before stopping device work"
+}

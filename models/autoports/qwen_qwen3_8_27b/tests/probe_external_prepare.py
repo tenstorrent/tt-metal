@@ -140,7 +140,7 @@ def main():
                 ttnn.release_trace=original_release
             assert injected and ended and all(trace in released for trace in ended)
             preserved('capture_end_failure_preserves_original_cache_map_request_and_rng')
-            assert gen.model_trace is None and gen.sample_trace is None and not gen.decode_traces
+            assert gen.model_trace is None and gen.sample_trace is None and gen.buffered_sample_trace is None and not gen.decode_traces
             assert not gen._warming
             result['capture_boundary_cleanup_errors']=gen.last_preparation_cleanup_errors
             result['checks']['capture_end_failure_retains_original_exception_and_clears_trace_state']=True

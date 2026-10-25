@@ -1,0 +1,26 @@
+{
+  "config": {
+    "batch": 1,
+    "chunk": 6144,
+    "readers": 3,
+    "block": 10,
+    "cores": 16,
+    "output": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/head_c6144_r3_k10_s16.json"
+  },
+  "pcc": 1.0,
+  "argmax_equal": true,
+  "host_trace_us": {
+    "baseline": [
+      1683.0101399682462,
+      1683.2810710184276,
+      1683.4809491410851
+    ],
+    "candidate": [
+      2287.608729675412,
+      2288.5792911984026,
+      2287.926930002868
+    ]
+  },
+  "scope": "LM-head only, reduced real hidden, BF16/HiFi4 FP32 same precision",
+  "tracking": "0"
+}

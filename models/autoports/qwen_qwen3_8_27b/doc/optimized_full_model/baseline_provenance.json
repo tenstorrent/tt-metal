@@ -1,0 +1,23 @@
+{
+  "checkpoint": "6bcbce2d6e2",
+  "references": [
+    {
+      "path": "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/performance.json",
+      "sha256": "6a1e4610b7659b4c5b27e58a84c70bfb9155982528b5b318442a6a6f3679759e"
+    },
+    {
+      "path": "models/autoports/qwen_qwen3_8_27b/doc/full_model/layer_stack_comparison.json",
+      "sha256": "98968e9b05084778f03fd45dc71f878b2561892de9db62ab094328374dd4f3b6"
+    },
+    {
+      "path": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt.json",
+      "sha256": "32126a2cd09121ef1cf37c424693adea1364b4619d2e6ddd362a2dbb81d7295f"
+    },
+    {
+      "path": "models/autoports/qwen_qwen3_8_27b/doc/full_model/rejection_ledger.json",
+      "sha256": "7aafe84107a9bd0a66542e7db132abadbefc8821b094ca5bdb856853d8a19780"
+    }
+  ],
+  "hardware": "four Blackhole p300c ASICs; mesh1x4/ring/two links",
+  "scope": "Inherited baseline and policy artifacts; stage07 results are separate"
+}

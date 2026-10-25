@@ -1,0 +1,149 @@
+{
+  "scope": "Selected fused matmul/RS runtime attributes in reduced real layers0/3",
+  "records": [
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "op_index": 44,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 4,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT8_B",
+      "source": "optimized_full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "0e18132f19fbaf189585e7dcb51a93c24858a0e9aea543a4bc69e9bcc8b79b9a"
+    },
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "op_index": 55,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT8_B",
+      "source": "optimized_full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "0e18132f19fbaf189585e7dcb51a93c24858a0e9aea543a4bc69e9bcc8b79b9a"
+    },
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "op_index": 84,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 4,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT8_B",
+      "source": "optimized_full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "0e18132f19fbaf189585e7dcb51a93c24858a0e9aea543a4bc69e9bcc8b79b9a"
+    },
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "op_index": 95,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT8_B",
+      "source": "optimized_full_model/tracy/b1/prefill_ops.csv",
+      "source_sha256": "0e18132f19fbaf189585e7dcb51a93c24858a0e9aea543a4bc69e9bcc8b79b9a"
+    },
+    {
+      "batch": 1,
+      "phase": "prefill",
+      "operation": "ordinary_BFP4_matmuls",
+      "count": 6,
+      "fidelity": "LoFi",
+      "source": "optimized_full_model/tracy/b1/prefill_ops.csv"
+    },
+    {
+      "batch": 1,
+      "phase": "decode",
+      "operation": "ordinary_BFP4_matmuls",
+      "count": 8,
+      "fidelity": "LoFi",
+      "source": "optimized_full_model/tracy/b1/decode_ops.csv"
+    },
+    {
+      "batch": 1,
+      "phase": "decode",
+      "operation": "terminal_head",
+      "weight_dtype": "BFLOAT16",
+      "fidelity": "HiFi4",
+      "source": "optimized_full_model/tracy/b1/decode_ops.csv"
+    },
+    {
+      "batch": 32,
+      "phase": "prefill",
+      "operation": "ordinary_BFP4_matmuls",
+      "count": 10,
+      "fidelity": "LoFi",
+      "source": "optimized_full_model/tracy/b32/prefill_ops.csv"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "op_index": 149,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 6,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "source": "optimized_full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "f754c3c6ecba724db28c1730497c8a1a01105e0d6f816811f1b5fb8ce8eeedf0"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "op_index": 169,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "source": "optimized_full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "f754c3c6ecba724db28c1730497c8a1a01105e0d6f816811f1b5fb8ce8eeedf0"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "op_index": 227,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 24,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "source": "optimized_full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "f754c3c6ecba724db28c1730497c8a1a01105e0d6f816811f1b5fb8ce8eeedf0"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "op_index": 247,
+      "operation": "MatmulReduceScatterAsyncDeviceOperation",
+      "k_block_tiles": 17,
+      "lofi": true,
+      "weight_dtype": "BFLOAT4_B",
+      "output_dtype": "BFLOAT16",
+      "source": "optimized_full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "f754c3c6ecba724db28c1730497c8a1a01105e0d6f816811f1b5fb8ce8eeedf0"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "operation": "ordinary_BFP4_matmuls",
+      "count": 4,
+      "fidelity": "LoFi",
+      "source": "optimized_full_model/tracy/b32/decode_ops.csv"
+    },
+    {
+      "batch": 32,
+      "phase": "decode",
+      "operation": "terminal_head",
+      "weight_dtype": "BFLOAT16",
+      "fidelity": "HiFi4",
+      "source": "optimized_full_model/tracy/b32/decode_ops.csv"
+    }
+  ]
+}

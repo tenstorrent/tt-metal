@@ -1,0 +1,46 @@
+{
+  "checks": [
+    {
+      "command": [
+        "python",
+        ".codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/runtime/readiness_check/check_degenerate_output.py",
+        "--model-dir",
+        "models/autoports/qwen_qwen3_8_27b",
+        "--missing-artifacts",
+        "critical",
+        "--scope",
+        "autoregressive"
+      ],
+      "exit_code": 0,
+      "log": "check_degenerate_output.log",
+      "classification": "pass"
+    },
+    {
+      "command": [
+        "python",
+        ".codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/scripts/check_context_contract.py",
+        "--model-dir",
+        "models/autoports/qwen_qwen3_8_27b",
+        "--stage",
+        "full-model",
+        "--require-contract"
+      ],
+      "exit_code": 0,
+      "log": "check_context_contract.log",
+      "classification": "pass"
+    },
+    {
+      "command": [
+        "python",
+        ".codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/scripts/check_agentic_serving.py",
+        "--model-dir",
+        "models/autoports/qwen_qwen3_8_27b",
+        "--stage",
+        "full-model"
+      ],
+      "exit_code": 1,
+      "log": "check_agentic_serving.log",
+      "classification": "six inherited accounted weight-representation advisories; no critical findings"
+    }
+  ]
+}

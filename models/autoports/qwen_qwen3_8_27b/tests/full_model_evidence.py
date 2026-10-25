@@ -40,7 +40,7 @@ def inventory(model):
 
 def request_inventory(generator):
     rows=[]
-    for name in ('page_table','tokens','positions','rope_indices','k','p','temp','seeds','prefill_output','active_mask','logits'):
+    for name in ('page_table','tokens','positions','rope_indices','k','p','temp','seeds','prefill_output','active_mask','logits','output_history','output_index'):
         rows.append(dict(name=name,**tensor_bytes(getattr(generator,name))))
     for name in ('_index_offsets','_invalid_vocab_mask','_invalid_vocab_tail_mask','_seeds','_user_ids'):
         tensor=getattr(generator.sampler,name,None)

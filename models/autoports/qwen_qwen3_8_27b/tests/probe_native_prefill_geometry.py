@@ -59,9 +59,9 @@ def main():
         ttnn.experimental.matmul_reduce_scatter_async=count_native
         def retire():
             ttnn.synchronize_device(mesh)
-            for trace in {*gen.decode_traces.values(),gen.sample_trace}:
+            for trace in {*gen.decode_traces.values(),gen.sample_trace,gen.buffered_sample_trace}:
                 if trace is not None:ttnn.release_trace(mesh,trace)
-            gen.decode_traces.clear();gen.model_trace=gen.sample_trace=None;gen.prepared_buckets.clear()
+            gen.decode_traces.clear();gen.model_trace=gen.sample_trace=gen.buffered_sample_trace=None;gen.prepared_buckets.clear()
         def decision():
             forced=[]
             def teacher(step,token):forced.append(hf[step]);return hf[step]
@@ -137,7 +137,7 @@ def main():
         ttnn.experimental.matmul_reduce_scatter_async=original_native
         if gen is not None:
             ttnn.synchronize_device(mesh)
-            for trace in {*gen.decode_traces.values(),gen.sample_trace}:
+            for trace in {*gen.decode_traces.values(),gen.sample_trace,gen.buffered_sample_trace}:
                 if trace is not None:ttnn.release_trace(mesh,trace)
             for view,geometry in original_geometries:view.policy['prefill_rs_geometry']=geometry
         persist();ttnn.close_mesh_device(mesh)

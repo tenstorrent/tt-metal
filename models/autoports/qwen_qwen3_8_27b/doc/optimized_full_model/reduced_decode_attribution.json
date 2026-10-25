@@ -1,0 +1,277 @@
+{
+  "rows": [
+    {
+      "batch": 1,
+      "per_device": {
+        "0": {
+          "embedding_and_rope": {
+            "device_us": 49.68962962962963,
+            "first_op_index": 0,
+            "last_op_index": 6,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 462.27407407407406,
+            "first_op_index": 7,
+            "last_op_index": 73,
+            "first_op": "InterleavedToShardedDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 372.1585185185185,
+            "first_op_index": 74,
+            "last_op_index": 117,
+            "first_op": "LayerNormDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2238.2296296296295,
+            "first_op_index": 118,
+            "last_op_index": 141,
+            "first_op": "ShardedToInterleavedDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        },
+        "1": {
+          "embedding_and_rope": {
+            "device_us": 48.00370370370371,
+            "first_op_index": 0,
+            "last_op_index": 6,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 463.2962962962963,
+            "first_op_index": 7,
+            "last_op_index": 73,
+            "first_op": "InterleavedToShardedDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 372.64666666666665,
+            "first_op_index": 74,
+            "last_op_index": 117,
+            "first_op": "LayerNormDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2234.5866666666666,
+            "first_op_index": 118,
+            "last_op_index": 141,
+            "first_op": "ShardedToInterleavedDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        },
+        "2": {
+          "embedding_and_rope": {
+            "device_us": 46.89703703703704,
+            "first_op_index": 0,
+            "last_op_index": 6,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 464.7185185185185,
+            "first_op_index": 7,
+            "last_op_index": 73,
+            "first_op": "InterleavedToShardedDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 372.08592592592595,
+            "first_op_index": 74,
+            "last_op_index": 117,
+            "first_op": "LayerNormDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2239.6585185185186,
+            "first_op_index": 118,
+            "last_op_index": 141,
+            "first_op": "ShardedToInterleavedDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        },
+        "3": {
+          "embedding_and_rope": {
+            "device_us": 46.986666666666665,
+            "first_op_index": 0,
+            "last_op_index": 6,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 463.5459259259259,
+            "first_op_index": 7,
+            "last_op_index": 73,
+            "first_op": "InterleavedToShardedDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 371.88444444444445,
+            "first_op_index": 74,
+            "last_op_index": 117,
+            "first_op": "LayerNormDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2229.3533333333335,
+            "first_op_index": 118,
+            "last_op_index": 141,
+            "first_op": "ShardedToInterleavedDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        }
+      },
+      "max_device_us": {
+        "embedding_and_rope": 49.68962962962963,
+        "linear_attention": 464.7185185185185,
+        "full_attention": 372.64666666666665,
+        "terminal_sampling_collector": 2239.6585185185186
+      },
+      "derived_64layer_stack_us": 28268.835555555554,
+      "derived_stack_plus_terminal_us": 30558.1837037037,
+      "source": "optimized_full_model/tracy/b1/decode_ops.csv",
+      "source_sha256": "a7f49ca1b03c805ae14878fddb7edcdb33a529ab45428909befad35b36de7d59",
+      "scope": "Derived attribution estimate from two real layers at decode position4223, not all64-layer device timing. Whole-layer windows include every operation and internal gap; profile overhead/context differences remain."
+    },
+    {
+      "batch": 32,
+      "per_device": {
+        "0": {
+          "embedding_and_rope": {
+            "device_us": 43.17703703703704,
+            "first_op_index": 0,
+            "last_op_index": 5,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 2033.7881481481481,
+            "first_op_index": 6,
+            "last_op_index": 171,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 1002.6844444444445,
+            "first_op_index": 172,
+            "last_op_index": 249,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2477.191851851852,
+            "first_op_index": 250,
+            "last_op_index": 273,
+            "first_op": "CopyDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        },
+        "1": {
+          "embedding_and_rope": {
+            "device_us": 42.58444444444444,
+            "first_op_index": 0,
+            "last_op_index": 5,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 2036.6155555555556,
+            "first_op_index": 6,
+            "last_op_index": 171,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 1002.694074074074,
+            "first_op_index": 172,
+            "last_op_index": 249,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2472.5585185185187,
+            "first_op_index": 250,
+            "last_op_index": 273,
+            "first_op": "CopyDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        },
+        "2": {
+          "embedding_and_rope": {
+            "device_us": 42.388888888888886,
+            "first_op_index": 0,
+            "last_op_index": 5,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 2033.9874074074073,
+            "first_op_index": 6,
+            "last_op_index": 171,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 1003.6081481481482,
+            "first_op_index": 172,
+            "last_op_index": 249,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2473.9222222222224,
+            "first_op_index": 250,
+            "last_op_index": 273,
+            "first_op": "CopyDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        },
+        "3": {
+          "embedding_and_rope": {
+            "device_us": 42.52148148148148,
+            "first_op_index": 0,
+            "last_op_index": 5,
+            "first_op": "EmbeddingsDeviceOperation",
+            "last_op": "TilizeWithValPaddingDeviceOperation"
+          },
+          "linear_attention": {
+            "device_us": 2030.8696296296296,
+            "first_op_index": 6,
+            "last_op_index": 171,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "full_attention": {
+            "device_us": 1003.5711111111111,
+            "first_op_index": 172,
+            "last_op_index": 249,
+            "first_op": "ReshapeViewDeviceOperation",
+            "last_op": "BinaryNgDeviceOperation"
+          },
+          "terminal_sampling_collector": {
+            "device_us": 2476.673333333333,
+            "first_op_index": 250,
+            "last_op_index": 273,
+            "first_op": "CopyDeviceOperation",
+            "last_op": "PlusOneDeviceOperation"
+          }
+        }
+      },
+      "max_device_us": {
+        "embedding_and_rope": 43.17703703703704,
+        "linear_attention": 2036.6155555555556,
+        "full_attention": 1003.6081481481482,
+        "terminal_sampling_collector": 2477.191851851852
+      },
+      "derived_64layer_stack_us": 113815.27703703703,
+      "derived_stack_plus_terminal_us": 116335.64592592591,
+      "source": "optimized_full_model/tracy/b32/decode_ops.csv",
+      "source_sha256": "f754c3c6ecba724db28c1730497c8a1a01105e0d6f816811f1b5fb8ce8eeedf0",
+      "scope": "Derived attribution estimate from two real layers at decode position4223, not all64-layer device timing. Whole-layer windows include every operation and internal gap; profile overhead/context differences remain."
+    }
+  ],
+  "warning": "Never populate full-model device-time/roofline telemetry from this reduced profile."
+}

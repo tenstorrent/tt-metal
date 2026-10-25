@@ -5,13 +5,13 @@ from pathlib import Path
 import torch
 import ttnn
 from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
-p=argparse.ArgumentParser();p.add_argument('--batch',type=int,default=1);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--persistent',action='store_true');p.add_argument('--async-ccl',action='store_true');p.add_argument('--output');p.add_argument('--batch',type=int,default=1);a=p.parse_args()
 torch.set_num_threads(8)
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
 mesh=ttnn.open_mesh_device(ttnn.MeshShape(1,4),trace_region_size=0)
 try:
     gen=build_generator('models/autoports/qwen_qwen3_8_27b',mesh,checkpoint='.cache/qwen38-probe',
-        layer_indices=[0,3],context_length=512,batch_size=a.batch,prepare=False)
+        layer_indices=[0,3],context_length=512,batch_size=a.batch,prepare=False,persistent_sampling_ccl="async" if a.async_ccl else a.persistent)
     prompts=torch.arange(33).repeat(a.batch,1)+100
     output=gen.prefill_forward(prompts,page_table=gen.page_table,kv_cache=gen.kv_cache,prompt_lens=[33]*a.batch,return_device=True)
     ttnn.copy(ttnn.reshape(output,[1,1,a.batch,248320//4]),gen.logits)
@@ -55,6 +55,6 @@ try:
         synthetic_vocabulary_boundary_cases=boundary_cases,
         batch=a.batch,semantics='topk path uses k=1,p=0,temp=1; both select a diagnostic global maximum; first-index tie agreement recorded separately',rows=rows,
         fastest=min(rows,key=lambda r:r['host_wall_us_per_replay'])['strategy'],tracking=os.environ.get('TT_METAL_TRACE_ALLOC_TRACKING')=='1')
-    Path(f'models/autoports/qwen_qwen3_8_27b/doc/full_model/sampling_b{a.batch}.json').write_text(json.dumps(result,indent=2)+'\n')
+    Path(a.output or f'models/autoports/qwen_qwen3_8_27b/doc/full_model/sampling_b{a.batch}.json').write_text(json.dumps(result,indent=2)+'\n')
     print(json.dumps(result),flush=True)
 finally:ttnn.close_mesh_device(mesh)

@@ -1,0 +1,57 @@
+{
+  "batch": 32,
+  "scope": "Reduced real layers0/3; end-to-end prefill host times, not full model",
+  "rows": [
+    {
+      "prompt_len": 33,
+      "mixed_inactive_rows": false,
+      "exact": true,
+      "host_prefill_ms": {
+        "False": [
+          86.70606603845954,
+          86.27371210604906,
+          86.45783411338925
+        ],
+        "True": [
+          36.47175617516041,
+          36.484851967543364,
+          36.61649185232818
+        ]
+      }
+    },
+    {
+      "prompt_len": 65,
+      "mixed_inactive_rows": true,
+      "exact": true,
+      "host_prefill_ms": {
+        "False": [
+          87.26591803133488,
+          87.73019188083708,
+          87.29660790413618
+        ],
+        "True": [
+          37.403573049232364,
+          37.561314878985286,
+          37.4052778352052
+        ]
+      }
+    },
+    {
+      "prompt_len": 4097,
+      "mixed_inactive_rows": false,
+      "exact": true,
+      "host_prefill_ms": {
+        "False": [
+          561.7525679990649,
+          559.4743581023067,
+          556.012307992205
+        ],
+        "True": [
+          465.7143410295248,
+          457.9012740869075,
+          455.5587798822671
+        ]
+      }
+    }
+  ]
+}

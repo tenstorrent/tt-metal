@@ -1,0 +1,96 @@
+{
+  "inherited": [
+    "../full_model/rejection_ledger.json",
+    "../optimized_multichip_decoder/README.md"
+  ],
+  "policy": "Decoder precision, fidelity, KV, activation, CCL and inter-layer residual contracts unchanged; full-model B1 prefill outK4 repair retained.",
+  "candidates": [
+    {
+      "name": "Common DRAM-sharded BF16/HiFi4 head",
+      "decision": "reject for latency",
+      "evidence": "head_candidates.csv",
+      "reason": "Adapted legal reader1/2/3, K4/5/10/16/20/32, core/shard/chunk families run; real-hidden PCC and argmax pass, whole terminal reshard/chunk/slice/concat cost exceeds baseline."
+    },
+    {
+      "name": "Larger-K interleaved split head",
+      "decision": "reject for latency",
+      "evidence": [
+        "head_generic_split2_k16.json",
+        "head_generic_split4_k20.json"
+      ],
+      "reason": "Adapts directK16 L1 capacity error using split weights; correct but slower."
+    },
+    {
+      "name": "Explicit generic K4/sub2",
+      "decision": "retain existing auto config",
+      "evidence": "head_generic_k4_sub2.json",
+      "reason": "About3us terminal-only improvement, below0.02% whole-model latency; no demonstrated multi-batch full-path benefit."
+    },
+    {
+      "name": "Head HiFi2 micro-controls",
+      "decision": "not selected in this stage",
+      "evidence": [
+        "head_generic_k4_hifi2.json",
+        "head_c6144_r2_k10_hifi2.json"
+      ],
+      "reason": "No full-model precision gate run; no change to selected BF16/HiFi4 policy. Stage08 owns datatype/fidelity Pareto selection."
+    },
+    {
+      "name": "Force argmax",
+      "decision": "reject for latency",
+      "evidence": [
+        "sampling_baseline_b1_v2.json",
+        "sampling_baseline_b32_v2.json"
+      ],
+      "reason": "Semantic k1/p0/temp1 split sampler is correct and substantially faster; no full-vocabulary gather selected."
+    },
+    {
+      "name": "Persistent sampler candidate-gather buffers",
+      "decision": "reject for latency",
+      "evidence": [
+        "sampling_persistent_b1_v2.json",
+        "sampling_persistent_b32_v2.json"
+      ],
+      "reason": "Common sampler owns and deallocates gathered values, requiring transient clone of persistent output. Adapted ownership-safe candidate measured slower. Decoder persistent CCL remains enabled."
+    },
+    {
+      "name": "Async sampler gathers B1/B8/B16",
+      "decision": "reject for latency",
+      "evidence": [
+        "sampling_async_b1_v2.json",
+        "sampling_async_b8.json",
+        "sampling_async_b16.json"
+      ],
+      "reason": "Correct but slower than legacy small candidate gather at these batches."
+    },
+    {
+      "name": "Async sampler gathers B32",
+      "decision": "select",
+      "evidence": "sampling_async_b32_v2.json",
+      "reason": "Correct and faster than legacy/persistent controls; final default selected at batch32."
+    },
+    {
+      "name": "Packed last-token prefill terminal",
+      "decision": "select",
+      "evidence": "prefill_terminal_b32.json",
+      "reason": "Bitwise logits match for33/65/4097 and inactive rows; eliminates separately padded matmul row for each user."
+    },
+    {
+      "name": "Traced output collector",
+      "decision": "select",
+      "evidence": [
+        "buffered_final_b1.json",
+        "buffered_final_b32.json",
+        "reduced_trace_contract.json",
+        "benchmark_b1_perf.json"
+      ],
+      "reason": "Exact greedy/sampled sequence, fixed persistent token feedback, nonblocking replay with output-window boundary read instead of per-token readback."
+    },
+    {
+      "name": "128-step EOS-aware default",
+      "decision": "reject for short-answer latency",
+      "evidence": "benchmark_b1_perf.json:eos_window_control",
+      "reason": "Factual47-token output schedules129 and takes4064.64ms versus1739.87ms streamed. Selected16-step policy schedules49 and takes1797.60ms,3.32% slower than streamed; fixed-length throughput retains128."
+    }
+  ]
+}

@@ -11,14 +11,18 @@ from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
 from models.autoports.qwen_qwen3_8_27b.tests.full_model_evidence import inventory,request_inventory,runtime_build
 
 p=argparse.ArgumentParser()
+p.add_argument('--buffered-output',action=argparse.BooleanOptionalAction,default=True)
+p.add_argument('--compare-buffered',action='store_true')
 p.add_argument('--batch',type=int,default=1)
 p.add_argument('--context',type=int,default=262144)
 p.add_argument('--lengths',type=int,nargs='+',default=[4096])
 p.add_argument('--outputs',type=int,default=128)
 p.add_argument('--repeats',type=int,default=3)
+p.add_argument('--long-repeats',type=int,default=None,help='Optional repeat count for input lengths above4096')
 p.add_argument('--output',required=True)
 p.add_argument('--verify-native-context',action='store_true')
 p.add_argument('--memory-audit',action='store_true')
+p.add_argument('--eos-control',action='store_true')
 p.add_argument('--qualitative-control-tokens',type=int,default=0)
 p.add_argument('--teacher-forcing-control',action='store_true')
 a=p.parse_args()
@@ -27,7 +31,7 @@ if a.teacher_forcing_control and a.batch!=1:
 torch.set_num_threads(8)
 ttnn.CONFIG.throw_exception_on_fallback=True
 root=Path('models/autoports/qwen_qwen3_8_27b')
-source_hashes={str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in [Path(__file__),*(root/'tt').glob('*.py'),Path('ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp')]}
+source_hashes={str(f):hashlib.sha256(f.read_bytes()).hexdigest() for f in [Path(__file__),root/'tests/full_model_memory.py',root/'tests/full_model_evidence.py',*(root/'tt').glob('*.py'),Path('ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/rotary_embedding_program_factory.cpp')]}
 ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
 mesh=ttnn.open_mesh_device(ttnn.MeshShape(1,4),trace_region_size=0)
 def memory():
@@ -63,13 +67,20 @@ try:
         prompt=make_prompt(length)
         prompts=[prompt[:] for _ in range(a.batch)]
         # Warm the exact request once; all timing below remains true token-out.
-        gen.generate(prompts,a.outputs,stop_on_eos=False)
-        for repeat in range(a.repeats):
-            tokens=gen.generate(prompts,a.outputs,stop_on_eos=False)
+        gen.generate(prompts,a.outputs,stop_on_eos=False,buffered_output=a.buffered_output)
+        repeats=a.long_repeats if length>4096 and a.long_repeats is not None else a.repeats
+        for repeat in range(repeats):
+            if a.compare_buffered:
+                baseline_tokens=gen.generate(prompts,a.outputs,stop_on_eos=False,buffered_output=False)
+                baseline=dict(gen.last_generation_metrics,repeat=repeat)
+                packet.setdefault('streamed_baseline_records',[]).append(baseline)
+            tokens=gen.generate(prompts,a.outputs,stop_on_eos=False,buffered_output=a.buffered_output)
             metrics=dict(gen.last_generation_metrics)
+            if a.compare_buffered:
+                assert tokens==baseline_tokens,'Buffered token sequence differs from streaming'
             assert metrics['source']=='autoregressive' and not metrics['host_sampling']
             for key in ('host_copies_total','token_refreshes','position_refreshes','page_table_refreshes','captures'):
-                assert metrics['steady_state_counters'][key]==0,(key,metrics)
+                assert metrics['steady_state_counters'][key]==(max(0,metrics.get('output_windows',0)-1) if key=='host_copies_total' else 0),(key,metrics)
             assert all(len(t)==a.outputs for t in tokens)
             if not all(t==tokens[0] for t in tokens):
                 failure=dict(scope='all64layer fixed-slot determinism failure',batch=a.batch,input_length=length,
@@ -84,7 +95,7 @@ try:
             print(json.dumps(metrics),flush=True)
     if a.batch>1:
         print('FULL_STACK_MIXED_TRACE_BEGIN',flush=True)
-        trace_ids=[str(t) for t in gen.decode_traces.values()]+[str(gen.sample_trace)]
+        trace_ids=[str(t) for t in gen.decode_traces.values()]+[str(gen.sample_trace),str(gen.buffered_sample_trace)]
         captures=gen.counters['captures']
         mixed_prompts=[[100]*33,[101]*65,[102]]
         mixed=gen.generate(mixed_prompts,4,stop_on_eos=False)
@@ -93,7 +104,7 @@ try:
         assert repeated==mixed
         all_active=gen.generate([[100]*33 for _ in range(a.batch)],4,stop_on_eos=False)
         assert len(all_active)==a.batch and all(row==all_active[0] for row in all_active)
-        assert trace_ids==[str(t) for t in gen.decode_traces.values()]+[str(gen.sample_trace)]
+        assert trace_ids==[str(t) for t in gen.decode_traces.values()]+[str(gen.sample_trace),str(gen.buffered_sample_trace)]
         assert captures==gen.counters['captures']
         for key in ('host_copies_total','token_refreshes','position_refreshes','page_table_refreshes','captures'):
             assert mixed_metrics['steady_state_counters'][key]==0
@@ -110,7 +121,7 @@ try:
         tf_prompt=entry.prompt_tokens[0].tolist()
         expected=entry.generated_tokens[0].tolist()
         assert len(tf_prompt)==203 and len(expected)==100,('Unexpected AIME control dimensions',len(tf_prompt),len(expected))
-        trace_ids=[str(gen.model_trace),str(gen.sample_trace)]
+        trace_ids=[str(gen.model_trace),str(gen.sample_trace),str(gen.buffered_sample_trace)]
         captures=gen.counters['captures']
         print('TEACHER_FORCING_CONTROL_WARMUP',flush=True)
         gen.generate(tf_prompt,100,next_input=lambda step,token:expected[step],stop_on_eos=False)
@@ -119,7 +130,7 @@ try:
         tf_metrics=dict(gen.last_generation_metrics)
         assert tf_metrics['source']=='teacher_forcing_token_out' and not tf_metrics['host_sampling']
         assert len(predicted)==len(expected)==100
-        assert trace_ids==[str(gen.model_trace),str(gen.sample_trace)] and captures==gen.counters['captures']
+        assert trace_ids==[str(gen.model_trace),str(gen.sample_trace),str(gen.buffered_sample_trace)] and captures==gen.counters['captures']
         correct=sum(actual==target for actual,target in zip(predicted,expected))
         packet['teacher_forcing_control']=dict(tf_metrics,
             scope='Clean high-level all64 B1 AIME teacher-forced token-out timing; canonical split sampling plus explicit reference-token callback; not autoregressive headline performance or run_teacher_forcing accuracy replacement',
@@ -134,7 +145,7 @@ try:
         print('TEACHER_FORCING_CONTROL',json.dumps(packet['teacher_forcing_control']),flush=True)
     if a.verify_native_context:
         assert a.batch==1 and a.context==gen.model.config.max_position_embeddings
-        trace_ids=[str(gen.model_trace),str(gen.sample_trace)]
+        trace_ids=[str(gen.model_trace),str(gen.sample_trace),str(gen.buffered_sample_trace)]
         programs=mesh.num_program_cache_entries()
         length=a.context-3
         prompt=make_prompt(length)
@@ -154,7 +165,7 @@ try:
             prompt_lens=[a.context],return_device=True)
         assert torch.isfinite(gen.host_logits(logits)).all()
         del logits
-        assert [str(gen.model_trace),str(gen.sample_trace)]==trace_ids
+        assert [str(gen.model_trace),str(gen.sample_trace),str(gen.buffered_sample_trace)]==trace_ids
         assert mesh.num_program_cache_entries()==programs
         packet['context_validation']=dict(nonaligned_prompt=length,generated_tokens=tokens,
             exact_max_prefill=a.context,final_decode_input_position=a.context-1,
@@ -170,6 +181,31 @@ try:
             scope='Longer qualitative continuation with normal EOS stopping; not a headline performance measurement',stop_on_eos=True)
         Path(a.output).write_text(json.dumps(packet,indent=2)+'\n')
         print('THROUGHPUT_QUALITY',packet['throughput_fixture_qualitative_control']['completion'],flush=True)
+    if a.eos_control:
+        assert a.batch==1
+        cases=json.loads((root/'doc/full_model/long_quality_cases.json').read_text())['cases']
+        case=next(c for c in cases if c['name']=='distinct_records_4096')
+        prompt=case['input_tokens']
+        assert len(prompt)==4096
+        gen.generate(prompt,1024,stop_on_eos=True)
+        eos_rows=[];expected=None;original_window=gen.eos_output_window
+        try:
+            for label,buffered,window in [('streamed',False,16),('buffered128',True,128),('buffered16',True,16)]:
+                gen.eos_output_window=window
+                for repeat in range(3):
+                    tokens=gen.generate(prompt,1024,stop_on_eos=True,buffered_output=buffered)
+                    if expected is None:expected=tokens
+                    assert tokens==expected,'EOS control token sequence differs'
+                    metrics=dict(gen.last_generation_metrics)
+                    eos_rows.append(dict(mode=label,repeat=repeat,returned_tokens=len(tokens),
+                        total_request_ms=metrics['ttft_ms']+1000*metrics['decode_seconds'],metrics=metrics))
+        finally:
+            gen.eos_output_window=original_window
+        packet['eos_window_control']=dict(case='distinct_records_4096',rows=eos_rows,exact=True,
+            completion=gen.tokenizer.decode(expected,skip_special_tokens=False),
+            scope='All64layer paired warmed EOS latency control; 4096 input,1024 output cap; not headline4096/128 workload')
+        Path(a.output).write_text(json.dumps(packet,indent=2)+'\n')
+        print('EOS_WINDOW_CONTROL_PASS',json.dumps(packet['eos_window_control']),flush=True)
     if a.memory_audit:
         from .full_model_memory import allocation_peak,release_trace_bytes
         print('ALLOCATION_AUDIT_BEGIN',flush=True)

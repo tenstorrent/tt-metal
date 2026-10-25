@@ -12,7 +12,7 @@ from models.autoports.qwen_qwen3_8_27b.tt.model import Model
 
 
 class Generator(GeneratorContract):
-    def __init__(self, model, checkpoint, *, batch_size=1, context_length=None, kv_cache=None, page_table=None, sampling_strategy="topk"):
+    def __init__(self, model, checkpoint, *, batch_size=1, context_length=None, kv_cache=None, page_table=None, sampling_strategy="topk", persistent_sampling_ccl=None, pack_prefill_terminal=True):
         self.model, self.mesh = model, model.mesh
         self.tokenizer = AutoTokenizer.from_pretrained(checkpoint)
         generation_config=Path(checkpoint)/'generation_config.json'
@@ -20,6 +20,7 @@ class Generator(GeneratorContract):
              else self.tokenizer.eos_token_id)
         self.eos_token_ids=set(eos if isinstance(eos,list) else ([] if eos is None else [eos]))
         self.batch_size = batch_size
+        self.pack_prefill_terminal = pack_prefill_terminal
         if sampling_strategy not in ('topk','argmax'):
             raise ValueError('Unknown common-sampler strategy')
         self.sampling_strategy = sampling_strategy
@@ -55,8 +56,15 @@ class Generator(GeneratorContract):
         self.tokens = self.put(torch.zeros(1,1,1,batch_size, dtype=torch.int32), ttnn.uint32)
         self.positions = self.put(torch.zeros(batch_size, dtype=torch.int32), ttnn.int32)
         self.rope_indices = self.put(torch.zeros(batch_size,1, dtype=torch.int32), ttnn.uint32)
+        sampler_ccl=model.layers[0].ccl
+        if persistent_sampling_ccl is None:
+            persistent_sampling_ccl = "async" if batch_size == 32 else False
+        self.sampling_ccl_mode = persistent_sampling_ccl or "baseline"
+        if persistent_sampling_ccl:
+            from .sampling_ccl import SamplingCCL
+            sampler_ccl=SamplingCCL(sampler_ccl,persistent=persistent_sampling_ccl != "async")
         self.sampler = Sampling1D(vocab_size=model.config.vocab_size, mesh_device=self.mesh,
-            tt_ccl=model.layers[0].ccl, max_batch_size=32, max_top_k=32,
+            tt_ccl=sampler_ccl, max_batch_size=32, max_top_k=32,
             allow_force_argmax=True, pad_to_power_of_2=True)
         self.sampler.load_device_buffers()
         self.k = self.put(torch.ones(batch_size,dtype=torch.int32), ttnn.uint32)
@@ -88,6 +96,11 @@ class Generator(GeneratorContract):
         self._warming = False
         self.model_trace = self.sample_trace = None
         self.decode_traces = {}
+        self.buffered_sample_trace = None
+        self.output_window = 128
+        self.eos_output_window = 16
+        self.output_history = self.put(torch.zeros(self.output_window,1,1,batch_size,dtype=torch.int32),ttnn.uint32)
+        self.output_index = self.put(torch.zeros(1,dtype=torch.int32),ttnn.uint32)
         self.active_mask = model.put(torch.ones(batch_size,1,1))
         self.logits = model.put(torch.zeros(1,1,batch_size,model.config.vocab_size//4))
         self.counters = dict(model_replays=0, sampling_replays=0, token_refreshes=0,
@@ -130,6 +143,12 @@ class Generator(GeneratorContract):
         result=self.sampler(logits,k=self.k,p=self.p,temp=self.temp,seeds=self.seeds,tt_out_tok=self.tokens)
         ttnn.plus_one(self.seeds)
         return result
+
+    def _sample_buffered(self):
+        self._sample(self.logits)
+        updated = ttnn.indexed_fill(self.output_index,self.output_history,self.tokens)
+        ttnn.copy(updated,self.output_history)
+        ttnn.plus_one(self.output_index)
 
     def set_sampling_params(self, *, top_k=1, top_p=0.0, temperature=1.0, seed=1234):
         def vector(value,dtype):
@@ -271,6 +290,7 @@ class Generator(GeneratorContract):
             for masked in modes:
                 self._decode(masked)
             self._sample(self.logits)
+            self._sample_buffered()
             ttnn.synchronize_device(self.mesh)
             preparation_reset()
             memory_checkpoint('warmed_before_capture')
@@ -292,7 +312,12 @@ class Generator(GeneratorContract):
             self._sample(self.logits)
             ttnn.end_trace_capture(self.mesh, self.sample_trace, cq_id=0)
             capturing = None
-            self.counters['captures'] += len(modes)+1
+            self.buffered_sample_trace = ttnn.begin_trace_capture(self.mesh,cq_id=0)
+            capturing = self.buffered_sample_trace
+            self._sample_buffered()
+            ttnn.end_trace_capture(self.mesh,self.buffered_sample_trace,cq_id=0)
+            capturing = None
+            self.counters['captures'] += len(modes)+2
             if self.owns_cache:
                 self.reset()
         except BaseException:
@@ -302,6 +327,8 @@ class Generator(GeneratorContract):
             traces = set(self.decode_traces.values())
             if self.sample_trace is not None:
                 traces.add(self.sample_trace)
+            if self.buffered_sample_trace is not None:
+                traces.add(self.buffered_sample_trace)
             if capturing is not None:
                 traces.add(capturing)
             cleanup_errors = []
@@ -315,7 +342,7 @@ class Generator(GeneratorContract):
                     ttnn.release_trace(self.mesh,trace)
                 except BaseException as cleanup_error:
                     cleanup_errors.append(('release_trace',type(cleanup_error).__name__))
-            self.model_trace = self.sample_trace = None
+            self.model_trace = self.sample_trace = self.buffered_sample_trace = None
             self.decode_traces.clear()
             self.last_preparation_cleanup_errors = cleanup_errors
             self.prepared_buckets = saved_flags[2]
@@ -447,7 +474,10 @@ class Generator(GeneratorContract):
                             del host
                         del logits
                 else:
-                    logits = self.model.terminal(self.model.select_rows(hidden,meta['last_indices']))
+                    logits = self.model.terminal(self.model.select_rows(hidden,meta['last_indices']),
+                        pack_decode_rows=self.pack_prefill_terminal)
+                    if self.pack_prefill_terminal:
+                        logits=ttnn.reshape(logits,[batch,1,self.model.config.vocab_size//4])
                     merged = ttnn.where(meta['active_mask'],logits,self.prefill_output)
                     ttnn.copy(merged,self.prefill_output)
                     del logits,merged
@@ -516,7 +546,11 @@ class Generator(GeneratorContract):
         return output
 
     def generate(self, prompt_token_ids, max_new_tokens, *, next_input=None, enable_trace=True,
-                 host_sampling=False, stop_on_eos=True, **kwargs):
+                 host_sampling=False, stop_on_eos=True, buffered_output=None, **kwargs):
+        if buffered_output is None:
+            buffered_output = not host_sampling and next_input is None
+        if buffered_output and (host_sampling or next_input is not None):
+            raise ValueError('Buffered output requires on-device autoregressive sampling')
         if host_sampling and not self.host_sampling_greedy:
             raise ValueError('Host-sampling compatibility supports greedy top_k=1 only')
         if not enable_trace:
@@ -554,6 +588,8 @@ class Generator(GeneratorContract):
             self.counters['sampling_replays']+=1
         self.refresh(torch.tensor([n if n else -1 for n in lengths],dtype=torch.int32),self.positions)
         self.refresh(torch.tensor(lengths,dtype=torch.int32).reshape(self.batch_size,1),self.rope_indices)
+        if buffered_output:
+            return self._generate_buffered_tail(prompts,lengths,max_new_tokens,started,nested,stop_on_eos)
         result=[[] for _ in prompts]
         finished=[False for _ in prompts]
         steady_before=dict(self.counters)
@@ -595,6 +631,58 @@ class Generator(GeneratorContract):
             steady_state_counters={k:self.counters[k]-steady_before[k] for k in self.counters},
             decode_trace=str(self.model_trace),sampling_trace=str(self.sample_trace),blocking_replay=False,
             host_sampling=host_sampling,stop_on_eos=stop_on_eos)
+        return result if nested else result[0]
+
+    def _generate_buffered_tail(self,prompts,lengths,count,started,nested,stop_on_eos):
+        # Read the first token for honest caller-visible TTFT, then enqueue each
+        # bounded window without host input refresh or per-token readback.
+        self.refresh(torch.zeros(1,dtype=torch.int32),self.output_index)
+        first=ttnn.to_torch(ttnn.get_device_tensors(self.tokens)[0]).reshape(-1).tolist()
+        self.counters['readbacks']+=1
+        first_at=time.monotonic()
+        result=[[int(first[row])] for row in range(len(prompts))]
+        before=dict(self.counters)
+        windows=0
+        scheduled=1
+        finished=[bool(stop_on_eos and row[0] in self.eos_token_ids) for row in result]
+        window_steps=self.eos_output_window if stop_on_eos else self.output_window
+        for start in range(1,count,window_steps):
+            if all(finished):
+                break
+            steps=min(window_steps,count-start)
+            if windows:
+                self.refresh(torch.zeros(1,dtype=torch.int32),self.output_index)
+            for _ in range(steps):
+                ttnn.execute_trace(self.mesh,self.model_trace,cq_id=0,blocking=False)
+                ttnn.execute_trace(self.mesh,self.buffered_sample_trace,cq_id=0,blocking=False)
+                self.counters['model_replays']+=1
+                self.counters['sampling_replays']+=1
+            # One boundary read collects all outputs, never reconstructs feedback.
+            host=ttnn.to_torch(ttnn.get_device_tensors(self.output_history)[0]).reshape(self.output_window,self.batch_size)
+            self.counters['readbacks']+=1
+            for row in range(len(prompts)):
+                if finished[row]:
+                    continue
+                chunk=[int(x) for x in host[:steps,row].tolist()]
+                if stop_on_eos:
+                    stop=next((i for i,t in enumerate(chunk) if t in self.eos_token_ids),None)
+                    if stop is not None:
+                        chunk=chunk[:stop+1]
+                        finished[row]=True
+                result[row].extend(chunk)
+            windows+=1
+            scheduled+=steps
+        ended=time.monotonic()
+        emitted=max(map(len,result))
+        self.last_generation_metrics=dict(source='autoregressive',input_tokens=lengths[:len(prompts)],
+            output_tokens=emitted,scheduled_output_tokens=scheduled,requested_output_tokens=count,output_lengths=[len(r) for r in result],batch=self.batch_size,
+            concurrency=len(prompts),ttft_ms=(first_at-started)*1000,decode_seconds=ended-first_at,
+            decode_tps_per_user=(emitted-1)/(ended-first_at) if emitted>1 else None,
+            steady_state_counters={k:self.counters[k]-before[k] for k in self.counters},
+            inner_loop_host_refreshes=0,inner_loop_readbacks=0,output_windows=windows,output_window_steps=window_steps,
+            decode_trace=str(self.model_trace),sampling_trace=str(self.buffered_sample_trace),
+            blocking_replay=False,host_sampling=False,stop_on_eos=stop_on_eos,buffered_output=True,
+            eos_policy='trim at first EOS; finish current bounded output window before stopping device work')
         return result if nested else result[0]
 
 

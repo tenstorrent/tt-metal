@@ -96,11 +96,11 @@ def main():
         result['checks']['prepare_restores_nonzero_external_cache_all_devices'] = True
         assert gen.prepared_buckets == set(result['prepared_buckets'])
         captures = gen.counters['captures']
-        assert captures == 3, gen.counters
+        assert captures == 4, gen.counters
 
         def trace_ids():
             return {**{str(mode): str(trace) for mode, trace in gen.decode_traces.items()},
-                    'sampling': str(gen.sample_trace)}
+                    'sampling': str(gen.sample_trace), 'buffered_sampling': str(gen.buffered_sample_trace)}
 
         identities = trace_ids()
         cache_addresses = [[value.buffer_address() for value in vars(state).values()] for state in external_cache]

@@ -95,9 +95,9 @@ def main():
         if a.separate_prefill:
             print('EAGER_CONTROL_RETIRE_TRACES_BEFORE_VARIANT',flush=True)
             ttnn.synchronize_device(mesh)
-            for trace in {*gen.decode_traces.values(),gen.sample_trace}:
+            for trace in {*gen.decode_traces.values(),gen.sample_trace,gen.buffered_sample_trace}:
                 ttnn.release_trace(mesh,trace)
-            gen.decode_traces.clear();gen.model_trace=gen.sample_trace=None;gen.prepared_buckets.clear()
+            gen.decode_traces.clear();gen.model_trace=gen.sample_trace=gen.buffered_sample_trace=None;gen.prepared_buckets.clear()
             result['separate_prefill_config'],restore_variant=install_diagnostic_variant('separate_prefill_rs')
             # All variant ops compile after retiring every previous trace and
             # before capturing the replacement model/sampling traces.

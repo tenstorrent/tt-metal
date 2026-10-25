@@ -1,0 +1,30 @@
+{
+  "config": {
+    "batch": 1,
+    "chunk": 8192,
+    "readers": 1,
+    "block": 8,
+    "cores": 8,
+    "generic": true,
+    "grid_x": 10,
+    "grid_y": 10,
+    "subblock": 4,
+    "output": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/head_generic_k8_g10x10_sub4.json"
+  },
+  "pcc": 1.0,
+  "argmax_equal": true,
+  "host_trace_us": {
+    "baseline": [
+      1683.32725064829,
+      1683.0820706672966,
+      1683.826509397477
+    ],
+    "candidate": [
+      1769.7636992670596,
+      1770.7955790683627,
+      1772.5193803198636
+    ]
+  },
+  "scope": "LM-head only, reduced real hidden, BF16/HiFi4 FP32 same precision",
+  "tracking": "0"
+}

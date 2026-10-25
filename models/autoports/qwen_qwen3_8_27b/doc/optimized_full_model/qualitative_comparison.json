@@ -1,0 +1,52 @@
+{
+  "status": "pass_no_generation_regression",
+  "rows": [
+    {
+      "name": "benchmark_question_4096",
+      "prior_stage_tokens_exact": true,
+      "input_tokens": 4096,
+      "returned_tokens": 1024,
+      "scheduled_tokens": 1024,
+      "eos_positions": [],
+      "facts_exact": null
+    },
+    {
+      "name": "benchmark_question_4095",
+      "prior_stage_tokens_exact": true,
+      "input_tokens": 4095,
+      "returned_tokens": 892,
+      "scheduled_tokens": 897,
+      "eos_positions": [
+        891
+      ],
+      "facts_exact": null
+    },
+    {
+      "name": "distinct_records_4096",
+      "prior_stage_tokens_exact": true,
+      "input_tokens": 4096,
+      "returned_tokens": 47,
+      "scheduled_tokens": 49,
+      "eos_positions": [
+        46
+      ],
+      "facts_exact": true
+    },
+    {
+      "name": "structured_tt",
+      "prior_stage_tokens_exact": true,
+      "returned_tokens": 114
+    },
+    {
+      "name": "explain_tt",
+      "prior_stage_tokens_exact": true,
+      "returned_tokens": 128
+    },
+    {
+      "name": "code_tt",
+      "prior_stage_tokens_exact": true,
+      "returned_tokens": 128
+    }
+  ],
+  "scope": "Exact TT previous-stage comparison. HF controls are separately read and retain original differences; no full HF equivalence claim."
+}

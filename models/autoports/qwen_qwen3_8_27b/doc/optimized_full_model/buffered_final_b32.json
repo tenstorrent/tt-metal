@@ -1,0 +1,151 @@
+{
+  "rows": [
+    {
+      "k": 1,
+      "outputs": 128,
+      "exact": true,
+      "metrics": {
+        "source": "autoregressive",
+        "input_tokens": [
+          33,
+          65,
+          97
+        ],
+        "output_tokens": 128,
+        "scheduled_output_tokens": 128,
+        "requested_output_tokens": 128,
+        "output_lengths": [
+          128,
+          128,
+          128
+        ],
+        "batch": 32,
+        "concurrency": 3,
+        "ttft_ms": 113.33496682345867,
+        "decode_seconds": 0.7361016601789743,
+        "decode_tps_per_user": 172.53051700647092,
+        "steady_state_counters": {
+          "model_replays": 127,
+          "sampling_replays": 127,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "readbacks": 1,
+          "captures": 0,
+          "host_copies_total": 0
+        },
+        "inner_loop_host_refreshes": 0,
+        "inner_loop_readbacks": 0,
+        "output_windows": 1,
+        "decode_trace": "MeshTraceId(1)",
+        "sampling_trace": "MeshTraceId(3)",
+        "blocking_replay": false,
+        "host_sampling": false,
+        "stop_on_eos": false,
+        "buffered_output": true,
+        "eos_policy": "trim at first EOS; finish current bounded output window before stopping device work"
+      }
+    },
+    {
+      "k": 8,
+      "outputs": 130,
+      "exact": true,
+      "metrics": {
+        "source": "autoregressive",
+        "input_tokens": [
+          33,
+          65,
+          97
+        ],
+        "output_tokens": 130,
+        "scheduled_output_tokens": 130,
+        "requested_output_tokens": 130,
+        "output_lengths": [
+          130,
+          130,
+          130
+        ],
+        "batch": 32,
+        "concurrency": 3,
+        "ttft_ms": 113.32814581692219,
+        "decode_seconds": 0.7481264050584286,
+        "decode_tps_per_user": 172.4307538509152,
+        "steady_state_counters": {
+          "model_replays": 129,
+          "sampling_replays": 129,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "readbacks": 2,
+          "captures": 0,
+          "host_copies_total": 1
+        },
+        "inner_loop_host_refreshes": 0,
+        "inner_loop_readbacks": 0,
+        "output_windows": 2,
+        "decode_trace": "MeshTraceId(1)",
+        "sampling_trace": "MeshTraceId(3)",
+        "blocking_replay": false,
+        "host_sampling": false,
+        "stop_on_eos": false,
+        "buffered_output": true,
+        "eos_policy": "trim at first EOS; finish current bounded output window before stopping device work"
+      }
+    },
+    {
+      "k": 1,
+      "outputs": 3,
+      "exact": true,
+      "metrics": {
+        "source": "autoregressive",
+        "input_tokens": [
+          33,
+          65,
+          97
+        ],
+        "output_tokens": 3,
+        "scheduled_output_tokens": 3,
+        "requested_output_tokens": 3,
+        "output_lengths": [
+          3,
+          3,
+          3
+        ],
+        "batch": 32,
+        "concurrency": 3,
+        "ttft_ms": 112.96279006637633,
+        "decode_seconds": 0.011719547910615802,
+        "decode_tps_per_user": 170.6550470422464,
+        "steady_state_counters": {
+          "model_replays": 2,
+          "sampling_replays": 2,
+          "token_refreshes": 0,
+          "position_refreshes": 0,
+          "page_table_refreshes": 0,
+          "readbacks": 1,
+          "captures": 0,
+          "host_copies_total": 0
+        },
+        "inner_loop_host_refreshes": 0,
+        "inner_loop_readbacks": 0,
+        "output_windows": 1,
+        "decode_trace": "MeshTraceId(1)",
+        "sampling_trace": "MeshTraceId(3)",
+        "blocking_replay": false,
+        "host_sampling": false,
+        "stop_on_eos": false,
+        "buffered_output": true,
+        "eos_policy": "trim at first EOS; finish current bounded output window before stopping device work"
+      }
+    }
+  ],
+  "trace_ids": [
+    "MeshTraceId(0)",
+    "MeshTraceId(1)",
+    "MeshTraceId(2)",
+    "MeshTraceId(3)"
+  ],
+  "captures": 4,
+  "tracking": "1",
+  "skip_program_cache": "0"
+}
