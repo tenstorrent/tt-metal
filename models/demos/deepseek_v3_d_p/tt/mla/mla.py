@@ -39,6 +39,8 @@ _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
 _GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
+# glue track: seqq q_a norm on its 160 rows width-sharded over this many cores (0 = interleaved rms_norm, 5 cores).
+_GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "0"))
 
 
 class ttMLA:
@@ -2770,8 +2772,55 @@ class ttMLA:
             cluster_axis=self.tp_axis,
         )
         ttnn.deallocate(qr)
-        out = self._q_a_norm(qr_rows, norm_memory_config)
+        if _GLUE_SEQQ_NORM_CORES:
+            out = self._q_a_norm_width_sharded(qr_rows, norm_memory_config, _GLUE_SEQQ_NORM_CORES)
+        else:
+            out = self._q_a_norm(qr_rows, norm_memory_config)
         ttnn.deallocate(qr_rows)
+        return out
+
+    def _q_a_norm_width_sharded(self, qr: ttnn.Tensor, out_memory_config: ttnn.MemoryConfig, cores: int) -> ttnn.Tensor:
+        """q_a RMSNorm with the rows width-sharded over `cores` cores (8 per grid row). The interleaved rms_norm runs
+        one core per 32-row tile row, i.e. 5 cores for seqq's 160 rows; the sharded one splits the 2048 channels and
+        reduces the row statistics across the shard grid (glue track, GLUE_SEQQ_NORM_CORES)."""
+        rows, width = qr.shape[-2], qr.shape[-1]
+        key = (rows, width, cores)
+        cfgs = getattr(self, "_q_norm_shard_cfgs", None)
+        if cfgs is None:
+            cfgs = self._q_norm_shard_cfgs = {}
+        if key not in cfgs:
+            gx = min(8, cores)
+            gy = cores // gx
+            block_w = width // ttnn.TILE_SIZE // cores
+            sub_w = max(w for w in (4, 3, 2, 1) if block_w % w == 0)
+            cfgs[key] = (
+                ttnn.create_sharded_memory_config(
+                    shape=(rows, width // cores),
+                    core_grid=ttnn.CoreGrid(x=gx, y=gy),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+                ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=[gx, gy],
+                    subblock_w=sub_w,
+                    block_h=rows // ttnn.TILE_SIZE,
+                    block_w=block_w,
+                    inplace=False,
+                ),
+            )
+        in_cfg, pc = cfgs[key]
+        xs = ttnn.to_memory_config(qr, in_cfg)
+        o = ttnn.rms_norm(
+            xs,
+            weight=self.q_a_layernorm_weight,
+            epsilon=self.config.rms_norm_eps,
+            program_config=pc,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        ttnn.deallocate(xs)
+        out = ttnn.sharded_to_interleaved(o, out_memory_config)
+        ttnn.deallocate(o)
         return out
 
     def _q_stem_seq(
