@@ -178,18 +178,22 @@ class SparseKvPushPlanner:
         max_rows: int,
         chunk_start: int = 0,
         chunk_start_tensor: ttnn.Tensor | None = None,
+        run_gather=None,
     ) -> SparseKvPushPlan:
         """The plan for `indices`, cached on the indices buffer. Trace-safe with chunk_start_tensor (the metadata's
         kv_actual_global): the plan op reads the chunk start on device, so the cache key leaves its value out. Every
         layer that computes its own indices invalidate()s, so the key only has to tell calls within one forward apart.
+
+        `run_gather(gather)`, when given, issues the plan tables' all-gather: it calls gather(subdevice_id) (the caller
+        runs it on a sub-device next to other work; Q-stem || push overlap, GLM_QPUSH_FULL). Unused on a cache hit.
         """
         start = chunk_start_tensor if chunk_start_tensor is not None else self.chunk_start(chunk_start)
         key = (indices.buffer_address(), stripe_chunk, page_bytes, start.buffer_address())
         if self._last is None or self._key != key:
-            self._key, self._last = key, self._build(indices, stripe_chunk, page_bytes, max_rows, start)
+            self._key, self._last = key, self._build(indices, stripe_chunk, page_bytes, max_rows, start, run_gather)
         return self._last
 
-    def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start):
+    def _build(self, indices, stripe_chunk, page_bytes, max_rows, chunk_start, run_gather=None):
         table, compact = ttnn.experimental.sparse_push_plan(
             indices,
             num_devices=self.mesh_device.get_num_devices(),
@@ -208,9 +212,13 @@ class SparseKvPushPlanner:
                 ttnn.uint32,
                 ttnn.ROW_MAJOR_LAYOUT,
             )
-        ttnn.experimental.high_bw_all_gather(
-            table, dim=2, output_tensor=self._tables, cluster_axis=None, num_links=self.links
+        gather = lambda subdevice_id=None: ttnn.experimental.high_bw_all_gather(
+            table, dim=2, output_tensor=self._tables, cluster_axis=None, subdevice_id=subdevice_id, num_links=self.links
         )
+        if run_gather is not None:
+            run_gather(gather)
+        else:
+            gather()
         hot_table = None
         if self.hot:
             assert 2 * stripe_chunk <= HOT_CURRENT_CAP, f"stripe_chunk {stripe_chunk} > HOT_CURRENT_CAP / 2"
