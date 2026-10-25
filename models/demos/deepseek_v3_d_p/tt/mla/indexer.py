@@ -873,7 +873,10 @@ class TtIndexerBase:
         weights = self._tp_reduce_scatter_sequence(weights)
         # Q and gate weights now have the same TP×SP query ownership. Scoring still uses the original
         # full-SP cache geometry below; only the input query count and its TP sub-offset are smaller.
-        qc = (64 if sq_local % 64 == 0 else 32) if tpsp else 64
+        # q_chunk 64 only with >= 128 TP-local rows: at 64 rows (GLM chunk 2048 on 8x4) the 64-row Q block of all 32
+        # resident heads pushes the op's static CBs past the L1 buffers live at that point (static-CB clash,
+        # smallchunk-2); 5120 (160 rows) and 1024 (32 rows) already run qc=32.
+        qc = (64 if sq_local % 64 == 0 and sq_local >= 128 else 32) if tpsp else 64
 
         # Causality is fused inside indexer_score (future columns -> -inf from chunk_start_idx), so no triu
         # mask here. All H_idx heads are resident on-chip (wq_b replicated), so head_group_size=0 reads the
