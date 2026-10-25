@@ -52,10 +52,12 @@ TABLE = {
         "(layer 0: output column rel up to 0.12) (C.attn_dense.attention)",
     ),
     "SDPA_SEGMENTED": Setting(
-        False,
+        True,
         (True, False),
-        "ring SDPA segmented_accumulation (per-ring-iteration accumulators; needs one Q chunk per core). Layer-0 gate "
-        "margin at k 320: on 0.989, off 1.003, so off (C.attn_dense.attention)",
+        "ring SDPA segmented_accumulation (per-ring-iteration accumulators; needs one Q chunk per core). Off, the "
+        "running output / sum drift over a long prefix: layer-0 attention at 51200 -> 56320 median row norm +2.0 % "
+        "(ladder s56320 norm bias 0.0055-0.0073 > 0.005); on -0.17 % (L.s56320). Layer-0 gate margin at k 320: on "
+        "1.14 with exact_exp (0.989 before it), off 1.003 (C.attn_dense.attention)",
     ),
     "SWA_SDPA_Q_CHUNK": Setting(
         128,

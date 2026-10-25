@@ -287,3 +287,25 @@
   state 0.999843, test_kv_layout, and test_cache_writes (lowest: layer 5 value 0.9758 pulled_back, 0.9784
   follow_up_tile). M.1 (and K.1) must be refrozen by render-tests.
 - Re-run: `bfw job check --task M.1 --gate-only`.
+
+## L.s56320 (ladder, all 11 chunks of 56320): SDPA_SEGMENTED on
+
+- First gate: every PCC / rel / state check passed, but `bias_layer_L*` 0.0055-0.0073 > 0.005 on all six layers,
+  already at layer 0 (s10240: 0.0008). The CPU reference on the golden's layer-0 input and bfp8-rounded prefix gives
+  bias 1e-4, so the drift is the device's.
+- Per-step diagnosis (scratch test: layer 0, chunk 51200 -> 56320, golden prefix loaded, device boundaries vs the CPU
+  step outputs): attn_out median row norm +2.0 % (rel 0.032), every other step clean. The full-attention ring SDPA with
+  `segmented_accumulation=False` carries its bf16 running output / sum across the whole 51k prefix (bf16 dest is
+  forced by the kv_actual_isl streaming path), and the rescale roundings bias the norm up with prefix length.
+- Fix: `SDPA_SEGMENTED` default True (per-ring-iteration accumulators). Layer 0 attn_out -0.17 %, block out +0.05 %.
+  Ladder s56320 (direct): worst layer PCC 0.999858, state 0.999765, every chunk's KV >= 0.99974. Re-gated with it:
+  C.attn_dense.attention PASS margin 1.14, C.attn_moe.attention PASS margin 1.22 (the older 0.989 margin with it on
+  predates exact_exp). Sliding layers do not use the ring SDPA output, so they are unchanged.
+- Re-run: `bfw job check --task L.s56320 --gate-only`.
+- Gate status (attempt 1): not yet confirmed through `bfw job check`. Run 1 failed at mesh open (`Query mappings failed
+  on device 0: No such device`, boards re-enumerated 08:28); run 2 was killed by session teardown mid-run; run 3 refused
+  (device marked dirty, reset is the worker's). The next attempt only needs to run the gate on a reset board.
+- Attempt 4 (debugger, 08:40 UTC, bh-glx-120-b05u02): the gate failed the same way again. Root cause is the host:
+  only 31 of 32 Blackhole chips enumerate (`/dev/tenstorrent/30` and PCI `0000:87:00.0` absent from sysfs), so UMD
+  topology discovery throws `Query mappings failed on device 0: No such device` before the model runs. The code
+  (SDPA_SEGMENTED on) is unchanged and still needs its first gate run on a host with all 32 chips.
