@@ -44,7 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 # glue track: workers per link for the MoE x all-gather over TP; "0" = op default.
 _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
 # glue track: build post_combine_reduce's [1, 1, S, k, 1] weights inside the dispatch || shared-expert window.
-_GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "0") == "1"
+_GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "1") == "1"
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #

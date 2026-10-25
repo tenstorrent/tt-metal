@@ -35,9 +35,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 # glue track: workers per link for the q_a (and merged q_a+kv_a) TP reduce-scatter; "0" = op default.
 _GLUE_STEM_RS_WORKERS = int(os.environ.get("GLUE_STEM_RS_WORKERS", "8")) or None
 # glue track: o_proj RS output in L1 (read once by the block's residual add).
-_GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "0") == "1"
+_GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
-_GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "0") == "1"
+_GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
 
 
