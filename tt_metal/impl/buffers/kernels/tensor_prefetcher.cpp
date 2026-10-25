@@ -180,6 +180,12 @@ FORCE_INLINE void store_pipe_sender(const PipeSender& snd) {
     experimental::pipe_store_wr_offset(snd.ctx, snd.fifo_wr_ptr - snd.ctx.fifo_start_addr);
 }
 
+// The NOC_XY_ENCODING on this kernel's NoC of a NoC endpoint the host packed as virtual coords, x in the
+// low 16 bits and y in the high 16 (TensorPrefetcherEntry::selector_noc_xy).
+FORCE_INLINE uint32_t packed_virtual_xy_to_noc_xy(uint32_t xy) {
+    return uint32_t(NOC_XY_ENCODING(DYNAMIC_NOC_X(noc_index, xy & 0xFFFFu), DYNAMIC_NOC_Y(noc_index, xy >> 16)));
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -192,7 +198,8 @@ void kernel_main() {
     // Base of this core's signal slot table (see kNumCqSignalSlots in tensor_prefetcher_request.hpp):
     // uint32 counters the dispatcher and device kernels raise, which a WAIT_SIGNAL request blocks on.
     // Slots are `signal_slot_stride` bytes apart, not packed: a CQ fence slot is the target of its own
-    // dispatcher write, which only lands on an L1-aligned address.
+    // dispatcher write, which only lands on an L1-aligned address. The host zeroes them before launch;
+    // the kernel never does, or it could erase a signal that landed before it started.
     constexpr uint32_t signal_slots_l1_base = get_compile_time_arg_val(3);
     constexpr uint32_t signal_slot_stride = get_compile_time_arg_val(4);
     constexpr bool controls_ordinary_mpfe = get_compile_time_arg_val(5) != 0;
@@ -222,12 +229,10 @@ void kernel_main() {
     const uint32_t socket_config_addr = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t own_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t ordinary_mpfe_port = get_arg_val<uint32_t>(rt_idx++);
-    // Where this sender passes on the op signal counts it waits for: 0 for nowhere, else the virtual coords
-    // (x in the low 16 bits, y in the high 16) of the bank's NOC1-endpoint sender, which no signal reaches.
+    // Where this sender passes on the op signal counts it waits for: 0 for nowhere, else the packed virtual
+    // coords of the bank's NOC1-endpoint sender, which no signal reaches.
     const uint32_t op_signal_forward_xy = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t op_signal_forward_noc_xy = uint32_t(NOC_XY_ENCODING(
-        DYNAMIC_NOC_X(noc_index, op_signal_forward_xy & 0xFFFFu),
-        DYNAMIC_NOC_Y(noc_index, op_signal_forward_xy >> 16)));
+    const uint32_t op_signal_forward_noc_xy = packed_virtual_xy_to_noc_xy(op_signal_forward_xy);
 
     // ---- Init ----
     SocketReceiverInterface socket = create_receiver_socket_interface(socket_config_addr);
@@ -242,12 +247,6 @@ void kernel_main() {
             gddr_mc_write_mpfe_weight(ordinary_mpfe_port, ordinary_mpfe_weight);
         }
     }
-
-    // Never zeroed here: the host zeroes the signal slots before launching this kernel, so a signal that
-    // lands before the kernel gets here is still counted.
-    auto signal_slot = [](uint32_t index) -> volatile tt_l1_ptr uint32_t* {
-        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_slots_l1_base + index * signal_slot_stride);
-    };
 
     // ---- Request loop ----
     while (true) {
@@ -284,7 +283,8 @@ void kernel_main() {
             // kernels for an op signal -- reaches the requested value. Wrap-safe: compare the unsigned
             // difference as signed.
             const uint32_t slot_index = req->wait_signal.slot_index;
-            volatile tt_l1_ptr uint32_t* slot = signal_slot(slot_index);
+            const uint32_t slot_addr = signal_slots_l1_base + slot_index * signal_slot_stride;
+            volatile tt_l1_ptr uint32_t* slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr);
             const uint32_t target = req->wait_signal.wait_value;
             while ((int32_t)(*slot - target) < 0) {
                 invalidate_l1_cache();
@@ -293,8 +293,7 @@ void kernel_main() {
             // atomics and repeats register writes. So on passing an op signal wait the free sender copies its
             // count into the same slot of its partner, which gets the same WAIT and spins on that slot. Posted:
             // the partner's spin is the only consumer, so there is no ack to wait for.
-            if (op_signal_forward_xy != 0 && slot_index >= tt::tt_metal::kNumCqSignalSlots) {
-                const uint32_t slot_addr = reinterpret_cast<uint32_t>(slot);
+            if (op_signal_forward_xy != 0 && tt::tt_metal::is_op_signal_slot(slot_index)) {
                 noc_async_write_one_packet</*enable_noc_tracing=*/false, /*posted=*/true>(
                     slot_addr, get_noc_addr_helper(op_signal_forward_noc_xy, slot_addr), sizeof(uint32_t), noc_index);
                 noc_async_posted_writes_flushed();
@@ -372,9 +371,7 @@ void kernel_main() {
             volatile tt_l1_ptr uint16_t* selector =
                 reinterpret_cast<volatile tt_l1_ptr uint16_t*>(selector_scratch_l1_addr);
             if (selected) {
-                const uint32_t selector_xy = entries[e].selector_noc_xy;
-                const uint32_t selector_noc_xy = uint32_t(NOC_XY_ENCODING(
-                    DYNAMIC_NOC_X(noc_index, selector_xy & 0xFFFFu), DYNAMIC_NOC_Y(noc_index, selector_xy >> 16)));
+                const uint32_t selector_noc_xy = packed_virtual_xy_to_noc_xy(entries[e].selector_noc_xy);
                 const uint32_t selector_bytes =
                     (num_groups * sizeof(uint16_t) + L1_ALIGNMENT - 1) & ~(L1_ALIGNMENT - 1);
                 noc_async_read(

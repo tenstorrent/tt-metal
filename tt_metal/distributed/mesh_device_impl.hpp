@@ -408,10 +408,8 @@ public:
     // returns the released region, or TT_FATALs if none was ever created.
     std::shared_ptr<experimental::HostRegion> host_region();
 
-    // Returns the logical DRAM core for `bank_id` on `device` whose physical NoC coord isn't
-    // already claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
-    // safe for a DRISC kernel to occupy. Resolved against `device`'s harvested DRAM topology.
-    // Throws if no free subchannel exists, or TT_FATALs if bank_id is out of range.
+    // tt::tt_metal::pick_unused_dram_logical_core (impl/buffers/dram_sender_topology.hpp) against
+    // `device`'s SoC descriptor.
     CoreCoord pick_unused_dram_logical_core(const IDevice* device, uint32_t bank_id) const;
 
     // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender

@@ -626,8 +626,7 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
                 noc_x = hal_.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord.x);
                 noc_y = hal_.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y);
             }
-            uint16_t xy = ((noc_y << hal_.get_noc_addr_node_id_bits()) | noc_x) << hal_.get_noc_coord_reg_offset();
-            dram_bank_to_noc_xy.push_back(xy);
+            dram_bank_to_noc_xy.push_back(static_cast<uint16_t>(pack_bank_noc_xy(noc_x, noc_y)));
         }
     }
 
@@ -638,10 +637,13 @@ void RiscFirmwareInitializer::generate_device_bank_to_noc_tables(
             auto l1_noc_coords = virtual_noc0_coordinate(device_id, noc, noc_coord);
             uint16_t noc_x = l1_noc_coords.x;
             uint16_t noc_y = l1_noc_coords.y;
-            uint16_t xy = ((noc_y << hal_.get_noc_addr_node_id_bits()) | noc_x) << hal_.get_noc_coord_reg_offset();
-            l1_bank_to_noc_xy.push_back(xy);
+            l1_bank_to_noc_xy.push_back(static_cast<uint16_t>(pack_bank_noc_xy(noc_x, noc_y)));
         }
     }
+}
+
+uint32_t RiscFirmwareInitializer::pack_bank_noc_xy(uint32_t noc_x, uint32_t noc_y) const {
+    return ((noc_y << hal_.get_noc_addr_node_id_bits()) | noc_x) << hal_.get_noc_coord_reg_offset();
 }
 
 void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(tt::ChipId device_id) {
@@ -695,8 +697,7 @@ void RiscFirmwareInitializer::generate_tensor_prefetcher_signal_table(
         const CoreCoord signal_core = pick_unused_dram_logical_core(soc_desc, bank_id, device_id);
         const CoreCoord xy =
             cluster_.get_virtual_coordinate_from_logical_coordinates(device_id, signal_core, CoreType::DRAM);
-        tensor_prefetcher_signal_noc_xy[bank_id] = ((xy.y << hal_.get_noc_addr_node_id_bits()) | xy.x)
-                                                   << hal_.get_noc_coord_reg_offset();
+        tensor_prefetcher_signal_noc_xy[bank_id] = pack_bank_noc_xy(xy.x, xy.y);
     }
 }
 
@@ -739,13 +740,12 @@ void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
     const uint64_t mem_bank_to_noc_addr = hal_.get_dev_noc_addr(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
     const uint32_t mem_bank_to_noc_size = hal_.get_dev_size(core_type, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
 
-    // Only WH/BH Tensix firmware (brisc/ncrisc) loads the Tensor prefetcher signal table, and Tensix always
-    // takes the multicast path below.
-    const bool loads_tensor_prefetcher_signal_table =
-        core_type == HalProgrammableCoreType::TENSIX && cluster_.arch() != ARCH::QUASAR;
+    // Only Tensix firmware loads the Tensor prefetcher signal table (none on Quasar, which leaves it empty), and
+    // Tensix always takes the multicast path below.
     const uint32_t tensor_prefetcher_sz_in_bytes =
-        loads_tensor_prefetcher_signal_table ? tensor_prefetcher_signal_noc_xy_[device_id].size() * sizeof(uint32_t)
-                                             : 0;
+        core_type == HalProgrammableCoreType::TENSIX
+            ? tensor_prefetcher_signal_noc_xy_[device_id].size() * sizeof(uint32_t)
+            : 0;
 
     TT_ASSERT(
         (dram_to_noc_sz_in_bytes + l1_to_noc_sz_in_bytes + dram_offset_sz_in_bytes + l1_offset_sz_in_bytes +

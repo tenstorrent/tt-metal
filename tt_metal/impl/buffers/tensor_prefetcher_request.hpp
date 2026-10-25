@@ -96,6 +96,12 @@ inline constexpr uint32_t kRequestPageBytes = 128;
 // The host zeroes the table before launching the kernels.
 constexpr uint32_t kNumCqSignalSlots = 2;
 
+// Index in the signal slot table of op signal `signal_id`.
+constexpr uint32_t op_signal_slot_index(uint32_t signal_id) { return kNumCqSignalSlots + signal_id; }
+
+// Whether signal slot `slot_index` is an op signal slot rather than a CQ fence slot.
+constexpr bool is_op_signal_slot(uint32_t slot_index) { return slot_index >= kNumCqSignalSlots; }
+
 // Address-independent per-tensor geometry handed to the Tensor prefetcher kernel.
 // All values are derived from the tensor shape + dtype + receiver topology + DRISC L1
 // stage budget; the host (compute_tensor_layout) picks (rows_per_sub, M) by the fit

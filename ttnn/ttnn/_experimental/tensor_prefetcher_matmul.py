@@ -163,7 +163,9 @@ def prefetch_and_sparse_matmul(
             (``ttnn.experimental.signal_tensor_prefetcher``) and queues a wait on it ahead of the
             matmul's request. Both are captured into a trace with the rest, so a mask written by an op
             inside the same trace is read after that op on every replay. Every wait on the signal must
-            pair with one raise of it, so don't raise it elsewhere.
+            pair with one raise of it, so don't raise it elsewhere. The wait also holds every request
+            queued after it, so when several sparse matmuls read one mask, set ``signal_id`` on the
+            first only: each further one adds a signal program and a wait for nothing.
         **sparse_matmul_kwargs: Forwarded to ``ttnn.sparse_matmul`` (e.g. ``nnz``,
             ``is_input_a_sparse``, ``memory_config``, ``compute_kernel_config``, ``dtype``). Prefer
             leaving ``nnz`` unset: an ``nnz`` that differs from ``count_nonzero(sparsity)`` stalls the

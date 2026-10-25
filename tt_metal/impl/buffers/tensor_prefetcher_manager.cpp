@@ -523,9 +523,14 @@ TensorPrefetcherTensorLayout compute_tensor_layout(
     return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
 }
 
-// Where the DRISC kernel reads a group selector's mask page: a NoC endpoint as virtual coordinates
-// (x in the low 16 bits, y in the high 16, the TensorPrefetcherEntry::selector_noc_xy encoding) and
-// the page's address there.
+// Virtual coords `xy` packed the way the DRISC kernel decodes a NoC endpoint from a request page or
+// runtime arg: x in the low 16 bits, y in the high 16 (TensorPrefetcherEntry::selector_noc_xy).
+uint32_t pack_virtual_xy(const CoreCoord& xy) {
+    return static_cast<uint32_t>(xy.x) | (static_cast<uint32_t>(xy.y) << 16);
+}
+
+// Where the DRISC kernel reads a group selector's mask page: a NoC endpoint packed by pack_virtual_xy,
+// and the page's address there.
 struct SelectorLocation {
     uint32_t noc_xy = 0;
     uint32_t addr = 0;
@@ -584,7 +589,7 @@ SelectorLocation resolve_group_selector(
                                      .get_cluster()
                                      .get_soc_desc(device->id())
                                      .get_preferred_worker_core_for_dram_view(static_cast<int>(channel), /*noc=*/0);
-            here.noc_xy = static_cast<uint32_t>(xy.x) | (static_cast<uint32_t>(xy.y) << 16);
+            here.noc_xy = pack_virtual_xy(xy);
             here.addr = static_cast<uint32_t>(mask.mesh_buffer().get_reference_buffer()->page_address(0, 0));
         } else {
             TT_FATAL(
@@ -596,7 +601,7 @@ SelectorLocation resolve_group_selector(
                 memory_config);
             const CoreCoord xy =
                 device->worker_core_from_logical_core(mask.shard_spec()->grid.ranges().front().start_coord);
-            here.noc_xy = static_cast<uint32_t>(xy.x) | (static_cast<uint32_t>(xy.y) << 16);
+            here.noc_xy = pack_virtual_xy(xy);
             here.addr = static_cast<uint32_t>(mask.address());
         }
         if (location.has_value()) {
@@ -881,14 +886,13 @@ void TensorPrefetcherManager::build_and_launch_programs(
                 DramConfig{.noc = NOC::NOC_0, .compile_args = compile_args, .defines = {{"WATCHER_NOINLINE", "1"}}});
 
             const uint32_t socket_addr = sockets_[d * num_senders_ + s]->get_config_buffer_address();
-            // Op signals reach only the bank's free sender (the firmware table that tensor_prefetcher_signal
-            // walks names it), because no NoC 1 atomic reaches the NOC1-endpoint sender's L1. The free sender
-            // passes each count it waits for on to that partner, at coords DRAM harvesting may move per device.
+            // The free sender passes the op signal counts it waits for on to the bank's NOC1-endpoint sender,
+            // which no signal reaches (see the kernel's WAIT_SIGNAL handler), at coords DRAM harvesting may
+            // move per device.
             uint32_t op_signal_forward_xy = 0;
             if (s == bank_sender_base) {
-                const CoreCoord partner = devices_[d]->virtual_core_from_logical_core(
-                    sender_logical_cores_[bank_sender_base + 1], CoreType::DRAM);
-                op_signal_forward_xy = static_cast<uint32_t>(partner.x) | (static_cast<uint32_t>(partner.y) << 16);
+                op_signal_forward_xy = pack_virtual_xy(devices_[d]->virtual_core_from_logical_core(
+                    sender_logical_cores_[bank_sender_base + 1], CoreType::DRAM));
             }
             std::vector<uint32_t> rt_args = {
                 bank_id, socket_addr, own_mpfe_port, ordinary_mpfe_port, op_signal_forward_xy};
@@ -1425,7 +1429,7 @@ void TensorPrefetcherManager::queue(
     const RequestTarget target = target_for(prefetcher_pipes);
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
-    validate_trace_capture_cq(trace_capture_cq, "QueueTensorPrefetcherRequest");
+    validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherRequest");
     const std::vector<uint32_t> target_sender_indices = sender_indices_for_target(target);
     TT_FATAL(!tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
     // A Queue call may span more tensors than fit in one socket page; serialize into one
@@ -1469,17 +1473,16 @@ void TensorPrefetcherManager::queue(
     send_or_capture(std::move(requests), trace_capture_cq);
 }
 
-void TensorPrefetcherManager::validate_trace_capture_cq(
-    const MeshCommandQueue* trace_capture_cq, std::string_view api_name) const {
+void TensorPrefetcherManager::validate_own_cq(const MeshCommandQueue* cq, std::string_view api_name) const {
     // Only reached with a non-null queue: the null case short-circuits, so the message may
     // dereference it (TT_FATAL evaluates its arguments only when the condition fails).
     TT_FATAL(
-        trace_capture_cq == nullptr || trace_capture_cq->device() == mesh_device_,
-        "{} was given trace-capture command queue {} of mesh device {}, but this prefetcher was started on mesh "
-        "device {}. Pass a command queue of the prefetcher's own mesh device.",
+        cq == nullptr || cq->device() == mesh_device_,
+        "{} was given command queue {} of mesh device {}, but this prefetcher was started on mesh device {}. Pass a "
+        "command queue of the prefetcher's own mesh device.",
         api_name,
-        trace_capture_cq->id(),
-        trace_capture_cq->device()->id(),
+        cq->id(),
+        cq->device()->id(),
         mesh_device_->id());
 }
 
@@ -1613,14 +1616,13 @@ std::vector<uint8_t> TensorPrefetcherManager::wait_signal_page(uint32_t slot_ind
     return page;
 }
 
-uint32_t TensorPrefetcherManager::op_signal_slot(uint32_t signal_id, std::string_view api_name) {
+void TensorPrefetcherManager::validate_signal_id(uint32_t signal_id, std::string_view api_name) {
     TT_FATAL(
         signal_id < experimental::kTensorPrefetcherNumSignals,
         "{}: signal id {} is out of range [0, {})",
         api_name,
         signal_id,
         experimental::kTensorPrefetcherNumSignals);
-    return kNumCqSignalSlots + signal_id;
 }
 
 uint32_t TensorPrefetcherManager::signal_slot_addr(uint32_t slot_index) const {
@@ -1630,14 +1632,15 @@ uint32_t TensorPrefetcherManager::signal_slot_addr(uint32_t slot_index) const {
 uint32_t TensorPrefetcherManager::signal_address(uint32_t signal_id) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "GetTensorPrefetcherSignalAddress called before StartTensorPrefetcher");
-    return signal_slot_addr(op_signal_slot(signal_id, "GetTensorPrefetcherSignalAddress"));
+    validate_signal_id(signal_id, "GetTensorPrefetcherSignalAddress");
+    return signal_slot_addr(op_signal_slot_index(signal_id));
 }
 
 void TensorPrefetcherManager::queue_wait_for_signal(uint32_t signal_id, MeshCommandQueue* trace_capture_cq) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherWaitForSignal called before StartTensorPrefetcher");
-    op_signal_slot(signal_id, "QueueTensorPrefetcherWaitForSignal");
-    validate_trace_capture_cq(trace_capture_cq, "QueueTensorPrefetcherWaitForSignal");
+    validate_signal_id(signal_id, "QueueTensorPrefetcherWaitForSignal");
+    validate_own_cq(trace_capture_cq, "QueueTensorPrefetcherWaitForSignal");
 
     // Every sender of every device waits: a signal increments the slot on all of them, and the per-signal
     // count of waits is only meaningful if every device sees every wait. worker_loop builds the page.
@@ -1662,13 +1665,7 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     // api lock and does NOT re-lock, so holding it here does not self-deadlock.
     auto lock = lock_api_function_();
     TT_FATAL(active_, "WaitForCqOnTensorPrefetcher called before StartTensorPrefetcher");
-    TT_FATAL(
-        cq.device() == mesh_device_,
-        "WaitForCqOnTensorPrefetcher was given command queue {} of mesh device {}, but this prefetcher was started on "
-        "mesh device {}. Fence against a command queue of the prefetcher's own mesh device.",
-        cq.id(),
-        cq.device()->id(),
-        mesh_device_->id());
+    validate_own_cq(&cq, "WaitForCqOnTensorPrefetcher");
     const uint32_t cq_id = cq.id();
     TT_FATAL(
         cq_id < cq_signal_counter_.size(),
@@ -1731,18 +1728,13 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
 
     // (b) Queue a WAIT_SIGNAL request on the CQ's fence slot. It rides the same async worker path as
     // prefetch requests, so it lands in each socket's FIFO ahead of the next prefetch request;
-    // the kernel blocks on it until it observes signal_value.
-    Request req;
-    req.sender_pages.push_back(wait_signal_page(cq_id, signal_value));
-    req.target_devices = std::move(target_devices);
-    validate_request_pages(req.sender_pages);
-
-    {
-        std::lock_guard<std::mutex> lk(queue_mu_);
-        pending_.push_back(std::make_shared<const Request>(std::move(req)));
-        has_pending_.store(true);
-    }
-    queue_cv_.notify_one();
+    // the kernel blocks on it until it observes signal_value. Never captured, as the dispatcher write
+    // above cannot be.
+    std::vector<Request> requests(1);
+    requests[0].sender_pages.push_back(wait_signal_page(cq_id, signal_value));
+    requests[0].target_devices = std::move(target_devices);
+    validate_request_pages(requests[0].sender_pages);
+    send_or_capture(std::move(requests), /*trace_capture_cq=*/nullptr);
 }
 
 void TensorPrefetcherManager::release_trace(const MeshTraceId& trace_id) {
@@ -1788,7 +1780,7 @@ void TensorPrefetcherManager::worker_loop() {
             const uint32_t signal_id = *request->op_signal;
             auto with_page = std::make_shared<Request>(*request);
             with_page->sender_pages.push_back(
-                wait_signal_page(kNumCqSignalSlots + signal_id, ++op_signal_waits_[signal_id]));
+                wait_signal_page(op_signal_slot_index(signal_id), ++op_signal_waits_[signal_id]));
             request = std::move(with_page);
         }
         TakenRequest& taken_request = taken.emplace_back(TakenRequest{.request = std::move(request)});
