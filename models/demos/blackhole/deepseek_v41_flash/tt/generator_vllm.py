@@ -1853,17 +1853,18 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             self._ab_logits_check(r, k, runner_rows)
             ea, em, _ = r._readback(pack=r.dec.pack)
             eager_out.append((k, ea[runner_rows, 0].tolist()))
-            v2 = torch.cat(
-                [
-                    ttnn.to_torch(ttnn.get_device_tensors(r.dec.top2)[row * r.cols]).reshape(r.U * r.n, -1)
-                    for row in range(r.rows)
-                ]
-            ).float()
-            t2 = v2.topk(2, dim=-1).values.reshape(self.B, r.n, 2)
-            logger.info(
-                f"ABCMP eager k={k} top1/top2 logit of row 0 per user row {[[round(float(t2[q, 0, 0]), 3), round(float(t2[q, 0, 1]), 3)] for q in runner_rows]}, "
-                f"rows 1..{r.n - 1} top1 {[[round(float(t2[q, j, 0]), 2) for j in range(1, r.n)] for q in runner_rows]}, nan in logits {bool(v2.isnan().any())}, shard width {v2.shape[1]}"
-            )
+            if r.dec.top2 is not None:  # (DSV41_SPEC_TOP2=1 only)
+                v2 = torch.cat(
+                    [
+                        ttnn.to_torch(ttnn.get_device_tensors(r.dec.top2)[row * r.cols]).reshape(r.U * r.n, -1)
+                        for row in range(r.rows)
+                    ]
+                ).float()
+                t2 = v2.topk(2, dim=-1).values.reshape(self.B, r.n, 2)
+                logger.info(
+                    f"ABCMP eager k={k} top1/top2 logit of row 0 per user row {[[round(float(t2[q, 0, 0]), 3), round(float(t2[q, 0, 1]), 3)] for q in runner_rows]}, "
+                    f"rows 1..{r.n - 1} top1 {[[round(float(t2[q, j, 0]), 2) for j in range(1, r.n)] for q in runner_rows]}, nan in logits {bool(v2.isnan().any())}, shard width {v2.shape[1]}"
+                )
             r.dec.restore_states(snaps)
             for _, sn in snaps:
                 if sn is not None:
