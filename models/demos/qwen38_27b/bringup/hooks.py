@@ -210,3 +210,58 @@ def device_model(mesh, spec, layers, lm_head=True):
 
     chunk, max_seq = int(spec.get("target.chunk")), int(spec.get("target.seq"))
     return _DeviceModel(TtModel(mesh, spec.hf_dir, list(layers), chunk, max_seq, lm_head=lm_head))
+
+
+# ---- serving contract (K.1): the prefill runner's runtime (tt/runners/runtime.py) on the engine-owned cache
+
+
+def _pcc(a, b) -> float:
+    a, b = a.double().flatten(), b.double().flatten()
+    if torch.equal(a, b):
+        return 1.0
+    a, b = a - a.mean(), b - b.mean()
+    den = a.norm() * b.norm()
+    return float((a @ b) / den) if den > 0 else 0.0
+
+
+def contract_state_pcc(spec, runtime, kv, slot, length, golden):
+    """The linear layers' conv / recurrent state of ``slot`` after the runtime prefilled [0, length), read off the
+    engine-owned state (harness boundary), vs the golden snapshot at ``length``: {name: min PCC over the layers}."""
+    model = runtime.model
+    out = {}
+    for i in kv.linear_layers:
+        st = kv.gdn[(slot, i)]
+        gold = golden.state(i, at=length)
+        got = {"conv": model.conv_to_host(model.mixers[i], st.conv), "recurrent": model.rec_to_host(st.recurrent)}
+        for name, t in got.items():
+            p = _pcc(t.float(), gold[name].float().reshape(t.shape))
+            out[name] = min(out.get(name, 1.0), p)
+    return out
+
+
+def contract_independent_pcc(spec, table, dmap, slot, length, golden):
+    """The KV of ``slot`` [0, length) read through the table over UMD and decoded by ttnn (not the producer's decoder),
+    vs the golden: {"k": min PCC, "v": min PCC} over the attention layers. Configs: K heads 0..n_kv-1, then V heads."""
+    import ttnn
+    from models.demos.qwen38_27b.reference.model import Config
+
+    D = ttnn.experimental.disaggregation
+    cfg = Config(spec.hf_dir)
+    n_kv, hd = cfg.n_kv, cfg.head_dim
+    out = {"k": 1.0, "v": 1.0}
+    for layer in [i for i in spec.layers() if not cfg.is_linear(i)]:
+        gold = golden.state(layer)
+        for kind, base, name in (("k", 0, "key"), ("v", n_kv, "value")):
+            heads = []
+            for h in range(n_kv):
+                rows = []
+                for pos in range(0, length, 32):
+                    loc = table.lookup(layer, pos, slot, base + h)
+                    node = table.get_device_group(loc.device_group_index).fabric_node_ids[0]
+                    raw = D.read_dram_umd(dmap[(int(node.mesh_id), int(node.chip_id))], loc.noc_addr, loc.size_bytes)
+                    rows.append(ttnn.to_torch(D.tensor_from_bfp8_bytes(bytes(raw), [32, hd])).float())
+                heads.append(torch.cat(rows)[:length])
+            dev = torch.stack(heads)
+            want = gold[name].reshape(n_kv, -1, hd)[:, :length].float()
+            out[kind] = min(out[kind], _pcc(dev, want))
+    return out

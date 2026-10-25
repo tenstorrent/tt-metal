@@ -61,6 +61,24 @@ def _apply_manifest_env():
 
 _apply_manifest_env()
 
+
+def _apply_operation_timeout_floor():
+    # The request loop blocks in the H2D drain until the scheduler sends the next chunk, and tt-metal counts that
+    # wait as a device op. A short TT_METAL_OPERATION_TIMEOUT_SECONDS (a hang-detecting wrapper sets 5 s) then reads
+    # an idle server as a hang. Raise it to a floor that still catches a real hang; 0 (no timeout) stays as is. It
+    # must be set before the first MetalContext reads the runtime options (mesh open).
+    floor = float(os.environ.get("PREFILL_MIN_OPERATION_TIMEOUT_S", "600"))
+    current = os.environ.get("TT_METAL_OPERATION_TIMEOUT_SECONDS")
+    if current is not None and 0 < float(current) < floor:
+        os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = f"{floor:g}"
+        logger.info(
+            f"TT_METAL_OPERATION_TIMEOUT_SECONDS {current} -> {floor:g} (PREFILL_MIN_OPERATION_TIMEOUT_S): "
+            "the runner idles in the H2D drain between chunks"
+        )
+
+
+_apply_operation_timeout_floor()
+
 SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
 METADATA_SIZE_BYTES = 12
 

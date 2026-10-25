@@ -62,6 +62,11 @@ TABLE = {
     ),
     "ATTN_SDPA_K_CHUNK": Setting(64, (64, 128, 256), "ring SDPA k chunk; see ATTN_SDPA_Q_CHUNK"),
     "ATTN_RING_LINKS": Setting(1, (1, 2), "fabric links of the ring SDPA's KV all-gather over axis 0"),
+    "HF_DIR": Setting(
+        "/mnt/models/huggingface/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+        None,
+        "the checkpoint the prefill runner's adapter loads (config and weights): the spec's hf dir",
+    ),
     "KV_SLOTS": Setting(
         2, (1, 2), "request slots of the served state (serving_answers slots: 2); KV user-major, slot * n_attn + layer"
     ),

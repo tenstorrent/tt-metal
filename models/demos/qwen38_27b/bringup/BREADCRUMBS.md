@@ -111,3 +111,89 @@
   g = beta = 0 on pad rows (a device mask `row_offset < end - start` built at load), so the recurrent state skips them.
 - `bringup/hooks.py:device_model` wraps TtModel; only `layer` runs under `_ops_visible` (device-op proof).
 - Re-run: `bfw job check --task M.1 --gate-only`.
+
+## K.1 contract (adapter, served cache, table)
+
+- `tt/runners/kv_cache.py`: the engine-owned serving state `Qwen38KvCaches` (allocate_kv_cache): one bfp8 K/V cache for
+  the served attention layers (ND-sharded [1, 1, 32, 256] ROUND_ROBIN_1D, user-major slot * n_attn + ordinal, kv head
+  c on TP column c) and per (slot, linear layer) the GDN conv (bf16) / recurrent (fp32) state. `TtState` now runs on
+  this object (`model.new_state(max_seq, caches=...)`; it allocates one the same way by default), so the ladder and
+  the runner share one cache format.
+- Table (`build_table`): configs 0..3 = K heads, 4..7 = V heads (gpt_oss_d_p layout), chunk_n_tokens 32, 8704 B,
+  num_layers = served layers, entries only on attention layers. One-chip device groups (head h on column h, position p
+  on SP row (p // 640) % 8, local row (p // 5120) * 640 + p % 640; shard j in bank j % B at base + (j // B) * 8704).
+  The walk matches `blockcyclic_positions` for every 32-token position (checked on the CPU).
+- `tt/runners/runtime.py`: eager, one rank. prefill_chunk embeds the engine's [8, 1, 640] uint32 input
+  (`embed_engine_input`), runs every served layer on the slot, acks after each layer (D2H record when the runner
+  passes the service, else device sync + host sink). Chunk starts must be chunk multiples (prefix_reuse false).
+- Adapter `tt/runners/adapter.py`, registered as `qwen38_27b`; checkpoint from the `HF_DIR` setting. The producer's
+  KV read-back goes through the adapter hook `read_slot_kv_and_check_pcc` (new generic branch in prefill_producer).
+- hooks: `contract_state_pcc` (GDN state vs golden snapshot), `contract_independent_pcc` (ttnn's bfp8 decoder).
+- Re-run: `bfw job check --task K.1 --gate-only`.
+- Attempt 1 result: the gate FAILs in the framework, not the model. `testing/contract.py:102` calls
+  `get_chip_unique_id_from_fabric_node_id(mesh_id, chip_id)`; this ttnn wants `(mesh, mesh_id, chip_id)`. Its layout
+  check also passes `range(L)`, so GDN layers without records fail it (owner answer hybrid_table_check). A scratch copy
+  of the test with only those two changes passes: contract_checks_failed 0, acks_early 0, producer KV k 0.99987 /
+  v 0.99981, GDN state conv 0.99993 / recurrent 0.99978. The runner test could not start here: on
+  bh-glx-120-b07u08 the runner's H2DStreamService fails to pin host pages (IOMMU disabled on chip 15). With the
+  engine feeder it would also stop at its ack-channel precheck until tt-d-gen is re-pinned (owner answer engine_pin).
+
+### K.1 attempt 2 (2026-10-24)
+No code change. The framework's `testing/contract.py` is unchanged: line 102 still calls the ttnn function without the
+mesh, and line 155 still passes `range(L)`. The gate failed the same way: TypeError at contract.py:102,
+layout_failures 1. Chip 15 on bh-glx-120-b07u08 still cannot pin DMA pages. Re-run with:
+`bfw job check --task K.1 --gate-only`.
+
+### K.1 attempt 3 (2026-10-24)
+- Same code as attempt 1, nothing changed. I ran `bfw job check --task K.1 --gate-only` once (94 s). It failed the same way: a TypeError at framework `testing/contract.py:102`, which calls `get_chip_unique_id_from_fabric_node_id` without the mesh, and `layout_failures` = 1 because line 155 passes `range(L)`, which includes the GDN layers that have no records. Both lines are outside K.1's paths, so a person has to fix them. Chip 15's DMA pin warning is still in the log.
+
+### K.1 (run 20261024-173440, attempt 1)
+- Restored the parent's K.1 work (refs/bringup/wip/K.1) unchanged. With the framework fixes, the adapter contract test
+  passes: contract_checks_failed 0, acks_early 0, layout_failures 0, producer KV k 0.99987 / v 0.99981.
+- The runner test ran for the first time, fed by tt-d-gen's engine (driver attached in 57 s, a1/b1 admitted on slots
+  0/1). The runner died 5 s after "entering request loop", before any chunk ran: `TT_THROW: TIMEOUT` in its own H2D
+  drain (`_socket_next` -> `_decode_metadata`). The test copies the safe runner's `TT_METAL_OPERATION_TIMEOUT_SECONDS=5`
+  into the runner subprocess, so waiting idle for the next chunk counts as a hang (known_issues "The safe runner's 5 s
+  dispatch timeout..."). The gate reported HANG (fabric routers left mid-flight; the device reset failed).
+- Fix: `prefill_runner.py` `_apply_operation_timeout_floor()`, run at import before the mesh opens, raises a positive
+  timeout below `PREFILL_MIN_OPERATION_TIMEOUT_S` (default 600 s) to that floor; 0 (no timeout) stays as it is. Not
+  re-run in this session (the board stays hung until the next attempt).
+- Re-run: `bfw job check --task K.1 --gate-only`.
+
+### K.1 (run 20261024-173440, attempt 2)
+- Code unchanged from attempt 1 (the parent's K.1 work plus the runner's timeout floor). The gate
+  (`bfw job check --task K.1 --gate-only`, which uses `--dev` because attempt 1 hung) FAILs in 77 s, before any
+  model check: under the watcher, `chunk_gated_delta_rule` at chunk 64 does not build. TT_FATAL "Program size (90016)
+  too large for kernel config buffer (70656)" (fused program: chunk_gdn_prep / reader / writer_chunk_gdn_fused).
+  Probes of layer-0 linear attention with `--dev`: phased program at chunk 64 is 89232 B (prep trisc0-2 alone 80 KB);
+  mono needs 2.3 MB of CBs; fused at chunk 32 is 1648 B over; phased at chunk 32 builds and passes (PCC 0.999994).
+  I did not change the shipped GDN chunk or program: chunk 64 is the measured-better choice (GDN_DELTA_CHUNK), and the
+  limit applies only to the watcher build.
+- Runner test without the watcher (`scripts/run_safe_pytest.sh --run-all .../test_runner_contract.py`), fed by
+  tt-d-gen's engine @ 1cf34388: the runner logs the timeout floor (5 -> 600), reaches CHUNK_START, runs 17 chunks, and
+  the driver reports ok. a1/b1 PREFILL_DONE at 8017, a2 at 56320, b2 at 10240, on tt-d-gen's chunk plan. Shutdown is clean.
+  The test then fails in the framework: `server_rules.harness` copies tt-d-gen's `kv_manager/tests/harness/tables.py`
+  out of its package, so its `from .config import ...` raises ImportError.
+- A scratch copy of the test that imports `tables` as a package module (diagnosis only; frozen test untouched): the
+  table matches tt-d-gen's profile on all 8 configs, layout_failures 0, KV through the table vs golden with
+  kv_dump_compare is 0.99977-0.99992 for every head (a2 [0, 56320), b2 [0, 10240)). The only failures are in "starts":
+  `ran [(5120, 8017), (0, 5120)]` for a1 and b1. The test picks the last len(plan) chunks on the slot that are in the
+  plan, and a2/b2 restart the same slot at 0 (prefix_reuse false), so a1's own (0, 5120) is shadowed by a2's. The
+  runner ran a1 as [0,5120) then [5120,8017).
+- The adapter contract test without the watcher: PASS.
+- Re-run: `bfw job check --task K.1 --gate-only`.
+
+### K.1 (run 20261024-230754, attempt 1)
+- Code unchanged: the K.1 work from refs/bringup/wip/K.1 plus the runner's timeout floor. The gate ran without `--dev`
+  (423 s). The adapter contract test PASSes: contract_checks_failed 0, acks_early 0, layout_failures 0, KV k 0.99987 /
+  v 0.99981.
+- Runner test, fed by tt-d-gen 1cf34388's engine: a1/b1/a2/b2 PREFILL_DONE at their prompt lengths, driver ok. The
+  table profile and layout checks pass, and so does KV via the table vs golden: every head >= 0.99977 for a2
+  [0, 56320) and b2 [0, 10240).
+- Failed only "starts" for a1/b1: `ran [(5120, 8017), (0, 5120)], plan [(0, 5120), (5120, 8017)]`. The runner log shows
+  the engine's plan, in order (c=0 slot0 [0,5120), c=2 slot0 [5120,8017), c=4 slot0 [0,5120) = a2 ...). The test
+  filters every chunk on the slot that matches a1's plan over the whole log. With prefix_reuse false, the follow-up a2
+  restarts at [0,5120) on the same slot, so its first chunk is counted as a1's. The check is in the frozen
+  test_runner_contract.py (outside K.1's paths), so a person has to fix it. The chunks come from tt-d-gen, so the
+  model cannot change them.
+- Re-run: `bfw job check --task K.1 --gate-only`.

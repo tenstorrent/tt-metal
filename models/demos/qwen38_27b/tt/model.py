@@ -38,11 +38,13 @@ from models.demos.qwen38_27b.reference.model import (
     Reference,
 )
 
-from .attention import KvCache, TtGatedAttention, blockcyclic_positions, kv_memory_config
+from .attention import KvCache, TtGatedAttention, _Ring, blockcyclic_positions, kv_memory_config
 from .linear_attention import GdnState, TtGatedDeltaNet
 from .mlp import TtMlp
 from .norm import TtRmsNorm, compute_config
 from .residual import TtResidualAdd
+from .runners.kv_cache import Qwen38KvCaches
+from .runners.kv_cache import allocate as allocate_caches
 from .settings import settings
 
 
@@ -67,23 +69,41 @@ def rows_to_host(mesh, t) -> torch.Tensor:
 
 
 class TtState:
-    """The served state of one model (module docstring). ``slot`` selects the slot the chunks run on."""
+    """The served state of one model (module docstring). ``slot`` selects the slot the chunks run on. ``caches``: the
+    engine-owned serving state (tt/runners/kv_cache.py) to run on; by default the model allocates its own the same
+    way, so the ladder and the prefill runner run on one cache format."""
 
-    def __init__(self, model: "TtModel", max_seq: int):
+    def __init__(self, model: "TtModel", max_seq: int, caches: Qwen38KvCaches | None = None):
         self.model = model
         chunk = model.chunk
         self.capacity = -(-max_seq // chunk) * chunk
         self.slot = 0
-        self.kv: KvCache | None = None
+        if caches is None:
+            caches = allocate_caches(model.mesh, model.cfg, model.layers, model.slots, chunk, max_seq)
+        assert caches.chunk == chunk and caches.capacity == self.capacity, (caches.chunk, caches.capacity)
+        assert caches.attn_layers == model.attn_layers and caches.linear_layers == model.linear_layers
+        self.caches = caches
         if model.attn_layers:
-            proto = model.mixers[model.attn_layers[0]]
-            self.kv = proto.new_cache(len(model.attn_layers), model.slots, capacity=self.capacity)
-        self.gdn: dict[tuple[int, int], GdnState] = {}
-        for i in model.linear_layers:
-            for s in range(model.slots):
-                self.gdn[(s, i)] = model.mixers[i].state_from_host(None, None)
+            _Ring.shared(model.mesh, self.capacity, model.cfg.head_dim)  # the ring SDPA's scratch, at load time
         for p in range(0, self.capacity + 1, chunk):  # actual_start / full-chunk actual_end scalars, at load time
             model.scalar(p)
+
+    @property
+    def kv(self) -> KvCache | None:
+        return self.caches.kv
+
+    @kv.setter
+    def kv(self, value: KvCache | None):
+        self.caches.kv = value
+
+    @property
+    def gdn(self) -> dict[tuple[int, int], GdnState]:
+        """(slot, linear layer) -> GdnState; a chunk replaces its slot's entry with the state after it."""
+        return self.caches.gdn
+
+    @gdn.setter
+    def gdn(self, value: dict):
+        self.caches.gdn = value
 
     # ---- serving / contract
     def formats(self) -> dict:
@@ -224,9 +244,9 @@ class TtModel:
         return self._scalars[value]
 
     # ---- interface
-    def new_state(self, max_seq: int) -> TtState:
+    def new_state(self, max_seq: int, caches: Qwen38KvCaches | None = None) -> TtState:
         assert max_seq <= self.capacity, f"max_seq {max_seq} above the model's capacity {self.capacity}"
-        return TtState(self, max_seq)
+        return TtState(self, max_seq, caches)
 
     def embed(self, tokens: torch.Tensor, start: int = 0):
         """One chunk of ids in natural order (0xFFFFFFFF past the real tokens) -> the residual stream."""
@@ -242,6 +262,12 @@ class TtModel:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=(rows, cols), dims=(3, None)),
         )
         return self._embed_device(ids)
+
+    def embed_engine_input(self, ids):
+        """The engine's H2D chunk (uint32 ROW_MAJOR [sp, 1, chunk / sp], sharded over the mesh rows, replicated over
+        the columns; a chunk-aligned start puts chunk offsets [r * 640, (r + 1) * 640) on row r) -> the residual
+        stream. Frees ``ids``."""
+        return self._embed_device(ttnn.reshape(ids, (1, 1, 1, self.local_rows)))
 
     def _embed_device(self, ids):
         dram = ttnn.DRAM_MEMORY_CONFIG
