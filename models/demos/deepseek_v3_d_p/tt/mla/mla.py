@@ -39,9 +39,10 @@ _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
 _GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
-# mm track: GLM o_proj on the full 12x10 grid (see ttMLA._oproj_grid12). Off by default: mla_config.py keeps MLA on
-# 11x10 for di/dt / throttling, so this must be judged at L78 (interleaved ABAB), not at R0 / L10.
-_MLA_OPROJ_GRID12 = os.environ.get("MLA_OPROJ_GRID12", "0") == "1"
+# mm track: GLM o_proj on the full 12x10 grid (see ttMLA._oproj_grid12; MLA_OPROJ_GRID12=0 disables). In-model L10 on
+# v13: 125.8 -> 117.2 us per layer, per-chip idle unchanged, KVPE bit-identical. mla_config.py keeps MLA on 11x10 for
+# di/dt / throttling, so the keep decision is the L78 interleaved ABAB.
+_MLA_OPROJ_GRID12 = os.environ.get("MLA_OPROJ_GRID12", "1") == "1"
 # mm track: o_proj weight laid out DRAM WIDTH_SHARDED ([K, N/banks] per bank, device tile copy, bit-identical tiles) so
 # the 2D mcast in1 senders read it bank by bank (R0 12x10: 118.1 -> 115.1 us, 11x10: 128.0 -> 126.8 us).
 _MLA_OPROJ_WS = os.environ.get("MLA_OPROJ_WS", "0") == "1"
