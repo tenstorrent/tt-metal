@@ -205,6 +205,115 @@ def compose_tp_hidden(device_tensors, row, cols):
     return ttnn.to_torch(device_tensors[row * cols]).float()
 
 
+# MiniMax-M3 attention dims of the random-weight attention-layer tests.
+M3_HIDDEN, M3_NQ, M3_NKV, M3_HEAD_DIM, M3_ROTARY_DIM = 6144, 64, 4, 128, 64
+M3_NIDX, M3_INDEX_DIM = 4, 128
+
+
+def random_sp_attention(mesh_device, *, chunk_size, max_seq_len, is_sparse, global_layer_idx, local_layer_idx=None):
+    """A random-weight M3 attention layer on an SP=rows x TP=cols mesh, with the runtime's whole-cache indexed RoPE
+    (TtPrefillRuntime._build_indexed_rope). Returns a namespace for packed_attention_forward."""
+    from types import SimpleNamespace
+
+    from models.common.utils import block_cyclic_reorder
+
+    from ..tt.attention import Attention, AttentionConfig
+    from ..tt.attention_configs import MiniMaxM3AttentionProgramConfig
+    from ..tt.model import create_rope_setup
+    from ..utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
+
+    rows, cols = tuple(mesh_device.shape)
+    torch.manual_seed(0)
+    hf_state = {
+        "q_proj.weight": torch.rand(M3_NQ * M3_HEAD_DIM, M3_HIDDEN) * 0.02,
+        "k_proj.weight": torch.rand(M3_NKV * M3_HEAD_DIM, M3_HIDDEN) * 0.02,
+        "v_proj.weight": torch.rand(M3_NKV * M3_HEAD_DIM, M3_HIDDEN) * 0.02,
+        "o_proj.weight": torch.rand(M3_HIDDEN, M3_NQ * M3_HEAD_DIM) * 0.02,
+        "q_norm.weight": torch.randn(M3_HEAD_DIM) * 0.1,
+        "k_norm.weight": torch.randn(M3_HEAD_DIM) * 0.1,
+    }
+    if is_sparse:
+        hf_state |= {
+            "index_q_proj.weight": torch.rand(M3_NIDX * M3_INDEX_DIM, M3_HIDDEN) * 0.02,
+            "index_k_proj.weight": torch.rand(M3_INDEX_DIM, M3_HIDDEN) * 0.02,
+            "index_q_norm.weight": torch.randn(M3_INDEX_DIM) * 0.1,
+            "index_k_norm.weight": torch.randn(M3_INDEX_DIM) * 0.1,
+        }
+    state = convert_hf_qkv_to_meta_format_partial(hf_state, M3_HEAD_DIM, M3_ROTARY_DIM)
+    ccl = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
+    hf_config = SimpleNamespace(
+        hidden_size=M3_HIDDEN,
+        num_attention_heads=M3_NQ,
+        num_key_value_heads=M3_NKV,
+        head_dim=M3_HEAD_DIM,
+        rotary_dim=M3_ROTARY_DIM,
+        rope_theta=5_000_000.0,
+        rope_scaling=None,
+        rms_norm_eps=1e-6,
+        max_position_embeddings=max_seq_len,
+        use_qk_norm=True,
+        use_gemma_norm=True,
+    )
+    rope_setup = create_rope_setup(mesh_device=mesh_device, hf_config=hf_config, datatype=ttnn.bfloat16)
+    attn = Attention(
+        mesh_device=mesh_device,
+        config=AttentionConfig(
+            hidden_size=M3_HIDDEN,
+            num_heads=M3_NQ,
+            num_kv_heads=M3_NKV,
+            head_dim=M3_HEAD_DIM,
+            rotary_dim=M3_ROTARY_DIM,
+            rms_norm_eps=hf_config.rms_norm_eps,
+            use_qk_norm=True,
+            use_gemma_norm=True,
+            max_seq_len=max_seq_len,
+            max_local_batch_size=1,
+            is_sparse=is_sparse,
+            sequence_parallel=True,
+        ),
+        state_dict=state,
+        ccl_manager=ccl,
+        mesh_config=MeshConfig((rows, cols), tp=cols),
+        program_config=MiniMaxM3AttentionProgramConfig(),
+        global_layer_idx=global_layer_idx,
+        local_layer_idx=local_layer_idx,
+        transformation_mats=rope_setup.get_both_trans_mats(),
+    )
+    seq_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(2, None))
+
+    def indexed_rope(dev_mat):
+        full = ttnn.to_torch(ttnn.get_device_tensors(dev_mat)[0])[:, :, :max_seq_len, :]
+        bc = block_cyclic_reorder(full, chunk_size // rows, rows, seq_dim=2)
+        return ttnn.from_torch(
+            bc, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=seq_mapper
+        )
+
+    rope = [indexed_rope(rope_setup.cos_matrix_prefill), indexed_rope(rope_setup.sin_matrix_prefill)]
+    return SimpleNamespace(
+        attn=attn, ccl=ccl, rope=rope, seq_mapper=seq_mapper, mesh_device=mesh_device, chunk_size=chunk_size
+    )
+
+
+def packed_attention_forward(layer, x_chunks, chunks, kv_cache):
+    """One attention forward of ``layer`` (random_sp_attention) over ``chunks``; x_chunks are natural-order
+    [chunk_size, hidden] rows per chunk. Returns each chunk's output rows chip-major: rank r's rows of a chunk are
+    ``pack_forward_tokens``' positions of that rank, in order."""
+    from ..tt.prefill_chunk import pack_forward_tokens
+
+    rows, cols = tuple(layer.mesh_device.shape)
+    c, n = layer.chunk_size, len(chunks)
+    idx = pack_forward_tokens([[k * c + i for i in range(c)] for k in range(n)], [e.actual_start for e in chunks], rows)
+    x = torch.cat(x_chunks)[idx].reshape(1, 1, -1, M3_HIDDEN)
+    x_tt = ttnn.from_torch(
+        x, device=layer.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=layer.seq_mapper
+    )
+    out = layer.attn(x_tt, rope_mats=layer.rope, kv_cache=kv_cache, indexed_rope=True, chunks=chunks)
+    dts = ttnn.get_device_tensors(out)
+    per_chip = [compose_tp_hidden(dts, r, cols).reshape(n, c // rows, M3_HIDDEN) for r in range(rows)]
+    ttnn.deallocate(out)
+    return [torch.cat([chip[k] for chip in per_chip]) for k in range(n)]
+
+
 # Test helper functions
 def compare_tensors(tt_tensor, torch_tensor, mesh_device, pcc_threshold=0.99):
     """Universal tensor comparison - handles both TT tensors and already-converted torch tensors"""
