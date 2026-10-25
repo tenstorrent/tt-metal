@@ -107,7 +107,7 @@ def mask_scores(scores, nvalid, ar):
     U, n = int(scores.shape[0]), int(scores.shape[-1])
     sc = ttnn.reshape(scores, [1, 1, U, n])
     nv = ttnn.reshape(ttnn.to_layout(nvalid, ttnn.ROW_MAJOR_LAYOUT), [1, 1, U, 1])
-    if os.environ.get("DSV41_MASK_LEAN", "0") == "1":
+    if os.environ.get("DSV41_MASK_LEAN", "1") == "1":  # default ON (bit-identical to the float32 path, 78 vs 140 us at 32,832 entries; DSV41_MASK_LEAN=0 restores the old chain)
         # same values with ~1/3 of the DRAM temporaries (no float32 copies; a bf16 select of bf16 scores is the typecast round trip of the float32 one): the eager decode step of a 1M build
         # needs ~17 MiB/bank blocks for them (measured bit-identical to the float32 path, test in the commit message)
         keep = ttnn.lt(ar, ttnn.to_layout(nv, ttnn.TILE_LAYOUT), dtype=ttnn.bfloat16)
