@@ -701,7 +701,12 @@ def test_seqq_r0(mesh_device, variant, config_only):
                 t_til, tw_b2_full, program_config=b2_pc160, memory_config=DRAM, dtype=dt, compute_kernel_config=hifi2
             )
             timer(f"O5 a2a s2h [64,160,256] {dn} (DRAM in)", lambda v=v: a2a(v, 2, 1))
-            cc = ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM)
+            try:  # bf16 [64,160,256] nlp_concat_heads fails its CB allocation (R0-1); keep going
+                cc = ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM)
+            except Exception as e:
+                log(f"FAIL O5 concat heads {dn}: {type(e).__name__}: {str(e)[:200]}")
+                _free(v)
+                continue
             timer(
                 f"O5 concat heads [64,160,256] {dn}",
                 lambda v=v: ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM),

@@ -1,12 +1,17 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Sequence-sharded absorbed Q (ttMLA seq_sharded_q / MLA_SEQ_SHARDED_Q) against the head-sharded path.
+"""Sequence-sharded absorbed Q (ttMLA seq_sharded_q / MLA_SEQ_SHARDED_Q) against the head-sharded path and CPU truth.
 
 GLM-5.3 on the production 8x4 torus-XY mesh at the production 5120-token chunk (640 rows per chip, 160 per TP
-quarter), random weights. One full-indexer layer feeds its top-k to one shared layer, over two chunks (so the
-second chunk ropes and attends at a non-zero start). Each layer is built twice from the same weights, once per
-mode; the shared layer gets the SAME indices in both modes (the head-sharded run's) so its comparison isolates
-the attention path. Prints "SEQQ_MLA" lines: per-chunk output PCC, index agreement, DRAM cost of the mode.
+quarter), random weights, two chunks (the second ropes and attends at a non-zero start). Each layer is built once per
+mode from the same weights:
+  head    the production head-sharded path
+  seq_ar  sequence-sharded Q but the head-sharded path's q_a stem (all-reduce + norm, then partition): isolates the
+          q_a reduce-scatter summation order, everything after it should be bit-exact with head
+  seq     the candidate (q_a reduce-scattered over rows)
+Full layer 0 runs its own indexer; shared layer 3 gets the CPU full layer's top-k injected (identical index sets on
+CPU and every device mode). With SEQQ_CPU_REF=<pt> (written by a pure-torch SparseMLAReference run on the same
+seeds) every mode is also compared with CPU truth. Prints "SEQQ_MLA" lines.
 """
 
 import copy
@@ -14,7 +19,6 @@ import os
 
 import pytest
 import torch
-from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -29,8 +33,10 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 SP_AXIS, TP_AXIS = 0, 1
 CHUNK = 5120
-N_CHUNKS = int(os.environ.get("SEQQ_MLA_CHUNKS", "2"))
+N_CHUNKS = 2
 FULL_LAYER, SHARED_LAYER = 0, 3
+SENTINEL = 0xFFFFFFFF
+MODES = ("head", "seq_ar", "seq")
 
 
 def log(*a):
@@ -39,6 +45,39 @@ def log(*a):
 
 def dram_alloc_mib(mesh):
     return ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank / 2**20
+
+
+def pcc(x, y):
+    return float(comp_pcc(x.float(), y.float(), 0.0)[1])
+
+
+def device_indices(topk, start, mesh):
+    """CPU top-k [1, CHUNK, k] (absolute positions, future entries where p+1 < k) -> the device's TP-sequence-sharded
+    [1, 1, 160, k] uint32 shards (chip (s, t) holds chunk rows s*640 + t*160 ...), future -> sentinel, sorted."""
+    sp, tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
+    rows = CHUNK // (sp * tp)
+    t = topk[0].to(torch.int64).clone()  # [CHUNK, k]
+    pos = torch.arange(start, start + CHUNK, dtype=torch.int64).unsqueeze(1)
+    t[t > pos] = SENTINEL
+    t = t.sort(dim=-1).values
+    return ttnn.from_torch(
+        t.reshape(sp, tp, rows, t.shape[-1]),
+        device=mesh,
+        dtype=ttnn.uint32,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=(0, 1)),
+    )
+
+
+def index_sets(idx_tensor, dev, start, row0):
+    """Valid (causal, non-sentinel) index sets of one device's [1,1,rows,k] indices; rows start at position row0."""
+    a = ttnn.to_torch(ttnn.get_device_tensors(idx_tensor)[dev]).to(torch.int64)[0, 0]
+    return [set(x for x in a[r].tolist() if x != SENTINEL and x <= row0 + r) for r in range(a.shape[0])]
+
+
+def jaccard(sa, sb):
+    return sum(len(a & b) / max(1, len(a | b)) for a, b in zip(sa, sb)) / len(sa)
 
 
 @pytest.mark.parametrize(
@@ -62,6 +101,7 @@ def dram_alloc_mib(mesh):
 @pytest.mark.timeout(0)
 def test_seqq_mla_matches_head_sharded(mesh_device, device_params, variant, cache_format, config_only):
     mesh = mesh_device
+    sp, tp = mesh.shape[SP_AXIS], mesh.shape[TP_AXIS]
     config = copy.deepcopy(config_only)
     seq_len = CHUNK * N_CHUNKS
     config.max_seq_len = seq_len
@@ -76,49 +116,53 @@ def test_seqq_mla_matches_head_sharded(mesh_device, device_params, variant, cach
     shard_dims[TP_AXIS], shard_dims[SP_AXIS] = -1, -2
     composer = ttnn.ConcatMesh2dToTensor(mesh, dims=shard_dims, mesh_shape=mesh.shape)
     index_cache_layers = sum(kind == "full" for kind in config.indexer_types)
+    cpu_path = os.environ.get("SEQQ_CPU_REF")
+    cpu = torch.load(cpu_path, weights_only=True) if cpu_path else None
+    log(f"CPU reference: {cpu_path if cpu else 'none'}")
 
-    def build(layer, seq_q):
+    def build(layer, mode):
         before = dram_alloc_mib(mesh)
-        mla = ttMLA(
-            config,
-            weights[layer],
-            mesh,
-            layer_idx=layer,
-            seq_len=seq_len,
-            sp_axis=SP_AXIS,
-            tp_axis=TP_AXIS,
-            weight_cache_path=None,
-            sparse_kv_cache_format=cache_format,
-            is_chunked=True,
-            active_seq_len=CHUNK,
-            layer_num=1,
-            seq_sharded_q=seq_q,
-        )
-        assert mla._seq_q == seq_q, f"layer {layer}: seq_sharded_q={seq_q} did not resolve (got {mla._seq_q})"
-        log(f"built layer {layer} seq_q={seq_q}: DRAM +{dram_alloc_mib(mesh) - before:.1f} MiB/bank")
+        old = os.environ.get("MLA_SEQQ_QA")
+        os.environ["MLA_SEQQ_QA"] = "allreduce" if mode == "seq_ar" else "rows"
+        try:
+            mla = ttMLA(
+                config,
+                weights[layer],
+                mesh,
+                layer_idx=layer,
+                seq_len=seq_len,
+                sp_axis=SP_AXIS,
+                tp_axis=TP_AXIS,
+                weight_cache_path=None,
+                sparse_kv_cache_format=cache_format,
+                is_chunked=True,
+                active_seq_len=CHUNK,
+                layer_num=1,
+                seq_sharded_q=mode != "head",
+            )
+        finally:
+            if old is None:
+                os.environ.pop("MLA_SEQQ_QA")
+            else:
+                os.environ["MLA_SEQQ_QA"] = old
+        assert mla._seq_q == (mode != "head"), f"layer {layer} mode {mode}: seq_sharded_q did not resolve"
+        log(f"built layer {layer} mode={mode}: DRAM +{dram_alloc_mib(mesh) - before:.1f} MiB/bank")
         return mla
 
-    def run(full, shared, ref_indices=None):
-        kvpe_full = init_mla_kv_cache(
-            cache_format=cache_format,
-            hf_config=config,
-            mesh_device=mesh,
-            seq_len=seq_len,
-            mesh_shape=list(mesh.shape),
-            sp_axis=SP_AXIS,
-            num_kvpe_cache_layers=1,
-            tp_axis=TP_AXIS,
-        )
-        kvpe_shared = init_mla_kv_cache(
-            cache_format=cache_format,
-            hf_config=config,
-            mesh_device=mesh,
-            seq_len=seq_len,
-            mesh_shape=list(mesh.shape),
-            sp_axis=SP_AXIS,
-            num_kvpe_cache_layers=1,
-            tp_axis=TP_AXIS,
-        )
+    def caches():
+        kv = [
+            init_mla_kv_cache(
+                cache_format=cache_format,
+                hf_config=config,
+                mesh_device=mesh,
+                seq_len=seq_len,
+                mesh_shape=list(mesh.shape),
+                sp_axis=SP_AXIS,
+                num_kvpe_cache_layers=1,
+                tp_axis=TP_AXIS,
+            )
+            for _ in range(2)
+        ]
         index_kv = init_kvpe_cache(
             kvpe_cache_head_dim=config.index_head_dim,
             mesh_device=mesh,
@@ -130,67 +174,80 @@ def test_seqq_mla_matches_head_sharded(mesh_device, device_params, variant, cach
             dtype=ttnn.bfloat8_b,
             tp_axis=TP_AXIS,
         )
-        outs_full, outs_shared, indices = [], [], []
-        for c in range(N_CHUNKS):
-            start = c * CHUNK
-            tt_hidden = ttnn.from_torch(
-                hidden[:, start : start + CHUNK].unsqueeze(0),
-                device=mesh,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=shard_dims),
-            )
-            out_f, idx = full.forward(
-                tt_hidden,
-                rope_tensors,
-                kvpe_full,
-                actual_start=start,
-                index_kv_cache=index_kv,
-                return_indexer_indices=True,
-            )
-            out_s = shared.forward(
-                tt_hidden,
-                rope_tensors,
-                kvpe_shared,
-                actual_start=start,
-                indexer_indices=idx if ref_indices is None else ref_indices[c],
-            )
-            ttnn.synchronize_device(mesh)
-            outs_full.append(ttnn.to_torch(out_f, mesh_composer=composer).float())
-            outs_shared.append(ttnn.to_torch(out_s, mesh_composer=composer).float())
-            indices.append(idx)
-            ttnn.deallocate(out_f)
-            ttnn.deallocate(out_s)
-            ttnn.deallocate(tt_hidden)
-        return outs_full, outs_shared, indices
+        return kv[0], kv[1], index_kv
 
-    full_ref, shared_ref = build(FULL_LAYER, False), build(SHARED_LAYER, False)
-    full_new, shared_new = build(FULL_LAYER, True), build(SHARED_LAYER, True)
-    try:
-        ref_f, ref_s, ref_idx = run(full_ref, shared_ref)
-        new_f, new_s, new_idx = run(full_new, shared_new, ref_indices=ref_idx)
-    finally:
-        for m in (full_ref, full_new):
-            m.release_sparse_mla_overlap_manager()
+    def run(mode):
+        full, shared = build(FULL_LAYER, mode), build(SHARED_LAYER, mode)
+        kvpe_full, kvpe_shared, index_kv = caches()
+        res = {"full": [], "shared": [], "idx": []}
+        try:
+            for c in range(N_CHUNKS):
+                start = c * CHUNK
+                tt_hidden = ttnn.from_torch(
+                    hidden[:, start : start + CHUNK].unsqueeze(0),
+                    device=mesh,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=shard_dims),
+                )
+                out_f, idx = full.forward(
+                    tt_hidden,
+                    rope_tensors,
+                    kvpe_full,
+                    actual_start=start,
+                    index_kv_cache=index_kv,
+                    return_indexer_indices=True,
+                )
+                inj = device_indices(cpu["topk"][c], start, mesh) if cpu else idx
+                out_s = shared.forward(tt_hidden, rope_tensors, kvpe_shared, actual_start=start, indexer_indices=inj)
+                ttnn.synchronize_device(mesh)
+                res["full"].append(ttnn.to_torch(out_f, mesh_composer=composer).float())
+                res["shared"].append(ttnn.to_torch(out_s, mesh_composer=composer).float())
+                # dev 0 = (s 0, t 0) and dev 6 = (s 1, t 2): rows start at c*CHUNK + s*640 + t*160
+                res["idx"].append(
+                    {
+                        d: index_sets(
+                            idx, d, start, start + (d // tp) * (CHUNK // sp) + (d % tp) * (CHUNK // (sp * tp))
+                        )
+                        for d in (0, 6)
+                    }
+                )
+                for t in (out_f, out_s, tt_hidden, idx) + ((inj,) if cpu else ()):
+                    ttnn.deallocate(t)
+        finally:
+            full.release_sparse_mla_overlap_manager()
+        return res
+
+    results = {mode: run(mode) for mode in MODES}
 
     ok = True
     for c in range(N_CHUNKS):
-        a = ttnn.to_torch(ttnn.get_device_tensors(ref_idx[c])[0]).to(torch.int64)
-        b = ttnn.to_torch(ttnn.get_device_tensors(new_idx[c])[0]).to(torch.int64)
-        same_rows = (
-            sum(
-                len(set(a[0, 0, r].tolist()) & set(b[0, 0, r].tolist())) / max(1, a.shape[-1])
-                for r in range(a.shape[2])
+        start = c * CHUNK
+        for d in (0, 6):
+            row0 = start + (d // tp) * (CHUNK // sp) + (d % tp) * (CHUNK // (sp * tp))
+            msg = f"chunk {c} dev{d}: top-k Jaccard vs head: " + " ".join(
+                f"{m}={jaccard(results[m]['idx'][c][d], results['head']['idx'][c][d]):.5f}" for m in MODES[1:]
             )
-            / a.shape[2]
-        )
-        log(f"chunk {c}: indexer top-k set overlap (dev0, mean over rows) = {same_rows:.5f}; shape {tuple(a.shape)}")
-        for name, x, y in (("full", ref_f[c], new_f[c]), ("shared", ref_s[c], new_s[c])):
-            passed, p = comp_pcc(x, y, 0.999)
-            md = (x - y).abs().max().item()
-            log(
-                f"chunk {c} {name} layer: PCC seq-Q vs head-sharded = {p} max|diff| = {md:.4g} (ref max {x.abs().max().item():.4g})"
+            if cpu:
+                t = cpu["topk"][c][0, (row0 - start) : (row0 - start) + CHUNK // (sp * tp)].tolist()
+                cpu_sets = [set(x for x in row if x <= row0 + r) for r, row in enumerate(t)]
+                msg += " | vs CPU: " + " ".join(f"{m}={jaccard(results[m]['idx'][c][d], cpu_sets):.5f}" for m in MODES)
+            log(msg)
+        for layer in ("full", "shared"):
+            ref = results["head"][layer][c]
+            line = f"chunk {c} {layer:6s}: vs head " + " ".join(
+                f"{m}={pcc(results[m][layer][c], ref):.6f}" for m in MODES[1:]
             )
-            ok = ok and passed
-    assert ok, "sequence-sharded Q diverged from the head-sharded path"
+            line += f" bitexact(seq_ar)={torch.equal(results['seq_ar'][layer][c], ref)}"
+            if cpu:
+                truth = cpu[f"{layer}_out"][c].float().reshape(ref.shape)
+                vs = {m: pcc(results[m][layer][c], truth) for m in MODES}
+                line += " | vs CPU " + " ".join(f"{m}={v:.6f}" for m, v in vs.items())
+                # The candidate must be as accurate as production (same CPU bar the sparse MLA tests use, 0.98),
+                # within run-to-run index-flip noise.
+                ok = ok and vs["seq"] >= 0.98 and vs["seq"] >= vs["head"] - 0.002 and vs["seq_ar"] >= vs["head"] - 0.002
+            log(line)
+            if layer == "shared":
+                ok = ok and pcc(results["seq_ar"][layer][c], ref) >= 0.99999
+    assert ok, "sequence-sharded Q is less accurate than the head-sharded path (see SEQQ_MLA lines)"
