@@ -58,6 +58,9 @@ _GLM_FP8_SCALE_BLOCK = int(os.environ.get("GLM_FP8_SCALE_BLOCK", "128"))
 _GLM_FP8_DQ1_TILE = os.environ.get("GLM_FP8_DQ1_TILE", "1") == "1"
 # Dispatch sub-device rows on the fp8 wire: the row-major fp8 input needs no untilizer row (default 1).
 _GLM_FP8_DISPATCH_SD_ROWS = int(os.environ.get("GLM_FP8_DISPATCH_SD_ROWS", "1"))
+# With the fp8 wire the dispatch rows finish well before the shared-expert chain, which then bounds the window: run
+# post_combine_reduce's weights reshape (depends only on the scores) on the dispatch rows after dispatch instead.
+_GLM_FP8_PCRW_SD0 = os.environ.get("GLM_FP8_PCRW_SD0", "0") == "1"
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
@@ -569,6 +572,7 @@ class TtMoe(LightweightModule):
             # Stash the CoreRangeSet of the shared sub-device so TtSharedExpert can build
             # sub-device-confined shard_specs in Python without a C++ worker_cores binding.
             self.shared_sd_cores = shared_cores
+            self.dispatch_sd_cores = dispatch_cores
             logger.debug(
                 f"Sub-devices: grid={grid_x}x{grid_y}, dispatch=rows[0,{dispatch_sd_rows}), "
                 f"shared=rows[{dispatch_sd_rows},{grid_y})"
@@ -578,6 +582,7 @@ class TtMoe(LightweightModule):
             self.dispatch_sd_id = None
             self.shared_sd_id = None
             self.shared_sd_cores = None
+            self.dispatch_sd_cores = None
             logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
 
         # Initialize dispatch module (row axis: axis 0)
@@ -1202,7 +1207,11 @@ class TtMoe(LightweightModule):
                 scores,
                 (1, 1, scores.shape[-2], scores.shape[-1], 1),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                sub_core_grids=self.shared_expert.subdevice_cores,
+                sub_core_grids=(
+                    self.dispatch_sd_cores
+                    if (self.dispatch_fp8 and _GLM_FP8_PCRW_SD0)
+                    else self.shared_expert.subdevice_cores
+                ),
             )
 
         if self.overlap_shared_expert_with_dispatch:
