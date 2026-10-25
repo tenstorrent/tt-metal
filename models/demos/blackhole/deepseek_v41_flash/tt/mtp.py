@@ -667,6 +667,7 @@ class DSparkDrafter:
                 mesh_mapper=rep,
             )
             self.me_pad = up(torch.zeros(1, 1, Tp - T_d, 256), ttnn.float32)
+            self.me_pad_rm = up(torch.zeros(1, 1, Tp - T_d, 256), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
         self.ucfg_v = ttnn.create_sharded_memory_config(
             shape=(32, HEAD_DIM),
             core_grid=ttnn.num_cores_to_corerangeset(T_v, ttnn.CoreCoord(8, 8), row_wise=True),
@@ -770,10 +771,18 @@ class DSparkDrafter:
         st = st if st is not None else self.state.build_draft(f_rows)
         Tp = self.Tp
         if Tp:  # padded stream: embedding rows of the Tp token ids (pad rows = noise ids)
-            emb = ttnn.embedding(
-                ttnn.concat([tok_rows, self.tok_pad], dim=0), self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )  # [Tp,1,5120]
-            x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [Tp, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
+            tok8 = ttnn.concat([tok_rows, self.tok_pad], dim=0)
+            if (
+                os.environ.get("DSV41_DRAFT_X_RM", "1") == "1"
+            ):  # 4 streams = 4 copies of the row, built in row-major (copy) and tilized once as fp32
+                e = ttnn.reshape(
+                    ttnn.embedding(tok8, self.embed_w, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16),
+                    [Tp, 1, 1, 5120],
+                )
+                x = ttnn.to_layout(ttnn.concat([e, e, e, e], dim=2), ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+            else:
+                emb = ttnn.embedding(tok8, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [Tp,1,5120]
+                x = ttnn.repeat(ttnn.typecast(ttnn.reshape(emb, [Tp, 1, 1, 5120]), ttnn.float32), [1, 1, 4, 1])
             pre = self.pre0p
         else:
             emb = ttnn.embedding(tok_rows, self.embed_w, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [T,1,5120]
@@ -799,10 +808,10 @@ class DSparkDrafter:
                 return {"tokens": [], "logits": [], "conf": x}
         if self.stop == "stages":
             return {"tokens": [], "logits": [], "conf": x}
-        y = ttnn.matmul(pre, x, compute_kernel_config=self.ckc)  # hc_pre -> [Tp or T,1,1,D]
         R = (
             Tp or T
         )  # rows carried to the end (the pad rows are independent of the real ones; every consumer takes the first T rows)
+        y = ttnn.matmul(pre, x, compute_kernel_config=self.ckc)  # hc_pre -> [Tp or T,1,1,D]
         xb = ttnn.typecast(ttnn.reshape(y, [1, 1, R, 5120]), ttnn.bfloat16)  # pre-norm (the confidence head reads this)
         xn = ttnn.rms_norm(xb, weight=self.norm_w, epsilon=1e-20)
         logits = ttnn.matmul(
@@ -813,16 +822,24 @@ class DSparkDrafter:
         toks, lgs, mes = [], [], []
         tok = ttnn.slice(tok_rows, [0, 0], [U, 1])  # t_u
         rm_mode = os.environ.get("DSV41_DRAFT_SAMPLE_RM", "1") == "1"
+        conf_rm = os.environ.get("DSV41_DRAFT_CONF_RM", "1") == "1"
         if rm_mode:
             lrm = ttnn.to_layout(
                 logits, ttnn.ROW_MAJOR_LAYOUT
             )  # untilize once; the 5 steps slice / add / argmax in row-major
         V8 = logits.shape[3]
         for i in range(BLOCK):
-            me = ttnn.reshape(
-                ttnn.embedding(tok, self.embed_m, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), [1, 1, U, 256]
-            )
-            mes.append(me)
+            if conf_rm:
+                me_rm = ttnn.reshape(
+                    ttnn.embedding(tok, self.embed_m, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16), [1, 1, U, 256]
+                )  # row-major
+                mes.append(me_rm)
+                me = ttnn.to_layout(me_rm, ttnn.TILE_LAYOUT)
+            else:
+                me = ttnn.reshape(
+                    ttnn.embedding(tok, self.embed_m, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16), [1, 1, U, 256]
+                )
+                mes.append(me)
             bias = ttnn.matmul(me, self.head_m, compute_kernel_config=self.ckc, dtype=ttnn.float32)
             if rm_mode:
                 lg = ttnn.add(
@@ -837,9 +854,14 @@ class DSparkDrafter:
                 )  # [U,1] uint32 row-major, identical on every device
             lgs.append(lg)
             toks.append(tok)
-        me_all = ttnn.typecast(ttnn.concat(mes, dim=2), ttnn.float32)  # [1,1,T,256] block-index-major like the rows
-        if R != T:
-            me_all = ttnn.concat([me_all, self.me_pad], dim=2)  # [1,1,R,256]: same row count as xb
+        if conf_rm:  # [R,256] row-major (block-index-major like the rows, zero pad rows up to R), tilized once as fp32
+            me_all = ttnn.to_layout(
+                ttnn.concat(mes + ([self.me_pad_rm] if R != T else []), dim=2), ttnn.TILE_LAYOUT, dtype=ttnn.float32
+            )  # [1,1,R,256]
+        else:
+            me_all = ttnn.typecast(ttnn.concat(mes, dim=2), ttnn.float32)  # [1,1,T,256] block-index-major like the rows
+            if R != T:
+                me_all = ttnn.concat([me_all, self.me_pad], dim=2)  # [1,1,R,256]: same row count as xb
         conf = ttnn.add(
             ttnn.matmul(ttnn.typecast(xb, ttnn.float32), self.conf_x, compute_kernel_config=self.ckc),
             ttnn.matmul(me_all, self.conf_m, compute_kernel_config=self.ckc),
