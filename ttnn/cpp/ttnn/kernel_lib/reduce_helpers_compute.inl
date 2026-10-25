@@ -399,6 +399,9 @@ ALWI void reduce(
             output_dfb.reserve_back(onetile);
             tile_regs_commit();
             tile_regs_wait();
+            if constexpr (!is_sfpu) {
+                PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
+            }
             pack_tile(get_dst_index(accumulate), output_dfb_id);
             tile_regs_release();
             output_dfb.push_back(onetile);
@@ -501,6 +504,9 @@ ALWI void reduce(
                 output_dfb.reserve_back(onetile);
                 tile_regs_commit();
                 tile_regs_wait();
+                if constexpr (!is_sfpu) {
+                    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
+                }
                 pack_tile(dst_idx, output_dfb_id);
                 tile_regs_release();
                 output_dfb.push_back(onetile);
@@ -627,6 +633,9 @@ ALWI void reduce(
 
                 tile_regs_commit();
                 tile_regs_wait();
+                if constexpr (!is_sfpu) {
+                    PACK((llk_pack_reduce_mask_config<reduce_dim, PackMode::Default>(output_dfb_id)));
+                }
                 for (uint32_t i = 0; i < current_chunk; ++i) {
                     output_dfb.reserve_back(onetile);
                     pack_tile(base_dst + i, output_dfb_id);
@@ -646,9 +655,7 @@ ALWI void reduce(
         }
     }
 
-    if constexpr (is_sfpu) {
-        PACK((llk_pack_reduce_mask_clear()));
-    }
+    PACK((llk_pack_reduce_mask_clear()));
 }
 
 }  // namespace compute_kernel_lib
