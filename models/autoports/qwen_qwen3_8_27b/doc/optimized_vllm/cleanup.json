@@ -1,0 +1,17 @@
+{
+  "scope": "container proc namespace; accessible descriptors",
+  "live_serving_processes": [],
+  "device_holders": [],
+  "inaccessible_processes": 211,
+  "status": "pass",
+  "preexisting_zombies": [
+    {
+      "pid": 1635300,
+      "ppid": 1,
+      "state": "Z",
+      "start_utc": "2026-10-25 10:51:37",
+      "device_fds": 0
+    }
+  ],
+  "note": "Process1635300 has empty cmdline and ps state Z, started before this stage; no live engine or device ownership. Cannot reap a child of container PID1. Scan initially counted comm-only zombie and was corrected using process state."
+}

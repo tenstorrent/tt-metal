@@ -1,0 +1,24 @@
+{
+  "status": "pass_with_controlled_generation_budget_limits",
+  "prompt_mode": "checkpoint chat template; raw reasoning content retained, no reasoning parser configured",
+  "packaged_prompts": 6,
+  "shared_prompts": 3,
+  "generation_modes": [
+    "greedy",
+    "temperature0.7/topk4"
+  ],
+  "reviewed_outputs": 18,
+  "greedy_exact_full_model_matches": 9,
+  "evidence": [
+    "selected_b1_qualitative_outputs.json",
+    "shared_qualitative_outputs.json",
+    "quality_control_comparison.json"
+  ],
+  "findings": [
+    "All outputs are coherent and on topic; no wrong-language switch, repetition collapse or stale-request contamination observed.",
+    "Shared final answers: three English sky sentences; JSON apple counts4/3; duplicate-removal code preserves order for hashable examples.",
+    "Raw reasoning is included in content because this checkpoint template opens think and no parser is selected; full-model controls match exactly. Whole structured content is therefore not JSON-only; only the answer after the reasoning delimiter is JSON.",
+    "The256-token budget truncates packaged greedy story/thermodynamics/Fibonacci exactly as in full-model controls; sampled story/thermodynamics and shared sampled code also reach the cap. This is capped-output smoke coverage, not complete-answer quality for those cases.",
+    "Sampled shared code has a complete correct function but truncated example call at finish_reason=length/completion_tokens256. No completed-example claim."
+  ]
+}

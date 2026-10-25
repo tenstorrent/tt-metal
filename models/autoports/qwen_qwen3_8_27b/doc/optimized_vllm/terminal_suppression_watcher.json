@@ -1,0 +1,92 @@
+{
+  "scope": "Reduced real layers0/3 B2 context512, correctness only",
+  "cases": [
+    {
+      "parts": [
+        128,
+        128,
+        1
+      ],
+      "exact": {
+        "logits": true,
+        "tokens": true,
+        "decode0": true,
+        "decode1": true,
+        "decode2": true,
+        "0:conv": true,
+        "0:recurrent": true,
+        "1:key": true,
+        "1:value": true
+      },
+      "terminal_calls_before": 3,
+      "terminal_calls_after": 1
+    },
+    {
+      "parts": [
+        64,
+        64,
+        65
+      ],
+      "exact": {
+        "logits": true,
+        "tokens": true,
+        "decode0": true,
+        "decode1": true,
+        "decode2": true,
+        "0:conv": true,
+        "0:recurrent": true,
+        "1:key": true,
+        "1:value": true
+      },
+      "terminal_calls_before": 2,
+      "terminal_calls_after": 1
+    },
+    {
+      "parts": [
+        123,
+        6
+      ],
+      "exact": {
+        "logits": true,
+        "tokens": true,
+        "decode0": true,
+        "decode1": true,
+        "decode2": true,
+        "0:conv": true,
+        "0:recurrent": true,
+        "1:key": true,
+        "1:value": true
+      },
+      "terminal_calls_before": 2,
+      "terminal_calls_after": 1
+    },
+    {
+      "parts": [
+        128,
+        1
+      ],
+      "exact": {
+        "logits": true,
+        "tokens": true,
+        "decode0": true,
+        "decode1": true,
+        "decode2": true,
+        "0:conv": true,
+        "0:recurrent": true,
+        "1:key": true,
+        "1:value": true
+      },
+      "terminal_calls_before": 2,
+      "terminal_calls_after": 1
+    }
+  ],
+  "status": "pass",
+  "captures_before": 4,
+  "captures_after": 4,
+  "trace_ids": [
+    "MeshTraceId(0)",
+    "MeshTraceId(1)"
+  ],
+  "tracking": true,
+  "program_cache_included": true
+}

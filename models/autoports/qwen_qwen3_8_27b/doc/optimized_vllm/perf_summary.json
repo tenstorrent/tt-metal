@@ -1,0 +1,19 @@
+{
+  "source": "vllm",
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 4096,
+    "gen_len": 128,
+    "batch": 1,
+    "concurrency": 1
+  },
+  "ttft_ms": 447.39251397550106,
+  "decode_ms_per_token_e2e": 27.621631607721287,
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "named_limitations": [
+    "vllm_serving_profiler_disabled_to_protect_hardware",
+    "one measured primary request; not a tail-latency population estimate"
+  ],
+  "evidence": "selected_b1_vllm_result.json"
+}

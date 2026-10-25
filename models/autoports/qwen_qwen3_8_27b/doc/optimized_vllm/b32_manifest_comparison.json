@@ -1,0 +1,8 @@
+{
+  "argv_equal": true,
+  "environment_equal": true,
+  "changed_sources": [
+    "models/autoports/qwen_qwen3_8_27b/tt/generator.py",
+    "models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py"
+  ]
+}

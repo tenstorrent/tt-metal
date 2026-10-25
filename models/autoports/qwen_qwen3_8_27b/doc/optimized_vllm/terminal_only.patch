@@ -1,0 +1,87 @@
+diff --git a/models/autoports/qwen_qwen3_8_27b/tt/generator.py b/models/autoports/qwen_qwen3_8_27b/tt/generator.py
+index 560f345ab1d..7600eb5df66 100644
+--- a/models/autoports/qwen_qwen3_8_27b/tt/generator.py
++++ b/models/autoports/qwen_qwen3_8_27b/tt/generator.py
+@@ -651,8 +651,10 @@ class Generator(GeneratorContract):
+         return {**bucket, 'active_rows': tuple(active_rows), 'start_alignment': absolute_start%256}
+ 
+     def prefill_forward(self, tokens, *, page_table, kv_cache, prompt_lens, return_all_logits=False,
+-                        return_device=False, start_position=0, **kwargs):
++                        return_device=False, start_position=0, compute_logits=True, **kwargs):
+         batch = self.batch_size
++        if return_all_logits and not compute_logits:
++            raise ValueError('All-logits output requires compute_logits=True')
+         self._decode_active=None
+         if kv_cache is not self.kv_cache:
+             raise ValueError('External cache must be bound at construction before preparation')
+@@ -665,7 +667,8 @@ class Generator(GeneratorContract):
+         length = max(prompt_lens)
+         if tokens.shape[1] < length:
+             raise ValueError('Token rows are shorter than their logical prompt lengths')
+-        ttnn.copy(ttnn.zeros_like(self.prefill_output),self.prefill_output)
++        if compute_logits:
++            ttnn.copy(ttnn.zeros_like(self.prefill_output),self.prefill_output)
+         if isinstance(page_table, torch.Tensor):
+             self.refresh_page_table(page_table)
+         elif page_table is not self.page_table:
+@@ -701,7 +704,7 @@ class Generator(GeneratorContract):
+                                     outputs[row,start+offset:start+offset+take] = host[row,:take]
+                             del host
+                         del logits
+-                else:
++                elif compute_logits:
+                     logits = self.model.terminal(self.model.select_rows(hidden,meta['last_indices']),
+                         pack_decode_rows=self.pack_prefill_terminal)
+                     if self.pack_prefill_terminal:
+@@ -712,6 +715,8 @@ class Generator(GeneratorContract):
+                 del hidden
+         if return_all_logits:
+             return outputs
++        if not compute_logits:
++            return None
+         return self.prefill_output if return_device else self.host_logits(self.prefill_output)
+ 
+     def prefill_logits(self, prompt_token_ids):
+@@ -723,7 +728,7 @@ class Generator(GeneratorContract):
+         return logits[:1]
+ 
+     def prefill_continuation(self, tokens, *, page_table, kv_cache, prompt_lens,
+-                             start_position=0):
++                             start_position=0, compute_logits=True):
+         """Continue an equally sized serving row group at any logical position.
+ 
+         A short teacher-forced bridge reaches the existing128-token prefill
+@@ -744,10 +749,11 @@ class Generator(GeneratorContract):
+                     kv_cache=kv_cache,return_logits=True,return_device=True)
+             if bridge==length:
+                 self._decode_active=None
+-                return ttnn.reshape(logits,[self.batch_size,1,self.model.config.vocab_size//4])
++                return (ttnn.reshape(logits,[self.batch_size,1,self.model.config.vocab_size//4])
++                        if compute_logits else None)
+         return self.prefill_forward(tokens[:,bridge:],page_table=page_table,kv_cache=kv_cache,
+             prompt_lens=[n-bridge if n else 0 for n in prompt_lens],
+-            start_position=start_position+bridge,return_device=True)
++            start_position=start_position+bridge,return_device=True,compute_logits=compute_logits)
+ 
+     def sample_prefill(self, logits, *, active_slots=None):
+         """Use the canonical sampling trace for terminal prefill logits."""
+diff --git a/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py b/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py
+index 20d4d3bc5ba..4e2621da5dd 100644
+--- a/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py
++++ b/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py
+@@ -290,11 +290,13 @@ class Qwen38ForCausalLM:
+                           if self.state_pool is not None else length)
+                 logits=gen.prefill_continuation(values[:,consumed:consumed+piece],
+                     page_table=table,kv_cache=kv_cache,
+-                    prompt_lens=[piece if n else 0 for n in lengths],start_position=absolute)
++                    prompt_lens=[piece if n else 0 for n in lengths],start_position=absolute,
++                    compute_logits=not suppressed and consumed+piece==length)
+                 consumed+=piece
+                 end=start+consumed
+                 self._event('prefill_chunk',start=absolute,length=piece,
+-                    slots=[int(slots[row]) for row in rows])
++                    slots=[int(slots[row]) for row in rows],
++                    compute_logits=not suppressed and consumed==length)
+                 if self.state_pool is not None and end%self.scheduler_block_size==0:
+                     for row in rows:
+                         column=(end-1)//self.scheduler_block_size

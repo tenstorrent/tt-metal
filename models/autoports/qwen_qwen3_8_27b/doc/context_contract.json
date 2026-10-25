@@ -1084,6 +1084,14 @@
       "evidence": "datatype_sweep/selected/benchmark_b1_perf.json:context_validation",
       "memory_evidence": "datatype_sweep/memory_capacity_plan.json",
       "construction": "tt.precision loads selected_precision_config.json by default; max_context must equal checkpoint262144"
+    },
+    "10-optimized-vllm": {
+      "status": "validated",
+      "evidence": "doc/optimized_vllm/README.md",
+      "max_model_len": 262144,
+      "capability_reduction": false,
+      "persistent_allocation_delta_bytes": 0,
+      "note": "Selected terminal suppression changes no cache, trace or persistent metadata allocations; batched snapshot candidate rejected after flat measured latency."
     }
   },
   "stage05_prefill_policy": {

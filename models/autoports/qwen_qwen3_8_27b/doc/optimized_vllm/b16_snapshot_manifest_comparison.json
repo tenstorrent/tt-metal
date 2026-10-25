@@ -1,0 +1,9 @@
+{
+  "argv_equal": true,
+  "environment_equal": true,
+  "changed_sources": [
+    "models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py",
+    "models/autoports/qwen_qwen3_8_27b/tt/kernels/serving_state_copy_batched.cpp",
+    "models/autoports/qwen_qwen3_8_27b/tt/serving_state.py"
+  ]
+}

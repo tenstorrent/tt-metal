@@ -1,0 +1,59 @@
+{
+  "control": "readiness_vllm/full_model_controls.json",
+  "comparisons": [
+    {
+      "id": "vllm_01",
+      "equal": true,
+      "control_finish": "eos",
+      "control_output_tokens": 225
+    },
+    {
+      "id": "vllm_02",
+      "equal": true,
+      "control_finish": "eos",
+      "control_output_tokens": 137
+    },
+    {
+      "id": "vllm_03",
+      "equal": true,
+      "control_finish": "length",
+      "control_output_tokens": 256
+    },
+    {
+      "id": "vllm_04",
+      "equal": true,
+      "control_finish": "length",
+      "control_output_tokens": 256
+    },
+    {
+      "id": "vllm_05",
+      "equal": true,
+      "control_finish": "eos",
+      "control_output_tokens": 121
+    },
+    {
+      "id": "vllm_06",
+      "equal": true,
+      "control_finish": "length",
+      "control_output_tokens": 256
+    },
+    {
+      "id": "shared_explain",
+      "equal": true,
+      "control_finish": "eos",
+      "control_output_tokens": 135
+    },
+    {
+      "id": "shared_structured",
+      "equal": true,
+      "control_finish": "eos",
+      "control_output_tokens": 114
+    },
+    {
+      "id": "shared_code",
+      "equal": true,
+      "control_finish": "eos",
+      "control_output_tokens": 244
+    }
+  ]
+}

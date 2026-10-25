@@ -290,11 +290,13 @@ class Qwen38ForCausalLM:
                           if self.state_pool is not None else length)
                 logits=gen.prefill_continuation(values[:,consumed:consumed+piece],
                     page_table=table,kv_cache=kv_cache,
-                    prompt_lens=[piece if n else 0 for n in lengths],start_position=absolute)
+                    prompt_lens=[piece if n else 0 for n in lengths],start_position=absolute,
+                    compute_logits=not suppressed and consumed+piece==length)
                 consumed+=piece
                 end=start+consumed
                 self._event('prefill_chunk',start=absolute,length=piece,
-                    slots=[int(slots[row]) for row in rows])
+                    slots=[int(slots[row]) for row in rows],
+                    compute_logits=not suppressed and consumed==length)
                 if self.state_pool is not None and end%self.scheduler_block_size==0:
                     for row in rows:
                         column=(end-1)//self.scheduler_block_size

@@ -43,38 +43,38 @@
     "dataset_name": "random",
     "ignore_eos": true
   },
-  "elapsed_s": 13.489899382926524,
+  "elapsed_s": 13.488546401960775,
   "completed_requests": 32,
   "total_input_tokens": 3200.0,
   "total_output_tokens": 3200.0,
   "requested_output_tokens": 3200,
   "missing_output_tokens": 0,
   "ttft_ms": {
-    "p50": 2395.1950109330937,
-    "p99": 2395.8133000251837,
-    "mean": 2393.841396966309
+    "p50": 2394.809049903415,
+    "p99": 2395.2364148851484,
+    "mean": 2393.396462088276
   },
   "tpot_ms": {
-    "p50": 112.04691701498108,
-    "p99": 112.35886113859262,
-    "mean": 112.06018957697476
+    "p50": 112.03536844925222,
+    "p99": 112.3610692488199,
+    "mean": 112.04988923433268
   },
   "itl_ms": {
-    "p50": 109.19673193711787,
-    "p99": 204.29698938734643,
-    "mean": 112.06018957697476
+    "p50": 109.0709661366418,
+    "p99": 204.6954272081872,
+    "mean": 112.04988923433268
   },
   "e2el_ms": {
-    "p50": 13487.815639120527,
-    "p99": 13489.186376980506,
-    "mean": 13487.80016508681
+    "p50": 13486.246368964203,
+    "p99": 13487.766755591147,
+    "mean": 13486.33549628721
   },
-  "itl_p50_decode_tps": 9.1577832253795,
-  "itl_mean_decode_tps": 8.923775729587664,
-  "vllm_mean_tpot_decode_tps": 8.923775729587664,
-  "mean_per_request_decode_tps": 8.923775729587664,
+  "itl_p50_decode_tps": 9.168342735198854,
+  "itl_mean_decode_tps": 8.924596060141349,
+  "vllm_mean_tpot_decode_tps": 8.924596060141349,
+  "mean_per_request_decode_tps": 8.924596060141349,
   "mean_per_request_decode_tps_basis": "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived decode value. For burst-serving profiles, scheduler admission and chunked prefill can affect TPOT, so use the single-user profile for headline decode t/s/u.",
-  "output_throughput_tok_per_s": 237.21451948337557,
-  "request_throughput_per_s": 2.372145194833756,
-  "total_token_throughput_tok_per_s": 474.42903896675114
+  "output_throughput_tok_per_s": 237.23831350239703,
+  "request_throughput_per_s": 2.3723831350239704,
+  "total_token_throughput_tok_per_s": 474.47662700479407
 }

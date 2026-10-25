@@ -1,0 +1,11 @@
+{
+  "status": "pass",
+  "argv_equal": true,
+  "environment_equal": true,
+  "before": "before_b1_command.json",
+  "after": "selected_b1_command.json",
+  "changed_sources": [
+    "models/autoports/qwen_qwen3_8_27b/tt/generator.py",
+    "models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py"
+  ]
+}

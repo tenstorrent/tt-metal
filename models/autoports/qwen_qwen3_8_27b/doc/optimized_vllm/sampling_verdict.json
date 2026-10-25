@@ -1,0 +1,16 @@
+{
+  "status": "pass",
+  "passed": 76,
+  "skipped": 74,
+  "failed": 0,
+  "scope": "Full canonical TT plugin sampling profile; explicit host compatibility for unsupported device params/logprobs",
+  "batch": 8,
+  "max_model_len": 262144,
+  "max_num_batched_tokens": 32768,
+  "evidence": "after_b8_sampling_tests.log",
+  "skip_reasons": {
+    "unconfigured_speculation": 71,
+    "runner_missing_opt_in_chunk_budget": 3
+  },
+  "chunking_control": "after_b32_lifecycle.json"
+}

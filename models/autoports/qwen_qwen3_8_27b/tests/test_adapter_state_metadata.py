@@ -17,6 +17,7 @@ def adapter_with_partial_owner():
     adapter.batch_size = 2
     adapter.scheduler_block_size = 4096
     adapter.slot_ends = [4094, 128]
+    adapter.request_seeds = [1234, 5678]
     adapter.generator = SimpleNamespace(_decode_active=torch.tensor([True, False]))
     adapter.saved = []
     adapter.state_pool = SimpleNamespace(
@@ -64,3 +65,5 @@ def test_release_clears_only_the_released_owner():
     adapter.release_request(0)
     assert adapter.slot_ends == [None, 128]
     assert adapter.decode_slots == set()
+    assert adapter.request_seeds[1] == 5678
+    assert 0 <= adapter.request_seeds[0] < 2**31

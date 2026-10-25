@@ -1,0 +1,174 @@
+diff --git a/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py b/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py
+index 20d4d3bc5ba..a4cd7cf43dc 100644
+--- a/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py
++++ b/models/autoports/qwen_qwen3_8_27b/tt/generator_vllm.py
+@@ -205,6 +205,7 @@ class Qwen38ForCausalLM:
+         if self.state_pool is None:
+             return
+         active=self.generator._decode_active.tolist()
++        saves={}
+         for slot,live in enumerate(active):
+             if not live:
+                 continue
+@@ -214,7 +215,8 @@ class Qwen38ForCausalLM:
+                 self.slot_ends[slot]+=1
+             end=self.slot_ends[slot]
+             if end is not None and end%self.scheduler_block_size==0:
+-                self.state_pool.save(slot,self._snapshot_ids(layer_tables,slot,end))
++                saves[slot]=self._snapshot_ids(layer_tables,slot,end)
++        self.state_pool.save_many(saves)
+ 
+     def _sampling(self, params, slots=None, *, reset_state=False, offsets=0, reset_slots=None):
+         if params is None:
+@@ -271,10 +273,12 @@ class Qwen38ForCausalLM:
+                 for row in rows:
+                     self.request_seeds[slots[row]]=secrets.randbelow(2**31)
+             elif self.state_pool is not None:
++                restores={}
+                 for row in rows:
+                     slot=slots[row]
+                     if self.slot_ends[slot] != start:
+-                        self.state_pool.restore(slot,self._snapshot_ids(layer_tables,row,start))
++                        restores[slot]=self._snapshot_ids(layer_tables,row,start)
++                self.state_pool.restore_many(restores)
+             table = gen.page_table_host.clone()
+             values = torch.zeros(self.batch_size,max(lengths),dtype=torch.int64)
+             for row in rows:
+@@ -290,17 +294,21 @@ class Qwen38ForCausalLM:
+                           if self.state_pool is not None else length)
+                 logits=gen.prefill_continuation(values[:,consumed:consumed+piece],
+                     page_table=table,kv_cache=kv_cache,
+-                    prompt_lens=[piece if n else 0 for n in lengths],start_position=absolute)
++                    prompt_lens=[piece if n else 0 for n in lengths],start_position=absolute,
++                    compute_logits=not suppressed and consumed+piece==length)
+                 consumed+=piece
+                 end=start+consumed
+                 self._event('prefill_chunk',start=absolute,length=piece,
+-                    slots=[int(slots[row]) for row in rows])
++                    slots=[int(slots[row]) for row in rows],
++                    compute_logits=not suppressed and consumed==length)
+                 if self.state_pool is not None and end%self.scheduler_block_size==0:
++                    saves={}
+                     for row in rows:
+                         column=(end-1)//self.scheduler_block_size
+                         allocated=[int(layer_tables[i][row,column]) for i in self.state_pool.pools]
+                         if any(allocated):
+-                            self.state_pool.save(slots[row],self._snapshot_ids(layer_tables,row,end))
++                            saves[slots[row]]=self._snapshot_ids(layer_tables,row,end)
++                    self.state_pool.save_many(saves)
+             for row in rows:
+                 self.slot_ends[slots[row]]=int(prompt_lens[row])
+             if suppressed:
+diff --git a/models/autoports/qwen_qwen3_8_27b/tt/serving_state.py b/models/autoports/qwen_qwen3_8_27b/tt/serving_state.py
+index db214ec31f0..ae3d6f0e813 100644
+--- a/models/autoports/qwen_qwen3_8_27b/tt/serving_state.py
++++ b/models/autoports/qwen_qwen3_8_27b/tt/serving_state.py
+@@ -13,7 +13,7 @@ import torch
+ import ttnn
+ from .optimized_decoder import LinearState
+ 
+-_KERNEL = str(Path(__file__).with_name('kernels') / 'serving_state_copy.cpp')
++_KERNEL = str(Path(__file__).with_name('kernels') / 'serving_state_copy_batched.cpp')
+ 
+ 
+ class ServingStatePool:
+@@ -48,14 +48,16 @@ class ServingStatePool:
+             raise ValueError('A recurrent state pool needs at least one linear layer')
+         self.layer_indices = tuple(self.active)
+         self.batch_size = int(next(iter(self.active.values())).conv.shape[0])
+-        self.host_ids = torch.zeros(len(self.active),8,dtype=torch.int32)
++        # One stable metadata row per layer and simultaneously transferred slot.
++        # Runtime count selects a prefix; batch size does not change the program.
++        self.host_ids = torch.zeros(len(self.active)*self.batch_size,8,dtype=torch.int32)
+         self.ids = ttnn.from_torch(self.host_ids,dtype=ttnn.uint32,layout=ttnn.ROW_MAJOR_LAYOUT,
+             device=self.mesh,memory_config=ttnn.DRAM_MEMORY_CONFIG,
+             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
+         self.allocated_bytes_per_device = sum(
+             self.num_blocks[i] * (3*2560*2 + 12*128*128*4) for i in self.layer_indices)
+ 
+-    def _copy_tensor(self, source, destination, layer_row):
++    def _copy_tensor(self, source, destination, layer_row, count_rows):
+         if source.buffer_address() == destination.buffer_address():
+             raise ValueError('Snapshot copies require distinct live and pool allocations')
+         if source.is_sharded() or destination.is_sharded():
+@@ -78,7 +80,7 @@ class ServingStatePool:
+         runtime = ttnn.RuntimeArgs()
+         for ordinal,core in enumerate(coords):
+             runtime[core.x][core.y] = [source.buffer_address(),destination.buffer_address(),
+-                self.ids.buffer_address(),layer_row,ordinal]
++                self.ids.buffer_address(),layer_row,ordinal,count_rows]
+         descriptor = ttnn.ProgramDescriptor(kernels=[ttnn.KernelDescriptor(
+             kernel_source=_KERNEL,core_ranges=cores,compile_time_args=compile_args,
+             runtime_args=runtime,config=ttnn.ReaderConfigDescriptor())],cbs=[
+@@ -90,25 +92,35 @@ class ServingStatePool:
+         ttnn.generic_op([source,destination,self.ids],descriptor)
+ 
+     def _transfer(self, slot, block_ids, restore):
+-        slot = operator.index(slot)
+-        if not 0 <= slot < self.batch_size:
+-            raise ValueError('Live slot is outside the configured batch')
+-        if set(block_ids) != set(self.layer_indices):
+-            raise ValueError('Supply the scheduler block ID for every selected linear layer')
+-        ids = {i:operator.index(block_ids[i]) for i in self.layer_indices}
+-        if any(not 0 <= block < self.num_blocks[i] for i,block in ids.items()):
+-            raise ValueError('Snapshot block ID is outside the scheduler pool')
++        self._transfer_many({slot:block_ids},restore)
++
++    def _transfer_many(self, transfers, restore):
++        if not transfers:
++            return
++        checked=[]
++        for slot,block_ids in transfers.items():
++            slot=operator.index(slot)
++            if not 0 <= slot < self.batch_size:
++                raise ValueError('Live slot is outside the configured batch')
++            if set(block_ids) != set(self.layer_indices):
++                raise ValueError('Supply the scheduler block ID for every selected linear layer')
++            ids={i:operator.index(block_ids[i]) for i in self.layer_indices}
++            if any(not 0 <= block < self.num_blocks[i] for i,block in ids.items()):
++                raise ValueError('Snapshot block ID is outside the scheduler pool')
++            checked.append((slot,ids))
+         for row,i in enumerate(self.layer_indices):
+-            self.host_ids[row,0] = ids[i] if restore else slot
+-            self.host_ids[row,1] = slot if restore else ids[i]
++            for offset,(slot,ids) in enumerate(checked):
++                index=row*self.batch_size+offset
++                self.host_ids[index,0] = ids[i] if restore else slot
++                self.host_ids[index,1] = slot if restore else ids[i]
+         host = ttnn.from_torch(self.host_ids,dtype=ttnn.uint32,layout=ttnn.ROW_MAJOR_LAYOUT,
+                               mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh))
+         ttnn.copy_host_to_device_tensor(host,self.ids)
+         self.counters['metadata_uploads']+=1
+         for row,i in enumerate(self.layer_indices):
+             source,destination=(self.pools[i],self.active[i]) if restore else (self.active[i],self.pools[i])
+-            self._copy_tensor(source.conv,destination.conv,row)
+-            self._copy_tensor(source.recurrent,destination.recurrent,row)
++            self._copy_tensor(source.conv,destination.conv,row*self.batch_size,len(checked))
++            self._copy_tensor(source.recurrent,destination.recurrent,row*self.batch_size,len(checked))
+ 
+     def warmup(self):
+         """Compile both directions before capture, preserving the live slot exactly.
+@@ -124,13 +136,19 @@ class ServingStatePool:
+         self.prepared=True
+ 
+     def save(self, slot, block_ids):
++        self.save_many({slot:block_ids})
++
++    def save_many(self, transfers):
+         if not self.prepared:
+             raise RuntimeError('Prepare snapshot copies before model trace capture')
+-        self._transfer(slot,block_ids,False)
+-        self.counters['saves']+=1
++        self._transfer_many(transfers,False)
++        self.counters['saves']+=len(transfers)
+ 
+     def restore(self, slot, block_ids):
++        self.restore_many({slot:block_ids})
++
++    def restore_many(self, transfers):
+         if not self.prepared:
+             raise RuntimeError('Prepare snapshot copies before model trace capture')
+-        self._transfer(slot,block_ids,True)
+-        self.counters['restores']+=1
++        self._transfer_many(transfers,True)
++        self.counters['restores']+=len(transfers)

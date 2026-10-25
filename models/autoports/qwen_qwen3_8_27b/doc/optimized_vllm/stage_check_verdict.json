@@ -1,0 +1,10 @@
+{
+  "exit_code": 1,
+  "status": "advisory_only_no_critical_failures",
+  "evidence": "stage_check.log",
+  "advisories": [
+    "Historical isolated plugin host-test context16384 appears in inherited logs; all real final server manifests262144.",
+    "Inherited separate prefill/decode weight representations already measured; unchanged.",
+    "Configured289-ID hybrid pool does not cover planning32x32768 prefixes; not a native context reduction or claimed hard model limit."
+  ]
+}

@@ -94,3 +94,18 @@ def test_events_record_physical_pieces_and_non_aligned_tail():
     assert pieces==[(0,32),(32,1)]
     assert [value for name,value in calls if name=='forward']==[[32,32],[1,1]]
     assert obj.slot_ends==[33,33]
+
+
+@pytest.mark.parametrize('suppressed',[False,True])
+def test_terminal_work_only_for_final_emitted_chunk(suppressed):
+    obj,calls=adapter()
+    obj.generator.prefill_chunk_size=32
+    forward=obj.generator.prefill_continuation
+    terminal=[]
+    def record(values,**kwargs):
+        terminal.append(kwargs['compute_logits'])
+        return forward(values,**kwargs)
+    obj.generator.prefill_continuation=record
+    run(obj,[suppressed,suppressed],params=object())
+    assert terminal==[False,not suppressed]
+    assert obj.slot_ends==[33,33]

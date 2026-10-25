@@ -1,0 +1,390 @@
+{
+  "hf_model": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "prompt_mode": "chat",
+  "chat_template_present": true,
+  "endpoint": "/v1/chat/completions",
+  "source": "doc/qualitative_prompts.json",
+  "control": "readiness_vllm/full_model_controls.json",
+  "outputs": [
+    {
+      "id": "explain",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nExplain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "generation": {
+        "model": "/workspace/.cache/qwen38-full",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Explain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1
+      },
+      "response": {
+        "id": "chatcmpl-b8a1feb4b12002de",
+        "object": "chat.completion",
+        "created": 1792935080,
+        "model": "/workspace/.cache/qwen38-full",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "We need to respond to user: \"Explain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old.\" Need final with exactly three short sentences. Ensure English. Simple. Maybe: \"Sunlight is made of many colors.\" \"Air in the sky scatters the blue light more than other colors.\" \"So our eyes see lots of blue all around the sky.\" Count three sentences. Short. Suitable. Final only three sentences.\n</think>\n\nSunlight is made of many colors.  \nAir in the sky scatters blue light more than other colors.  \nSo we see a blue sky during the day.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-8c1675ac",
+        "usage": {
+          "prompt_tokens": 77,
+          "total_tokens": 212,
+          "completion_tokens": 135,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "id": "explain",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Explain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nExplain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "generation": {
+        "model": "/workspace/.cache/qwen38-full",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Explain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "top_k": 4
+      },
+      "response": {
+        "id": "chatcmpl-9c677de1f6d5b8cf",
+        "object": "chat.completion",
+        "created": 1792935083,
+        "model": "/workspace/.cache/qwen38-full",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "We need to respond to user: \"Explain in English why the sky looks blue during the day. Use three short sentences suitable for a curious ten-year-old.\" Need final exactly three short sentences. Ensure English. Maybe: \"Sunlight is white, but it contains many colors.\" \"Air scatters the smaller blue light rays in all directions.\" \"So your eyes see lots of blue coming from all around the sky.\" Need three short sentences suitable for ten-year-old. Good.\n</think>\n\nSunlight looks white, but it is made of many colors.  \nAir scatters the blue colors in all directions.  \nThat is why the daytime sky looks blue to us.",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-8c1675ac",
+        "usage": {
+          "prompt_tokens": 77,
+          "total_tokens": 214,
+          "completion_tokens": 137,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "id": "structured",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Alice has 7 apples and gives Bob 3. Return a JSON object with keys alice_apples and bob_apples containing the resulting counts. Do not use a markdown code fence."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nAlice has 7 apples and gives Bob 3. Return a JSON object with keys alice_apples and bob_apples containing the resulting counts. Do not use a markdown code fence.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "generation": {
+        "model": "/workspace/.cache/qwen38-full",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Alice has 7 apples and gives Bob 3. Return a JSON object with keys alice_apples and bob_apples containing the resulting counts. Do not use a markdown code fence."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1
+      },
+      "response": {
+        "id": "chatcmpl-87ee1be995d31097",
+        "object": "chat.completion",
+        "created": 1792935087,
+        "model": "/workspace/.cache/qwen38-full",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "We need answer user's request. Need produce final: JSON object no markdown code fence. Keys alice_apples and bob_apples. Alice has 7 apples gives Bob 3. Result Alice 4, Bob? It says Bob? likely Bob initially 0? \"Alice has 7 apples and gives Bob 3. Return ... resulting counts.\" Bob_apples likely 3. JSON: {\"alice_apples\":4,\"bob_apples\":3}. No code fence.\n</think>\n\n{\"alice_apples\":4,\"bob_apples\":3}",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-8c1675ac",
+        "usage": {
+          "prompt_tokens": 89,
+          "total_tokens": 203,
+          "completion_tokens": 114,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "id": "structured",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Alice has 7 apples and gives Bob 3. Return a JSON object with keys alice_apples and bob_apples containing the resulting counts. Do not use a markdown code fence."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nAlice has 7 apples and gives Bob 3. Return a JSON object with keys alice_apples and bob_apples containing the resulting counts. Do not use a markdown code fence.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "generation": {
+        "model": "/workspace/.cache/qwen38-full",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Alice has 7 apples and gives Bob 3. Return a JSON object with keys alice_apples and bob_apples containing the resulting counts. Do not use a markdown code fence."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "top_k": 4
+      },
+      "response": {
+        "id": "chatcmpl-bbd0cfbac1c3f4ad",
+        "object": "chat.completion",
+        "created": 1792935091,
+        "model": "/workspace/.cache/qwen38-full",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "We need answer user's request. Need final JSON object no markdown code fence. Need likely {\"alice_apples\":4,\"bob_apples\":3} if Bob had 0 initially? Wording: Alice has 7 apples and gives Bob 3. Return JSON object with keys alice_apples and bob_apples containing resulting counts. Assume Bob initially 0, receives 3. Alice 4. Need no code fence.\n</think>\n\n{\"alice_apples\":4,\"bob_apples\":3}",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-8c1675ac",
+        "usage": {
+          "prompt_tokens": 89,
+          "total_tokens": 193,
+          "completion_tokens": 104,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "id": "code",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a short Python function that removes duplicates from a list while preserving the original order. Show one example call."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nWrite a short Python function that removes duplicates from a list while preserving the original order. Show one example call.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "generation": {
+        "model": "/workspace/.cache/qwen38-full",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Write a short Python function that removes duplicates from a list while preserving the original order. Show one example call."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "top_k": 1
+      },
+      "response": {
+        "id": "chatcmpl-812c7a6932afe102",
+        "object": "chat.completion",
+        "created": 1792935093,
+        "model": "/workspace/.cache/qwen38-full",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "We need answer user: \"Write a short Python function that removes duplicates from a list while preserving the original order. Show one example call.\" Need provide code. Simple. Need final concise. Could use dict.fromkeys or seen set. Need short function. Example call. Ensure preserves order. Maybe:\ndef remove_duplicates(lst):\n    seen=set()\n    out=[]\n    for x in lst:\n        if x not in seen:\n            seen.add(x); out.append(x)\n    return out\nExample: remove_duplicates([1,2,2,3,1,4]) -> [1,2,3,4].\nNeed final only.\n</think>\n\n```python\ndef remove_duplicates(items):\n    seen = set()\n    result = []\n\n    for item in items:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n\n    return result\n```\n\nExample:\n\n```python\nprint(remove_duplicates([1, 2, 2, 3, 1, 4]))\n```\n\nOutput:\n\n```python\n[1, 2, 3, 4]\n```",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "stop",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-8c1675ac",
+        "usage": {
+          "prompt_tokens": 74,
+          "total_tokens": 318,
+          "completion_tokens": 244,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    },
+    {
+      "id": "code",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Write a short Python function that removes duplicates from a list while preserving the original order. Show one example call."
+        }
+      ],
+      "rendered_prompt": "<|im_start|>system\nReasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.<|im_end|>\n<|im_start|>user\nWrite a short Python function that removes duplicates from a list while preserving the original order. Show one example call.<|im_end|>\n<|im_start|>assistant\n<think>\n",
+      "generation": {
+        "model": "/workspace/.cache/qwen38-full",
+        "messages": [
+          {
+            "role": "user",
+            "content": "Write a short Python function that removes duplicates from a list while preserving the original order. Show one example call."
+          }
+        ],
+        "max_tokens": 256,
+        "temperature": 0.7,
+        "top_p": 1.0,
+        "top_k": 4
+      },
+      "response": {
+        "id": "chatcmpl-a2211eeec1bd1883",
+        "object": "chat.completion",
+        "created": 1792935100,
+        "model": "/workspace/.cache/qwen38-full",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "We need answer user's request: \"Write a short Python function that removes duplicates from a list while preserving the original order. Show one example call.\"\n Need final concise. Provide code. Could use dict.fromkeys, but careful with unhashable? For short simple: def remove_duplicates(lst): seen=set(); out=[]; for x in lst: if x not in seen: seen.add(x); out.append(x); return out. Example: remove_duplicates([1,2,2,3,1,4]) -> [1,2,3,4]. Or use list(dict.fromkeys(lst)). Since short, maybe dict.fromkeys. But if elements unhashable? Not needed. Could present function. Ensure example call. Final only.\n</think>\n\n```python\ndef remove_duplicates(items):\n    seen = set()\n    result = []\n\n    for item in items:\n        if item not in seen:\n            seen.add(item)\n            result.append(item)\n\n    return result\n```\n\nExample:\n\n```python\nprint(remove_duplicates([1, 2, 2, 3, 1, 4]))\n```\n\nOutput:\n\n```python\n[1, 2, 3, 4]",
+              "refusal": null,
+              "annotations": null,
+              "audio": null,
+              "function_call": null,
+              "reasoning": null
+            },
+            "logprobs": null,
+            "finish_reason": "length",
+            "stop_reason": null,
+            "token_ids": null,
+            "routed_experts": null
+          }
+        ],
+        "service_tier": null,
+        "system_fingerprint": "vllm-0.30.0-8c1675ac",
+        "usage": {
+          "prompt_tokens": 74,
+          "total_tokens": 330,
+          "completion_tokens": 256,
+          "prompt_tokens_details": null,
+          "completion_tokens_details": null
+        },
+        "prompt_logprobs": null,
+        "prompt_token_ids": null,
+        "prompt_text": null,
+        "kv_transfer_params": null,
+        "ec_transfer_params": null,
+        "metrics": null
+      }
+    }
+  ],
+  "status": "collected_requires_review"
+}

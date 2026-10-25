@@ -1,0 +1,8 @@
+{
+  "source": "after_b32_events.jsonl",
+  "measurement": "host event timestamps, not device time",
+  "duration_s": 255.19967103004456,
+  "prefill_intervals": 30,
+  "sum_prefill_host_s": 162.9223145789001,
+  "max_prefill_host_s": 15.921705554006621
+}

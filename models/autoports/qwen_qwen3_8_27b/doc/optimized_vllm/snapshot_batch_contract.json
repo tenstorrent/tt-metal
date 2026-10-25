@@ -1,0 +1,92 @@
+{
+  "scope": "Synthetic byte-exact snapshot primitive, two linear layers, B32/TP4; not model quality/performance",
+  "status": "pass",
+  "cases": [
+    {
+      "rows": 1,
+      "order": [
+        31
+      ],
+      "all_four_replicas_exact": true,
+      "metadata_uploads": 2,
+      "programs": 6
+    },
+    {
+      "rows": 3,
+      "order": [
+        7,
+        0,
+        31
+      ],
+      "all_four_replicas_exact": true,
+      "metadata_uploads": 2,
+      "programs": 6
+    },
+    {
+      "rows": 32,
+      "order": [
+        31,
+        30,
+        29,
+        28,
+        27,
+        26,
+        25,
+        24,
+        23,
+        22,
+        21,
+        20,
+        19,
+        18,
+        17,
+        16,
+        15,
+        14,
+        13,
+        12,
+        11,
+        10,
+        9,
+        8,
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0
+      ],
+      "all_four_replicas_exact": true,
+      "metadata_uploads": 2,
+      "programs": 6
+    },
+    {
+      "rows": 2,
+      "order": [
+        0,
+        31
+      ],
+      "all_four_replicas_exact": true,
+      "metadata_uploads": 2,
+      "programs": 6
+    }
+  ],
+  "trace_id": "MeshTraceId(0)",
+  "captures": 1,
+  "retirements_during_workload": 0,
+  "counters": {
+    "saves": 38,
+    "restores": 38,
+    "metadata_uploads": 10
+  },
+  "programs": 6,
+  "tracking": true,
+  "program_cache_included": true,
+  "metadata_shape": [
+    64,
+    8
+  ],
+  "metadata_bytes_per_device": 2048
+}

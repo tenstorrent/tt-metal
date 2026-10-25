@@ -1,4 +1,4 @@
-2026-10-25 11:47:44.822 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+2026-10-25 13:11:07.245 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
 Config{cache_path=/.cache/ttnn,model_cache_path=/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,std::nullopt}
 ============================= test session starts ==============================
 platform linux -- Python 3.10.22, pytest-9.0.3, pluggy-1.7.0 -- /opt/venv/bin/python
@@ -10,12 +10,12 @@ plugins: anyio-4.15.1, split-0.11.0, repeat-0.9.4, benchmark-5.2.3, cov-7.0.0, d
 timeout: 300.0s
 timeout method: signal
 timeout func_only: False
-collecting ... INFO 10-25 11:47:45 [__init__.py:52] Available plugins for group vllm.platform_plugins:
-INFO 10-25 11:47:45 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
-INFO 10-25 11:47:45 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
-INFO 10-25 11:47:45 [__init__.py:272] Platform plugin tt is activated
-INFO 10-25 11:47:47 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
-INFO 10-25 11:47:47 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
+collecting ... INFO 10-25 13:11:07 [__init__.py:52] Available plugins for group vllm.platform_plugins:
+INFO 10-25 13:11:07 [__init__.py:54] - tt -> vllm_tt_plugin.entrypoints:platform_plugin
+INFO 10-25 13:11:07 [__init__.py:57] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 10-25 13:11:07 [__init__.py:272] Platform plugin tt is activated
+INFO 10-25 13:11:09 [importing.py:74] Triton is installed but 0 active driver(s) found (expected 1). Disabling Triton to prevent runtime errors.
+INFO 10-25 13:11:09 [importing.py:98] Triton not installed or not compatible; certain GPU-related functions will not be available.
 collected 150 items
 
 bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_acceptance_metrics.py::test_a_completed_request_also_moved_the_draft_counters SKIPPED
@@ -209,33 +209,59 @@ Traceback (most recent call last):
   File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 515, in _check_closed
     raise RuntimeError('Event loop is closed')
 RuntimeError: Event loop is closed
+ERROR    asyncio:base_events.py:1758 Task exception was never retrieved
+future: <Task finished name='Task-1009' coro=<AsyncClient.aclose() done, defined at /opt/venv/lib/python3.10/site-packages/httpx2/_client.py:2198> exception=RuntimeError('Event loop is closed')>
+Traceback (most recent call last):
+  File "/opt/venv/lib/python3.10/site-packages/httpx2/_client.py", line 2205, in aclose
+    await self._transport.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpx2/_transports/default.py", line 400, in aclose
+    await self._pool.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection_pool.py", line 382, in aclose
+    await self._close_connections(closing_connections)
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection_pool.py", line 374, in _close_connections
+    await connection.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/connection.py", line 157, in aclose
+    await self._connection.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_async/http11.py", line 236, in aclose
+    await self._network_stream.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/httpcore2/_backends/anyio.py", line 56, in aclose
+    await self._stream.aclose()
+  File "/opt/venv/lib/python3.10/site-packages/anyio/_backends/_asyncio.py", line 1467, in aclose
+    self._transport.close()
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/selector_events.py", line 706, in close
+    self._loop.call_soon(self._call_connection_lost, None)
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 753, in call_soon
+    self._check_closed()
+  File "/usr/local/share/uv/cpython-3.10-linux-x86_64-gnu/lib/python3.10/asyncio/base_events.py", line 515, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
 - generated xml file: /workspace/generated/test_reports/most_recent_tests.xml --
 ============================= slowest 25 durations =============================
-30.54s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_changes_output
-30.15s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_changes_output
-25.95s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
-16.53s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied
-16.11s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1]
-16.03s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0]
-10.01s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words
-9.02s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1]
-8.95s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0]
-7.42s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32]
+30.95s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_changes_output
+30.59s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestFrequencyPenalty::test_frequency_penalty_changes_output
+24.72s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab
+16.54s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_no_seed_varied
+16.09s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[1]
+16.04s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_batch1_seed_reproducible[0]
+9.93s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_bad_words
+9.04s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-1]
+8.94s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[32-0]
+8.59s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[32]
 7.17s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_between_batches
-5.44s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_reuses_slots_with_mixed_requests
-5.38s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19]
-5.31s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_is_per_request
-4.97s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens
-4.58s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+5.81s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_host_only_params.py::TestHostOnlyParameters::test_min_tokens
+5.80s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_structured_output_dp1.py::test_dp1_reuses_slots_with_mixed_requests
+5.33s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_tt_penalties.py::TestPresencePenalty::test_presence_penalty_is_per_request
+4.89s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[19]
+4.76s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch
+4.39s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15]
 4.24s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-1]
-4.20s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0]
+4.23s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_uniform_seed_deterministic[10-0]
 4.16s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_same_seeds_reproduce_across_batches
-3.69s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37]
-3.54s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_topk[15]
-3.25s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding
-3.23s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999]
-3.21s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[123]
-3.21s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[42]
+3.70s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_temperature_varied_in_batch[37]
+3.35s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_logprobs.py::TestLogprobs::test_logprobs[1-1.5]
+3.26s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_seeding
+3.22s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[999]
+3.21s call     bringup/dependencies/vllm-tt-plugin/tests/tt/test_seeding_and_variety.py::TestSeedingAndVariety::test_specific_seed_reproducible[0]
 =========================== short test summary info ============================
 PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_basic_shape
 PASSED bringup/dependencies/vllm-tt-plugin/tests/tt/test_build_logprobs_from_topk.py::TestBuildLogprobsFromTopk::test_sampled_token_at_col0
@@ -373,5 +399,5 @@ SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/spec/test_termination.p
 SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py:145: Needs a server with chunked prefill enabled; pass --tt-chunked-prefill-budget=<max_num_batched_tokens>
 SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py:175: Needs a server with chunked prefill enabled; pass --tt-chunked-prefill-budget=<max_num_batched_tokens>
 SKIPPED [1] bringup/dependencies/vllm-tt-plugin/tests/tt/test_chunked_prefill.py:206: Needs a server with chunked prefill enabled; pass --tt-chunked-prefill-budget=<max_num_batched_tokens>
-============ 76 passed, 74 skipped, 2 warnings in 311.59s (0:05:11) ============
+============ 76 passed, 74 skipped, 2 warnings in 315.02s (0:05:15) ============
 sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

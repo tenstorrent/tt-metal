@@ -1,0 +1,4 @@
+{
+  "status": "excluded_from_acceptance",
+  "reason": "Runtime source/kernel changed while the terminal-only server was in flight. Retained for history; final source must restart and rerun."
+}
