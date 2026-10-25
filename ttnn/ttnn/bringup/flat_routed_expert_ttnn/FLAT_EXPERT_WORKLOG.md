@@ -1723,3 +1723,76 @@ the ceiling of any change to the down stream is DN_NOREAD 433 at M 160.
 So GLM-5.3 E 8 sits at ~75% DRAM with three read streams per bank; every on-chip and port knob tried moves it < 2%.
 The measured lever left is fewer x bytes (block-fp8 x rows, -30..-40 us at M 160; parked by the user: no quantization).
 Logs: rm_*.
+
+### Flat vs main's routed experts (unified, fused, hybrid) at the Galaxy per-chip loads (2026-10-25, one chip, bh-lb-09)
+Main = origin/main 07fac6de536 (worktree /localdev/mstaletovic/tt-metal-main-1025, built as is). Every implementation
+on the same bfp4 experts at LoFi; device time from the program real-time profiler, median of 10 calls, every program
+of a call summed. Flat: test_flat_balanced_sweep (DRISC-only defaults, rows_hint = M, x bf16 row-major gathered by
+token index, y bf16 row-major, fp32 DEST down). Main: scratch harness zz_re_compare.py (copy in
+/localdev/mstaletovic/re_cmp/) on TtRoutedExpert's weights and its production config (LoFi, bf16 DEST, packer L1 acc):
+row-major bf16 dispatch buffer, E regions of 512 rows; "unified" = unified_routed_expert_moe; "fused" = TtRoutedExpert
+.forward with T >= max_tokens (moe_fused_swiglu alone); "hybrid op" = the one-dispatch hybrid_routed_expert_moe at
+T 320 (the models' ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD) and T 128; skewed: zipf (count ~ 1 / rank, same total, cap
+512), also the two-op forward at T 128. DRAM % = (weights + x bf16 + y; y bf16 flat, bfp8 main) / 512 GB/s. Math %
+over the compute cores (flat 64 gate/up + 32 down, K3 + 28; main 11 x 8 = 88) and over 110. * = the Galaxy M.
+
+**GLM-5.3 E8** (Galaxy M 160), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 96 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 433 / 54.1 / 82% / 17% / 15% | 697 / 87.1 / 50% / 11% / 9% | 533 / 66.6 / 66% / 15% / 12% | 562 / 70.2 / 62% / 14% / 11% | 561 / 70.1 / 63% / 14% / 11% | 1.23x |
+| 96 | 459 / 57.4 / 80% / 24% / 21% | 694 / 86.7 / 52% / 18% / 14% | 561 / 70.1 / 64% / 21% / 17% | 604 / 75.5 / 60% / 20% / 16% | 602 / 75.3 / 60% / 20% / 16% | 1.22x |
+| 128 | 498 / 62.2 / 77% / 30% / 26% | 691 / 86.3 / 53% / 22% / 18% | 589 / 73.6 / 63% / 28% / 22% | 626 / 78.3 / 59% / 25% / 20% | 623 / 77.9 / 59% / 25% / 20% | 1.18x |
+| 160 * | 526 / 65.8 / 75% / 34% / 30% | 711 / 88.8 / 53% / 28% / 22% | 698 / 87.3 / 54% / 29% / 23% | 744 / 93.0 / 51% / 26% / 21% | 818 / 102.2 / 46% / 24% / 19% | 1.33x |
+| 192 | 555 / 69.4 / 73% / 39% / 34% | 733 / 91.6 / 53% / 32% / 26% | 711 / 88.9 / 55% / 34% / 27% | 746 / 93.3 / 52% / 32% / 26% | 829 / 103.7 / 47% / 29% / 23% | 1.28x |
+| 256 | 632 / 79.0 / 68% / 46% / 40% | 757 / 94.6 / 54% / 42% / 34% | 753 / 94.1 / 54% / 42% / 34% | 765 / 95.6 / 53% / 41% / 33% | 853 / 106.7 / 48% / 38% / 30% | 1.19x |
+| zipf (mean 160) | 529 / 66.1 / 74% / 34% / 30% | 748 / 93.5 / 51% / 26% / 21% | 697 / 87.1 / 54% / 29% / 23% | 711 / 88.9 / 53% / 28% / 22% | 731 / 91.3 / 52% / 28% / 22% | 1.28x (two-op T 128: 679) |
+
+**GLM-5.3-Flash E9** (Galaxy M 142), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 96 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 324 / 36.0 / 83% / 17% / 15% | 591 / 65.7 / 44% / 10% / 8% | 444 / 49.3 / 59% / 14% / 11% | 489 / 54.3 / 54% / 12% / 10% | 488 / 54.2 / 54% / 12% / 10% | 1.37x |
+| 96 | 349 / 38.8 / 79% / 23% / 20% | 590 / 65.6 / 46% / 15% / 12% | 489 / 54.4 / 55% / 19% / 15% | 540 / 60.0 / 50% / 16% / 13% | 539 / 59.9 / 50% / 16% / 13% | 1.40x |
+| 128 | 375 / 41.7 / 76% / 29% / 25% | 580 / 64.4 / 48% / 20% / 16% | 494 / 54.9 / 56% / 24% / 19% | 558 / 62.0 / 50% / 21% / 17% | 557 / 61.8 / 50% / 21% / 17% | 1.32x |
+| 142 * | 381 / 42.4 / 76% / 32% / 28% | 583 / 64.8 / 48% / 22% / 18% | 637 / 70.8 / 44% / 21% / 17% | 683 / 75.9 / 41% / 19% / 15% | 688 / 76.5 / 41% / 19% / 15% | 1.53x |
+| 160 | 398 / 44.2 / 74% / 34% / 30% | 588 / 65.4 / 48% / 25% / 20% | 637 / 70.8 / 45% / 24% / 19% | 682 / 75.8 / 42% / 21% / 17% | 691 / 76.7 / 41% / 21% / 17% | 1.48x |
+| 192 | 420 / 46.7 / 72% / 39% / 34% | 614 / 68.2 / 47% / 29% / 23% | 637 / 70.8 / 46% / 28% / 22% | 683 / 75.8 / 43% / 26% / 21% | 703 / 78.1 / 41% / 25% / 20% | 1.46x |
+| 256 | 477 / 53.0 / 68% / 46% / 40% | 631 / 70.1 / 48% / 38% / 30% | 653 / 72.5 / 47% / 36% / 29% | 688 / 76.4 / 44% / 35% / 28% | 720 / 80.0 / 42% / 32% / 26% | 1.32x |
+| zipf (mean 142) | 395 / 43.9 / 73% / 31% / 27% | 625 / 69.5 / 45% / 21% / 17% | 594 / 66.0 / 47% / 22% / 18% | 615 / 68.4 / 46% / 21% / 17% | 618 / 68.7 / 45% / 21% / 17% | 1.43x (two-op T 128: 564) |
+
+**K3 E28 (H 3584)** (Galaxy M 91), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 92 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 1170 / 41.8 / 91% / 20% / 17% | 2565 / 91.6 / 41% / 10% / 8% | 1840 / 65.7 / 57% / 14% / 11% | 1995 / 71.3 / 53% / 12% / 10% | 1991 / 71.1 / 53% / 12% / 10% | 1.57x |
+| 91 * | 1231 / 44.0 / 88% / 26% / 22% | 2568 / 91.7 / 42% / 14% / 11% | 2187 / 78.1 / 49% / 16% / 13% | 2359 / 84.3 / 45% / 15% / 12% | 2354 / 84.1 / 45% / 15% / 12% | 1.78x |
+| 96 | 1231 / 44.0 / 89% / 29% / 24% | 2569 / 91.7 / 42% / 14% / 11% | 2186 / 78.1 / 49% / 16% / 13% | 2358 / 84.2 / 46% / 15% / 12% | 2354 / 84.1 / 46% / 15% / 12% | 1.78x |
+| 128 | 1313 / 46.9 / 85% / 36% / 30% | 2499 / 89.2 / 44% / 20% / 16% | 2273 / 81.2 / 48% / 21% / 17% | 2415 / 86.3 / 45% / 20% / 16% | 2413 / 86.2 / 45% / 20% / 16% | 1.73x |
+| 160 | 1436 / 51.3 / 79% / 41% / 34% | 2493 / 89.0 / 45% / 25% / 20% | 3050 / 108.9 / 36% / 20% / 16% | 3337 / 119.2 / 33% / 19% / 15% | 2835 / 101.3 / 39% / 21% / 17% | 1.74x |
+| 192 | 1508 / 53.9 / 77% / 47% / 39% | 2513 / 89.7 / 45% / 29% / 23% | 3051 / 109.0 / 37% / 24% / 19% | 3337 / 119.2 / 34% / 21% / 17% | 2820 / 100.7 / 40% / 26% / 21% | 1.67x |
+| 256 | 1708 / 61.0 / 71% / 55% / 46% | 2632 / 94.0 / 44% / 38% / 30% | 3067 / 109.5 / 38% / 31% / 25% | 3339 / 119.3 / 35% / 29% / 23% | 2892 / 103.3 / 40% / 34% / 27% | 1.54x |
+| zipf (mean 91) | 1274 / 45.5 / 85% / 26% / 22% | 2651 / 94.7 / 40% / 12% / 10% | 2269 / 81.0 / 47% / 15% / 12% | 2356 / 84.1 / 45% / 15% / 12% | 2294 / 81.9 / 47% / 15% / 12% | 1.68x (two-op T 128: 2139) |
+
+**K2.7 E12** (Galaxy M 107), cells: total us / us per expert / DRAM % / math % compute cores / math % 110 grid; flat compute = 96 cores, main's ops 88 (11 x 8)
+
+| M | flat | unified | fused (moe_fused_swiglu) | hybrid op T 320 | hybrid op T 128 | best main / flat |
+|---|---|---|---|---|---|---|
+| 64 | 733 / 61.1 / 85% / 17% / 15% | 1166 / 97.2 / 53% / 12% / 10% | 885 / 73.7 / 69% / 16% / 13% | 939 / 78.3 / 65% / 15% / 12% | 942 / 78.5 / 65% / 15% / 12% | 1.21x |
+| 96 | 782 / 65.2 / 82% / 24% / 21% | 1157 / 96.4 / 54% / 18% / 14% | 935 / 77.9 / 67% / 22% / 18% | 992 / 82.6 / 64% / 21% / 17% | 991 / 82.6 / 64% / 21% / 17% | 1.20x |
+| 107 * | 806 / 67.2 / 81% / 26% / 23% | 1163 / 96.9 / 55% / 20% / 16% | 991 / 82.5 / 64% / 24% / 19% | 1026 / 85.5 / 62% / 22% / 18% | 1028 / 85.7 / 62% / 22% / 18% | 1.23x |
+| 128 | 829 / 69.1 / 80% / 31% / 27% | 1166 / 97.2 / 55% / 24% / 19% | 989 / 82.4 / 65% / 28% / 22% | 1026 / 85.5 / 63% / 28% / 22% | 1026 / 85.5 / 63% / 28% / 22% | 1.19x |
+| 160 | 878 / 73.1 / 78% / 37% / 32% | 1197 / 99.8 / 55% / 29% / 23% | 1159 / 96.6 / 57% / 30% / 24% | 1208 / 100.7 / 55% / 29% / 23% | 1369 / 114.1 / 48% / 25% / 20% | 1.32x |
+| 192 | 926 / 77.1 / 77% / 41% / 36% | 1239 / 103.3 / 55% / 34% / 27% | 1195 / 99.6 / 57% / 35% / 28% | 1211 / 100.9 / 56% / 35% / 28% | 1393 / 116.1 / 49% / 30% / 24% | 1.29x |
+| 256 | 1059 / 88.2 / 71% / 48% / 42% | 1283 / 106.9 / 56% / 44% / 35% | 1282 / 106.8 / 56% / 44% / 35% | 1265 / 105.4 / 56% / 44% / 35% | 1439 / 119.9 / 50% / 39% / 31% | 1.19x |
+| zipf (mean 107) | 814 / 67.8 / 80% / 26% / 23% | 1223 / 101.9 / 52% / 19% / 15% | 1056 / 88.0 / 60% / 22% / 18% | 1089 / 90.7 / 58% / 21% / 17% | 1119 / 93.3 / 57% / 21% / 17% | 1.28x (two-op T 128: 1044) |
+
+- Flat is fastest at every point: best of main / flat 1.18-1.33x on GLM-5.3, 1.32-1.53x GLM-5.3-Flash, 1.54-1.78x K3,
+  1.19-1.32x K2.7; zipf 1.28 / 1.43 / 1.68 / 1.28x. Flat holds 71-91% DRAM; main's best 44-69%.
+- Among main's: the fused op wins at <= 128 tokens an expert, then steps up (GLM-5.3 589 -> 698 us at 128 -> 160,
+  GLM-Flash 494 -> 637 at 142, K3 2273 -> 3050 at 160); unified is ~flat in M (87-107 us an expert) and wins above 128 on
+  GLM-Flash / K3. The models' T 320 sends 129-320-token experts to the fused op, slower than unified there (GLM-Flash
+  M 142 637 vs 583, K3 M 160 3050 vs 2493): ~128 is the crossover on these shapes.
+- The one-dispatch hybrid op costs over the separate ops: T 320 (all fused) +5-9% over the fused op alone, its unified
+  half (T 128 at M >= 160) +12-15% over unified alone. Under zipf routing the two-op forward at T 128 is main's best.
+Logs: /localdev/mstaletovic/re_cmp/ (fl_*, mn_*, mz_*, main_all.out, flat_all.out, table.md).
