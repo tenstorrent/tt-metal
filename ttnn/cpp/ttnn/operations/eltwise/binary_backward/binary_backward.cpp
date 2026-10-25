@@ -5,6 +5,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include <numbers>
+#include <algorithm>
 #include <cstdint>
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
@@ -69,6 +70,67 @@ Tensor reduce_grad_to_operand_shape(
     // sum with keepdim preserves rank; drop leading 1s when operand had fewer axes.
     if (reduced.logical_shape().rank() != operand_shape.rank()) {
         reduced = ttnn::reshape(reduced, operand_shape, memory_config);
+    }
+    return reduced;
+}
+
+// Sum-reduce each gradient back to its operand's shape, so a broadcast operand gets a gradient of its
+// own shape, as torch.autograd returns it (mul_bw does the same).
+void reduce_grads_to_operand_shapes(
+    std::vector<Tensor>& grads,
+    const Tensor& input,
+    const Tensor& other,
+    const std::optional<MemoryConfig>& memory_config) {
+    const Tensor* operands[2] = {&input, &other};
+    for (size_t i = 0; i < std::min<size_t>(grads.size(), 2); ++i) {
+        const auto& shape = operands[i]->logical_shape();
+        if (is_broadcasted_over(shape, grads[i].logical_shape())) {
+            grads[i] =
+                reduce_grad_to_operand_shape(grads[i], shape, memory_config.value_or(operands[i]->memory_config()));
+        }
+    }
+}
+
+// Allocates the required outputs whose operand is not broadcast, shaped like alloc_input / alloc_other. A broadcast
+// operand's gradient is reduced by operand_grad and written into a preallocated output only if the caller passed one.
+void preallocate_unbroadcast_outputs(
+    std::optional<Tensor>& input_grad,
+    std::optional<Tensor>& other_grad,
+    const Tensor& alloc_input,
+    const Tensor& alloc_other,
+    const std::vector<bool>& required,
+    const Tensor& grad,
+    const Tensor& input,
+    const Tensor& other,
+    const std::optional<MemoryConfig>& memory_config) {
+    TT_FATAL(required.at(0) || required.at(1), "At least one gradient is expected to be calculated.");
+    const bool allocate_input = required.at(0) && !is_broadcasted_over(input.logical_shape(), grad.logical_shape());
+    const bool allocate_other = required.at(1) && !is_broadcasted_over(other.logical_shape(), grad.logical_shape());
+    if (allocate_input || allocate_other) {
+        preallocated_tensors_check(
+            input_grad, other_grad, alloc_input, alloc_other, {allocate_input, allocate_other}, memory_config);
+    }
+}
+
+// Gradient for one operand of an op with optional preallocated outputs. compute(out) produces the gradient
+// at grad's shape, writing into out when given. For a broadcast operand it is computed unwritten, reduced
+// to the operand's shape, then copied into the preallocated output if there is one.
+template <typename Compute>
+std::optional<Tensor> operand_grad(
+    const Tensor& grad,
+    const Tensor& operand,
+    std::optional<Tensor>& preallocated,
+    const std::optional<MemoryConfig>& memory_config,
+    Compute&& compute) {
+    if (!is_broadcasted_over(operand.logical_shape(), grad.logical_shape())) {
+        Tensor out = compute(preallocated);
+        return preallocated.has_value() ? preallocated : std::optional<Tensor>{out};
+    }
+    Tensor reduced = reduce_grad_to_operand_shape(
+        compute(std::nullopt), operand.logical_shape(), memory_config.value_or(operand.memory_config()));
+    if (preallocated.has_value()) {
+        ttnn::assign(reduced, preallocated.value());
+        return preallocated;
     }
     return reduced;
 }
@@ -141,6 +203,7 @@ std::vector<Tensor> atan2_bw(
     recip_mul.deallocate();
     cond.deallocate();
     grad.emplace_back(grad_b);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -155,16 +218,21 @@ std::vector<std::optional<Tensor>> addalpha_bw(
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
 
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
+    namespace detail = operations::binary_backward::detail;
+    detail::preallocate_unbroadcast_outputs(
+        input_grad, other_grad, input_a, other, are_required_outputs, grad_tensor, input_a, other, output_mem_config);
 
-    if (are_required_outputs[0]) {
-        ttnn::assign(grad_tensor, input_grad.value());
-        result[0] = input_grad;
+    if (are_required_outputs.at(0)) {
+        result[0] = detail::operand_grad(
+            grad_tensor, input_a, input_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                return out.has_value() ? ttnn::assign(grad_tensor, out.value()) : grad_tensor;
+            });
     }
-    if (are_required_outputs[1]) {
-        ttnn::multiply(grad_tensor, alpha, std::nullopt, output_mem_config, other_grad);
-        result[1] = other_grad;
+    if (are_required_outputs.at(1)) {
+        result[1] = detail::operand_grad(
+            grad_tensor, other, other_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                return ttnn::multiply(grad_tensor, alpha, std::nullopt, output_mem_config, out);
+            });
     }
     return result;
 }
@@ -179,16 +247,21 @@ std::vector<std::optional<Tensor>> subalpha_bw(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
+    namespace detail = operations::binary_backward::detail;
+    detail::preallocate_unbroadcast_outputs(
+        input_grad, other_grad, input_a, other, are_required_outputs, grad_tensor, input_a, other, output_mem_config);
     if (are_required_outputs.at(0)) {
-        ttnn::assign(grad_tensor, input_grad.value());
-        result[0] = input_grad;
+        result[0] = detail::operand_grad(
+            grad_tensor, input_a, input_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                return out.has_value() ? ttnn::assign(grad_tensor, out.value()) : grad_tensor;
+            });
     }
     if (are_required_outputs.at(1)) {
-        ttnn::neg(grad_tensor, output_mem_config, other_grad);
-        ttnn::multiply(other_grad.value(), alpha, std::nullopt, output_mem_config, other_grad);
-        result[1] = other_grad;
+        result[1] = detail::operand_grad(
+            grad_tensor, other, other_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                Tensor negated = ttnn::neg(grad_tensor, output_mem_config, out);
+                return ttnn::multiply(negated, alpha, std::nullopt, output_mem_config, out);
+            });
     }
 
     return result;
@@ -218,15 +291,20 @@ std::vector<std::optional<Tensor>> add_bw(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
+    namespace detail = operations::binary_backward::detail;
+    detail::preallocate_unbroadcast_outputs(
+        input_grad, other_grad, input_a, other, are_required_outputs, grad_tensor, input_a, other, output_mem_config);
     if (are_required_outputs.at(0)) {
-        ttnn::assign(grad_tensor, input_grad.value());
-        result[0] = input_grad;
+        result[0] = detail::operand_grad(
+            grad_tensor, input_a, input_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                return out.has_value() ? ttnn::assign(grad_tensor, out.value()) : grad_tensor;
+            });
     }
     if (are_required_outputs.at(1)) {
-        ttnn::multiply(grad_tensor, 1.0f, std::nullopt, output_mem_config, other_grad);
-        result[1] = other_grad;
+        result[1] = detail::operand_grad(
+            grad_tensor, other, other_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                return ttnn::multiply(grad_tensor, 1.0f, std::nullopt, output_mem_config, out);
+            });
     }
     return result;
 }
@@ -353,6 +431,7 @@ std::vector<Tensor> xlogy_bw(
     // was reaching for is a real gap and is filed on its own: grad_b is 0 or inf where b
     // is nan and torch.xlogy has nan.
     grad.emplace_back(grad2_result);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -376,6 +455,7 @@ std::vector<Tensor> hypot_bw(
         std::nullopt,
         output_memory_config);
     grad.emplace_back(grad_b);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -395,6 +475,7 @@ std::vector<Tensor> ldexp_bw(
         std::nullopt,
         output_memory_config);
     grad.emplace_back(result);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -425,6 +506,7 @@ std::vector<Tensor> logaddexp_bw(
     Tensor grad_b =
         ttnn::multiply(grad_tensor, ttnn::reciprocal(opexp, output_mem_config), std::nullopt, output_mem_config);
     grad.emplace_back(grad_b);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -456,6 +538,7 @@ std::vector<Tensor> logaddexp2_bw(
     Tensor grad_b =
         ttnn::multiply(grad_tensor, ttnn::reciprocal(oppow, output_memory_config), std::nullopt, output_memory_config);
     grad.emplace_back(grad_b);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -502,6 +585,7 @@ std::vector<Tensor> fmod_bw(
     Tensor result_div = ttnn::div(input_a, other, false, "trunc", std::nullopt, output_mem_config);
     Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
     grad.emplace_back(grad_b);
+    operations::binary_backward::detail::reduce_grads_to_operand_shapes(grad, input_a, other, output_mem_config);
     return grad;
 }
 
@@ -630,28 +714,36 @@ std::vector<std::optional<Tensor>> concat_bw(
 
 std::vector<std::optional<Tensor>> rsub_bw(
     const Tensor& grad_tensor,
-    const Tensor& /*input_a*/,
-    const Tensor& /*other*/,
+    const Tensor& input_a,
+    const Tensor& other,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<ttnn::Tensor>> result = {std::nullopt, std::nullopt};
 
-    operations::binary_backward::detail::preallocated_tensors_check(
+    namespace detail = operations::binary_backward::detail;
+    detail::preallocate_unbroadcast_outputs(
         input_grad,
         other_grad,
         grad_tensor,
         grad_tensor,
-        {are_required_outputs[0], are_required_outputs[1]},
+        are_required_outputs,
+        grad_tensor,
+        input_a,
+        other,
         output_mem_config);
     if (are_required_outputs.at(0)) {
-        ttnn::neg(grad_tensor, output_mem_config, input_grad);
-        result[0] = input_grad;
+        result[0] = detail::operand_grad(
+            grad_tensor, input_a, input_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                return ttnn::neg(grad_tensor, output_mem_config, out);
+            });
     }
     if (are_required_outputs.at(1)) {
-        ttnn::assign(grad_tensor, other_grad.value());
-        result[1] = other_grad;
+        result[1] = detail::operand_grad(
+            grad_tensor, other, other_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                return out.has_value() ? ttnn::assign(grad_tensor, out.value()) : grad_tensor;
+            });
     }
     return result;
 }
@@ -777,47 +869,53 @@ std::vector<std::optional<Tensor>> div_bw(
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
     std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]}, output_mem_config);
+    namespace detail = operations::binary_backward::detail;
+    detail::preallocate_unbroadcast_outputs(
+        input_grad, other_grad, input_a, other, are_required_outputs, grad_tensor, input_a, other, output_mem_config);
     TT_FATAL(
         (rounding_mode == std::nullopt || rounding_mode == "trunc" || rounding_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
     if (rounding_mode == std::nullopt) {
         if (are_required_outputs.at(0)) {
-            ttnn::multiply(
-                grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
-            result[0] = input_grad;
+            result[0] = detail::operand_grad(
+                grad_tensor, input_a, input_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                    return ttnn::multiply(
+                        grad_tensor, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, out);
+                });
         }
         if (are_required_outputs.at(1)) {
-            // -grad * input_a / other^2, evaluated as -grad * ((input_a / other) / other).
-            // Squaring first loses the answer at both ends -- infinity below
-            // |other| = 1.0842e-19, zero above 2^63; see the note in rdiv_bw. The op count is
-            // unchanged: one reciprocal and two multiplies either way.
-            Tensor recip_other = ttnn::reciprocal(other, output_mem_config);
-            ttnn::multiply(
-                ttnn::neg(grad_tensor, output_mem_config),
-                (ttnn::multiply(
-                    ttnn::multiply(input_a, recip_other, std::nullopt, output_mem_config),
-                    recip_other,
-                    std::nullopt,
-                    output_mem_config)),
-                std::nullopt,
-                output_mem_config,
-                other_grad);
-            recip_other.deallocate();
-            result[1] = other_grad;
+            result[1] = detail::operand_grad(
+                grad_tensor, other, other_grad, output_mem_config, [&](const std::optional<Tensor>& out) {
+                    // -grad * input_a / other^2, evaluated as -grad * ((input_a / other) / other).
+                    // Squaring first loses the answer at both ends -- infinity below
+                    // |other| = 1.0842e-19, zero above 2^63; see the note in rdiv_bw. The op count is
+                    // unchanged: one reciprocal and two multiplies either way.
+                    Tensor recip_other = ttnn::reciprocal(other, output_mem_config);
+                    Tensor grad_b = ttnn::multiply(
+                        ttnn::neg(grad_tensor, output_mem_config),
+                        (ttnn::multiply(
+                            ttnn::multiply(input_a, recip_other, std::nullopt, output_mem_config),
+                            recip_other,
+                            std::nullopt,
+                            output_mem_config)),
+                        std::nullopt,
+                        output_mem_config,
+                        out);
+                    recip_other.deallocate();
+                    return grad_b;
+                });
         }
     } else {
+        auto zeros = [&](const std::optional<Tensor>& out) {
+            return ttnn::zeros_like(
+                grad_tensor, grad_tensor.dtype(), grad_tensor.layout(), std::nullopt, output_mem_config, out);
+        };
         if (are_required_outputs.at(0)) {
-            ttnn::zeros_like(
-                grad_tensor, grad_tensor.dtype(), grad_tensor.layout(), std::nullopt, output_mem_config, input_grad);
-            result[0] = input_grad;
+            result[0] = detail::operand_grad(grad_tensor, input_a, input_grad, output_mem_config, zeros);
         }
         if (are_required_outputs.at(1)) {
-            ttnn::zeros_like(
-                grad_tensor, grad_tensor.dtype(), grad_tensor.layout(), std::nullopt, output_mem_config, other_grad);
-            result[1] = other_grad;
+            result[1] = detail::operand_grad(grad_tensor, other, other_grad, output_mem_config, zeros);
         }
     }
     return result;
