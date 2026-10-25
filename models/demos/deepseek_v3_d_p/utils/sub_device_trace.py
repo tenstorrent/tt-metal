@@ -33,6 +33,8 @@ referenced across the end/begin split; trace replay reproduces them at the same 
 `CapturedCall` below applies the same idea to a single call: one region, one trace id.
 """
 
+import time
+
 import ttnn
 
 
@@ -186,7 +188,11 @@ class SubDeviceTraceController:
         This replaces the old block-every-segment (which serialized dispatch for no reason but the ack)."""
         assert not self._capturing, "still capturing"
         assert self._program, "nothing captured"
+        t0 = time.perf_counter()
         self._replay_steps(self._program, variant)
+        # host time to enqueue every segment (+ sub-device load/clear); the device may still be running. Read by
+        # the chunked test's [chunk timing] line to tell a host-bound replay from a device-bound one.
+        self.last_enqueue_s = time.perf_counter() - t0
         ttnn.synchronize_device(self.mesh_device)
 
     def _replay_steps(self, program, variant):

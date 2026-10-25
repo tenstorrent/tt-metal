@@ -2310,7 +2310,10 @@ def run_chunked_transformer_updated(
                 # iterations[1:], so at num_iters=2 iteration 0's per-chunk times would otherwise be
                 # unrecoverable (only its total is logged) -- and the traced path reaches no other
                 # timing log at all. Emitted identically in both modes so the two are comparable.
-                logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms")
+                # enqueue = host time to submit every trace segment (smallchunk agent: host-bound check).
+                enq = getattr(trace_controller, "last_enqueue_s", None)
+                enq_note = f" enqueue={enq * 1000:.2f} ms" if enq is not None else ""
+                logger.info(f"[chunk timing] iter={it} chunk={c} {chunk_seconds * 1000:.2f} ms{enq_note}")
                 continue
             tt_tokens = ttnn.from_torch(
                 chunk_tok_host[c],
