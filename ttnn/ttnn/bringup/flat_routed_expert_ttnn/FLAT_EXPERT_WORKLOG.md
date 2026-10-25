@@ -1632,9 +1632,9 @@ Before rewriting every kernel, each step type was made larger on its own with th
   = 6.7 / 10.0 / 13.4 MB a core a call at ~32 GB/s = 209 / 313 / 418 us vs 229 / 333 / 436 measured; bf16 x (1.9x
   the bytes, its own plan) 229 -> 332 / 333 -> 476. Fewer handshakes (pieces 2, depth 6, K group) move it <= 6%.
 Takeaway: no larger-step emulation moves the real run by more than noise (best -0.5%), the no-read floor by <= 3%;
-the 16-tile rewrite of every kernel is not worth it on this evidence. The on-chip floor is the x intake of a gate/up
-core (~32 GB/s through the snake, every core takes all of x, padded to 64-row sub-blocks: M 160's third sub-block of
-32 rows ships 64); the real run is that floor (no reads 434) + the read interference (~87 us): lever 2 next.
+the 16-tile rewrite of every kernel is not worth it on this evidence. The real run is the on-chip floor (no reads
+434) + the read interference (~87 us): lever 2 next. (The "x bytes" reading of the skeleton is wrong - see the
+padding section below: the skeleton is a fixed ~0.54 us per x block whatever its bytes.)
 Logs: /localdev/mstaletovic/flat_glm53/ (ab_*, r_*, nr*, xs_*, zs_sk, zw_sk, sk_xbf16, ub2_glm53, dprof).
 
 ### Lever 2 (x off the DRISC tile's port): retest with the unicast snakes (2026-10-25, bh-lb-09, GLM-5.3 E 8)
@@ -1660,3 +1660,17 @@ gathers a call next to the 170 MB weight streams. The lever left is fewer x byte
 today's tilize; 1.0625 B / element) with a relay-side rearrange into bfp8 tiles: estimate -30..-40 us at M 160
 (XRD_HALF), dispatch + relay work. Landing x in L1 instead does not fit: M_total 1280 x 6144 bf16 = 15.7 MB a chip.
 Logs: /localdev/mstaletovic/flat_glm53/ (x0_glm53, l2_*).
+
+### Padding rows: not the cost; the skeleton is a fixed rate per x block (2026-10-25, GLM-5.3 E 8)
+Before sizing the last sub-block to its real rows (M 160: 64 + 64 + 32, the third ships 64 rows of x), the emulation:
+32-row sub-blocks (MIMO_FL_MT=1: no padding at all, more sub-blocks) - skeleton M 96 / 128 / 160 313 / 410 / 508 (3 /
+4 / 5 sub-blocks) vs 64-row 229 / 229 / 333 (2 / 2 / 3); real 472 / 509 / 572 vs 459 / 500 / 522. Every sub-block
+costs the same ~100 us a call (12.5-13 us an expert) whether it has 1 or 2 row tiles: shipping fewer rows saves
+nothing, fewer sub-blocks does. Not implemented.
+- The per-sub-block cost is 24 x blocks at ~0.54 us each at the gate/up core (X_ARR marks every 8 blocks 4.3 us apart,
+  the unpacker in its K loop the rest), the same for 8.7 and 17.4 KB blocks.
+- Skeleton M 96 / 160 exactly 229 / 333 with: 6 relays (NH 2), tilize skipped (TZ_SKIP), a 2-sub-block x ring (48),
+  2 snakes a rectangle (325), forward depth 6 (313), pieces 2 / 1 (314 / 328); pieces 8 594. The relays are
+  backpressured (XRD_FULL 195 us), the down cores wait for h, the weights land ahead (every 8 blocks ~6.4 us).
+  What fixes the 0.54 us a block is not found yet - none of the x path's own knobs.
+Logs: /localdev/mstaletovic/flat_glm53/ (pad_*, sk_nh2, sk_tzskip, sk_xs48, zs_sk2 + zs_sk2.csv).
