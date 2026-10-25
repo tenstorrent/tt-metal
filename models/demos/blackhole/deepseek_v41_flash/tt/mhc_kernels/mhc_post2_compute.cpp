@@ -106,6 +106,22 @@ void kernel_main() {
     {
         DeviceZoneScopedN("QC_mixesdone");
     }
+    // ---- comb logits: mixes @ SEL_comb + base_comb (token rows; the data mover permutes them into the SFPU layout)
+    // ----
+    reconfig_data_format(CB_MIXES, CB_CONSTS);
+    matmul_init(CB_MIXES, CB_CONSTS);
+    tile_regs_acquire();
+    matmul_tiles(CB_MIXES, CB_CONSTS, 0, SEL_COMB, 0);
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_CONSTS);
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_CONSTS, BASE_COMB, 0);
+    tile_regs_commit();
+    tile_regs_wait();
+    CircularBuffer cb_log(CB_LOG);
+    cb_log.reserve_back(1);
+    pack_tile(0, CB_LOG);
+    cb_log.push_back(1);
+    tile_regs_release();
+
     // ---- pre | post = (sigmoid(mixes @ SEL_PP + base_PP) + OFF) * SCALE ----
     reconfig_data_format(CB_MIXES, CB_CONSTS);
     matmul_init(CB_MIXES, CB_CONSTS);
@@ -129,21 +145,6 @@ void kernel_main() {
     {
         DeviceZoneScopedN("QC_ppdone");
     }
-    // ---- comb logits: mixes @ SEL_comb + base_comb (token rows; the data mover permutes them into the SFPU layout)
-    // ----
-    reconfig_data_format(CB_MIXES, CB_CONSTS);
-    matmul_init(CB_MIXES, CB_CONSTS);
-    tile_regs_acquire();
-    matmul_tiles(CB_MIXES, CB_CONSTS, 0, SEL_COMB, 0);
-    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_CONSTS);
-    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CB_CONSTS, BASE_COMB, 0);
-    tile_regs_commit();
-    tile_regs_wait();
-    CircularBuffer cb_log(CB_LOG);
-    cb_log.reserve_back(1);
-    pack_tile(0, CB_LOG);
-    cb_log.push_back(1);
-    tile_regs_release();
     cb_mixes.pop_front(1);
 
     // ---- Sinkhorn on the SFPU: x = exp(min(logits, 80)); the 4x4 normalisations are lane-wise vector arithmetic ----
