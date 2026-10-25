@@ -839,6 +839,31 @@ class ttMLA:
             self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
             self.wkv_b1_weight = self._replicate_over_tp(self.wkv_b1_weight, dim=1)
             self.wkv_b2_weight = self._replicate_over_tp(self.wkv_b2_weight, dim=1)
+        # mm track (default on; MLA_SEQQ_QB_WS=0 disables): lays the TP-replicated seqq q_b weight ([2048, 16384] bfp8, 35.6 MB/chip, the
+        # weight-stream-bound 1D mcast_in0 matmul) out DRAM WIDTH_SHARDED ([K, N/banks] per bank; a device tile copy,
+        # no requantization) so the matmul reads it bank by bank, one request per worker K-row slice, and runs it with
+        # in0_block_w=MLA_SEQQ_QB_IB (default 2). R0: 113.0 -> 95.2 us (PCC 0.99996 vs 0.99993; the smaller K block
+        # changes the packer-L1 accumulation order, so not bit-exact).
+        self._seq_qb_ws_pc = None
+        if self._seq_q and self._is_blackhole and os.getenv("MLA_SEQQ_QB_WS", "1") not in ("", "0"):
+            qb_rows = self.active_seq_len_local // self.tp_factor
+            qb_cfg = self._resolve_mm_cfg("q_b_proj", qb_rows)
+            pc = qb_cfg["program_config"] if qb_cfg is not None else None
+            if isinstance(pc, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig) and pc.mcast_in0:
+                ib = int(os.getenv("MLA_SEQQ_QB_IB", "2"))
+                self.q_b_proj_weight = self._dram_width_shard(self.q_b_proj_weight)
+                self._seq_qb_ws_rows = qb_rows
+                self._seq_qb_ws_pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=pc.compute_with_storage_grid_size,
+                    in0_block_w=ib,
+                    out_subblock_h=pc.out_subblock_h,
+                    out_subblock_w=pc.out_subblock_w,
+                    per_core_M=pc.per_core_M,
+                    per_core_N=pc.per_core_N,
+                    fuse_batch=pc.fuse_batch,
+                    fused_activation=pc.fused_activation,
+                    mcast_in0=True,
+                )
         # glue track: in-place RoPE for the sequence-sharded Q stem too (see _q_stem_seq). The head-path padded
         # weight built above is unused once Q is sequence-sharded; rebuild it from the TP-replicated wkv_b1.
         self._q_rope_inplace_seq = False
@@ -2781,6 +2806,27 @@ class ttMLA:
             return False
         return True
 
+    def _dram_width_shard(self, w: ttnn.Tensor) -> ttnn.Tensor:
+        """Re-lay a DRAM-interleaved [.., K, N] weight out WIDTH_SHARDED over every DRAM bank ([K, N/banks] per bank) by
+        an on-device tile copy (bit-identical tiles). Returns w unchanged when N does not split into whole-tile shards."""
+        g = self.mesh_device.dram_grid_size()
+        banks = g.x * g.y
+        n = w.shape[-1]
+        height = 1
+        for d in list(w.shape)[:-1]:
+            height *= d
+        if n % (banks * ttnn.TILE_SIZE) != 0:
+            return w
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+        mc = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(grid, [height, n // banks], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        out = ttnn.to_memory_config(w, mc)
+        ttnn.deallocate(w)
+        return out
+
     def _replicate_over_tp(self, w: ttnn.Tensor, dim: int) -> ttnn.Tensor:
         """TP-replicated copy of a TP-sharded weight, by an on-device all_gather along the TP axis (a tile copy, so
         bit-identical to uploading the full weight). Frees the sharded input."""
@@ -2897,7 +2943,10 @@ class ttMLA:
     ) -> ttnn.Tensor:
         """Absorbed-Q stem over this chip's TP-quarter rows and ALL heads: [1, H, S/(sp*tp), kv_lora + rope]."""
         q_rows = qr.shape[2]
-        tt_q = ttnn.linear(qr, self.q_b_proj_weight, **self._get_mm_kwargs("q_b_proj", q_rows))
+        qb_kwargs = self._get_mm_kwargs("q_b_proj", q_rows)
+        if self._seq_qb_ws_pc is not None and q_rows == self._seq_qb_ws_rows:
+            qb_kwargs = dict(qb_kwargs, program_config=self._seq_qb_ws_pc)
+        tt_q = ttnn.linear(qr, self.q_b_proj_weight, **qb_kwargs)
         ttnn.deallocate(qr)
         inplace = self._q_rope_inplace_seq and q_rows == self.active_seq_len_local // self.tp_factor
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(

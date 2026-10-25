@@ -179,7 +179,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     using tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids;
 
     const bool use_global_cb = global_cb.has_value();
-    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb;
+    // A DRAM-resident sharded weight (ND or width sharded) is read through its TensorAccessor like an
+    // interleaved one; only an L1-sharded in1 is consumed in place.
+    const bool in1_is_dram_sharded = in1_is_sharded && in1_tensor.memory_config().is_dram();
+    const bool in1_is_locally_sharded = in1_is_sharded && !use_global_cb && !in1_is_dram_sharded;
 
     // currently only support transpose of the full tile
     bool in0_transpose_tile = in0_tile.get_transpose_of_faces() && in0_tile.get_transpose_within_face();
@@ -3417,6 +3420,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             "matmul mcast_in0 over prefetcher_pipes does not support transpose_b: the pipes deliver the weight's "
             "K-blocks in its DRAM layout");
     }
+    // A DRAM-resident sharded weight is never borrowed in place (only an L1-sharded in1 is). A WIDTH_SHARDED
+    // one ([K, N/banks] per bank) is read bank by bank with per-worker (stride, bank) lists, as in the 2D
+    // factory, with each worker's K-row slice of a shard fetched as ONE contiguous request
+    // (IN1_DRAM_WS_MERGE); any other DRAM-sharded layout (ND) goes through the generic accessor path.
+    const bool in1_dram_ws = in1_is_sharded && in1_tensor.memory_config().is_dram() &&
+                             in1_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED &&
+                             !use_prefetcher_pipes;
+    if (in1_is_sharded && in1_tensor.memory_config().is_dram()) {
+        in1_is_sharded = false;
+    }
 
     // Mask-mode sparsity (the sparse matmul): the in0 sender and the in1 sender/writer read the mask
     // page and skip the batches it zeroes, and the in0 receivers and compute loop num_batch_compute
@@ -3784,6 +3797,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
     }
 
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
+    if (in1_dram_ws) {
+        mm_kernel_in1_sender_writer_defines["IN1_DRAM_WIDTH_SHARDED"] = "1";
+        mm_kernel_in1_sender_writer_defines["IN1_DRAM_WS_MERGE"] = "1";
+    }
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device.arch());
@@ -4280,6 +4297,59 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         });
     }
 
+    // DRAM width-sharded in1: per N-block (vc, shard count, start offset) and (stride bytes, bank id) pairs, walked
+    // in N order exactly as the 2D factory's DramWidthShardWalker does (a worker's per_core_N columns may straddle
+    // two banks' shards).
+    struct In1WsNode {
+        uint32_t vc = 0, num_shards = 0, start_offset = 0;
+        std::vector<uint32_t> varargs;
+    };
+    std::vector<In1WsNode> in1_ws_nodes;
+    uint32_t in1_ws_per_core_N_storage = 0;
+    uint32_t in1_ws_num_varargs = 0;
+    if (in1_dram_ws) {
+        const uint32_t num_dram_banks = device.num_dram_channels();
+        in1_ws_per_core_N_storage = (N + num_dram_banks - 1) / num_dram_banks;
+        const uint32_t pcns = in1_ws_per_core_N_storage;
+        const uint32_t nblk = ((N - 1) / per_core_N) + 1;
+        uint32_t vc = 0, curr_storage_core = 0, storage_core_stride = 0, curr_worker_core = 0, worker_core_stride = 0;
+        for (uint32_t x = 0; x < nblk; ++x) {
+            In1WsNode node;
+            vc = vc == 3 ? 0 : vc + 1;
+            uint32_t num_iter = 0, start_offset = 0;
+            if (curr_storage_core < num_dram_banks) {
+                num_iter++;
+                worker_core_stride = std::min(pcns - storage_core_stride, per_core_N);
+                start_offset = storage_core_stride * in1_single_tile_size;
+                node.varargs.push_back(worker_core_stride * in1_single_tile_size);
+                node.varargs.push_back(curr_storage_core);
+                curr_storage_core += (storage_core_stride + worker_core_stride) / pcns;
+                storage_core_stride = (storage_core_stride + worker_core_stride) % pcns;
+                const uint32_t curr_worker_core_old = curr_worker_core;
+                if (worker_core_stride >= per_core_N) {
+                    curr_worker_core += 1;
+                }
+                while (curr_worker_core <= curr_worker_core_old and curr_storage_core < num_dram_banks) {
+                    num_iter++;
+                    const uint32_t stride = std::min(worker_core_stride + pcns, per_core_N);
+                    node.varargs.push_back((stride - worker_core_stride) * in1_single_tile_size);
+                    node.varargs.push_back(curr_storage_core);
+                    if (stride >= per_core_N) {
+                        curr_worker_core += 1;
+                    }
+                    storage_core_stride = (stride - worker_core_stride) % pcns;
+                    curr_storage_core += (stride - worker_core_stride) / pcns;
+                    worker_core_stride = stride;
+                }
+            }
+            node.vc = vc;
+            node.num_shards = num_iter;
+            node.start_offset = start_offset;
+            in1_ws_num_varargs = std::max<uint32_t>(in1_ws_num_varargs, node.varargs.size());
+            in1_ws_nodes.push_back(std::move(node));
+        }
+    }
+
     // ---- in1 sender / output writer --------------------------------------
     // On this path the in1 multicast is skipped entirely (SKIP_MCAST), so the kernel's semaphore
     // objects are constructed but never used; they are still bound because the kernel constructs
@@ -4390,6 +4460,16 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
         }
         if (!output_is_sharded) {
             in1_sender_rta_names.push_back("last_num_blocks_w_dim");
+        }
+        if (in1_dram_ws) {
+            in1_sender.compile_time_args.insert(
+                {"in1_dram_block_num_tiles", in1_ws_per_core_N_storage * in0_block_w});
+            in1_sender.compile_time_args.insert(
+                {"in1_block_w_dram_bytes", in1_ws_per_core_N_storage * in1_single_tile_size});
+            in1_sender_rta_names.push_back("vc");
+            in1_sender_rta_names.push_back("num_dram_shards_to_read");
+            in1_sender_rta_names.push_back("dram_tensor_start_offset");
+            in1_sender.advanced_options.num_runtime_varargs = in1_ws_num_varargs;
         }
         in1_sender.runtime_arg_schema = {.runtime_arg_names = std::move(in1_sender_rta_names)};
         kernels.push_back(std::move(in1_sender));
@@ -4731,6 +4811,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifac
             if (!output_is_sharded) {
                 in1_sender_run_args.runtime_arg_values["last_num_blocks_w_dim"][core] =
                     last_x ? last_out_num_blocks_w : out_num_blocks_x;
+            }
+            if (in1_dram_ws) {
+                const auto& node = in1_ws_nodes.at(output_idx_x);
+                in1_sender_run_args.runtime_arg_values["vc"][core] = node.vc;
+                in1_sender_run_args.runtime_arg_values["num_dram_shards_to_read"][core] = node.num_shards;
+                in1_sender_run_args.runtime_arg_values["dram_tensor_start_offset"][core] = node.start_offset;
+                auto va = node.varargs;
+                va.resize(in1_ws_num_varargs, 0u);
+                in1_sender_run_args.advanced_options.runtime_varargs[core] = std::move(va);
             }
         }
     }
