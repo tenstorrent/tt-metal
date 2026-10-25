@@ -951,15 +951,9 @@ def test_bench_traced_prefetch_and_linear(device, k, n, requests):
     k_block_tiles = k // ttnn.TILE_SIZE // ring_size
     per_core_n = n // ttnn.TILE_SIZE // ring_size
     block_bytes = k_block_tiles * per_core_n * _bytes_per_tile(ttnn.bfloat8_b)
-    pipe_space = ttnn.experimental.create_prefetcher_pipe_space(
-        device,
-        sender_cores=ttnn.CoreRangeSet([]),
-        receiver_domain=ring_cores,
-        ring_size=_TRACED_RING_BUDGET_BYTES // block_bytes * block_bytes,
-        max_receivers_per_pipe=_TRACED_RECV_PER_BANK,
-        num_dram_senders=2 * _NUM_DRAM_BANKS,
+    _pipe_space, pipes = _make_tensor_prefetcher_pipes(
+        device, bank_to_receivers, _TRACED_RING_BUDGET_BYTES // block_bytes * block_bytes
     )
-    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(pipe_space, bank_to_receivers)
 
     torch.manual_seed(0)
     pt_weight = torch.randn(1, 1, k, n)
