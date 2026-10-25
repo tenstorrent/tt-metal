@@ -39,8 +39,11 @@ constexpr uint32_t untilizer_group_of(StreamId stream) { return stream % UNTILIZ
 // Cores per group, from CMBF2D_UNTILIZERS_PER_GROUP. Spreading a group's staging over more cores trades
 // worker cores for L1 read ports; which way that goes is a measurement, so it is a knob. The ceiling here
 // only bounds the knob; whether a value fits is decided by placement, which knows the grid and the senders.
-uint32_t untilizers_per_group();
+// Untilizers that quantize to fp8 tokens are the op's bottleneck, so they default to as many as the routed
+// expert's overlap leaves room for.
+uint32_t untilizers_per_group(bool fp8_tokens);
 constexpr uint32_t DEFAULT_UNTILIZERS_PER_GROUP = 5;
+constexpr uint32_t DEFAULT_FP8_UNTILIZERS_PER_GROUP = 8;
 constexpr uint32_t MAX_UNTILIZERS_PER_GROUP = 10;
 
 struct UntilizerPlacement {

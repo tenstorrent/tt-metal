@@ -325,6 +325,8 @@ struct HybridRoutedExpertFfnParams {
     uint32_t combine_num_links = 2;
     uint32_t num_experts_per_tok = 0;
     uint32_t seq_len_per_chip = 0;
+    // Combine's CombineFabric2dParams::fp8_scale_block: 0 sends BFLOAT16 tokens, 128 fp8 ones.
+    uint32_t combine_fp8_scale_block = 0;
 
     // The overlap's counters: combine's per-stream receive counts and the routed expert's start signal. They
     // must outlive every launch -- an upstream chip may bump one for the next launch before this chip starts it
@@ -357,6 +359,7 @@ struct HybridRoutedExpertFfnParams {
         "combine_num_links",
         "num_experts_per_tok",
         "seq_len_per_chip",
+        "combine_fp8_scale_block",
         "fwd_arrived_addr",
         "final_arrived_addr",
         "expert_go_addr",
@@ -377,6 +380,7 @@ struct HybridRoutedExpertFfnParams {
             combine_num_links,
             num_experts_per_tok,
             seq_len_per_chip,
+            combine_fp8_scale_block,
             fwd_arrived_addr,
             final_arrived_addr,
             expert_go_addr,

@@ -148,6 +148,46 @@ struct Ring {
     }
 };
 
+#ifdef CMBF2D_FP8_ROWS
+// fp8 tokens: the compute kernel packs a batch's e4m3 values, and their scales are this kernel's to write after them
+// in each row, from the 1/scale tile it leaves per scale block. Column 0 of that tile holds one exact power of two per
+// row, so the fp32 scale is (254 << 23) minus its bits.
+struct ScaleTails {
+    static constexpr uint32_t block_tiles = 4;
+    static constexpr uint32_t values_bytes = ct.tiles_per_row * 32;  // one byte per e4m3 value
+    CircularBuffer cb{::cmbf2d::UNT_CB_SCALE};
+    // cb_out's first byte, where batch n's rows start (n % ring_batches) batches in: the compute kernel fills the
+    // ring a whole batch at a time.
+    uint32_t ring_base = CircularBuffer(::cmbf2d::UNT_CB_OUT).get_read_ptr();
+    uint32_t rows = 0;
+    uint32_t next_block = 0;
+
+    void start(uint32_t batch) {
+        rows = ring_base + batch % ct.ring_batches * ::cmbf2d::UNT_BATCH_ROWS * ct.token_size_bytes;
+        next_block = 0;
+    }
+
+    // The next `n` scale blocks' scales, once the compute kernel has them.
+    void write(uint32_t n) {
+        cb.wait_front(n);
+        invalidate_l1_cache();
+        const uint32_t tile_bytes = get_tile_size(::cmbf2d::UNT_CB_SCALE);
+        for (uint32_t i = 0; i < n; i++) {
+            const uint16_t* inv = reinterpret_cast<const uint16_t*>(cb.get_read_ptr() + i * tile_bytes);
+            const uint32_t tail = rows + values_bytes + (next_block + i) * sizeof(uint32_t);
+            for (uint32_t r = 0; r < ::cmbf2d::UNT_BATCH_ROWS; r++) {
+                // Rows 0-15 of column 0 are in face 0 and rows 16-31 in face 2, 16 values to a face row.
+                const uint32_t v = inv[(r / 16) * 512 + (r % 16) * 16];
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tail + r * ct.token_size_bytes) =
+                    (254u << 23) - (v << 16);
+            }
+        }
+        cb.pop_front(n);
+        next_block += n;
+    }
+};
+#endif
+
 // The walk, once per walk step, with `on_step(step)` called before a step's batches and
 // `body(batch_in_expert, walk)` for the batches this core owns.
 template <typename OnStep, typename Body>
@@ -211,6 +251,10 @@ void kernel_main() {
 #endif
 
     Ring ring;
+#ifdef CMBF2D_FP8_ROWS
+    ScaleTails tails;
+    constexpr uint32_t window_blocks = ct.block_tiles / ScaleTails::block_tiles;
+#endif
     walk_my_batches(ctl, on_step, [&](uint32_t b, const ::cmbf2d::GroupWalk& walk) {
         while (ring.full()) {
             ring.reclaim_one();
@@ -241,6 +285,9 @@ void kernel_main() {
 #endif
         CircularBuffer cb_in(::cmbf2d::UNT_CB_IN);
         const uint32_t first_tile = walk.tile_row_of(b) * ct.tiles_per_row;
+#ifdef CMBF2D_FP8_ROWS
+        tails.start(ring.produced);
+#endif
         for (uint32_t t = 0; t < ct.tiles_per_row; t += ct.block_tiles) {
             cb_in.reserve_back(ct.block_tiles);
             const uint32_t dst = cb_in.get_write_ptr();
@@ -249,7 +296,16 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_in.push_back(ct.block_tiles);
+#ifdef CMBF2D_FP8_ROWS
+            // A window behind the reads, so the compute kernel quantizes this window while the last one's scales go in.
+            if (t != 0) {
+                tails.write(window_blocks);
+            }
+#endif
         }
+#ifdef CMBF2D_FP8_ROWS
+        tails.write(window_blocks);
+#endif
         ring.publish();
     });
 

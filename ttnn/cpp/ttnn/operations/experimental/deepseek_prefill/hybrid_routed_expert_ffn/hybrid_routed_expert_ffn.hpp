@@ -65,7 +65,8 @@ ttnn::Tensor hybrid_routed_expert_moe(
     const std::optional<GlobalSemaphore>& expert_go_semaphore = std::nullopt,
     const std::optional<ttnn::Tensor>& forwarding_buffer = std::nullopt,
     const std::vector<GlobalSemaphore>& channel_semaphores = {},
-    const std::optional<ttnn::Tensor>& weight_address_table = std::nullopt);
+    const std::optional<ttnn::Tensor>& weight_address_table = std::nullopt,
+    uint32_t combine_fp8_scale_block = 0);
 
 // How many `channel_semaphores` the overlap needs on this mesh. Create that many once, before the first
 // overlapped forward, and pass the same ones every call -- combine's channel credits cross chips and
@@ -84,7 +85,8 @@ ttnn::Tensor hybrid_routed_expert_moe_forwarding_buffer(
     uint32_t num_experts_per_tok,
     uint32_t seq_len_per_chip,
     uint32_t combine_axis = 0,
-    uint32_t combine_num_links = 2);
+    uint32_t combine_num_links = 2,
+    uint32_t fp8_scale_block = 0);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
 

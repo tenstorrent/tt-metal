@@ -250,7 +250,18 @@ Relevant files:
 - [`device/kernels/compute/untilize_combine_fabric2d.cpp`](device/kernels/compute/untilize_combine_fabric2d.cpp)
 
 `CMBF2D_UNTILIZERS_PER_GROUP` controls the number of untilizer cores per
-direction; its default is 5.
+direction; its default is 5, or 8 when they quantize to fp8 tokens.
+
+With `fp8_scale_block=128` the untilizers quantize instead of only untilizing,
+and every token moves as `[emb e4m3 | emb/128 fp32 scales]`
+([`device/kernels/compute/untilize_quantize_combine_fabric2d.cpp`](device/kernels/compute/untilize_quantize_combine_fabric2d.cpp)).
+Per 128 columns the compute RISC takes the row maximum of |x| (SFPU), forms the
+power-of-two scale, multiplies, rounds to the e4m3 grid and packs the values
+into the batch row. The dataflow RISC writes the 48 scales into each row's
+tail from the 1/scale tile the compute RISC leaves per block. Readers and
+senders only see a narrower token. The output is FP8_E4M3, and
+`post_combine_reduce(fp8_scale_block_w=128)` dequantizes it. A token must be a
+whole number of 64 B lines, so emb must be a multiple of 2048.
 
 ---
 
@@ -267,7 +278,8 @@ direction; its default is 5.
 ## 9. Constraints and present caveats
 
 - The selected mesh axis must have at least four chips and an even extent.
-- Inputs must be device, interleaved-DRAM tensors; token data is BF16.
+- Inputs must be device, interleaved-DRAM tensors; token data is BF16 (or
+  BFLOAT8_B tiles), and moves as BF16 or, with `fp8_scale_block`, as packed fp8.
 - Metadata is exactly three INT32 values per token.
 - `expert_offsets` has one replicated row for every origin chip in the ring.
 - The token payload and token-plus-routing-tail must satisfy NoC/DRAM/Fabric
