@@ -21,8 +21,17 @@ Its "mrs" dict overrides the op's planning knobs (module constants of its progra
 "compare": the name of an earlier case. Reports whether this case's output (chip 0) is bit-identical to that case's,
 and the largest absolute difference.
 
+Every case also reports the per-chip spread of its eager runs: "chips_us" = [min, median, max] over the chips of each
+chip's median duration ("us" is the slowest chip), and "chips_mesh_us" the same per chip as mesh rows. An eager mesh
+dispatch reaches the chips one after another, so in a cross-chip op (mmrs) a chip launched early waits for its late
+peers: its duration holds that launch skew. KDA_MM_TRACE_CALLS = n > 0 also profiles the traced op replayed n times back
+to back (3 replays after a warm-up one): "trace_first_chips_us" (each replay's first call), "trace_steady_chips_us"
+(calls 2..n), "trace_steady_mesh_us" (per chip) and "trace_period_us" (median over chips of the start-to-start period
+of calls 2..n, which adds the trace's per-replay launch gap): the op's cost once the chips run in step.
+
 KDA_MM_SUSTAIN_S > 0 also replays each case's traced op back to back for that many seconds (after
-KDA_MM_SUSTAIN_IDLE_S of idle) and reports over the second half the wall per call ("sustain_ms_per_call"), the chips'
+KDA_MM_SUSTAIN_IDLE_S of idle, in blocks of KDA_MM_SUSTAIN_BLOCK calls with a host sync after each block; 1 syncs
+after every call) and reports over the second half the wall per call ("sustain_ms_per_call"), the chips'
 AI clock and total power (telemetry.py), and the energy per call of all chips ("sustain_mj_per_call"). Back-to-back
 load runs into each chip's power limit, so the sustained wall ranks configs by energy per call as much as by time.
 Results go to stdout as KDA_MM= lines and to KDA_MM_OUT as JSON.
@@ -46,14 +55,18 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tests.kda.perf.telemetry import Telemetry
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _L1_SMALL_SIZE
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_WORKER_L1_SIZE
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
+from tests.ttnn.profiling.realtime_profiler_utils import require_realtime_profiler
 
 _CASES = json.loads(os.environ.get("KDA_MM_CASES", "[]"))
 _RUNS = int(os.environ.get("KDA_MM_RUNS", "5"))
 _OUT = Path(os.environ.get("KDA_MM_OUT", "generated/kda_mm.json"))
 _SUSTAIN_S = float(os.environ.get("KDA_MM_SUSTAIN_S", "0"))
 _SUSTAIN_IDLE_S = float(os.environ.get("KDA_MM_SUSTAIN_IDLE_S", "1"))
-_SUSTAIN_BLOCK = 20
+_SUSTAIN_BLOCK = int(os.environ.get("KDA_MM_SUSTAIN_BLOCK", "20"))
+_TRACE_CALLS = int(os.environ.get("KDA_MM_TRACE_CALLS", "0"))
+_TRACE_REPLAYS = 3
+_RECORD_SETTLE_S = 0.3
+_RECORD_TIMEOUT_S = 10.0
 _T = 32
 _TP_AXIS = 1
 
@@ -185,6 +198,87 @@ def _chip0(tensor: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(ttnn.get_device_tensors(tensor)[0]).float()
 
 
+def _profile(mesh_device: ttnn.MeshDevice, run) -> tuple[object, dict]:
+    """Run under the realtime profiler: (run's result, {chip: [(start us, end us)] in start order})."""
+    records, dropped = [], [0]
+
+    def collect(batch):
+        dropped[0] += int(batch.dropped)
+        for record in batch.records:
+            frequency = float(record.frequency)
+            start, end = int(record.start_timestamp), int(record.end_timestamp)
+            if record.runtime_id and frequency > 0 and end > start:
+                records.append((int(record.chip_id), start / frequency / 1e3, end / frequency / 1e3))
+
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect)
+    try:
+        result = run()
+        ttnn.synchronize_device(mesh_device)
+        deadline, last, changed = time.monotonic() + _RECORD_TIMEOUT_S, -1, time.monotonic()
+        while time.monotonic() < deadline:
+            if len(records) != last:
+                last, changed = len(records), time.monotonic()
+            elif records and time.monotonic() - changed >= _RECORD_SETTLE_S:
+                break
+            time.sleep(0.01)
+    finally:
+        ttnn.device.UnregisterProgramRealtimeProfilerCallback(handle)
+    assert records and not dropped[0], f"realtime profiler: {len(records)} records, {dropped[0]} dropped"
+    per_chip: dict = {}
+    for chip, start, end in sorted(records, key=lambda r: r[1]):
+        per_chip.setdefault(chip, []).append((start, end))
+    return result, per_chip
+
+
+def _spread(per_chip: dict) -> list[float]:
+    """[min, median, max] over the chips of each chip's median value."""
+    medians = [statistics.median(v) for v in per_chip.values() if v]
+    return [min(medians), statistics.median(medians), max(medians)] if medians else []
+
+
+def _by_mesh(mesh_device: ttnn.MeshDevice, per_chip: dict) -> list[list[float]]:
+    """Each chip's median value laid out as the mesh: rows x columns (SP x TP), rounded to 0.1 us."""
+    ids = [int(i) for i in mesh_device.get_device_ids()]
+    cols = tuple(mesh_device.shape)[1]
+    values = [round(statistics.median(per_chip[c]), 1) if per_chip.get(c) else None for c in ids]
+    return [values[r : r + cols] for r in range(0, len(values), cols)]
+
+
+def _trace_profile(mesh_device: ttnn.MeshDevice, run) -> dict:
+    """Profile _TRACE_CALLS back-to-back replays of the traced op: per-chip first / steady durations and period."""
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    out = run()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+
+    def replays():
+        for _ in range(_TRACE_CALLS):
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+
+    first, steady, periods = {}, {}, {}
+    try:
+        for replay in range(_TRACE_REPLAYS + 1):
+            _, per_chip = _profile(mesh_device, replays)
+            if replay == 0:
+                continue  # warm-up
+            for chip, spans in per_chip.items():
+                durations = [end - start for start, end in spans]
+                first.setdefault(chip, []).append(durations[0])
+                steady.setdefault(chip, []).extend(durations[1:])
+                starts = [start for start, _ in spans[1:]]
+                periods.setdefault(chip, []).extend(b - a for a, b in zip(starts, starts[1:]))
+    finally:
+        ttnn.release_trace(mesh_device, trace_id)
+        ttnn.deallocate(out)
+    result = {
+        "trace_first_chips_us": _spread(first),
+        "trace_steady_chips_us": _spread(steady),
+        "trace_steady_mesh_us": _by_mesh(mesh_device, steady),
+    }
+    if any(periods.values()):
+        result["trace_period_us"] = _spread(periods)[1]
+    return result
+
+
 def _sustain(mesh_device: ttnn.MeshDevice, run, telemetry: Telemetry) -> dict:
     """Replay the traced op back to back for _SUSTAIN_S seconds: wall, clock and power over the second half."""
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -275,12 +369,22 @@ def test_projection_microbench(mesh_device: ttnn.MeshDevice, device_params: dict
                         ref, got = outputs[case["compare"]], outputs[case["name"]]
                         entry["bit_identical"] = bool(torch.equal(ref, got))
                         entry["max_abs_diff"] = float((ref - got).abs().max())
-                    durations = []
+                    durations, chip_us = [], {}
                     for _ in range(_RUNS):
-                        out, programs = profile_realtime_program_merged(mesh_device, run)
+                        out, per_chip = _profile(mesh_device, run)
                         ttnn.deallocate(out)
-                        durations.append(max(p["duration_ns"] for p in programs.values()) / 1e3)
-                    entry.update(us=statistics.median(durations), runs_us=durations)
+                        run_us = {chip: sum(end - start for start, end in spans) for chip, spans in per_chip.items()}
+                        durations.append(max(run_us.values()))
+                        for chip, us in run_us.items():
+                            chip_us.setdefault(chip, []).append(us)
+                    entry.update(
+                        us=statistics.median(durations),
+                        runs_us=durations,
+                        chips_us=_spread(chip_us),
+                        chips_mesh_us=_by_mesh(mesh_device, chip_us),
+                    )
+                    if _TRACE_CALLS > 0:
+                        entry.update(_trace_profile(mesh_device, run))
                     if _SUSTAIN_S > 0:
                         entry.update(_sustain(mesh_device, run, telemetry))
             except Exception as error:  # a config the op rejects, or one that does not fit L1
