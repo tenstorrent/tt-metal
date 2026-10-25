@@ -6,6 +6,8 @@
 #include "device/moe_fused_swiglu_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#include <tt-metalium/allocator.hpp>
+
 namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu {
 
 ttnn::Tensor moe_fused_swiglu(
@@ -92,6 +94,28 @@ ttnn::Tensor moe_fused_swiglu(
     const std::vector<ttnn::Tensor> up_bias_list = up_biases.value_or(std::vector<ttnn::Tensor>{});
     const std::vector<ttnn::Tensor> down_bias_list = down_biases.value_or(std::vector<ttnn::Tensor>{});
 
+    // Static circular buffers grow up from the L1 allocator base and L1 buffers are allocated top-down, so the CB
+    // region must end below the lowest live L1 buffer. The blocking plans for the whole unreserved L1 by default; a
+    // persistent L1 tensor another op keeps for the forward (the sparse KV-push L1 fronts, 2 x 160 KB per core) then
+    // makes the program clash at enqueue. Plan for what is actually free instead -- the blocking shrinks its depths
+    // to fit. Zero (the default) when nothing is allocated, which keeps the program the op has always built.
+    uint32_t l1_budget_bytes = 0;
+    {
+        auto* device = activations.device();
+        const auto lowest = device->lowest_occupied_compute_l1_address();
+        const uint32_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        if (lowest.has_value() && *lowest > base) {
+            // A few KB of slack for per-CB alignment, which the blocking's byte count does not include, and a 16 KB
+            // granule so small changes in what else is allocated do not each cost a program-cache miss.
+            constexpr uint32_t kCbAlignmentSlack = 4 * 1024;
+            constexpr uint32_t kBudgetGranule = 16 * 1024;
+            const uint32_t free_below = static_cast<uint32_t>(*lowest) - base;
+            l1_budget_bytes = free_below > kCbAlignmentSlack + kBudgetGranule
+                                  ? ((free_below - kCbAlignmentSlack) / kBudgetGranule) * kBudgetGranule
+                                  : 64u;
+        }
+    }
+
     return ttnn::prim::moe_fused_swiglu(
         activations,
         w_gates,
@@ -114,7 +138,8 @@ ttnn::Tensor moe_fused_swiglu(
         output,
         expert_region_offsets,
         min_active_tokens,
-        max_active_tokens);
+        max_active_tokens,
+        l1_budget_bytes);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_fused_swiglu
