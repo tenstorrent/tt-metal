@@ -391,7 +391,7 @@ def test_flat_combine_closeout_perf(mesh_device, device_params, model, mode, a_m
 # landing ring depth D per model (the combine's pool = D slots a source chip), at each model's Galaxy 8x4 per-chip load
 # on this mesh: D forced through FC.ring_depth (None: the planner's choice here); A and everything else the planners'
 # defaults. (The Galaxy 8x4 plans D: GLM-5.3 2, GLM-5.3-Flash 4, M3 2, K3 5, DSv4.1-Flash 3 at chunk 5120.)
-_DEPTHS = (None, 1, 2, 3, 4, 6, 8)
+_DEPTHS = (None, 1, 2, 3, 4, 5, 6, 8)
 _DEPTH_MODELS = ("k3", "glm53_flash", "glm53", "m3", "dsv41_flash")
 
 

@@ -59,6 +59,9 @@ class CombineProbes:
     nodrain: bool = False  # SPC_NODRAIN=1: no end-of-call credit drain
     piggy: str = ""  # SPC_PIGGY: 1 / 0 overrides piggyback_credits
     hw: bool = False  # SPC_HW=1: hang words - a sparse snapshot of each port's / accumulator's loop state in MISC 480..
+    bk: int = 1  # SPC_BK: bookkeeping load x bk - every credit snapshot / ring layout packet sent bk times (the copies
+    # idempotent: the same cumulative counts / layouts), every ring polled bk times a pass - the per-source bookkeeping of
+    # bk x the sources (the Galaxy's 31 from the LoudBox's 7 at 4); the data path unchanged
     se: str = ""  # SPC_SE: shared_rows probes - off (no rows, both sides: wrong sums) / noread (no DRAM reads: garbage)
     # / noown (the accumulators skip the own block)
 
@@ -77,6 +80,7 @@ class CombineProbes:
             se=env.get("SPC_SE", ""),
             piggy=env.get("SPC_PIGGY", ""),
             hw=env.get("SPC_HW") == "1",
+            bk=int(env.get("SPC_BK", "1")),
         )
 
 
@@ -591,8 +595,10 @@ void kernel_main() {
             }
             auto* h = hdr_at(s, rot);
             h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(sx[s], sy[s], area + CRED + 4 * me * AP)}, 4 * AP);
-            conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(cstage + rot * 4 * AP, 4 * AP, reinterpret_cast<uint32_t>(h));
+            for (uint32_t b = 0; b < __BK__; ++b) {  // (probe SPC_BK: the same snapshot bk times - idempotent)
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(cstage + rot * 4 * AP, 4 * AP, reinterpret_cast<uint32_t>(h));
+            }
             ++sent;
             ++unflushed;
             returned += cov - rdone[s];
@@ -616,8 +622,10 @@ void kernel_main() {
             for (uint32_t o = 0; o < A; ++o) st[o] = lay_o[s * AP + o];
             auto* h = hdr_at(s, rot);
             h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(sx[s], sy[s], area + LAYR + 4 * me * AP)}, 4 * AP);
-            conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(cstage + rot * 4 * AP, 4 * AP, reinterpret_cast<uint32_t>(h));
+            for (uint32_t b = 0; b < __BK__; ++b) {  // (probe SPC_BK: the same layouts bk times - idempotent)
+                conn.wait_for_empty_write_slot();
+                conn.send_current_slot_non_blocking(cstage + rot * 4 * AP, 4 * AP, reinterpret_cast<uint32_t>(h));
+            }
             ++sent;
             ++unflushed;
             lay_pend &= ~(1u << s);
@@ -1174,7 +1182,19 @@ void kernel_main() {
             if ((++hw_it & 511) == 1) {
                 misc[496] = 0x41430000u | (calls_ & 0xFFFF), misc[497] = done, misc[498] = n_rows;
                 misc[499] = li, misc[500] = n_local, misc[501] = me | hc << 8, misc[502] = hw_it;
-                for (uint32_t k = 0; k < N && k < 4; ++k) misc[503 + k] = taken[k] - t0[k], misc[507 + k] = want[k];
+                uint32_t kw = 0;  // (the source with the most rows still wanted: its ring's head slot)
+                for (uint32_t k = 0; k < N && k < 8; ++k) {
+                    misc[503 + k] = (taken[k] - t0[k]) | want[k] << 16;
+                    if (want[k] > want[kw]) kw = k;
+                }
+                const uint32_t hs = rdep[kw] ? ring_slot(kw, taken[kw]) : 0;
+                uint32_t fl = 0;
+                for (uint32_t pc = 0; hs && pc < P && pc < 8; ++pc) {
+                    volatile tt_l1_ptr uint32_t* tp =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hs + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+                    fl |= (tp[3] != 0 ? 1u : 0u) << (2 * pc) | (tp[7] != 0 ? 2u : 0u) << (2 * pc);
+                }
+                misc[476] = kw | rdep[kw] << 8 | rbase[kw] << 16, misc[477] = fl;
             }
         }
         if (li == n_local && t_local == 0) t_local = get_timestamp_32b();
@@ -1189,7 +1209,10 @@ void kernel_main() {
             ++done;
         }
         for (uint32_t k = 0; k < N; ++k) {
-            if (want[k]) take_ring(k);
+            if (want[k]) {
+                take_ring(k);
+                for (uint32_t b = 1; b < __BK__; ++b) (void)peek_ring(k);  // (probe SPC_BK: bk rings polled a source)
+            }
         }
         if (SOWN && oi < SOWN) {
             push(get_noc_addr(oi, own_g), oi);
@@ -1709,6 +1732,7 @@ def sparse_combine_rf_prepare(
         "__PS__": str(PS),
         "__DRAIN__": "false" if pr.nodrain else "true",  # (probe: no end-of-call credit drain)
         "__HW__": str(int(pr.hw)),
+        "__BK__": str(int(pr.bk)),
         "__MRTOT__": str(M_RTOT),
         "__MRDONE__": str(M_RDONE),
         "__MTAKEN__": str(M_TAKEN),

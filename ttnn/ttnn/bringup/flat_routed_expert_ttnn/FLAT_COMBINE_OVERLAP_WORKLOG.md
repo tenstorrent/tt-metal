@@ -1875,3 +1875,21 @@ Galaxy's D the 2x4 hides 75-95 % (fused / flat: K3 1.02, GLM-Flash 1.09 at D 4, 
 V4.1 1.05 at D 3); only D 1 comes near GLM-Flash's 1.77 (1.67). Each model is fully hidden from D 3; D 2 costs GLM-5.3 /
 M3 / GLM-Flash 10-15 % of the combine, D 1 30-45 %; K3 and V4.1 stay hidden at any D (their flat is the long pole).
 The Galaxy's other factors (31 sources, torus multi-hop forwarding on each link, possibly 14 Gbps GDDR) are next.
+
+### Bookkeeping load x 4 (CombineProbes.bk, SPC_BK=4: every credit snapshot / ring-layout packet sent 4 times - idempotent
+copies - and every ring polled 4 times a pass; the Galaxy's 31 sources' bookkeeping from the LoudBox's 7, data path
+unchanged), each model at its Galaxy D on the 2x4, pipelined:
+
+| model (D) | combine alone off -> x4 | fused off -> x4 (flat) | hidden off -> x4 | combine / floor off -> x4 |
+|---|---|---|---|---|
+| K3 (5) | 500 -> 517 | 1203 -> 1204 (1179) | 95 -> 95 % | 1.32 -> 1.37 |
+| GLM-5.3-Flash (4) | 316 -> 371 | 395 -> 442 (363) | 90 -> 79 % | 1.42 -> 1.66 |
+| GLM-5.3 (2) | 528 -> 673 | 620 -> 836 (497) | 77 -> 50 % | 1.66 -> 2.11 |
+| M3 (2) | 289 -> 375 | 436 -> 544 (387) | 83 -> 59 % | 1.69 -> 2.20 |
+| DSv4.1-Flash (3) | 335 -> 429 | 603 -> 641 (574) | 91 -> 84 % | 1.64 -> 2.09 |
+
+Per sender (SPC_TPROF, mean of 40): the credit-return time triples (fused GLM-5.3 42 -> 159 us, K3 84 -> 185, V4.1 36
+-> 113) and the fabric-slot waits double (25 -> 54): the copies take EDM slots on the same senders that inject the
+rows. So the per-source bookkeeping - mostly credit / layout packets sharing the senders' fabric slots - is a real part
+of the Galaxy's loss: fused / flat GLM-Flash 1.09 -> 1.22, GLM-5.3 1.25 -> 1.68, M3 1.13 -> 1.41 (the Galaxy's
+GLM-Flash: 1.77). Not all of it: multi-hop forwarding and per-link load are still not emulated.
