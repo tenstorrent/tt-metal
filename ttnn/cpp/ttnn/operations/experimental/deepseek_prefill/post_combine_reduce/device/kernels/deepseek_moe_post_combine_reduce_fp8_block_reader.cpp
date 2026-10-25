@@ -27,7 +27,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 constexpr uint32_t cb_rm_id = tt::CBIndex::c_0;
 constexpr uint32_t cb_dispatch_table_id = tt::CBIndex::c_2;
