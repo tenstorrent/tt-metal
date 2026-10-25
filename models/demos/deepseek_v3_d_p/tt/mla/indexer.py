@@ -650,7 +650,9 @@ class TtIndexerBase:
         """Return the model-gated Blackhole config for an indexer matmul."""
         if not self._is_blackhole:
             return None
-        entry = get_matmul_config(weight_name, seq_len_local)
+        # Native chunks smaller than the tuned 5120 (GLM only): derived configs for missing slots (GLM_SMALL_MM_CFG).
+        glm = self.config.num_attention_heads == 64 and getattr(self.config, "q_lora_rank", None) == 2048
+        entry = get_matmul_config(weight_name, seq_len_local, self.active_seq_len_local if glm else None)
         candidates = entry if isinstance(entry, list) else [entry]
         return next(
             (

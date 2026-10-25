@@ -998,12 +998,19 @@ MLA_SDPA_CONFIG = {
 # than tuned on these shapes, e.g. indexer wq_b 60 vs 31 us), and the paths keyed on a tuned config (in-place q RoPE,
 # L1 activations) turn off. GLM_SMALL_MM_CFG=1 derives the missing entry from the smallest larger tuned key by
 # scaling only the M blocking (per_core_M / out_subblock_h); K/N blocking, grids, memory configs and dtypes are kept.
-# GLM_SMALL_MM_CFG=1 (or "all"): every weight; "wkv": only the batched per-head wkv_b1 / wkv_b2 (their auto fallback,
-# ttMLA._make_batched_mm_kwargs, puts all 64 heads of a 1-tile-row M on ONE core: 425 / 500 us per layer at chunk 1024).
+# GLM_SMALL_MM_CFG (DEFAULT ON = "1"): every weight; "wkv": only the batched per-head wkv_b1 / wkv_b2 (their auto
+# fallback, ttMLA._make_batched_mm_kwargs, puts all 64 heads of a 1-tile-row M on ONE core: 425 / 500 us per layer at
+# chunk 1024); "0": off. Measured L78 @97k (smallchunk agent): native 1024 254.6 -> 184.2 ms, 2048 314.7 -> 221.5 ms.
+# Only ever applied when the caller passes the per-chip rows of a chunk SMALLER than the tuned one
+# (chunk_rows < SMALL_CHUNK_TUNED_ROWS = 640 rows = chunk 5120 on 8 SP chips): the 5120 path is never touched, even for
+# a call whose row count happens to have no entry. Callers pass chunk_rows only for GLM-5.3 (64 heads, q_lora 2048).
+SMALL_CHUNK_TUNED_ROWS = 640
+
+
 def small_mm_cfg_enabled(weight_name: str | None = None) -> bool:
     import os
 
-    mode = os.environ.get("GLM_SMALL_MM_CFG", "0")
+    mode = os.environ.get("GLM_SMALL_MM_CFG", "1")
     if mode in ("", "0"):
         return False
     if mode == "wkv":
@@ -1076,9 +1083,12 @@ def derive_small_rows_cfg(cfg: dict, seq_len_local: int) -> dict | None:
     return {**cfg, "program_config": new}
 
 
-def small_rows_entry(table: dict, seq_len_local: int, weight_name: str | None = None):
+def small_rows_entry(table: dict, seq_len_local: int, weight_name: str | None = None, chunk_rows: int | None = None):
     """Derived candidates for a missing ``seq_len_local`` slot: the smallest larger tuned key's candidates, each
-    re-blocked (see derive_small_rows_cfg). None when disabled, present, or nothing to derive from."""
+    re-blocked (see derive_small_rows_cfg). None when disabled, present, nothing to derive from, or the chunk is not
+    smaller than the tuned one (chunk_rows None or >= SMALL_CHUNK_TUNED_ROWS)."""
+    if chunk_rows is None or chunk_rows >= SMALL_CHUNK_TUNED_ROWS:
+        return None
     if not small_mm_cfg_enabled(weight_name) or seq_len_local in table or seq_len_local % ttnn.TILE_SIZE:
         return None
     larger = sorted(k for k in table if k > seq_len_local)
@@ -1090,7 +1100,7 @@ def small_rows_entry(table: dict, seq_len_local: int, weight_name: str | None = 
     return out or None
 
 
-def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | None:
+def get_matmul_config(weight_name: str, seq_len_local: int, chunk_rows: int | None = None) -> dict | list | None:
     """Raw matmul entry for a given weight and local sequence length (per-device).
 
     Returns None if there is no entry. **A slot may hold a LIST of candidates** (one per model
@@ -1102,7 +1112,7 @@ def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | Non
     """
     table = MLA_MATMUL_CONFIG.get(weight_name, {})
     entry = table.get(seq_len_local)
-    return entry if entry is not None else small_rows_entry(table, seq_len_local, weight_name)
+    return entry if entry is not None else small_rows_entry(table, seq_len_local, weight_name, chunk_rows)
 
 
 def get_sdpa_config(seq_len_local: int) -> dict | list | None:

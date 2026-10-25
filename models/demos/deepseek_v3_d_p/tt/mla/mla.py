@@ -1081,7 +1081,9 @@ class ttMLA:
         table = self.mm_configs[weight_name]
         entry = table.get(seq_len_local)
         if entry is None:
-            entry = small_rows_entry(table, seq_len_local, weight_name)  # GLM_SMALL_MM_CFG only
+            # Native chunks smaller than the tuned 5120 (GLM only): derive the missing slot (GLM_SMALL_MM_CFG, default on).
+            glm = self.num_heads == 64 and self.q_lora_rank == 2048
+            entry = small_rows_entry(table, seq_len_local, weight_name, self.active_seq_len_local if glm else None)
         return self._select_cfg(entry, weight_name)
 
     def _weight_kt(self, weight_name: str) -> int | None:
