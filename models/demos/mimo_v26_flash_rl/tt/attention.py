@@ -7,9 +7,11 @@ sink, 1 kv head per chip. Sliding layers (1-4, ..): causal window 128 with a per
 Per chip, one chunk of 5120 tokens:
     x [1, 1, 160, 4096] local rows -> all_gather over TP -> [640, 4096] (the SP row's tokens)
     -> fused qkv linear with the TP rank's own checkpoint slab -> [640, 16 x 192 | 192 | 192]
-       (the softmax scale 192^-0.5 is folded into the q rows, attention_value_scale into the v rows, and v is
-       zero-padded 128 -> 192 so nlp_create_qkv_heads splits one projection; v is sliced back to 128 after)
+       (v is zero-padded 128 -> 192 so nlp_create_qkv_heads splits one projection; v is sliced back to 128 after;
+       full layers: fp32 out, QKV_FP32)
     -> RoPE (HF rotate_half) on dims 0-63 of q and k, cos / sin rows looked up at each local row's absolute position
+    -> q x 192^-0.5 and v x attention_value_scale (fp32 tensor operands; FULL_SCALES_AFTER_PROJ off: folded into the
+       q / v weight rows), q to bf16 for the SDPA
     -> k, v written into the served caches (update_padded_kv_cache over SP, pad rows zeroed)
     -> ring_joint_sdpa causal over SP, reading the whole prefix from the caches (V head dim 128)
        sliding layers: the 192-wide zero-padded v is also written to an unserved attention-only cache (the op's
@@ -246,29 +248,35 @@ def layer_dims(cfg: dict, layer_idx: int) -> dict:
     }
 
 
-def rank_weights(ck, layer_idx: int, cfg: dict, tp: int, fold_scales: bool = True):
+def rank_weights(ck, layer_idx: int, cfg: dict, tp: int, fold_scales: bool = True, bf16_first: str = "none"):
     """fp32 per-TP-rank weights in the checkpoint's [out, in] orientation (the linears run with transpose_b, so the
     bfloat8_b blocks of 16 run along K as in the precision model; [in, out] blocks along the output and costs single
     output columns up to 9x their error): qkv [tp, lh D + lkv D + lkv D, H] (q rows x D^-0.5, v rows x
     attention_value_scale and zero-padded 128 -> D so nlp_create_qkv_heads splits it) and o_proj [tp, H, lh Dv]
-    (rank r's input columns). The checkpoint's own rank slabs: rank r holds q heads r*lh.., kv heads r*lkv.."""
+    (rank r's input columns). The checkpoint's own rank slabs: rank r holds q heads r*lh.., kv heads r*lkv..
+    bf16_first ("none", "qkv", "o", "all"): those dequantized weights are rounded to bf16 before the scales are folded
+    in (as the reference holds them), so the later bfloat8_b rounding starts from the precision model's values."""
     dims = layer_dims(cfg, layer_idx)
     heads, kv_heads, D, Dv = dims["heads"], dims["kv_heads"], dims["head_dim"], dims["v_head_dim"]
     lh, lkv = heads // tp, kv_heads // tp
     p = f"model.layers.{layer_idx}.self_attn"
     wq, wk, wv = ck.qkv(f"{p}.qkv_proj", heads * D, kv_heads * D, kv_heads * Dv)
-    wq, wv = wq.float(), wv.float()
+    wq, wk, wv = wq.float(), wk.float(), wv.float()
+    if bf16_first in ("qkv", "all"):
+        wq, wk, wv = (w.to(torch.bfloat16).float() for w in (wq, wk, wv))
     if fold_scales:  # else the module applies them after the projection (sliding layers)
         wq = wq * D**-0.5
         wv = wv * (cfg.get("attention_value_scale") or 1.0)
     slabs = []
     for r in range(tp):
         q_r = wq[r * lh * D : (r + 1) * lh * D]
-        k_r = wk[r * lkv * D : (r + 1) * lkv * D].float()
+        k_r = wk[r * lkv * D : (r + 1) * lkv * D]
         v_r = wv[r * lkv * Dv : (r + 1) * lkv * Dv].view(lkv, Dv, -1)
         v_r = torch.nn.functional.pad(v_r, (0, 0, 0, D - Dv)).reshape(lkv * D, -1)
         slabs.append(torch.cat((q_r, k_r, v_r)).contiguous())
     wo = ck.get(f"{p}.o_proj.weight").float()  # [H, heads * Dv]
+    if bf16_first in ("o", "all"):
+        wo = wo.to(torch.bfloat16).float()
     return torch.stack(slabs), wo.view(-1, tp, lh * Dv).permute(1, 0, 2).contiguous()
 
 
@@ -310,9 +318,22 @@ class Attention:
         # projection, as the reference does: folded in, the rounding moved single o_proj output columns past their
         # limit (layer 1 column 2331 0.19 vs 0.16)
         self.fold_scales = not self.window
+        # full layers with fp32 q / v (QKV_FP32, SCALES_AFTER_PROJ): the scales are applied to the fp32 projection
+        # (fp32 tensor operands) instead of being folded into the bfloat8_b weights, as the precision model rounds
+        # the weights before scaling; the SDPA still runs at scale 1 on the scaled bf16 q
+        self.scale_after = not self.window and settings.get("QKV_FP32") and settings.get("FULL_SCALES_AFTER_PROJ")
+        if self.scale_after:
+            self.fold_scales = False
         self.v_scale = cfg.get("attention_value_scale") or 1.0
         self.true_scale = self.head_dim**-0.5
-        wqkv, wo = rank_weights(ck, layer_idx, cfg, self.tp, fold_scales=self.fold_scales)
+        wqkv, wo = rank_weights(
+            ck,
+            layer_idx,
+            cfg,
+            self.tp,
+            fold_scales=self.fold_scales,
+            bf16_first="none" if self.window else settings.get("FULL_WEIGHTS_BF16_FIRST"),
+        )
         if self.window and settings.get("SWA_WEIGHTS_BF16_FIRST"):
             # fp32 -> bf16 -> bfloat8_b, as the precision model rounds them (fp32 -> bfloat8_b directly picks other
             # shared exponents and doubled layer 1's K error vs the model: output column 529 0.13 vs 0.04)
@@ -341,6 +362,14 @@ class Attention:
         self.swa_cfg = _compute_config(mesh, "HiFi4", True)
         # the softmax scale as an fp32 tensor operand: a scalar operand is rounded to bf16 (192^-0.5 +0.13 %, which the
         # sink-dominated softmax turned into a -1.4 % output bias)
+        self.vscale32 = ttnn.from_torch(
+            torch.full((1, 1, 1, 1), self.v_scale),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+        )
         self.scale32 = ttnn.from_torch(
             torch.full((1, 1, 1, 1), self.head_dim**-0.5),
             dtype=ttnn.float32,
@@ -428,11 +457,14 @@ class Attention:
         """x [1, 1, 160, H] bf16 (this chip's residual rows) -> [1, 1, 160, H] bf16."""
         D, Dv, R = self.head_dim, self.v_head_dim, self.rope_dim
         xg = ccl.gather_rows(x)
+        # full layers: q / k / v stay fp32 through RoPE, so the cache writes round fp32 values to bfloat8_b (the
+        # device's bf16 -> bfloat8_b typecast rounds the many exact ties away from zero: +0.28 % on k / v norms)
+        qkv_fp32 = not self.window and settings.get("QKV_FP32")
         qkv = ttnn.linear(
             xg,
             self.wqkv,
             transpose_b=True,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32 if qkv_fp32 else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.mm_cfg,
         )
@@ -451,7 +483,14 @@ class Attention:
         k = self._rope(k, cos, sin, R)
         cos.deallocate(True)
         sin.deallocate(True)
-        if not self.fold_scales:
+        if self.scale_after:
+            q = self._scale(q, self.scale32)
+            v = self._scale(v, self.vscale32)
+        if qkv_fp32:  # the SDPA reads bf16 q
+            q32 = q
+            q = ttnn.typecast(q32, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            q32.deallocate(True)
+        if not self.fold_scales and not self.scale_after:
             v = ttnn.multiply(v, self.v_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self.lkv > 1:  # pad rows zeroed before the write (zero_padded_kv_cache below takes single-head caches only)
             k = self._zero_pad_rows(k)
@@ -516,6 +555,11 @@ class Attention:
             y = ttnn.typecast(y32, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             y32.deallocate(True)
         return y
+
+    def _scale(self, t, factor):
+        out = ttnn.multiply(t, factor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        t.deallocate(True)
+        return out
 
     def _zero_pad_rows(self, t):
         """t [1, heads, W, d] x the chunk's row-validity mask: rows at or past valid_end become 0 (exact for the

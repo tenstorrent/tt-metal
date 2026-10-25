@@ -183,3 +183,28 @@
   0.0042, auto_margin_min 2.37, host FLOPs 0, deterministic. Test wall time 228 s of the 300 s pytest timeout (most of
   it the framework's CPU reference and precision model).
 - Re-run: `bfw job check --task C.sliding_moe.experts --gate-only`.
+
+## C.attn_moe.attention (layer 5): PASS
+
+- Same `tt/attention.py` `Attention` (full path) as layer 0; no hook change. First gate: PCC 0.99999 but auto_margin_min
+  0.835, output column 774 rel 0.067 vs limit 0.056 (o_proj column with sum |terms| / |sum| ~ 89).
+- Diagnosis (device dumps vs fp32 CPU): device SDPA out 0.0118 rel from fp32; of that, the kernel itself 0.0092 and the
+  inputs 0.0068. Column 774 from the inputs alone: 0.044. The chunk's own k / v in the cache had row norms +0.42 % /
+  +0.27 %: the device `typecast` bf16 -> bfloat8_b is biased (+0.28 % norm on random-like k / v; `clone` / `add` with
+  dtype bfloat8_b +0.5 %), while fp32 -> bfloat8_b (`typecast`) rounds like the host converter (ratio 1.0000).
+  A bf16 -> fp32 -> bfloat8_b detour does not help (same result as the direct cast: the bias is in rounding bf16
+  values). fp32 -> bf16 `typecast` is exact RNE.
+- Changes (full layers only; sliding layers unchanged, their gate re-run: margin 1.006 as before):
+  - `QKV_FP32`: qkv linear out fp32, `nlp_create_qkv_heads` and `rotary_embedding` on fp32, k / v cast fp32 ->
+    bfloat8_b for the cache writes, q typecast to bf16 for the SDPA.
+  - `FULL_SCALES_AFTER_PROJ`: 192^-0.5 and attention_value_scale multiply the fp32 q / v (fp32 [1,1,1,1] tensors)
+    instead of being folded into the bfloat8_b weight rows (as the precision model scales after bfp8 weights). This
+    was the bigger lever: with QKV_FP32 alone layer 5 reached 1.02 and layer 0 dropped to 0.97-1.0001.
+  - `FULL_WEIGHTS_BF16_FIRST` "all" (none / qkv / o / all): dequantized qkv / o_proj rounded to bf16 before bfloat8_b.
+- Gates with all three (k chunk 320): layer 5 margin 1.222 (rel vs CPU 0.0044 / 0.0079, worst column 1005 0.033 vs
+  0.040); layer 0 margin 1.114 (was 1.003). BF16_FIRST none: 1.13 / 1.046. Before the scale change, SDPA_K_CHUNK 640
+  gave layer 5 1.049 but layer 0 0.868; 160 gave layer 5 0.935: kept 320.
+- Checked on the device: the ring SDPA's gather buffer [1, 1, 56320, 192] holds SP row d's slot-0 cache at rows
+  d*7040.. (own row block left 0), i.e. the prefix layout is right; the remaining error is the streaming kernel's bf16
+  scores / running sums (fp32 dest not allowed on the kv_actual_isl path).
+- Re-run: `bfw job check --task C.attn_moe.attention --gate-only`.

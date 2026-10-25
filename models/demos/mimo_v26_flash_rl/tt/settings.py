@@ -68,6 +68,26 @@ TABLE = {
         (True, False),
         "sliding layers: qkv / o_proj weights rounded fp32 -> bf16 before bfloat8_b (C.sliding_moe.attention)",
     ),
+    "FULL_WEIGHTS_BF16_FIRST": Setting(
+        "all",
+        ("none", "qkv", "o", "all"),
+        "full layers: which dequantized weights (qkv, o_proj) are rounded to bf16 before the scale fold and bfloat8_b "
+        "(C.attn_moe.attention)",
+    ),
+    "QKV_FP32": Setting(
+        True,
+        (True, False),
+        "full layers: qkv projection out, head split and RoPE in fp32; k / v cast fp32 -> bfloat8_b for the cache, "
+        "q to bf16 for the SDPA (bf16 -> bfloat8_b typecast biased +0.28 %: layer 5 column 774 0.078 vs limit 0.066) "
+        "(C.attn_moe.attention)",
+    ),
+    "FULL_SCALES_AFTER_PROJ": Setting(
+        True,
+        (True, False),
+        "full layers with QKV_FP32: the softmax scale and attention_value_scale multiply the fp32 q / v after the "
+        "projection (fp32 tensor operands) instead of being folded into the bfloat8_b qkv weights "
+        "(C.attn_moe.attention)",
+    ),
     "SWA_OUT_FP32": Setting(
         True,
         (True, False),
@@ -142,6 +162,7 @@ MAX_PRECISION = {
     "SDPA_FIDELITY": "HiFi4",
     "SDPA_EXACT_EXP": True,
     "SWA_OUT_FP32": True,
+    "QKV_FP32": True,
     "MLP_FIDELITY": "HiFi4",
     "MLP_FP32_ACC": True,
     "MLP_INTER_FP32": True,
