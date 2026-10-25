@@ -363,6 +363,56 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         ]
 
 
+class MATMUL_PHASE_ELIDE(TemplateParameter):
+    """Blackhole matmul that runs the fidelity phases its operand formats can use (matmul_phase_fidelity in llk_matmul_forms.h)."""
+
+    def __init__(self, in0: DataFormat, in1: DataFormat):
+        self.in0 = in0
+        self.in1 = in1
+
+    def __repr__(self) -> str:
+        return f"MATMUL_PHASE_ELIDE({self.in0.name}, {self.in1.name})"
+
+    def convert_to_cpp(self) -> str:
+        return (
+            "#define MATMUL_PHASE_ELIDE\n"
+            f"constexpr DataFormat MATMUL_IN0_FORMAT = DataFormat::{self.in0.name};\n"
+            f"constexpr DataFormat MATMUL_IN1_FORMAT = DataFormat::{self.in1.name};"
+        )
+
+    @staticmethod
+    def fidelity(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None):
+        """The fidelity the elided matmul runs, the same rule as matmul_phase_fidelity."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return math_fidelity
+        if formats.input_format != formats.input_format_B or transpose == Transpose.Yes:
+            return math_fidelity
+        # Bfp8_b x Bfp8_b HiFi3/HiFi4 with a 32-bit output or DEST runs faster on main's own forms (measured).
+        if (
+            formats.input_format == formats.input_format_B == DataFormat.Bfp8_b
+            and math_fidelity in (MathFidelity.HiFi3, MathFidelity.HiFi4)
+            and throttle == 0
+            and (formats.output_format == DataFormat.Float32 or dest_acc == DestAccumulation.Yes)
+        ):
+            return math_fidelity
+        lo_a_zero = formats.input_format_B == DataFormat.Bfp4_b
+        lo_b_zero = formats.input_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+        if lo_a_zero and lo_b_zero:
+            return MathFidelity.LoFi
+        if lo_b_zero:
+            return MathFidelity.LoFi if math_fidelity == MathFidelity.LoFi else MathFidelity.HiFi2
+        if lo_a_zero and math_fidelity == MathFidelity.HiFi2:
+            return MathFidelity.LoFi
+        return math_fidelity
+
+    @staticmethod
+    def for_block(formats, math_fidelity, dest_acc=None, throttle=0, transpose=None) -> list:
+        """[MATMUL_PHASE_ELIDE(in0, in1)] where the elided fidelity is lower than the requested one, else []."""
+        if MATMUL_PHASE_ELIDE.fidelity(formats, math_fidelity, dest_acc, throttle, transpose) == math_fidelity:
+            return []
+        return [MATMUL_PHASE_ELIDE(formats.input_format, formats.input_format_B)]
+
+
 @dataclass
 class MATMUL_PROD_KEYS(TemplateParameter):
     """The forms of a cell are the ones the ttnn kernels select (helpers/matmul_prod_keys.py): no fused post flip, which ttnn does not run."""

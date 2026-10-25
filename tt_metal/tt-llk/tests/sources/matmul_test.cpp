@@ -21,6 +21,12 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr std::uint32_t MAX_TILES_DEST = ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>();
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PHASE_ELIDE)
+#include "llk_matmul_forms.h"
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = ckernel::matmul_phase_fidelity<MATH_FIDELITY, MATMUL_IN0_FORMAT, MATMUL_IN1_FORMAT>();
+#else
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
+#endif
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -218,9 +224,9 @@ constexpr bool matmul_prod_keys = false;
 #endif
 #line 176
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
-#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL, true
+#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
 #else
-#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop
+#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)

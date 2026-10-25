@@ -27,6 +27,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
@@ -164,11 +165,13 @@ def test_matmul(
         tilized_A = src_A
         tilized_B = src_B
 
+
     configuration = TestConfig(
         "sources/matmul_test.cpp",
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, 0),
             PERF_RUN_TYPE(PerfRunType.L1_TO_L1),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),

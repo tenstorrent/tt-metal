@@ -29,6 +29,7 @@ from helpers.param_config import (
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
@@ -157,12 +158,14 @@ def test_perf_matmul(
     # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
+
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
         run_types,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, 0),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             *MATMUL_STREAM_NARROW.for_block(

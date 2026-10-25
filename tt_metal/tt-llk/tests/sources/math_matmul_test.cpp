@@ -19,6 +19,13 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PHASE_ELIDE)
+#include "llk_matmul_forms.h"
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = ckernel::matmul_phase_fidelity<MATH_FIDELITY, MATMUL_IN0_FORMAT, MATMUL_IN1_FORMAT>();
+#else
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
@@ -212,7 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull>(
+        _llk_math_matmul_init_<MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -233,7 +240,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                 }
             }
@@ -250,7 +257,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Matmul block exceeds destination capacity");
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                     #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
                     constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;

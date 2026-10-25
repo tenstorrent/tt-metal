@@ -17,6 +17,7 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
+template <DataFormat in0_format, DataFormat in1_format>
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
@@ -39,7 +40,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
-    matmul_block_init(
+    matmul_block_init<false, false, 0, DataFormat::Invalid, 0, in0_format, in1_format>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -278,10 +279,23 @@ void kernel_main() {
     constexpr bool in1_transpose_tile = false;
 #endif
 
+
+#ifdef ARCH_BLACKHOLE
+    // operand formats for the fidelity phases they cannot use (matmul_phase_fidelity); unknown when in0 and the ring buffer differ
+    constexpr bool mm_same_in0 = unpack_src_format[in0_dfb_id] == unpack_src_format[in2_dfb_id] && !in1_transpose_tile;
+    constexpr DataFormat mm_in0_format =
+        mm_same_in0 ? static_cast<DataFormat>(unpack_src_format[in0_dfb_id]) : DataFormat::Invalid;
+    constexpr DataFormat mm_in1_format =
+        mm_same_in0 ? static_cast<DataFormat>(unpack_src_format[in1_dfb_id]) : DataFormat::Invalid;
+#else
+    constexpr DataFormat mm_in0_format = DataFormat::Invalid;
+    constexpr DataFormat mm_in1_format = DataFormat::Invalid;
+#endif
+
     constexpr bool spill = num_blocks > 1 && (out_block_num_tiles / out_subblock_num_tiles) > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_ids[0]);
-    matmul_block_init(
+    matmul_block_init<false, false, 0, DataFormat::Invalid, 0, mm_in0_format, mm_in1_format>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
 #if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
@@ -375,7 +389,7 @@ void kernel_main() {
                 for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
                     if (enable_reload) {
-                        reload_from_cb_to_dst(
+                        reload_from_cb_to_dst<mm_in0_format, mm_in1_format>(
                             input0_dfb_id,
                             in1_dfb_id,
                             mm_partials_dfb_id,
@@ -397,7 +411,7 @@ void kernel_main() {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
                         // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
-                        matmul_block(
+                        matmul_block<false, false, 0, DataFormat::Invalid, 0, mm_in0_format, mm_in1_format>(
                             input0_dfb_id,
                             in1_dfb_id,
                             in0_index,

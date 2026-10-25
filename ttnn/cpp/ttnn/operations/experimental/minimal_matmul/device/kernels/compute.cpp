@@ -343,6 +343,7 @@ void add_bias_and_addcmul_block(
 }
 
 // Slightly modified from compute_common.hpp
+template <DataFormat in0_format, DataFormat in1_format>
 void matmul_blocks(
     const uint32_t in0_cb,
     const uint32_t in1_cb,
@@ -365,7 +366,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block(
+                matmul_block<false, false, 0, DataFormat::Invalid, 0, in0_format, in1_format>(
                     in0_cb,
                     in1_cb,
                     in0_index,
@@ -446,7 +447,15 @@ void kernel_main() {
     SFPU_OP_INIT_ACTIVATION
 #endif
 
-    matmul_init(in0_cb, in1_cb);
+#ifdef ARCH_BLACKHOLE
+    // operand formats for the fidelity phases they cannot use (matmul_phase_fidelity)
+    constexpr DataFormat mm_in0_format = static_cast<DataFormat>(unpack_src_format[in0_cb]);
+    constexpr DataFormat mm_in1_format = static_cast<DataFormat>(unpack_src_format[in1_cb]);
+#else
+    constexpr DataFormat mm_in0_format = DataFormat::Invalid;
+    constexpr DataFormat mm_in1_format = DataFormat::Invalid;
+#endif
+    matmul_init<mm_in0_format, mm_in1_format>(in0_cb, in1_cb);
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -478,7 +487,7 @@ void kernel_main() {
             // configured for the previous output stage's operands (see #55052).
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermediate_cb);
-            matmul_block_init(
+            matmul_block_init<false, false, 0, DataFormat::Invalid, 0, mm_in0_format, mm_in1_format>(
                 in0_cb,
                 in1_cb,
                 false /*transpose*/,
@@ -491,7 +500,7 @@ void kernel_main() {
                 cb_in0.wait_front(in0_block_num_tiles);
                 cb_in1.wait_front(in1_block_num_tiles);
 
-                matmul_blocks(
+                matmul_blocks<mm_in0_format, mm_in1_format>(
                     in0_cb,
                     in1_cb,
                     intermediate_cb,

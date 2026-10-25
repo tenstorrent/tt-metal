@@ -27,6 +27,7 @@ from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_INDEX,
     DEST_SYNC,
@@ -247,12 +248,14 @@ def test_perf_math_matmul(
         * matmul_config.tile_dimensions.kt_dim
     )
 
+
     configuration = PerfConfig(
         "sources/math_matmul_test.cpp",
         formats,
         run_types,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, matmul_config.dest_acc, throttle, matmul_config.face_layout_config.unpack_transpose_faces),
             DEST_SYNC(matmul_config.dest_sync),
             THROTTLE_LEVEL(throttle),
             *MATMUL_STREAM_NARROW.for_block(

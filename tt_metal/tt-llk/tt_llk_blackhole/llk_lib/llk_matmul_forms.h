@@ -116,4 +116,59 @@ constexpr bool matmul_main_form_cell_selected()
     }
     return false;
 }
+
+/**
+ * @brief The math fidelity whose phases cover every nonzero mantissa slice of the two matmul operands.
+ *
+ * A phase multiplies one slice of each operand: SrcA hi {1, m[9:6]} or lo m[5:1], SrcB hi {1, m[9:4]} or lo {m[3:0], 000}
+ * (tt_fpu_tile.sv). An in1 (SrcA) of Bfp4_b has 2 fraction bits, so its lo slice is zero and phase 1 adds exactly 0;
+ * an in0 (SrcB) of Bfp8_b or Bfp4_b has at most 6 fraction bits, so its lo slice is zero and phase 2 adds exactly 0;
+ * phase 3 needs both lo slices. Only a dropped suffix maps to an existing fidelity, so HiFi3 and HiFi4 with a narrow
+ * in1 and a wide in0 keep their phases.
+ *
+ * Only equal operand formats are keyed; Invalid (unknown, the default of the compute API) keeps the requested fidelity.
+ * check_out is set by the compute API, which knows the output format and DEST width; the harness keys that cell in python.
+ *
+ * @tparam math_fidelity: Requested math fidelity.
+ * @tparam in0_format: L1 data format of in0 (unpacked to SrcB).
+ * @tparam in1_format: L1 data format of in1 (unpacked to SrcA).
+ */
+template <
+    MathFidelity math_fidelity,
+    DataFormat in0_format,
+    DataFormat in1_format,
+    DataFormat out_format = DataFormat::Invalid,
+    bool fp32_dest        = false,
+    int throttle_level    = 0,
+    bool check_out        = false>
+constexpr MathFidelity matmul_phase_fidelity()
+{
+    constexpr bool lo_a_zero = in1_format == DataFormat::Bfp4_b;
+    constexpr bool lo_b_zero = in0_format == DataFormat::Bfp8_b || in0_format == DataFormat::Bfp4_b;
+    // Bfp8_b x Bfp8_b at HiFi3 and HiFi4 with a 32-bit DEST or a Float32 output (or an unknown output when check_out) is pack bound and
+    // measured slower with the phases dropped, so it keeps the requested fidelity
+    constexpr bool keep = check_out && in0_format == DataFormat::Bfp8_b && in1_format == DataFormat::Bfp8_b && throttle_level == 0 &&
+                          (math_fidelity == MathFidelity::HiFi3 || math_fidelity == MathFidelity::HiFi4) &&
+                          (fp32_dest || out_format == DataFormat::Float32 || out_format == DataFormat::Invalid);
+    if constexpr (in0_format != in1_format || in0_format == DataFormat::Invalid || keep)
+    {
+        return math_fidelity; // mixed or unknown operand formats (bits not proven on hardware), or a cell that keeps main's fidelity
+    }
+    else if constexpr (lo_a_zero && lo_b_zero)
+    {
+        return MathFidelity::LoFi;
+    }
+    else if constexpr (lo_b_zero)
+    {
+        return math_fidelity == MathFidelity::LoFi ? MathFidelity::LoFi : MathFidelity::HiFi2;
+    }
+    else if constexpr (lo_a_zero)
+    {
+        return math_fidelity == MathFidelity::HiFi2 ? MathFidelity::LoFi : math_fidelity;
+    }
+    else
+    {
+        return math_fidelity;
+    }
+}
 } // namespace ckernel
