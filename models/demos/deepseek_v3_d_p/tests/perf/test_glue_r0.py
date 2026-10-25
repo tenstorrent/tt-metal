@@ -1249,4 +1249,60 @@ def test_glue_r0(mesh_device, variant, config_only):
         timer("M4 concat_heads DRAM + o_proj", lambda: epi(DRAM))
         timer("M4 concat_heads L1 + o_proj", lambda: epi(L1))
 
+    # ======================= N. seqq epilogue: wkv_b2 out placement, a2a seq->heads vs cols =======================
+    if want("n"):
+        R = S // TP
+        NH = 64
+
+        def cfgR(key, rows=R):
+            e = MLA_MATMUL_CONFIG[key][rows]
+            return e[0] if isinstance(e, list) else e
+
+        b2_cfg = cfgR("wkv_b2")
+        sd_out = mk(mesh, torch.randn(1, NH, R, KV_LORA), mem=L1)  # tilized sparse_sdpa output (MLA_SEQQ_L1 v3: L1)
+        tw_b2 = mk(mesh, torch.randn(1, NH, KV_LORA, VDIM) * (1 / KV_LORA**0.5), ttnn.bfloat8_b)
+
+        def b2(mem):
+            return ttnn.linear(sd_out, tw_b2, program_config=b2_cfg["program_config"], memory_config=mem,
+                               dtype=ttnn.bfloat8_b, compute_kernel_config=hifi2)
+
+        def a2a(t, in_dim, out_dim):
+            return ttnn.experimental.all_to_all_async_generic(
+                t, in_dim=in_dim, out_dim=out_dim, num_links=2, memory_config=DRAM, cluster_axis=1
+            )
+
+        def heads_path(mem):
+            v = b2(mem)
+            h = a2a(v, 2, 1)
+            ttnn.deallocate(v)
+            c = ttnn.experimental.nlp_concat_heads(h, memory_config=DRAM)
+            ttnn.deallocate(h)
+            return c
+
+        def cols_path(mem):
+            v = b2(mem)
+            c = ttnn.experimental.nlp_concat_heads(v, memory_config=mem)
+            ttnn.deallocate(v)
+            h = a2a(c, 2, 3)
+            ttnn.deallocate(c)
+            return h
+
+        try:
+            r = heads_path(DRAM)
+            for tag, fn, mem in (("heads L1", heads_path, L1), ("cols DRAM", cols_path, DRAM), ("cols L1", cols_path, L1)):
+                try:
+                    o = fn(mem)
+                    cmp(f"N epilogue [{tag}] vs heads DRAM", o, r)
+                    _free(o)
+                except Exception as e:
+                    log(f"FAIL N {tag}: {type(e).__name__}: {str(e)[:300]}")
+            _free(r)
+        except Exception as e:
+            log(f"FAIL N base: {type(e).__name__}: {str(e)[:300]}")
+            traceback.print_exc()
+        timer("N0 wkv_b2(DRAM out) + a2a heads + concat (v9)", lambda: heads_path(DRAM))
+        timer("N1 wkv_b2(L1 out) + a2a heads + concat", lambda: heads_path(L1))
+        timer("N2 wkv_b2(DRAM) + concat + a2a cols", lambda: cols_path(DRAM))
+        timer("N3 wkv_b2(L1) + concat(L1) + a2a cols", lambda: cols_path(L1))
+
     log("DONE")
