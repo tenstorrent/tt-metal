@@ -1735,6 +1735,7 @@ def run_glm_slab_mixed_chunks(
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import clear_tt_ccl_cache
 
     models = {}
+    transformer = layer_outputs = None
     layer_min_pcc: dict[int, float] = {}
     per_size_min: dict[int, float] = {}
     kv_actual = 0
@@ -1746,6 +1747,7 @@ def run_glm_slab_mixed_chunks(
             for old in models.values():
                 old.release_sub_device_managers()
             models.clear()
+            old = transformer = layer_outputs = None  # the loop locals still pin the previous model (and its L1 buffers)
             ttnn.synchronize_device(mesh_device)
             clear_tt_ccl_cache()
             gc.collect()
