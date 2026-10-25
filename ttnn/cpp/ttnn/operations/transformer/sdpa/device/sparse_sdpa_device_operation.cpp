@@ -267,7 +267,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
         t.indices.logical_shape(),
         t.indices.dtype(),
-        t.attention_sink);
+        t.attention_sink,
+        ::sparse_sdpa::split_k_enabled());
 }
 
 Tensor sparse_sdpa(

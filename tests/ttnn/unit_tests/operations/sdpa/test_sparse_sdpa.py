@@ -738,3 +738,44 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
     probs = torch.cat([logits, model_sink.expand(1, H, S, 1)], dim=-1).softmax(dim=-1)[..., :-1]
     expected = probs @ kv.float()
     torch.testing.assert_close(ttnn.to_torch(out).float(), expected, atol=0.012, rtol=0.01)
+
+
+# ---- split-K work distribution (S > cores, S % cores != 0): tokens straddling two cores are merged ----
+@run_for_blackhole()
+@pytest.mark.parametrize("split_k", ["1", "0"], ids=["splitk", "token_split"])
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,kc,nv_id",
+    [
+        (64, 160, 4096, 2048, 128, "all"),  # GLM per-chip shape (16 chunks/token)
+        (64, 160, 1024, 512, 128, "mixed"),  # sentinel tails: empty HEAD segments, masks in either segment
+        (32, 250, 1024, 512, 128, "causal"),  # 2+ tokens/core, prefill-like valid counts
+        (64, 130, 1024, 256, 64, "mixed"),  # 1 token + a sliver per core
+    ],
+)
+def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, H, S, T, TOPK, kc, nv_id):
+    """Split-K must match the whole-token split and the torch golden (PCC), incl. sentinel tails."""
+    grid = device.compute_with_storage_grid_size()
+    if S <= grid.x * grid.y:
+        pytest.skip(f"split-K needs S > cores ({grid.x * grid.y})")
+    monkeypatch.setenv("SPARSE_SDPA_SPLITK", split_k)  # split-K is the default; "0" = whole-token split
+    nv_fn = {
+        "all": lambda s: TOPK,
+        "mixed": lambda s: 1 + (s * 37) % TOPK,
+        "causal": lambda s: min(TOPK, 1 + s * 3),
+    }[nv_id]
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=71)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=72, round_scale=True)
+    out = ttnn.transformer.sparse_sdpa(
+        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_packed,
+        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        V_DIM,
+        kv_format=SCALED_FP8_KV,
+        scale=K_DIM**-0.5,
+        k_chunk_size=kc,
+    )
+    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    actual = ttnn.to_torch(out)
+    score = pcc(actual, expected)
+    worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
+    assert score >= 0.999 and worst >= 0.995, f"split_k={split_k} PCC {score:.5f}, worst token {worst:.5f}"
