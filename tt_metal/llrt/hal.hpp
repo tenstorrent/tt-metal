@@ -16,6 +16,7 @@
 #include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -392,6 +393,8 @@ public:
 };
 
 class Hal {
+    friend class HalJitBuildQueryQuasar;
+
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
@@ -408,6 +411,7 @@ public:
 
 private:
     tt::ARCH arch_;
+    IpVariant quasar_arch_variant_{IpVariant::GRENDEL};
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
@@ -446,6 +450,8 @@ private:
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
     bool supports_64_bit_pcie_addressing_{};
+    // Lowest NoC address the PCIe tile serves itself instead of forwarding to the host.
+    uint64_t pcie_tile_local_noc_addr_base_ = std::numeric_limits<uint64_t>::max();
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
@@ -490,7 +496,8 @@ private:
         bool is_simulator,
         bool enable_blackhole_dram_programmable_cores,
         bool enable_aerisc_ptp_trace);
-    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
+    void initialize_qa(
+        uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -519,7 +526,8 @@ public:
         bool enable_dram_backed_cq,
         bool is_simulator = false,
         bool enable_blackhole_dram_programmable_cores = false,
-        bool enable_aerisc_ptp_trace = false);
+        bool enable_aerisc_ptp_trace = false,
+        IpVariant quasar_arch_variant = IpVariant::GRENDEL);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -774,6 +782,10 @@ public:
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
     bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
+    // NoC addresses from this one up reach the PCIe tile's own configuration space, never the host. It bounds only
+    // that range: below it the tile's other windows apply their own PCIe attributes or targets, and only [0, 2^58)
+    // forwards an IOVA (see get_supports_64_bit_pcie_addressing) to the host unchanged.
+    uint64_t get_pcie_tile_local_noc_addr_base() const { return pcie_tile_local_noc_addr_base_; }
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
     size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }

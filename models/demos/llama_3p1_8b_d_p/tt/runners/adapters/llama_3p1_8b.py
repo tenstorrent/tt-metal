@@ -15,8 +15,8 @@ nothing heavy may be imported at module load: no torch, no ttnn, no transformers
 reference modeling. Everything heavy is imported lazily inside the methods. ``Llama31_8BConfig`` is
 safe to name at class-definition time because it is a pure constants class with no imports of its own.
 
-The eager runtime targets one SP4/TP8 rank and two slots. Its default live gate is 2K;
-larger configured capacities require separate device acceptance.
+The eager runtime targets one SP4/TP8 rank holding ``PREFILL_NUM_USERS`` slots (two by default).
+Its default live gate is 2K; larger configured capacities require separate device acceptance.
 """
 
 from __future__ import annotations
