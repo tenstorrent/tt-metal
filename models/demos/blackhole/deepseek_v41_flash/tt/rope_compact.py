@@ -109,8 +109,11 @@ class CompactRope:
         ]
 
     def _lookup_sharded(self, idxs):
-        T, k = int(idxs[0].shape[0]), len(idxs)
-        kT = k * T
+        lens, k = [int(i.shape[0]) for i in idxs], len(
+            idxs
+        )  # position sets may differ in length (drafter: verify rows + draft rows)
+        offs = [sum(lens[:j]) for j in range(k)]
+        kT = sum(lens)
         cat = idxs[0] if k == 1 else ttnn.concat(idxs, dim=0)  # [kT, 1] uint32
         f = ttnn.typecast(ttnn.to_layout(ttnn.reshape(cat, [1, 1, 1, kT]), ttnn.TILE_LAYOUT), ttnn.float32)
         loc = ttnn.subtract(f, self.base)  # position inside this column's block
@@ -134,9 +137,9 @@ class CompactRope:
         for j in range(k):
             piece = lambda c0: ttnn.reshape(
                 ttnn.to_layout(
-                    ttnn.slice(r, [0, 0, j * T, c0], [1, 1, (j + 1) * T, c0 + ROPE_DIM]), ttnn.ROW_MAJOR_LAYOUT
+                    ttnn.slice(r, [0, 0, offs[j], c0], [1, 1, offs[j] + lens[j], c0 + ROPE_DIM]), ttnn.ROW_MAJOR_LAYOUT
                 ),
-                [T, 1, ROPE_DIM],
+                [lens[j], 1, ROPE_DIM],
             )
             out.append((piece(0), piece(ROPE_DIM)))
         return out
