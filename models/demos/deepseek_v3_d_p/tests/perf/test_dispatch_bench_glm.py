@@ -467,6 +467,20 @@ def test_dispatch_bench(mesh_device, device_params):
                 )
             )
 
+        if os.environ.get("DB_ROUTEOPS_CHECK", "1") == "1":
+            h = bincount()[0]
+            got = ttnn.to_torch(h, mesh_composer=get_ep_mesh_composer(mesh_device)).reshape(G, H, -1)[..., :E].to(torch.int64)
+            ref = torch.zeros(G, H, E, dtype=torch.int64)
+            for gi in range(G):
+                for hi in range(H):
+                    e = indices[hi].reshape(-1).long()
+                    e = e[table[gi][e] >= 0]
+                    ref[gi, hi] = torch.bincount(e, minlength=E)[:E]
+            ok = torch.equal(got, ref)
+            logger.info(f"[dbench] CHECK masked_bincount {spec}: exact={ok}")
+            assert ok, "masked_bincount histogram mismatch"
+            ttnn.deallocate(h)
+
         for name, fn in [("grouped_topk", topk), ("masked_bincount", bincount), ("offset_cumsum", cumsum)]:
 
             def one(name=name, fn=fn):
