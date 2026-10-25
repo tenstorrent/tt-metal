@@ -90,6 +90,8 @@ class FC:
     arena_reserve_kb: int = None  # None: the flat plan's static CBs and the writers' words (fused_arena_reserve)
     det_repeat: int = 0
     soak: int = 0  # fused calls after the first, back to back (every 500th checked)
+    landing: str = "rings"  # the combine's landing pools: "rings" (a ring a source) / "shared" (slot grants)
+    pool_slots: int = None  # the landing pool's slots an accumulator (None: the planner's)
     pipe: bool = False
     trace: bool = False  # (traced replays back to back: wall, and the profiler's device time a replay)
     timing: bool = True
@@ -442,6 +444,45 @@ def test_flat_combine_layout(mesh_device, device_params, model, mode, per_dir):
     _run(mesh_device, c)
 
 
+# the landing pools: rings vs shared (slot grants) at the same pool, each model at its Galaxy 8x4 per-chip load; pool
+# None: the planner's, else that many slots an accumulator (the Galaxy's slots a source on this mesh)
+_LANDING = [
+    (m, chunk, routing, pool)
+    for m in ("glm53", "m3")
+    for chunk, pools in ((5120, (None,)), (8192, (None, 11)), (16384, (None, 11)))
+    for pool in pools
+    for routing in ("uniform",) + (("zipf_spread_1.2",) if chunk == 8192 else ())
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, chunk, routing, pool, landing",
+    [
+        pytest.param(
+            *_mesh_params("2x4", fabric_payload(MODELS[m]["H"])),
+            m,
+            chunk,
+            routing,
+            pool,
+            landing,
+            id=f"{m}-{chunk}-{routing}-pool{pool or 'auto'}-{landing}",
+        )  # fmt: skip
+        for m, chunk, routing, pool in _LANDING
+        for landing in ("rings", "shared")
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(3600)
+def test_flat_combine_landing(mesh_device, device_params, model, chunk, routing, pool, landing):
+    """The combine's landing pools, rings vs shared (slot grants), ports apart, at one pool size."""
+    c = closeout_cfg(
+        model, chunk, "2x4", routings=(routing,), timing=True, pipe=True, ITERS=12, combine_mode="ports apart",
+        landing=landing, pool_slots=pool,
+    )  # fmt: skip
+    logger.info(f"landing {model} {chunk} {routing} pool {pool} {landing}: {c}")
+    _run(mesh_device, c)
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, model, depth, calls",
     [
@@ -454,6 +495,36 @@ def test_flat_combine_layout(mesh_device, device_params, model, mode, per_dir):
 def test_flat_combine_depth_soak(mesh_device, device_params, model, depth, calls):
     """The fused call soaked at a model's Galaxy D (with CombineProbes.bk the Galaxy's source count's credit policy)."""
     c = closeout_cfg(model, 5120, "2x4", routings=("uniform",), timing=False, ring_depth=depth, soak=calls)
+    _run(mesh_device, c)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, chunk, routing, pool, calls",
+    [
+        pytest.param(
+            *_mesh_params("2x4", fabric_payload(MODELS[m]["H"])),
+            m,
+            chunk,
+            routing,
+            11,
+            calls,
+            id=f"{m}-{chunk}-{routing}-pool11-soak",
+        )  # fmt: skip
+        for m, chunk, routing, calls in (
+            ("glm53", 8192, "uniform", 20000),
+            ("glm53", 8192, "zipf_spread_1.2", 20000),
+            ("m3", 16384, "uniform", 20000),
+        )
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(7200)
+def test_flat_combine_landing_soak(mesh_device, device_params, model, chunk, routing, pool, calls):
+    """The shared landing pool soaked at the Galaxy's slots per source (fused calls back to back, ports apart)."""
+    c = closeout_cfg(
+        model, chunk, "2x4", routings=(routing,), timing=False, combine_mode="ports apart", landing="shared",
+        pool_slots=pool, soak=calls,
+    )  # fmt: skip
     _run(mesh_device, c)
 
 
@@ -619,7 +690,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         port_cells = {(v.x, v.y) for v in place_ports(mesh_device, chips_, cells).values()}
         auto = combine_auto(
             N, S, H, len(cells), len(port_cells), arena_bytes=arena_bytes, l1=L1, depth=c.depth, piece_max=c.piece_max,
-            a_max=c.a_max, mode=c.combine_mode,
+            a_max=c.a_max, mode=c.combine_mode, landing=c.landing,
         )  # fmt: skip
         assert auto[
             "fits"
@@ -753,7 +824,10 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         inj_slots=copt["inj_slots"],
         ring_depth=copt["ring_depth"],
         local_keep=copt["local_keep"],
+        landing=c.landing,
     )
+    if c.pool_slots:  # (the pool capped: the Galaxy's slots a source on this mesh)
+        combine_kw["pool_slots"] = c.pool_slots
     l1 = None
     if L1:
         wcores = [tuple(v) for v in plan["y_writers"]]  # (the factory's writer order: reader tails, then down)
@@ -790,7 +864,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         assert (
             len(fused.cells["accs"]) == n_acc
         ), f"combine has {len(fused.cells['accs'])} accumulators, the planner {n_acc} ({len(cells)} free cells)"
-    if auto is not None and c.ring_depth is None:  # (combine_auto's layout is the combine's - unless D is forced)
+    if auto is not None and c.ring_depth is None and not c.pool_slots:  # (combine_auto's - unless D / the pool forced)
         assert fused.pool == auto["layout"]["PSL"], (fused.pool, auto["layout"]["PSL"])
     # (combine alone: the same cells in the same roles and ring depth - the arena's cumulative counters are shared; with
     # accumulators on the ports (L1 hand-off only) there is no alone variant)
@@ -805,8 +879,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
             writers=0,
             ports_per_direction=PER_DIR_PORTS,
             **{**common, "depth": fused.depth},
-            pool_slots=fused.pool,  # (the fused build's pool exactly: its CBs must not sit on the fused ring slots)
-            **combine_kw,
+            **{**combine_kw, "pool_slots": fused.pool},  # (the fused build's pool exactly: its CBs off the fused slots)
         )
     )
     coll = fused.collector

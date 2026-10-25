@@ -319,22 +319,30 @@ MISC_BYTES = 2048
 # devplan scratch; 256.. rows consumed per source chip (accumulators increment); 288.. rows covered by the credit
 # snapshots sent; 320.. acc taken[] (per ring = source chip); 477..511 the hang words (CombineProbes.hw)
 M_RTOT, M_RDONE, M_TAKEN = 256, 288, 320
+GRANTS = 8  # (landing "shared": grant ids outstanding a (source, accumulator) at most - its grant ring)
 
 
-def state_layout(N, A):
+def state_layout(N, A, G=0):
     """Byte offsets of the state block: CRED, USED, RET, CNT (collector counts), MISC, HDRS, RINGS (its end; the
-    landing pool starts there), and LAYR / LAYO / U0 (state_layout_ext)."""
-    CRED, USED, RET, _, _, _, CNT, MISC, HDRS, RINGS, _, _ = _state(N, A)
+    landing pool starts there), and LAYR / LAYO / U0 (state_layout_ext). G: the shared landing's grant ring size (0:
+    rings - the layout unchanged)."""
+    CRED, USED, RET, _, _, _, CNT, MISC, HDRS, RINGS, _, _ = _state(N, A, G)[:12]
     return CRED, USED, RET, CNT, MISC, HDRS, RINGS
 
 
-def state_layout_ext(N, A):
+def state_layout_ext(N, A, G=0):
     """LAYR (layouts received per (home, accumulator) at a source port), LAYO (per (source, accumulator), written by the
     home's accumulators, forwarded by its port), U0 (a source port's used count per ring at this call's start)."""
-    return _state(N, A)[3:6]
+    return _state(N, A, G)[3:6]
 
 
-def _state(N, A):
+def state_layout_grants(N, A, G):
+    """The shared landing's GIDH (at a home port: per (source, accumulator) its G grant ids) and GREC (at a source port:
+    per home its snapshot - AP grant counts, then AP x G ids)."""
+    return _state(N, A, G)[12:14]
+
+
+def _state(N, A, G=0):
     al = lambda v: (v + 63) // 64 * 64  # noqa: E731
     AP = (A + 3) // 4 * 4
     rw = al(4 * N * AP)
@@ -345,15 +353,20 @@ def _state(N, A):
     SHW = 7 * rw
     PIG = SHW + rw
     CNT = al(PIG + 16 * 8 * N)
+    GIDH = GREC = 0
+    if G:  # (shared landing: the grant rings, before the counts)
+        GIDH = CNT
+        GREC = al(GIDH + 4 * N * AP * G)
+        CNT = al(GREC + 4 * N * AP * (1 + G))
     MISC = CNT + 512
     HDRS = MISC + MISC_BYTES
-    RINGS = al(HDRS + N * NH_ * HSZ_ + NH_ * 4 * AP)
-    return CRED, USED, RET, LAYR, LAYO, U0, CNT, MISC, HDRS, RINGS, SHW, PIG
+    RINGS = al(HDRS + N * NH_ * HSZ_ + NH_ * 4 * AP * (1 + G))
+    return CRED, USED, RET, LAYR, LAYO, U0, CNT, MISC, HDRS, RINGS, SHW, PIG, GIDH, GREC
 
 
 def state_layout_pig(N, A):
     """SHW (a port's monotonic credit count per ring) and PIG (per home chip, the piggybacked consumed counts)."""
-    return _state(N, A)[10:12]
+    return _state(N, A)[10:12]  # (the same with grants: they sit after PIG)
 
 
 _RF_SENDER = r"""
@@ -399,6 +412,12 @@ constexpr uint32_t BAR = __BAR__;
 // port facing me on that link (PIG words), which merges them with its snapshots (SHW: monotonic, so late or reordered
 // copies never take credits back). Standalone snapshots remain for when no row goes that way.
 constexpr uint32_t PIGGY = __PIGGY__, PIG = __PIG__, SHW = __SHW__;
+// landing "shared": a home's accumulators grant slot ids (GIDH at this port, per (source, accumulator) G words, id |
+// grant seq << 24; RET counts them); this port forwards each source a snapshot of its validated grant counts and ids
+// (GREC at the source's port, per home: AP counts then AP x G ids); a row goes into its grant's slot
+constexpr uint32_t SHARED = __SHARED__, G = __G__, GIDH = __GIDH__, GREC = __GREC__;
+constexpr uint32_t SNAPW = SHARED ? AP * (1 + G) : AP;  // (a snapshot's words)
+#define GTAG(q) (0x80u | ((q) & 0x7Fu))  // (a grant's tag: never 0 - a zeroed ring entry is no grant)
 #if __FUSED__
 // (a port that is also an accumulator, acc_on_ports: this RISC also runs the port's L1 hand-off - slot grants to the y
 // writers, pushes of landed rows - and the accumulator's output writes; RISCV_1 runs the accumulator's reader)
@@ -567,11 +586,15 @@ void kernel_main() {
         for (uint32_t ci = 0; ci < N * AP; ++ci) m += (lay_r[ci] != 0 ? 1u : 0u) << (4 * (ci / AP));
         misc[477] = m;
     }
-    for (uint32_t ci = 0; ci < N * AP; ++ci) u0[ci] = used[ci];
     uint32_t lay_pend = 0;  // (sources whose layouts this port still forwards: bit s)
-    for (uint32_t s = 0; s < N; ++s) {
-        if (sx[s]) lay_pend |= 1u << s;
+    if constexpr (!SHARED) {  // (shared: U0 holds the grant counts validated and forwarded, cumulative)
+        for (uint32_t ci = 0; ci < N * AP; ++ci) u0[ci] = used[ci];
+        for (uint32_t s = 0; s < N; ++s) {
+            if (sx[s]) lay_pend |= 1u << s;
+        }
     }
+    volatile tt_l1_ptr uint32_t* gidh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + GIDH);
+    volatile tt_l1_ptr uint32_t* grec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(area + GREC);
     uint32_t inj_done = 0, sent = 0, pend_inj = 0, unflushed = 0;
     uint32_t p_idle = 0, p_cred = 0, p_slot = 0, p_flush = 0, n_credpk = 0, n_blocked = 0, n_empty = 0, p_send = 0;
     uint32_t p_book = 0, p_blk = 0, n_iter = 0;  // (TPROF: bookkeeping per pass, passes spent blocked on a full ring)
@@ -607,18 +630,31 @@ void kernel_main() {
             if (unflushed >= NH) flush();
             const uint32_t t0 = get_timestamp_32b();
             const uint32_t rot = sent % NH;
-            volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cstage + rot * 4 * AP);
+            volatile tt_l1_ptr uint32_t* st = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cstage + rot * 4 * SNAPW);
             uint32_t cov = 0;
             for (uint32_t o = 0; o < A; ++o) {
-                const uint32_t v = ret[s * AP + o];
+                uint32_t v = ret[s * AP + o];
+                if constexpr (SHARED) {  // (a grant's count goes only as far as its ids have landed here: tags)
+                    const uint32_t gb = (s * AP + o) * G;
+                    uint32_t w = u0[s * AP + o];
+                    while (w != v && (gidh[gb + w % G] >> 24) == GTAG(w)) ++w;
+                    u0[s * AP + o] = w;
+                    v = w;
+                    for (uint32_t j = 0; j < G; ++j) st[AP + o * G + j] = gidh[gb + j];
+                }
                 st[o] = v;
                 cov += v;
             }
+            if constexpr (SHARED) {
+                if (cov == rdone[s]) continue;  // (nothing validated yet: later)
+            }
             auto* h = hdr_at(s, rot);
-            h->to_noc_unicast_write(NocUnicastCommandHeader{get_noc_addr(sx[s], sy[s], area + CRED + 4 * me * AP)}, 4 * AP);
+            h->to_noc_unicast_write(
+                NocUnicastCommandHeader{get_noc_addr(sx[s], sy[s], SHARED ? area + GREC + 4 * me * SNAPW : area + CRED + 4 * me * AP)},
+                4 * SNAPW);
             for (uint32_t b = 0; b < __BK__; ++b) {  // (probe SPC_BK: the same snapshot bk times - idempotent)
                 conn.wait_for_empty_write_slot();
-                conn.send_current_slot_non_blocking(cstage + rot * 4 * AP, 4 * AP, reinterpret_cast<uint32_t>(h));
+                conn.send_current_slot_non_blocking(cstage + rot * 4 * SNAPW, 4 * SNAPW, reinterpret_cast<uint32_t>(h));
             }
             ++sent;
             ++unflushed;
@@ -662,6 +698,7 @@ void kernel_main() {
     // ring ci's credits, cheap: the snapshot count and the last merged piggyback (SHW); the slots only when that is
     // not enough (send_row) or at the drain
     auto cred_fast = [&](uint32_t ci) -> uint32_t {
+        if constexpr (SHARED) return grec[(ci / AP) * SNAPW + ci % AP];  // (the home's grants to me, validated)
         const uint32_t c = cred[ci];
         if constexpr (PIGGY) {
             const uint32_t s = shw[ci];
@@ -671,6 +708,7 @@ void kernel_main() {
     };
     // ring ci's credits: the snapshot count and the piggybacked one merged into SHW (both monotonic)
     auto cred_of = [&](uint32_t ci) -> uint32_t {
+        if constexpr (SHARED) return grec[(ci / AP) * SNAPW + ci % AP];  // (the grants: the drain waits for the last)
         const uint32_t c = cred[ci];
         if constexpr (PIGGY) {
             const uint32_t home = ci / AP, o = ci % AP, j = o / L;
@@ -695,8 +733,16 @@ void kernel_main() {
         const uint32_t hdr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[0];
         const uint32_t home = hdr & 0xFF, t = (hdr >> 8) & 0xFFFF, o = t % A, ci = home * AP + o;
         const uint32_t u = used[ci], lw = lay_r[ci], dep = lw & 0xFFF;
-        if ((lw >> 24) != tag) return false;
-        if (dep + cred_fast(ci) - u < 1 && (!PIGGY || dep + cred_of(ci) - u < 1)) return false;
+        uint32_t gslot = 0;
+        if constexpr (SHARED) {  // (my u-th row to this accumulator: grant u's slot, once its id carries u's tag)
+            if (static_cast<int32_t>(cred_fast(ci) - u) < 1) return false;
+            const uint32_t gw = grec[home * SNAPW + AP + o * G + u % G];
+            if ((gw >> 24) != GTAG(u)) return false;
+            gslot = gw & 0xFFFF;
+        } else {
+            if ((lw >> 24) != tag) return false;
+            if (dep + cred_fast(ci) - u < 1 && (!PIGGY || dep + cred_of(ci) - u < 1)) return false;
+        }
         if constexpr (PIGGY) {  // (this port returns home's credits: the row carries this link class's counts)
             // (the flag set or cleared on every row: a staged slot keeps its previous row's trailer words)
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + LASTPB)[1] &= 0xFFFFu;
@@ -721,7 +767,8 @@ void kernel_main() {
                 ++n_piggy;
             }
         }
-        const uint32_t dst = area + RINGS + (((lw >> 12) & 0xFFF) + (u - u0[ci]) % dep) * SLOT;  // (my ring there)
+        const uint32_t dst = SHARED ? area + RINGS + gslot * SLOT                                // (my grant's slot)
+                                    : area + RINGS + (((lw >> 12) & 0xFFF) + (u - u0[ci]) % dep) * SLOT;  // (my ring)
         auto& cn = conn_of(NL > 1 ? (o + me + home) % L : 0);
         for (uint32_t pc = 0; pc < P; ++pc) {
             const uint32_t pb = (pc + 1 == P ? row_bytes - pc * PD : PD) + 32;
@@ -917,6 +964,11 @@ constexpr uint32_t NT = get_compile_time_arg_val(7);
 constexpr uint32_t N = get_compile_time_arg_val(8);
 constexpr uint32_t L = get_compile_time_arg_val(9);
 constexpr uint32_t RET = __RET__, MISC = __MISC__, RINGS = __RINGS__, LAYO = __LAYO__;
+// landing "shared" (SHARED): no rings - the pool's slots granted to sources by id (G grants outstanding a source at most),
+// each grant written into the home port's grant ring (GIDH: per (source, accumulator) G words, id | grant seq << 24)
+// and counted (RET / MRTOT, as the credits are with rings): the port forwards them in its snapshots
+constexpr uint32_t SHARED = __SHARED__, G = __G__, GIDH = __GIDH__;
+#define GTAG(q) (0x80u | ((q) & 0x7Fu))  // (a grant's tag: never 0 - a zeroed ring entry is no grant)
 constexpr uint32_t PROF = __PROF__;
 constexpr uint32_t ABL = __ABL__;
 constexpr uint32_t P = __P__, PD = __PD__, PS = __PS__;
@@ -1008,14 +1060,54 @@ void kernel_main() {
         }
         uint32_t b = 0;
         for (uint32_t k = 0; k < N; ++k) {
-            const uint32_t d = rdep[k] < want[k] ? rdep[k] : want[k];  // (no more slots than rows)
+            uint32_t d = rdep[k] < want[k] ? rdep[k] : want[k];  // (no more slots than rows)
+            if constexpr (SHARED) d = d < G ? d : G;  // (the first grants: the carve's shares, G at most)
             rbase[k] = b;
             rdep[k] = d;
             b += d;
             t0[k] = taken[k];
-            if (k != hc && px[k]) noc_inline_dw_write(get_noc_addr(px[k], py[k], area + LAYO + 4 * (k * AP + me)), tag << 24 | rbase[k] << 12 | d);
+            if constexpr (!SHARED) {
+                if (k != hc && px[k]) noc_inline_dw_write(get_noc_addr(px[k], py[k], area + LAYO + 4 * (k * AP + me)), tag << 24 | rbase[k] << 12 | d);
+            }
         }
     }
+    // shared: slot ownership (source, 0xFF free), grants outstanding / issued this call a source, the free list
+    uint8_t own[SHARED ? PSL : 1];
+    uint32_t gout[N], giss[N], fstack[SHARED ? PSL : 1], nfree = 0;
+    auto grant = [&](uint32_t k, uint32_t slot) {  // (the id into the home port's grant ring, then its count)
+        const uint32_t seq = t0[k] + giss[k];
+        noc_inline_dw_write(
+            get_noc_addr(px[k], py[k], area + GIDH + 4 * ((k * AP + me) * G + seq % G)), slot | GTAG(seq) << 24);
+        noc_semaphore_inc(get_noc_addr(px[k], py[k], area + RET + 4 * (k * AP + me)), 1);
+        noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (__MRTOT__ + k)), 1);
+        own[slot] = static_cast<uint8_t>(k);
+        ++giss[k];
+        ++gout[k];
+    };
+    if constexpr (SHARED) {
+        for (uint32_t i = 0; i < PSL; ++i) own[i] = 0xFF;
+        for (uint32_t k = 0; k < N; ++k) gout[k] = giss[k] = 0;
+        for (uint32_t k = 0; k < N; ++k) {
+            if (k == hc || !px[k]) continue;
+            for (uint32_t j = 0; j < rdep[k]; ++j) grant(k, rbase[k] + j);
+        }
+        for (uint32_t i = PSL; i-- > 0;) {
+            if (own[i] == 0xFF) fstack[nfree++] = i;
+        }
+    }
+    // a freed slot to the source with rows still to grant (want - outstanding), fewest outstanding first
+    auto regrant = [&]() {
+        while (nfree) {
+            uint32_t bk = N;
+            for (uint32_t k = 0; k < N; ++k) {
+                if (k == hc || gout[k] >= G || want[k] <= gout[k]) continue;
+                if (bk == N || gout[k] < gout[bk] || (gout[k] == gout[bk] && want[k] - gout[k] > want[bk] - gout[bk])) bk = k;
+            }
+            if (bk == N) return;
+            grant(bk, fstack[--nfree]);
+        }
+    };
+    if constexpr (SHARED) regrant();  // (the slots the first grants left: to whoever has rows still to grant)
     auto ring_slot = [&](uint32_t k, uint32_t tk) { return area + RINGS + (rbase[k] + (tk - t0[k]) % rdep[k]) * SLOT; };
     constexpr uint32_t WGT = __L1__;  // (gate weights: with the L1 hand-off, from each row's trailer)
     auto push_w = [&](uint32_t wb) {
@@ -1169,6 +1261,30 @@ void kernel_main() {
         noc_semaphore_inc(get_noc_addr(px[k], py[k], area + MISC + 4 * (__MRTOT__ + k)), 1);
         return true;
     };
+    auto take_slot = [&](uint32_t i) -> bool {  // shared: slot i's row, if all its pieces landed
+        const uint32_t s = area + RINGS + i * SLOT;
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            if (tp[3] == 0 || tp[7] == 0) return false;
+        }
+        volatile tt_l1_ptr uint32_t* tr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + LASTPB);
+        push_pieces(s, (tr[0] >> 8) & 0xFFFF);
+        for (uint32_t pc = 0; pc < P; ++pc) {
+            volatile tt_l1_ptr uint32_t* tp =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(s + pc * PS + (pc + 1 == P ? row_bytes - pc * PD : PD));
+            tp[3] = 0;
+            tp[7] = 0;
+        }
+        const uint32_t k = own[i];
+        own[i] = 0xFF;
+        fstack[nfree++] = i;
+        ++taken[k];
+        --want[k];
+        --gout[k];
+        ++done;
+        return true;
+    };
     // Deterministic order (__DET__, with the L1 hand-off and the device plan): each home token's rows are added in
     // the planner's per-token source order (combine_plan det); a ring holds its source's rows in production order,
     // so a ring's head row is taken once it is its token's next. A token's sum no longer depends on arrival timing,
@@ -1247,10 +1363,18 @@ void kernel_main() {
             ++li;
             ++done;
         }
-        for (uint32_t k = 0; k < N; ++k) {
-            if (want[k]) {
-                take_ring(k);
-                for (uint32_t b = 1; b < __BK__; ++b) (void)peek_ring(k);  // (probe SPC_BK: bk rings polled a source)
+        if constexpr (SHARED) {  // (every granted slot, any order; freed slots regranted at once)
+            bool any = false;
+            for (uint32_t i = 0; i < PSL; ++i) {
+                if (own[i] != 0xFF) any = take_slot(i) || any;
+            }
+            if (any) regrant();
+        } else {
+            for (uint32_t k = 0; k < N; ++k) {
+                if (want[k]) {
+                    take_ring(k);
+                    for (uint32_t b = 1; b < __BK__; ++b) (void)peek_ring(k);  // (probe SPC_BK: bk rings polled a source)
+                }
             }
         }
         if (SOWN && oi < SOWN) {
@@ -1323,6 +1447,7 @@ def combine_l1_layout(
     det_pg=0,
     shared_rows=False,
     local_keep=8,
+    landing="rings",
 ):
     """What the combine puts in each core's arena (bytes), as sparse_combine_rf_prepare lays it out: N chips, S home
     tokens a chip, rows W wide (bf16), A accumulators. Pure (no device): the planner's sizing and its reports use it.
@@ -1336,7 +1461,7 @@ def combine_l1_layout(
     PD = ((row_bytes + NP - 1) // NP + 63) // 64 * 64
     SLOT = ISLOT = NP * ((PD + 32 + 63) // 64) * 64
     FUSED = bool(acc_on_ports)
-    RINGS = state_layout(N, A)[6]
+    RINGS = state_layout(N, A, GRANTS if landing == "shared" else 0)[6]
     MAXT = (S + A - 1) // A
     tab_cb = max(256 * 8 + 128, 256 + 64 + (MAXT * det_k + 63) // 64 * 64) if det_k else 256 * 8 + 128
     acc_cb_list = [tab_cb, 2 * NT * TILE, 2 * 32, MAXT * NT * 4096, 2 * NT * TILE] + ([2 * TILE] if l1 else [])
@@ -1381,7 +1506,19 @@ def combine_l1_layout(
 
 
 def combine_auto(
-    N, S, W, n_cells, port_cells, *, arena_bytes, l1=True, depth=8, piece_max=None, a_max=A_MAX, mode=None
+    N,
+    S,
+    W,
+    n_cells,
+    port_cells,
+    *,
+    arena_bytes,
+    l1=True,
+    depth=8,
+    piece_max=None,
+    a_max=A_MAX,
+    mode=None,
+    landing="rings",
 ):
     """The combine's configuration from what the flat plan leaves (n_cells free cells per chip, port_cells of them
     the ports' - the union over the chips) and the arena: ports on their own cells with A = n_cells - port_cells
@@ -1407,7 +1544,7 @@ def combine_auto(
             for qp in (64, 32, 16, 8):
                 lay = combine_l1_layout(
                     N, S, W, A, arena_bytes=arena_bytes, l1=l1, acc_on_ports=fused, inj_slots=qp, depth=depth,
-                    piece_max=piece_max, local_keep=keep,
+                    piece_max=piece_max, local_keep=keep, landing=landing,
                 )  # fmt: skip
                 if not lay["fits"]:
                     last = lay
@@ -1454,6 +1591,7 @@ def sparse_combine_rf_prepare(
     pool_slots=None,
     local_keep=8,
     fill_sink=None,
+    landing="rings",
 ):
     """rows_by_chip[coord] = list of (y row on that chip, home coord, home token t, link[, local expert]). cells: the
     logical (x, y) cells the combine may use (ports nearest their Ethernet cores, accumulators the rest), else the
@@ -1549,9 +1687,14 @@ def sparse_combine_rf_prepare(
     A = len(acc_cores)
     assert N <= 32 and A <= 16, (N, A)
     AP = (A + 3) // 4 * 4
-    CRED, USED, RET, CNT, MISC, HDRS, RINGS = state_layout(N, A)
-    LAYR, LAYO, U0 = state_layout_ext(N, A)
+    SHARED = landing == "shared"
+    assert landing in ("rings", "shared"), landing
+    assert not SHARED or not (deterministic or FUSED), "landing shared: the accumulators apart, nondeterministic"
+    G_ = GRANTS if SHARED else 0
+    CRED, USED, RET, CNT, MISC, HDRS, RINGS = state_layout(N, A, G_)
+    LAYR, LAYO, U0 = state_layout_ext(N, A, G_)
     SHW, PIG = state_layout_pig(N, A)
+    GIDH, GREC = state_layout_grants(N, A, G_) if SHARED else (0, 0)
     run_cells = dict(ports={k: (c.x, c.y) for k, c in port_core.items()}, accs=[(c.x, c.y) for c in acc_cores])
     virt = lambda c: mesh_device.worker_core_from_logical_core(c)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
@@ -1583,7 +1726,7 @@ def sparse_combine_rf_prepare(
     # (not with the deterministic order: a piggybacked row's credits count as returned when it is sent but reach the
     # port only when the home's accumulator takes the row, and that order leaves landed rows in their ring until their
     # token's turn - the row next in order can be the one waiting on those credits: a deadlock)
-    PIGGY = PIGGY and not deterministic
+    PIGGY = PIGGY and not deterministic and landing != "shared"  # (shared: grants ride the snapshots only)
     SE_ON = shared_rows is not None
     assert not SE_ON or l1 is not None, "shared_rows: the L1 hand-off"
     assert not SE_ON or arena is not None, "shared_rows: the staging slots live in the arena"
@@ -1645,6 +1788,7 @@ def sparse_combine_rf_prepare(
     # to its rows); depth = the pool's average per source
     PSL = PSL if ring_depth is None else int(ring_depth) * (N - 1)
     PSL = PSL if pool_slots is None else int(pool_slots)
+    assert not SHARED or PSL < 255, f"landing shared: slot owners are bytes ({PSL} slots)"
     assert PSL >= N - 1, f"combine: no room for one landing slot per source chip ({N - 1} x {SLOT} B)"
     assert PSL < 4096, "combine: a ring's base / depth are 12-bit fields"
     D = PSL // (N - 1)
@@ -1789,6 +1933,10 @@ def sparse_combine_rf_prepare(
         "__DRAIN__": "false" if pr.nodrain else "true",  # (probe: no end-of-call credit drain)
         "__HW__": str(int(pr.hw)),
         "__BK__": str(int(pr.bk)),
+        "__SHARED__": str(int(SHARED)),
+        "__G__": str(max(G_, 1)),
+        "__GIDH__": str(GIDH),
+        "__GREC__": str(GREC),
         "__MRTOT__": str(M_RTOT),
         "__MRDONE__": str(M_RDONE),
         "__MTAKEN__": str(M_TAKEN),
