@@ -104,9 +104,15 @@ inline void _llk_math_wait_for_dest_available_()
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool fused_post_flip = false>
 inline void _llk_math_dest_section_done_()
 {
+    if constexpr (Dst == DstSync::SyncHalf && fused_post_flip)
+    {
+        math_sync_tile_dst_index = 0;
+        dest_section_post_flip();
+        return;
+    }
     set_math_semaphores();
     if constexpr (Dst == DstSync::SyncHalf)
     {

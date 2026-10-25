@@ -158,3 +158,81 @@ inline void llk_matmul_pack(
         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
     }
 }
+
+// Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full, and half sync at LoFi
+// with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output, int throttle_level = 0>
+constexpr bool llk_matmul_block_pack() {
+    if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1) {
+        return false;
+    } else if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
+        return true;
+    } else if constexpr (throttle_level >= 4) {
+        return false;
+    } else {
+        constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
+                                    pack_partial_face[output] != 0;
+        constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
+        return math_fidelity == MathFidelity::LoFi && !(small_tile && float32_out);
+    }
+}
+
+// What one pack run can write back to back: plain format, full 32x32 tiles, one tile per CB page.
+inline bool llk_pack_block_is_contiguous(const std::uint32_t output_id) {
+    const std::uint32_t dst_format = pack_dst_format[output_id];
+    if (IS_BFP_FORMAT(dst_format)) {
+        return false;
+    }
+    if (get_output_num_faces(output_id) != 4 || get_output_face_r_dim(output_id) != FACE_R_DIM ||
+        get_output_partial_face(output_id)) {
+        return false;
+    }
+    const std::uint32_t tile_words = (TILE_R_DIM * TILE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
+    return get_local_cb_interface(output_id).fifo_page_size == tile_words;
+}
+
+// The CB page must fit the packer's W stride.
+inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
+    return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
+}
+
+template <bool is_fp32_dest_acc_en>
+inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
+    std::uint8_t output_id = get_output_id(output);
+
+    LLK_ASSERT_BLOCK(are_packers_configured_correctly(pack_src_format[output_id], pack_dst_format[output_id]));
+    LLK_ASSERT(
+        ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
+        "Dst tile exceeds packer destination capacity for the configured W-stride.");
+
+    SAN_HOOK(execute<OperationPack>(
+        StateVal<Operand<Exu::Pack>::DestWidth32>(is_fp32_dest_acc_en),
+        StateVal<Operand<Exu::Pack>::InputFormat>(pack_src_format[output_id]),
+        StateVal<Operand<Exu::Pack>::OutputFormat>(pack_dst_format[output_id]),
+        StateVal<Operand<Exu::Pack>::FaceHeight>(get_output_face_r_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::TileWidth>(get_output_tile_c_dim(output_id)),
+        StateVal<Operand<Exu::Pack>::NumFaces>(get_output_num_faces(output_id)),
+        StateDiscard<std::uint32_t>(start_tile_index),
+        StateDiscard<std::uint32_t>(ntiles)));
+
+    if (ntiles > 1 && llk_pack_block_is_contiguous(output_id)) {
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
+            get_local_cb_interface(output_id).fifo_page_size * ntiles;
+        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
+            start_tile_index, pack_tile_addr, ntiles);
+    } else if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
+        const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+    } else {
+        for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
+            std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
+            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
+        }
+    }
+}

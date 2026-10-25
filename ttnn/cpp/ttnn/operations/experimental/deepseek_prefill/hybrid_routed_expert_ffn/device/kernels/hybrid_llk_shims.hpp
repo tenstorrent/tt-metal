@@ -88,7 +88,11 @@ HYB_LLK_SHIM inline void hyb_llk_pop_tiles(
 #include "cpack_common.h"
 
 namespace ckernel::packer {
-HYB_LLK_SHIM inline void hyb_program_packer_destination(std::uint32_t addr) { program_packer_destination(addr); }
+// PR #58816 made program_packer_destination a template (keep_output_addr, default true); forward it.
+template <bool keep_output_addr = true>
+HYB_LLK_SHIM inline void hyb_program_packer_destination(std::uint32_t addr) {
+    program_packer_destination<keep_output_addr>(addr);
+}
 
 template <DstSync Dst>
 HYB_LLK_SHIM inline void hyb_select_packer_dest_registers() {
@@ -101,9 +105,10 @@ HYB_LLK_SHIM inline void hyb_select_packer_dest_registers() {
 
 #include "llk_pack_common.h"
 
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+// PR #58816 added <clear_dest, words> to _llk_pack_dest_section_done_; forward them with its defaults.
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool clear_dest = true, std::uint32_t words = LLK_PACK_SECTION_WORDS>
 HYB_LLK_SHIM inline void hyb_llk_pack_dest_section_done_() {
-    _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en>();
+    _llk_pack_dest_section_done_<Dst, is_fp32_dest_acc_en, clear_dest, words>();
 }
 
 #define _llk_pack_dest_section_done_ hyb_llk_pack_dest_section_done_
