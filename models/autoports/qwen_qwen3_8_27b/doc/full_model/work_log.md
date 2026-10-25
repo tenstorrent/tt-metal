@@ -199,3 +199,77 @@ Stage complete; independent review clean-pass. Repository `/home/mvasiljev/tt-me
 ### Runner resume 025039c5 — environment repair
 
 The runner's check-1 and check-1-retry logs both exit127 at `python: command not found`; no model gate executed. Added user-local `/home/mvasiljev/.local/bin/python -> /usr/bin/python3` (already on runner PATH), preserving the installed check script and model implementation. Exact command: `MODEL_DIR=models/autoports/qwen_qwen3_8_27b HF_MODEL=Qwen/Qwen3.8-27B bash .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/prompts/model_bringup_multigoal/06-full-model.check.sh`. Result exit1: degeneration/context pass and six previously reviewed inherited-weight advisories only; multigoal defines1 as advisory and continues. Log: external run directory `06-06-full-model.resume-025039c5.check.log`. No new hardware run or measurement. Benchmark source hashes match current files after mapping the recorded container `/workspace` prefix to this checkout; prior independent clean-pass remains applicable. New telemetry packet `telemetry/packets/025039c5-ad75-41b4-bafc-f4ab8598fd9a.json` starts from the supplied new template and reuses verified existing evidence.
+
+### Runner advisory refutation — attempt 795b8327 (2026-10-25)
+
+Reproduced the supplied bug report using the unmodified installed checker from
+this checkout after the skill environment setup:
+`MODEL_DIR=models/autoports/qwen_qwen3_8_27b HF_MODEL=Qwen/Qwen3.8-27B bash .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/prompts/model_bringup_multigoal/06-full-model.check.sh`.
+Actual result **exit 1**, preserved in `resume_795b8327_check.log`: degeneration
+and native-context checks pass; six weight-copy advisories, no critical finding.
+This is a refutation of treating that advisory exit as evidence of an incomplete
+model, not a claim that the stock script exits 0.
+
+The cause is explicit in installed `scripts/check_agentic_serving.py`:
+`check_memory` sends every `copies > 1` row to `shortfall`; an existing
+`copy_reason` produces level 1, and `main` returns the maximum level. Thus even
+fully evidenced retained copies necessarily return 1. The agentic-serving skill
+explicitly permits measured retention reasons and calls these advisory. The
+original stage goal also requires preserving the optimized decoder strategy.
+
+Concrete controls for all six rows:
+- `gate`, `up`, `gateup`: stage05 `prefill_projection_selection.json` records
+  real-layer host prefill means for layer0 packed 6197.314us versus separate
+  6002.467us, and layer3 packed 6634.490us versus separate 6271.887us. These
+  are inherited projection comparisons, not new full-model/device measurements.
+  `tt/multichip_decoder.py:140` allocates the separate projections and line142
+  the packed representation; `_finish` selects packed decode/one-row and separate
+  multi-row prefill. Removing the copies would discard the selected strategy.
+- `in_norm`, `post_norm`, `norm_shards`: construction at
+  `tt/multichip_decoder.py:135`–138 and distributed norm consumption at line448
+  support the recorded full/sharded residual layouts. The inherited
+  `optimized_multichip_decoder/residual_contract.md` and final all-layer
+  `benchmark_b{1,8,16,32}_perf.json` establish the measured batch-dependent
+  contracts. These are representations of the same norm, not accidental loads.
+- CPU recomputation from `benchmark_b1_perf.json:weight_inventory` exactly
+  equals the ledger sum: **6,522,077,184 bytes/device**. Each row's bytes count
+  its named representation once; `copies` is not an extra multiplier. Target
+  B32 pool 1,056,768 tokens exceeds 32 x 32,768 = 1,048,576. Allocator and reserve
+  reconciliation remains in `memory_capacity_plan.json` and the ledger.
+
+No checker or copy count was changed to suppress the advisories. No runtime
+model repair was warranted by this report. One actual evidence defect was fixed:
+`summarize_full_model.py` previously carried forward the stale agentic status
+`implementation_in_progress` after all clean batch measurements were present.
+It now emits `full_model_measurements_reconciled` when those measurements exist
+and retains the in-progress status otherwise; this status does not assert an
+independent review verdict. Rerunning this CPU-only summarizer changed only that
+status in `doc/agentic_serving.json`.
+
+Existing original completion evidence remains applicable: B1 benchmark provenance
+SHA256 values for all 12 recorded source files match current files (container
+`/workspace` mapped to this checkout). B32 retains the previously reviewed
+historical benchmark/multichip source differences for changes to B1-only paths;
+no fresh all-batch hash equality is claimed. Prior full independent clean-pass is in
+`stage_review_final.md`; implementation checkpoint is
+`8d2790658451b296dd63da7d17a670fc42a61400`. No device commands, new benchmarks,
+profiling, reset, dependency changes or vLLM work were performed in this attempt.
+
+Required local packet was built from the exact supplied template at
+`telemetry/packets/795b8327-1563-4a7d-ba4c-022ce9e3254c.json` under the external
+run directory. CPU checks verified all three benchmark rows are autoregressive,
+4096 input /128 output/B1/concurrency1, then recomputed medians: TTFT
+433.81215003319085ms and 35.186164937945414 tokens/s/user. Six accuracy records
+come from the prefill and teacher-forcing JSON, each over 100 token positions
+from one AIME24 prompt, not 100 problems. Device time/rooflines remain unknown
+with reasons; reduced profiles are not substituted. Prior long-output quality
+and batch/context scope limitations remain disclosed.
+
+Independent xhigh review `/root/advisory_review` returned **clean-pass**, no
+required work; see `stage_review_795b8327.md`. Reviewer independently reran the
+stock checker (exit1/six advisories), verified allocations/consumers, paired
+projection measurements, all four 1253-tensor inventories and ledger totals,
+source provenance, status repair and packet values. Final CPU compilation and
+`git diff --check` pass. The supplied failure is refuted as a completion blocker
+with the stock advisory outcome explicitly retained. Local checkpoint follows;
+no push. Commit receipt is stored in the required external packet.

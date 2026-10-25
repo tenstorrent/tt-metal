@@ -1,0 +1,13 @@
+measured: tt free-running completion [models/autoports/qwen_qwen3_8_27b/doc/full_model/autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 79, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0759}
+measured: hf/tt token agreement (informational) [models/autoports/qwen_qwen3_8_27b/doc/full_model/autoregressive/autoregressive_meta.json] {'matching_tokens': 15, 'compared_tokens': 100}
+measured: tt free-running completion [models/autoports/qwen_qwen3_8_27b/doc/full_model/before_geometry/autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 79, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0759}
+measured: hf/tt token agreement (informational) [models/autoports/qwen_qwen3_8_27b/doc/full_model/before_geometry/autoregressive/autoregressive_meta.json] {'matching_tokens': 15, 'compared_tokens': 100}
+
+No degenerate output detected.
+Context contract OK for models/autoports/qwen_qwen3_8_27b: target=262144, supported=262144 (full HF context).
+ADVISORY: weight family 'in_norm' is held more than once: Inherited full and hidden-sharded norms support measured replicated B1-7 and native-RS B8-32 residual contracts. Bytes in each row count that representation only. See optimized_multichip_decoder/residual_contract.md.
+ADVISORY: weight family 'post_norm' is held more than once: Inherited full and hidden-sharded norms support measured replicated B1-7 and native-RS B8-32 residual contracts. Bytes in each row count that representation only. See optimized_multichip_decoder/residual_contract.md.
+ADVISORY: weight family 'gate' is held more than once: Inherited measured stage05 separate prefill plus packed decode/one-row weights. Bytes in each row count only that named representation; sum rows once. See optimized_multichip_decoder/prefill_projection_selection.json.
+ADVISORY: weight family 'up' is held more than once: Inherited measured stage05 separate prefill plus packed decode/one-row weights. Bytes in each row count only that named representation; sum rows once. See optimized_multichip_decoder/prefill_projection_selection.json.
+ADVISORY: weight family 'gateup' is held more than once: Inherited measured stage05 separate prefill plus packed decode/one-row weights. Bytes in each row count only that named representation; sum rows once. See optimized_multichip_decoder/prefill_projection_selection.json.
+ADVISORY: weight family 'norm_shards' is held more than once: Inherited full and hidden-sharded norms support measured replicated B1-7 and native-RS B8-32 residual contracts. Bytes in each row count that representation only. See optimized_multichip_decoder/residual_contract.md.

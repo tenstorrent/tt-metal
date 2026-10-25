@@ -123,6 +123,6 @@ context['status'] = ('full_model_native_context_and_recorded_batch_pairs_verifie
 context['largest_tested_context_scope'] = 'Full all64layer B1 native prefill262144, nonaligned262141 plus3tokens, and explicit decode input262143 passed finite/capacity checks. HF accuracy at native context was not measured in this stage; prior per-layer accuracy is separately scoped.'
 write(root/'context_contract.json', context)
 agentic = json.loads((root/'agentic_serving.json').read_text())
-agentic.update(ledger=ledger, tested_batch_sizes=list(benchmarks), batch_evidence={str(a['batch']):['full_model/'+a['evidence']] for a in allocations}, performance_evidence='full_model/performance.json', performance_status='measured_for_recorded_batches', performance_note='All-layer autoregressive token-out measurements only. Teacher-forcing and reduced profiler results are separate.')
+agentic.update(status=('full_model_measurements_reconciled' if complete_clean else 'implementation_in_progress'), ledger=ledger, tested_batch_sizes=list(benchmarks), batch_evidence={str(a['batch']):['full_model/'+a['evidence']] for a in allocations}, performance_evidence='full_model/performance.json', performance_status='measured_for_recorded_batches', performance_note='All-layer autoregressive token-out measurements only. Teacher-forcing and reduced profiler results are separate.')
 write(root/'agentic_serving.json', agentic)
 print(json.dumps(dict(performance=measurements, allocations=allocations), indent=2))

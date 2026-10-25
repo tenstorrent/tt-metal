@@ -18,7 +18,7 @@
     16,
     32
   ],
-  "status": "implementation_in_progress",
+  "status": "full_model_measurements_reconciled",
   "stage_scope": "Full text model; no vLLM",
   "memory_evidence": [
     "full_model/memory_capacity_plan.json"

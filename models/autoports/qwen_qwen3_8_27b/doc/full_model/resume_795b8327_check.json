@@ -1,0 +1,9 @@
+{
+  "command": "MODEL_DIR=models/autoports/qwen_qwen3_8_27b HF_MODEL=Qwen/Qwen3.8-27B bash .codex/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.21/prompts/model_bringup_multigoal/06-full-model.check.sh",
+  "exit_code": 1,
+  "advisories": 6,
+  "critical_findings": 0,
+  "disposition": "refuted_as_completion_blocker; retained weight representations have measured reasons",
+  "log": "resume_795b8327_check.log",
+  "checker_sha256": "71fd3140975dfdb08f2e7d905ac108882190ffa2a9f216657c593e859cf813cb"
+}
