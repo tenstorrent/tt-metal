@@ -420,15 +420,24 @@ class Qwen38TTNNPLERowsState:
     mesh_contract: Qwen38MeshContract
     token_context: tuple[int, int] | None = None
     owns_history: bool = (
-        True  # False: ``history`` is another rows state's buffer (the long chunk shares the 32-row one)
+        True  # False: ``history`` is another rows state's history buffer (the long chunk shares the 32-row one)
     )
+    # The slab's padded-pass carry (``slab_blocks`` > 0): the slab runs its PLE one 128-row block at a time, each block
+    # overwriting ``normalized`` and ``history``, so the nine history rows before the first pad row may sit in an earlier
+    # block.  ``snapshot`` ``[1, 9 + 128, 4, 640]`` keeps the ``[history | normalized]`` window of the block that holds the
+    # last real row: block b's pass takes ``snapshot <- snapshot * keep[b] + window * take[b]`` with the host-written BF16
+    # scalars ``keep`` / ``take`` (exact: x * 1.0 + y * 0.0), and the eager hand-off reads its rows out.
+    snapshot: Any = None
+    snapshot_keep: tuple[Any, ...] = ()
+    snapshot_take: tuple[Any, ...] = ()
 
     @classmethod
     def allocate(
-        cls, mesh_device, mesh_contract: Qwen38MeshContract, *, rows: int, history=None
+        cls, mesh_device, mesh_contract: Qwen38MeshContract, *, rows: int, history=None, slab_blocks: int = 0
     ) -> "Qwen38TTNNPLERowsState":
         """``history`` hands over another rows state's history buffer: the two row forms then carry one history
-        (and one host context, kept by the caller) and need no sync between them."""
+        (and one host context, kept by the caller) and need no sync between them.  ``slab_blocks`` (the 128-row state a
+        slab runs per block): the padded-pass snapshot and its per-block scalars."""
 
         mesh_contract.validate_mesh(mesh_device)
         if not 1 <= rows <= 32 and rows != LONG_CHUNK_ROWS and not is_slab_rows(rows):
@@ -448,11 +457,42 @@ class Qwen38TTNNPLERowsState:
         owns_history = history is None
         if owns_history:
             history = upload_zero(CONV_STATE_LENGTH)
+        extra: list[Any] = []
         try:
-            state = cls(rows, history, upload_zero(rows), mesh_contract, owns_history=owns_history)
+            snapshot, keep, take = None, (), ()
+            if slab_blocks:
+                snapshot = upload_zero(CONV_STATE_LENGTH + rows)
+                extra.append(snapshot)
+
+                def scalar(value: float):
+                    tensor = ttnn.from_torch(
+                        torch.full((1, 1, 1, 1), value, dtype=torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh_device),
+                    )
+                    extra.append(tensor)
+                    return tensor
+
+                last = slab_blocks - 1  # the full pass's flags: the last block holds the last row
+                keep = tuple(scalar(0.0 if block == last else 1.0) for block in range(slab_blocks))
+                take = tuple(scalar(1.0 if block == last else 0.0) for block in range(slab_blocks))
+            state = cls(
+                rows,
+                history,
+                upload_zero(rows),
+                mesh_contract,
+                owns_history=owns_history,
+                snapshot=snapshot,
+                snapshot_keep=keep,
+                snapshot_take=take,
+            )
             state.validate()
             return state
         except BaseException:
+            _deallocate(*extra)
             if owns_history:
                 _deallocate(history)
             raise
@@ -468,6 +508,12 @@ class Qwen38TTNNPLERowsState:
             self.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.HIDDEN_SHARDED, shard_dim=3)
         if _tensor_key(self.history) == _tensor_key(self.normalized):
             raise RuntimeError("PLE rows history and normalized rows must be distinct buffers")
+        if self.snapshot is not None:
+            expected = _rows_residual_shape(CONV_STATE_LENGTH + self.rows)
+            if _shape(self.snapshot) != expected or self.snapshot.dtype != ttnn.bfloat16:
+                raise RuntimeError(f"PLE rows snapshot must be BF16 {expected}, got {_shape(self.snapshot)}")
+            if len(self.snapshot_keep) != len(self.snapshot_take) or not self.snapshot_keep:
+                raise RuntimeError("PLE rows snapshot needs one keep and one take scalar per slab block")
         if self.token_context is not None and (
             len(self.token_context) != NGRAM_SIZE - 1
             or any(isinstance(value, bool) or type(value) is not int for value in self.token_context)
@@ -506,7 +552,11 @@ class Qwen38TTNNPLERowsState:
         state.validate()
 
     def deallocate(self) -> None:
-        _deallocate(*((self.history,) if self.owns_history else ()), self.normalized)
+        _deallocate(
+            *((self.history,) if self.owns_history else ()),
+            self.normalized,
+            *(() if self.snapshot is None else (self.snapshot, *self.snapshot_keep, *self.snapshot_take)),
+        )
 
 
 @dataclass
@@ -1281,8 +1331,10 @@ class Qwen38TTNNPLE:
     # Assumption to confirm on hardware: rms_norm_post_all_gather applies the [1,1,4,640] per-branch
     # weight per tile row, so it is reused for every token (row 0 must match the 1-row path).
 
-    def allocate_rows_state(self, rows: int, *, history=None) -> Qwen38TTNNPLERowsState:
-        return Qwen38TTNNPLERowsState.allocate(self.mesh_device, self.mesh_contract, rows=rows, history=history)
+    def allocate_rows_state(self, rows: int, *, history=None, slab_blocks: int = 0) -> Qwen38TTNNPLERowsState:
+        return Qwen38TTNNPLERowsState.allocate(
+            self.mesh_device, self.mesh_contract, rows=rows, history=history, slab_blocks=slab_blocks
+        )
 
     def _validate_rows_residual(self, tensor, rows: int, *, label: str) -> None:
         expected = _rows_residual_shape(rows)
@@ -1761,6 +1813,71 @@ class Qwen38TTNNPLE:
         self._validate_rows_residual(history, CONV_STATE_LENGTH, label="PLE rows full-commit history")
         _copy_inplace(history, rows_state.history, label="PLE rows history")
         _deallocate(history)
+
+    def snapshot_window(self, rows_state: Qwen38TTNNPLERowsState, block: int) -> None:
+        """The slab's padded-pass carry: ``snapshot <- snapshot * keep[block] + [history | normalized] * take[block]``
+        (called after the block's injection, before its history commit).  The host-written scalars are 1.0 / 0.0 in an
+        exact multiply and add, so only the block that holds the last real row lands in the snapshot, bit for bit."""
+
+        rows_state.validate()
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        window = self._conv_window_rows(rows_state)
+        kept = ttnn.multiply(rows_state.snapshot, rows_state.snapshot_keep[block], memory_config=dram)
+        taken = ttnn.multiply(window, rows_state.snapshot_take[block], memory_config=dram)
+        _deallocate(window)
+        landed = ttnn.add(kept, taken, output_tensor=rows_state.snapshot, fast_and_approximate_mode=False)
+        if landed is not None and _tensor_key(landed) != _tensor_key(rows_state.snapshot):
+            raise RuntimeError("PLE rows snapshot did not land in its persistent buffer")
+        _deallocate(kept, taken)
+
+    def commit_padded_history(self, rows_state: Qwen38TTNNPLERowsState, real_rows: int) -> None:
+        """Eager hand-off after a padded 128-row chunk or slab with ``real_rows >= 9`` real rows: ``history`` <- the nine
+        normalized rows before the first pad row (the history the pass's own full commit left holds its last nine rows,
+        pad included).  The 128-row chunk reads them out of ``normalized``; the slab out of the snapshot window of the block
+        that holds the last real row (window rows ``o + 1 .. o + 9`` for the last real row at offset ``o`` of its block).
+
+        The rows are picked by one exact 0/1 matmul (the tokens permuted last, a ``[W, 32]`` select uploaded for the call:
+        a program whose shapes never change, so a closed program-cache guard sees no new program); the select's column k
+        holds a one at the window row of history row k."""
+
+        rows_state.validate()
+        if not CONV_STATE_LENGTH <= real_rows:
+            raise ValueError(f"a padded PLE history needs at least {CONV_STATE_LENGTH} real rows, got {real_rows}")
+        if rows_state.snapshot is None:
+            source, first = rows_state.normalized, real_rows - CONV_STATE_LENGTH
+        else:
+            source, first = rows_state.snapshot, (real_rows - 1) % rows_state.rows + 1
+        window_rows = _shape(source)[1]
+        host = torch.zeros(1, 1, window_rows, 32, dtype=torch.bfloat16)
+        for index in range(CONV_STATE_LENGTH):
+            host[0, 0, first + index, index] = 1.0
+        select = ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+        )
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        try:
+            tokens_last = ttnn.permute(source, (0, 2, 3, 1), memory_config=dram)  # [1, 4, 640, W]
+            picked = ttnn.matmul(
+                tokens_last, select, memory_config=dram, compute_kernel_config=self.compute_config
+            )  # [1, 4, 640, 32]: column k is window row first + k
+            _deallocate(tokens_last)
+            rows = ttnn.permute(picked, (0, 3, 1, 2), memory_config=dram)  # [1, 32, 4, 640]
+            _deallocate(picked)
+            history = ttnn.slice(
+                rows, (0, 0, 0, 0), (1, CONV_STATE_LENGTH, RESIDUAL_BRANCHES, LOCAL_HIDDEN_SIZE), memory_config=dram
+            )
+            _deallocate(rows)
+            history.update_tensor_topology(rows_state.history.tensor_topology())
+            self._validate_rows_residual(history, CONV_STATE_LENGTH, label="PLE rows padded history")
+            _copy_inplace(history, rows_state.history, label="PLE rows history")
+            _deallocate(history)
+        finally:
+            _deallocate(select)
 
     @staticmethod
     def commit_rows_host(

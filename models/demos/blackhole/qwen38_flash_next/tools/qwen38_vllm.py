@@ -28,7 +28,10 @@ The prefill form is the environment's (``prefill_form``): ``QWEN38_PREFILL_SLAB`
 with a prefill slab of that many rows ahead of the 128-row and 32-row chunks; ``0`` or ``off`` serves without the
 slab, where ``QWEN38_LONG_CHUNKS=1`` still turns the 128-row chunks on.  The slab's resident dense weights are
 admitted against the free DRAM when the chain opens; a refusal ends the start-up naming the knob, never a silent
-fallback.  One log line after the open states the form the chain opened in.
+fallback.  ``QWEN38_PREFILL_PLAN`` (``cost``, the default, or ``legacy``; anything else is refused by name) picks how a
+prompt's rows are covered by those forms: ``cost`` the cheapest sequence of passes with one padded last pass, ``legacy``
+the slabs, then 128-row chunks, then 32-row chunks and a padded 32-row tail (``tools/qwen38_prefill_driver``).  One log
+line after the open states the form the chain opened in and the plan.
 
 Batch mode (``max_num_seqs`` 2..32, P2a): one plain-lane-body trace with B = ``max_num_seqs`` lanes, residue-free, over
 a paged KV pool that IS vLLM's block pool (page size = block size, page id = vLLM block id; vLLM never hands out block
@@ -77,6 +80,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     Qwen38ChatChainError,
     Qwen38TracedChain,
 )
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_prefill_driver import prefill_plan
 from models.demos.blackhole.qwen38_flash_next.tools.runtime_admission import (
     RuntimeAdmissionError,
     git_identity,
@@ -340,13 +344,15 @@ def prefill_form(environ: Mapping[str, str] | None = None) -> tuple[bool, int | 
     return long_chunks, slab_rows
 
 
-def describe_prefill_form(long_chunks: bool, slab_rows: int | None) -> str:
-    """The chunk kinds a prompt runs through, largest first (the chunk driver's order)."""
+def describe_prefill_form(long_chunks: bool, slab_rows: int | None, plan: str | None = None) -> str:
+    """The chunk kinds a prompt runs through, largest first (the chunk driver's order), and with ``plan`` the plan mode
+    that covers a prompt's rows with them (``QWEN38_PREFILL_PLAN``)."""
 
     parts = [f"{slab_rows}-row slabs"] if slab_rows is not None else []
     if long_chunks:
         parts.append("128-row chunks")
-    return ", then ".join(parts + ["32-row chunks"])
+    form = ", then ".join(parts + ["32-row chunks"])
+    return form if plan is None else f"{form}; plan: {plan}"
 
 
 def prefill_dense_refusal(error: BaseException) -> ValueError | None:
@@ -569,6 +575,7 @@ class Qwen38ForCausalLM:
         if optimizations not in OPTIMIZATIONS:
             raise ValueError(f"optimizations must be one of {OPTIMIZATIONS}, got {optimizations!r}")
         long_chunks, slab_rows = prefill_form()  # refused by name before any library call
+        plan = prefill_plan()  # ditto: QWEN38_PREFILL_PLAN
         shape = tuple(int(extent) for extent in mesh_device.shape)
         if shape != MESH_SHAPE or mesh_device.get_num_devices() != TP_SIZE:
             raise ValueError(
@@ -674,7 +681,7 @@ class Qwen38ForCausalLM:
                     f"({LONG_CHUNKS_VARIABLE}=1 keeps the 128-row chunks)"
                 ) from error
             logger.info(
-                f"prefill form: {describe_prefill_form(long_chunks, slab_rows)}"
+                f"prefill form: {describe_prefill_form(long_chunks, slab_rows, plan)}"
             )  # the form the chain opened in
             return chain
 

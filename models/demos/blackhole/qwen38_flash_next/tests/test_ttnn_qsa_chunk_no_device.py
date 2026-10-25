@@ -170,6 +170,8 @@ def test_chunk_constants_and_inputs_declare_the_device_fields() -> None:
         "row_index_row",
         # The slab's hoist decision for its block masks (qsa_mask_hoist; None for the chunk forms).
         "hoist_masks",
+        # The slab's padded-pass row mask (host-written: 1 real row, 0 pad row; None for the chunk forms).
+        "pad_rows_col",
     )
     # compressed_tile_i32: the 128-row chunk's / the slab's page table (None for the 32-row forms);
     # complete_blocks_col: the slab's mask column (None for the chunk forms); block_masks: the slab's hoisted

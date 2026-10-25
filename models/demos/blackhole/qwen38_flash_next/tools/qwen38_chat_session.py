@@ -3168,6 +3168,11 @@ class Qwen38TracedChain:
             synchronize()
             marker("after-chat-mtp-warm-pass")
 
+        def warm_padded_hand_off(tail_state: Any, real_rows: int) -> None:
+            model.write_chunk_pad(tail_state, real_rows)
+            model.finish_prefill(state, chunk_state, real_rows, tail=(tail_state, real_rows))
+            synchronize()
+
         if slab_rows is not None:
             # One eager slab from the reset state: its programs compile here, before the miss guard.
             marker("before-chat-slab-warm-pass")
@@ -3189,6 +3194,10 @@ class Qwen38TracedChain:
             actual = state.position.read()
             if actual != slab_rows:
                 raise Qwen38ChatChainError(f"warm slab position counter {actual} vs expected {slab_rows}")
+            if chain_mtp is None:
+                # The padded slab's hand-off (a plain chain's cost plan): the kept-tile copies and the PLE history rows
+                # are eager programs, compiled here; the next warm block resets the generic state this leaves behind.
+                warm_padded_hand_off(slab_state, slab_rows - 5)
             marker("after-chat-slab-warm-pass")
         if long_chunks:
             # One eager 128-row chunk from the reset state: its programs compile here, before the miss guard (with
@@ -3211,6 +3220,8 @@ class Qwen38TracedChain:
             actual = state.position.read()
             if actual != LONG_CHUNK_ROWS:
                 raise Qwen38ChatChainError(f"warm long chunk position counter {actual} vs expected {LONG_CHUNK_ROWS}")
+            if chain_mtp is None:
+                warm_padded_hand_off(long_chunk_state, LONG_CHUNK_ROWS - 5)  # the padded 128-row chunk's, as the slab's
             marker("after-chat-long-chunk-warm-pass")
         if chunked_prefill:
             # One eager chunk from the reset state (the chunk body's programs compile here) and both hand-off

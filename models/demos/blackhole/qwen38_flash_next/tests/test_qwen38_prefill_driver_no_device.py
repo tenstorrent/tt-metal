@@ -318,7 +318,7 @@ def test_driver_source_pins() -> None:
         "pending = self._prepare(\n                    plan, starts, index + 1, ple_context, position, positions, features, feature_cursor\n                )",
         "ttnn.event_synchronize(ttnn.record_event(self.mesh, cq_id=0))",
         "between_chunks(row_offset, len(remaining))",
-        "self.model.finish_prefill(self.state, self.chunk_state, position, rope_shift=rope_shift)",
+        "self.model.finish_prefill(\n                self.state,\n                self.chunk_state,\n                position,\n                rope_shift=rope_shift,",
     )
     positions = [run.index(fragment) for fragment in order]
     assert positions == sorted(positions)
@@ -332,7 +332,7 @@ def test_driver_source_pins() -> None:
         and "positions=chunk_positions, features=chunk_features" in prepare
     )
     assert "chunk_features, feature_cursor = vision_splice.split_features(rows, features, feature_cursor)" in prepare
-    assert "rows = rows + [self.pad_token_id] * (CHUNK_ROWS - len(rows))" in prepare
+    assert "rows = rows + [self.pad_token_id] * (self._form_rows(kind) - len(rows))" in prepare
     # The host half (the lookup and the packing) is timed apart from the copies' enqueue and the slab's event wait.
     assert run.index("slab_prepare_ms.append(prepare_ns / 1_000_000)") < run.index(
         "slab_upload_ms.append((replay_started_ns - upload_started_ns)"

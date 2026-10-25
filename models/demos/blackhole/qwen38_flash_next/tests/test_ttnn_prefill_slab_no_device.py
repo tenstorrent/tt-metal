@@ -481,6 +481,7 @@ def test_driver_runs_slabs_then_long_then_short_chunks(driver, start: int, count
         forced_step=lambda token, context: context,
         long_chunk_state=states[128],
         slab_state=states[SLAB],
+        plan="legacy",  # these pins are the legacy plan's: slabs, long chunks, full 32-row chunks, the padded tail
     )
     result = prefill.run(tokens, start_position=start, ple_context=None)
     aligned = driver_module.alignment_steps(start, count)
@@ -550,6 +551,7 @@ def test_driver_prepares_the_next_slab_while_the_current_one_replays(monkeypatch
         long_chunk_trace_id=traces["long"],
         slab_state=states[SLAB],
         slab_trace_id=traces["slab"],
+        plan="legacy",
     )
     result = prefill.run(tokens, start_position=0, ple_context=None)
 

@@ -335,8 +335,9 @@ def test_the_commit_takes_the_epilogues_history_tile_under_the_form():
     assert _squash('_copy_inplace(rows_state.history_next, rows_state.history, label="GDN slab history")') in _squash(
         source[fused_at:slab_at]
     )
-    # the row-shift branch the slab used before, and the 32/128-row select, are both still there
-    assert _squash("last_rm = ttnn.to_layout(last_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)") in _squash(source)
+    # the unfused slab takes the next history from the real rows by the host-written pad select (the row-shift branch
+    # it used before could not follow a padded last pass), and the 128-row form by history_select_full
+    assert _squash("rows_state.constants.pad.history_select,") in _squash(source[slab_at:])
     assert _squash("rows_state.constants.history_select_full,") in _squash(source)
 
 

@@ -1279,7 +1279,9 @@ class Qwen38TTNNDecoderLayer:
         try:
             if self.ple is not None:
                 ple = self.ple.allocate_rows_state(
-                    LONG_CHUNK_ROWS if is_slab_rows(rows) else rows, history=None if base is None else base.ple.history
+                    LONG_CHUNK_ROWS if is_slab_rows(rows) else rows,
+                    history=None if base is None else base.ple.history,
+                    slab_blocks=rows // LONG_CHUNK_ROWS if is_slab_rows(rows) else 0,
                 )
             moe = Qwen38TTNNMoE(
                 self.mlp.mesh_device,
@@ -1373,6 +1375,7 @@ class Qwen38TTNNDecoderLayer:
             rows_block.update_tensor_topology(prepared.embedding_rows.tensor_topology())
             block_prepared = Qwen38TTNNPLERowsPreparedInput(rows_block, (), ())
             blocks.append(self.ple.inject_rows(residual_block, block_prepared, rows_state))
+            self.ple.snapshot_window(rows_state, start // LONG_CHUNK_ROWS)  # the padded pass's carry (see the state)
             self.ple.commit_rows_full(rows_state)
             block_prepared.release()
         _deallocate_unique(residual_rows)
@@ -1484,6 +1487,32 @@ class Qwen38TTNNDecoderLayer:
         _deallocate_unique(mlp_result.hidden_sharded, mlp_gr_state.residual, mlp_gr_state.injection)
         self._validate_residual_rows(residual, label="chunk decoder-layer output residual rows", rows=rows)
         return residual
+
+    def hand_off_padded_tail(
+        self,
+        state: Qwen38TTNNDecoderLayerChunkState,
+        tail: Qwen38TTNNDecoderLayerChunkState,
+        *,
+        real_rows: int,
+    ) -> None:
+        """Eager, before :meth:`finish_chunk_state_inplace`, after a prefill whose last pass was a padded 128-row chunk or
+        slab (``tail``) with ``real_rows`` real rows: the carries the hand-off reads from the 32-row state take the
+        real rows' values.  A QSA layer's kept ``[v|k]`` slab and raw keys: the 32-row tile that holds the last real row
+        (rows past it are the padded rows' values, which the next replay rewrites or never gathers); skipped when the
+        real rows end on a tile boundary (the hand-off then reads no kept row).  The PLE layer's history: the nine rows
+        before the first pad row.  A GDN layer's conv history and recurrent state are already the real rows' (the pass
+        committed them through its pad inputs); nothing to do."""
+
+        self._validate_chunk_state(state)
+        self._validate_chunk_state(tail)
+        if state.rows != CHUNK_ROWS or tail.rows == CHUNK_ROWS:
+            raise ValueError(f"a padded tail hands over to the 32-row state from a longer form, got {tail.rows} rows")
+        if not 1 <= real_rows < tail.rows:
+            raise ValueError(f"a padded {tail.rows}-row pass holds 1..{tail.rows - 1} real rows, got {real_rows}")
+        if isinstance(self.attention, Qwen38TTNNQSA) and real_rows % CHUNK_ROWS:
+            self.attention.copy_kept_tile(tail.attention, state.attention, tile=(real_rows - 1) // CHUNK_ROWS)
+        if self.ple is not None:
+            self.ple.commit_padded_history(tail.ple, real_rows)
 
     def finish_chunk_state_inplace(
         self,

@@ -432,6 +432,7 @@ def driver(monkeypatch):
         forced_step=lambda token, context: (2 if context is None else context[1], token),
         long_chunk_state="long_state",
         long_chunk_trace_id=LONG_TRACE_ID,
+        plan="legacy",  # these pins are the legacy plan's: the long chunks, the full 32-row chunks, the padded tail
     )
     return SimpleNamespace(model=model, log=log, prefill=prefill)
 

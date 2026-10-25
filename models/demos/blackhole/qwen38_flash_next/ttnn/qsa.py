@@ -1327,6 +1327,12 @@ class Qwen38TTNNQSAChunkConstants:
     # slab_hoisted_mask_admission; None for the chunk forms and when the policy does not name the form.
     # derive_qsa_chunk_inputs hoists the masks when it says so and leaves them to the layers otherwise.
     hoist_masks: Qwen38HoistedMaskAdmission | None = None
+    # The slab's padded-pass row mask (UINT32 ROW_MAJOR ``[1,1,rows,1]``, host-written by ``write_chunk_pad``: 1 for a real
+    # row, 0 for a pad row; all ones on a full pass).  A pad row's complete-block count is zeroed, so every block of its
+    # score row is hidden (exactly the mask value, whatever the pad row's query) and its top-k block ids are the same for
+    # every pad content: the block-shared attention kernel builds one block union per tile of queries, so a real row of the
+    # boundary tile would otherwise see the pad rows' content-dependent selections through the union's chunking.
+    pad_rows_col: Any = None
 
     @property
     def block_tiles(self) -> int:
@@ -1400,6 +1406,11 @@ class Qwen38TTNNQSAChunkConstants:
                 page_offsets=upload_uint32("page_offsets"),
                 row_index_row=upload_uint32("row_index_row"),
                 hoist_masks=hoist_masks,
+                pad_rows_col=(
+                    _upload_uint32(mesh_device, mesh_contract, torch.ones(1, 1, rows, 1), layout=ttnn.ROW_MAJOR_LAYOUT)
+                    if slab
+                    else None
+                ),
             )
         except BaseException:
             _deallocate(*uploaded)
@@ -1410,6 +1421,7 @@ class Qwen38TTNNQSAChunkConstants:
             *(
                 tensor
                 for tensor in (
+                    self.pad_rows_col,
                     self.arange32_lanes,
                     self.block_start_lanes,
                     self.row_index_blocks,
@@ -1490,6 +1502,12 @@ def _derive_slab_tile_inputs(position_scalar, chunk: Qwen38TTNNQSAChunkConstants
     context_rows = ttnn.add(chunk.row_index_col, position_scalar, memory_config=dram)
     context_rows_plus = ttnn.add(context_rows, 1, memory_config=dram)
     complete_rows_rm = ttnn.bitwise_right_shift(context_rows_plus, 2, memory_config=dram)
+    pad_rows_col = getattr(chunk, "pad_rows_col", None)
+    if pad_rows_col is not None:
+        # A padded pass's pad rows complete no block (x * 1 is exact on every real row of a full pass).
+        masked_rows = ttnn.multiply(complete_rows_rm, pad_rows_col, memory_config=dram)
+        _deallocate(complete_rows_rm)
+        complete_rows_rm = masked_rows
     complete_blocks_col = ttnn.to_layout(complete_rows_rm, ttnn.TILE_LAYOUT, memory_config=dram)
     _deallocate(context_rows, context_rows_plus, complete_rows_rm)
     # The query positions P + j as one row: the block-shared attention kernel's positions input (the same add on
@@ -6447,6 +6465,52 @@ class Qwen38TTNNQSA:
         output = self._project_output_rows(local_attention, full_hidden, constants)
         _deallocate(full_hidden)
         return output
+
+    def copy_kept_tile(
+        self, source: Qwen38TTNNQSAChunkState, destination: Qwen38TTNNQSAChunkState, *, tile: int
+    ) -> None:
+        """Eager: the 32-row tile ``tile`` of a longer form's kept ``[v|k]`` slab and raw keys becomes the 32-row
+        state's kept rows, the ones :meth:`handoff_chunk_state` reads.  A prefill that ends inside a padded 128-row chunk or
+        slab hands over from the tile that holds its last real row (``tile = (real_rows - 1) // 32``).
+
+        One exact 0/1 matmul per buffer (HiFi4, fp32 accumulation) with a ``[32, rows]`` select uploaded for the call and
+        written into the destination: a program whose shapes never change with the tile, so a closed program-cache guard
+        sees no new program at the hand-off (a slice at a variable offset would be one)."""
+
+        self._validate_chunk_state(source)
+        self._validate_chunk_state(destination)
+        if destination.rows != CHUNK_ROWS or not 0 <= tile < source.rows // CHUNK_ROWS:
+            raise ValueError(
+                f"kept tile {tile} of a {source.rows}-row state goes to the {CHUNK_ROWS}-row state, "
+                f"got {destination.rows} rows"
+            )
+        host = torch.zeros(1, 1, CHUNK_ROWS, source.rows, dtype=torch.bfloat16)
+        for row in range(CHUNK_ROWS):
+            host[0, 0, row, tile * CHUNK_ROWS + row] = 1.0
+        select = ttnn.from_torch(
+            host,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+        )
+        try:
+            for label, kept, target in (
+                ("kept KV slab", source.kept_kv, destination.kept_kv),
+                ("kept raw keys", source.kept_raw, destination.kept_raw),
+            ):
+                landed = ttnn.matmul(
+                    select,
+                    kept,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_config,
+                    optional_output_tensor=target,
+                )
+                if landed is not None and _tensor_key(landed) != _tensor_key(target):
+                    raise RuntimeError(f"QSA {label} tile hand-over was not in place")
+        finally:
+            _deallocate(select)
 
     def handoff_chunk_state(
         self,

@@ -59,6 +59,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROWS,
     LONG_CHUNK_ROWS,
     MESH_SHAPE,
+    PADDED_PASS_MIN_ROWS,
     Qwen38MeshContract,
     Qwen38TTNNDevicePosition,
     Qwen38TTNNDevicePositionRow,
@@ -2842,6 +2843,8 @@ class Qwen38TTNNTextModel:
                 layer.reset_chunk_state_inplace(layer_chunk, layer_state)
             if chunk_state.accepted is not None:
                 self.write_chunk_accepted(chunk_state, CHUNK_ROWS - 1)
+            elif chunk_state.rows_constants.pad is not None:
+                self.write_chunk_pad(chunk_state, None)  # the 128-row form and the slab: a full pass
         except BaseException as error:
             self._mark_poisoned("reset_chunk_state_inplace", 0, error)
 
@@ -2859,6 +2862,63 @@ class Qwen38TTNNTextModel:
             mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
         )
         ttnn.copy_host_to_device_tensor(host, chunk_state.accepted)
+
+    def write_chunk_pad(self, chunk_state: Qwen38TTNNTextModelChunkState, real_rows: int | None) -> None:
+        """Host writes of the padded-pass inputs of a 128-row chunk or a slab (outside any trace): the GDN row masks and
+        history select (``gdn.pad_input_images``) and, for a slab, the PLE snapshot's per-block scalars, for a pass whose
+        first ``real_rows`` rows are real and the rest padding; ``None`` (or every row) is the full pass.  The 32-row
+        form pads through :meth:`write_chunk_accepted`.  One trace serves every real-row count: only these inputs change.
+        """
+
+        self._validate_chunk_state(chunk_state)
+        pad = chunk_state.rows_constants.pad
+        rows = chunk_state.rows
+        if pad is None:
+            raise ValueError(
+                f"the {rows}-row chunk state has no pad inputs (the 32-row form pads through its accept scalar)"
+            )
+        if real_rows is not None and (isinstance(real_rows, bool) or type(real_rows) is not int):
+            raise ValueError(f"real rows must be an int or None, got {real_rows!r}")
+        if real_rows is not None and not PADDED_PASS_MIN_ROWS <= real_rows <= rows:
+            raise ValueError(
+                f"a padded {rows}-row pass holds {PADDED_PASS_MIN_ROWS}..{rows} real rows, got {real_rows}"
+            )
+        images = gdn_module.pad_input_images(rows, real_rows)
+
+        def write(host: torch.Tensor, dtype, target) -> None:
+            tensor = ttnn.from_torch(
+                host.contiguous(),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(tensor, target)
+
+        write(images["row_mask"], ttnn.float32, pad.row_mask)
+        write(images["history_select"], ttnn.bfloat16, pad.history_select)
+        if pad.row_mask_c is not None:
+            write(images["row_mask_c"], ttnn.float32, pad.row_mask_c)
+        qsa_pad = chunk_state.qsa_chunk_constants.pad_rows_col
+        if qsa_pad is not None:
+            keep = torch.zeros(1, 1, rows, 1, dtype=torch.int64)
+            keep[:, :, : rows if real_rows is None else real_rows] = 1
+            tensor = ttnn.from_torch(
+                keep.to(torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(tensor, qsa_pad)
+        ple = chunk_state.layers[PLE_CHECKPOINT_LAYER].ple
+        if ple is not None and ple.snapshot is not None:
+            blocks = len(ple.snapshot_keep)
+            target = blocks - 1 if real_rows is None else (real_rows - 1) // LONG_CHUNK_ROWS
+            for block in range(blocks):
+                flag = 1.0 if block == target else 0.0
+                write(
+                    torch.full((1, 1, 1, 1), 1.0 - flag, dtype=torch.bfloat16), ttnn.bfloat16, ple.snapshot_keep[block]
+                )
+                write(torch.full((1, 1, 1, 1), flag, dtype=torch.bfloat16), ttnn.bfloat16, ple.snapshot_take[block])
 
     def chunk_rope_host_rows(
         self, chunk_state: Qwen38TTNNTextModelChunkState, positions: torch.Tensor
@@ -3125,9 +3185,14 @@ class Qwen38TTNNTextModel:
         prefilled: int,
         *,
         rope_shift: int = 0,
+        tail: tuple[Qwen38TTNNTextModelChunkState, int] | None = None,
     ) -> None:
         """Eager hand-off from the chunk body to the 1-row generic body after a prefill of ``prefilled`` positions
         (0 .. prefilled - 1; the last chunk padded past prefilled % 32 with the accept scalar prefilled % 32 - 1).
+        ``tail`` ``(chunk state, real rows)``: the last pass was a padded 128-row chunk or slab of that state with that
+        many real rows (its pad inputs written, ``write_chunk_pad``): the carries this hand-off reads from the 32-row
+        state take the real rows' values first (``Qwen38TTNNDecoderLayer.hand_off_padded_tail``), and the pad inputs go
+        back to a full pass.
 
         ``P`` becomes ``prefilled`` (the next replay's trace key: residue prefilled % 4, regime 0) and the rotary
         shift ``S`` becomes ``rope_shift`` (the prefilled sequence's ``mrope`` shift: 0 for text); the GDN ring
@@ -3146,7 +3211,16 @@ class Qwen38TTNNTextModel:
                 f"prefilled position count must be an int in [0,{self.allocated_context}], got {prefilled!r}"
             )
         require_rope_shift(rope_shift, prefilled)
+        if tail is not None:
+            tail_state, tail_rows = tail
+            self._validate_chunk_state(tail_state)
+            if tail_state.rows == CHUNK_ROWS or tail_state.rows_constants.pad is None:
+                raise ValueError(f"a padded tail is a 128-row chunk or a slab, got {tail_state.rows} rows")
         try:
+            if tail is not None:
+                for layer, layer_chunk, tail_chunk in zip(self.layers, chunk_state.layers, tail_state.layers):
+                    layer.hand_off_padded_tail(layer_chunk, tail_chunk, real_rows=tail_rows)
+                self.write_chunk_pad(tail_state, None)
             ring_select = ttnn.from_torch(
                 qsa_module.chunk_handoff_ring_select_rows(prefilled),
                 dtype=ttnn.bfloat16,

@@ -47,6 +47,9 @@ SLAB_ROW_STEP = LONG_CHUNK_ROWS
 MIN_SLAB_ROWS = 2 * LONG_CHUNK_ROWS
 MAX_SLAB_ROWS = 32 * LONG_CHUNK_ROWS
 DEFAULT_SLAB_ROWS = 16 * LONG_CHUNK_ROWS
+# The fewest real rows of a padded 128-row chunk or slab: the PLE history is the nine normalized rows before the first pad
+# row (the GDN conv history needs three), so a pass with fewer real rows is a 32-row chunk's.
+PADDED_PASS_MIN_ROWS = 9
 
 
 def is_slab_rows(rows) -> bool:

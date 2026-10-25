@@ -43,7 +43,8 @@ restores the chain): 6 programs where the chain ran 53 per GDN layer, bitwise, t
 (`docs/NUMERICS.md`).
 
 The remainder of a prompt after the slabs runs through the 128-row chunks, then the 32-row chunks and the padded tail,
-then the ordinary hand-off from the 32-row state.  `--prefill-slab` implies `--long-chunks`; with `--mtp` (since
+then the ordinary hand-off from the 32-row state (the `legacy` plan; the default `cost` plan below covers the remainder
+with fewer, padded passes).  `--prefill-slab` implies `--long-chunks`; with `--mtp` (since
 2026-09-27) the MTP layer's rows of a slab run inside the slab body through the 128-row twin's slab form -- the slab as
 `ROWS / 128` slices of 128 rows, each the 128-row form exactly (its residual rows cut from the slab's layer-47 residual,
 its RoPE and QSA chunk inputs at `P + 128 i` from the slab body's own index rows, its MTP tokens one tile per slice), so
@@ -60,6 +61,88 @@ state's.  The 32-row and 128-row bodies are unchanged.  Measured 2026-09-26 on t
 prompt token; 1.309 s, 2.34 ms, with the 32-row chunks alone), a 513-token prompt in 0.764 s (1.49; 1.173 s, 2.29,
 in 32-row chunks); the served decode after either prefill is the same to 0.2 tok/s, and the MTP DRAM admission adds
 the 128-row twin's 25,600 bytes per bank (`docs/SERVER.md`).
+
+## The prefill plan and the padded last pass (`QWEN38_PREFILL_PLAN`)
+
+A pass costs about the same full or nearly empty (QB2 = 2x P300c, blocking replays: 2048-row slab 648 ms, 128-row chunk
+156 ms, 32-row chunk 62 ms), so the `legacy` plan's remainder was dear: head 2047 ran 15 x 128 + 4 x 32 rows (2.6 s) where
+one slab with 1 row of padding is 0.65 s.  The default `cost` plan (`tools/qwen38_prefill_driver.plan_cover`) covers the
+head's rows with the cheapest sequence of passes by the per-form table `PASS_COST_MS` (one place; a slab of another
+row count costs in proportion), with the rules the forms need:
+
+- at most one pass is padded, the last, and the hand-off reads its state; a padded 128-row chunk or slab holds at least 9
+  real rows (`PADDED_PASS_MIN_ROWS`: the PLE history is nine rows), a smaller remainder stays a padded 32-row chunk;
+- a 128-row chunk or slab starts only where the position is a multiple of 128 (their compressed index rows are whole cache
+  tiles), so 32-row chunks run up to the boundary (the legacy plan does not check this, it starts them wherever the alignment
+  steps left the position; a fresh prompt starts at 0 and meets the rule);
+- no pass, padded or not, ends past the allocated context (the pad rows write the KV and index caches); near the end of the
+  context the cover falls back to the cheapest one that fits, and none that fits is a ValueError;
+- forms are used when the chain has their state (a slab with `--prefill-slab`, the 128-row chunk with `--long-chunks`); a
+  chain with MTP chunk extensions keeps the legacy plan (their 128-row and slab forms have no padded pass); the 32-row-only
+  chain's cover is the legacy plan.
+
+`QWEN38_PREFILL_PLAN=legacy` (the plan before this one, numerics unchanged) or `cost`; any other value is refused by name
+at start-up and logged with the prefill form line (`prefill form: ...; plan: cost`).
+
+What a padded pass changes in the traced bodies (one trace per form, nothing per length: the real-row count reaches the
+pass only through host-written device inputs, `Qwen38TTNNTextModel.write_chunk_pad`, restored to a full pass by the hand-off and
+by every reset, so a full pass is bitwise what it was):
+
+| state the hand-off reads | how the padded pass keeps it the real rows' |
+|---|---|
+| GDN recurrent state | beta and the log decay of the pad rows are multiplied by a 0/1 row mask (beta = 0, g = 0: an identity update); the chain bodies mask in `_chunk_rows`, the fused slab body masks the prims' page layout between its two programs |
+| GDN conv history | one exact 0/1 selection of the three real rows before the first pad row (the 128-row form's `history_select_full` is the host-written select; the slab picks them out of the projection's q\|k\|v rows) |
+| QSA KV and compressed index rows | pad rows write past the prompt: the decode rewrites a row before it reads it, and the indexer masks blocks at or past `(P + 1) // 4`; the slab zeroes a pad row's complete-block count so every block of its score row is hidden and its top-k ids are the same for every pad content (the block-shared kernel builds one block union per tile of queries) |
+| QSA staging tile and raw-key ring | the hand-off copies the 32-row tile that holds the last real row from the pass's kept rows into the 32-row state's, by one exact matmul with a host-uploaded select (no program that changes with the tile) |
+| PLE history | the nine normalized rows before the first pad row: the hand-off picks them out of `normalized` (128-row chunk) or out of the slab's per-block snapshot window (`snapshot <- snapshot * keep + window * take`, host-written 1.0 / 0.0 per block) by one exact matmul |
+
+The hand-off's programs have fixed shapes, so a closed program-cache guard sees no new program in a request; the chain's warm
+passes run one padded hand-off per form.
+
+Numerics (QB2, `tests/test_prefill_padded_pass_device.py`; one id per process): the same prompt prefilled with two different pad
+tokens gives bitwise-identical first-token logits and 32 decode logits and tokens (`pad_long`: 100 real rows in a 128-row
+chunk; `pad_slab`: 1000 real rows in a slab).  The K/V and compressed index rows of the 12 QSA layers that a padded 128-row
+chunk writes for its real rows equal a full 128-row chunk's bit for bit (`kv_long`).  A padded slab's equal a full slab's
+except in the real rows that share a query tile (16 or 32 rows) with pad rows (here rows 992-999 of 1000): `sparse_sdpa_tiled` streams one
+block union per tile, so those rows' rounding depends on their neighbors' selections, in a full slab on the next real tokens and
+in a padded one on the pad rows (with `QWEN38_FUSED_OFF=sparse_sdpa_tiled` all 24 caches are bitwise equal, `kv_slab`).  Against
+the legacy plan the padded plan is tolerance-class, like the slab and the 128-row chunk against the 32-row ones: top-1
+agreement 1.000 over 32 teacher-forced steps, KL 8.9e-3 / 7.5e-3 mean (a 256-token and a 1001-token prompt; the 32-row form alone
+against the legacy plan: 7.2e-3), identical greedy streams over 32 tokens.  The layer-0 GDN conv history and recurrent state
+after the hand-off equal the legacy plan's bit for bit at 127 padded rows (`state_long`).
+
+Measured on QB2 (2026-10-25, the default chain: 2048-row slab, 128-row chunks; median of 3, plain `prefill_forward` wall time
+on the batch adapter with 8 lanes, which includes the lane import; the token each plan gives first is the same at every length):
+
+| prompt tokens | legacy ms | cost ms | cost passes (padded last pass) |
+|---|---|---|---|
+| 32 | 257 | 258 | 1 x 32 (short x 31 real rows) |
+| 128 | 439 | 370 | 1 x 128 (long x 127 real rows) |
+| 256 | 606 | 520 | 2 x 128 (long x 127 real rows) |
+| 512 | 912 | 824 | 4 x 128 (long x 127 real rows) |
+| 1024 | 1530 | 921 | 1 slab (slab x 1023 real rows) |
+| 2048 | 2775 | 943 | 1 slab (slab x 2047 real rows) |
+| 2049 | 933 | 932 | 1 slab |
+| 4096 | 3562 | 1591 | 2 slabs (slab x 2047 real rows) |
+| 8192 | 4845 | 2899 | 4 slabs (slab x 2047 real rows) |
+| 16384 | 7442 | 5538 | 8 slabs (slab x 2047 real rows) |
+| 30000 | 11195 | 10174 | 15 slabs (slab x 1327 real rows) |
+
+and `demo/text_demo.py` on the single-slot adapter (greedy, 128 new tokens, the needle prompt found in every run):
+
+| prompt | cost TTFT s | legacy TTFT s | decode ms/token (cost / legacy) | pass key | first divergence of 128 tokens |
+|---|---|---|---|---|---|
+| 128 | 0.287 | 0.357 | 26.01 / 26.13 | found / found | 15 |
+| 1024 | 0.834 | 1.440 | 27.24 / 27.25 | found / found | 13 |
+| 2048 | 0.854 | 2.688 | 28.70 / 28.72 | found / found | 25 |
+| 4096 | 1.501 | 3.474 | 28.67 / 28.74 | found / found | 30 |
+| 8192 | 2.807 | 4.756 | 28.65 / 28.73 | found / found | 39 |
+| 32576 | 10.760 | 12.386 | 28.62 / 28.66 | found / found | 43 |
+
+The pad inputs cost a full slab about 8.6 ms (+1.3 %: the history select against the projection, the beta / g masks and the
+PLE snapshot, 35 GDN layers each); the 32-row and 128-row passes show no change (P = 32 / 128 / 256 / 512 under the legacy
+plan within 1.6 ms of the previous bodies').  The padded plan's hand-off adds the kept-tile and history selections (eager
+matmuls, not timed apart: the hand-off's own wait for the last replay hides them in `handoff_ms`).
 
 ## Numerics class
 

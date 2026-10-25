@@ -145,13 +145,30 @@ CAST_WRITES = ("o16",)
 NORM_WRITES = ("gated", "history_next")
 
 
-def slab_body(projected, history, taps, norm, chunk_tiles, tiles: RowsConstants, buffers, initial_state, *, rows: int):
+def slab_body(
+    projected,
+    history,
+    taps,
+    norm,
+    chunk_tiles,
+    tiles: RowsConstants,
+    buffers,
+    initial_state,
+    *,
+    rows: int,
+    pad_mask_c=None,
+):
     """The fused body on explicit tensors: projection -> gated rows, history tile and final recurrent state.
 
     ``projected`` ``[1, 1, T, 4160]`` bf16 (the slab's whole projection, read in place), ``history``
     ``[1, 1, 32, 2560]`` bf16, ``taps`` the four ``[1, 1, 1, 2560]`` conv weights, ``norm`` ``[1, 1, 1, 128]`` bf16,
     ``chunk_tiles`` the prims' ``(eye, tril, ones, masks)``, ``buffers`` an object with the fields
     :func:`buffer_layouts` names plus ``v``, ``initial_state`` ``[1, 12, 128, 128]`` fp32.
+
+    ``pad_mask_c`` (``[12, T / 32, 32, 1]`` fp32, the pad inputs' host-written mask in the prims' page layout) zeroes beta
+    and g of a padded pass's pad rows before the recurrence, which makes them an identity update (the full pass's mask is
+    all ones: x * 1.0 is exact); ``history_next`` is then the caller's to overwrite (it holds the last three rows of the
+    whole pass, the pad rows included).
 
     Returns ``(gated [1, 1, T, 1536] bf16, final_state [1, 12, 128, 128] fp32, history_next [1, 1, 32, 2560] bf16)``;
     ``gated`` and ``history_next`` are the caller's persistent buffers, ``final_state`` a new one.
@@ -178,9 +195,16 @@ def slab_body(projected, history, taps, norm, chunk_tiles, tiles: RowsConstants,
         rows=rows,
     )
     restamp_written(buffers, projected, PRE_WRITES)
+    beta, g = buffers.beta, buffers.g
+    if pad_mask_c is not None:
+        beta = ttnn.multiply(buffers.beta, pad_mask_c, memory_config=DRAM)
+        g = ttnn.multiply(buffers.g, pad_mask_c, memory_config=DRAM)
     o, final_state = chunk_prims(
-        buffers.q, buffers.k, buffers.v, buffers.beta, buffers.g, initial_state, chunk_tiles, rows_total=rows_total
+        buffers.q, buffers.k, buffers.v, beta, g, initial_state, chunk_tiles, rows_total=rows_total
     )
+    if pad_mask_c is not None:
+        ttnn.deallocate(beta)
+        ttnn.deallocate(g)
     gdn_post_rows.post_cast(o, buffers.o16)
     restamp_written(buffers, projected, CAST_WRITES)
     ttnn.deallocate(o)
@@ -282,7 +306,11 @@ def gdn_prefill_rows(gdn, full_hidden, rows_state, initial_state, *, full_tile: 
         rows_state,
         initial_state,
         rows=constants_of.rows,
+        pad_mask_c=None if constants_of.pad is None else constants_of.pad.row_mask_c,
     )
+    if constants_of.pad is not None:
+        # The next history from the real rows (the post program's tile holds the pass's last three rows, pad included).
+        gdn._slab_pad_history(projected, rows_state)
     ttnn.deallocate(projected)
     fp.stamp_topology(final_state, initial_state, 1)
     fp.stamp_topology(gated, full_hidden, 3)

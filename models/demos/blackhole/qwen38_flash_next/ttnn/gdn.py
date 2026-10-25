@@ -160,6 +160,35 @@ def rows_window_select_tiles(rows: int) -> dict[str, torch.Tensor]:
     }
 
 
+def pad_input_images(rows: int, real_rows: int | None = None) -> dict[str, torch.Tensor]:
+    """Host images of the padded-pass inputs of a 128-row chunk or a slab (``rows`` kernel rows, the first
+    ``real_rows`` real, the rest padding; ``None``: every row real, the full pass).
+
+    ``row_mask`` ``[1, 1, T, 1]`` FP32 (1.0 real, 0.0 pad) multiplies beta and the log decay of the chain forms, which
+    makes every pad row an identity update of the recurrent state (beta = 0, g = 0: no delta, decay exp(0) = 1);
+    ``row_mask_c`` is the same mask in the chunk prims' ``[12, T / 32, 32, 1]`` page layout (the fused slab body).
+    ``history_select`` is the exact 0/1 matrix of the next FIR history, the three real rows before the first pad row:
+    the 128-row form picks them out of its ``[history tile | qkv]`` window (``[32, 32 + T]``, the form of
+    ``history_select_full`` with ``real_rows`` for ``T``), the slab out of the projection's q|k|v rows (``[32, T]``;
+    ``real_rows >= CONV_HISTORY_ROWS``)."""
+
+    real = rows if real_rows is None else real_rows
+    if not CONV_HISTORY_ROWS <= real <= rows:
+        raise ValueError(f"a padded pass needs {CONV_HISTORY_ROWS}..{rows} real rows, got {real_rows!r}")
+    keep = (torch.arange(rows) < real).float()
+    slab = is_slab_rows(rows)
+    select = torch.zeros(CHUNK_SIZE, rows if slab else CHUNK_SIZE + rows)
+    for index in range(CONV_HISTORY_ROWS):
+        select[index, real - CONV_HISTORY_ROWS + index if slab else _window_buffer_row(real + index)] = 1.0
+    return {
+        "row_mask": keep.reshape(1, 1, rows, 1),
+        "row_mask_c": keep.reshape(1, rows // CHUNK_SIZE, CHUNK_SIZE, 1)
+        .expand(VALUE_HEADS_PER_DEVICE, -1, -1, -1)
+        .contiguous(),
+        "history_select": select.reshape(1, 1, *select.shape),
+    }
+
+
 def pack_projection_columns(shards) -> torch.Tensor:
     """Pack the four device-local ``[q|k|v|z|a|b]`` streams into one ``[1,1,K,4*N]`` linear weight.
 
@@ -872,6 +901,20 @@ def chunk_constant_tiles() -> dict[str, torch.Tensor]:
 
 
 @dataclass(frozen=True)
+class Qwen38TTNNGDNPadInputs:
+    """The host-written inputs that let one trace of the 128-row chunk or a slab serve a padded last pass
+    (:func:`pad_input_images`; :meth:`Qwen38TTNNTextModel.write_chunk_pad` writes them between replays, so one
+    trace serves every real-row count).  ``row_mask`` / ``row_mask_c`` zero beta and the log decay of the pad rows;
+    ``history_select`` picks the next FIR history out of the real rows.  ``row_mask_c`` and the slab's own
+    ``history_select`` exist for a slab only: the 128-row form reads ``history_select_full`` (the same tensor)."""
+
+    row_mask: Any  # [1, 1, T, 1] FP32
+    history_select: Any  # [1, 1, 32, 32 + T] BF16 (128 rows: the constants' history_select_full) or [1, 1, 32, T] (slab)
+    row_mask_c: Any = None  # [12, T / 32, 32, 1] FP32, slab only
+    owns_history_select: bool = True
+
+
+@dataclass(frozen=True)
 class Qwen38TTNNGDNRowsConstants:
     """Read-only device tensors shared by every GDN layer's ``rows``-row path (one set per row count).
 
@@ -907,6 +950,8 @@ class Qwen38TTNNGDNRowsConstants:
     # commit masks ``beta_c`` / ``g_c`` in that layout, so the mask is built there too and the multiply is element
     # for element.
     arange_c: Any = None
+    # The padded-pass inputs of the 128-row and slab forms (None on the 32-row form, which pads through its accept scalar).
+    pad: Qwen38TTNNGDNPadInputs | None = None
 
     @property
     def window_rows(self) -> int:
@@ -931,6 +976,30 @@ class Qwen38TTNNGDNRowsConstants:
             return tensor
 
         try:
+            pad = None
+            history_select_full = (
+                None
+                if slab
+                else upload(
+                    selects["history_select_full"].reshape(1, 1, CHUNK_SIZE, window_rows),
+                    ttnn.bfloat16,
+                    "history select full",
+                )
+            )
+            if tile_rows != CHUNK_SIZE:
+                images = pad_input_images(rows)
+                pad = Qwen38TTNNGDNPadInputs(
+                    row_mask=upload(images["row_mask"], ttnn.float32, "pad row mask"),
+                    history_select=(
+                        upload(images["history_select"], ttnn.bfloat16, "slab pad history select")
+                        if slab
+                        else history_select_full
+                    ),
+                    row_mask_c=upload(images["row_mask_c"], ttnn.float32, "pad row mask (prim layout)")
+                    if slab
+                    else None,
+                    owns_history_select=slab,
+                )
             return cls(
                 rows=rows,
                 tile_rows=tile_rows,
@@ -961,15 +1030,7 @@ class Qwen38TTNNGDNRowsConstants:
                     ttnn.bfloat16,
                     "history select stack",
                 ),
-                history_select_full=(
-                    None
-                    if slab
-                    else upload(
-                        selects["history_select_full"].reshape(1, 1, CHUNK_SIZE, window_rows),
-                        ttnn.bfloat16,
-                        "history select full",
-                    )
-                ),
+                history_select_full=history_select_full,
                 qk_expand=upload(
                     selects["qk_expand"].reshape(1, 1, QK_WIDTH_PER_DEVICE, VALUE_WIDTH_PER_DEVICE),
                     ttnn.bfloat16,
@@ -999,6 +1060,7 @@ class Qwen38TTNNGDNRowsConstants:
                     packer_l1_acc=False,
                 ),
                 mesh_contract=mesh_contract,
+                pad=pad,
             )
         except BaseException:
             _deallocate(*uploaded)
@@ -1021,6 +1083,15 @@ class Qwen38TTNNGDNRowsConstants:
             self.ones,
             self.masks,
             *(() if self.arange_c is None else (self.arange_c,)),
+            *(
+                ()
+                if self.pad is None
+                else (
+                    self.pad.row_mask,
+                    *((self.pad.history_select,) if self.pad.owns_history_select else ()),
+                    *(() if self.pad.row_mask_c is None else (self.pad.row_mask_c,)),
+                )
+            ),
         )
 
 
@@ -2749,6 +2820,25 @@ class Qwen38TTNNGDN:
         _require_shape(projected, (1, 1, tile_rows, PROJECTION_WIDTH_PER_DEVICE), label="GDN rows projection")
         return projected
 
+    def _slab_pad_history(self, projected, rows_state: Qwen38TTNNGDNRowsState) -> None:
+        """The fused slab body's next FIR history from the real rows: the host-written pad select (the last three rows of a
+        full pass, the three before the first pad row of a padded one) against the projection's q|k|v columns, written
+        into ``rows_state.history_next`` (an exact 0/1 selection: x * 1.0 plus exact zeros, bitwise the post program's
+        tile on a full pass)."""
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        tile_rows = rows_state.constants.tile_rows
+        qkv = ttnn.slice(projected, (0, 0, 0, 0), (1, 1, tile_rows, QKV_WIDTH_PER_DEVICE), memory_config=dram)
+        _retag_head_shard_after_reshape(qkv, reference=projected, shard_dim=3)
+        self._select_rows(
+            rows_state.constants.pad.history_select,
+            qkv,
+            memory_config=dram,
+            label="GDN slab pad history select",
+            output_tensor=rows_state.history_next,
+        )
+        _deallocate(qkv)
+
     def _conv_window_rows(self, rows_state: Qwen38TTNNGDNRowsState):
         """``[history tile | qkv tiles]``: whole tiles on dim 2 (no row padding, so a plain tile concat).
 
@@ -2965,6 +3055,10 @@ class Qwen38TTNNGDN:
                 self, rows_state, wrap, initial_state, None if committed_mask is None else committed_mask_c
             )
             return self._validate_chunk_rows(output, final_state, rows_state, initial_state, tile_rows)
+        if committed_mask is None and constants.pad is not None:
+            # The 128-row chunk and the slab chain: the host-written row mask zeroes beta and g of a padded pass's pad
+            # rows (all ones on a full pass: x * 1.0 is exact, so a full pass is bitwise what it was without it).
+            committed_mask = constants.pad.row_mask
         if committed_mask is None:
             beta, g, masked = rows_state.beta, rows_state.g, ()
         else:
@@ -3491,32 +3585,15 @@ class Qwen38TTNNGDN:
             # one copy, which is also what keeps ``forward_rows`` side-effect free on the shared history buffer.
             _copy_inplace(rows_state.history_next, rows_state.history, label="GDN slab history")
         elif is_slab_rows(rows_state.constants.tile_rows):
-            # The last three new rows into history rows 0..2 (rows 3..31 zero) by row shifts: the last row tile
-            # untilized, its rows 29..31 sliced, padded to a tile, tilized, copied into the persistent history.
-            dram = ttnn.DRAM_MEMORY_CONFIG
-            tile_rows = rows_state.constants.tile_rows
-            last_tile = ttnn.slice(
+            # The last three real rows into history rows 0..2 (rows 3..31 zero): one exact 0/1 selection of the qkv
+            # rows with the host-written pad select (the last three rows on a full pass).
+            self._select_rows(
+                rows_state.constants.pad.history_select,
                 rows_state.qkv,
-                (0, 0, tile_rows - CHUNK_SIZE, 0),
-                (1, 1, tile_rows, QKV_WIDTH_PER_DEVICE),
-                memory_config=dram,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                label="GDN slab history select",
+                output_tensor=rows_state.history,
             )
-            last_rm = ttnn.to_layout(last_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
-            _deallocate(last_tile)
-            tail = ttnn.slice(
-                last_rm,
-                (0, 0, CHUNK_SIZE - CONV_HISTORY_ROWS, 0),
-                (1, 1, CHUNK_SIZE, QKV_WIDTH_PER_DEVICE),
-                memory_config=dram,
-            )
-            _deallocate(last_rm)
-            padded = ttnn.pad(
-                tail, [(0, 0), (0, 0), (0, CHUNK_SIZE - CONV_HISTORY_ROWS), (0, 0)], 0.0, memory_config=dram
-            )
-            history = ttnn.to_layout(padded, ttnn.TILE_LAYOUT, memory_config=dram)
-            _require_shape(history, (1, 1, CHUNK_SIZE, QKV_WIDTH_PER_DEVICE), label="GDN slab history tile")
-            _copy_inplace(history, rows_state.history, label="GDN slab history")
-            _deallocate(history, padded, tail)
         else:
             window = self._conv_window_rows(rows_state)
             self._select_rows(

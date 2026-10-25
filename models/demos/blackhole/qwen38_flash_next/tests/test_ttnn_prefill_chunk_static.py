@@ -77,7 +77,9 @@ def test_layer_chunk_body_is_the_decode_order_on_rows_with_the_history_commits()
     assert "self.attention.allocate_chunk_state(rows)" in allocate
     assert (
         "self.ple.allocate_rows_state(\n"
-        "                    LONG_CHUNK_ROWS if is_slab_rows(rows) else rows, history=None if base is None else base.ple.history\n"
+        "                    LONG_CHUNK_ROWS if is_slab_rows(rows) else rows,\n"
+        "                    history=None if base is None else base.ple.history,\n"
+        "                    slab_blocks=rows // LONG_CHUNK_ROWS if is_slab_rows(rows) else 0,\n"
         "                )"
     ) in allocate
     assert "local_combine_output=local_combine_output" in allocate

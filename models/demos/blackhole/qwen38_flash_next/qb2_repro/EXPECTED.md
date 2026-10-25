@@ -16,6 +16,12 @@ Branch re-run (2026-10-23, branch atupe/qwen38-flash-next = main 985c23b1bdb + #
 - P4b: c2 agg 58.8 (-3.4%), c4 agg 92.8 (-1.6%), c8 agg 140.5 (+1.3%).
 - Tolerance to use: 1% for P1/P2; 10% for MTP decode (P3, P4) because acceptance changes with the generated text.
 
+Prefill plan change (2026-10-25, branch default `QWEN38_PREFILL_PLAN=cost`, `docs/PREFILL.md`):
+- Set `QWEN38_PREFILL_PLAN=legacy` to reproduce this file exactly. The legacy replay gives the same divergence table.
+- Under `cost`, the json gate is 96/96 PASS. Two first divergences change: math 56 -> 61, summary 75 -> 1.
+  The summary change is a near tie at step 1 (top-2 logit margin 0.25). All other records are the same.
+- Under `cost`, the P1 and P2 prefill TTFT rows drop (see `docs/PREFILL.md`). Decode rows, P3 and P4 do not change.
+
 ## Acceptance (json 96/96 against the CPU greedy records)
 
 Gate: json record 96/96 -> PASS. First divergence index per record (token position where device and CPU differ):

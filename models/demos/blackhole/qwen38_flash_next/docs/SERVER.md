@@ -478,12 +478,13 @@ the environment, every one checked before the device is touched:
 | `QWEN38_BF4_CORPUS`, `QWEN38_BF4_CORPUS_VERIFICATION` | unset | a CPU-staged BF4 expert corpus in place of the cache under `caches/bf4-experts`, which must otherwise exist: its first-start conversion runs inside vLLM start-up only with `QWEN38_VLLM_ALLOW_BF4_CONVERSION=1` |
 | `QWEN38_PREFILL_SLAB` | `2048` | the prefill slab's rows, a multiple of 128 in 256..4096: a prompt runs as `N // rows` slabs, then 128-row chunks, then 32-row chunks (`docs/PREFILL.md`); `0` or `off` serves without the slab; any other value is refused by name |
 | `QWEN38_LONG_CHUNKS` | unset | with the slab off, `1` keeps the 128-row chunks ahead of the 32-row ones (a slab implies them) |
+| `QWEN38_PREFILL_PLAN` | `cost` | how a prompt's rows are covered by the slab, 128-row and 32-row passes: `cost` the cheapest sequence by a per-form cost table with one padded last pass (a remainder is one padded slab or chunk instead of many small ones), `legacy` the slabs, then 128-row chunks, then 32-row chunks and a padded 32-row tail (`docs/PREFILL.md`); a chain with MTP keeps `legacy`; any other value is refused by name |
 | `QWEN38_TT_METAL_SHA` | unset | the cache identity's tt-metal sha (40 lowercase hex); unset, the checkout head, else the runtime extension's digest prefix, so a checkout without `.git` or `git` serves |
 
 The slab's resident dense weights are admitted against the free DRAM when the chain opens (`ttnn/prefill_dense.py`):
 a refusal ends the start-up with the admission's numbers and the sentence `QWEN38_PREFILL_SLAB=0 serves this context
 without the slab`, never a silent fallback (the serving profile decides per context).  The adapter logs the form it
-opened (`prefill form: 2048-row slabs, then 128-row chunks, then 32-row chunks`), so a served number is attributable
+opened (`prefill form: 2048-row slabs, then 128-row chunks, then 32-row chunks; plan: cost`), so a served number is attributable
 to it.  Numerics: the slab body is tolerance-class against the 32-row chunk bodies (`docs/PREFILL.md`, "Numerics
 class": each dense linear's output within one bf16 ULP of its scale, top-1 moving at a handful of positions on prompts
 longer than a slab), the 128-row chunks give the 32-row chunks' tokens (`docs/NUMERICS.md`), and the `json` acceptance

@@ -882,6 +882,7 @@ def construction(monkeypatch, tmp_path) -> SimpleNamespace:
         "QWEN38_VLLM_ALLOW_BF4_CONVERSION",
         "QWEN38_LONG_CHUNKS",
         "QWEN38_PREFILL_SLAB",
+        "QWEN38_PREFILL_PLAN",
         "QWEN38_HARDWARE_MODE",
         "QWEN38_TT_METAL_SHA",
         "QWEN38_HF_REPO",
@@ -1171,9 +1172,32 @@ def test_construction_opens_the_chain_in_the_prefill_form_the_knobs_name(
     assert opened["chunked_prefill"] is True and opened["sampling"] is True
     expected_long_chunks, expected_slab_rows = expected
     form = [message for message in messages if message.startswith("prefill form: ")]
-    assert len(form) == 1 and form[0].endswith("32-row chunks")  # one line after the open states the form
+    assert len(form) == 1 and form[0].endswith("32-row chunks; plan: cost")  # one line after the open: form and plan
     assert (f"{expected_slab_rows}-row slabs, then " in form[0]) is (expected_slab_rows is not None)
     assert ("128-row chunks, then 32-row chunks" in form[0]) is expected_long_chunks
+
+
+@pytest.mark.parametrize("value, plan", ((None, "cost"), ("", "cost"), ("cost", "cost"), (" Legacy ", "legacy")))
+def test_construction_logs_the_prefill_plan_the_knob_names(construction, monkeypatch, value, plan: str) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(vllm_module, "logger", SimpleNamespace(info=messages.append, warning=lambda *_: None))
+    if value is not None:
+        monkeypatch.setenv("QWEN38_PREFILL_PLAN", value)
+    _initialize(construction)
+    form = [message for message in messages if message.startswith("prefill form: ")]
+    assert form == [
+        f"prefill form: 2048-row slabs, then 128-row chunks, then 32-row chunks; plan: {plan}"
+    ]  # the default form, the plan the knob names
+
+
+@pytest.mark.parametrize("value", ("fast", "0", "costly", "cost,legacy", "legacy1"))
+def test_construction_refuses_an_unknown_prefill_plan_by_name(
+    construction, monkeypatch, value: str, expect_error
+) -> None:
+    monkeypatch.setenv("QWEN38_PREFILL_PLAN", value)
+    with expect_error(ValueError, "QWEN38_PREFILL_PLAN must be one of"):
+        _initialize(construction)
+    assert construction.calls == []  # refused before any library call
 
 
 def test_prefill_form_admits_every_slab_row_count_of_the_contract() -> None:
@@ -1182,6 +1206,9 @@ def test_prefill_form_admits_every_slab_row_count_of_the_contract() -> None:
     assert vllm_module.describe_prefill_form(True, 2048) == "2048-row slabs, then 128-row chunks, then 32-row chunks"
     assert vllm_module.describe_prefill_form(True, None) == "128-row chunks, then 32-row chunks"
     assert vllm_module.describe_prefill_form(False, None) == "32-row chunks"
+    assert vllm_module.describe_prefill_form(True, 2048, "legacy") == (
+        "2048-row slabs, then 128-row chunks, then 32-row chunks; plan: legacy"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1275,7 +1302,9 @@ def test_construction_names_the_slab_knob_when_the_dram_admission_refuses_the_sl
         "slab_rows": None,
     }
     assert model.chain is construction.chain
-    assert [line for line in messages if line.startswith("prefill form: ")] == ["prefill form: 32-row chunks"]
+    assert [line for line in messages if line.startswith("prefill form: ")] == [
+        "prefill form: 32-row chunks; plan: cost"
+    ]
 
 
 # -- the class surface and the bundle ----------------------------------------------------------------------------------

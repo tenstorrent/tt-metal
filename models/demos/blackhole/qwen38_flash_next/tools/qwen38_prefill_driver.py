@@ -1,18 +1,24 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Chunked prefill of one prompt on the generic chain: alignment steps, traced chunks (the slab rows, then 128, then
-32), the padded tail, the hand-off.
+"""Chunked prefill of one prompt on the generic chain: alignment steps, traced passes (slabs, 128-row chunks, 32-row
+chunks), one padded last pass, the hand-off.
 
 The chain owner (the chat session, a runner) hands over the model, its generic and chunk states, the captured chunk
 traces and ``forced_step``, which teacher-forces one token through the decode traces at the current position and
 returns the next n-gram context.  :meth:`Qwen38ChunkPrefill.run` then prefills ``token_ids`` from ``start_position``:
 ``(32 - P % 32) % 32`` forced steps so the first chunk starts at ``P % 32 == 0``; the chunk carry seeded from the
 decode buffers (``reset_chunk_state_inplace``, the 32-row state first: the 128-row and slab states share its
-histories); ``N // S`` slabs of ``S`` rows when the chain captured a slab trace (``--prefill-slab``), then
-``M // 128`` long chunks of the remainder when the chain captured the 128-row trace; then ``M // 32`` full 32-row
-chunks (accept scalar 31) over the remainder ``M``; if ``M % 32 = r > 0`` one padded chunk whose rows ``r .. 31`` are
-:data:`CHUNK_PAD_TOKEN_ID` with accept scalar ``r - 1``; ``finish_prefill`` from the 32-row state.  The host work of
+histories); then the passes of the plan (:func:`plan_cover`): the head's ``N`` rows covered by the cheapest sequence of
+slabs (when the chain captured a slab trace, ``--prefill-slab``), 128-row chunks (the 128-row trace) and 32-row
+chunks, by a per-form cost table (:data:`PASS_COST_MS`: a pass costs about the same full or nearly empty, so a
+remainder is cheaper as one padded pass than as many small ones).  At most one pass is padded, the last: its rows past
+the real ones are :data:`CHUNK_PAD_TOKEN_ID`, a 32-row chunk takes its real row count as the accept scalar ``r - 1``, a
+128-row chunk or slab as the host-written pad inputs (``write_chunk_pad``: beta and g of the pad rows zero, the GDN conv
+history from the real rows), and the hand-off takes the carries from the real rows (``finish_prefill(tail=...)``).
+``QWEN38_PREFILL_PLAN=legacy`` (or an MTP-drafting chain, whose chunk extensions have no padded 128-row form) plans as
+before: ``N // S`` slabs, ``M // 128`` long chunks of the remainder ``M``, ``M // 32`` full 32-row chunks and, if ``M % 32
+= r > 0``, one padded 32-row chunk; ``finish_prefill`` from the 32-row state.  The host work of
 chunk i + 1 (``prepare_chunk_inputs``: the n-gram lookups from the running context and the row packing; then
 ``upload_chunk_inputs``: the token-row and PLE-row copies) runs under chunk i's replay: the host half is prepared as
 soon as chunk i is queued and the copies are queued behind it, so only the first chunk's preparation is exposed
@@ -43,8 +49,9 @@ inside the slab body), so a slab chain with drafting needs the twin allocated wi
 
 from __future__ import annotations
 
+import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -53,11 +60,25 @@ from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker
 
 import ttnn
 from models.demos.blackhole.qwen38_flash_next import mrope, vision_splice
-from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import CHUNK_ROWS, LONG_CHUNK_ROWS, is_slab_rows
+from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
+    CHUNK_ROWS,
+    LONG_CHUNK_ROWS,
+    PADDED_PASS_MIN_ROWS,
+    is_slab_rows,
+)
 
-# Rows past the prompt in the padded tail chunk: any in-vocabulary id; their state is never read after the hand-off.
+# Rows past the prompt in the padded last pass: any in-vocabulary id; their state is never read after the hand-off.
 CHUNK_PAD_TOKEN_ID = 0
 CHUNK_EVENT_INTERVAL = 4
+
+PLAN_ENV = "QWEN38_PREFILL_PLAN"
+PLAN_COST, PLAN_LEGACY = "cost", "legacy"
+PLANS = (PLAN_COST, PLAN_LEGACY)
+# Device time of one pass of each form in ms, blocking replay, 4x Blackhole QuietBox 2 (P3a-1, 2026-10-25): a pass costs
+# about the same full or nearly empty.  The slab's entry is for SLAB_COST_ROWS rows; a slab of another row count costs in
+# proportion.  The one table the cost plan reads: re-measure here when a form's body changes.
+PASS_COST_MS: Mapping[str, float] = {"slab": 648.0, "long": 156.0, "short": 62.0}
+SLAB_COST_ROWS = 2048
 
 
 def alignment_steps(start_position: int, count: int) -> int:
@@ -85,6 +106,113 @@ def chunk_accepts(count: int) -> list[int]:
     return [CHUNK_ROWS - 1] * full + ([tail - 1] if tail else [])
 
 
+def prefill_plan(environ: Mapping[str, str] | None = None) -> str:
+    """The plan mode from ``QWEN38_PREFILL_PLAN`` (``os.environ`` by default): ``cost`` (the default) or ``legacy``; any
+    other value is refused by name."""
+
+    environ = os.environ if environ is None else environ
+    raw = environ.get(PLAN_ENV)
+    value = "" if raw is None else raw.strip().lower()
+    if value == "":
+        return PLAN_COST
+    if value not in PLANS:
+        raise ValueError(f"{PLAN_ENV} must be one of {PLANS}, got {raw!r}")
+    return value
+
+
+@dataclass(frozen=True)
+class PassSpec:
+    """One pass of a plan: its form (``slab``, ``long`` or ``short``), the rows the form runs and the real ones among them
+    (fewer than ``rows``: the padded last pass)."""
+
+    kind: str
+    rows: int
+    real: int
+
+    @property
+    def padded(self) -> bool:
+        return self.real < self.rows
+
+
+def legacy_cover(count: int, *, slab_rows: int = 0, long_chunks: bool = False) -> list[PassSpec]:
+    """The legacy plan of ``count`` rows: ``count // slab_rows`` slabs, ``// 128`` long chunks of the rest, full 32-row
+    chunks and one padded 32-row chunk for the last ``count % 32`` rows."""
+
+    slabs = slab_count(count, slab_rows=slab_rows or None)
+    after_slabs = count - slabs * slab_rows
+    longs = long_chunk_count(after_slabs, long_chunks=long_chunks)
+    rest = after_slabs - longs * LONG_CHUNK_ROWS
+    return (
+        [PassSpec("slab", slab_rows, slab_rows)] * slabs
+        + [PassSpec("long", LONG_CHUNK_ROWS, LONG_CHUNK_ROWS)] * longs
+        + [PassSpec("short", CHUNK_ROWS, CHUNK_ROWS)] * (rest // CHUNK_ROWS)
+        + ([PassSpec("short", CHUNK_ROWS, rest % CHUNK_ROWS)] if rest % CHUNK_ROWS else [])
+    )
+
+
+def plan_cover(
+    count: int,
+    *,
+    position: int,
+    context: int,
+    slab_rows: int = 0,
+    long_chunks: bool = False,
+    costs: Mapping[str, float] | None = None,
+) -> list[PassSpec]:
+    """The cheapest cover of ``count`` rows from device position ``position`` (``position % 32 == 0``): a sequence of full
+    passes and at most one padded pass, the last, whose cost is the sum of :data:`PASS_COST_MS` over its passes.
+
+    A 128-row chunk or slab starts only where ``position % 128 == 0`` (their compressed index rows are whole cache tiles,
+    ``qsa._derive_slab_tile_inputs``; the legacy plan does not check it), so 32-row chunks run up to the boundary.  A
+    padded 128-row chunk or slab holds at least ``PADDED_PASS_MIN_ROWS`` real rows (a smaller remainder is a 32-row chunk's).
+    No pass runs past ``context`` (the pad rows write the KV and index caches): near its end the cover falls back to
+    the cheapest one that fits.  Ties go to the fewer passes, then to the larger forms first.  ValueError when no cover fits.
+    """
+
+    if count < 0 or (count and position % CHUNK_ROWS):
+        raise ValueError(
+            f"a cover needs a non-negative row count from a 32-aligned position, got {count} from {position}"
+        )
+    if count == 0:
+        return []
+    table = dict(PASS_COST_MS if costs is None else costs)
+    forms = (
+        [("short", CHUNK_ROWS)]
+        + ([("long", LONG_CHUNK_ROWS)] if long_chunks else [])
+        + ([("slab", slab_rows)] if slab_rows else [])
+    )
+    price = {kind: table[kind] * (rows / SLAB_COST_ROWS if kind == "slab" else 1.0) for kind, rows in forms}
+    units = count // CHUNK_ROWS
+    # best[c] = (cost, passes, first pass, c after it): the cheapest cover of the rows after the first c * 32 rows.
+    best: list[tuple[float, int, PassSpec | None, int] | None] = [None] * (units + 1)
+    for c in range(units, -1, -1):
+        rest = count - c * CHUNK_ROWS
+        if rest == 0:
+            best[c] = (0.0, 0, None, c)
+            continue
+        start = position + c * CHUNK_ROWS
+        options = []
+        for kind, rows in forms:
+            if start + rows > context or (kind != "short" and start % LONG_CHUNK_ROWS):
+                continue
+            if rows <= rest and rows % CHUNK_ROWS == 0:
+                after = c + rows // CHUNK_ROWS if rows < rest else units + 1  # a full pass that ends the head
+                follow = (0.0, 0) if after > units else best[after]
+                if follow is not None:
+                    options.append((price[kind] + follow[0], 1 + follow[1], PassSpec(kind, rows, rows), after))
+            if rest < rows and rest >= (1 if kind == "short" else PADDED_PASS_MIN_ROWS):
+                options.append((price[kind], 1, PassSpec(kind, rows, rest), units + 1))
+        # Ties: the fewer passes, then the larger first form (the legacy plan's order: slabs, long chunks, 32-row chunks).
+        best[c] = min(options, key=lambda option: (option[0], option[1], -option[2].rows)) if options else None
+    if best[0] is None:
+        raise ValueError(f"no pass cover of {count} rows from position {position} fits the allocated context {context}")
+    cover, c = [], 0
+    while c <= units and best[c][2] is not None:
+        _cost, _passes, spec, c = best[c]
+        cover.append(spec)
+    return cover
+
+
 @dataclass(frozen=True)
 class Qwen38PrefillTiming:
     alignment_steps: int
@@ -109,6 +237,11 @@ class Qwen38PrefillTiming:
     slab_prepare_ms: tuple[float, ...] = ()
     slab_upload_ms: tuple[float, ...] = ()
     slab_wait_ms: tuple[float, ...] = ()
+    plan: str = (
+        PLAN_LEGACY  # the plan that ran: ``cost``, ``legacy``, or ``legacy (mtp)`` for a chain with MTP extensions
+    )
+    padded_pass: str | None = None  # the form of the padded last pass (``slab``, ``long``, ``short``), None: no padding
+    padded_real_rows: int = 0  # its real rows
 
 
 @dataclass(frozen=True)
@@ -142,7 +275,11 @@ class Qwen38ChunkPrefill:
         slab_state: Any | None = None,
         slab_trace_id: Any | None = None,
         long_mtp: Any = None,
+        plan: str | None = None,
+        pass_costs: Mapping[str, float] | None = None,
     ) -> None:
+        if plan is not None and plan not in PLANS:
+            raise ValueError(f"prefill plan must be one of {PLANS} or None (the {PLAN_ENV} knob), got {plan!r}")
         if isinstance(event_interval, bool) or type(event_interval) is not int or event_interval <= 0:
             raise ValueError(f"event interval must be a positive int, got {event_interval!r}")
         if event_rows is not None and (
@@ -197,6 +334,33 @@ class Qwen38ChunkPrefill:
         # tokens one position ahead) through the extension of its form, and the hand-off includes the MTP layer.
         self.mtp = mtp
         self.long_mtp = long_mtp
+        # The plan mode (``QWEN38_PREFILL_PLAN`` unless given) and the per-form cost table the cost plan reads.  A chain with
+        # MTP chunk extensions keeps the legacy plan: their 128-row and slab forms have no padded pass.
+        self.plan = prefill_plan() if plan is None else plan
+        self.pass_costs = PASS_COST_MS if pass_costs is None else pass_costs
+
+    def _form_rows(self, kind: str) -> int:
+        return {"slab": self.slab_rows, "long": LONG_CHUNK_ROWS, "short": CHUNK_ROWS}[kind]
+
+    def _cover(self, count: int, position: int) -> tuple[list[PassSpec], str]:
+        """The passes of a ``count``-row head from ``position`` and the name of the plan that made them."""
+
+        long_chunks = self.long_chunk_state is not None
+        if self.plan == PLAN_COST and self.mtp is None:
+            return (
+                plan_cover(
+                    count,
+                    position=position,
+                    context=self.model.allocated_context,
+                    slab_rows=self.slab_rows,
+                    long_chunks=long_chunks,
+                    costs=self.pass_costs,
+                ),
+                PLAN_COST,
+            )
+        return legacy_cover(count, slab_rows=self.slab_rows, long_chunks=long_chunks), (
+            PLAN_LEGACY if self.plan == PLAN_LEGACY else f"{PLAN_LEGACY} (mtp)"
+        )
 
     def _run_chunk(self, *, blocking: bool, kind: str = "short") -> None:
         """One chunk at the device position: the captured trace's replay, or the eager chunk body with the
@@ -263,9 +427,8 @@ class Qwen38ChunkPrefill:
 
         if index >= len(plan):
             return None
-        chunk_state, _kind, rows, accepted = plan[index]
-        if accepted is not None and accepted != CHUNK_ROWS - 1:
-            rows = rows + [self.pad_token_id] * (CHUNK_ROWS - len(rows))
+        chunk_state, kind, rows, _accepted = plan[index]
+        rows = rows + [self.pad_token_id] * (self._form_rows(kind) - len(rows))
         started_ns = time.perf_counter_ns()
         chunk_positions = self._chunk_positions(positions, position + starts[index], rows)
         chunk_features, feature_cursor = vision_splice.split_features(rows, features, feature_cursor)
@@ -338,36 +501,25 @@ class Qwen38ChunkPrefill:
             ple_context = self.forced_step(token, ple_context)
         position = start_position + aligned
         remaining = tokens[aligned:]
-        slabs = slab_count(len(remaining), slab_rows=self.slab_rows or None)
-        after_slabs = len(remaining) - slabs * self.slab_rows
-        long_chunks = long_chunk_count(after_slabs, long_chunks=self.long_chunk_state is not None)
-        accepts = chunk_accepts(after_slabs - long_chunks * LONG_CHUNK_ROWS)
-        # The chunk sequence: (chunk state, kind, rows, accept scalar or None): the slabs, then the long chunks,
-        # then the 32-row chunks and the padded tail.
-        plan: list[tuple[Any, str, list[int], int | None]] = [
-            (self.slab_state, "slab", remaining[self.slab_rows * index : self.slab_rows * (index + 1)], None)
-            for index in range(slabs)
-        ]
-        offset = slabs * self.slab_rows
-        plan += [
-            (
-                self.long_chunk_state,
-                "long",
-                remaining[offset + LONG_CHUNK_ROWS * index : offset + LONG_CHUNK_ROWS * (index + 1)],
-                None,
+        specs, used_plan = self._cover(len(remaining), position)
+        # The chunk sequence: (chunk state, kind, real rows, accept scalar or None): the passes of the plan, each over its
+        # slice of the remaining tokens.  A padded 32-row chunk carries its accept scalar r - 1 (31 on a full one).
+        states = {"slab": self.slab_state, "long": self.long_chunk_state, "short": self.chunk_state}
+        plan: list[tuple[Any, str, list[int], int | None]] = []
+        offset = 0
+        for spec in specs:
+            plan.append(
+                (
+                    states[spec.kind],
+                    spec.kind,
+                    remaining[offset : offset + spec.real],
+                    spec.real - 1 if spec.kind == "short" else None,
+                )
             )
-            for index in range(long_chunks)
-        ]
-        offset += long_chunks * LONG_CHUNK_ROWS
-        plan += [
-            (
-                self.chunk_state,
-                "short",
-                remaining[offset + CHUNK_ROWS * index : offset + CHUNK_ROWS * (index + 1)],
-                accepted,
-            )
-            for index, accepted in enumerate(accepts)
-        ]
+            offset += spec.real
+        slabs = sum(spec.kind == "slab" for spec in specs)
+        long_chunks = sum(spec.kind == "long" for spec in specs)
+        accepts = [spec.real - 1 for spec in specs if spec.kind == "short"]
         verify_ms = None
         handoff_ms = 0.0
         replay_ms: list[float] = []
@@ -380,6 +532,9 @@ class Qwen38ChunkPrefill:
         slab_upload_ms: list[float] = []
         slab_wait_ms: list[float] = []
         stopped = None
+        padded_pass: tuple[
+            str, int
+        ] | None = None  # (form, real rows) of the padded pass when it was the last one replayed
         consumed = len(remaining)
         chunks = len(accepts)
         long_done = long_chunks
@@ -387,7 +542,7 @@ class Qwen38ChunkPrefill:
         if plan:
             if position % CHUNK_ROWS:
                 raise AssertionError(f"chunks must start at P % {CHUNK_ROWS} == 0, got P = {position}")
-            end = position + slabs * self.slab_rows + long_chunks * LONG_CHUNK_ROWS + CHUNK_ROWS * len(accepts)
+            end = position + sum(spec.rows for spec in specs)
             if end > self.model.allocated_context:
                 raise ValueError(
                     f"the padded tail chunk ends at {end}, past the allocated context {self.model.allocated_context}"
@@ -451,6 +606,8 @@ class Qwen38ChunkPrefill:
                 host_started_ns = time.perf_counter_ns()
                 if accepted is not None and accepted != CHUNK_ROWS - 1:
                     self.model.write_chunk_accepted(self.chunk_state, accepted)
+                elif kind != "short" and real_rows < self._form_rows(kind):
+                    self.model.write_chunk_pad(chunk_state, real_rows)  # the padded 128-row chunk or slab
                 prepared, prepare_ns, feature_cursor = pending
                 ple_context = prepared.contexts[real_rows]
                 upload_started_ns = time.perf_counter_ns()
@@ -521,11 +678,23 @@ class Qwen38ChunkPrefill:
             position += consumed
             handoff_started_ns = time.perf_counter_ns()
             ttnn.synchronize_device(self.mesh)
+            # A padded 128-row chunk or slab is the last pass replayed (a stop after it consumed every row): the hand-off
+            # takes the carries it reads from the real rows of that pass.
+            last_state, last_kind, last_rows, _last_accepted = plan[index]  # the last pass replayed
+            if len(last_rows) < self._form_rows(last_kind):
+                padded_pass = (last_kind, len(last_rows))
+            tail = None if padded_pass is None or last_kind == "short" else (last_state, len(last_rows))
             # The decode's shift after the prefill; a prompt that ends in text (Qwen38VisionPrompt.validate_prompt)
             # keeps it within the next position's block start.  A stop inside an image leaves a state no request
             # decodes from (an image prompt always resets), so its shift is clamped to a valid value.
             rope_shift = 0 if positions is None else min(positions.shift_at(position), position & ~3)
-            self.model.finish_prefill(self.state, self.chunk_state, position, rope_shift=rope_shift)
+            self.model.finish_prefill(
+                self.state,
+                self.chunk_state,
+                position,
+                rope_shift=rope_shift,
+                **({} if tail is None else {"tail": tail}),
+            )
             if self.mtp is not None:
                 self.mtp.finish_chunk(self.model, prefilled=position)
             ttnn.synchronize_device(self.mesh)
@@ -551,6 +720,9 @@ class Qwen38ChunkPrefill:
             slab_prepare_ms=tuple(slab_prepare_ms),
             slab_upload_ms=tuple(slab_upload_ms),
             slab_wait_ms=tuple(slab_wait_ms),
+            plan=used_plan,
+            padded_pass=None if padded_pass is None else padded_pass[0],
+            padded_real_rows=0 if padded_pass is None else padded_pass[1],
         )
         return Qwen38PrefillResult(position, ple_context, timing, stopped)
 
