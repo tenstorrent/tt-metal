@@ -105,7 +105,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
     def for_block(formats, dest_acc, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int) -> list:
         """[MATMUL_ROW_MOP()] where the ttnn matmul kernels run the opt-in row MOP for a half-sync block of the sweep (one inner block, so
         the section packs to the output format): helpers/matmul_prod_keys.py m2_row_mop, less the cells that keep main's form."""
-        from helpers.matmul_prod_keys import forced_r_cell, main_form_cell, m2_row_mop
+        from helpers.matmul_prod_keys import forced_form, main_form_cell, m2_row_mop
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
             return []
@@ -113,9 +113,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
         out_format = formats.output_format
         if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim)):
             return []
-        if dest_sync == DestSync.Half and forced_r_cell(
-            math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
-        ):
+        if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
@@ -391,13 +389,16 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             return [MATMUL_FORM_KEYS(2, DataFormat.Float32, True)]
         # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
         if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
-            from helpers.matmul_prod_keys import forced_r_cell, main_form_cell
+            from helpers.matmul_prod_keys import forced_form, main_form_cell
 
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
-            if dest_sync == DestSync.Half and forced_r_cell(
-                math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), False, min(ct_dim, rt_dim)
-            ):
-                return [MATMUL_FORM_KEYS(1, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, "R")]
+            forced = (
+                forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, rt_dim, ct_dim)
+                if dest_sync == DestSync.Half
+                else ""
+            )
+            if forced:
+                return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else 2, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, forced)]
             if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim)):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down

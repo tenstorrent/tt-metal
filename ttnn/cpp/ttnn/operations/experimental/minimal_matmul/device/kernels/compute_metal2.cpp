@@ -575,7 +575,8 @@ void kernel_main() {
     // cells where the keyed forms read slower than main's on the tt-llk sweep keep main's form (llk_matmul_forms.h)
 #if defined(UCK_CHLKC_PACK)
     constexpr bool mm_main_cell = false;
-    constexpr bool mm_forced_r = false;
+    constexpr char mm_forced_form = 0;
+    constexpr DataFormat mm_forced_key = DataFormat::Invalid;
 #else
     constexpr bool mm_main_cell = ckernel::matmul_main_form_cell_selected<
         MATH_FIDELITY,
@@ -589,7 +590,7 @@ void kernel_main() {
         (subblock_w > subblock_h ? subblock_w : subblock_h),
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
         (subblock_w < subblock_h ? subblock_w : subblock_h)>();
-    constexpr bool mm_forced_r = !mm_main_cell && ckernel::matmul_forced_r_cell_selected<
+    constexpr char mm_forced_form = mm_main_cell ? 0 : ckernel::matmul_forced_form<
         MATH_FIDELITY,
         K_block_tiles,
         DST_ACCUM_MODE,
@@ -597,15 +598,15 @@ void kernel_main() {
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in1)]),
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::out)]),
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]),
-        (K_num_blocks > 1),
-        (subblock_w > subblock_h ? subblock_w : subblock_h),
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
-        (subblock_w < subblock_h ? subblock_w : subblock_h)>();
+        subblock_h,
+        subblock_w>();
+    constexpr DataFormat mm_forced_key = ckernel::matmul_forced_form_key(mm_forced_form);
 #endif
 #endif
 #if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
     // not with a fused activation: its SFPU init runs once, before the matmul inits that rewrite ADDR_MOD_3, 6 and 7
-    constexpr bool row_mop = !mm_main_cell && !mm_forced_r && subblock_h * subblock_w >= 8 && K_block_tiles > 1;
+    constexpr bool row_mop = !mm_main_cell && mm_forced_form == 0 && subblock_h * subblock_w >= 8 && K_block_tiles > 1;
 #else
     constexpr bool row_mop = false;
 #endif
@@ -613,7 +614,7 @@ void kernel_main() {
     // each DEST section is packed to the intermediate buffer
     constexpr DataFormat mm_pack_format =
         mm_main_cell ? DataFormat::Invalid
-        : mm_forced_r ? DataFormat::Bfp4_b
+        : mm_forced_form != 0 ? mm_forced_key
         : static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]);
 #else
     constexpr DataFormat mm_pack_format = DataFormat::Invalid;

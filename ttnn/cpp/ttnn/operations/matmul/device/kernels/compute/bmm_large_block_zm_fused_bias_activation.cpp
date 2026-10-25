@@ -228,7 +228,8 @@ void kernel_main() {
 #endif
 #if defined(UCK_CHLKC_PACK)
     constexpr bool bmm_main_cell = false;
-    constexpr bool bmm_forced_r = false;
+    constexpr char bmm_forced_form = 0;
+    constexpr DataFormat bmm_forced_key = DataFormat::Invalid;
 #else
     // one tile in one section for the whole kernel: the row MOP's init is not repaid (HiFi4 bf16 1x1 reads 6 to 14 ns slower than main)
     constexpr bool bmm_single_tile_kernel =
@@ -246,7 +247,7 @@ void kernel_main() {
         (out_subblock_w > out_subblock_h ? out_subblock_w : out_subblock_h),
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
         (out_subblock_w < out_subblock_h ? out_subblock_w : out_subblock_h)>();
-    constexpr bool bmm_forced_r = !bmm_main_cell && ckernel::matmul_forced_r_cell_selected<
+    constexpr char bmm_forced_form = bmm_main_cell ? 0 : ckernel::matmul_forced_form<
         MATH_FIDELITY,
         in0_block_w,
         DST_ACCUM_MODE,
@@ -254,13 +255,13 @@ void kernel_main() {
         in1_format,
         static_cast<DataFormat>(unpack_src_format[out_dfb_id]),
         static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id]),
-        (num_blocks_inner_dim > 1),
-        (out_subblock_w > out_subblock_h ? out_subblock_w : out_subblock_h),
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
-        (out_subblock_w < out_subblock_h ? out_subblock_w : out_subblock_h)>();
+        out_subblock_h,
+        out_subblock_w>();
+    constexpr DataFormat bmm_forced_key = ckernel::matmul_forced_form_key(bmm_forced_form);
 #endif
     constexpr bool row_mop =
-        !bmm_main_cell && !bmm_forced_r && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
+        !bmm_main_cell && bmm_forced_form == 0 && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
         (DST_ACCUM_MODE || (unpack_src_format[out_dfb_id] != (uint8_t)DataFormat::Float32 &&
                             unpack_src_format[mm_partials_dfb_id] != (uint8_t)DataFormat::Float32)) &&
         out_subblock_num_tiles >= 4 && (is_bfp8_b_format(in1_format) || is_bfp4_b_format(in1_format));
@@ -307,7 +308,7 @@ void kernel_main() {
     // the format each DEST section is packed to: the partials until the last inner block
     constexpr DataFormat mm_pack_format =
         bmm_main_cell ? DataFormat::Invalid
-        : bmm_forced_r ? DataFormat::Bfp4_b
+        : bmm_forced_form != 0 ? bmm_forced_key
                       : static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : mm_out_dfb_id]);
 #else
     constexpr DataFormat mm_pack_format = DataFormat::Invalid;

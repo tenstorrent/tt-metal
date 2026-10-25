@@ -31,11 +31,18 @@ def _cells(text: str) -> dict:
     return out
 
 
-_MAIN_PART, _, _FORCED_PART = _HEADER.partition("matmul_forced_r_cells[]")
+_MAIN_PART, _, _FORCED_PART = _HEADER.partition("matmul_forced_form_cells[] = {")
 # matmul_main_form_cells of the header: cells whose keyed forms read slower than main's, which keep main's form
 _MAIN_CELLS = _cells(_MAIN_PART)
-# matmul_forced_r_cells: cells that take the hoisted rows form 'R' whatever the table says
-_FORCED_R_CELLS = _cells(_FORCED_PART.split("};")[0])
+# matmul_forced_form_cells: cells that take the form 'R' or 'h' whatever the table says
+_FORCED_CELLS = [
+    (fid, int(sync), int(mink), int(maxk, 0), acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(minw), int(maxw, 0), int(minh), wide == "true", form)
+    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form in re.findall(
+        r"\{MathFidelity::(\w+), (\d), (\d+), (0x[0-9A-Fa-f]+|\d+), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), "
+        r"(\d+), (0x[0-9A-Fa-f]+|\d+), (\d+), (true|false), '(\w)'\},",
+        _FORCED_PART.split("};")[0],
+    )
+]
 _FMT = {
     DataFormat.Float16_b: 0,
     DataFormat.Float16: 1,
@@ -93,9 +100,23 @@ def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, 
     return _cell_hit(_MAIN_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
 
 
-def forced_r_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99) -> bool:
-    """matmul_forced_r_cell_selected of llk_matmul_forms.h: the cell takes the hoisted rows form 'R'."""
-    return _cell_hit(_FORCED_R_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
+def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, full_sync, rt, ct) -> str:
+    """matmul_forced_form of llk_matmul_forms.h: 'R', 'h' or '' (the table's form), for a block of rt x ct tiles."""
+    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form in _FORCED_CELLS:
+        if (
+            fid == fidelity.name
+            and sync == (1 if full_sync else 0)
+            and mink <= kb <= maxk
+            and acc == fp32_dest
+            and in_format == i
+            and out_format == o
+            and pack_format == p
+            and minw <= ct <= maxw
+            and rt >= minh
+            and (not wide or ct >= rt)
+        ):
+            return form
+    return ""
 
 
 MAIN_FORM = (("tile", False), None)  # main's form: tile MOP, per-row unpack, unknown format key

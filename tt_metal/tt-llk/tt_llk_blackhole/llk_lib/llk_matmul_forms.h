@@ -40,7 +40,15 @@ constexpr char matmul_default_form()
                         : out_format == DataFormat::Bfp8_b  ? 3
                         : out_format == DataFormat::Bfp4_b  ? 4
                                                             : -1;
-    if constexpr (kt_per_section == 0 || fmt < 0)
+    if constexpr (out_format == DataFormat::Bfp2_b)
+    {
+        return 'h'; // forced forms (matmul_forced_form_cells): block float 2 bit formats are not matmul outputs
+    }
+    else if constexpr (out_format == DataFormat::Bfp2)
+    {
+        return 'R';
+    }
+    else if constexpr (kt_per_section == 0 || fmt < 0)
     {
         return '.';
     }
@@ -129,30 +137,58 @@ constexpr bool matmul_main_form_cell_selected()
     return false;
 }
 
-// Cells whose rows read slower than main's with the keyed form but faster with the hoisted rows form 'R' ('r' per row unpack
-// loses there); the kernels key them with Bfp4_b, which the table reads as 'R' at k 1, LoFi, half sync and a 32-bit DEST.
-inline constexpr matmul_main_form_cell matmul_forced_r_cells[] = {
-    // Float32 input to Bfp8_b at LoFi, one k step, half sync and a 32-bit DEST: the 2x2 block reads 1.5 cycles behind main on the per row unpack;
-    // the four tile row and column blocks lose with the hoisted form, so only blocks with both sides of two tiles or more
-    {MathFidelity::LoFi, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 0, 0xFFFF, 0, 0, 0xFFFF, 2},
+// Cells that take a form of their own whatever the table says, keyed on the input format and the block shape (the table keys the output
+// format, which cells of different input formats share): form 'R' is the hoisted rows form, 'h' the tile MOP with the hoisted unpack. The
+// kernels key a forced cell as Bfp2 ('R') or Bfp2_b ('h'), which matmul_default_form reads as that form (neither is a ttnn type).
+struct matmul_forced_form_cell
+{
+    MathFidelity fidelity;
+    int sync; // 0 half, 1 full
+    std::uint32_t min_k;
+    std::uint32_t max_k;
+    bool fp32_dest;
+    DataFormat in;
+    DataFormat out;
+    DataFormat pack;
+    std::uint32_t min_w; // block width (ct) in tiles
+    std::uint32_t max_w;
+    std::uint32_t min_h; // block height (rt) in tiles
+    bool wide;           // width at least the height: the in1 side is reused
+    char form;
 };
 
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles, int sync, std::uint32_t min_side>
-constexpr bool matmul_forced_r_cell_selected()
+inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
+    // Float32 to Bfp8_b at LoFi, one k step, 32-bit DEST: the 2x2 block reads 1.5 cycles behind main on the per row unpack; the four tile row and
+    // column blocks lose with the hoisted form
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 0xFFFF, 2, false, 'R'},
+    // Bfp8_b to Float32 at LoFi, two to four k steps, 16-bit DEST: the rows form reads up to 5 cycles under main from a 4 tile width (the
+    // tile form leaves 0.14 to 0.19 over); the 3 tile width takes the hoisted tile form; the tall blocks keep the tile form
+    {MathFidelity::LoFi, 0, 2, 4, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 0xFFFF, 1, true, 'R'},
+    {MathFidelity::LoFi, 0, 2, 4, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 3, 1, true, 'h'},
+    // Bfp8_b to Float32 at HiFi4, one k step, 16-bit DEST: the hoisted tile form on the wide blocks (the tall blocks lose with it)
+    {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 0xFFFF, 1, true, 'h'},
+};
+
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, int sync, std::uint32_t h, std::uint32_t w>
+constexpr char matmul_forced_form()
 {
-    for (const matmul_main_form_cell& c : matmul_forced_r_cells)
+    for (const matmul_forced_form_cell& c : matmul_forced_form_cells)
     {
-        if (c.fidelity == math_fidelity && c.k1 == (kt_per_section == 1) && c.fp32_dest == fp32_dest && c.out == out_format && c.pack == pack_format &&
-            (c.in == in0 || c.in == in1) && !(c.several_blocks_ok && several_blocks) && row_tiles >= c.min_row && row_tiles <= c.max_row &&
-            (c.sync < 0 || c.sync == sync) && kt_per_section >= c.min_k && kt_per_section <= c.max_k && min_side >= c.min_dim)
+        if (c.fidelity == math_fidelity && c.sync == sync && kt_per_section >= c.min_k && kt_per_section <= c.max_k && c.fp32_dest == fp32_dest &&
+            c.out == out_format && c.pack == pack_format && (c.in == in0 || c.in == in1) && w >= c.min_w && w <= c.max_w && h >= c.min_h && (!c.wide || w >= h))
         {
-            return true;
+            return c.form;
         }
     }
-    return false;
+    return 0;
 }
 
-static_assert(matmul_default_form<MathFidelity::LoFi, DstSync::SyncHalf, true, 1, DataFormat::Bfp4_b>() == 'R', "the forced hoisted rows cells key as Bfp4_b");
+// The key a kernel hands the table for a forced form
+constexpr DataFormat matmul_forced_form_key(const char form)
+{
+    return form == 'R' ? DataFormat::Bfp2 : (form == 'h' ? DataFormat::Bfp2_b : DataFormat::Invalid);
+}
+
 
 /**
  * @brief The math fidelity whose phases cover every nonzero mantissa slice of the two matmul operands.
