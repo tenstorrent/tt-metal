@@ -600,7 +600,8 @@ void kernel_main() {
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]),
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
         subblock_h,
-        subblock_w>();
+        subblock_w,
+        (K_num_blocks > 1)>();
     constexpr DataFormat mm_forced_key = ckernel::matmul_forced_form_key(mm_forced_form);
 #endif
 #endif

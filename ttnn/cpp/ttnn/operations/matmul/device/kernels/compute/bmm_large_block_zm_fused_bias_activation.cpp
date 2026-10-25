@@ -257,7 +257,8 @@ void kernel_main() {
         static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id]),
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
         out_subblock_h,
-        out_subblock_w>();
+        out_subblock_w,
+        (num_blocks_inner_dim > 1)>();
     constexpr DataFormat bmm_forced_key = ckernel::matmul_forced_form_key(bmm_forced_form);
 #endif
     constexpr bool row_mop =
