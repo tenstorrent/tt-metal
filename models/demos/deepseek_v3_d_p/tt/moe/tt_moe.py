@@ -46,6 +46,36 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 # glue track: workers per link for the MoE x all-gather over TP; "0" = op default.
 _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
+# Prelude overlap (overlap agent, 2026-10-25): the MoE x all-gather (axis 1) runs on its own sub-device next to the
+# routing chain (masked_bincount, offset_cumsum's axis-0 gather + cumsum, the indices/scores untilize), which needs
+# none of it. Manager {SD0 = columns 0..SPLIT-1 (masked_bincount's fixed (0,0)-(7,7) grid, offset_cumsum's (0,0)
+# core and default-sub-device gather, column-major untilize cores), SD1 = the rest (the x all-gather's workers)},
+# loaded after the gate (so the gate's axis-1 all-gather is done: two programs on one fabric axis must never overlap,
+# notes/pipeline/deadlock-matrix.md) and cleared before the indices copy and Q1, which need the whole grid.
+# The clear drains both sub-devices = the join. GLM_MOE_PRELUDE_OVERLAP=1 enables it.
+_PRELUDE_OVERLAP = os.environ.get("GLM_MOE_PRELUDE_OVERLAP", "0") == "1"
+_PRELUDE_SPLIT = int(os.environ.get("GLM_MOE_PRELUDE_SPLIT", "8"))
+_prelude_managers: dict = {}
+
+
+def _prelude_manager(mesh_device):
+    """The prelude-overlap manager of `mesh_device` (one per mesh, shared by every MoE layer)."""
+    key = (mesh_device.id(), _PRELUDE_SPLIT)
+    mgr = _prelude_managers.get(key)
+    if mgr is None:
+        g = mesh_device.compute_with_storage_grid_size()
+        assert 8 <= _PRELUDE_SPLIT < g.x, f"GLM_MOE_PRELUDE_SPLIT={_PRELUDE_SPLIT}: masked_bincount needs columns 0-7"
+        routing = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_PRELUDE_SPLIT - 1, g.y - 1))})
+        xag = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(_PRELUDE_SPLIT, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+        mgr = mesh_device.create_sub_device_manager([ttnn.SubDevice([routing]), ttnn.SubDevice([xag])], 0)
+        _prelude_managers[key] = mgr
+        logger.info(
+            f"[prelude overlap] manager: routing SD0 = columns 0-{_PRELUDE_SPLIT - 1}, x all-gather SD1 = columns "
+            f"{_PRELUDE_SPLIT}-{g.x - 1}"
+        )
+    return mgr
+
+
 # glue track: build post_combine_reduce's [1, 1, S, k, 1] weights inside the dispatch || shared-expert window.
 _GLUE_PCR_WEIGHTS_IN_WINDOW = os.environ.get("GLUE_PCR_WEIGHTS_IN_WINDOW", "1") == "1"
 # fp8wire track (port of pmilojevic/FP8-newDispatchCombine): the fp8 dispatch wire. Q1 (per_token_cast_to_fp8,
@@ -931,6 +961,21 @@ class TtMoe(LightweightModule):
             forwarding_buffer=self.combine_forwarding_buffer,
         )
 
+    def _x_all_gather(self, x, subdevice_id=None):
+        """All-gather x over TP (axis 1) to the full emb_dim (both the shared expert and dispatch need it)."""
+        return ttnn.experimental.all_gather_async(
+            x,
+            dim=-1,  # Gather along emb_dim
+            cluster_axis=1,  # Gather across axis 1 (TP axis)
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+            num_links=self.col_num_links,
+            topology=self.col_topology,
+            # glue R0: 8 workers per link 85.3 us vs 90.5 default at [640,1536] -> 6144.
+            num_workers_per_link=_GLUE_MOE_XAG_WORKERS,
+            subdevice_id=subdevice_id,
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -1053,6 +1098,22 @@ class TtMoe(LightweightModule):
 
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
+        # Prelude overlap: issue the x all-gather first, on its own sub-device, then the routing chain on SD0.
+        prelude = (
+            _PRELUDE_OVERLAP
+            and self.overlap_shared_expert_with_dispatch
+            and self.mesh_device.shape[1] > 1
+            and not return_intermediates
+            and not self.debug_token_count
+        )
+        x_gathered = None
+        if prelude:
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(_prelude_manager(self.mesh_device))
+            else:
+                self.mesh_device.load_sub_device_manager(_prelude_manager(self.mesh_device))
+            x_gathered = self._x_all_gather(x, subdevice_id=ttnn.SubDeviceId(1))
+
         (
             tt_expert_offsets,
             tt_expert_token_counts,
@@ -1103,18 +1164,16 @@ class TtMoe(LightweightModule):
         # Input x is sharded: (dispatch_group_size/axis0, seq_len_per_chip, emb_dim/axis1)
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
-        if self.mesh_device.shape[1] > 1:
-            x = ttnn.experimental.all_gather_async(
-                x,
-                dim=-1,  # Gather along emb_dim
-                cluster_axis=1,  # Gather across axis 1 (TP axis)
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
-                num_links=self.col_num_links,
-                topology=self.col_topology,
-                # glue R0: 8 workers per link 85.3 us vs 90.5 default at [640,1536] -> 6144.
-                num_workers_per_link=_GLUE_MOE_XAG_WORKERS,
-            )
+        if x_gathered is not None:
+            x = x_gathered
+            # Join: clearing the prelude manager drains both sub-devices; the indices copy and Q1 below get the
+            # whole grid again.
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_clear()
+            else:
+                self.mesh_device.clear_loaded_sub_device_manager()
+        elif self.mesh_device.shape[1] > 1:
+            x = self._x_all_gather(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] x (after all_gather) shape: {x.shape}")
 
