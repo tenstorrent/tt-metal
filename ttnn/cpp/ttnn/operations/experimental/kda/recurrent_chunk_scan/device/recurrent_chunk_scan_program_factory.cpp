@@ -129,23 +129,28 @@ ttnn::device_operation::MeshWorkloadArtifacts RecurrentChunkScanProgramFactory::
                 .num_entries = entries,
                 .data_format_metadata = format};
         };
+    // The chunk inputs are double-buffered. Those the reader multicasts are a chunk deeper, so its stream runs a chunk
+    // ahead of compute (kda::SharedInputStream) and neither the sender nor its siblings wait on each other per chunk.
+    const uint32_t input_depth = mcast_shared ? 3 : 2;
+    const uint32_t update_input_depth = late_on_writer ? 2 : input_depth;
     const uint32_t split_head_tiles = summary ? Vt : 1;
     const uint32_t tail_entry_states_tiles = !summary ? kv : 1;
     tt::tt_metal::experimental::Group<tt::tt_metal::experimental::DataflowBufferSpec> dfbs = {
         make_dfb(state_dfb_name, state_tiles, fp32),
-        make_dfb(t_inv_dfb_name, 2 * cc, input_format(in.t_inv)),
-        make_dfb(v_beta_dfb_name, 2 * cv, input_format(in.v_beta)),
-        make_dfb(kd_dfb_name, 2 * ck, input_format(in.kd)),
-        make_dfb(q_decay_dfb_name, reads_queries ? 2 * ck : 1, reads_queries ? input_format(in.q_decay) : fp32),
-        make_dfb(intra_dfb_name, reads_queries ? 2 * cc : 1, reads_queries ? input_format(in.intra) : fp32),
+        make_dfb(t_inv_dfb_name, input_depth * cc, input_format(in.t_inv)),
+        make_dfb(v_beta_dfb_name, input_depth * cv, input_format(in.v_beta)),
+        make_dfb(kd_dfb_name, input_depth * ck, input_format(in.kd)),
+        make_dfb(
+            q_decay_dfb_name, reads_queries ? input_depth * ck : 1, reads_queries ? input_format(in.q_decay) : fp32),
+        make_dfb(intra_dfb_name, reads_queries ? input_depth * cc : 1, reads_queries ? input_format(in.intra) : fp32),
         make_dfb(state_ring_dfb_name, 2 * state_tiles, fp32),
         make_dfb(value_new_dfb_name, paths * cv, fp32),
-        make_dfb(final_decay_dfb_name, 2 * Kt, input_format(in.final_decay)),
+        make_dfb(final_decay_dfb_name, update_input_depth * Kt, input_format(in.final_decay)),
         make_dfb(output_dfb_name, summary ? kv : 2 * cv, output_format),
         make_dfb(output_intermediate_dfb_name, summary ? 1 : cv, fp32),
         // The recurrence's q_decay @ state, computed early so its latency hides behind the dependent stages.
         make_dfb(query_projection_dfb_name, reads_queries ? paths * cv : 1, fp32),
-        make_dfb(k_decay_transposed_dfb_name, 2 * kc, input_format(in.k_dec_t)),
+        make_dfb(k_decay_transposed_dfb_name, update_input_depth * kc, input_format(in.k_dec_t)),
         make_dfb(final_state_dfb_name, state_tiles, fp32),
         make_dfb(transport_state_dfb_name, summary ? kv : 1, tt::DataFormat::Float16_b),
         make_dfb(scratch_dfb_name, scratch_entries, fp32),

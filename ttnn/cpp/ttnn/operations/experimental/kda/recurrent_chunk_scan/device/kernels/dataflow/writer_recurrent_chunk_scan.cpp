@@ -42,7 +42,8 @@ FORCE_INLINE void write_value_slice(
                     {.page_id = destination + value_tile});
             }
         }
-        noc.async_write_barrier();
+        // The packet may be reused once its data has left; the writes complete by the writer's final barrier.
+        noc.async_writes_flushed();
         if constexpr (Consume) {
             buffer.pop_front(packet_tiles);
         }
@@ -146,7 +147,7 @@ FORCE_INLINE void write_summary(
                     {.offset_bytes = (Vt + t) * entry_size},
                     {.page_id = page + t});
             }
-            noc.async_write_barrier();
+            noc.async_writes_flushed();
             chunk_pair.pop_front(2 * Vt);
             if (straddles && chunk + 1 == reset_chunk) {
                 write_value_slice<Kt, Vt, row_stride, 1>(head_a_accessor, split_head_a, noc, row_base, a_column);
@@ -344,4 +345,7 @@ TT_KERNEL void writer(
         write_recurrent<Ct, Kt, Vt, Vt_full, late_on_writer>(
             head, value_block, num_chunks, valid_chunks, final_head, {peer_x0, peer_y0, peer_x1, peer_y1, receivers});
     }
+    // Every output write was only flushed from L1 as it was issued; complete them all once, at the end.
+    Noc noc;
+    noc.async_write_barrier();
 }
