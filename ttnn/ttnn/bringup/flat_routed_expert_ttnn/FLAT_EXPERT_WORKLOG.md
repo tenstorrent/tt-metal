@@ -1674,3 +1674,14 @@ nothing, fewer sub-blocks does. Not implemented.
   backpressured (XRD_FULL 195 us), the down cores wait for h, the weights land ahead (every 8 blocks ~6.4 us).
   What fixes the 0.54 us a block is not found yet - none of the x path's own knobs.
 Logs: /localdev/mstaletovic/flat_glm53/ (pad_*, sk_nh2, sk_tzskip, sk_xs48, zs_sk2 + zs_sk2.csv).
+- What sets the 0.54 us (per-core X_ARR marks, zs_sk2.csv): 2 snakes of 32 gate/up cores each, every core gets blocks
+  at the same 0.54 us, ~0.43 us later than its predecessor; the head runs a full x ring (24 blocks, 12.5 us) ahead of
+  core 2. It is the NCRISC forwarder's acked writes: 3 pieces in flight, one ack round trip (~0.4 us) each ->
+  4 pieces = 0.53 us a block whatever the block's bytes (MT 1 / MT 2 the same). Pieces 8 predicts 1.07 us a block,
+  measured 1.03 (594); forward depth 12: skeleton 333 -> 304 (M 96 229 -> 217), where the next limit is the snake's
+  bandwidth, ~35-40 GB/s a link: 128-row sub-blocks (MT 4, 34.8 KB blocks) take ~0.9 us a block, so 2 x 24 x 0.9 ~
+  3 x 24 x 0.54 (skeleton MT 4 M 160 345 vs 333) - why MT 4 did not help (real 535, no math 531).
+- And it does not reach the real run: depth 12 no reads 387 / 434 (= base), real 459 / 499 / 526. The skeleton is not
+  what binds; above it sit the weight forwards (+80 us at no reads) and the read interference (+87). Not fixed: a
+  posted-write forwarder (no ack round trip) is estimated at ~0 in the real run on this evidence.
+Logs: sk_mt4, sk_p2d6, sk_p4d12, nm_mt4, r_d12, nr_d12.
