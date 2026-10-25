@@ -295,7 +295,8 @@ class TtDistributedRmsNorm(LightweightModule):
             logger.debug("Moved input to specified memory config")
 
         if self.use_fused:
-            semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
+            # The current pipeline stream's TT_CCL (tt_ccl.ccl_stream): its stats buffers and semaphores, not stream 0's.
+            semaphores, stats = get_tt_ccl(self.mesh_device).get_fused_rmsnorm_resources(
                 x, self.fused_weight, self.cluster_axis, self.num_links
             )
             return ttnn.experimental.dit_fused_distributed_rmsnorm(

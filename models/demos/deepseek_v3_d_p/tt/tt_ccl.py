@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
@@ -43,31 +44,56 @@ _tt_ccl_cache: dict[int, "TT_CCL"] = {}
 # MLA scratch -- assumes layers run one after another, so each stream gets its own TT_CCL. Stream 0 is the
 # existing per-mesh instance (unchanged behaviour for every single-stream caller). The stream is a context:
 # modules look their TT_CCL up when they issue ops (get_tt_ccl(mesh)), and the driver wraps each stream's op
-# group in `with ccl_stream(mesh, s):` (TtMoe.forward(stream=s) does it for the MoE).
+# group in `with ccl_stream(mesh, s):` (TtMoe.forward(stream=s) does it for the MoE). The context is thread-local;
+# without one, the stream is the two-stream runner's (utils/pipeline.current_stream, thread-local, when that module
+# exists), so a per-thread runner selects each stream's TT_CCL with no explicit context.
 # A stream's TT_CCL creates global semaphores in its constructor and some resources synchronize on first use, so
 # every stream must run once (warm-up) before any trace capture; prepare_ccl_streams() does the constructor part.
+# Stream >= 1 instances carry `_is_stream_peer` / `_parent` (= stream 0's), the markers of the E3 "stream-1 peer", so
+# a TT_CCL that redirects stream-local names to a peer can use this instance as that peer.
 _tt_ccl_stream_cache: dict[tuple[int, int], "TT_CCL"] = {}
-_current_stream: dict[int, int] = {}
+_stream_tls = threading.local()
+_pipeline_current_stream = None  # utils.pipeline.current_stream, resolved on first use (False: not available)
+
+
+def _runner_stream() -> int:
+    global _pipeline_current_stream
+    if _pipeline_current_stream is None:
+        try:
+            from models.demos.deepseek_v3_d_p.utils.pipeline import current_stream
+        except ImportError:
+            current_stream = False
+        _pipeline_current_stream = current_stream
+    return _pipeline_current_stream() if _pipeline_current_stream else 0
 
 
 def current_ccl_stream(mesh_device: ttnn.MeshDevice) -> int:
-    """The pipeline stream whose TT_CCL get_tt_ccl(mesh_device) returns right now (0 outside any ccl_stream)."""
-    return _current_stream.get(mesh_device.id(), 0)
+    """The pipeline stream whose TT_CCL get_tt_ccl(mesh_device) returns right now: the innermost ccl_stream of this
+    thread, else the two-stream runner's stream of this thread, else 0."""
+    explicit = getattr(_stream_tls, "streams", {}).get(mesh_device.id())
+    return explicit if explicit is not None else _runner_stream()
 
 
 @contextmanager
 def ccl_stream(mesh_device: ttnn.MeshDevice, stream: Optional[int]):
-    """Make `stream`'s TT_CCL the one get_tt_ccl(mesh_device) returns inside the block. None keeps the current."""
+    """Make `stream`'s TT_CCL the one get_tt_ccl(mesh_device) returns inside the block (this thread). None keeps the
+    current one."""
     if stream is None:
         yield
         return
+    streams = getattr(_stream_tls, "streams", None)
+    if streams is None:
+        streams = _stream_tls.streams = {}
     mesh_id = mesh_device.id()
-    previous = _current_stream.get(mesh_id, 0)
-    _current_stream[mesh_id] = int(stream)
+    previous = streams.get(mesh_id)
+    streams[mesh_id] = int(stream)
     try:
         yield
     finally:
-        _current_stream[mesh_id] = previous
+        if previous is None:
+            streams.pop(mesh_id, None)
+        else:
+            streams[mesh_id] = previous
 
 
 def prepare_ccl_streams(mesh_device: ttnn.MeshDevice, num_streams: int) -> None:
@@ -108,14 +134,18 @@ def get_tt_ccl(mesh_device: ttnn.MeshDevice, stream: Optional[int] = None) -> "T
     see ccl_stream; 0 outside any)."""
     mesh_id = mesh_device.id()
     if stream is None:
-        stream = _current_stream.get(mesh_id, 0)
+        stream = current_ccl_stream(mesh_device)
     if stream == 0:
         if mesh_id not in _tt_ccl_cache:
             _tt_ccl_cache[mesh_id] = TT_CCL(mesh_device)
         return _tt_ccl_cache[mesh_id]
     key = (mesh_id, int(stream))
     if key not in _tt_ccl_stream_cache:
-        _tt_ccl_stream_cache[key] = TT_CCL(mesh_device)
+        base = get_tt_ccl(mesh_device, 0)
+        tt_ccl = TT_CCL(mesh_device)
+        tt_ccl.__dict__["_is_stream_peer"] = True
+        tt_ccl.__dict__["_parent"] = base
+        _tt_ccl_stream_cache[key] = tt_ccl
     return _tt_ccl_stream_cache[key]
 
 
@@ -134,7 +164,7 @@ def clear_tt_ccl_cache():
         tt_ccl.release_sparse_mla_overlap_manager()
     _tt_ccl_cache.clear()
     _tt_ccl_stream_cache.clear()
-    _current_stream.clear()
+    getattr(_stream_tls, "streams", {}).clear()
 
 
 # =============================================================================
