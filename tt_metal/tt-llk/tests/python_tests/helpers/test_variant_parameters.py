@@ -94,6 +94,47 @@ class THROTTLE_LEVEL(TemplateParameter):
         return f"constexpr int THROTTLE_LEVEL = {self.throttle_level};"
 
 
+def matmul_reuse_dir_for(formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None) -> int:
+    """The reuse direction llk_matmul_forms.h matmul_reuse_dir picks (0 default, 1 hold in0, 2 hold in1): at LoFi a block of 4 or more
+    tiles with one 32-bit and one 16-bit operand holds the 32-bit one when it is reused (input_format feeds SrcA = in1, input_format_B SrcB = in0)."""
+    if get_chip_architecture() != ChipArchitecture.BLACKHOLE or math_fidelity != MathFidelity.LoFi or ct_dim * rt_dim < 4:
+        return 0
+    # half sync with a Float32 output is pack bound and measured up to 1.7 percent slower
+    if dest_sync == DestSync.Half and formats.output_format == DataFormat.Float32:
+        return 0
+    wide = (DataFormat.Float32, DataFormat.Tf32)
+    half = (DataFormat.Float16, DataFormat.Float16_b)
+    in0, in1 = formats.input_format_B, formats.input_format
+    if in1 in wide and in0 in half and ct_dim >= rt_dim and rt_dim >= 2:
+        return 2
+    if in0 in wide and in1 in half and ct_dim < rt_dim and ct_dim >= 2:
+        return 1
+    return 0
+
+
+@dataclass(init=False, repr=False, eq=False)
+class MATMUL_REUSE_DIR(TemplateParameter):
+    """Blackhole matmul that holds the 32-bit operand and streams the 16-bit one (reuse_dir of the LLK matmul); runs main's tile form.
+
+    The direction is kept out of the dataclass fields (a field would add a report column and split the CSV schema); the repr still
+    holds it, as the variant hash reads it."""
+
+    def __init__(self, reuse_dir: int = 0):
+        self.reuse_dir = reuse_dir
+
+    def __repr__(self) -> str:
+        return f"MATMUL_REUSE_DIR({self.reuse_dir})"
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_REUSE_DIR {self.reuse_dir}"
+
+    @staticmethod
+    def for_block(formats, math_fidelity, ct_dim: int, rt_dim: int, dest_sync=None) -> list:
+        """[MATMUL_REUSE_DIR(n)] where matmul_reuse_dir is not 0, else []."""
+        d = matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync)
+        return [MATMUL_REUSE_DIR(d)] if d else []
+
+
 @dataclass
 class MATMUL_ROW_MOP(TemplateParameter):
     """Blackhole matmul math with one MOP per reuse row."""
@@ -108,6 +149,8 @@ class MATMUL_ROW_MOP(TemplateParameter):
         from helpers.matmul_prod_keys import forced_form, main_form_cell, m2_row_mop
 
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE or (dest_sync != DestSync.Half and math_fidelity != MathFidelity.LoFi):
+            return []
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
@@ -204,6 +247,8 @@ class MATMUL_STREAM_Z(TemplateParameter):
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
         if ct_dim < rt_dim or in1_faces != 4 or in1_partial:
+            return []
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return []
         # measured: only LoFi rows of 4 or more output tiles never lose; the fidelities above it, 1x1 and 1x2 are pack or hand-off bound
         if math_fidelity != MathFidelity.LoFi or ct_dim * rt_dim < 4:
@@ -362,6 +407,9 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         if _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim, rt_dim, kt_dim, throttle):
+            return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
+        # a block that changes the reuse direction runs main's tile form and per-row unpack: the unknown-k key
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # 32-bit input at LoFi and full sync with four k steps: the 1x2 block with a 32-bit DEST and 16-bit or bfp8 output, and the 2x1 block
         # with a Float16_b output and a 16-bit DEST, read slower with the row forms: the unknown-k key, which is the tile form
@@ -528,6 +576,8 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
         if MATMUL_K_LOOP.for_block(formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim):
+            return []
+        if matmul_reuse_dir_for(formats, math_fidelity, ct_dim, rt_dim, dest_sync):
             return []
         # the cells below measured 0 slower than the context poll over 1440 small-block rows (ABBA, both orders) and are the
         # same cells bmm_unpack_auto_ttsync takes in the metal2 matmul kernel

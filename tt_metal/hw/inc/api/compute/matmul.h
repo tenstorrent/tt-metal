@@ -73,7 +73,8 @@ template <
     bool multi_k = false,
     DataFormat in0_format = DataFormat::Invalid,
     DataFormat in1_format = DataFormat::Invalid,
-    DataFormat out_format = DataFormat::Invalid>
+    DataFormat out_format = DataFormat::Invalid,
+    std::uint32_t reuse_dir = 0>
 ALWI void matmul_block_math_dynamic_throttle(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -89,30 +90,30 @@ ALWI void matmul_block_math_dynamic_throttle(
     const std::uint32_t mm_throttle_en = *(throttle_ptr) % 2;
     if (mm_throttle_en) {
         if (throttled_mop_status != 1) {
-            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, false, true, in1_order>(
+            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, false, true, in1_order, reuse_dir>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
         if constexpr (multi_k) {
             for (std::uint32_t k = 0; k < num_k; k++) {
-                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim)));
             }
         } else {
-            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE_MAX, /*num_faces=*/4, false, true, reuse_dir>(idst, ct_dim, rt_dim)));
         }
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order>(
+            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
         if constexpr (multi_k) {
             for (std::uint32_t k = 0; k < num_k; k++) {
-                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop>(
+                MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir>(
                     idst, ct_dim, rt_dim)));
             }
         } else {
-            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop>(idst, ct_dim, rt_dim)));
+            MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir>(idst, ct_dim, rt_dim)));
         }
     }
 #endif
@@ -278,7 +279,8 @@ template <
     DataFormat out_format = DataFormat::Invalid,
     int in1_order = 0,
     DataFormat in0_format = DataFormat::Invalid,
-    DataFormat in1_format = DataFormat::Invalid>
+    DataFormat in1_format = DataFormat::Invalid,
+    std::uint32_t reuse_dir = 0>
 ALWI void matmul_block_init(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -291,13 +293,14 @@ ALWI void matmul_block_init(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul_init<unpack_auto_ttsync>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    UNPACK((llk_unpack_AB_matmul_init<unpack_auto_ttsync, reuse_dir>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_init<
           matmul_elided_fidelity<in0_format, in1_format, out_format>(),
           MM_THROTTLE,
           row_mop,
           llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
-          in1_order>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+          in1_order,
+          reuse_dir>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
@@ -346,7 +349,8 @@ template <
     DataFormat out_format = DataFormat::Invalid,
     int in1_order = 0,
     DataFormat in0_format = DataFormat::Invalid,
-    DataFormat in1_format = DataFormat::Invalid>
+    DataFormat in1_format = DataFormat::Invalid,
+    std::uint32_t reuse_dir = 0>
 ALWI void matmul_block(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -362,7 +366,7 @@ ALWI void matmul_block(
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
 #ifdef ARCH_BLACKHOLE
-    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_per_section, out_format>(
+    UNPACK((llk_unpack_AB_matmul<unpack_auto_ttsync, kt_per_section, out_format, reuse_dir>(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((matmul_block_math_dynamic_throttle<
@@ -372,7 +376,8 @@ ALWI void matmul_block(
           false,
           in0_format,
           in1_format,
-          out_format>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+          out_format,
+          reuse_dir>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
@@ -401,7 +406,8 @@ template <
     DataFormat out_format = DataFormat::Invalid,
     int in1_order = 0,
     DataFormat in0_format = DataFormat::Invalid,
-    DataFormat in1_format = DataFormat::Invalid>
+    DataFormat in1_format = DataFormat::Invalid,
+    std::uint32_t reuse_dir = 0>
 ALWI void matmul_block_k(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -417,6 +423,7 @@ ALWI void matmul_block_k(
     std::uint32_t call_line = __builtin_LINE()) {
 #ifdef ARCH_BLACKHOLE
     static_assert(!unpack_auto_ttsync, "matmul_block_k: Auto TTSync rows are not supported");
+    static_assert(reuse_dir == 0, "matmul_block_k: a forced reuse direction is not supported");
     LLK_SAN_FUNCTION();
     state_configure(in1_cb_id, in0_cb_id, call_line);
     UNPACK((llk_unpack_AB_matmul_k(

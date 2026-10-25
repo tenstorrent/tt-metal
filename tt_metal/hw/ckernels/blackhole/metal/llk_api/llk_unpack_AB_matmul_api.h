@@ -16,7 +16,7 @@
 // FORMAT-FREE at the op level (src/dst formats are programmed at compute_kernel_hw_startup<SrcOrder::Reverse>),
 // so the cores take only the already-resolved geometry (face_r_dim / num_faces / partial_face per src) +
 // runtime addresses + per-tile sizes. The role swap (in0 -> SrcB, in1 -> SrcA) is applied by the callers.
-template <std::uint32_t auto_ttsync = false, bool stream_narrow = false>
+template <std::uint32_t auto_ttsync = false, bool stream_narrow = false, std::uint32_t reuse_dir = 0>
 inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t transpose,
     const std::uint32_t ct_dim,
@@ -28,7 +28,7 @@ inline void llk_unpack_AB_matmul_init_impl(
     const std::uint32_t unpB_num_faces,
     const bool partial_face_a,
     const bool partial_face_b) {
-    _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow>(
+    _llk_unpack_AB_matmul_init_<0, 0, auto_ttsync, stream_narrow, 0, reuse_dir>(
         transpose,
         ct_dim,
         rt_dim,
@@ -43,7 +43,7 @@ inline void llk_unpack_AB_matmul_init_impl(
 
 // kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
 // unknown.
-template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
+template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0>
 inline void llk_unpack_AB_matmul_impl(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -62,7 +62,10 @@ inline void llk_unpack_AB_matmul_impl(
         0,
         auto_ttsync,
         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
-        unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>()>(
+        unpack_AB_matmul_hoist_rows<MATH_FIDELITY, DST_SYNC_MODE, DST_ACCUM_MODE, kt_per_section, out_format>(),
+        get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+        0,
+        reuse_dir>(
         base_address_a,
         base_address_b,
         tile_index_a,
@@ -96,7 +99,7 @@ constexpr bool llk_unpack_AB_matmul_kernel_has_narrow_format() {
     return false;
 }
 
-template <std::uint32_t auto_ttsync = false>
+template <std::uint32_t auto_ttsync = false, std::uint32_t reuse_dir = 0>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -148,6 +151,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(unpA_num_faces),
         StateVal<Operand<Exu::Unpack>::NumFacesB>(unpB_num_faces)));
 
+    static_assert(reuse_dir == 0 || !may_stream_narrow, "a forced reuse direction does not stream 8-bit operands");
     if (may_stream_narrow && _llk_unpack_AB_matmul_stream_narrow_(
                                  ct_dim,
                                  rt_dim,
@@ -168,7 +172,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
             partial_face_a,
             partial_face_b);
     } else {
-        llk_unpack_AB_matmul_init_impl<auto_ttsync>(
+        llk_unpack_AB_matmul_init_impl<auto_ttsync, false, reuse_dir>(
             transpose,
             ct_dim,
             rt_dim,
@@ -182,7 +186,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     }
 }
 
-template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
+template <std::uint32_t auto_ttsync = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid, std::uint32_t reuse_dir = 0>
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -234,7 +238,7 @@ inline void llk_unpack_AB_matmul(
         StateDiscard<std::uint32_t>(tile_index_a),
         StateDiscard<std::uint32_t>(tile_index_b)));
 
-    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format>(
+    llk_unpack_AB_matmul_impl<auto_ttsync, kt_per_section, out_format, reuse_dir>(
         base_address_a,
         base_address_b,
         tile_index_a,

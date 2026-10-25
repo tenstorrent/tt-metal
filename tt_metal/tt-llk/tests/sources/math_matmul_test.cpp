@@ -26,6 +26,13 @@ constexpr ckernel::MathFidelity MATMUL_FIDELITY = ckernel::matmul_phase_fidelity
 constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
 #endif
 
+// reuse direction of the block (llk_matmul_forms.h matmul_reuse_dir), chosen by the test's python key from the operand formats
+#ifdef MATMUL_REUSE_DIR
+constexpr std::uint32_t matmul_reuse_dir_k = MATMUL_REUSE_DIR;
+#else
+constexpr std::uint32_t matmul_reuse_dir_k = 0;
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
@@ -83,9 +90,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr std::uint32_t stream_z = 0;
 #endif
-#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow, stream_z
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow, stream_z, matmul_reuse_dir_k
 #define MATMUL_UNPACK_TEMPLATE_ARGS \
-    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles, stream_z
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles, stream_z, matmul_reuse_dir_k
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
@@ -228,7 +235,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull>(
+        _llk_math_matmul_init_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull, matmul_reuse_dir_k>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -249,7 +256,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                 }
             }
@@ -266,7 +273,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Matmul block exceeds destination capacity");
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                     #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
                     constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;

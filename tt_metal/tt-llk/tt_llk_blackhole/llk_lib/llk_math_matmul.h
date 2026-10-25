@@ -348,7 +348,7 @@ inline void matmul_configure_addrmod(
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int in1_order = 0, bool load_only = false, bool end_fold = false>
+template <MathFidelity math_fidelity, int in1_order = 0, bool load_only = false, bool end_fold = false, std::uint32_t reuse_dir = 0>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -367,7 +367,7 @@ inline void matmul_configure_mop(
     // if col major layout faces are ordered as f0,f2,f1,f3
     constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
 
-    const bool reuse_a        = ct_dim >= rt_dim;
+    const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
 
     const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
@@ -994,7 +994,7 @@ inline constexpr bool matmul_throttle_drives_phases()
  * @param in1_tile_c_dim: Column dimension of an in1 tile.
  * @param partial_face: True when the tile has fewer than the full set of faces.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL, std::uint32_t reuse_dir = 0>
 inline void matmul_configure_mop_throttled(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
@@ -1017,7 +1017,7 @@ inline void matmul_configure_mop_throttled(
         matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face),
         "MM throttling only enabled for full 32x32 tile size");
 
-    const bool reuse_a = ct_dim >= rt_dim;
+    const bool reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
 
     const bool is_in0_16x32 = (in0_tile_r_dim <= FACE_R_DIM) && (in0_tile_c_dim > FACE_C_DIM);
     const bool is_in1_32x16 = (in1_tile_r_dim > FACE_R_DIM) && (in1_tile_c_dim <= FACE_C_DIM);
@@ -1112,7 +1112,7 @@ inline void matmul_configure_mop_throttled(
  *       _llk_math_matmul_ asserts this precondition under LLK asserts, so a prior op that left PRESERVE
  *       must be followed by this init (or a format-changing reconfig) before the matmul.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, int in1_order = 0, bool tiny_16_rows = false, bool end_fold = false, std::uint32_t reuse_dir = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
@@ -1123,6 +1123,7 @@ inline void _llk_math_matmul_init_(
     const std::uint32_t ct_dim         = 1,
     const std::uint32_t rt_dim         = 1)
 {
+    static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
     // in1=32x16 NOT supported with transpose (no addr_mod handling)
     LLK_ASSERT(!(transpose && (in1_tile_r_dim == TILE_R_DIM) && (in1_tile_c_dim == FACE_C_DIM)), "Transpose with input 1 dimensions 32x16 not supported");
     LLK_ASSERT(
@@ -1148,11 +1149,11 @@ inline void _llk_math_matmul_init_(
 
         if (fallback_matches_execute && !matmul_throttle_supports_tile(in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face))
         {
-            matmul_configure_mop<math_fidelity, in1_order>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, false, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
         else
         {
-            matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL>(
+            matmul_configure_mop_throttled<math_fidelity, THROTTLE_LEVEL, reuse_dir>(
                 ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
@@ -1166,7 +1167,7 @@ inline void _llk_math_matmul_init_(
     {
         matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
             transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
-        matmul_configure_mop<math_fidelity, in1_order, false, end_fold>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+        matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
     }
     else
     {
@@ -1186,10 +1187,10 @@ inline void _llk_math_matmul_init_(
             matmul_configure_addrmod<math_fidelity, THROTTLE_LEVEL, false, in1_order>(
                 transpose, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
             matmul_rows_dest_stride = 0;
-            matmul_configure_mop<math_fidelity, in1_order, false, end_fold>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
+            matmul_configure_mop<math_fidelity, in1_order, false, end_fold, reuse_dir>(ct_dim, rt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
         }
     }
-    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = (ct_dim >= rt_dim));
+    LLK_ASSERT_BLOCK(math_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim));
     math::reset_counters(p_setrwc::SET_ABD_F);
 
     // Matmul never sets the Src zero-substitution flag itself, so
@@ -1227,7 +1228,7 @@ inline void _llk_math_matmul_uninit_()
  *       function, and @ref _llk_math_matmul_uninit_ after it to restore modified state.
  * @note On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
  */
-template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false>
+template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, bool row_mop = false, bool tile_mop = false, std::uint32_t reuse_dir = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {
     // Zero-flag leak guard. MVMUL reads ALU_ACC_CTRL_Zero_Flag_disabled_src, which for
@@ -1241,7 +1242,8 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
         "matmul: Src zero-substitution flag does not hold the operand-driven value — a prior op (copy_init/datacopy) left "
         "a keep flag before MVMUL without a format-changing reconfig; denormal Src results will differ");
 
-    const bool reuse_a          = ct_dim >= rt_dim;
+    static_assert(reuse_dir == 0 || (!row_mop && (tile_mop || THROTTLE_LEVEL > 0)), "a forced reuse direction runs on the tile MOP");
+    const bool reuse_a          = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
     const std::uint32_t t_dim   = reuse_a ? rt_dim : ct_dim;
     const std::uint32_t rut_dim = reuse_a ? ct_dim : rt_dim; // reuse-dim
     LLK_ASSERT(reuse_a == math_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");

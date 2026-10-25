@@ -44,6 +44,7 @@ from helpers.test_variant_parameters import (
     MATMUL_IN1_ALT,
     MATMUL_PACK_BLOCK,
     MATMUL_STREAM_NARROW,
+    MATMUL_REUSE_DIR,
     MATMUL_STREAM_Z,
     NUM_BLOCKS,
     NUM_FACES,
@@ -299,6 +300,13 @@ def test_math_matmul(
                 matmul_config.tile_dimensions.rt_dim,
                 matmul_config.tile_dimensions.in0_tile_r_dim,
                 math_fidelity=math_fidelity,
+            ),
+            *MATMUL_REUSE_DIR.for_block(
+                formats,
+                math_fidelity,
+                matmul_config.tile_dimensions.ct_dim,
+                matmul_config.tile_dimensions.rt_dim,
+                matmul_config.dest_sync,
             ),
             *MATMUL_STREAM_Z.for_block(
                 formats,

@@ -21,6 +21,13 @@ std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr std::uint32_t MAX_TILES_DEST = ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>();
+// reuse direction of the block (llk_matmul_forms.h matmul_reuse_dir), chosen by the test's python key from the operand formats
+#ifdef MATMUL_REUSE_DIR
+constexpr std::uint32_t matmul_reuse_dir_k = MATMUL_REUSE_DIR;
+#else
+constexpr std::uint32_t matmul_reuse_dir_k = 0;
+#endif
+
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_PHASE_ELIDE)
 #include "llk_matmul_forms.h"
 constexpr ckernel::MathFidelity MATMUL_FIDELITY = ckernel::matmul_phase_fidelity<MATH_FIDELITY, MATMUL_IN0_FORMAT, MATMUL_IN1_FORMAT>();
@@ -89,8 +96,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr std::uint32_t stream_z = 0;
 #endif
-#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow, stream_z
-#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST, matmul_hoist_rows, matmul_max_row_tiles, stream_z
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow, stream_z, matmul_reuse_dir_k
+#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST, matmul_hoist_rows, matmul_max_row_tiles, stream_z, matmul_reuse_dir_k
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
@@ -229,8 +236,10 @@ constexpr bool matmul_prod_keys = false;
 #line 176
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
 #define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
+#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
 #else
-#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop
+#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k
+#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, false, matmul_reuse_dir_k
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -250,7 +259,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_matmul_init_<MATMUL_MATH_TEMPLATE_ARGS>(
+        _llk_math_matmul_init_<MATMUL_MATH_INIT_TEMPLATE_ARGS>(
             /* tile A */ TILE_R_DIM,
             /* tile A */ TILE_C_DIM,
             /* tile B */ TILE_R_DIM,

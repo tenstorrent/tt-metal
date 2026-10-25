@@ -37,6 +37,7 @@ from helpers.test_variant_parameters import (
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
     MATMUL_STREAM_NARROW,
+    MATMUL_REUSE_DIR,
     MATMUL_STREAM_Z,
     MATMUL_UNPACK_TTSYNC,
     MATMUL_UNPACK_TTSYNC_EXCL,
@@ -183,6 +184,7 @@ def test_matmul(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,
             ),
+            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, dest_sync),
             *MATMUL_STREAM_Z.for_block(
                 formats, dest_acc, dest_sync, matmul_dims.ct_dim, matmul_dims.rt_dim,
                 math_fidelity=math_fidelity,

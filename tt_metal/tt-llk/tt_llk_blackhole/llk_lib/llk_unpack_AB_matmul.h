@@ -209,14 +209,14 @@ inline void _llk_unpack_AB_matmul_narrow_mop_config_(
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, std::uint32_t stream_z = 0>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, std::uint32_t stream_z = 0, std::uint32_t reuse_dir = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
     const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
     // in0/inA - loaded to SrcB
     // in1/inB - loaded to SrcA
 
-    const bool reuse_a                      = ct_dim >= rt_dim;
+    const bool reuse_a                      = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
     if constexpr (stream_z != 0 && kernel_broadcast_b != 1)
     {
         if (reuse_a && !unpA_partial_face)
@@ -429,7 +429,8 @@ template <
     std::uint32_t kernel_broadcast_b = 0,
     std::uint32_t auto_ttsync                 = false,
     bool stream_narrow               = false,
-    std::uint32_t stream_z           = 0>
+    std::uint32_t stream_z           = 0,
+    std::uint32_t reuse_dir          = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
     const std::uint32_t ct_dim          = 1,
@@ -483,14 +484,15 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
-    LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = (ct_dim >= rt_dim));
+    static_assert(reuse_dir == 0 || (!stream_narrow && stream_z == 0 && !auto_ttsync), "a forced reuse direction runs on the per-row unpack with the default stream");
+    LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim));
     if constexpr (stream_narrow)
     {
         _llk_unpack_AB_matmul_narrow_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
     else
     {
-        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_z>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_z, reuse_dir>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
 
     if constexpr (auto_ttsync)
@@ -572,7 +574,8 @@ template <
     std::uint32_t dest_max_tiles     = 16,
     bool hoist_rows                  = true,
     std::uint32_t max_row_tiles      = dest_max_tiles,
-    std::uint32_t stream_z           = 0>
+    std::uint32_t stream_z           = 0,
+    std::uint32_t reuse_dir          = 0>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -591,7 +594,8 @@ inline void _llk_unpack_AB_matmul_(
 
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    const bool reuse_a        = ct_dim >= rt_dim;
+    static_assert(reuse_dir == 0 || (!auto_ttsync && stream_z == 0), "a forced reuse direction runs on the per-row unpack with the default stream");
+    const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
     LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");

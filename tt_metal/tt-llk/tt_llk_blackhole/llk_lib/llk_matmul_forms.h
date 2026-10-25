@@ -31,6 +31,45 @@ inline constexpr const char* matmul_forms_table[48] = {
     "RRRRR", "RRRRR", "RrrRr", "rrrrr", // k 5+, HiFi4
 };
 
+// Reuse direction of a block: reuse_dir 0 holds in0 in SrcB and streams in1 through SrcA when ct_dim >= rt_dim (main's rule), 1 forces that
+// direction and 2 the other one (in1 held in SrcA, in0 streamed through SrcB). A kernel fixes it at compile time with matmul_reuse_dir.
+template <std::uint32_t reuse_dir>
+constexpr bool matmul_reuse_a(const std::uint32_t ct_dim, const std::uint32_t rt_dim)
+{
+    return reuse_dir == 0 ? ct_dim >= rt_dim : reuse_dir == 1;
+}
+
+// A 32-bit tile takes twice the unpacker cycles of a 16-bit one (32 against 64 datums per cycle), and the streamed operand is unpacked once per
+// output tile, the held one once per row: with one operand of 32 bits and the other of 16 bits at LoFi the block holds the 32-bit operand and
+// streams the 16-bit one, which halves the unpack stream of a block of 4 tiles or more where the held operand is reused (>= 2 rows or columns).
+// The default direction already does it when the 32-bit operand is in0 and ct_dim >= rt_dim, or in1 and ct_dim < rt_dim.
+constexpr bool matmul_format_is_32bit(const DataFormat f)
+{
+    return f == DataFormat::Float32 || f == DataFormat::Tf32;
+}
+constexpr bool matmul_format_is_16bit(const DataFormat f)
+{
+    return f == DataFormat::Float16 || f == DataFormat::Float16_b;
+}
+// pack_bound: half sync with a Float32 output, where the pack is the bound and the cell measured up to 1.7 percent slower
+constexpr std::uint32_t matmul_reuse_dir(
+    const MathFidelity fidelity, const DataFormat in0, const DataFormat in1, const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool pack_bound = false)
+{
+    if (fidelity != MathFidelity::LoFi || pack_bound || ct_dim * rt_dim < 4)
+    {
+        return 0;
+    }
+    if (matmul_format_is_32bit(in1) && matmul_format_is_16bit(in0) && ct_dim >= rt_dim && rt_dim >= 2)
+    {
+        return 2;
+    }
+    if (matmul_format_is_32bit(in0) && matmul_format_is_16bit(in1) && ct_dim < rt_dim && ct_dim >= 2)
+    {
+        return 1;
+    }
+    return 0;
+}
+
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format>
 constexpr char matmul_default_form()
 {
