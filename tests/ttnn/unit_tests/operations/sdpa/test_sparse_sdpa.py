@@ -781,3 +781,52 @@ def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, kdeq_batch
     score = pcc(actual, expected)
     worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
     assert score >= 0.999 and worst >= 0.995, f"split_k={split_k} PCC {score:.5f}, worst token {worst:.5f}"
+
+
+# ---- split-K for S < cores (small chunks, e.g. GLM chunk 1024/2048 -> 32/64 rows per chip): <= 2 cores per token ----
+@run_for_blackhole()
+@pytest.mark.parametrize("small", ["1", "0"], ids=["splitk_small", "token_split"])
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,kc,nv_id,grid_rows",
+    [
+        (64, 32, 4096, 2048, 128, "all", 2),  # GLM chunk 1024 per chip on the 96-core grid: 64 cores, half a token each
+        (64, 64, 4096, 2048, 128, "all", 2),  # GLM chunk 2048: 96 cores, 2/3 token each (HEAD+TAIL cores)
+        (64, 32, 1024, 512, 128, "mixed", 2),  # sentinel tails: empty HEAD segments
+        (64, 64, 1024, 512, 128, "causal", 0),  # full grid, prefill-like valid counts
+        (32, 40, 1024, 256, 64, "mixed", 0),  # 4 chunks/token, odd S
+    ],
+)
+def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, monkeypatch, small, H, S, T, TOPK, kc, nv_id, grid_rows):
+    """Small-S split-K must match the torch golden (PCC) like the whole-token split, incl. sentinel tails."""
+    grid = device.compute_with_storage_grid_size()
+    if S >= grid.x * (grid.y - grid_rows):
+        pytest.skip("needs S < cores")
+    monkeypatch.setenv("SPARSE_SDPA_SPLITK", "1")
+    monkeypatch.setenv("SPARSE_SDPA_SPLITK_SMALL", small)
+    nv_fn = {
+        "all": lambda s: TOPK,
+        "mixed": lambda s: 1 + (s * 37) % TOPK,
+        "causal": lambda s: min(TOPK, 1 + s * 3),
+    }[nv_id]
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=73)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=74, round_scale=True)
+    kw = {}
+    if grid_rows:
+        kw["sub_core_grids"] = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, grid_rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]
+        )
+    out = ttnn.transformer.sparse_sdpa(
+        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+        tt_packed,
+        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        V_DIM,
+        kv_format=SCALED_FP8_KV,
+        scale=K_DIM**-0.5,
+        k_chunk_size=kc,
+        **kw,
+    )
+    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    actual = ttnn.to_torch(out)
+    score = pcc(actual, expected)
+    worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(S))
+    assert score >= 0.999 and worst >= 0.995, f"small={small} PCC {score:.5f}, worst token {worst:.5f}"
