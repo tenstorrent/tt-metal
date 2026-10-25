@@ -1564,3 +1564,46 @@ GLM-5.3-Flash at large M is noisy: a rerun gave G 1 / 2 / 4 = 1283 / 1290 / 1342
 closeout 9/9, test_closeout_plans pass (G 2 in every row-pass plan). Logs: /localdev/mstaletovic/gu_kblk/.
 Takeaway: the handshake is a real but small cost in the op (the microbench's 81 -> 86% does not carry over: below M 512
 the gate/up loop is not the bound, above it G 2 buys ~3% on the pair-split GLM-5.3 and ~1.3% on DSv4.1's units).
+
+### GLM-5.3 alone at its Galaxy 8x4 load: what holds it at ~67% DRAM (2026-10-25, bh-lb-09, one chip)
+Why: the Galaxy reports ~67% DRAM for GLM-5.3's flat expert (8 experts a chip, 160 home tokens, ~160 rows an expert at
+chunk 5120); our 2x4 numbers said the same. test_flat_balanced_sweep, E 8, H 6144, I 2048, silu, bfp4, rows_hint = M,
+DRISC-only defaults (pure, no Tensix readers), even split (64 gate/up cores x 1 pair, 32 down x 6 tiles, 4 relays).
+Weights 21.2 MB an expert (3 x 6144 x 2048 x 0.5625 B) = 41.5 us at 512 GB/s; x + y bf16 1.97 MB each an expert.
+| M | M_total | total us | us / expert | DRAM % (w + x + y) | DRAM % (weights) | math % (96 compute) | math % (110 grid) |
+|---|---|---|---|---|---|---|---|
+| 96 | 768 | 458 | 57.2 | 81 | 72 | 23 | 21 |
+| 128 | 1024 | 498 | 62.3 | 76 | 67 | 29 | 26 |
+| 160 | 1280 | 521 | 65.2 | 75 | 64 | 35 | 30 |
+| 192 | 1536 | 554 | 69.3 | 73 | 60 | 39 | 34 |
+| 224 | 1792 | 599 | 74.9 | 70 | 55 | 42 | 37 |
+| 256 | 2048 | 631 | 78.8 | 68 | 53 | 46 | 40 |
+Galaxy loads of the others: GLM-5.3-Flash E 9 M 142: 381 us, 42.3 / expert, 76% DRAM; K3 E 28 M 91 (H 3584, I 3072,
+units): 1233 us, 44.0 / expert, 88%. The gap over the DRAM floor (w + x + y) is ~90-150 us a call on all three: K3
+hides it under 28 experts' weights, GLM-5.3's 8 do not.
+
+Probes at M 160 (us, base 521; one-chip, MIMO_FL_* probes):
+- No math: 527 - the compute is not the bound (gate/up's math hides under the rest).
+- DRAM reads: any one stream off - x (XRD_SKIP) 442, gate/up W (GU_NOREAD / W_NOREAD) 434, down W (DN_NOREAD) 433 -
+  or all three 434: the read streams interfere (~87 us), removing any one removes it (the x reads go through each
+  bank's NOC1 endpoint = DRISC tile 1's port: drisc-endpoint-tile-x-conflict).
+- Below that an on-chip floor: no reads 434, + no math 414, + no weight forwards (W_NOFWD) 334, + no x / h / y data
+  333: the control skeleton (every handshake, no data, no math) runs 333 us. Weight forwards into the gate/up L1 ~81.
+- The skeleton per (expert, sub-block): GLM-5.3 28.6 us at M 96 (2 sub-blocks of 64 rows: 24 K-blocks each),
+  41.6 at M 160 (3 sub-blocks), ~1.2 us a K-block per 128 rows - the same on GLM-5.3-Flash (19.7 us, 16 K-blocks) and
+  K3 (16.0, 14): the op's per-step cost. At H 6144 it about equals the weights' DRAM time (41.5 us an expert), so the
+  two run near serially. Sampled gate/up waits (WAITZ, K group 1): x 3.6 us, weights 0.5 a 28 us sub-block - the loop
+  is not starved; K group 1 / 2 / 4 / 8 / 12 / 24: 334 / - / 328 / 330 / 332 / 351 (the compute handshake is not it).
+- Not levers here: x helpers 2 (6 relays) 515, 128-row sub-blocks (MT 4) 535, + full-sync gate/up 527, GU_SPLIT 2,2
+  (2 M-groups) 701, 4,4 (-> 2 units) 526, 2,1 (32 gate/up cores x 4 tiles: 18.4 KB blocks) 642 (M 96 61.6 vs 57.2),
+  DRISC NOC1 0 521, JOB1_NOC 0 / 1 524 / 525, STREAM_SPLIT 0 525, TILES 2 530, TILES 1 565.
+- X_RESIDENT hung (probe, twice; triage in /localdev/mstaletovic/flat_glm53/hang_x_resident) - not chased.
+Levers (estimates, M 160):
+- The per-K-block control cost (~1.2 us / K-block / 128 rows): fewer, larger steps end to end (16-tile K-blocks with
+  a ring as deep as today's in bytes - the 2026-10-22 UB 2 emulation lost from a shallower DRISC pipeline): skeleton
+  42 -> ~21 us / expert; with forwards + interference on top of the DRAM floor ~430-450 us (82-88%).
+- The read interference (~87 us): x off the DRISC tile's port (x landed in the relays' L1 by the dispatch, or x reads
+  on NOC0 once the linked-multicast hang is fixed): -50..-87 us.
+- Sub-blocks sized to M (5 row tiles as 3 + 2, not 2 + 2 + 1): the skeleton's third sub-block is ~13 us / expert, but
+  128-row sub-blocks did not show it in the real run (535) - low.
+Logs: /localdev/mstaletovic/flat_glm53/.
