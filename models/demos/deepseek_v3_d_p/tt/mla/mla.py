@@ -36,6 +36,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 _GLUE_STEM_RS_WORKERS = int(os.environ.get("GLUE_STEM_RS_WORKERS", "8")) or None
 # glue track: o_proj RS output in L1 (read once by the block's residual add).
 _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "0") == "1"
+# glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
+_GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "0") == "1"
+_GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
 
 
 class ttMLA:
@@ -1426,21 +1429,22 @@ class ttMLA:
             ttnn.deallocate(qr)
 
         # The Q stem uses interleaved head creation. Write the two channel regions directly.
+        inplace = self._q_rope_inplace and seq_len_local == self.active_seq_len_local
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
             num_heads=num_heads_local,
             split_head_dim=self.qk_nope_head_dim,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if (inplace and _GLUE_Q_HEADS_L1) else ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
 
-        if self._q_rope_inplace and seq_len_local == self.active_seq_len_local:
+        if inplace:
             # [q_nope @ wkv_b1 | 0] straight into the Q buffer, then RoPE the q_pe into its last channels.
             tt_q = ttnn.linear(
                 tt_q_nope,
                 self.wkv_b1_weight_padded,
                 program_config=self._wkv_b1_padded_pc,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_Q_OUT_L1 else ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.default_compute_kernel_config,
             )
