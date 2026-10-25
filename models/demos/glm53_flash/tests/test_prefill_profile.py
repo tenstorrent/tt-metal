@@ -359,7 +359,8 @@ def _regions_ops(model, dev, prompt: torch.Tensor, f, regions_t: int):
             logger.info(f"[prof] rank_check T={T}: {sum(same)}/{len(same)} chips bitwise")
             ttnn.deallocate(r_c)
             ttnn.deallocate(r_m)
-            for Ts in [int(v) for v in os.environ.get("PROF_RANK_TS", "").split(",") if v.strip()]:
+            for Ts in [int(v) for v in os.environ.get("PROF_RANK_TS", "").split(",") if v.strip() and int(v) < T]:
+                # (Ts == T would slice to the same tensor and the deallocate below would free onehot)
                 oh_s = ttnn.slice(onehot, [0, 0, 0, 0], [1, 1, Ts, onehot.shape[-1]])
                 r_c = ttnn.cumsum(oh_s, dim=-2)
                 moe_mod.REGIONS_RANK = "mm"
