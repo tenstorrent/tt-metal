@@ -1081,7 +1081,7 @@ class ttMLA:
         table = self.mm_configs[weight_name]
         entry = table.get(seq_len_local)
         if entry is None:
-            entry = small_rows_entry(table, seq_len_local)  # GLM_SMALL_MM_CFG=1 only
+            entry = small_rows_entry(table, seq_len_local, weight_name)  # GLM_SMALL_MM_CFG only
         return self._select_cfg(entry, weight_name)
 
     def _weight_kt(self, weight_name: str) -> int | None:

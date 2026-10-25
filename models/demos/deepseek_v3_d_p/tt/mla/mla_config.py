@@ -998,10 +998,17 @@ MLA_SDPA_CONFIG = {
 # than tuned on these shapes, e.g. indexer wq_b 60 vs 31 us), and the paths keyed on a tuned config (in-place q RoPE,
 # L1 activations) turn off. GLM_SMALL_MM_CFG=1 derives the missing entry from the smallest larger tuned key by
 # scaling only the M blocking (per_core_M / out_subblock_h); K/N blocking, grids, memory configs and dtypes are kept.
-def small_mm_cfg_enabled() -> bool:
+# GLM_SMALL_MM_CFG=1 (or "all"): every weight; "wkv": only the batched per-head wkv_b1 / wkv_b2 (their auto fallback,
+# ttMLA._make_batched_mm_kwargs, puts all 64 heads of a 1-tile-row M on ONE core: 425 / 500 us per layer at chunk 1024).
+def small_mm_cfg_enabled(weight_name: str | None = None) -> bool:
     import os
 
-    return os.environ.get("GLM_SMALL_MM_CFG", "0") not in ("", "0")
+    mode = os.environ.get("GLM_SMALL_MM_CFG", "0")
+    if mode in ("", "0"):
+        return False
+    if mode == "wkv":
+        return weight_name in ("wkv_b1", "wkv_b2")
+    return True
 
 
 def _divisor_at_least(n: int, lo: int) -> int:
@@ -1069,10 +1076,10 @@ def derive_small_rows_cfg(cfg: dict, seq_len_local: int) -> dict | None:
     return {**cfg, "program_config": new}
 
 
-def small_rows_entry(table: dict, seq_len_local: int):
+def small_rows_entry(table: dict, seq_len_local: int, weight_name: str | None = None):
     """Derived candidates for a missing ``seq_len_local`` slot: the smallest larger tuned key's candidates, each
     re-blocked (see derive_small_rows_cfg). None when disabled, present, or nothing to derive from."""
-    if not small_mm_cfg_enabled() or seq_len_local in table or seq_len_local % ttnn.TILE_SIZE:
+    if not small_mm_cfg_enabled(weight_name) or seq_len_local in table or seq_len_local % ttnn.TILE_SIZE:
         return None
     larger = sorted(k for k in table if k > seq_len_local)
     if not larger:
@@ -1095,7 +1102,7 @@ def get_matmul_config(weight_name: str, seq_len_local: int) -> dict | list | Non
     """
     table = MLA_MATMUL_CONFIG.get(weight_name, {})
     entry = table.get(seq_len_local)
-    return entry if entry is not None else small_rows_entry(table, seq_len_local)
+    return entry if entry is not None else small_rows_entry(table, seq_len_local, weight_name)
 
 
 def get_sdpa_config(seq_len_local: int) -> dict | list | None:
