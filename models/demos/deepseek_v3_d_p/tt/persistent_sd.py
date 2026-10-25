@@ -193,7 +193,7 @@ def fence(mesh_device, on_comm: bool, core=None) -> None:
     assert psd is not None, "fence() needs the persistent manager"
     cores = psd.comm_cores if on_comm else psd.main_cores
     if core is None:
-        core = cores.bounding_box().end_coord  # the last core: (10,9) on SD0, (11,9) on SD1
+        core = cores.bounding_box().end  # the last core: (10,9) on SD0, (11,9) on SD1
     key = mesh_device.id()
     pair = _fence_tensors.get(key)
     if pair is None:
