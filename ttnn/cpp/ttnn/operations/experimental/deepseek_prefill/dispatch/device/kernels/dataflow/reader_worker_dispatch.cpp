@@ -260,6 +260,13 @@ void kernel_main() {
         uint32_t batch_end =
             (batch_start + read_batch_size < token_end_idx) ? batch_start + read_batch_size : token_end_idx;
         uint32_t batch_count = batch_end - batch_start;
+#ifndef ROW_MAJOR_INPUT
+        constexpr bool batch_split = true;
+        const bool owned = ((batch_idx / total_workers) % num_sender_cores) == sender_core_idx;
+#else
+        constexpr bool batch_split = false;
+        constexpr bool owned = true;
+#endif
 
 #ifdef ROW_MAJOR_INPUT
         // Row-major: there is no untilize compute. Read this batch's input rows straight into the
@@ -295,6 +302,7 @@ void kernel_main() {
 #else
         uint32_t tile_base_page = batch_idx * tiles_per_row;
 
+        if (owned) {
         // 1. Signal compute to start untilizing this batch
         cb_reserve_back(cb_signal_id, 1);
         volatile tt_l1_ptr uint32_t* signal_ptr =
@@ -314,6 +322,7 @@ void kernel_main() {
             cb_push_back(cb_input_id, block_ct_dim);
         }
 
+        }  // owned
         // 3. Read this batch's indices pages
         for (uint32_t t = 0; t < batch_count; t++) {
             noc_async_read_page(batch_start + t, indices_addr_gen, indices_base + t * aligned_indices_page_size);
@@ -390,7 +399,11 @@ void kernel_main() {
                 // across sender cores. Balanced separately per class — local experts -> DRAM writes,
                 // remote experts -> fabric sends. Every sender core advances the same counter in
                 // lockstep, so exactly one core is selected per token (no double-send, no drop).
-                if (expert_lives_on_this_chip) {
+                if constexpr (batch_split) {
+                    if (!owned) {
+                        continue;  // the owning group emits every pair of this batch
+                    }
+                } else if (expert_lives_on_this_chip) {
                     uint32_t target_writer_core = dram_writes_seen++ % num_sender_cores;
                     if (target_writer_core != sender_core_idx) {
                         continue;
@@ -459,7 +472,7 @@ void kernel_main() {
                 entry_count);
         }
 
-        plan->entry_count = entry_count;
+        plan->entry_count = owned ? entry_count : PLAN_FOREIGN;
         cb_push_back(cb_plan_id, 1);
     }
 

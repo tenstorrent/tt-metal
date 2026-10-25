@@ -378,6 +378,18 @@ void kernel_main() {
 
     // ===== Per-batch loop — drains the route plan published by the reader RISC =====
     for (uint32_t batch_idx = core_id; batch_idx < effective_total_batches; batch_idx += total_workers) {
+        // Wait for reader to publish the per-batch route plan. First, because a batch another sender group owns
+        // (PLAN_FOREIGN, batch-split TILE path) has no payload to wait for.
+        cb_plan.wait_front(1);
+        uint32_t plan_addr = cb_plan.get_read_ptr();
+        volatile tt_l1_ptr PlanHeader* plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(plan_addr);
+        volatile tt_l1_ptr PlanEntry* entries =
+            reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(plan_addr + sizeof(PlanHeader));
+        if (plan->entry_count == PLAN_FOREIGN) {
+            cb_plan.pop_front(1);
+            continue;
+        }
+
         // Wait for compute to finish untilizing this batch
         cb_untilize.wait_front(read_batch_size);
 
@@ -393,12 +405,6 @@ void kernel_main() {
 #endif
 #endif
 
-        // Wait for reader to publish the per-batch route plan
-        cb_plan.wait_front(1);
-        uint32_t plan_addr = cb_plan.get_read_ptr();
-        volatile tt_l1_ptr PlanHeader* plan = reinterpret_cast<volatile tt_l1_ptr PlanHeader*>(plan_addr);
-        volatile tt_l1_ptr PlanEntry* entries =
-            reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(plan_addr + sizeof(PlanHeader));
         uint32_t entry_count = plan->entry_count;
         DPRINT_DISPATCH(
             "[W c={}] b={} draining plan entries={} produced_so_far={}\n",

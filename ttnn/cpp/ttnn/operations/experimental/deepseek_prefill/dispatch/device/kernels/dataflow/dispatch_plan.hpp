@@ -131,3 +131,10 @@ constexpr bool packed_xdev_enabled(uint32_t aligned_metadata_page_size, uint32_t
     return aligned_metadata_page_size <= PACKED_META_SLOT_BYTES && aligned_output_page_size % 64 == 0;
 #endif
 }
+
+// Batch-split payload ownership (TILE input): every worker still walks every batch's indices to keep the shared
+// offsets[] exact, but only the sender group that owns a batch reads + untilizes its tiles and emits its pairs
+// (all of them, local and remote). A non-owned batch gets a plan page with entry_count == PLAN_FOREIGN and no
+// payload, which the worker writer skips without waiting for untilize. Halves the per-worker untilize + DRAM
+// tile reads versus every group untilizing every batch.
+constexpr uint32_t PLAN_FOREIGN = 0xFFFFFFFEu;
