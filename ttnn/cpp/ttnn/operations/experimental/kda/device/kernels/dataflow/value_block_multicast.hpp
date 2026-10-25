@@ -85,9 +85,11 @@ FORCE_INLINE void multicast_shared(
 // never reset, so no side waits on a round trip per payload:
 // - stage(p) on the sender issues payload p's reads; on a receiver it reserves p's slots and raises the sender's ready
 //   by one (the slot addresses match on every block, as for multicast_shared);
-// - publish(p, stage_next) on the sender waits for p's reads and for ready to reach receivers * (p + 1), issues the
-//   data multicast (the chain closed by its last write), publishes its own copy, calls stage_next while the
-//   multicast drains, then waits for the data to leave and multicasts VALID = p + 1. On a receiver it calls
+// - publish(p, stage_next) on the sender waits for p's reads, publishes its own copy, calls stage_next, waits for
+//   ready to reach receivers * (p + 1), issues the data multicast (the chain closed by its last write), then waits
+//   for the data to leave and multicasts VALID = p + 1. stage_next goes first because issuing the next payload's
+//   reads is most of the sender's time per payload: issued behind the multicast they wait for its data, issued ahead
+//   of it their data comes in while the multicast goes out. On a receiver it calls
 //   stage_next, so ready for the next payload is raised before it waits, then waits for VALID to reach p + 1 and
 //   publishes the slots.
 // A sender's source slots stay intact until VALID: it reuses a slot only after a later payload's reserve, which
@@ -141,6 +143,12 @@ public:
         auto& inputs = inputs_[payload & 1];
         if (sender_) {
             noc_.async_read_barrier();
+            for (auto& input : inputs) {
+                input.buffer->push_back(input.tiles);
+            }
+            // The next payload's reads are issued before this payload's multicast, so their data comes in while the
+            // multicast goes out; issued after it, they queue behind its data.
+            stage_next();
             ready_.wait_min(receivers_ * (payload + 1));
             MulticastEndpoint destination;
             for (uint32_t index = 0; index < N; ++index) {
@@ -154,10 +162,6 @@ public:
                     {.noc_x_start = x0_, .noc_y_start = y0_, .noc_x_end = x1_, .noc_y_end = y1_, .addr = input.slot},
                     /*linked=*/index + 1 < N);
             }
-            for (auto& input : inputs) {
-                input.buffer->push_back(input.tiles);
-            }
-            stage_next();
             // The flag multicast issues from a different command buffer than the data, so only this flush orders the
             // data before the flag. It also retires the previous flag's multicast, which sourced the word set here.
             noc_.async_writes_flushed();
