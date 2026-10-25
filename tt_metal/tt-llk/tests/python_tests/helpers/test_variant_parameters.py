@@ -352,13 +352,14 @@ class MATMUL_FORM_KEYS(TemplateParameter):
                 1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
                 formats.output_format,
                 0 < max(ct_dim, rt_dim) <= 8,
-                # one Bfp8_b tile to a Float32 output at HiFi2 and half sync reads slower with the fused post and DEST flip: main's separate stalls
+                # Bfp8_b input to a Float32 output at HiFi2 and half sync reads slower with the fused post and DEST flip: main's separate stalls
+                # for one tile, and for any one k step block with a 16-bit DEST
                 unfuse_one_tile
-                and (kt_dim, ct_dim, rt_dim) == (1, 1, 1)
                 and math_fidelity == MathFidelity.HiFi2
                 and dest_sync == DestSync.Half
                 and formats.input_format == DataFormat.Bfp8_b
-                and formats.output_format == DataFormat.Float32,
+                and formats.output_format == DataFormat.Float32
+                and (kt_dim == 1 and (dest_acc == DestAccumulation.No or (ct_dim, rt_dim) == (1, 1)))
             )
         ]
 
