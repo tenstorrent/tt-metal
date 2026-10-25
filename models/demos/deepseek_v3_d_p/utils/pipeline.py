@@ -56,16 +56,22 @@ def policy_stub(stream: int, tag: str, state: dict) -> bool:
     return tag == "layer_end"
 
 
+PIPE_TAGS = ("attn_end", "moe_window_open", "layer_end")
+
+
 def policy_pipe(stream: int, tag: str, state: dict) -> bool:
-    """Half-layer offset: s0 hands over right after issuing its MoE dispatch window (s1 then issues its layer-L
-    attention while s0's dispatch runs on the comm sub-device), s1 hands back at the end of its attention, and so on
-    with the roles swapped. Needs the persistent manager (E1) and dispatch on its own sub-device (E1b)."""
-    if tag == "moe_window_open":
-        return True
-    if tag == "attn_end":
-        # Stream 1 starts with no MoE to overlap; let it run attention(0) then hand back to stream 0.
-        return True
-    return False
+    """Half-layer offset. Each layer of a stream is three segments: attn(L), pre(L) (MoE prelude + dispatch on the
+    comm sub-device + shared expert, ending at "moe_window_open"), post(L) (fence, routed expert, combine, reduce,
+    ending at "layer_end"). Every segment end hands over, except stream 0's first attn_end, which gives the global
+    issue order  A.attn0 A.pre0 | B.attn0 | A.post0 | B.pre0 | A.attn1 | B.post0 | A.pre1 | B.attn1 | A.post1 ...
+    i.e. one stream's attention is issued inside the other's dispatch window. Needs the persistent manager (E1) and
+    dispatch on its own sub-device (E1b)."""
+    if tag not in PIPE_TAGS:
+        return False
+    if stream == 0 and tag == "attn_end" and not state.get("s0_first_attn_done"):
+        state["s0_first_attn_done"] = True
+        return False
+    return True
 
 
 POLICIES = {"stub": policy_stub, "pipe": policy_pipe}
@@ -138,3 +144,29 @@ class TwoStreamRunner:
         if self._error is not None:
             raise self._error
         return out[0], out[1]
+
+
+class Fence:
+    """1-core no-op program on a chosen sub-device (a tiny in-place add confined by sub_core_grids). In one CQ, any
+    program issued on SD_p after a producer P and before a consumer C (on another SD) makes C start after P has
+    finished: go signals leave in issue order and each waits for its own SD (pipe-e2 finding, INTERFACES.md). The
+    fence tensor is created on first use, which must be outside a trace capture (the eager warm-up)."""
+
+    def __init__(self, mesh_device):
+        self.mesh_device = mesh_device
+        self._t = None
+
+    def __call__(self, core_grid):
+        import torch
+        import ttnn
+
+        if self._t is None:
+            self._t = ttnn.from_torch(
+                torch.zeros(1, 1, 32, 32),
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        ttnn.add(self._t, self._t, output_tensor=self._t, sub_core_grids=core_grid)

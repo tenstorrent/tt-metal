@@ -23,6 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_yield
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
@@ -1247,6 +1248,10 @@ class TtMoe(LightweightModule):
         # the dispatch slack can be filled for free and which fabric ops can run next to dispatch. Numerically inert.
         slackfill_outputs = self._slackfill() if self.overlap_shared_expert_with_dispatch else []
 
+        # Two-chunk pipeline switch point: the dispatch window is open (dispatch issued on its sub-device, shared
+        # expert issued); the other stream may issue its attention here. Nothing freed before this point may still be
+        # read by dispatch (frees come after the join below). No-op without an active TwoStreamRunner.
+        pipeline_yield("moe_window_open")
         if self.overlap_shared_expert_with_dispatch:
             if self._trace_controller is not None:
                 self._trace_controller.sub_device_clear()
