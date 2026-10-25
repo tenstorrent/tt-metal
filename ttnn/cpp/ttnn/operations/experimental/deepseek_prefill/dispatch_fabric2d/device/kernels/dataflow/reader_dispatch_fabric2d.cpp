@@ -48,7 +48,72 @@ void read_control_tables(const Scratch& c) {
 
 // One record per token, padded to indices_pad_stride because on Blackhole a DRAM read needs a 64-byte-aligned
 // L1 destination.
+//
+// Fast path: the indices are one 16-byte page per token, interleaved round-robin over the DRAM banks, so one
+// bank's pages form one contiguous run at a fixed stride. Reading each bank's run in one DMA (8 reads instead
+// of seq_len) into the token queue -- unused until the own phase -- and reordering in L1 replaces seq_len
+// latency-bound page reads. The bank count and the in-bank stride are discovered from the accessor and every
+// run's contiguity is checked before it is used; anything unexpected falls back to per-token reads.
+bool read_indices_by_bank(const Scratch& c) {
+    const auto indices_acc =
+        TensorAccessor(dspf2d::ReaderCtArgs::indices_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kIndicesAddr));
+    const uint32_t tokens = ct.seq_len;
+    const uint32_t stride = ct.indices_pad_stride;  // the DRAM page is the record padded to 64 B
+    if (tokens < 2) {
+        return false;
+    }
+    const uint64_t a0 = indices_acc.get_noc_addr(0);
+    uint32_t nb = 0;
+    for (uint32_t q = 1; q < tokens && q <= 64; q++) {
+        if (indices_acc.get_noc_addr(q) == a0 + stride) {
+            nb = q;
+            break;
+        }
+    }
+    if (nb == 0) {
+        return false;
+    }
+    const uint32_t kmax = (tokens + nb - 1) / nb;
+    const uint32_t staging = ct.queue_addr;
+    if (nb * kmax * stride > ct.queue_depth * ct.entry_stride()) {
+        return false;
+    }
+    for (uint32_t b = 0; b < nb && b < tokens; b++) {
+        const uint32_t kb = (tokens - b + nb - 1) / nb;
+        const uint64_t ab = indices_acc.get_noc_addr(b);
+        if (indices_acc.get_noc_addr(b + (kb - 1) * nb) != ab + (kb - 1) * stride) {
+            noc_async_read_barrier();
+            return false;
+        }
+    }
+    for (uint32_t b = 0; b < nb && b < tokens; b++) {
+        const uint32_t kb = (tokens - b + nb - 1) / nb;
+        noc_async_read(indices_acc.get_noc_addr(b), staging + b * kmax * stride, kb * stride);
+    }
+    noc_async_read_barrier();
+    invalidate_l1_cache();
+    // Token t = b + k*nb sits at staging[(b*kmax + k)*stride]; copy its record words to c.indices[t*stride].
+    constexpr uint32_t record_words = (ct.topk * 2u + 3u) / 4u;
+    for (uint32_t b = 0; b < nb && b < tokens; b++) {
+        const uint32_t kb = (tokens - b + nb - 1) / nb;
+        const volatile tt_l1_ptr uint32_t* src =
+            reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(staging + b * kmax * stride);
+        uint32_t t = b;
+        for (uint32_t k = 0; k < kb; k++, t += nb, src += stride / 4u) {
+            volatile tt_l1_ptr uint32_t* dst =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>((uint32_t)c.indices + t * stride);
+            for (uint32_t w = 0; w < record_words; w++) {
+                dst[w] = src[w];
+            }
+        }
+    }
+    return true;
+}
+
 void read_indices(const Scratch& c) {
+    if (read_indices_by_bank(c)) {
+        return;
+    }
     const auto indices_acc =
         TensorAccessor(dspf2d::ReaderCtArgs::indices_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kIndicesAddr));
     const uint32_t record_bytes = ct.topk * 2u;
