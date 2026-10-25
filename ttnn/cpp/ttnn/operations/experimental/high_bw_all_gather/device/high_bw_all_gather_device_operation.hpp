@@ -50,7 +50,8 @@ Tensor high_bw_all_gather(
     std::optional<uint32_t> input_batch_index = std::nullopt,
     std::optional<uint32_t> gathered_dim_size = std::nullopt,
     // Trace-safe slot select: 1-element uint32 tensor holding the USER id, recomposed on-device as
-    // user_id * batch_slot_num_layers + batch_slot_layer_idx. Mutually exclusive with input_batch_index.
+    // user_id * batch_slot_num_layers + batch_slot_layer_idx (with page_table: the request's page-table row, the
+    // layer being batch_slot_layer_idx). Mutually exclusive with input_batch_index.
     const std::optional<Tensor>& input_batch_index_tensor = std::nullopt,
     uint32_t batch_slot_num_layers = 1,
     uint32_t batch_slot_layer_idx = 0,
@@ -59,6 +60,9 @@ Tensor high_bw_all_gather(
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
     uint32_t gathered_slab_global = 0,
     const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
-    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt,
+    // Paged source: the input is a page pool and the request's page-table row locates each page
+    // (HighBwAllGatherInputs::page_table).
+    const std::optional<Tensor>& page_table = std::nullopt);
 
 }  // namespace ttnn::prim
