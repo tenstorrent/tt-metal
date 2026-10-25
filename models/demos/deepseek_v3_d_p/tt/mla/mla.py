@@ -2200,7 +2200,12 @@ class ttMLA:
                     subdevice_id=resources.gather_subdevice_id,
                     sub_core_grids=resources.gather_core_grid,
                 )
-                q_seq = self._sparse_q_seq(tt_q, subdevice_id=resources.topk_subdevice_id)
+                # TT_GLM_OVERLAP_A2A_TOPO=linear keeps the a2a off the TP wrap links while the full-mesh push
+                # runs: with both on wrap links the traced replay hung (EDM credit-cycle class, 2026-10-25).
+                topo = {"linear": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}.get(
+                    os.getenv("TT_GLM_OVERLAP_A2A_TOPO", "default").lower()
+                )
+                q_seq = self._sparse_q_seq(tt_q, subdevice_id=resources.topk_subdevice_id, topology=topo)
                 if mode == "a2a_untilize":
                     q_rm = ttnn.to_layout(q_seq, ttnn.ROW_MAJOR_LAYOUT, sub_core_grids=resources.topk_core_grid)
                     ttnn.deallocate(q_seq)
@@ -2783,9 +2788,9 @@ class ttMLA:
             ret = head_sharded
         return ret
 
-    def _sparse_q_seq(self, q, subdevice_id=None):
+    def _sparse_q_seq(self, q, subdevice_id=None, topology=None):
         """q sequence-sharded over TP for sparse_sdpa when the per-chip head shard is too thin (else q itself).
-        Optionally on one sub-device."""
+        Optionally on one sub-device. topology=None keeps the fabric default (Ring with wrap links on TORUS_XY)."""
         if not self._needs_head_to_seq_reshard:
             return q
         return ttnn.experimental.all_to_all_async_generic(
@@ -2796,6 +2801,7 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=self.tp_axis,
             subdevice_id=subdevice_id,
+            **({"topology": topology} if topology is not None else {}),
         )  # [1,H,S/(sp·tp),576] — FABRIC_2D path selected at runtime; topology resolves to Linear
 
     def _sparse_sdpa_grid(self, rows: int) -> dict:
