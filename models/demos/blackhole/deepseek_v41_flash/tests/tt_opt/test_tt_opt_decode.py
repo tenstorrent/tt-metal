@@ -162,14 +162,15 @@ def test_decode_tracy(mesh_device):
 def test_decode_latency(mesh_device):
     md = mesh_device
     # no prefill / seed: the traced round does not depend on the cache contents, only on the (fixed) token blocks; compile pass + trace capture of the runner as the server does it
-    _, runner, X, base, _ = _setup(md, minimal=True, tracy_layers=False)
+    gen, runner, X, base, _ = _setup(md, minimal=True, tracy_layers=False)
     Xw = X
-    if runner.siblings:  # adaptive set: every runner is prepared before the FIRST trace is captured
+    master = gen.spec.runners[3] if hasattr(gen.spec, "runners") else runner
+    if master.siblings:  # adaptive set: every runner is prepared before the FIRST trace is captured
         Xw = torch.cat([X, X[:, :2]], dim=1)  # the k=5 runner of the set verifies 6 rows per user
-        runner._capture_all(lambda nn: Xw[:, :nn], base)
+        master._capture_all(lambda nn: Xw[:, :nn], base)
     else:
         runner.capture(X, base)
-    X = Xw[:, : runner.n] if runner.siblings else X
+    X = Xw[:, : runner.n]
     snaps = runner.dec.snapshot_states()
     runner._ensure(base)
     runner._use(base)

@@ -41,8 +41,7 @@ def test_mhc_prof(mesh_device):
     post, comb = up(torch.rand(T, 1, 4, 1)), up(torch.rand(T, 1, 4, 4))
 
     def once():
-        ma.mixes(x)
-        ma.collapse_norm_rm(x, pre, wa, 1e-20)
+        ma.mixes_collapse(x, pre, wa, 1e-20, emit_rm=True)
         ma.expand(a, x, post, comb, None)
 
     once()
