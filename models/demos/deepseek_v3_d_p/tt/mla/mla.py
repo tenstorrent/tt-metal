@@ -54,6 +54,12 @@ _GLUE_Q_DEFER_FULL = os.environ.get("GLUE_Q_DEFER_FULL", "1") == "1"
 _GLUE_KV_L1 = os.environ.get("GLUE_KV_L1", "1") == "1"
 _GLUE_CONCAT_L1 = os.environ.get("GLUE_CONCAT_L1", "0") == "1"
 _GLUE_WKVB2_OUT_L1 = os.environ.get("GLUE_WKVB2_OUT_L1", "1") == "1"
+# mm track: seqq wkv_b1 / wkv_b2 batched-matmul program overrides, "in0_block_w,per_core_N,grid_x" (empty = tuned
+# config). Each is 64 heads x one [160, K] x [K, N] block per core on 64 of the 110 cores, bound by the bfp8 weight
+# reads; wkv_b1 is one K block (read-all -> compute -> write, no overlap). Smaller K blocks pipeline the weight reads
+# with the math; a smaller per_core_N on the 12-column grid spreads the 64 heads over more cores (and readers).
+_MLA_WKVB1_PC = os.environ.get("MLA_WKVB1_PC", "")
+_MLA_WKVB2_PC = os.environ.get("MLA_WKVB2_PC", "")
 
 
 class _DeferredQ:
@@ -877,7 +883,9 @@ class ttMLA:
             cfg = self._resolve_mm_cfg("wkv_b1", rows) if self._is_blackhole else None
             if os.environ.get("GLUE_Q_ROPE_INPLACE", "1") == "1" and cfg is not None:
                 self.wkv_b1_weight_padded = self._pad_wkv_b1_weight()
-                self._wkv_b1_padded_pc_seq = self._padded_wkv_b1_program_config(cfg["program_config"])
+                self._wkv_b1_padded_pc_seq = self._reuse_pc_override(
+                    self._padded_wkv_b1_program_config(cfg["program_config"]), _MLA_WKVB1_PC
+                )
                 self._q_rope_inplace_seq = True
                 self._q_defer_l1 = _GLUE_Q_DEFER_L1 and self._has_indexer and not self.kv_only
         if os.getenv("MLA_MEMLOG") and layer_idx in (0, layer_num - 2, layer_num - 1):
@@ -1417,6 +1425,27 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
         )
 
+    @staticmethod
+    def _reuse_pc_override(pc, spec: str):
+        """mm track (MLA_WKVB1_PC / MLA_WKVB2_PC): the batched MatmulMultiCoreReuse config with in0_block_w, per_core_N
+        and the grid width replaced ("ib,pn,gx"; empty fields keep the tuned value; sub-block 1 x the largest divisor
+        of per_core_N up to 8). Returns pc unchanged for an empty spec or another config type."""
+        if not spec or not isinstance(pc, ttnn.MatmulMultiCoreReuseProgramConfig):
+            return pc
+        f = (spec.split(",") + ["", "", ""])[:3]
+        g = pc.compute_with_storage_grid_size
+        ib = int(f[0]) if f[0] else pc.in0_block_w
+        pn = int(f[1]) if f[1] else pc.per_core_N
+        gx = int(f[2]) if f[2] else g.x
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(gx, g.y),
+            in0_block_w=ib,
+            out_subblock_h=1,
+            out_subblock_w=max(w for w in range(1, 9) if pn % w == 0),
+            per_core_M=pc.per_core_M,
+            per_core_N=pn,
+        )
+
     def _padded_wkv_b1_program_config(self, b1) -> ttnn.MatmulMultiCoreReuseProgramConfig:
         """The tuned wkv_b1 batched config with N widened to kv_lora_rank + rope (whole N per core)."""
         n_t = (self.kv_lora_rank + self.qk_rope_head_dim) // ttnn.TILE_SIZE
@@ -1784,6 +1813,8 @@ class ttMLA:
 
     def _apply_wkv_b2(self, t: ttnn.Tensor, seq_len_local: int, out_l1: bool = False) -> ttnn.Tensor:
         kwargs = self._get_mm_kwargs("wkv_b2", seq_len_local)
+        if _MLA_WKVB2_PC and self._seq_q and seq_len_local == self.active_seq_len_local // self.tp_factor:
+            kwargs["program_config"] = self._reuse_pc_override(kwargs.get("program_config"), _MLA_WKVB2_PC)
         if out_l1:
             kwargs["memory_config"] = ttnn.L1_MEMORY_CONFIG
         return ttnn.linear(
