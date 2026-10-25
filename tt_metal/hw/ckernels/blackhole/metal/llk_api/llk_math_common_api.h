@@ -76,9 +76,9 @@ inline void llk_math_dest_clear_region_end() {
     _llk_math_clear_dest_section_<DstSync::SyncFull, DST_ACCUM_MODE>();
 }
 
-template <bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en, bool next_op_sets_base = false>
 inline void llk_math_dest_section_done() {
-    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
+    _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en, false, next_op_sets_base>();
 }
 
 template <bool is_fp32_dest_acc_en>

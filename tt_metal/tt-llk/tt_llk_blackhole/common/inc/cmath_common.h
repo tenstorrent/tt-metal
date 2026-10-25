@@ -302,22 +302,41 @@ inline void math_dest_wait()
     TTI_SEMWAIT(p_stall::STALL_MATH | p_stall::STALL_SFPU | p_stall::STALL_SYNC, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_MAX);
 }
 
+// next_op_sets_base: the successor writes DEST_TARGET_REG_CFG_MATH_Offset itself (set_dst_write_addr: base plus tile index), so the base write is dead;
+// the stall stays, it keeps the next section's config writes behind the drained math.
+template <bool next_op_sets_base = false>
 inline void dest_section_flip()
 {
     update_dest_offset_id();
-    std::uint32_t base_addr = get_dest_buffer_base();
-    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+    if constexpr (next_op_sets_base)
+    {
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+    }
+    else
+    {
+        std::uint32_t base_addr = get_dest_buffer_base();
+        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+    }
 }
 
 // One stall for the post and the base flip: the post already waits for math and SFPU idle, so the flip needs no second stall.
+template <bool next_op_sets_base = false>
 inline void dest_section_post_flip()
 {
     update_dest_offset_id();
-    const std::uint32_t base_addr = get_dest_buffer_base();
-    TTI_STALLWAIT(p_stall::STALL_SYNC | p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
-    TTI_SEMPOST(semaphore::t6_sem(semaphore::MATH_PACK));
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+    if constexpr (next_op_sets_base)
+    {
+        TTI_STALLWAIT(p_stall::STALL_SYNC | p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+        TTI_SEMPOST(semaphore::t6_sem(semaphore::MATH_PACK));
+    }
+    else
+    {
+        const std::uint32_t base_addr = get_dest_buffer_base();
+        TTI_STALLWAIT(p_stall::STALL_SYNC | p_stall::STALL_CFG, p_stall::MATH | p_stall::SFPU1);
+        TTI_SEMPOST(semaphore::t6_sem(semaphore::MATH_PACK));
+        TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
+    }
 }
 
 template <DstStart Dst>

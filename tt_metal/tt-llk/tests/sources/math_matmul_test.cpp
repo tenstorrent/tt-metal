@@ -273,7 +273,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     #else
                     constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
                     #endif
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip>();
+                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en, fused_post_flip, !is_fp32_dest_acc_en>();
                 }
             }
         }

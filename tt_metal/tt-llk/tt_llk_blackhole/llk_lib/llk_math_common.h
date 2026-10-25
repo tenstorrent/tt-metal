@@ -103,21 +103,22 @@ inline void _llk_math_wait_for_dest_available_()
  *
  * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: Whether FP32 accumulation in the destination register is enabled.
+ * @tparam next_op_sets_base: Every math op that can follow writes DEST_TARGET_REG_CFG_MATH_Offset itself, so the flip skips that write.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool fused_post_flip = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool fused_post_flip = false, bool next_op_sets_base = false>
 inline void _llk_math_dest_section_done_()
 {
     if constexpr (Dst == DstSync::SyncHalf && fused_post_flip)
     {
         math_sync_tile_dst_index = 0;
-        dest_section_post_flip();
+        dest_section_post_flip<next_op_sets_base>();
         return;
     }
     set_math_semaphores();
     if constexpr (Dst == DstSync::SyncHalf)
     {
         math_sync_tile_dst_index = 0;
-        dest_section_flip();
+        dest_section_flip<next_op_sets_base>();
     }
 }
 

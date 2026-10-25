@@ -61,7 +61,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
         for (uint32_t tile_idx = 0; tile_idx < block_size; tile_idx++) {
             transpose_tile(in0_transpose_dfb_id, tile_idx, tile_idx);
         }
-        tile_regs_commit();
+        tile_regs_commit_matmul();
         in0_transpose_dfb.pop_front(block_size);
 
         in0_dfb.reserve_back(block_size);
@@ -79,7 +79,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
         for (uint32_t tile_idx = 0; tile_idx < last_block_size; tile_idx++) {
             transpose_tile(in0_transpose_dfb_id, tile_idx, tile_idx);
         }
-        tile_regs_commit();
+        tile_regs_commit_matmul();
         in0_transpose_dfb.pop_front(last_block_size);
 
         in0_dfb.reserve_back(last_block_size);
@@ -156,7 +156,7 @@ inline void reblock_and_untilize(
                 const uint32_t tile_index = block_offset + within_block_index + w;
                 copy_tile(interm_dfb_id, tile_index, w);
             }
-            tile_regs_commit();
+            tile_regs_commit_matmul();
             tile_regs_wait();
             pack_untilize_dest<out_subblock_w, out_block_w>(out_dfb_id, 1, n);
             tile_regs_release();
@@ -477,7 +477,7 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
-                                tile_regs_commit();
+                                tile_regs_commit_matmul();
                                 mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
 #if defined SFPU_ACTIVATION and not defined FUSE_BIAS
@@ -517,7 +517,7 @@ void kernel_main() {
                                 mm_out_dfb.push_back(out_subblock_num_tiles);
 
                             } else {
-                                tile_regs_commit();
+                                tile_regs_commit_matmul();
                                 mm_partials_dfb.reserve_back(out_subblock_num_tiles);
                                 tile_regs_wait();
 
@@ -645,7 +645,7 @@ void kernel_main() {
                                 bias_tile_idx++;
                             }
                         }
-                        tile_regs_commit();
+                        tile_regs_commit_matmul();
 
                         mm_partials_dfb.pop_front(out_subblock_num_tiles);
 

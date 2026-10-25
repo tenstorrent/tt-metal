@@ -217,7 +217,7 @@ void kernel_main() {
                     if constexpr (untilize_out) {
                         pack_untilize_dest_init<out_subblock_num_tiles>(mm_out_dfb_id);
                     }
-                    tile_regs_commit();
+                    tile_regs_commit_matmul();
                     // Pack out to output buffer
                     mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
@@ -253,7 +253,7 @@ void kernel_main() {
                     mm_out_dfb.push_back(out_subblock_num_tiles);
 
                 } else if (spill) {
-                    tile_regs_commit();
+                    tile_regs_commit_matmul();
                     // Move partial result to interm buffer
                     mm_partials_dfb.reserve_back(out_subblock_num_tiles);
                     tile_regs_wait();
