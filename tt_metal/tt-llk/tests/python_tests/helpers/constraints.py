@@ -436,11 +436,14 @@ def is_valid_quasar_packer_conversion(
 def is_valid_quasar_dest_mode_conversion(
     in_fmt: DataFormat, out_fmt: DataFormat, dest_acc: DestAccumulation
 ) -> bool:
-    """Quasar format conversions that only work with a 32-bit Dest (dest_acc=Yes).
+    """Is in_fmt -> out_fmt packable with this Dest mode on Quasar?
 
-    - Upcasting a non-32-bit input to Float32/Int32/UInt32.
-    - Converting between Int8 and UInt8. Int4/UInt4 sit in the source registers as
-      Int8/UInt8, so they follow the same rule.
+    With dest_acc=Yes (32-bit Dest) every pair passes. With dest_acc=No (16-bit Dest):
+
+    - a non-32-bit input can't be packed to Float32/Int32/UInt32;
+    - an input that sits in the source registers as Int8 or UInt8 (Int8, UInt8, and
+      Int4/UInt4, which are widened to them) can only be packed to exactly that
+      format. So Int8 -> UInt8, Int8 -> Float16 and Int4 -> Int4 are all rejected.
     """
     if dest_acc != DestAccumulation.No:
         return True
