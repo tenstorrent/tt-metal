@@ -1146,7 +1146,7 @@ def test_glue_r0(mesh_device, variant, config_only):
 
         qb_cfg, b1_cfg = cfgR("q_b_proj"), cfgR("wkv_b1")
         qr_l1 = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=L1)
-        qr_d = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=DRAM)
+        qr_d = ttnn.to_memory_config(qr_l1, DRAM)  # same data as qr_l1 (the first R0 run compared two random inputs)
         tw_qb = mk(mesh, torch.randn(Q_LORA, NH * (NOPE + ROPE)) * (1 / Q_LORA**0.5), ttnn.bfloat8_b)
         wb = mk(mesh, torch.randn(1, NH, NOPE, KV_LORA) * (1 / NOPE**0.5))
         zr = mk(mesh, torch.zeros(1, NH, NOPE, ROPE))
