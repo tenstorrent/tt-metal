@@ -36,7 +36,13 @@ import pytest
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tests.kda.perf.delay_injection import POINTS, DelayConfig
+from models.demos.deepseek_v3_d_p.tests.kda.perf.delay_injection import (
+    POINTS,
+    DelayConfig,
+    injection_io,
+    parse_configs,
+    release_io,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import (
     _GALAXY_ACTUAL_START,
     _L1_SMALL_SIZE,
@@ -63,11 +69,11 @@ _BASELINE_EVERY = 4
 def _configs() -> list[DelayConfig]:
     listed = os.environ.get("KDA_SLACK_CONFIGS")
     if listed:
-        return [DelayConfig.parse(text) for text in listed.split(",")]
+        return parse_configs(listed.split(","))
     points = os.environ.get("KDA_SLACK_POINTS", ",".join(POINTS)).split(",")
     delays = os.environ.get("KDA_SLACK_DELAYS_US", "10,30").split(",")
     chips = os.environ.get("KDA_SLACK_CHIPS", "all").split(",")
-    return [DelayConfig.parse(f"{p}:{d}:{r}") for p, d, r in itertools.product(points, delays, chips)]
+    return parse_configs(f"{p}:{d}:{r}" for p, d, r in itertools.product(points, delays, chips))
 
 
 @pytest.mark.parametrize(
@@ -85,6 +91,7 @@ def _configs() -> list[DelayConfig]:
 def test_kimi_k3_layer_slack(mesh_device: ttnn.MeshDevice, device_params: dict) -> None:
     """Write the traced-wall response of the SP8xTP4 layer to a delay after each chosen program."""
     configs = _configs()
+    io = injection_io(mesh_device)  # shared by every injection, allocated before the layer
     actual_start = _GALAXY_ACTUAL_START
     actual_end = actual_start + PREFILL_CHUNK_TOKENS
     case = make_synthetic_kimi_k3_test_case(sequence=PREFILL_CHUNK_TOKENS)
@@ -112,7 +119,7 @@ def test_kimi_k3_layer_slack(mesh_device: ttnn.MeshDevice, device_params: dict) 
 
         if config is None:
             return measure()
-        with config.inject(layer) as spin:
+        with config.inject(layer, io) as spin:
             wall = measure()
         # The warm-up call and the traced call each ran the point's program once.
         assert spin.dispatches == 2, f"{config}: {spin.dispatches} injections in two layer calls"
@@ -141,6 +148,7 @@ def test_kimi_k3_layer_slack(mesh_device: ttnn.MeshDevice, device_params: dict) 
             entries[str(config)] = {"wall_ms": wall, "baseline_ms": baseline, "delta_us": (wall - baseline) * 1e3}
         rounds.append({"baselines_ms": [measured[b][1] for b in baseline_slots], "configs": entries})
         print(f"KDA_SLACK round {round_index}: baselines " + " ".join(f"{measured[b][1]:.4f}" for b in baseline_slots))
+    release_io(io)
 
     summary = {}
     for config in configs:
