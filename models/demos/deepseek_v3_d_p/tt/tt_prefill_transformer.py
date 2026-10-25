@@ -21,6 +21,7 @@ from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_yield
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
@@ -653,6 +654,8 @@ class TtPrefillTransformer(LightweightModule):
             else:
                 h, _ = ret
             signpost(f"forward_layer_{i}_end")
+            # Two-chunk pipeline switch point (utils/pipeline.py; no-op when no TwoStreamRunner is active).
+            pipeline_yield("layer_end")
             if self.kv_only_last_layer and i == len(self.layers) - 1:
                 # Last layer was kv-only: KV cache filled, migration callback fired, no hidden state
                 # produced. Nothing more to run or snapshot; the populated cache is the output.

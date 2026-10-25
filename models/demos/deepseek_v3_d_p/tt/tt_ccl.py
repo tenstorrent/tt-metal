@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_d_p.utils.pipeline import current_stream as _pipe_current_stream
 
 # NOTE: This file is forked from models/common/tt_ccl.py
 #       This is done to include logic for divifing the grid of cores for ring attention
@@ -86,7 +88,37 @@ def create_global_semaphores(mesh_device, cores, initial_value):
     return ccl_semaphore_handles
 
 
+# Two-chunk pipeline (utils/pipeline.py): resources whose live range spans a stream switch point get one copy per
+# stream. Stream 1 is served by a lazily created peer TT_CCL with its own copies. PIPE_STREAM_LOCAL (comma list)
+# overrides the set; PIPE_PEER_PUSH_L1=1 keeps an L1 front for stream 1's sparse-push buffers (default DRAM only,
+# because the fronts are 160 KB/core/parity and L1 is already tight next to allopt's own fronts).
+_PIPE_STREAM_LOCAL = frozenset(
+    n.strip()
+    for n in os.environ.get("PIPE_STREAM_LOCAL", "sparse_kv_push,get_sparse_kv_push").split(",")
+    if n.strip()
+)
+
+
 class TT_CCL:
+    def __getattribute__(self, name):
+        if name in _PIPE_STREAM_LOCAL:
+            d = object.__getattribute__(self, "__dict__")
+            if not d.get("_is_stream_peer", False) and _pipe_current_stream() != 0:
+                return getattr(object.__getattribute__(self, "_stream_peer")(), name)
+        return object.__getattribute__(self, name)
+
+    def _stream_peer(self) -> "TT_CCL":
+        """The stream-1 copy of the stream-local resources (created on first use, during the eager warm-up)."""
+        d = object.__getattribute__(self, "__dict__")
+        peer = d.get("_peer")
+        if peer is None:
+            peer = TT_CCL.__new__(TT_CCL)
+            peer.__dict__["_is_stream_peer"] = True
+            TT_CCL.__init__(peer, d["mesh_device"])
+            d["_peer"] = peer
+            logger.info(f"TT_CCL: created stream-1 peer for {sorted(_PIPE_STREAM_LOCAL)}")
+        return peer
+
     def __init__(
         self,
         mesh_device,
@@ -469,7 +501,12 @@ class TT_CCL:
                 ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0, buffer_type) for _ in range(2)
             ]
             ttnn.synchronize_device(self.mesh_device)
-            self.sparse_kv_push = (SparseKvPushPlanner(self.mesh_device, links), *sems)
+            peer_kwargs = (
+                {"l1_front_bytes_per_core": 0}
+                if self.__dict__.get("_is_stream_peer", False) and os.environ.get("PIPE_PEER_PUSH_L1", "0") != "1"
+                else {}
+            )
+            self.sparse_kv_push = (SparseKvPushPlanner(self.mesh_device, links, **peer_kwargs), *sems)
         return self.sparse_kv_push
 
     def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
