@@ -206,6 +206,12 @@ class TtSharedExpert(LightweightModule):
           mesh_mapper dims=(None, -2)
     """
 
+    @property
+    def tt_ccl(self):
+        """The current pipeline stream's TT_CCL (tt_ccl.ccl_stream), looked up per use: two streams running this
+        same module must not share CCL semaphore pools or persistent CCL buffers."""
+        return get_tt_ccl(self.mesh_device)
+
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if all shared expert weight cache files exist."""
@@ -388,7 +394,7 @@ class TtSharedExpert(LightweightModule):
         # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
         # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
         # shared experts) — see forward() and TT_CCL.get_shared_rs_intermediate.
-        self.tt_ccl = get_tt_ccl(mesh_device)
+        # self.tt_ccl is a property: the current pipeline stream's TT_CCL.
         self.cache_name_prefix = cache_name_prefix
 
         logger.debug(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")

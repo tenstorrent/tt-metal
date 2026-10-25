@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -33,6 +34,48 @@ CCL_NUM_BUFFERS_PER_CHANNEL = 2
 
 _tt_ccl_cache: dict[int, "TT_CCL"] = {}
 
+# =============================================================================
+# Pipeline streams (two-chunk pipeline, E3): one TT_CCL per (mesh, stream)
+# =============================================================================
+# Two chunks in flight run the SAME layer objects for two streams whose ops interleave (and, on different
+# sub-devices, overlap). Everything TT_CCL hands out -- the cycling CCL semaphore pools, persistent CCL outputs, the
+# shared-expert RS intermediate + input keepalive, the HRE/combine overlap semaphores and forwarding buffer, the
+# MLA scratch -- assumes layers run one after another, so each stream gets its own TT_CCL. Stream 0 is the
+# existing per-mesh instance (unchanged behaviour for every single-stream caller). The stream is a context:
+# modules look their TT_CCL up when they issue ops (get_tt_ccl(mesh)), and the driver wraps each stream's op
+# group in `with ccl_stream(mesh, s):` (TtMoe.forward(stream=s) does it for the MoE).
+# A stream's TT_CCL creates global semaphores in its constructor and some resources synchronize on first use, so
+# every stream must run once (warm-up) before any trace capture; prepare_ccl_streams() does the constructor part.
+_tt_ccl_stream_cache: dict[tuple[int, int], "TT_CCL"] = {}
+_current_stream: dict[int, int] = {}
+
+
+def current_ccl_stream(mesh_device: ttnn.MeshDevice) -> int:
+    """The pipeline stream whose TT_CCL get_tt_ccl(mesh_device) returns right now (0 outside any ccl_stream)."""
+    return _current_stream.get(mesh_device.id(), 0)
+
+
+@contextmanager
+def ccl_stream(mesh_device: ttnn.MeshDevice, stream: Optional[int]):
+    """Make `stream`'s TT_CCL the one get_tt_ccl(mesh_device) returns inside the block. None keeps the current."""
+    if stream is None:
+        yield
+        return
+    mesh_id = mesh_device.id()
+    previous = _current_stream.get(mesh_id, 0)
+    _current_stream[mesh_id] = int(stream)
+    try:
+        yield
+    finally:
+        _current_stream[mesh_id] = previous
+
+
+def prepare_ccl_streams(mesh_device: ttnn.MeshDevice, num_streams: int) -> None:
+    """Create the TT_CCL of every stream < num_streams now (its constructor allocates global semaphores, which a
+    trace capture cannot do)."""
+    for stream in range(num_streams):
+        get_tt_ccl(mesh_device, stream)
+
 
 @dataclass(frozen=True)
 class SparseMlaOverlapResources:
@@ -60,19 +103,38 @@ _SPARSE_MLA_OVERLAP_PROFILE_ALIASES = {"galaxy_rows2": "loudbox_rows2"}
 _SPARSE_MLA_OVERLAP_GATHER_ROWS = 2
 
 
-def get_tt_ccl(mesh_device: ttnn.MeshDevice) -> "TT_CCL":
-    """Get or create TT_CCL for mesh_device (cached per device id)."""
+def get_tt_ccl(mesh_device: ttnn.MeshDevice, stream: Optional[int] = None) -> "TT_CCL":
+    """Get or create TT_CCL for mesh_device (cached per device id) and pipeline stream (default: the current one,
+    see ccl_stream; 0 outside any)."""
     mesh_id = mesh_device.id()
-    if mesh_id not in _tt_ccl_cache:
-        _tt_ccl_cache[mesh_id] = TT_CCL(mesh_device)
-    return _tt_ccl_cache[mesh_id]
+    if stream is None:
+        stream = _current_stream.get(mesh_id, 0)
+    if stream == 0:
+        if mesh_id not in _tt_ccl_cache:
+            _tt_ccl_cache[mesh_id] = TT_CCL(mesh_device)
+        return _tt_ccl_cache[mesh_id]
+    key = (mesh_id, int(stream))
+    if key not in _tt_ccl_stream_cache:
+        _tt_ccl_stream_cache[key] = TT_CCL(mesh_device)
+    return _tt_ccl_stream_cache[key]
+
+
+def all_tt_ccls(mesh_device: ttnn.MeshDevice) -> list["TT_CCL"]:
+    """Every TT_CCL created for mesh_device so far, stream 0 first. For per-model resets that must reach every
+    stream (e.g. dropping the shared-expert keepalive after a capture)."""
+    mesh_id = mesh_device.id()
+    out = [_tt_ccl_cache[mesh_id]] if mesh_id in _tt_ccl_cache else []
+    out += [ccl for (mid, _), ccl in sorted(_tt_ccl_stream_cache.items()) if mid == mesh_id]
+    return out
 
 
 def clear_tt_ccl_cache():
     """Release registered sparse-MLA managers, then clear the cache (for testing)."""
-    for tt_ccl in _tt_ccl_cache.values():
+    for tt_ccl in list(_tt_ccl_cache.values()) + list(_tt_ccl_stream_cache.values()):
         tt_ccl.release_sparse_mla_overlap_manager()
     _tt_ccl_cache.clear()
+    _tt_ccl_stream_cache.clear()
+    _current_stream.clear()
 
 
 # =============================================================================

@@ -26,11 +26,10 @@ from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM2
 from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import current_ccl_stream, get_tt_ccl
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 _GLUE_GATE_AR_HBAG = os.environ.get("GLUE_GATE_AR_HBAG", "1") == "1"
-
 
 
 # The noaux_tc correction bias only ranks experts (score + bias); the routing weights use the raw scores. Checkpoint
@@ -45,6 +44,7 @@ GATE_BIAS_CACHE_NAME = "e_score_correction_bias_centered"
 def centre_gate_bias(bias: torch.Tensor) -> torch.Tensor:
     bias = bias.float()
     return bias - bias.mean()
+
 
 class GateComputeMode(Enum):
     """Controls which parts of the gate computation fall back to host (torch).
@@ -480,6 +480,12 @@ class TtMoEGateConfig:
 class TtMoEGatePrefill(LightweightModule):
     """MoE gate module from DeepSeek-R1."""
 
+    @property
+    def tt_ccl(self):
+        """The current pipeline stream's TT_CCL (tt_ccl.ccl_stream), looked up per use: two streams running this
+        same module must not share CCL semaphore pools or persistent CCL buffers."""
+        return get_tt_ccl(self.mesh_device)
+
     @staticmethod
     def check_cache_complete(cache_path: Path, cache_name_prefix: str) -> bool:
         """Check if gate weight and bias cache files exist."""
@@ -654,7 +660,7 @@ class TtMoEGatePrefill(LightweightModule):
         # Shared per-mesh CCL singleton: provides persistent global semaphores for the gate's TP
         # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
         # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
-        self.tt_ccl = get_tt_ccl(mesh_device)
+        # self.tt_ccl is a property: the current pipeline stream's TT_CCL.
         self._ar_reduce_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -672,7 +678,9 @@ class TtMoEGatePrefill(LightweightModule):
         # host from_torch is illegal inside a trace capture, so the traced path derives the config
         # on-device instead and refreshes THIS buffer in place — a stable address the capture can keep
         # writing across replays. Allocated lazily on first use (warm-up, before any capture).
-        self._padding_config_device: Optional[ttnn.Tensor] = None
+        # One per two-chunk-pipeline stream (tt_ccl.ccl_stream): each stream's chunk has its own bounds, and a buffer
+        # refreshed in place by one stream must not be overwritten by the other's while its consumers still read it.
+        self._padding_config_device: dict[int, ttnn.Tensor] = {}
         # Row-index / sentinel masks for _sentinel_padded_rows, keyed on the indices shape.
         self._row_masks: dict = {}
 
@@ -1111,10 +1119,11 @@ class TtMoEGatePrefill(LightweightModule):
             )
 
         sp_factor = self.mesh_device.shape[0]
-        if self._padding_config_device is None:
-            # Allocate the persistent row once. Same spec the host builder produces, so the consumers
+        stream = current_ccl_stream(self.mesh_device)
+        if stream not in self._padding_config_device:
+            # Allocate the persistent row once per stream. Same spec the host builder produces, so the consumers
             # (moe_grouped_topk / dispatch) see an identical tensor either way.
-            self._padding_config_device = ttnn.from_torch(
+            self._padding_config_device[stream] = ttnn.from_torch(
                 torch.zeros((sp_factor, 2), dtype=torch.int32),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
@@ -1131,7 +1140,7 @@ class TtMoEGatePrefill(LightweightModule):
         # strict 3-way unpack breaks as soon as a variant sets one. Fields 0-2 are the stable contract.
         actual_start, actual_end = metadata[1], metadata[2]
         return ttnn.experimental.deepseek_prefill.moe_padding_config(
-            self._padding_config_device,
+            self._padding_config_device[stream],
             actual_start,
             actual_end,
             tokens_per_chip=self.config.sp_dim,

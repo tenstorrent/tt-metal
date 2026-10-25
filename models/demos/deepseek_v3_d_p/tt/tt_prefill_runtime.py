@@ -34,7 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.mtp_prefill.tt_mtp import TtMTPPredictor
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.utils import MTP_CACHE_ENV, MTP_CACHE_PREFIX, enable_mtp_indexer_slot
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor, prepare_prefill_mtp_tokens
 from models.demos.deepseek_v3_d_p.tt.runners.kv_caches import MlaKvCaches
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import all_tt_ccls
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -774,7 +774,8 @@ class TtPrefillRuntime:
         controller.end_capture()
         ttnn.synchronize_device(self.mesh_device)
         # Allocated inside the capture: the trace owns that address.
-        get_tt_ccl(self.mesh_device).set_shared_rs_input_keepalive(None)
+        for tt_ccl in all_tt_ccls(self.mesh_device):  # every pipeline stream's keepalive
+            tt_ccl.set_shared_rs_input_keepalive(None)
         # Non-last rank: the persistent output activation the replay refreshes each chunk.
         self._trace_output = out if not self.config.is_last_rank else None
         self._trace_indices_out = getattr(self.model, "last_indexer_indices", None)

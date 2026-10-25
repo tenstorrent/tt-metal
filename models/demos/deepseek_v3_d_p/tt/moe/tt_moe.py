@@ -42,7 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutin
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE, TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU, TtSharedExpert
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import ccl_stream, get_tt_ccl
 
 # glue track: workers per link for the MoE x all-gather over TP; "0" = op default.
 _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
@@ -78,6 +78,12 @@ class TtMoe(LightweightModule):
         - Split Connection (reduce): ROW_MAJOR → TILE_LAYOUT
         - Final Add: TILE_LAYOUT
     """
+
+    @property
+    def tt_ccl(self):
+        """The current pipeline stream's TT_CCL (tt_ccl.ccl_stream), looked up per use: two streams running this
+        same module must not share CCL semaphore pools or persistent CCL buffers."""
+        return get_tt_ccl(self.mesh_device)
 
     @staticmethod
     def check_cache_complete(
@@ -366,7 +372,7 @@ class TtMoe(LightweightModule):
         self.mesh_device = mesh_device
         # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
         # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
-        self.tt_ccl = get_tt_ccl(mesh_device)
+        # self.tt_ccl is a property: the current pipeline stream's TT_CCL.
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
         self.experts_per_chip = experts_per_chip
@@ -886,11 +892,47 @@ class TtMoe(LightweightModule):
             combine_num_links=self.row_num_links,
             num_experts_per_tok=self.num_experts_per_tok,
             seq_len_per_chip=self.seq_len_per_chip,
-            combine_semaphores=self.combine_overlap_semaphores,
-            forwarding_buffer=self.combine_forwarding_buffer,
+            combine_semaphores=self._stream_combine_semaphores(),
+            forwarding_buffer=self._stream_forwarding_buffer(),
         )
 
-    def forward(
+    def _stream_combine_semaphores(self):
+        """The HRE/combine overlap's semaphores of the current pipeline stream (tt_ccl.ccl_stream). Stream 0's are
+        self.combine_overlap_semaphores. Another stream's are created by its first call (prepare_stream, or the
+        warm-up forward): creation synchronizes the mesh, which a trace capture cannot do."""
+        return self.tt_ccl.get_combine_overlap_semaphores()
+
+    def _stream_forwarding_buffer(self):
+        """combine_fabric2d's forwarding buffer of the current stream, once the traced path has one (see
+        set_trace_controller); None leaves the op to allocate its own, as before."""
+        if self.combine_forwarding_buffer is None:
+            return None
+        return self.tt_ccl.get_combine_forwarding_buffer(
+            self.routed_emb_dim,
+            self.experts_per_chip,
+            self.num_experts_per_tok,
+            self.seq_len_per_chip,
+            self.row_num_links,
+        )
+
+    def prepare_stream(self, stream: int) -> None:
+        """Create pipeline stream `stream`'s TT_CCL and its MoE resources now (before warm-up and any capture):
+        the HRE/combine overlap semaphores (creation synchronizes the mesh) and, once a trace controller is set, the
+        forwarding buffer (allocated up front so it does not pin DRAM inside a forward)."""
+        with ccl_stream(self.mesh_device, stream):
+            if self.overlap_routed_expert_with_combine:
+                self._stream_combine_semaphores()
+                self._stream_forwarding_buffer()
+
+    def forward(self, *args, stream: Optional[int] = None, **kwargs):
+        """See _forward. `stream` is the two-chunk pipeline stream whose per-stream resources (CCL semaphore pools,
+        persistent CCL outputs, shared-expert RS intermediate/keepalive, HRE/combine overlap semaphores and
+        forwarding buffer, the gate's device padding config) this call uses; None keeps the current stream
+        (tt_ccl.ccl_stream), which is 0 for every single-stream caller."""
+        with ccl_stream(self.mesh_device, stream):
+            return self._forward(*args, **kwargs)
+
+    def _forward(
         self,
         x: ttnn.Tensor,
         return_intermediates: bool = False,
