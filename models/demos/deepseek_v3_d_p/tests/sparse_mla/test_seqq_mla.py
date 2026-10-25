@@ -177,49 +177,50 @@ def test_seqq_mla_matches_head_sharded(mesh_device, device_params, variant, cach
         return kv[0], kv[1], index_kv
 
     def run(mode):
-        full, shared = build(FULL_LAYER, mode), build(SHARED_LAYER, mode)
+        full, shared = layers[mode]
         kvpe_full, kvpe_shared, index_kv = caches()
         res = {"full": [], "shared": [], "idx": []}
-        try:
-            for c in range(N_CHUNKS):
-                start = c * CHUNK
-                tt_hidden = ttnn.from_torch(
-                    hidden[:, start : start + CHUNK].unsqueeze(0),
-                    device=mesh,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=shard_dims),
-                )
-                out_f, idx = full.forward(
-                    tt_hidden,
-                    rope_tensors,
-                    kvpe_full,
-                    actual_start=start,
-                    index_kv_cache=index_kv,
-                    return_indexer_indices=True,
-                )
-                inj = device_indices(cpu["topk"][c], start, mesh) if cpu else idx
-                out_s = shared.forward(tt_hidden, rope_tensors, kvpe_shared, actual_start=start, indexer_indices=inj)
-                ttnn.synchronize_device(mesh)
-                res["full"].append(ttnn.to_torch(out_f, mesh_composer=composer).float())
-                res["shared"].append(ttnn.to_torch(out_s, mesh_composer=composer).float())
-                # dev 0 = (s 0, t 0) and dev 6 = (s 1, t 2): rows start at c*CHUNK + s*640 + t*160
-                res["idx"].append(
-                    {
-                        d: index_sets(
-                            idx, d, start, start + (d // tp) * (CHUNK // sp) + (d % tp) * (CHUNK // (sp * tp))
-                        )
-                        for d in (0, 6)
-                    }
-                )
-                for t in (out_f, out_s, tt_hidden, idx) + ((inj,) if cpu else ()):
-                    ttnn.deallocate(t)
-        finally:
-            full.release_sparse_mla_overlap_manager()
+        for c in range(N_CHUNKS):
+            start = c * CHUNK
+            tt_hidden = ttnn.from_torch(
+                hidden[:, start : start + CHUNK].unsqueeze(0),
+                device=mesh,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh, mesh_shape=tuple(mesh.shape), dims=shard_dims),
+            )
+            out_f, idx = full.forward(
+                tt_hidden,
+                rope_tensors,
+                kvpe_full,
+                actual_start=start,
+                index_kv_cache=index_kv,
+                return_indexer_indices=True,
+            )
+            inj = device_indices(cpu["topk"][c], start, mesh) if cpu else idx
+            out_s = shared.forward(tt_hidden, rope_tensors, kvpe_shared, actual_start=start, indexer_indices=inj)
+            ttnn.synchronize_device(mesh)
+            res["full"].append(ttnn.to_torch(out_f, mesh_composer=composer).float())
+            res["shared"].append(ttnn.to_torch(out_s, mesh_composer=composer).float())
+            # dev 0 = (s 0, t 0) and dev 6 = (s 1, t 2): rows start at c*CHUNK + s*640 + t*160
+            res["idx"].append(
+                {
+                    d: index_sets(idx, d, start, start + (d // tp) * (CHUNK // sp) + (d % tp) * (CHUNK // (sp * tp)))
+                    for d in (0, 6)
+                }
+            )
+            for t in (out_f, out_s, tt_hidden, idx) + ((inj,) if cpu else ()):
+                ttnn.deallocate(t)
         return res
 
-    results = {mode: run(mode) for mode in MODES}
+    # Build every instance first: the full layers share ONE set of TT_CCL sparse-MLA overlap resources (its global
+    # semaphores live in the small L1_SMALL region, which does not survive repeated release/re-create).
+    layers = {mode: (build(FULL_LAYER, mode), build(SHARED_LAYER, mode)) for mode in MODES}
+    try:
+        results = {mode: run(mode) for mode in MODES}
+    finally:
+        layers["head"][0].release_sparse_mla_overlap_manager()
 
     ok = True
     for c in range(N_CHUNKS):
@@ -246,7 +247,9 @@ def test_seqq_mla_matches_head_sharded(mesh_device, device_params, variant, cach
                 line += " | vs CPU " + " ".join(f"{m}={v:.6f}" for m, v in vs.items())
                 # The candidate must be as accurate as production (same CPU bar the sparse MLA tests use, 0.98),
                 # within run-to-run index-flip noise.
-                ok = ok and vs["seq"] >= 0.98 and vs["seq"] >= vs["head"] - 0.002 and vs["seq_ar"] >= vs["head"] - 0.002
+                # No accuracy loss vs production, within run-to-run index-flip noise. (No absolute bar: with random
+                # weights production itself is 0.975 at chunk 1, below the 0.98 the small-shape sparse MLA tests use.)
+                ok = ok and vs["seq"] >= vs["head"] - 0.002 and vs["seq_ar"] >= vs["head"] - 0.002
             log(line)
             if layer == "shared":
                 ok = ok and pcc(results["seq_ar"][layer][c], ref) >= 0.99999
