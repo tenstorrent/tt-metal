@@ -659,13 +659,12 @@ FORCE_INLINE void matmul_phase_fused_gu(
         x_dq_cb.push_back(X_BLOCK_TILES_MAX);
         x_scale_cb.pop_front(SCALE_TILES_MAX);
         reconfig_data_format_srca(gate_cb_id);
-        matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+        re_mm_init<in0_block_w>(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
         pack_reconfig_data_format(URE_CB_X_DQ, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
         PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
 #endif
-        return;
-#endif
+#else
         compute_kernel_lib::tilize<
             in0_block_w,
             x_rm_cb_id,
@@ -692,6 +691,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #ifdef PACKER_L1_ACC
         PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
 #endif
+#endif  // URE_X_FP8
     };
     constexpr uint32_t kAhead = adaptive_chunk::kXTilizeLookahead;
     const uint32_t x_period = adaptive_chunk::x_owner_period(grid_x, my_gy);
