@@ -670,6 +670,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // to partials_gu so copy_tile reads the accumulator.
     reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
     copy_init(partials_gu_cb_id);
+#if defined(MM_RE_FORMS) && defined(ARCH_BLACKHOLE)
+    // The row-MOP matmul init reprograms the math ADDR_MOD_3/6/7 the SFPU silu uses (PR #58817 API note), and this
+    // kernel inits silu only once at kernel start: re-init it after every matmul phase.
+    silu_tile_init();
+#endif
     for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_gu_cb.wait_front(out_subblock_num_tiles);
@@ -804,6 +809,9 @@ FORCE_INLINE void binary_activation_phase(
     (void)up_bias_cb_id;
     reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
     copy_init(gate_partials_cb_id);
+#endif
+#if defined(MM_RE_FORMS) && defined(ARCH_BLACKHOLE)
+    BINARY_ACT_INIT();  // the row-MOP matmul init clobbered the SFPU address mods (see the silu re-init above)
 #endif
 
     for (uint32_t base = 0; base < EFF_OUT; base += kActChunk) {
