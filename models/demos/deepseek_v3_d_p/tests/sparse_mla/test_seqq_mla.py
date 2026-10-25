@@ -87,7 +87,10 @@ def jaccard(sa, sb):
             (8, 4),
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(GLM53Config),
-                l1_small_size=1536,
+                # Production uses 1536 B; three modes' CCL programs in one process (every all-to-all program keeps its
+                # carried counters in L1_SMALL) overflow it on best. A larger L1_SMALL only shrinks regular L1, so the
+                # CB-clash check of MLA_SEQQ_L1 stays conservative.
+                l1_small_size=8192,
                 trace_region_size=64 * 1024 * 1024,
             ),
             id="torus-xy-8x4",
