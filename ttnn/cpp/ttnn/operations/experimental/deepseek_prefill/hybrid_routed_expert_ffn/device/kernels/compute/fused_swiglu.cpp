@@ -66,6 +66,35 @@
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/device/kernels/adaptive_chunk.hpp"
 
+// BH matmul forms (upstream PR #58817): one math MOP per reuse row (row_mop) and the forms table keyed by k steps per
+// DEST section and the packed (bf16 partials) format, instead of the defaults (main's per-tile forms). Init and
+// execute must agree, so every matmul_block_init / matmul_block of this kernel goes through re_mm_init<kt> / re_mm<kt>.
+// The row-MOP init reprograms the math ADDR_MOD_3/6/7 that SFPU code uses, so the activations are re-inited after it.
+#if !defined(MM_RE_NO_FORMS) && defined(ARCH_BLACKHOLE)
+#define RE_MM_FORMS 1
+template <uint32_t kt>
+ALWI void re_mm_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt_dim) {
+    matmul_block_init<true, false, kt, DataFormat::Float16_b>(in0, in1, transpose, ct, rt, kt_dim);
+}
+template <uint32_t kt>
+ALWI void re_mm(
+    uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t dst, uint32_t transpose, uint32_t ct, uint32_t rt,
+    uint32_t kt_dim) {
+    matmul_block<true, false, kt, DataFormat::Float16_b>(in0, in1, i0, i1, dst, transpose, ct, rt, kt_dim);
+}
+#else
+template <uint32_t kt>
+ALWI void re_mm_init(uint32_t in0, uint32_t in1, uint32_t transpose, uint32_t ct, uint32_t rt, uint32_t kt_dim) {
+    matmul_block_init(in0, in1, transpose, ct, rt, kt_dim);
+}
+template <uint32_t kt>
+ALWI void re_mm(
+    uint32_t in0, uint32_t in1, uint32_t i0, uint32_t i1, uint32_t dst, uint32_t transpose, uint32_t ct, uint32_t rt,
+    uint32_t kt_dim) {
+    matmul_block(in0, in1, i0, i1, dst, transpose, ct, rt, kt_dim);
+}
+#endif
+
 #ifdef FUSE_BIAS
 // Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
 // tile-row; add_tiles_bcast_rows adds its row 0 to every row of the output
@@ -319,7 +348,7 @@ FORCE_INLINE void matmul_phase(
                             uint32_t in0_index = in0_index_subblock_offset;
                             uint32_t in1_index = in1_index_subblock_offset;
                             for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
-                                matmul_block(
+                                re_mm<in0_block_w>(
                                     in0_cb_id,
                                     in1_cb_id,
                                     in0_index,
@@ -594,7 +623,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             x_tilized_cb.push_back(x_pad);
         }
         reconfig_data_format_srca(gate_cb_id);
-        matmul_block_init(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+        re_mm_init<in0_block_w>(x_cb_id, gate_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
         pack_reconfig_data_format(x_tilized_cb_id, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
         PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
@@ -642,7 +671,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                         uint32_t in0_index = in0_index_subblock_offset;
                         uint32_t in1_index = in1_index_subblock_offset;
                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                            matmul_block(
+                            re_mm<in0_block_w>(
                                 x_cb_id,
                                 gate_cb_id,
                                 in0_index,
@@ -669,7 +698,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
                         uint32_t in0_index = in0_index_subblock_offset;
                         uint32_t in1_index = in1_index_subblock_offset;
                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; ++inner_dim) {
-                            matmul_block(
+                            re_mm<in0_block_w>(
                                 x_cb_id,
                                 up_cb_id,
                                 in0_index,
@@ -741,6 +770,9 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // to partials_gu so copy_tile reads the accumulator.
     reconfig_data_format_srca(up_cb_id, partials_gu_cb_id);
     copy_init(partials_gu_cb_id);
+#ifdef RE_MM_FORMS
+    silu_tile_init();  // the row-MOP matmul init clobbered the SFPU address mods
+#endif
     for (uint32_t sb = 0; sb < (EFF_OUT / out_subblock_num_tiles); ++sb) {
         tile_regs_acquire();
         partials_gu_cb.wait_front(out_subblock_num_tiles);
@@ -887,6 +919,9 @@ FORCE_INLINE void binary_activation_phase(
     (void)up_bias_cb_id;
     reconfig_data_format_srca(prev_srcA_cb_id, gate_partials_cb_id);
     copy_init(gate_partials_cb_id);
+#endif
+#ifdef RE_MM_FORMS
+    BINARY_ACT_INIT();  // the row-MOP matmul init clobbered the SFPU address mods
 #endif
 
     for (uint32_t base = 0; base < EFF_OUT; base += kActChunk) {
@@ -1223,7 +1258,7 @@ void kernel_main() {
             // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
             // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
             reconfig_data_format(cb_in1_gate, cb_in0_x);
-            matmul_block_init(
+            re_mm_init<g_in0_block_w>(
                 cb_in0_x,
                 cb_in1_gate,
                 /*transpose=*/0,
@@ -1290,7 +1325,7 @@ void kernel_main() {
             // matmul_block_init does not re-program data formats, so reset the down
             // operands here (in1 -> SrcA, in0 -> SrcB) before the matmul.
             reconfig_data_format(cb_in1_down, cb_in0_down_full);
-            matmul_block_init(
+            re_mm_init<d_in0_block_w>(
                 cb_in0_down_full,
                 cb_in1_down,
                 /*transpose=*/0,
