@@ -448,8 +448,12 @@ class TtMoe(LightweightModule):
         # scatter runs alone (no concurrent dispatch on the shared routers), so Ring is safe and kept.
         # Every other TP-axis collective (MLA, dense FFN, gate, pre-dispatch all-gather, post-combine
         # reduce) is never overlapped and keeps col_topology (Ring).
+        # glue track: GLUE_SHARED_RS_RING=1 keeps the ring. The deadlock above was recorded with the old
+        # deepseek_prefill.dispatch; dispatch_fabric2d stays on axis 0 and this RS on axis 1 (different routers).
         force_shared_expert_linear = (
-            self.overlap_shared_expert_with_dispatch and self.col_topology == ttnn.Topology.Ring
+            self.overlap_shared_expert_with_dispatch
+            and self.col_topology == ttnn.Topology.Ring
+            and os.environ.get("GLUE_SHARED_RS_RING", "0") != "1"
         )
         self.shared_expert_topology = ttnn.Topology.Linear if force_shared_expert_linear else self.col_topology
         if force_shared_expert_linear:
