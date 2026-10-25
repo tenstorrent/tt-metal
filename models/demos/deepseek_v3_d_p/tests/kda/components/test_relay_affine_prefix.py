@@ -9,7 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.config import block_projection_program_config
+from models.demos.deepseek_v3_d_p.tt.kda.config import block_projection_program_config, dram_width_sharded
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     AffineTransform,
     _RelayFinalCarry,
@@ -199,9 +199,12 @@ def test_relay_affine_prefix_one_tile_packets(mesh_device):
 
 
 @_MESH
-def test_relay_affine_prefix_with_output_gate(mesh_device):
+@pytest.mark.parametrize("weight_layout", ["interleaved", "dram_width_sharded"])
+def test_relay_affine_prefix_with_output_gate(mesh_device, weight_layout):
     """The output gate beside the relay, as the model lays it out: the relay on the right-hand worker columns, the
-    gate's matmul on the block from (0, 0), its first columns copied in by the relay columns' spare cores."""
+    gate's matmul on the block from (0, 0), its first columns copied in by the relay columns' spare cores. The gate's
+    weight is interleaved or, as the model keeps it, DRAM width-sharded over the banks; either way the gate equals
+    ttnn.linear with the interleaved weight bit for bit."""
     torch.manual_seed(0)
     start = 640
     transforms = _Transforms(mesh_device, seed=start)
@@ -226,9 +229,10 @@ def test_relay_affine_prefix_with_output_gate(mesh_device):
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
     )
+    gate_weight = dram_width_sharded(mesh_device, ttnn.clone(w)) if weight_layout == "dram_width_sharded" else w
     output_gate = RelayOutputGate(
         input=x,
-        weight=w,
+        weight=gate_weight,
         program_config=config,
         compute_config=compute_config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

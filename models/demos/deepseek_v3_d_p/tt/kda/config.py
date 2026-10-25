@@ -63,6 +63,27 @@ def l1_when_it_fits(device, nbytes: int, bytes_per_core: int) -> ttnn.MemoryConf
     return ttnn.L1_MEMORY_CONFIG if nbytes <= bytes_per_core * grid.x * grid.y else ttnn.DRAM_MEMORY_CONFIG
 
 
+def dram_width_sharded(device, tensor: ttnn.Tensor) -> ttnn.Tensor:
+    """``tensor`` (a [K, N] matmul weight in DRAM) width-sharded over the DRAM banks, ceil(N / banks) tile columns
+    per bank, and the interleaved one freed. ttnn.linear's 2D multicast then reads a worker column's weights bank by
+    bank, as one run of its tile columns per K row, instead of tile by tile."""
+    banks = device.dram_grid_size().x
+    k, n = tuple(tensor.shape)[-2:]
+    shard_width = -(-n // ttnn.TILE_SIZE // banks) * ttnn.TILE_SIZE
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))]),
+            (k, shard_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    sharded = ttnn.to_memory_config(tensor, memory_config)
+    ttnn.deallocate(tensor)
+    return sharded
+
+
 def preparation_bytes(batch_heads: int, num_chunks: int, key_dim: int, value_dim: int) -> int:
     """Bytes of chunk preparation's seven outputs, in the order and formats KDA_PREP_OUTPUT_BF16_MASK selects."""
     key_tiles, value_tiles = key_dim // ttnn.TILE_SIZE, value_dim // ttnn.TILE_SIZE
