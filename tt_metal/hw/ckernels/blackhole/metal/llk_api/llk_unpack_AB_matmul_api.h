@@ -115,7 +115,16 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const bool reuse_a = ct_dim >= rt_dim;
     constexpr std::uint32_t dest_max_tiles =
         get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>();
-    constexpr bool may_stream_narrow = dest_max_tiles > 8 && llk_unpack_AB_matmul_kernel_has_narrow_format();
+    // MM_NARROW_HALF (experiment): also stream 8-bit operands with the narrow body at half sync, where PR #58817 keeps
+    // main's body. 1 = LoFi only (the unpack-bound fidelity), 2 = every fidelity.
+#if defined(MM_NARROW_HALF) && (MM_NARROW_HALF > 0)
+    constexpr bool narrow_half_ok = (MM_NARROW_HALF >= 2) || (MATH_FIDELITY == ckernel::MathFidelity::LoFi);
+#else
+    constexpr bool narrow_half_ok = false;
+#endif
+    // the narrow-body gate only tests dest_max_tiles > 8, so a half-sync kernel that opts in passes a full-sync count
+    constexpr std::uint32_t narrow_gate_tiles = narrow_half_ok ? 16 : dest_max_tiles;
+    constexpr bool may_stream_narrow = narrow_gate_tiles > 8 && llk_unpack_AB_matmul_kernel_has_narrow_format();
     const bool partial_face_a = get_operand_partial_face(operandA_id);
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
@@ -153,7 +162,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
                                  rt_dim,
                                  unpack_src_format[operandA_id],
                                  unpack_src_format[operandB_id],
-                                 dest_max_tiles,
+                                 narrow_gate_tiles,
                                  unpB_face_r_dim,
                                  MATH_FIDELITY == ckernel::MathFidelity::HiFi4)) {
         llk_unpack_AB_matmul_init_impl<auto_ttsync, true>(

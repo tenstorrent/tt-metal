@@ -5,10 +5,12 @@
 #include "build_env_manager.hpp"
 
 #include <tracy/Tracy.hpp>
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <future>
 #include <map>
@@ -136,6 +138,31 @@ BuildEnvManager::BuildEnvManager(const Hal& hal) {
 
 namespace {
 
+// Experiment hook (glm53-prefill mm agent): TT_METAL_JIT_EXTRA_DEFINES="NAME=VALUE,NAME2=VALUE2" adds -D flags to every
+// JIT build (firmware and kernels) and is folded into the build key, so each value set gets its own kernel cache.
+const char* jit_extra_defines_env() {
+    const char* v = std::getenv("TT_METAL_JIT_EXTRA_DEFINES");
+    return (v != nullptr && *v != '\0') ? v : nullptr;
+}
+
+void add_jit_extra_defines(std::map<std::string, std::string>& defines) {
+    const char* env = jit_extra_defines_env();
+    if (env == nullptr) {
+        return;
+    }
+    std::string all(env);
+    std::size_t pos = 0;
+    while (pos <= all.size()) {
+        const std::size_t end = std::min(all.find(',', pos), all.size());
+        const std::string item = all.substr(pos, end - pos);
+        if (!item.empty()) {
+            const std::size_t eq = item.find('=');
+            defines[item.substr(0, eq)] = (eq == std::string::npos) ? "1" : item.substr(eq + 1);
+        }
+        pos = end + 1;
+    }
+}
+
 std::map<std::string, std::string> initialize_device_kernel_defines(const JitDeviceConfig& config) {
     std::map<std::string, std::string> device_kernel_defines;
 
@@ -167,6 +194,8 @@ std::map<std::string, std::string> initialize_device_kernel_defines(const JitDev
         device_kernel_defines.emplace("TT_TA_ADDRGEN_INTERLEAVED_L1_SW", "1");
     }
 
+    add_jit_extra_defines(device_kernel_defines);
+
     return device_kernel_defines;
 }
 
@@ -192,6 +221,10 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
     hasher.update(static_cast<uint32_t>(config.l1_banks_form_selector_run));
 
     hasher.update(rtoptions.get_compile_hash_string());
+
+    if (const char* extra = jit_extra_defines_env()) {
+        hasher.update(std::string(extra));
+    }
 
     return hasher.digest();
 }
