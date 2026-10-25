@@ -27,45 +27,36 @@ namespace ttnn::prim::qsr {
 namespace {
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded(
-    const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
+    const Tensor& input_tensor, const std::vector<CoreCoord>& cores) {
+    const uint32_t num_cores = cores.size();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t H = input_shape[2], C = input_shape[1];
 
     auto shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
-    bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     MeshDevice* device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
-    std::vector<uint32_t> shard_grid_x_map;
-    shard_grid_x_map.reserve(num_cores_x);
-    for (uint32_t i = 0; i < num_cores_x; ++i) {
-        auto physical_core = device->worker_core_from_logical_core(CoreCoord(i, 0));
-        shard_grid_x_map.push_back(physical_core.x);
-    }
-    std::vector<uint32_t> shard_grid_y_map;
-    shard_grid_y_map.reserve(num_cores_y);
-    for (uint32_t i = 0; i < num_cores_y; ++i) {
-        auto physical_core = device->worker_core_from_logical_core(CoreCoord(0, i));
-        shard_grid_y_map.push_back(physical_core.y);
+    // Per-shard physical NoC coordinates, indexed by shard id (the real cores of the shard grid, in shard order).
+    std::vector<uint32_t> shard_noc_x, shard_noc_y;
+    shard_noc_x.reserve(num_cores);
+    shard_noc_y.reserve(num_cores);
+    for (const auto& core : cores) {
+        auto physical_core = device->worker_core_from_logical_core(core);
+        shard_noc_x.push_back(physical_core.x);
+        shard_noc_y.push_back(physical_core.y);
     }
 
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x, i / num_cores_x};
-        } else {
-            core = {i / num_cores_y, i % num_cores_y};
-        }
         uint32_t num_sticks_per_core = shard_height;
 
         std::vector<uint32_t> reader_runtime_args = {num_sticks_per_core, curr_sticks_read, curr_c, curr_h, curr_n};
-        reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_x_map.begin(), shard_grid_x_map.end());
-        reader_runtime_args.insert(reader_runtime_args.end(), shard_grid_y_map.begin(), shard_grid_y_map.end());
+        reader_runtime_args.insert(reader_runtime_args.end(), shard_noc_x.begin(), shard_noc_x.end());
+        reader_runtime_args.insert(reader_runtime_args.end(), shard_noc_y.begin(), shard_noc_y.end());
 
         std::vector<uint32_t> writer_runtime_args;
 
@@ -93,39 +84,19 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded_special_case(
-    const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
+    const Tensor& input_tensor, const std::vector<CoreCoord>& shard_cores) {
+    const uint32_t num_cores = shard_cores.size();
     auto input_shape = input_tensor.padded_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
-    uint32_t total_height = N * C * H;
+    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
     uint32_t stick_size_bytes = W * input_tensor.element_size();
 
     auto shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
-    bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     MeshDevice* device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
-
-    uint32_t height = 0;
-    std::vector<CoreCoord> cores;
-    cores.reserve(num_cores);
-    for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x, i / num_cores_x};
-        } else {
-            core = {i / num_cores_y, i % num_cores_y};
-        }
-        log_debug(tt::LogOp, "core: {}", core);
-
-        height += shard_height;
-
-        if (height <= total_height) {
-            cores.push_back(core);
-        }
-    }
 
     uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;  // the number of H blocks in a shard
     uint32_t num_C_blocks_per_core = shard_height > C ? shard_height / C : 1;
@@ -169,16 +140,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             uint32_t shard_id = stick_id / num_sticks_per_core;
             uint32_t stick_id_in_shard = stick_id - (shard_id * num_sticks_per_core);
 
-            uint32_t shard_grid_inner_dim = row_major ? num_cores_x : num_cores_y;
-            uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
-            uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
-
-            uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
-            uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
-
-            if (worker_x_logical < num_cores_x && worker_y_logical < num_cores_y) {
-                auto core_physical =
-                    device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+            if (shard_id < num_cores) {
+                auto core_physical = device->worker_core_from_logical_core(shard_cores[shard_id]);
 
                 read_cores_indices.push_back(shard_id);
                 read_stick_offset.push_back(stick_id_in_shard * stick_size_bytes);
@@ -348,10 +311,9 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     log_debug(tt::LogOp, "all_cores: {}", all_cores);
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
 
-    const auto bbox = shard_spec.grid.bounding_box();
-    const CoreCoord grid_size = {bbox.end_coord.x + 1, bbox.end_coord.y + 1};
-    const uint32_t num_cores_x = grid_size.x;
-    const uint32_t num_cores_y = grid_size.y;
+    // Real cores of the shard grid in shard order (grid need not be anchored at (0,0) or be a single range).
+    const std::vector<CoreCoord> shard_cores = corerange_to_cores(all_cores, num_cores, row_major_orientation);
+    TT_FATAL(shard_cores.size() == num_cores, "Shard grid core count does not match the number of shards");
 
     // ------------------------------------------------------------------------
     // Borrowed-memory DFBs aliasing the input/output tensor shard buffers (legacy CBDescriptor::buffer
@@ -384,19 +346,13 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
     // varargs; the leading scalars become named runtime args.
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> all_runtime_args;
     if (is_special_case) {
-        all_runtime_args =
-            get_runtime_args_hc_rm_sharded_special_case(input_tensor, num_cores, num_cores_x, num_cores_y);
+        all_runtime_args = get_runtime_args_hc_rm_sharded_special_case(input_tensor, shard_cores);
     } else {
-        all_runtime_args = get_runtime_args_hc_rm_sharded(input_tensor, num_cores, num_cores_x, num_cores_y);
+        all_runtime_args = get_runtime_args_hc_rm_sharded(input_tensor, shard_cores);
     }
 
-    // Map flat core index -> node, mirroring the legacy row-major / col-major shard ordering exactly.
-    auto node_for_index = [&](uint32_t i) -> NodeCoord {
-        if (row_major_orientation) {
-            return CoreCoord{i % num_cores_x, i / num_cores_x};
-        }
-        return CoreCoord{i / num_cores_y, i % num_cores_y};
-    };
+    // Map flat shard index -> node using the real shard-grid cores.
+    auto node_for_index = [&](uint32_t i) -> NodeCoord { return shard_cores[i]; };
 
     std::vector<KernelSpec> kernels;
     std::vector<KernelSpecName> wu_kernels;
@@ -498,8 +454,8 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
         run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run)};
     } else {
         // Generic path: a single reader gathers every output stick via NoC. It is the sole toucher of
-        // both borrowed shards, so it self-loops (producer + consumer) each DFB. The shard-grid x/y
-        // physical-coordinate maps are uniform-length varargs (num_cores_x + num_cores_y).
+        // both borrowed shards, so it self-loops (producer + consumer) each DFB. The per-shard
+        // physical x/y NoC coordinates are uniform-length varargs (2 * num_cores).
         KernelSpec reader_spec{
             .unique_id = READER_KERNEL,
             .source = std::filesystem::path{READER_PATH},
@@ -509,18 +465,12 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
                  ProducerOf(CB_OUT, "cb_out"),
                  ConsumerOf(CB_OUT, "cb_out")},
             .compile_time_args =
-                {{"N", N},
-                 {"H", H},
-                 {"C", C},
-                 {"W_size_bytes", stick_size_bytes},
-                 {"row_major", static_cast<uint32_t>(row_major_orientation)},
-                 {"num_cores_x", num_cores_x},
-                 {"num_cores_y", num_cores_y}},
+                {{"N", N}, {"H", H}, {"C", C}, {"W_size_bytes", stick_size_bytes}, {"num_cores", num_cores}},
             .runtime_arg_schema =
                 {.runtime_arg_names = {"num_sticks_per_core", "start_id", "curr_c", "curr_h", "curr_n"}},
             .hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true),
         };
-        reader_spec.advanced_options.num_runtime_varargs = num_cores_x + num_cores_y;
+        reader_spec.advanced_options.num_runtime_varargs = 2 * num_cores;
 
         KernelRunArgs reader_run{.kernel = READER_KERNEL};
         for (uint32_t i = 0; i < num_cores; ++i) {

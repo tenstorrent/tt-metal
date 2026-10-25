@@ -7,40 +7,70 @@ The functional drivers sample a few thousand points from an op's *safe* domain. 
 measured that way describes the sample, not the format, and cannot see a tail the sample
 never reaches. This module measures the format's number.
 
-Exhaustive is only honest for the 16-bit formats. bfloat16 has 65,279 finite values and
-float16 63,487, so either fits one 64-tile device run; Float32's 2**32 does not, and is
-left to a stratified sweep. ``Bfp8_b`` is swept in bfloat16 and packed on the way in --
-it has no enumerable value set of its own.
+Exhaustive is only honest for the 16-bit formats. bfloat16 has 65,025 normal values
+(zero included) and float16 61,441, so either fits one 64-tile device run; Float32's 2**32
+does not, so it is walked with a stride that gives every binade an equal share. The
+subnormals are not fed at all: the unpack path flushes them, and a golden that does not
+would be measuring the flush rather than the op. Only the formats the SFPU computes in
+are swept: a block float's error is the unpacker's and packer's, not the op's.
 """
 
 from __future__ import annotations
 
 import math
-import re
-from dataclasses import dataclass
+import pickle
+from dataclasses import dataclass, replace
 from functools import lru_cache
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Union
 
 import torch
 from helpers.format_config import DataFormat
+from helpers.llk_params import MathOperation
 from helpers.stimuli_generator import StimuliSpec
+from helpers.ulp_domains import (
+    BINADE_OFFSET,
+    Bin,
+    Domain,
+    entries_of,
+    usable_budget_ceiling,
+)
+from helpers.ulp_table import (
+    MEASURED_ARCH,
+    TABLE_PATH,
+    BudgetKey,
+    Metric,
+    Reading,
+    Row,
+    load_table,
+    write_table_file,
+)
 
-#: The formats this harness can enumerate. Bfp8_b rides on the bfloat16 value set: the
-#: sweep generates bf16 and the pipeline packs it, which is the only sense in which a
-#: block format has "every value".
+#: The formats the sweep feeds and judges, in and out: the ones the SFPU computes in.
+#: Each is enumerated whole as an input, except Float32, which is strided
+#: (`is_exhaustive`).
 SWEEP_FORMATS: Tuple[DataFormat, ...] = (
     DataFormat.Float16_b,
     DataFormat.Float16,
-    DataFormat.Bfp8_b,
+    DataFormat.Float32,
 )
 
-#: What a Bfp8_b sweep is actually enumerated in.
-_STIMULI_FORMAT: Dict[DataFormat, DataFormat] = {
-    DataFormat.Bfp8_b: DataFormat.Float16_b,
-}
+#: Float32 has 2**32 values and one run holds 2**16, so it is the one input the sweep
+#: samples rather than enumerates. Striding the total order gives every binade an equal
+#: share (each holds the same number of values); a consecutive walk of one run's 2**16
+#: would cover 1/128 of one binade's 2**23. One sample per normal bfloat16 cell, 65,024
+#: of them, but not at the cell's start: the walk starts on -inf, a multiple of 2**16, so
+#: every sample would be a bfloat16 value -- the Float16_b sweep again -- and an fp32
+#: path that reads the low 16 mantissa bits (a LUT index, a truncating convert) would go
+#: untested. The walk moves each sample along its cell by 1/phi of a cell from the one
+#: before (`_enumerate_fp32_in_range`), so the low half is never zero and lands in either
+#: half of the cell about equally often within every binade. A stride
+#: of 2**16 + 1 did not: it tied the low half to the high, and all 128 samples of a
+#: binade sat at one point of their cells.
+_FP32_STRIDE = 2**16
 
-#: A top-level op key in the table.
-_OP_KEY = re.compile(r"^([A-Za-z_]\w*):")
+#: One 64-tile run: the most values a sweep variant generates.
+_SWEEP_TENSOR = 2**16
 
 _INF = float("inf")
 
@@ -59,11 +89,11 @@ def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]
     depend on which ``CHIP_ARCH`` the host happens to set.
 
     The grid is Wormhole's. On another arch only the Dest promotion is applied, not that
-    arch's own format support: Blackhole's functional drivers skip ``Float16`` with
-    ``dest_acc=No``, and Quasar has no ``Bfp8_b``. That is inert while every cell off
-    Wormhole resolves to tolerance and skips, which holds because no ULP row names
-    another ``arch``; test_ulp_sweep.py pins that, so the first such row has to bring
-    those filters with it.
+    arch's own format support: Blackhole skips a ``Float16`` input with ``dest_acc=No``
+    (``_skip_if_unsupported`` in accuracy/test_sfpu_accuracy.py). That is inert while
+    every cell off Wormhole resolves to tolerance and skips, which holds because no ULP
+    row names another ``arch``; test_ulp_sweep.py pins that, so the first such row has
+    to bring those filters with it.
     """
     from helpers.chip_architecture import get_chip_architecture
     from helpers.data_format_inference import effective_dest_acc
@@ -81,48 +111,70 @@ def sweep_cells(arch=None) -> List[Tuple[DataFormat, DataFormat, object, object]
     ]
 
 
-def stimuli_format_for(fmt: DataFormat) -> DataFormat:
-    """The format whose values the sweep enumerates in order to drive *fmt*."""
-    return _STIMULI_FORMAT.get(fmt, fmt)
+def is_exhaustive(input_format: DataFormat) -> bool:
+    """Whether the sweep sees *every* normal value the input can take (and zero), or a
+    stride of them."""
+    return input_format != DataFormat.Float32
 
 
-def sweep_spec() -> StimuliSpec:
-    """Every finite representable value of the stimuli format, once.
+def _stride_for(input_format: DataFormat) -> int:
+    return 1 if is_exhaustive(input_format) else _FP32_STRIDE
+
+
+@lru_cache(maxsize=None)
+def swept_value_count(input_format: DataFormat) -> int:
+    """How many values the sweep generates for *input_format* -- not how many the
+    format has, which for float32 is 2**32 against the 2**16 generated.
+
+    Cached: finding it enumerates the whole format, and `padding_lanes` asks twice per
+    variant.
+    """
+    from helpers.stimuli_generator.strategies.structured import (
+        _enumerate_representable,
+    )
+
+    stride = _stride_for(input_format)
+    return int(
+        _enumerate_representable(
+            input_format, -_INF, _INF, _SWEEP_TENSOR, stride=stride, normal_only=True
+        ).numel()
+    )
+
+
+def sweep_spec(input_format: DataFormat) -> StimuliSpec:
+    """Every normal representable value of the stimuli format and its zero, once -- or,
+    for float32, every ``_FP32_STRIDE``-th, since 2**32 values do not fit one run. No
+    subnormal is fed: the unpack path flushes it, so a lane there would measure the
+    flush, not the op.
 
     Deliberately not clipped to the op's domain. ``exclude_undefined`` expresses a domain
     as ``intervals``, which ULP_SWEEP does not read -- and clipping would also stop the
     undefined inputs reaching hardware at all. They are swept and then masked out of the
     statistics by :func:`measurable_mask`, so the run still exercises them.
     """
-    return StimuliSpec.ulp_sweep(low=-_INF, high=_INF)
-
-
-@lru_cache(maxsize=None)
-def swept_value_count(input_format: DataFormat) -> int:
-    """How many values the sweep actually generates for *input_format*.
-
-    Cached because the answer is a property of the format, while finding it walks the
-    whole format, and `padding_lanes` asks twice per variant.
-    """
-    from helpers.stimuli_generator.strategies.structured import ulp_sweep_value_count
-
-    return int(ulp_sweep_value_count(stimuli_format_for(input_format), -_INF, _INF))
+    return StimuliSpec.ulp_sweep(
+        low=-_INF, high=_INF, stride=_stride_for(input_format), normal_only=True
+    )
 
 
 def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     """The tail ``generate_full_tensor`` fills with zeros to reach the tile count.
 
-    The sweep enumerates every finite value of the stimuli format -- 65,279 for
-    bfloat16, 63,487 for float16 -- into a fixed 65,536-lane tensor, so the last 257
-    (or 2,049) lanes are padding rather than data. They are not values the sweep chose
-    to feed, and they are all the same one, so they belong in no statistic: they
-    inflate every lane count, and on an op singular at zero they land on the pole:
-    ``reciprocal`` returns ``Inf`` there, golden and hardware alike, so the lanes are
-    not a mismatch but they are 257 copies of one value the sweep never chose.
+    The sweep enumerates every normal value of the stimuli format and its zero --
+    65,025 for bfloat16, 61,441 for float16 -- into a fixed 65,536-lane tensor, so the
+    last 511 (or 4,095) lanes are padding rather than data. They are not values the
+    sweep chose to feed, and they are all the same one, so they belong in no
+    statistic: they inflate every lane count, and on an op singular at zero they land
+    on the pole: ``reciprocal`` returns ``Inf`` there, golden and hardware alike, so the
+    lanes are not a mismatch but they are 511 copies of one value the sweep never chose.
 
     Identified by position rather than by value, because ``0.0`` is also a legitimate
     swept value: exactly one, in the middle of the sorted order. Confirmed on hardware
     that the padding is the contiguous tail.
+
+    Counted by :func:`swept_value_count`, not by how many values the format has: a
+    strided float32 walk generates 65,024 of 2**32, and asking the format would put the
+    padding boundary past the end of the tensor and mask nothing.
     """
     swept = swept_value_count(input_format)
     # On *src*'s device: the mask is composed with tensors derived from it, and a
@@ -132,28 +184,30 @@ def padding_lanes(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
     return flat.reshape(src.shape)
 
 
-def received_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
-    """*src* as the op receives it: what ``quantize_input_to_unpack_format`` hands the
-    golden, and the unpack hands the kernel. The same tensor on every format but a block
-    float.
-
-    The lane checks that ask where an input *is* -- on a singularity, inside the op's
-    claim, inside a tracked issue's lanes -- have to ask it of this value, not of the one
-    generated. On Bfp8_b the shared exponent moves a value across those boundaries: in
-    the sorted sweep 1.0 is the last lane of the block ``0x3F71..0x3F80``, so 0.992 and
-    0.996 both arrive as exactly 1.0, and ``atanh`` of them is the pole.
+def received_inputs(
+    src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
+    """*src* as the op receives it: the tensor itself, except, given the variant, a
+    Float32 input at ``dest_acc=No``, which the unpack and the golden both truncate to
+    the 16-bit Dest: past 256 every truncated bf16 value is an integer, so -8326436.5
+    arrives as the pole -8323072. The lane checks that ask where an input *is* -- on a
+    singularity, inside the op's claim, inside a tracked issue's lanes -- have to ask it
+    of this value, not of the one generated.
     """
-    from helpers.bfp_format_utils import BFP_BLOCK
-    from helpers.golden_generators import quantize_input_to_unpack_format
+    from helpers.data_format_inference import _dest_acc_flag
 
-    # The block quantizer works on whole BFP_BLOCK-lane blocks. A device sweep is 65,536
-    # lanes; a host test may hand in a fragment, so pad it with zeros, which never raise
-    # a block's exponent, and drop the padding again.
-    flat = src.detach().flatten()
-    short = (-flat.numel()) % BFP_BLOCK
-    padded = torch.cat([flat, torch.zeros(short, dtype=flat.dtype, device=flat.device)])
-    received = quantize_input_to_unpack_format(padded, input_format)[: flat.numel()]
-    return received.reshape(src.shape)
+    if (
+        input_format != DataFormat.Float32
+        or dest_acc is None
+        or _dest_acc_flag(dest_acc)
+    ):
+        return src
+    from helpers.golden_generators import truncate_to_dest_width
+
+    width = _unpack_format(
+        input_format, output_format or DataFormat.Float16_b, dest_acc
+    )
+    return truncate_to_dest_width(src.detach().to(torch.float32), width)
 
 
 def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch.Tensor:
@@ -168,52 +222,123 @@ def golden_input(src: torch.Tensor, input_format: DataFormat, dest_acc) -> torch
     pole's ``-inf`` against ``+inf``, ``rsqrt(-0)``, was never a failure here: the
     singularity exclusion drops it.) The dedicated signed-zero tests in
     test_eltwise_unary_sfpu.py hold that path to account.
-
-    Not for a block-float input: the golden quantizes that itself, and in the
-    shared-exponent-0 block the zero lane sits in, the forced hidden bit turns it into
-    -2**-127 as -0.0 and +2**-127 (~6e-39) as +0.0 -- neither of them zero, so
-    canonicalizing moved Ceil/Sqrt/Log/Rsqrt's Bfp8_b cells rather than fixing them.
     """
     from helpers.sfpu_domains import negative_zero_delivered
 
-    if stimuli_format_for(input_format) != input_format or negative_zero_delivered(
-        input_format, dest_acc
-    ):
+    if negative_zero_delivered(input_format, dest_acc):
         return src
     return torch.where(src == 0, torch.zeros_like(src), src)
 
 
-def flushed_inputs(src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
-    """Lanes whose input the unpack path flushes to zero and the golden does not.
+def _unpack_format(input_format: DataFormat, output_format=None, dest_acc=None):
+    """The format whose values the unpacker writes for this cell: a Float32 input into
+    a Float16 output at ``dest_acc=No`` lands in a Float16 Dest. Without
+    *output_format* and *dest_acc*, the input's own."""
+    if output_format is None or dest_acc is None:
+        return input_format
+    from helpers.data_format_inference import infer_unpack_out, unpacks_to_dest
 
-    Two values are tested against the *stimuli* format's smallest normal: the input as
-    generated, and as received (:func:`received_inputs`). They differ on a block float.
-    The sweep's one ``-0.0`` shares a Bfp8_b block with the bf16 subnormals
-    ``0x8001..0x800F``, the shared exponent is 0, and the quantizer's forced hidden bit
-    gives the golden ``-2**-127``; ``floor`` of that is -1
-    against the 0 silicon sees. That one lane was 16,129 steps on every Bfp8_b-input
-    cell of Floor, and the reason Ceil and Trunc read 0 on the same cells.
+    return infer_unpack_out(
+        input_format,
+        output_format,
+        dest_acc,
+        unpacking_to_dest=unpacks_to_dest(input_format, dest_acc),
+    )
 
-    The threshold is the stimuli format's, not the golden's: taking it from the golden
-    dtype silently passed every fp16 subnormal through on a Float16->Float16_b variant --
-    bf16's smallest normal is 1.18e-38 and fp16's is 6.1e-05, so 2,046 flushed lanes
-    read as a 14,337-step error on ``Abs``, an op that cannot be wrong.
+
+def _dest_dtype(input_format: DataFormat, output_format=None, dest_acc=None):
+    """The torch dtype of the format the unpacker writes for this variant -- the lattice
+    the SFPU reads its input from and stores its answer to (:func:`_unpack_format`) --
+    or ``None`` when the caller did not name the variant, or that format has no float
+    dtype."""
+    from helpers.llk_params import format_dict
+
+    if output_format is None or dest_acc is None:
+        return None
+    dtype = format_dict.get(_unpack_format(input_format, output_format, dest_acc))
+    return dtype if dtype is not None and dtype.is_floating_point else None
+
+
+def dest_holds(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
+) -> torch.Tensor:
+    """False on lanes an fp16 Dest (``dest_acc=No``) under a wider output lost: a golden
+    past 65504 answered by NaN or by the golden's sign in the Dest's top binade, or a
+    flush at the 2**-14 boundary (one side zero, the other at most 2**-14). Any other
+    answer -- wrong-signed, or more than 2x short of the edge -- is the op's."""
+    from helpers.data_format_inference import _dest_acc_flag
+    from helpers.llk_params import format_dict
+
+    holds = torch.ones(golden.shape, dtype=torch.bool, device=golden.device)
+    # A 32-bit Dest at dest_acc=Yes, and a bf16 one (fp32's exponent range), hold
+    # every answer the output can.
+    if dest_acc is None or _dest_acc_flag(dest_acc):
+        return holds
+    dtype = _dest_dtype(input_format, output_format, dest_acc)
+    if dtype is not torch.float16:
+        return holds
+    dest = torch.finfo(dtype)
+    out = torch.finfo(format_dict[output_format])
+    if dest.max >= out.max and dest.tiny <= out.tiny:
+        return holds
+    g = golden.detach().to(torch.float32)
+    r = result.detach().to(torch.float32)
+    same_sign = torch.signbit(r) == torch.signbit(g)
+    # Past 65504 the golden is a stand-in (131008 for an fp16 inf), not the answer, so an
+    # answer near the edge cannot be ranked against it: I0(13.297) is 65772 and the
+    # kernel's 65440 is its usual 0.5%, which the stand-in reads as 8.4M fp32 steps.
+    top_binade = 2.0 ** (math.frexp(dest.max)[1] - 1)
+    overflowed = (g.abs() > dest.max) & (
+        torch.isnan(r) | (same_sign & (r.abs() >= top_binade))
+    )
+    # The generator zeroes a golden under 2**-14 before its fp16 cast, so the flushes
+    # the sweep sees are pairs across the boundary: 2**-14 against 0, or the reverse.
+    flushed = ((g == 0) & (r != 0) & (r.abs() <= dest.tiny)) | (
+        (r == 0) & (g != 0) & (g.abs() <= dest.tiny)
+    )
+    return holds & ~overflowed & ~flushed
+
+
+def _normal_input(
+    src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
+    """Lanes whose input survives the unpack: zero, or at least the smallest normal of
+    the stimuli format *and* of the format the unpacker writes, and no larger than that
+    format can hold. The sweep feeds no subnormal of the stimuli format
+    (:func:`sweep_spec`), so only the unpack format's cutoff bites, and it matters once:
+    a Float32 input into a Float16 output at ``dest_acc=No`` unpacks into a Float16
+    Dest, which flushes everything below 2**-14 -- a Float32 input's own cutoff is
+    1.18e-38, so the strided lanes in between scored ``f(x)`` against ``f(0)`` as op
+    error (Floor's Float32 -> Float16 cell read 15360 steps, the distance to 1.0).
+    Without *output_format* and *dest_acc*, only the stimuli format's cutoff applies.
     """
     from helpers.llk_params import format_dict
 
-    stimuli_dtype = format_dict[stimuli_format_for(input_format)]
-    smallest_normal = torch.finfo(stimuli_dtype).smallest_normal
-
-    def subnormal(values: torch.Tensor) -> torch.Tensor:
-        # In float32, from the values as they are. Casting to the golden's dtype first
-        # rounds an fp16 subnormal *up* -- bf16 keeps 8 mantissa bits, so 6.09e-05
-        # becomes 6.10e-05 and clears a 6.10e-05 threshold. The whole subnormal band
-        # then passed this filter while looking, in any printout, like the smallest
-        # normal.
-        magnitude = values.detach().to(torch.float32).abs()
-        return (magnitude < smallest_normal) & (magnitude != 0)
-
-    return subnormal(src) | subnormal(received_inputs(src, input_format))
+    fed = torch.finfo(format_dict[input_format])
+    cutoff = fed.smallest_normal
+    ceiling = math.inf
+    dtype = format_dict.get(_unpack_format(input_format, output_format, dest_acc))
+    if dtype is not None and dtype.is_floating_point:
+        unpacked = torch.finfo(dtype)
+        cutoff = max(cutoff, unpacked.smallest_normal)
+        # The other end of the same unpack: a Float32 input past fp16's range
+        # saturates to +-65504 on the way into a Float16 Dest, while the golden, which
+        # takes the value as fed, sees an infinity (asinh(-3.4e38) read -inf against
+        # the kernel's -11.8). Only where the unpack's exponent range is narrower: a
+        # bf16 Dest has fp32's, and fp32's largest values reach it as bf16's largest
+        # whether the unpack truncates or rounds -- nothing overflows there.
+        if math.frexp(unpacked.max)[1] < math.frexp(fed.max)[1]:
+            ceiling = float(unpacked.max)
+    # In float32, and from `src` as generated. Casting to the golden's dtype first
+    # rounds an fp16 subnormal *up* -- bf16 keeps 8 mantissa bits, so 6.09e-05 becomes
+    # 6.10e-05 and clears a 6.10e-05 threshold. The whole subnormal band then passed
+    # this filter while looking, in any printout, like the smallest normal.
+    magnitude = src.detach().to(torch.float32).abs()
+    return ((magnitude >= cutoff) | (magnitude == 0)) & (magnitude <= ceiling)
 
 
 def measurable_mask(
@@ -221,15 +346,17 @@ def measurable_mask(
     golden: torch.Tensor,
     result: torch.Tensor,
     input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
 ) -> torch.Tensor:
     """Lanes of an all-finite-input sweep that a *step count* can describe.
 
     Op-agnostic on purpose: an op undefined at an input lands in the NaN kind on its
     own, so there is nothing per-op to look up.
 
-    The sweep feeds every non-special value of the format, with no per-op domain
-    clipping -- an op is measured wherever its format can reach. Four lane kinds come
-    back out, none of them a budget question:
+    The sweep feeds every normal value of the format and its zero (a stride of them for
+    Float32), with no per-op domain clipping -- an op is measured wherever its format can reach. Five lane kinds come
+    back out, none of them a budget question (the fourth is two, on one boundary):
 
     * either side NaN. :func:`ulp_distance` returns ``UNMEASURABLE`` there, and an op
       undefined at an input (``log`` of a negative) lands here on its own.
@@ -238,18 +365,26 @@ def measurable_mask(
       budget says, so ranking them would inflate the number without tightening the gate.
       One such lane is worth ~48,000 steps.
     * the sweep's own zero padding -- see :func:`padding_lanes`.
-    * subnormal inputs, as generated or as the block-float quantizer hands them to the
-      golden (:func:`flushed_inputs`). The hardware flushes them on the way in and the
-      golden does not, so ``ceil(5.69e-39)`` is 1 in the model and 0 on silicon --
-      16,129 bf16 steps for a difference that is the unpack path's flush, not the op's
-      accuracy. Measured, it is the whole of Ceil's, Floor's and Sqrt's apparent error:
-      excluding it returns all three to the 0 their exactness claims, and moves nothing
-      else. The flush is covered on its own terms elsewhere; a step count is the wrong
-      instrument for it.
+    * inputs the unpack flushes (:func:`_normal_input`). The sweep feeds no subnormal of
+      its own -- the hardware flushes them on the way in and the golden does not, so
+      ``ceil(5.69e-39)`` was 1 in the model and 0 on silicon, 16,129 bf16 steps for a
+      difference that is the unpack path's flush, not the op's accuracy. The flush is
+      covered on its own terms elsewhere; a step count is the wrong instrument for it.
+      The same boundary has a top on a narrower unpack: a Float32
+      input into a Float16 output at ``dest_acc=No`` lands in a Float16 Dest, which
+      flushes below 2**-14 and *saturates* past 65504 -- about 44% of the strided lanes,
+      whose golden sees the value as fed. Saturation, not a flush, and not the op's.
+
+    * answers the Dest lost (:func:`dest_holds`): an fp16 Dest's overflow past 65504
+      or its flush at 2**-14 under a wider output, which is the Dest's, not the op's.
 
     Subnormal *outputs* stay in. Where the golden underflows and the hardware writes
     zero the count is large but the lane is a real one the op produced -- Silu at
     ``x=-87.5`` is that case, and it is the op's own tail, not the unpack path.
+
+    Op-agnostic, so the op's *claim* is not read here: :func:`ranked_mask` ANDs
+    :func:`claimed_lanes` into this mask, so a lane past an argument-reduction limit
+    or on a pole sets no budget, just as it is no non-finite failure.
 
     The second kind is a *failure*, not a non-question, and dropping it here is only
     sound because :func:`nonfinite_failures` reports it separately -- less the lanes it
@@ -258,31 +393,46 @@ def measurable_mask(
     (:data:`_KNOWN_NONFINITE_LANES`). A caller that ranks this mask and nothing else
     would let a hardware overflow produce a clean budget.
     """
+    # The threshold is the stimuli (and unpack) format's, not the golden's. Taking it
+    # from the golden dtype silently passed every fp16 subnormal through on a
+    # Float16->Float16_b variant -- bf16's smallest normal is 1.18e-38 and fp16's is
+    # 6.1e-05, so 2,046 flushed lanes read as a 14,337-step error on `Abs`, an op that
+    # cannot be wrong. See `_normal_input`.
     from .ulp import nonfinite_mismatches
+
+    normal_input = _normal_input(src, input_format, output_format, dest_acc)
 
     both_measurable = ~(torch.isnan(golden) | torch.isnan(result))
     return (
         both_measurable
         & ~nonfinite_mismatches(golden, result)
-        & ~flushed_inputs(src, input_format)
+        & normal_input
+        & dest_holds(golden, result, input_format, output_format, dest_acc)
         & ~padding_lanes(src, input_format)
     )
 
 
-#: The magnitude past which an op's argument reduction stops claiming a finite answer,
-#: per op and per *stimuli* format: ``{op: {stimuli_format: limit}}``. Only ops whose
-#: kernel reduces its argument belong here; anywhere else a non-finite answer against a
-#: finite golden is a failure over the whole format. Sin and Cos give up far outside
-#: [-pi, pi] -- `sin(2.6e28)` returns inf against a golden of -1 -- and pi is the widest
-#: bound measured so far, so it is the claim until one is wider.
-#:
-#: Keyed on the stimuli format because the claim is about what the format can reach.
-#: 2.6e28 is a bfloat16 value (and a Float32 one); float16 ends at 65504, and Sin and
-#: Cos measure 1-4 steps over the whole float16 format, so an fp16 input carries no
-#: limit and a non-finite answer anywhere in it is a failure. Keyed on the op alone, the
-#: pi claim silently covered the fp16 cells too -- the only Sin/Cos cells the table
-#: step-gates -- and a range-reduction regression on the ~46% of fp16 lanes past pi
-#: would have passed the gate and been emitted as a clean budget.
+def ranked_mask(
+    op,
+    src: torch.Tensor,
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
+) -> torch.Tensor:
+    """The lanes a sweep ranks: :func:`measurable_mask` within *op*'s :func:`claimed_lanes`."""
+    return measurable_mask(
+        src, golden, result, input_format, output_format, dest_acc
+    ) & claimed_lanes(op, src, input_format, output_format, dest_acc)
+
+
+#: Where Sin, Cos and Tan's range reduction breaks (0-2 steps inside, inf/NaN past it).
+#: It equals fp16's max, so an fp16 input -- or one unpacked into an fp16 Dest -- has none.
+_TRIG_CLAIM_LIMIT = 65504.0
+
+#: ``{op: {format the kernel is handed (:func:`_unpack_format`): limit}}``, bounding
+#: both the ranking mask and the non-finite check.
 _CLAIM_LIMIT: Dict = {}
 
 
@@ -290,29 +440,39 @@ def _claim_limits() -> Dict:
     from helpers.llk_params import MathOperation
 
     if not _CLAIM_LIMIT:
-        wide_formats = {DataFormat.Float16_b: math.pi, DataFormat.Float32: math.pi}
+        wide_formats = {
+            DataFormat.Float16_b: _TRIG_CLAIM_LIMIT,
+            DataFormat.Float32: _TRIG_CLAIM_LIMIT,
+        }
         _CLAIM_LIMIT.update(
-            {MathOperation.Sin: wide_formats, MathOperation.Cos: wide_formats}
+            {
+                MathOperation.Sin: wide_formats,
+                MathOperation.Cos: wide_formats,
+                MathOperation.Tan: wide_formats,
+            }
         )
     return _CLAIM_LIMIT
 
 
-def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
-    """Lanes where *op* claims a finite, accurate answer: the whole format, less the
-    side of each ``_OP_SINGULARITIES`` point the op is undefined on, the point itself
-    for a pole, and any ``_CLAIM_LIMIT`` for the format *input_format* is swept in.
-    Judged on the input as received (:func:`received_inputs`): a Bfp8_b 0.996 that
-    arrives as 1.0 is ``acosh``'s defined side.
+def claimed_lanes(
+    op,
+    src: torch.Tensor,
+    input_format: DataFormat,
+    output_format=None,
+    dest_acc=None,
+) -> torch.Tensor:
+    """Lanes where *op* claims an answer, judged on the input as received: all but its
+    singularities' undefined side, its poles, and anything past its ``_CLAIM_LIMIT``."""
+    from helpers.sfpu_domains import (
+        _NONPOSITIVE_INTEGER_POLES,
+        _OP_SINGULARITIES,
+        Operand,
+        SingularitySide,
+    )
 
-    Deliberately not the functional driver's sampling window, which is where a few
-    thousand points are drawn, not where the op stops being defined: Abs is sampled on
-    (-10, 10) and defined everywhere. Nor ``_SFPU_UNDEFINED_RANGES``, whose holes are
-    guard bands that keep a random draw off a singularity: Reciprocal's is
-    (-1e-6, 1e-6), and ``1/1e-7`` is a finite bf16 answer an inf must not be excused on.
-    """
-    from helpers.sfpu_domains import _OP_SINGULARITIES, Operand, SingularitySide
-
-    value = received_inputs(src, input_format).to(torch.float32)
+    value = received_inputs(src, input_format, output_format, dest_acc).to(
+        torch.float32
+    )
     claimed = torch.ones_like(value, dtype=torch.bool)
     for point, side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         # The defined side keeps the point: sqrt(0) and acosh(1) are answers. A golden
@@ -323,18 +483,32 @@ def _claimed(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
             claimed &= value <= point
         else:
             claimed &= value != point
-    limit = _claim_limits().get(op, {}).get(stimuli_format_for(input_format))
+    if op in _NONPOSITIVE_INTEGER_POLES:
+        # Every fp32 value of magnitude 2**23 or more is an integer, so for lgamma the
+        # whole negative tail past there is poles; on the pole itself the golden is a
+        # limit (torch's polygamma returns 4e15 at -6.0), and the kernel's inf is not
+        # what the cell measures.
+        claimed &= ~((value <= 0) & (value == torch.floor(value)))
+    limit = (
+        _claim_limits()
+        .get(op, {})
+        .get(_unpack_format(input_format, output_format, dest_acc))
+    )
     if limit is not None:
         claimed &= value.abs() <= limit
     return claimed
 
 
-def _at_a_singularity(op, src: torch.Tensor, input_format: DataFormat) -> torch.Tensor:
+def _at_a_singularity(
+    op, src: torch.Tensor, input_format: DataFormat, output_format=None, dest_acc=None
+) -> torch.Tensor:
     """Lanes received (:func:`received_inputs`) exactly on one of *op*'s
     ``_OP_SINGULARITIES`` points, either side."""
     from helpers.sfpu_domains import _OP_SINGULARITIES, Operand
 
-    value = received_inputs(src, input_format).to(torch.float32)
+    value = received_inputs(src, input_format, output_format, dest_acc).to(
+        torch.float32
+    )
     on_point = torch.zeros_like(value, dtype=torch.bool)
     for point, _side in _OP_SINGULARITIES.get(op, {}).get(Operand.A, ()):
         on_point |= value == point
@@ -398,7 +572,8 @@ def _known_lanes() -> Dict:
     # #58607: on a 16-bit Float16 Dest these ops answer inf where the answer is one of
     # the four largest fp16 values, 65408..65504. The same inputs on a 32-bit Dest read
     # 1-2 steps, and Abs/Identity read 0 on the same cell, so it is neither the input
-    # nor the store alone.
+    # nor the store alone. Float16 inputs only: the strided Float32 walk has no lane in
+    # the band, so a Float32 entry would excuse nothing and read as stale.
     top_of_fp16 = dict(
         issue="#58607",
         inputs=(DataFormat.Float16,),
@@ -411,28 +586,6 @@ def _known_lanes() -> Dict:
     # The same top-of-fp16 window for an op that answers 65408 finite: #58607's lanes
     # start one fp16 step above it, at 65440.
     above_65408 = {**top_of_fp16, "low": 65440.0}
-
-    def store_saturates(at: float, **fields):
-        """#57215: the Float16 store saturates a value just past 65504 to 65504 rather
-        than to an infinity, on a 32-bit Dest packed to Float16, where the golden's fp16
-        rounding answers inf. Only at the one input *at* whose exact answer rounds past
-        fp16's range (2**16 for Reciprocal and SqrtCustom, 65535 for Tanhshrink, which
-        fp16 rounds to inf as it does anything from 65520). The bounds are on the input
-        as received, so on Bfp8_b they also name every bf16
-        value the block quantizer maps onto *at* -- the quantization preimage, not a
-        wider defect -- without spelling it out."""
-        return (
-            KnownNonfiniteLanes(
-                issue="#57215",
-                inputs=(DataFormat.Float16_b, DataFormat.Bfp8_b),
-                output=DataFormat.Float16,
-                dest=DestAccumulation.Yes,
-                low=at,
-                high=at,
-                **fields,
-            ),
-        )
-
     _KNOWN_NONFINITE_LANES.update(
         {
             MathOperation.Celu: (KnownNonfiniteLanes(**top_of_fp16),),
@@ -441,8 +594,41 @@ def _known_lanes() -> Dict:
                 KnownNonfiniteLanes(**top_of_fp16, approx=ApproximationMode.No),
             ),
             MathOperation.GeluTanh: (KnownNonfiniteLanes(**top_of_fp16),),
+            MathOperation.Mish: (KnownNonfiniteLanes(**top_of_fp16),),
             # Silu answers 65408 itself; #58607 lists only the three lanes above it.
             MathOperation.Silu: (KnownNonfiniteLanes(**above_65408),),
+            # The same band reached through the op: selu(x) = 1.0507 x, xielu(x) ~ x*x.
+            MathOperation.Selu: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "low": 62272.0,
+                        "high": 62336.0,
+                        "why": "inf where 1.0507 x is 65440..65504, on a 16-bit Dest",
+                    }
+                ),
+            ),
+            MathOperation.Xielu: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "low": 255.5,
+                        "high": 255.625,
+                        "why": "inf where the answer is 65408 or 65472, on a 16-bit Dest",
+                    }
+                ),
+            ),
+            MathOperation.UnaryPower: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "low": 255.625,
+                        "high": 255.875,
+                        "magnitude": True,
+                        "why": "inf (NaN at |x|=255.875) where x*x is 65344..65472, on a 16-bit Dest",
+                    }
+                ),
+            ),
             MathOperation.Square: (
                 KnownNonfiniteLanes(
                     **{
@@ -464,28 +650,52 @@ def _known_lanes() -> Dict:
                         "why": "inf where the answer is x - tanh(x), in the top fp16 values, on a 16-bit Dest",
                     }
                 ),
-                # x - tanh(x) at |x| = 2**16 is 65535, which fp16 rounds to inf.
-                *store_saturates(
-                    at=2.0**16,
-                    magnitude=True,
-                    why="+-65504 where x - tanh(x) is just past fp16's range and the store saturates instead of overflowing",
+            ),
+            # The same band reached through lgamma: lgamma(x) rounds to 65408..65504 in
+            # fp16 for x in [8168, 8180], bounded by the answer as the band is; measured,
+            # 8172 and 8176 read inf where the answer is 65440 and 65472.
+            MathOperation.Lgamma: (
+                KnownNonfiniteLanes(
+                    **{
+                        **top_of_fp16,
+                        "low": 8168.0,
+                        "high": 8180.0,
+                        "why": "inf where lgamma(x) is a top fp16 value, on a 16-bit Dest",
+                    }
                 ),
             ),
-            # sqrt(x) for x at 2**32 is 2**16.
-            MathOperation.SqrtCustom: store_saturates(
-                at=2.0**32,
-                why="65504 where sqrt(x) is just past fp16's range and the store saturates instead of overflowing",
+            # #50465: i0 is a bare Taylor series with no large-|x| branch, so where i0
+            # first overflows fp16 -- i0(13.296875) is 65772, the Float16 golden inf --
+            # the truncated series answers finite. The one fp16 input in that gap; past
+            # it the series overflows too.
+            MathOperation.I0: (
+                KnownNonfiniteLanes(
+                    issue="#50465",
+                    inputs=(DataFormat.Float16,),
+                    output=DataFormat.Float16,
+                    low=13.296875,
+                    high=13.296875,
+                    magnitude=True,
+                    why="finite where i0(x) has just overflowed fp16: the series has no large-|x| branch",
+                ),
             ),
-            # 1/x is 2**16 at |x| = 2**-16 and ~65793-66052 a step or two under it: past
-            # fp16's range, which the store overflows to inf as the golden does. The
-            # approximate reciprocal falls a fraction of a percent short, into
-            # (65504, 2**16), where the store saturates instead -- hence approx=Yes; the
-            # exact kernel agrees with the golden on these lanes.
-            MathOperation.Reciprocal: store_saturates(
-                at=2.0**-16,
-                approx=ApproximationMode.Yes,
-                magnitude=True,
-                why="+-65504 where 1/x is past fp16's range and the store saturates instead of overflowing",
+            # #57215: the Float16 store carries exactly 2**16 to inf (and every larger
+            # value to NaN). Approximate sqrt lands on 2**16 exactly where the answer
+            # rounds to 65504. The store's *clamp* of (65504, 2**16) to 65504 is the
+            # same issue but needs no entry: `nonfinite_failures` reads it as saturation.
+            # Bounded by where sqrt(x) rounds to 65504 in fp16, [65488**2, 65520**2],
+            # not by the one lane a walk happens to put there.
+            MathOperation.Sqrt: (
+                KnownNonfiniteLanes(
+                    issue="#57215",
+                    inputs=(DataFormat.Float32,),
+                    output=DataFormat.Float16,
+                    approx=ApproximationMode.Yes,
+                    dest=DestAccumulation.Yes,
+                    low=65488.0**2,
+                    high=65520.0**2,
+                    why="inf where sqrt(x) rounds to 65504: the approximation lands on 2**16, the one value the store carries to inf",
+                ),
             ),
         }
     )
@@ -497,10 +707,15 @@ def known_nonfinite_lanes(
     src: torch.Tensor,
     input_format: DataFormat,
     output_format: DataFormat,
+    *,
     approx_mode,
     dest_acc,
 ) -> torch.Tensor:
-    """The lanes of *src* a :data:`_KNOWN_NONFINITE_LANES` entry names on this cell."""
+    """The lanes of *src* a :data:`_KNOWN_NONFINITE_LANES` entry names on this cell.
+
+    The cell's two enums are keyword-only, here and in :func:`stale_excuses` and
+    :func:`nonfinite_failures`: a swap raises nothing (the enums just compare unequal),
+    and in ``stale_excuses`` it would silently turn the stale-entry gate off."""
     received = received_inputs(src, input_format)
     excused = torch.zeros(src.shape, dtype=torch.bool, device=src.device)
     for entry in _known_lanes().get(op, ()):
@@ -516,6 +731,7 @@ def stale_excuses(
     result: torch.Tensor,
     input_format: DataFormat,
     output_format: DataFormat,
+    *,
     approx_mode,
     dest_acc,
 ) -> List[KnownNonfiniteLanes]:
@@ -531,8 +747,8 @@ def stale_excuses(
         result,
         input_format,
         output_format,
-        approx_mode,
-        dest_acc,
+        dest_acc=dest_acc,
+        approx_mode=approx_mode,
         known_lanes=False,
     )
     received = received_inputs(src, input_format)
@@ -551,17 +767,20 @@ def nonfinite_failures(
     result: torch.Tensor,
     input_format: DataFormat,
     output_format: DataFormat,
-    approx_mode=None,
+    *,
     dest_acc=None,
+    approx_mode=None,
     known_lanes: bool = True,
 ) -> torch.Tensor:
     """The lanes :func:`measurable_mask` drops that are a *failure* rather than a
     non-question: the two sides disagreeing about being non-finite where the output
     format could have held the answer.
 
-    *approx_mode* and *dest_acc* name the cell for :data:`_KNOWN_NONFINITE_LANES`; left
-    unset, only an entry that pins neither can apply. *known_lanes* False leaves those
-    entries out altogether, which is how :func:`stale_excuses` asks what they buy.
+    *dest_acc* also sets the unpack's cutoff and ceiling (:func:`_normal_input`): left
+    unset, only the stimuli format's own cutoff applies. With *approx_mode* it names the
+    cell for :data:`_KNOWN_NONFINITE_LANES`, where an unset one matches only an entry
+    that pins neither. *known_lanes* False leaves those entries out altogether, which is
+    how :func:`stale_excuses` asks what they buy.
 
     ``passed_test`` rejects these positionally whatever the budget says, but the sweep
     driver ranks a distance rather than calling it, so it has to ask separately -- a
@@ -570,12 +789,12 @@ def nonfinite_failures(
 
     The exclusions, and whose doing each one is:
 
-    * **flushed inputs** (:func:`flushed_inputs`), on the same grounds as in the mask --
+    * **flushed inputs** (:func:`_normal_input`), on the same grounds as in the mask --
       the unpack path flushes a subnormal and the golden does not, so a disagreement
-      there is the flush. As generated or as the block-float quantizer hands it to the
-      golden: the sweep's ``-0.0`` becomes ``-2**-127`` in a Bfp8_b block of subnormals.
+      there is the flush.
     * **a NaN golden**, and **a golden past the output format's range answered by a
-      saturated store** -- ``NaN`` or an infinity of the golden's sign. A full-range
+      saturated store** -- ``NaN``, an infinity of the golden's sign, or on a Float16
+      output the pack's clamp to +-65504 of that sign. A full-range
       sweep feeds every value of a 16-bit input, and ``relu_min`` passes most of them
       straight through, so a bf16 input against a Float16 output reaches magnitudes fp16
       cannot represent -- 14,334 lanes of it. Saturating there is the store doing what
@@ -591,12 +810,14 @@ def nonfinite_failures(
       fp16 Dest has no infinity, so ``log(0)`` answers -130560. Only the point: one step
       off it the op claims a finite answer again.
     * **the sweep's own zero padding**, which is not a value it chose to feed.
-    * **an input the op makes no claim on** (:func:`_claimed`): the op's own limit
+    * **an answer the Dest lost** (:func:`dest_holds`), on the same grounds as in the
+      mask: an fp16 Dest's overflow under a wider output, answered with the golden's
+      sign at the Dest's edge. A wrong-signed or finite small answer stays.
+    * **an input the op makes no claim on** (:func:`claimed_lanes`): the op's own limit
       rather than the sweep's -- the undefined side of a registered singularity, or
       past an argument-reduction limit on a format that reaches it. ``Sin`` and ``Cos``
-      disagree on ~21,000 bf16 lanes far outside ``[-pi, pi]``. The budget is still
-      measured over the whole format; it is only the *non-finite* answer that needs the
-      op to have been claiming something.
+      disagree on bf16 lanes far past 65504. The sweep ranks the claimed lanes only,
+      so the budget and this check agree on what the op answers for.
     * **a lane a tracked issue names** (:data:`_KNOWN_NONFINITE_LANES`): a defect
       already on the books, excused on its own cell and inputs so the rest of the cell
       keeps its step gate. The gate fails once the lanes stop disagreeing
@@ -610,24 +831,39 @@ def nonfinite_failures(
 
     from .ulp import nonfinite_mismatches
 
-    output_max = torch.finfo(format_dict[stimuli_format_for(output_format)]).max
+    normal_input = _normal_input(src, input_format, output_format, dest_acc)
+    output_max = torch.finfo(format_dict[output_format]).max
     # `golden` is usually already in the output dtype, so "past the range" is mostly an
     # infinity; a wider golden can also be finite and past it. NaN compares false here.
     past_range = golden.detach().to(torch.float32).abs() > output_max
-    saturated = torch.isnan(result) | (
-        torch.isinf(result) & (torch.signbit(result) == torch.signbit(golden))
-    )
+    same_sign = torch.signbit(result) == torch.signbit(golden)
+    saturated = torch.isnan(result) | (torch.isinf(result) & same_sign)
+    if output_format == DataFormat.Float16:
+        # The fp16 pack clamps an out-of-range value from a wider Dest to +-65504 (or
+        # packs NaN, above): x + 1 at -66048 reads -65504 against the golden's -inf.
+        # A bfloat16 pack cannot overflow that way -- its range is the Dest's.
+        saturated |= same_sign & (result.detach().to(torch.float32).abs() == output_max)
     excused = torch.isnan(golden) | (
-        past_range & (saturated | _at_a_singularity(op, src, input_format))
+        past_range
+        & (
+            saturated
+            | _at_a_singularity(op, src, input_format, output_format, dest_acc)
+        )
     )
     return (
         nonfinite_mismatches(golden, result)
-        & ~flushed_inputs(src, input_format)
+        & normal_input
+        & dest_holds(golden, result, input_format, output_format, dest_acc)
         & ~excused
-        & _claimed(op, src, input_format)
+        & claimed_lanes(op, src, input_format, output_format, dest_acc)
         & ~(
             known_nonfinite_lanes(
-                op, src, input_format, output_format, approx_mode, dest_acc
+                op,
+                src,
+                input_format,
+                output_format,
+                approx_mode=approx_mode,
+                dest_acc=dest_acc,
             )
             if known_lanes
             else torch.zeros_like(src, dtype=torch.bool)
@@ -636,38 +872,61 @@ def nonfinite_failures(
     )
 
 
-#: How many offending lanes a non-finite verdict spells out.
-NAMED_LANES = 4
+#: How many offending lanes a non-finite verdict spells out. Two: the row's `nonfinite`
+#: count says how many there are, two lanes show the kind (an overflow, a NaN, a wrong
+#: sign), and more would only lengthen every not-measurable row's `note`.
+NAMED_LANES = 2
 
 
-def nonfinite_reason(
+@dataclass(frozen=True)
+class Unmeasurable:
+    """A cell the sweep could not describe with a step count, as the emitter writes it:
+    a tolerance row with these figures and *why* in its ``note``.
+
+    *nonfinite* is how many lanes disagreed with the golden about being finite -- what
+    makes the cell unmeasurable, and the count the headroom report (from #57527) fails a
+    run on when it grows; 0 for a cell with no rankable lane and no non-finite one
+    either. *measured* is the worst lane over the lanes that *could* be ranked --
+    usually tens of thousands of them, which a demotion used to throw away, so a cell
+    parked by a handful of lanes recorded no step count for the rest of it; ``None``
+    when there were none."""
+
+    why: str
+    nonfinite: int = 0
+    measured: Optional[int] = None
+
+
+def nonfinite_verdict(
     overflowed: torch.Tensor,
     src: torch.Tensor,
     golden: torch.Tensor,
     result: torch.Tensor,
     stats: Dict,
-    lanes: int,
     named_lanes: int = NAMED_LANES,
-) -> str:
-    """The verdict a cell with non-finite disagreements is written with.
-
-    Two numbers, because two readers want them. The lane count is what makes the cell
-    unmeasurable, and the headroom report (from #57527) fails a run in which it grows.
-    The maximum over the *measurable* lanes -- the rest of the cell, usually tens of
-    thousands of them -- is what the demotion used to throw away: a cell parked by a
-    handful of lanes recorded no step count for the rest of it. It is written as
-    ``max N ULP``, the same shape a measured row's figure has, so the same reader finds
-    it. *named_lanes* bounds how many offending inputs are spelled out.
-    """
+) -> Unmeasurable:
+    """The verdict a cell with non-finite disagreements is written with. *named_lanes*
+    bounds how many offending inputs are spelled out."""
     named = "; ".join(
         f"x={float(src[i]):g}: {float(golden[i]):g} -> {float(result[i]):g}"
         for i in overflowed.nonzero().flatten()[:named_lanes].tolist()
     )
-    return (
-        f"{int(overflowed.sum())} lane(s) disagreeing with the golden about being "
-        f"finite (golden -> result: {named}); max {int(stats['max'])} ULP over the "
-        f"{lanes} measurable lanes"
+    return Unmeasurable(
+        why="lanes disagreeing with the golden about being finite "
+        f"(golden -> result: {named})",
+        nonfinite=int(overflowed.sum()),
+        # Over no lane at all `ulp_stats` reads 0, which would claim the rest bit-exact.
+        measured=int(stats["max"]) if stats["lanes"] else None,
     )
+
+
+def nonfinite_reason(verdict: Unmeasurable, lanes: int) -> str:
+    """*verdict*, from :func:`nonfinite_verdict`, as one sentence for a failure message:
+    the message and the recorded verdict are the one computation. A cell whose every
+    lane is non-finite has no worst lane to name."""
+    reason = f"{verdict.why}: {verdict.nonfinite} such lane(s)"
+    if verdict.measured is None:
+        return reason
+    return f"{reason}; max {verdict.measured} ULP over the {lanes} measurable lane(s)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -677,472 +936,594 @@ def nonfinite_reason(
 #: Set by ``--ulp-emit``. Measure and rewrite the table instead of gating against it.
 EMIT = False
 
-#: Where an xdist worker hands its ``MEASURED`` to the controller, in ``workeroutput``.
-#: One name for both ends: a mismatch reads as an empty worker, and the controller then
-#: refuses with "nothing was measured".
+#: Where an xdist worker hands its measurements to the controller, in ``workeroutput``.
 WORKEROUTPUT_KEY = "ulp_measured"
 
-#: The axes of a ``MEASURED`` key, in key order, and the row fields they are written as.
-KEY_AXES = ("in", "out", "approx", "dest")
+#: What one cell recorded: the worst lane's step count, a :class:`Floored` measurement,
+#: or an :class:`Unmeasurable` verdict.
+Recorded = Union[int, "Floored", Unmeasurable]
 
-#: {op_name: {(in, out, approx, dest): max_ulp}}, filled during an emitting session.
-MEASURED: Dict[str, Dict[Tuple[str, str, str, str], Union[int, str]]] = {}
+#: The cells measured this session, by op and by the variant's key (which pins
+#: ``input_format``, ``output_format``, ``approx_mode`` and ``dest_acc``).
+MEASURED: Dict[MathOperation, Dict[BudgetKey, Recorded]] = {}
 
-#: Headroom over the measured worst lane. The sweep is exhaustive, so unlike a sampled
-#: measurement there is no unseen tail to leave room for -- but a budget at exactly the
-#: maximum fails on any movement at all, including a golden that gets more accurate.
-EMIT_HEADROOM = 1.1
+#: The list each measured cell was recorded with, beside its figure in ``MEASURED``. A
+#: cell read twice keeps its list only while both readings are the same; one read with
+#: unequal readings or lists, or parked as unmeasurable, keeps none (:func:`record`).
+DOMAINS: Dict[MathOperation, Dict[BudgetKey, Tuple[Domain, ...]]] = {}
+
+#: The widest ``near_zero_atol`` the emitter writes on its own. A cell whose only
+#: over-ceiling lanes sit in the near-zero band is enrolled with the floor that covers
+#: them (:func:`near_zero_floor`); past this the floor would be forgiving a kernel's
+#: cut-off rather than its rounding -- Softplus answers 0 below x = -5 where the answer
+#: is up to 0.0065, the approximate Gelu is 0.024 off -- and that is a decision to make
+#: by hand.
+EMIT_MAX_NEAR_ZERO_ATOL = 1e-3
 
 
-def record(op_name: str, key: Tuple[str, str, str, str], max_ulp: int) -> None:
+@dataclass(frozen=True)
+class Floored:
+    """A cell's measurement with the near-zero floor that makes it gateable: the worst
+    lane over every ranked lane, the worst lane outside the floor's band, and the
+    floor itself (see :func:`near_zero_floor`)."""
+
+    max_ulp: int
+    residual: int
+    atol: float
+
+
+def near_zero_floor(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    distance: torch.Tensor,
+    mask: torch.Tensor,
+    out_fmt: DataFormat,
+) -> Optional[Tuple[int, float]]:
+    """``(residual, atol)``: the worst lane outside the near-zero floor a demoted cell
+    needs, and that floor; ``None`` when the cell fits without one (see SFPU_ULP.md).
+    The floor is exactly the largest absolute error it rescues, no margin and no
+    rounding: like the step figure, it is the measurement."""
+    from helpers.ulp import NEAR_ZERO_FRACTION
+
+    ceiling = usable_budget_ceiling(out_fmt)
+    flat = distance.reshape(-1).to(torch.int64)
+    selected = mask.reshape(-1) & (flat >= 0)
+    if not selected.any() or int(flat[selected].max()) <= ceiling:
+        return None
+    g = golden.detach().reshape(-1).to(torch.float32)
+    r = result.detach().reshape(-1).to(torch.float32)
+    magnitude = g.abs()
+    finite = selected & torch.isfinite(g)
+    if not finite.any():
+        return None
+    dynamic_range = float(magnitude[finite].max())
+    band = finite & (magnitude < NEAR_ZERO_FRACTION * dynamic_range)
+    if not band.any():
+        return None
+    absolute_error = (r - g).abs()
+    demoting = band & (flat > ceiling)
+    if not demoting.any():
+        return None
+    atol = float(absolute_error[demoting].max())
+    if atol == 0:
+        return None
+    atol = min(atol, EMIT_MAX_NEAR_ZERO_ATOL)
+    rescued = band & (magnitude <= atol / NEAR_ZERO_FRACTION) & (absolute_error <= atol)
+    kept = selected & ~rescued
+    residual = int(flat[kept].max()) if kept.any() else 0
+    # Past the ceiling even so, the cell demotes; _decide records the floor it tried.
+    return residual, atol
+
+
+def _max_of(value) -> int:
+    return value.max_ulp if isinstance(value, Floored) else int(value)
+
+
+def floor_covered(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    mask: torch.Tensor,
+    atol: Optional[float],
+) -> torch.Tensor:
+    """The lanes of *mask* a ``near_zero_atol`` of *atol* judges on absolute error
+    instead of steps: ``ulp_elementwise_valid``'s own band, so the entries of a list
+    and the cell's residual leave out the same lanes. Nothing, for no floor."""
+    if atol is None:
+        return torch.zeros_like(mask)
+    from helpers.ulp import ulp_elementwise_valid
+
+    # The covered mask does not depend on the budget.
+    _, _, covered = ulp_elementwise_valid(
+        golden, result, max_ulp=0, near_zero_atol=atol, selected=mask
+    )
+    return covered.reshape(mask.shape) & mask
+
+
+def floored_distance(distance: torch.Tensor, covered: torch.Tensor) -> torch.Tensor:
+    """*distance* with the lanes a near-zero floor *covered* read as 0 steps: they are
+    held, by the floor, so for the profile a list is drawn on they are in-budget lanes,
+    not edges. The figures themselves are measured outside the floor
+    (:func:`domain_figures`)."""
+    return torch.where(
+        covered.reshape(distance.shape), torch.zeros_like(distance), distance
+    )
+
+
+def floored_profile(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    x: torch.Tensor,
+    distance: torch.Tensor,
+    mask: torch.Tensor,
+    present: torch.Tensor,
+    atol: Optional[float],
+) -> Tuple[torch.Tensor, Dict[int, Bin]]:
+    """``(judged, bins)`` for a cell held with a near-zero floor of *atol*, or none: the
+    ranked lanes outside the floor, which a list's entries are figured and gated on, and
+    the binade profile with the lanes the floor covers ranked at 0 steps. The emitter
+    calls it with the floor it measured, the gate with the row's, so the gate judges
+    exactly the lanes the emitter figured."""
+    covered = floor_covered(golden, result, mask, atol)
+    bins = binade_maxima(x, floored_distance(distance, covered), mask, present)
+    return mask & ~covered, bins
+
+
+def _binade_index(x: torch.Tensor) -> torch.Tensor:
+    """``ulp_domains.binade`` over a tensor of received inputs: a negative power of two
+    is the low edge of the binade above it."""
+    flat = x.reshape(-1).to(torch.float64)
+    mantissa, exponent = torch.frexp(flat)
+    k = exponent.to(torch.int64) - 1 - ((flat < 0) & (mantissa.abs() == 0.5)).long()
+    index = k + BINADE_OFFSET
+    return torch.where(
+        flat > 0, index, torch.where(flat < 0, -index, torch.zeros_like(index))
+    )
+
+
+def binade_maxima(
+    x: torch.Tensor, distance: torch.Tensor, ranked: torch.Tensor, present: torch.Tensor
+) -> Dict[int, Bin]:
+    """Per signed binade of the received input *x*: lanes *present* (data, not
+    padding), lanes *ranked* and the worst of them by *distance* -- the profile
+    ``ulp_domains.partition`` draws a cell's list on, and what ``--ulp-measure``
+    records as ``bins``. Both callers pass the floor-covered lanes as ranked at 0 steps
+    (:func:`floored_distance`)."""
+    index = _binade_index(x)
+    dist = distance.reshape(-1).to(torch.int64)
+    present = present.reshape(-1)
+    ranked = ranked.reshape(-1)
+    bins: Dict[int, Bin] = {}
+    for b in torch.unique(index[present]).tolist():
+        here = index == b
+        lanes = here & ranked
+        n = int(lanes.sum())
+        bins[int(b)] = (
+            int((here & present).sum()),
+            n,
+            int(dist[lanes].max()) if n else -1,
+        )
+    return bins
+
+
+def band_mask(entry: Domain, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+    """The lanes of *mask* whose received input lies in *entry*."""
+    flat = x.reshape(-1).to(torch.float64)
+    return (mask.reshape(-1) & (flat >= entry.low) & (flat < entry.high)).reshape(
+        mask.shape
+    )
+
+
+def _figure(entry: Domain, x, distance, mask, judged) -> Tuple[Optional[int], int]:
+    """``(worst, lanes)`` over one entry: the worst *judged* lane (ranked, outside the
+    floor), 0 when the floor covers every ranked lane there, ``None`` when none is
+    ranked; and how many lanes are ranked in it."""
+    dist = distance.reshape(-1).to(torch.int64)
+    ranked = band_mask(entry, x, mask).reshape(-1)
+    outside = band_mask(entry, x, judged).reshape(-1)
+    n = int(ranked.sum())
+    if bool(outside.any()):
+        return int(dist[outside].max()), n
+    return (0 if n else None), n
+
+
+def domain_figures(
+    spans,
+    x: torch.Tensor,
+    distance: torch.Tensor,
+    mask: torch.Tensor,
+    judged: torch.Tensor,
+) -> Tuple[Domain, ...]:
+    """Each ``(low, high, ranked)`` of ``ulp_domains.partition`` as the entry the table
+    writes (``ulp_domains.entries_of``): the worst *judged* lane in it (ranked, outside
+    the floor), 0 where the floor covers every ranked lane, ``None`` where the span is
+    unranked and its stray ranked lanes fit the row's largest figure; ``()`` when no
+    span measured anything. Measured over the final edges rather than summed from the
+    binades, so the figure written is exactly what the gate will hold the same lanes
+    to."""
+    return entries_of(
+        spans,
+        lambda low, high: _figure(Domain(low, high, None), x, distance, mask, judged)[
+            0
+        ],
+    )
+
+
+def entry_readings(
+    domains: Tuple[Domain, ...],
+    x: torch.Tensor,
+    distance: torch.Tensor,
+    mask: torch.Tensor,
+    judged: torch.Tensor,
+) -> Tuple[Reading, ...]:
+    """What the sweep measured over each entry of a list, for the ``--ulp-measure``
+    record: the worst lane outside the floor (0 if the floor covers all of them, ``None``
+    where none is ranked) and the ranked lanes. The headroom report holds each entry to
+    its figure from these."""
+    return tuple(
+        Reading(entry.low, entry.high, *_figure(entry, x, distance, mask, judged))
+        for entry in domains
+    )
+
+
+def record(
+    op: MathOperation,
+    key: BudgetKey,
+    max_ulp: int,
+    floor: Optional[Tuple[int, float]] = None,
+    domains: Tuple[Domain, ...] = (),
+) -> None:
     """Fold one measurement into the cell *key* names, keeping the *worst* lane.
+    *floor* is :func:`near_zero_floor`'s ``(residual, atol)`` when the cell has one;
+    *domains* the list drawn on the same reading, which rides with the reading that wins.
 
-    The sweep driver records each cell once per process, so a repeat comes from
-    :func:`merge_measured` folding in another xdist worker's reading of it -- or from a
-    future driver that enumerates an axis the key does not have. Last-write-wins would
-    keep whichever arrived last, which is the polarity that can hide error; ``max`` is
-    the one that cannot. For the same reason a cell already recorded unmeasurable
-    (:func:`record_unmeasurable`) stays so: a number arriving later does not rescue it.
-    """
-    cells = MEASURED.setdefault(op_name, {})
-    if isinstance(cells.get(key), str):
-        return  # already unmeasurable; a reading elsewhere does not rescue it
-    cells[key] = max(cells.get(key, 0), max_ulp)
-
-
-def record_unmeasurable(op_name: str, key: Tuple[str, str, str, str], why: str) -> None:
-    """Record that the cell *key* names could not be measured, and why.
-
-    Written into the table as a tolerance row naming the reason, rather than left out:
-    a hole in an op's grid would let ``write_table`` drop the cell's old row with
-    nothing to replace it, and ``_collapse`` could stretch a neighbour's budget over it.
-    """
-    MEASURED.setdefault(op_name, {})[key] = why
-
-
-def export_measured() -> List[list]:
-    """``MEASURED`` as plain lists, for an xdist worker to hand to the controller."""
-    return [
-        [op, list(key), max_ulp]
-        for op, cells in MEASURED.items()
-        for key, max_ulp in cells.items()
-    ]
+    A repeat comes from :func:`merge_measured` folding in another xdist worker's
+    reading. ``max`` is the polarity that cannot hide error, and a cell already recorded
+    unmeasurable stays so, though its worst lane still counts. Two readings that differ
+    in figure, floor or list keep the worst lane with no floor and no list: either list
+    holds only its own reading's worst lane per entry, and the other's may lie in
+    another entry. A cell that lost its list keeps none, whatever reading comes next."""
+    cells = MEASURED.setdefault(op, {})
+    lists = DOMAINS.setdefault(op, {})
+    current = cells.get(key)
+    if isinstance(current, Unmeasurable):
+        cells[key] = _with_measured(current, max_ulp)
+        return
+    new = Floored(max_ulp, *floor) if floor else max_ulp
+    if current is None:
+        cells[key], lists[key] = new, tuple(domains)
+    elif current != new or lists.get(key) != tuple(domains):
+        cells[key] = max(_max_of(new), _max_of(current))
+        lists.pop(key, None)
 
 
-def merge_measured(rows) -> None:
+def record_unmeasurable(
+    op: MathOperation, key: BudgetKey, verdict: Unmeasurable
+) -> None:
+    """Record that the cell *key* names could not be measured, and why. A cell read
+    twice keeps the worst of both: the reason with more non-finite lanes, and the larger
+    finite-lane figure."""
+    cells = MEASURED.setdefault(op, {})
+    DOMAINS.setdefault(op, {}).pop(key, None)  # no list describes a parked cell
+    current = cells.get(key)
+    if isinstance(current, Unmeasurable):
+        worse, other = sorted(
+            (current, verdict), key=lambda v: (v.nonfinite, v.why), reverse=True
+        )
+        verdict = _with_measured(worse, other.measured)
+    elif current is not None:
+        verdict = _with_measured(verdict, _max_of(current))
+    cells[key] = verdict
+
+
+def _with_measured(verdict: Unmeasurable, measured: Optional[int]) -> Unmeasurable:
+    """*verdict* with *measured* as its finite-lane figure, if that is worse. Kept on a
+    verdict of no rankable lane too, though its row will not write it (:func:`_decide`):
+    dropped here, a later non-finite verdict would win with only its own figure, and the
+    cell's worst lane would depend on the order the workers' readings arrived in."""
+    if measured is None or (
+        verdict.measured is not None and verdict.measured >= measured
+    ):
+        return verdict
+    return replace(verdict, measured=measured)
+
+
+def export_measured() -> bytes:
+    """This process's measurements, for an xdist worker to hand to the controller."""
+    return pickle.dumps((MEASURED, DOMAINS))
+
+
+def merge_measured(blob: Optional[bytes]) -> None:
     """Fold a worker's :func:`export_measured` into this process, worst lane winning."""
-    for op, key, value in rows:
-        if isinstance(value, str):
-            record_unmeasurable(op, tuple(key), value)
-        else:
-            record(op, tuple(key), value)
+    if blob is None:
+        return
+    measured, domains = pickle.loads(blob)
+    for op, cells in measured.items():
+        for key, value in cells.items():
+            if isinstance(value, Unmeasurable):
+                record_unmeasurable(op, key, value)
+                continue
+            drawn = domains.get(op, {}).get(key, ())
+            if isinstance(value, Floored):
+                record(op, key, value.max_ulp, (value.residual, value.atol), drawn)
+            else:
+                record(op, key, value, domains=drawn)
 
 
-def _incomplete_grids() -> List[str]:
-    """Each touched ``(op, in, out)`` missing a cell :func:`sweep_cells` runs.
+def cell_key(input_format, output_format, approx_mode, dest_acc) -> BudgetKey:
+    """The key a swept cell is recorded under."""
+    return BudgetKey(
+        approx_mode=approx_mode,
+        input_format=input_format,
+        output_format=output_format,
+        dest_acc=dest_acc,
+    )
 
-    ``write_table`` replaces every row of a touched ``(in, out)``, so a run narrowed
-    within one -- ``-k``, ``--maxfail``, an interrupt -- would drop the rows of the
-    cells it never reached.
-    """
-    expected: Dict[Tuple[str, str], Set[Tuple[str, str, str, str]]] = {}
-    for in_fmt, out_fmt, approx, dest in sweep_cells():
-        cell = (in_fmt.name, out_fmt.name, approx.name, dest.name)
-        expected.setdefault(cell[:2], set()).add(cell)
+
+def _incomplete_grids() -> List[Tuple[MathOperation, DataFormat, DataFormat, int]]:
+    """Each touched ``(op, input, output)`` missing a cell :func:`sweep_cells` runs, with
+    how many it is missing: a write replaces every row of a touched pair, so a run
+    narrowed within one would drop the rows of the cells it never reached."""
+    expected: Dict[Tuple[DataFormat, DataFormat], Set[BudgetKey]] = {}
+    for cell in sweep_cells():
+        expected.setdefault(cell[:2], set()).add(cell_key(*cell))
     gaps = []
-    for op, cells in sorted(MEASURED.items()):
-        for pair in sorted({key[:2] for key in cells}):
+    for op, cells in sorted(MEASURED.items(), key=lambda item: item[0].name):
+        pairs = {(key.input_format, key.output_format) for key in cells}
+        for pair in sorted(pairs, key=lambda p: (p[0].name, p[1].name)):
             missing = expected.get(pair, set()) - set(cells)
             if missing:
-                gaps.append(
-                    f"{op} {pair[0]}->{pair[1]}: {len(missing)} cell(s) unmeasured"
-                )
+                gaps.append((op, pair[0], pair[1], len(missing)))
     return gaps
 
 
-def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> str:
-    """Write this session's measurements into the table, and say what was written.
+def finish_emit(arch, testsfailed: int, path=None, exitstatus=0) -> "WriteReport":
+    """Write this session's measurements into the table (:func:`write_table`), or raise
+    an :class:`EmitRefused` subclass naming why nothing was written. *exitstatus* is
+    pytest's; *testsfailed* is read first to give a failed run its own message.
 
-    * **nothing written, ``RuntimeError``** when the session cannot vouch for them: off
-      ``MEASURED_ARCH``, where unkeyed rows would carry another arch's numbers under
-      Wormhole's name; after a failure, when only a subset was measured; when
-      *exitstatus* says the session did not run to the end (pytest calls
-      ``pytest_sessionfinish`` after a Ctrl-C too, and an interrupt between two ops
-      leaves every touched grid complete and nothing counted as failed); or when an
-      op's ``(in, out)`` grid is incomplete, when a write would drop the rest's rows.
-    * **written, then ``RuntimeError``** when an op was measured with no key line to
-      write into. Every *other* op's block has already been rewritten, so a red emit is
-      not an untouched table.
-    * **written**, returning the summary line. An op kept verbatim -- a row the run
-      covers carries a field ``_render`` cannot put back, the ``near_zero_atol`` floors
-      and ``atol``/``rtol`` anchors -- is named in it: such a block is maintained by
-      hand by design, and failing on it would turn every whole-table emit red.
-
-    *exitstatus* is pytest's ``session.exitstatus``, an ``ExitCode`` or a plain int.
-    pytest has already set it to ``TESTS_FAILED`` when a test failed, so the failure
-    count is read first, to give that run its own message.
-    """
-    from datetime import date
-
+    :func:`write_table` can also raise :class:`~helpers.ulp_domains.TableError` (a
+    ``ValueError``, not an :class:`EmitRefused`): the table on disk does not load, or
+    the rewrite would not read back, or would not resolve, once written."""
     import pytest
-    from helpers.sfpu_accuracy_budget import _TABLE_PATH, MEASURED_ARCH
 
     if arch != MEASURED_ARCH:
-        raise RuntimeError(
-            f"ran on {arch.value}, but the table's unkeyed rows are read as "
-            f"{MEASURED_ARCH.value} measurements and `_render` does not emit `arch`. "
-            "Nothing written."
-        )
-    if testsfailed:
-        raise RuntimeError(
-            f"saw {testsfailed} failure(s), so the session measured a subset. Nothing "
-            "written -- emit from a clean run."
-        )
-    if exitstatus != pytest.ExitCode.OK:
-        try:
-            name = pytest.ExitCode(exitstatus).name
-        except ValueError:  # pytest.exit(returncode=...) can carry any int
-            name = str(exitstatus)
-        raise RuntimeError(
-            f"the session ended with exit status {name}, not OK, so what it measured "
-            "is whatever it got to. Nothing written -- emit from a run that ends on "
-            "its own."
-        )
+        raise WrongArch(arch)
+    if testsfailed or exitstatus != pytest.ExitCode.OK:
+        raise SessionNotClean(testsfailed, exitstatus)
     gaps = _incomplete_grids()
     if gaps:
-        raise RuntimeError(
-            "measured only part of an op's grid, and a write would drop the rows of "
-            "the rest. Nothing written -- emit whole (in, out) grids:\n  "
-            + "\n  ".join(gaps)
+        raise IncompleteGrid(gaps)
+    return write_table(path or TABLE_PATH)
+
+
+def _verdict(measured: int, output_format: DataFormat) -> Metric:
+    """The metric the table should hold a measured worst lane to: ``ULP`` while it fits
+    ``usable_budget_ceiling`` (the measurement is the gate, with no headroom), else
+    ``TOLERANCE`` -- past the ceiling a step budget would no longer be *tighter* than the
+    tolerance it replaces, and would be the whole gate."""
+    if measured > usable_budget_ceiling(output_format):
+        return Metric.TOLERANCE
+    return Metric.ULP
+
+
+@dataclass(frozen=True)
+class Decision:
+    """What the table should say for one measured cell: its metric and figure, the
+    near-zero floor it is written with, the non-finite lanes that park it, a note for
+    people, and its list."""
+
+    metric: Metric
+    measured: Optional[int]
+    floor: Optional[float] = None
+    nonfinite: Optional[int] = None
+    note: Optional[str] = None
+    domains: Tuple[Domain, ...] = ()
+
+    def row(self, key: BudgetKey) -> Row:
+        """The row the table writes for this decision under *key*. A cell with a list is
+        written as the list, with the floor its entries were measured outside."""
+        pinned = dict(
+            input=key.input_format,
+            output=key.output_format,
+            approx=key.approx_mode,
+            dest=key.dest_acc,
         )
-    path = path or _TABLE_PATH
-    suffix = (
-        f"exhaustive {'/'.join(f.name for f in SWEEP_FORMATS)} sweep, "
-        f"{arch.value}, {date.today().isoformat()}"
-    )
-    try:
-        n, kept = write_table(path, suffix)
-        unplaced = []
-    except UnplacedMeasurements as exc:
-        n, kept, unplaced = exc.written, exc.kept, exc.missing
-    message = f"rewrote {n} op block(s) in {path.name}"
-    if kept:
-        message += (
-            f"; kept {', '.join(kept)} verbatim: a row this sweep covers carries a "
-            f"field it cannot regenerate (beyond {sorted(_RENDERABLE_FIELDS)}), so "
-            "their measurements were not written. Settle those cells by hand"
+        if self.domains:
+            return Row(**pinned, near_zero_atol=self.floor, domains=self.domains)
+        tolerance = self.metric is Metric.TOLERANCE
+        return Row(
+            **pinned,
+            metric=Metric.TOLERANCE if tolerance else None,
+            measured=self.measured,
+            nonfinite=self.nonfinite,
+            near_zero_atol=None if tolerance else self.floor,
+            note=self.note,
         )
-    if unplaced:
-        raise RuntimeError(
-            f"{message}; but measured {', '.join(unplaced)} and the table has no key "
-            "line for them, so they were not written. Give an op its block first "
-            "(SFPU_ULP.md, step 2) to enrol it."
-        )
-    return f"--ulp-emit: {message}"
-
-
-def _verdict(measured: int, out_fmt: str) -> Tuple[str, int]:
-    """What the table should say for a measured worst lane on *out_fmt*.
-
-    ``("ulp", budget)`` while a step budget is still *stronger* than the tolerance it
-    replaces, and ``("tolerance", measured)`` once it is not. The bound is the table's
-    own ``usable_budget_ceiling``: ~419,430 steps for fp32, 51 for fp16, 6 for bf16, 25
-    for Bfp8_b. Decided per cell and before collapsing, because it depends on the output
-    format and collapsing may drop it.
-
-    Without this the sweep enrols what it should not. ``Abs`` measures 393 steps on a
-    Bfp8_b output from a bf16 input -- the block exponent quantizing a small element, not
-    the op -- and a 433-step budget on a format whose ceiling is 25 gates nothing.
-
-    Headroom is 1.1x, except at zero: the sweep saw every value, so a measured 0 means
-    the op is exactly rounded on this format, and widening it to 1 retires that claim.
-    """
-    from helpers.format_config import DataFormat
-    from helpers.sfpu_accuracy_budget import usable_budget_ceiling
-    from helpers.ulp import _ULP_PROXY_DTYPES
-
-    if DataFormat[out_fmt] in _ULP_PROXY_DTYPES:
-        # reason: block composition, not the size of the number
-        # A block float never enrols from *this* sweep, whatever it measures. The sweep
-        # enumerates a format in value order, so sixteen adjacent values share a block
-        # and the exponent fits all of them -- which is the best case for quantization,
-        # not a representative one. Measured the two ways: `Abs` reads 15616 steps on a
-        # Bfp8_b output from random mixed-magnitude blocks (the table's Bfp8_b note) and
-        # 393 from the sorted sweep. Enrolling the second would hide the first.
-        return ("block", measured)
-    budget = 0 if measured == 0 else math.ceil(measured * EMIT_HEADROOM)
-    if budget > usable_budget_ceiling(DataFormat[out_fmt]):
-        return ("tolerance", measured)
-    return ("ulp", budget)
 
 
 def _decide(
-    cells: Dict[Tuple[str, str, str, str], Union[int, str]],
-) -> Dict[Tuple, Tuple]:
-    """Each measured cell as ``(verdict, measured)``, verdict decided per output format;
-    an unmeasurable cell as ``(("unmeasurable", why), None)``."""
-    return {
-        key: (
-            (("unmeasurable", v), None)
-            if isinstance(v, str)
-            else (_verdict(v, key[1]), v)
-        )
-        for key, v in cells.items()
-    }
-
-
-def _collapse(decided: Dict[Tuple, Tuple]) -> List[dict]:
-    """The decided cells as the fewest rows that reproduce them.
-
-    Only ``approx`` and ``dest`` may be dropped. ``in`` and ``out`` stay pinned even
-    when every value agrees, because this sweep covers the 16-bit formats only: a row
-    that wildcards the output would, by most-specific-wins, also answer for Float32 and
-    the block floats below Bfp8_b, which nothing here measured. `Abs` losing its
-    Float32 row that way is what the registry's unswept-architecture guard caught.
-    """
-    axes = KEY_AXES
-    keep = [0, 1]
-    for i in (2, 3):
-        seen: Dict[Tuple, set] = {}
-        for key, value in decided.items():
-            seen.setdefault(key[:i] + key[i + 1 :], set()).add(value)
-        if any(len(v) > 1 for v in seen.values()):
-            keep.append(i)
-    keep.sort()
-
-    merged: Dict[Tuple, Tuple] = {}
-    for key, value in decided.items():
-        collapsed = tuple(key[i] for i in keep)
-        if merged.get(collapsed, value) != value:
-            # `approx` and `dest` droppability is decided independently above, which is
-            # sound on a full 2x2 grid -- both dropped implies all four agree. On an
-            # anti-diagonal (only (No,No) and (Yes,Yes) recorded) each axis sees only
-            # singletons, both get dropped, and one measurement would silently overwrite
-            # the other. `_render` writes the survivor's own figure into the provenance
-            # comment, so the budget audit could not catch it either.
-            raise ValueError(
-                f"collapsing {axes} to {[axes[i] for i in keep]} merges two different "
-                f"measurements onto {collapsed}: {merged[collapsed]} and {value}. The "
-                "recorded cells do not form a full grid -- emit from a complete run."
+    cells: Dict[BudgetKey, Recorded],
+    domains: Optional[Dict[BudgetKey, Tuple[Domain, ...]]] = None,
+) -> Dict[BudgetKey, Decision]:
+    """Each measured cell's :class:`Decision`. A :class:`Floored` cell whose worst lane
+    demotes it is judged on the lanes outside its floor: enrolled at the residual, or,
+    when even those are past the ceiling, demoted with the floor it tried noted."""
+    lists = domains or {}
+    decided = {}
+    for key, value in cells.items():
+        drawn = tuple(lists.get(key, ()))
+        out = key.output_format
+        if isinstance(value, Unmeasurable):
+            # A verdict that ranked no lane records no figure: one written here would
+            # sit without `nonfinite`, and the row would read as an ordinary demotion.
+            decided[key] = Decision(
+                Metric.TOLERANCE,
+                value.measured if value.nonfinite else None,
+                nonfinite=value.nonfinite or None,
+                note=f"not measurable: {value.why}",
             )
-        merged[collapsed] = value
+        elif isinstance(value, Floored):
+            plain = _verdict(value.max_ulp, out)
+            if plain is Metric.ULP:
+                decided[key] = Decision(plain, value.max_ulp, domains=drawn)
+            elif _verdict(value.residual, out) is Metric.ULP:
+                decided[key] = Decision(
+                    Metric.ULP, value.residual, floor=value.atol, domains=drawn
+                )
+            else:
+                decided[key] = Decision(
+                    Metric.TOLERANCE,
+                    value.max_ulp,
+                    floor=value.atol,
+                    note=f"{value.residual} ULP outside a {value.atol:.2e} floor",
+                    domains=drawn,
+                )
+        else:
+            decided[key] = Decision(_verdict(value, out), value, domains=drawn)
+    return decided
 
-    rows = []
-    for key, (verdict, measured) in sorted(merged.items()):
-        row = {axes[i]: v for i, v in zip(keep, key)}
-        row["verdict"] = verdict
-        row["measured"] = measured
-        rows.append(row)
-    return rows
+
+#: The key fields a collapse may drop when every value of them decides the same.
+_DROPPABLE = ("approx_mode", "dest_acc")
 
 
-def _render(key_line: str, rows: List[dict], suffix: str) -> List[str]:
-    """One op's block: each row with its verdict, and the measurement behind it.
-
-    *key_line* is passed through verbatim. Several ops carry their measurement as a
-    header comment on that line -- `Fill:  # 0 ULP, 115 variants` -- and it is the
-    provenance for every row of theirs this sweep does not reach. Rewriting the key as
-    a bare `Fill:` dropped it, and the guard that every budget names its measurement
-    then failed on rows that had one all along.
-    """
-    out = [key_line]
-    for row in rows:
-        metric, value = row["verdict"]
-        body = ", ".join(
-            f'{k}: "{row[k]}"' if k in ("approx", "dest") else f"{k}: {row[k]}"
-            for k in KEY_AXES
-            if k in row
+def _collapse(decided: Dict[BudgetKey, Decision]) -> Dict[BudgetKey, Decision]:
+    """The decided cells as the fewest rows that reproduce them. Only ``approx_mode``
+    and ``dest_acc`` may be dropped; the formats stay pinned, because the sweep drives a
+    fixed set of them and a wildcard would answer for any a driver adds later."""
+    dropped = [
+        name
+        for name in _DROPPABLE
+        if all(
+            len(group) == 1
+            for group in _group(decided, lambda key: replace(key, **{name: None}))
         )
-        decided = (
-            "max_ulp: {}".format(value) if metric == "ulp" else "metric: tolerance"
+    ]
+    merged: Dict[BudgetKey, Decision] = {}
+    for key, decision in decided.items():
+        collapsed = replace(key, **{name: None for name in dropped})
+        if merged.get(collapsed, decision) != decision:
+            # Each field's droppability is decided alone, which is sound on a full 2x2
+            # grid but merges two measurements on an anti-diagonal.
+            raise AmbiguousCollapse(collapsed, (merged[collapsed], decision))
+        merged[collapsed] = decision
+    return merged
+
+
+def _group(decided: Dict[BudgetKey, Decision], project) -> List[Set[Decision]]:
+    groups: Dict[BudgetKey, Set[Decision]] = {}
+    for key, decision in decided.items():
+        groups.setdefault(project(key), set()).add(decision)
+    return list(groups.values())
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Writing the table
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class WriteReport:
+    """What :func:`write_table` did: the rows each written op holds now."""
+
+    path: Path
+    written: Dict[MathOperation, Tuple[Row, ...]]
+
+    def summary(self) -> str:
+        return f"--ulp-emit: rewrote {len(self.written)} op(s) in {self.path.name}"
+
+
+class EmitRefused(RuntimeError):
+    """``--ulp-emit`` refused to write. Each subclass carries the facts as attributes;
+    the message is for the terminal."""
+
+
+class WrongArch(EmitRefused):
+    def __init__(self, arch):
+        self.arch = arch
+        super().__init__(
+            f"ran on {arch.name}, but the table's unkeyed rows are measurements on the "
+            "measured architecture. Nothing written."
         )
-        pairs = f"{body}, {decided}" if body else decided
-        note = f"max {row['measured']} ULP"
-        if metric == "unmeasurable":
-            note = f"not measurable: {value}"
-        elif metric == "tolerance":
-            note += ", past this output's usable ceiling, so tolerance"
-        elif metric == "block":
-            note += ", but a sorted sweep flatters a block format, so tolerance"
-        out.append(f"  - {{{pairs}}}  # {note}, {suffix}\n")
-    return out
 
 
-#: A ``name: value`` pair inside an inline row, with the value unquoted.
-_ROW_FIELD = re.compile(r'([A-Za-z_]\w*)\s*:\s*"?([^,}"]*)"?')
+class SessionNotClean(EmitRefused):
+    """The session failed tests, or did not run to its end."""
 
-#: What `_render` can put back. A row carrying anything else -- a `near_zero_atol`
-#: floor, an `atol`/`rtol` pair -- cannot be regenerated from a measurement, so it is
-#: preserved rather than replaced even when this sweep covers its cell.
-_RENDERABLE_FIELDS = frozenset({"in", "out", "approx", "dest", "max_ulp", "metric"})
-
-
-def _row_fields(line: str) -> Dict[str, str]:
-    """The inline row's fields, parsed. Substring matching is not enough: ``in:
-    Float16`` is a substring of ``in: Float16_b``."""
-    body = line.split("#", 1)[0]
-    if "{" not in body:
-        return {}
-    return dict(_ROW_FIELD.findall(body[body.index("{") + 1 : body.rindex("}")]))
+    def __init__(self, failures: int, exitstatus):
+        self.failures, self.exitstatus = failures, exitstatus
+        super().__init__(
+            f"the session saw {failures} failure(s) and ended with exit status "
+            f"{exitstatus!r}, so it measured a subset. Nothing written."
+        )
 
 
-def _pins_a_measured_cell(line: str, measured: Set[Tuple[str, str, str, str]]) -> bool:
-    """Whether some cell this run measured resolves through *line*'s key: every key
-    field *line* pins agrees with it. A wildcard row -- an op-wide ``{metric:
-    tolerance, atol: 0.13}``, or a YAML alias whose fields are not inline -- pins
-    nothing, so it answers for every cell.
+class IncompleteGrid(EmitRefused):
+    """*gaps* is ``(op, input, output, unmeasured cells)`` for each touched pair missing
+    a cell :func:`sweep_cells` runs."""
 
-    Wider than :func:`_covered`, which asks whether the run measured the row's own
-    ``(in, out)``: a rendered row is more specific than a wildcard, so it would shadow
-    the wildcard's ``atol``/``rtol`` on every cell it names.
-    """
-    if line.strip().startswith("- *"):
-        return True  # an alias: its fields live on the anchor, so assume the widest
-    fields = _row_fields(line)
-    pinned = [(i, fields[axis]) for i, axis in enumerate(KEY_AXES) if axis in fields]
-    return any(all(key[i] == value for i, value in pinned) for key in measured)
+    def __init__(self, gaps):
+        self.gaps = gaps
+        super().__init__(
+            "measured only part of an op's grid, and a write would drop the rows of the "
+            f"rest. Nothing written: {gaps}"
+        )
 
 
-def _unrenderable(line: str) -> bool:
-    """A row carrying something ``_render`` cannot put back: a field beyond
-    ``_RENDERABLE_FIELDS``, or an alias whose fields are not inline. Arch-keyed rows are
-    never touched, so they are not counted."""
-    if line.strip().startswith("- *"):
-        return True
-    fields = _row_fields(line)
-    return "arch" not in fields and bool(set(fields) - _RENDERABLE_FIELDS)
+class KeptRowCollides(EmitRefused):
+    """A row the write keeps (:func:`_kept`) has the key of a row the emit writes for
+    *op*: one would silently replace the other, and whether the cells collapsed onto
+    that key decided which."""
+
+    def __init__(self, op: MathOperation, key: BudgetKey):
+        self.op, self.key = op, key
+        super().__init__(
+            f"{op.name} {key.describe()}: a kept row has the key this emit writes. "
+            "Nothing written -- give the kept row a key no measured cell collapses to."
+        )
 
 
-class UnplacedMeasurements(ValueError):
-    """``write_table`` wrote every op it could, and measured some it had no key line
-    for. Carries what a normal return would, plus the ops it could not place."""
+class AmbiguousCollapse(EmitRefused):
+    """Collapsing the recorded cells would merge two different decisions onto *key*."""
 
-    def __init__(self, message: str, written: int, kept: List[str], missing: List[str]):
-        super().__init__(message)
-        self.written, self.kept, self.missing = written, kept, missing
+    def __init__(self, key: BudgetKey, decisions: Tuple[Decision, Decision]):
+        self.key, self.decisions = key, decisions
+        super().__init__(
+            f"collapsing merges two different measurements onto {key.describe()}. "
+            "Nothing written -- emit from a complete run."
+        )
 
 
-def _covered(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
-    """Whether this run measured the ``(in, out)`` cell *line* declares.
-
-    Only the cells actually in ``MEASURED`` for this op, never the static
-    ``SWEEP_FORMATS`` cross-product: a partial run -- ``-k``, an interrupt, a driver
-    skip -- must replace what it measured and leave the rest alone, rather than
-    rendering a whole op block from an incomplete session.
-    """
-    fields = _row_fields(line)
+def _kept(row: Row, measured: Set[Tuple[DataFormat, DataFormat]]) -> bool:
+    """Whether *row* survives a write of the cells *measured*: it pins an ``arch`` (this
+    sweep runs on one), declares ``atol``/``rtol`` (a judgement no measurement
+    re-derives), or names a pair of formats this run did not measure."""
     return (
-        bool(fields)
-        and (
-            fields.get("in", ""),
-            fields.get("out", ""),
-        )
-        in emitted_cells
+        row.arch is not None
+        or row.atol is not None
+        or row.rtol is not None
+        or (row.input, row.output) not in measured
     )
 
 
-def _replaceable(line: str, emitted_cells: Set[Tuple[str, str]]) -> bool:
-    """Whether this run's output supersedes *line*.
-
-    A row that pins ``arch`` is never replaceable. This sweep runs on one architecture,
-    and the table's own header says to re-measure on Blackhole; specificity lets the two
-    rows coexist, so regenerating one arch must not erase the other's contract.
-
-    Nor is a row carrying a field ``_render`` cannot put back -- a ``near_zero_atol``
-    floor, an ``atol``/``rtol`` pair. :func:`write_table` keeps such an op's block
-    verbatim and names it in its return, rather than quietly replacing or quietly
-    duplicating the row.
-    """
-    fields = _row_fields(line)
-    if "arch" in fields or set(fields) - _RENDERABLE_FIELDS:
-        return False
-    return _covered(line, emitted_cells)
-
-
-def write_table(path, suffix: str) -> Tuple[int, List[str]]:
-    """Replace every swept op's block in the YAML with what the sweep measured.
-
-    Returns how many blocks were rewritten, and the ops kept verbatim because a row the
-    sweep covers carries a field it cannot regenerate (a ``near_zero_atol`` floor).
-
-    Line-oriented on purpose. The table's comments *are* its provenance, and a load and
-    re-dump through PyYAML would drop every one of them, including for the ops this
-    sweep never touched.
-
-    Raises :class:`UnplacedMeasurements` if an op in ``MEASURED`` has no key line to
-    write into -- *after* writing every op that has one, so one unenrolled op does not
-    throw away the rest of a whole-table emit. The measurement would otherwise be
-    dropped in silence, and the sampled rows it was meant to replace would stay in place
-    looking measured -- the failure the ``_OP_KEY`` comment below records biting once
-    already.
-    """
-    import pathlib as _pathlib
-
-    path = _pathlib.Path(path)
-    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
-    out, i, written, kept_verbatim = [], 0, set(), []
-    while i < len(lines):
-        line = lines[i]
-        # A top-level key by shape, not by trailing colon: an op whose key line carries a
-        # header comment -- `Signbit:  # 0 ULP, 16 variants` -- does not end with one.
-        # Matching on that silently skipped 17 ops, every one of them exact or predicate,
-        # and left their sampled rows in place looking measured. Signbit and Threshold
-        # measure 16,129 steps exhaustively against the 0 those rows claimed.
-        head = _OP_KEY.match(line)
-        name = head.group(1) if head else ""
-        if head and name in MEASURED:
-            j = i + 1
-            while j < len(lines) and (not lines[j].strip() or lines[j][0].isspace()):
-                j += 1
-            # The blank lines after the block are left for the loop to copy through.
-            while j - 1 > i and not lines[j - 1].strip():
-                j -= 1
-            emitted_cells = {(k[0], k[1]) for k in MEASURED[name]}
-            rows = [l for l in lines[i + 1 : j] if l.strip().startswith("- ")]
-            # Any row a measured cell resolves through, not only one pinning the
-            # measured (in, out): an op-wide `{metric: tolerance, atol: 0.13}` would
-            # otherwise be shadowed by the bare rows rendered below it, and every cell
-            # they name would silently lose its declared atol.
-            unrenderable = [
-                l
-                for l in rows
-                if _unrenderable(l) and _pins_a_measured_cell(l, set(MEASURED[name]))
-            ]
-            if unrenderable:
-                # Emitting over it would drop the floor; keeping it as well would give
-                # the cell two equally specific keys, which `_load_table` refuses. So
-                # the op's block stays as it is, and the caller is told: the row is a
-                # judgement a measurement cannot re-derive. Every other op is written.
-                out.extend(lines[i:j])
-                kept_verbatim.append(name)
-                written.add(name)
-                i = j
-                continue
-            kept = [l for l in rows if not _replaceable(l, emitted_cells)]
-            out.extend(_render(line, _collapse(_decide(MEASURED[name])), suffix))
-            # Rows this run did not supersede -- a format it does not reach, an
-            # arch-keyed entry, a floor `_render` cannot re-derive -- are the
-            # measurement of a different run and stay as they are. Replacing a whole op
-            # block deleted them.
-            out.extend(kept)
-            written.add(name)
-            i = j
-            continue
-        out.append(line)
-        i += 1
-    # Exactly one trailing newline: an op block carries its own trailing blank lines,
-    # and the last block's leave the file ending in several. `end-of-file-fixer` then
-    # rewrites the table on every commit.
-    path.write_text("".join(out).rstrip("\n") + "\n", encoding="utf-8")
-    missing = sorted(set(MEASURED) - written)
-    if missing:
-        raise UnplacedMeasurements(
-            f"{path.name}: measured {', '.join(missing)} but found no key line to "
-            "write into, so those were not written; every other op was. Add the op's "
-            "block to the table first -- the key line is passed through verbatim so a "
-            "header comment survives, and cannot be generated here.",
-            written=len(written) - len(kept_verbatim),
-            kept=kept_verbatim,
-            missing=missing,
+def write_table(path=TABLE_PATH) -> WriteReport:
+    """Replace, in the table at *path*, every row of each measured ``(input, output)``
+    pair with what the sweep measured, and write it back. A kept row never displaces a
+    measurement: one with the key of an emitted row is refused (:class:`KeptRowCollides`),
+    so an emitted row always outranks a kept row pinning its pair."""
+    table = load_table(path)
+    written: Dict[MathOperation, Tuple[Row, ...]] = {}
+    for op, cells in MEASURED.items():
+        pairs = {(key.input_format, key.output_format) for key in cells}
+        kept = tuple(row for row in table.get(op, ()) if _kept(row, pairs))
+        taken = {row.key for row in kept}
+        emitted = tuple(
+            decision.row(key)
+            for key, decision in _collapse(_decide(cells, DOMAINS.get(op))).items()
         )
-    return len(written) - len(kept_verbatim), kept_verbatim
+        for row in emitted:
+            if row.key in taken:
+                raise KeptRowCollides(op, row.key)
+        written[op] = table[op] = kept + emitted
+    write_table_file(table, path)
+    return WriteReport(Path(path), written)

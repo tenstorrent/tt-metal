@@ -10,10 +10,10 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
-template <typename DSpec>
+template <typename DFB, typename DSpec>
 inline void write_tiles_in_block(
     Noc& noc,
-    DataflowBuffer& cb_out0,
+    DFB& cb_out0,
     uint32_t block_height_ntiles,
     uint32_t block_width_ntiles,
     uint32_t block_start_row_id,

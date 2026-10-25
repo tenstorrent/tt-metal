@@ -61,7 +61,6 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // A block of work is one MtNt
-    uint32_t num_cores_y = operation_attributes.compute_with_storage_grid_size.y;
     auto num_output_blocks_total = ashape[1];  // ashape[1] is Q num_heads; only parallelize on this
     auto
         [num_cores,
@@ -76,6 +75,8 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
     CoreRangeSet all_device_cores{CoreRange(
         {0, 0}, {device->compute_with_storage_grid_size().x - 1, device->compute_with_storage_grid_size().y - 1})};
     uint32_t total_num_cores = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
+    // The kernels run on every device core, so the runtime-arg loop walks the device grid, not the op's sub-grid.
+    const uint32_t device_num_cores_y = device->compute_with_storage_grid_size().y;
 
     // C = torch.matmul(A.transpose(0, 2) * B).transpose(0, 2)
     const bool transpose_hw_bool = operation_attributes.transpose_hw.value_or(false);
@@ -217,7 +218,7 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
 
     uint32_t num_output_blocks_per_core = 0;
     for (uint32_t i = 0, num_blocks_written = 0; i < total_num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = {i / device_num_cores_y, i % device_num_cores_y};
 
         if (core_group_1.contains(core)) {
             num_output_blocks_per_core = num_output_blocks_per_core_group_1;

@@ -28,6 +28,7 @@ from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
+    check_checkpoint_index,
     load_hf_state_dict,
     convert_hf_to_meta,
     convert_meta_to_hf,
@@ -2432,6 +2433,7 @@ class TtModelArgs:
             if self.cache_hf_flag and self.cached_hf_model is not None:
                 model = self.cached_hf_model
             else:
+                check_checkpoint_index(self.CKPT_DIR)
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
@@ -2513,6 +2515,7 @@ class TtModelArgs:
             if self.from_hf_url:
                 from transformers import AutoModelForCausalLM
 
+                check_checkpoint_index(self.CKPT_DIR)
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",

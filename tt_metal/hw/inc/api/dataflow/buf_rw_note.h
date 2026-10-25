@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "hostdev/buf_rw_common.h"
 #include "internal/tensor/binding_id.h"  // tensor_accessor::NO_BINDING_ID
 
 // Op-to-op R/W inference (POC) -- device emit side. When a kernel reads/writes a bound tensor via the Noc
@@ -15,12 +16,6 @@
 // kernel reads vs writes -- the input a future trace-mode barrier-relaxation optimizer needs. Pure data,
 // zero instructions; not loaded to device. Eventually the compiler emits these directly.
 namespace tt_buf_rw {
-
-// Record kinds -- MUST match ll_api::BufRwKind (tt_metal/llrt/binary_metadata.hpp). OPAQUE=0 is the
-// failure-safe default: a zero-filled/truncated record reads as un-analyzable, never as a plain read.
-inline constexpr uint32_t OPAQUE = 0;
-inline constexpr uint32_t READ = 1;
-inline constexpr uint32_t WRITE = 2;
 
 // Emit one (slot, kind) record into the non-allocated .tt.BUF_RW note section. Both are compile-time
 // immediates, so this adds section data only -- no instructions.
@@ -33,6 +28,9 @@ inline void note() {
         ".popsection" ::"n"(Slot),
         "n"(Kind));
 }
+
+// Emit the OPAQUE record. Used by raw NoC calls whose address can't be attributed to any bound tensor.
+inline void note_opaque() { note<kOpaqueSlot, kOpaque>(); }
 
 // Recover an endpoint's op-to-op binding id at the NoC call site. A bound-tensor accessor carries it as
 // T::DSpec::binding_id (threaded in by the TensorAccessor deduction guide); non-tensor endpoints (e.g.
@@ -71,8 +69,8 @@ inline constexpr uint32_t binding_of = endpoint<T>::present ? endpoint<T>::slot 
 template <uint32_t Slot>
 inline void note_read_write() {
     if constexpr (Slot != tensor_accessor::NO_BINDING_ID) {
-        note<Slot, READ>();
-        note<Slot, WRITE>();
+        note<Slot, kRead>();
+        note<Slot, kWrite>();
     }
 }
 

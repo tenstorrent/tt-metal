@@ -71,6 +71,17 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw("size_bytes", &KvCacheLocation::size_bytes, "Size of the KV cache chunk in bytes.")
         .def_rw("device_group_index", &KvCacheLocation::device_group_index, "Index into the device group table.");
 
+    // KvChunkTensorType - Cached tensor kind (maps 1:1 onto a TemporalPolicy alternative)
+    nb::enum_<KvChunkTensorType>(mod, "KvChunkTensorType", R"(
+        What kind of cached tensor a config's chunks belong to.
+        Each value corresponds to one TemporalPolicy alternative.
+    )")
+        .value("Kv", KvChunkTensorType::Kv, "Dense: full KV / MLA latent over [0, prefix_len).")
+        .value(
+            "Snapshot",
+            KvChunkTensorType::Snapshot,
+            "None: fixed-size state keyed by the prefix_len it was snapshotted at (SSM / KDA state).");
+
     // KvChunkAddressTableConfig - Configuration struct
     nb::class_<KvChunkAddressTableConfig>(mod, "KvChunkAddressTableConfig", R"(
         Configuration for constructing a KvChunkAddressTable.
@@ -90,7 +101,19 @@ void bind_disaggregation_api(nb::module_& mod) {
         .def_rw(
             "chunk_size_bytes",
             &KvChunkAddressTableConfig::chunk_size_bytes,
-            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)");
+            "Physical size of one chunk in bytes. Default: 19584 (18 x 1088 bfp8 tiles)")
+        .def_rw(
+            "tensor_type",
+            &KvChunkAddressTableConfig::tensor_type,
+            "Cached tensor kind for this config's chunks. Default: KvChunkTensorType.Kv");
+
+    // ChunkCompression - per-config in-memory / on-wire representation
+    nb::enum_<ChunkCompression>(mod, "ChunkCompression", R"(
+        How a config's chunk map is represented: UNROLLED (one entry per chunk) or
+        STRIDED_ROWS (per (slot, layer) row, a periodic base + stride per residue class).
+    )")
+        .value("UNROLLED", ChunkCompression::kUnrolled)
+        .value("STRIDED_ROWS", ChunkCompression::kStridedRows);
 
     // KvChunkAddressTable - Main lookup table class
     nb::class_<KvChunkAddressTable>(mod, "KvChunkAddressTable", R"(
@@ -120,6 +143,30 @@ void bind_disaggregation_api(nb::module_& mod) {
             R"(
             Construct a multi-config KvChunkAddressTable from a name->config map.
             Config ids are assigned in sorted key order; each config's name is its key.
+            )")
+        .def(
+            "__init__",
+            [](KvChunkAddressTable* self,
+               const std::map<std::string, KvChunkAddressTableConfig>& configs,
+               const std::map<std::string, ChunkCompression>& compressions) {
+                std::map<std::string, KvChunkAddressTable::NamedConfigInit> inits;
+                for (const auto& [name, cfg] : configs) {
+                    inits[name] = {.config = cfg, .compression = ChunkCompression::kUnrolled};
+                }
+                for (const auto& [name, compression] : compressions) {
+                    auto it = inits.find(name);
+                    TT_FATAL(it != inits.end(), "compression given for unknown config '{}'", name);
+                    it->second.compression = compression;
+                }
+                new (self) KvChunkAddressTable(inits);
+            },
+            nb::arg("configs"),
+            nb::arg("compressions"),
+            R"(
+            Construct a multi-config KvChunkAddressTable from a name->config map, choosing each
+            config's representation from `compressions` (name -> ChunkCompression; configs not
+            listed are UNROLLED). A STRIDED_ROWS config allocates no per-chunk grid and is
+            authored with set_strided_row().
             )")
 
         // Device group management
@@ -158,14 +205,72 @@ void bind_disaggregation_api(nb::module_& mod) {
             )")
         .def(
             "set",
-            static_cast<void (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, KvCacheLocation, const std::string&)>(
-                &KvChunkAddressTable::set),
+            static_cast<void (KvChunkAddressTable::*)(
+                uint32_t, uint32_t, uint32_t, KvCacheLocation, const std::string&)>(&KvChunkAddressTable::set),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
             nb::arg("location"),
             nb::arg("config"),
             "Set the location for a specific (layer, position, slot, config-name).")
+        .def(
+            "set_strided_row",
+            [](KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t slot,
+               uint32_t size_bytes,
+               std::vector<uint64_t> bases,
+               std::vector<int64_t> strides,
+               const std::vector<uint32_t>& device_group_indices,
+               uint32_t config_id) {
+                std::vector<DeviceGroupIndex> groups;
+                groups.reserve(device_group_indices.size());
+                for (uint32_t g : device_group_indices) {
+                    groups.emplace_back(g);
+                }
+                table.set_strided_row(
+                    layer, slot, size_bytes, std::move(bases), std::move(strides), std::move(groups), config_id);
+            },
+            nb::arg("layer"),
+            nb::arg("slot"),
+            nb::arg("size_bytes"),
+            nb::arg("bases"),
+            nb::arg("strides"),
+            nb::arg("device_group_indices"),
+            nb::arg("config_id") = 0,
+            R"(
+            Author one (slot, layer) row of a STRIDED_ROWS config: chunk c resolves to
+            bases[c % step] + (c // step) * strides[c % step] on device group
+            device_group_indices[c % step], where step = len(bases). device_group_indices
+            takes ints or the DeviceGroupIndex objects add_device_group() returns.
+            )")
+        .def(
+            "set_strided_row",
+            [](KvChunkAddressTable& table,
+               uint32_t layer,
+               uint32_t slot,
+               uint32_t size_bytes,
+               std::vector<uint64_t> bases,
+               std::vector<int64_t> strides,
+               std::vector<DeviceGroupIndex> device_group_indices,
+               uint32_t config_id) {
+                table.set_strided_row(
+                    layer,
+                    slot,
+                    size_bytes,
+                    std::move(bases),
+                    std::move(strides),
+                    std::move(device_group_indices),
+                    config_id);
+            },
+            nb::arg("layer"),
+            nb::arg("slot"),
+            nb::arg("size_bytes"),
+            nb::arg("bases"),
+            nb::arg("strides"),
+            nb::arg("device_group_indices"),
+            nb::arg("config_id") = 0,
+            "Overload of set_strided_row taking the DeviceGroupIndex objects add_device_group() returns.")
         .def(
             "set_fabric_node_host",
             &KvChunkAddressTable::set_fabric_node_host,
@@ -188,8 +293,8 @@ void bind_disaggregation_api(nb::module_& mod) {
             )")
         .def(
             "lookup",
-            static_cast<KvCacheLocation (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, const std::string&) const>(
-                &KvChunkAddressTable::lookup),
+            static_cast<KvCacheLocation (KvChunkAddressTable::*)(uint32_t, uint32_t, uint32_t, const std::string&)
+                            const>(&KvChunkAddressTable::lookup),
             nb::arg("layer"),
             nb::arg("position"),
             nb::arg("slot"),
@@ -278,6 +383,11 @@ void bind_disaggregation_api(nb::module_& mod) {
             &KvChunkAddressTable::num_position_chunks,
             nb::arg("config_id") = 0,
             "Number of position chunks for a config (default 0).")
+        .def(
+            "compression",
+            &KvChunkAddressTable::compression,
+            nb::arg("config_id") = 0,
+            "Representation of a config's chunk map (ChunkCompression).")
         .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries summed across all configs.")
 
         // Device reads

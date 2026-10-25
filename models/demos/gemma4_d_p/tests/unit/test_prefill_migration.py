@@ -279,7 +279,9 @@ def test_command_queue_read_restores_chunk_order(monkeypatch, dtype):
     gathered = expected[:, positions].unsqueeze(0)
     cache = SimpleNamespace(shape=(6, 4, 32768, width))
     selected = object()
-    row_major = object()
+    mesh = object()
+    row_major = SimpleNamespace(shape=(1, 4, tokens // 8, width), dtype=ttnn.bfloat16, spec="spec", device=lambda: mesh)
+    host = object()
     released = []
 
     def select(tensor, starts, ends, *, memory_config):
@@ -292,18 +294,36 @@ def test_command_queue_read_restores_chunk_order(monkeypatch, dtype):
     monkeypatch.setattr(Gemma4ServiceConfig, "CHUNK_SIZE", chunk_size)
     monkeypatch.setattr(ttnn, "slice", select)
     monkeypatch.setattr(ttnn, "untilize", lambda tensor, memory_config: row_major)
-    monkeypatch.setattr(ttnn, "from_device", lambda tensor, blocking: gathered)
+    allocations, copies = [], []
+
+    def allocate(spec, device):
+        assert (spec, device) == ("spec", mesh)
+        allocations.append(spec)
+        return host
+
+    def copy(device_tensor, host_tensor, blocking):
+        assert (device_tensor, host_tensor, blocking) == (row_major, host, True)
+        copies.append(device_tensor)
+
+    monkeypatch.setattr(ttnn, "allocate_tensor_on_host", allocate)
+    monkeypatch.setattr(ttnn, "copy_device_to_host_tensor", copy)
     monkeypatch.setattr(ttnn, "deallocate", released.append)
     shards = [
-        gathered[:, column * 4 : (column + 1) * 4, row * (tokens // 8) : (row + 1) * (tokens // 8)]
+        SimpleNamespace(
+            to_torch_with_padded_shape=lambda shard=gathered[
+                :, column * 4 : (column + 1) * 4, row * (tokens // 8) : (row + 1) * (tokens // 8)
+            ]: shard
+        )
         for row in range(8)
         for column in range(4)
     ]
-    monkeypatch.setattr(ttnn, "get_device_tensors", lambda tensor: shards)
-    monkeypatch.setattr(ttnn, "to_torch", lambda tensor: tensor)
-    actual = kv_validation.read_cache_tensor(cache, 3, tokens)
-    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
-    assert released == [selected, row_major]
+    monkeypatch.setattr(ttnn, "get_device_tensors", lambda tensor: shards if tensor is host else None)
+    staging = {}
+    for _ in range(2):
+        actual = kv_validation.read_cache_tensor(cache, 3, tokens, staging)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert released == [selected, row_major] * 2
+    assert len(allocations) == 1 and len(copies) == 2
 
 
 @pytest.mark.parametrize("layer", [0, 5])

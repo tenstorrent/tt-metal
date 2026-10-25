@@ -14,6 +14,8 @@
 namespace tt::test {
 namespace {
 
+constexpr tt::ARCH kSimulatorArchs[] = {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE, tt::ARCH::QUASAR};
+
 // An empty simulator build directory, removed when the test ends.
 class SimulatorBuildDir : public ::testing::Test {
 protected:
@@ -27,12 +29,30 @@ protected:
 };
 
 TEST_F(SimulatorBuildDir, CPU_SingleChipBuildOpensChipZero) {
-    EXPECT_EQ(Cluster::simulator_target_devices(dir_), (std::unordered_set<ChipId>{0}));
+    for (const auto arch : kSimulatorArchs) {
+        SCOPED_TRACE(tt::arch_to_str(arch));
+        EXPECT_EQ(Cluster::simulator_target_devices(dir_, arch), (std::unordered_set<ChipId>{0}));
+    }
 }
 
 TEST_F(SimulatorBuildDir, CPU_PartitionedBuildLeavesTheDevicesToUmd) {
     std::ofstream(dir_ / "ip_layout.yaml") << "access_points: []\n";
-    EXPECT_TRUE(Cluster::simulator_target_devices(dir_).empty());
+    for (const auto arch : kSimulatorArchs) {
+        SCOPED_TRACE(tt::arch_to_str(arch));
+        EXPECT_TRUE(Cluster::simulator_target_devices(dir_, arch).empty());
+    }
+}
+
+TEST_F(SimulatorBuildDir, CPU_SharedLibraryLeavesTheDevicesToUmd) {
+    for (const auto arch : {tt::ARCH::WORMHOLE_B0, tt::ARCH::BLACKHOLE}) {
+        SCOPED_TRACE(tt::arch_to_str(arch));
+        EXPECT_TRUE(Cluster::simulator_target_devices(dir_ / "libttsim.so", arch).empty());
+    }
+}
+
+TEST_F(SimulatorBuildDir, CPU_QuasarSharedLibraryOpensChipZero) {
+    EXPECT_EQ(
+        Cluster::simulator_target_devices(dir_ / "libttsim.so", tt::ARCH::QUASAR), (std::unordered_set<ChipId>{0}));
 }
 
 }  // namespace

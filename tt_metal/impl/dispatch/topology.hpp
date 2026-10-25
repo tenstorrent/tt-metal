@@ -62,7 +62,6 @@ public:
         DeviceManager* device_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
     ~DispatchTopology();
 
@@ -90,7 +89,6 @@ private:
     DeviceManager* device_manager_;
     GetControlPlaneFn get_control_plane_;
     GetDispatchQueryManagerFn get_dispatch_query_manager_;
-    GetMaxNumEthCoresFn get_max_num_eth_cores_;
     GetReadsDispatchCoresFn get_reads_dispatch_cores_;
     std::vector<FDKernel*> node_id_to_kernel_;
     std::unique_ptr<detail::ProgramCompileGroup> command_queue_compile_group_;

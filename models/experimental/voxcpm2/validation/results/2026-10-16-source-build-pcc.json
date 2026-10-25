@@ -1,0 +1,446 @@
+{
+  "date": "2026-10-16",
+  "scope": "Source-built TTNN component replay; not integrated TT speech synthesis",
+  "parent_revision": "ec74d3be21e8dabe457e87df464a047c07c115e2",
+  "implementation_sha256": {
+    "config.py": "6ad5276eb57266956b77e59d6d906d749ea92d7fd83380edf307677f07016276",
+    "tt/ops.py": "edb2cb43442c14327a9aaa1a928bf172dc8605b7f6da1e7f61980bcf1f4ddf96",
+    "tt/minicpm.py": "c62c807924304006ec4e6a44741800bf91f5f0d69c482be41656e7b35bed2d34",
+    "tt/local.py": "eacface493cd3163c1e8c12abf6621d785e72b0985b7dab3506996dbde7b00c9",
+    "tt/audio_vae.py": "97a19c4c6bbbaac3b358e0f169489190d947bced3dbcd3a1b3dcab39ed348dc9",
+    "validation/replay_component.py": "5b873f8d60963d5e8d804a284fdd500d82cb09eb65cdba66e68009f86eddb6e4",
+    "validation/metrics.py": "b0de04a2be6eae9ee813a31e5b2b128ad5df4dbd5cceb01fe350a27cbb8bc625",
+    "validation/cases.py": "5e455770717f20b08f412ce650b6f2ae89b10c7d77bfc5b17ef72f06b8ee7acc"
+  },
+  "environment": {
+    "native_source_revision": "ec74d3be21e8dabe457e87df464a047c07c115e2",
+    "ttnn_version": "0.1.dev1+ggec74d3b",
+    "ttnn_module": "/home/user/Projects/voxcpm2-review-20261016/tt-metal/ttnn/ttnn/__init__.py",
+    "binary": "/home/user/Projects/voxcpm2-review-20261016/tt-metal/ttnn/ttnn/_ttnn.so",
+    "binary_sha256": "580e84ef9059e8ceeb3efda6c11c5184ff8bba857f3fca1ae81e0ac28a4408ba",
+    "torch": "2.11.0+cpu",
+    "numpy": "1.26.4",
+    "python": "3.10.12",
+    "pytest": "9.0.3",
+    "torchvision": "0.26.0+cpu",
+    "build_command": "CMAKE_BUILD_PARALLEL_LEVEL=12 ./build_metal.sh --release --disable-profiler --without-distributed",
+    "build_from_source": true,
+    "device": "Blackhole p150b; UMD6; /dev/tenstorrent/5; BDF 0000:c1:00.0; visible logical0",
+    "l1_small_size": 262144
+  },
+  "checkpoint": {
+    "repository": "openbmb/VoxCPM2",
+    "revision": "32279effe8c19989596f05d353d1447f51d9e915",
+    "files": {
+      "audiovae.pth": {
+        "sha256": "94b5d51e107e0507d4acc976cfdadb64edd6fd06d1f751dadbf2fd1594274bf1",
+        "bytes": 376951122
+      },
+      "config.json": {
+        "sha256": "405f0dcd92f7feba6011ed4eac5c8d4f74cba9712f07fd5cfa3063bbdd95402c",
+        "bytes": 4336
+      },
+      "model.safetensors": {
+        "sha256": "f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d",
+        "bytes": 4580080592
+      },
+      "special_tokens_map.json": {
+        "sha256": "068594063e37662c02b21acf42ebb334ef6a74fb810e68a2368f88f08351de76",
+        "bytes": 1632
+      },
+      "tokenization_voxcpm2.py": {
+        "sha256": "84489ea32b6ee0cae22ed5480cacb6df85c46624c3119be9a2021c3649a12729",
+        "bytes": 2895
+      },
+      "tokenizer.json": {
+        "sha256": "f8984687e4a92a3503d521396d454b7d68e9fdaab2a0288eb3536c7c1aa4bc20",
+        "bytes": 3676772
+      },
+      "tokenizer_config.json": {
+        "sha256": "e78a3ebb48a0b9437efd1823b6b726c823da89e49dd8bcc90c02419d9baa772b",
+        "bytes": 5059
+      }
+    }
+  },
+  "capture_manifest_sha256": {
+    "text": "72a5bbbc9deb2b2f517bde44309bbdf978986d759a4625d6a29f49f98004d782",
+    "voice": "971ea6c97fe5601f21442b1bb3e6a3a981b04c2c52767f0fd79b863f0fde3393"
+  },
+  "suite": {
+    "passed": 58,
+    "device_cases": 16,
+    "component_types": 14,
+    "subtests_passed": 49,
+    "failed": 0,
+    "skipped": 0,
+    "elapsed_seconds": 131.992,
+    "command": "python -m pytest models/experimental/voxcpm2/tests --device-id 0 --timeout=120 --basetemp=../reports/pytest --junitxml=../reports/junit.xml -q -o addopts="
+  },
+  "thresholds": {
+    "min_pcc": 0.99,
+    "ordinary_max_relative_rms": 0.02,
+    "encoder_max_relative_rms": 0.05,
+    "decoder_max_relative_rms": 0.03,
+    "stop_head_max_abs": 0.001
+  },
+  "precision": {
+    "transformers": "BF16 storage, HiFi4, FP32 destination accumulation",
+    "codec": "FP32 activation/output storage and pointwise/residual operations; BF16 convolution inputs/weights, FP32 destination accumulation"
+  },
+  "cases": [
+    {
+      "component": "audio_vae.decode",
+      "event": "audio_vae.decode/000000",
+      "dtype": "float32",
+      "conv_operand_dtype": "bfloat16",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999540497816777,
+        "relative_rms": 0.012561082929597098,
+        "max_abs": 0.013906747102737413,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 0.9917984879681624,
+        "offset": -4.5379666001937505e-05,
+        "residual_relative_rms": 0.009508165209335936
+      }
+    },
+    {
+      "component": "audio_vae.encode",
+      "event": "audio_vae.encode/000000",
+      "dtype": "float32",
+      "conv_operand_dtype": "bfloat16",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9997891515670808,
+        "relative_rms": 0.020619396024052633,
+        "max_abs": 0.4970438480377197,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 0.9976977267607715,
+        "offset": 8.097592470487236e-05,
+        "residual_relative_rms": 0.0204904300352579
+      }
+    },
+    {
+      "component": "base_lm.forward",
+      "event": "base_lm.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9998485794474621,
+        "relative_rms": 0.01740090185228679,
+        "max_abs": 1.12890625,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 0.9996621381477088,
+        "offset": 9.352220129878248e-05,
+        "residual_relative_rms": 0.01739758590358045
+      }
+    },
+    {
+      "component": "enc_to_lm_proj.forward",
+      "event": "enc_to_lm_proj.forward/000001",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999995945466793,
+        "relative_rms": 0.0009032459646733638,
+        "max_abs": 0.01562500000000014,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.000069123593429,
+        "offset": -8.50196594319894e-06,
+        "residual_relative_rms": 0.0009005647947020797
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999565609678107,
+        "relative_rms": 0.009888036841080654,
+        "max_abs": 0.03125000000000002,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.0032401385017315,
+        "offset": 0.0006685219173936585,
+        "residual_relative_rms": 0.0093312686075447
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000004",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999524683327204,
+        "relative_rms": 0.00982262821884444,
+        "max_abs": 0.03906250000000011,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.0010905389814906,
+        "offset": -0.0003168364284448234,
+        "residual_relative_rms": 0.00975836336121324
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000008",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999574451563733,
+        "relative_rms": 0.00924670451190416,
+        "max_abs": 0.037109375000000014,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.0004130345724607,
+        "offset": -0.0007004990638142418,
+        "residual_relative_rms": 0.009222718881599552
+      }
+    },
+    {
+      "component": "feat_encoder.forward",
+      "event": "feat_encoder.forward/000001",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999820235617656,
+        "relative_rms": 0.006068506973803402,
+        "max_abs": 0.062499999999999986,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 0.9989942664990004,
+        "offset": -0.00015405843364097306,
+        "residual_relative_rms": 0.0059800590204554015
+      }
+    },
+    {
+      "component": "fsq_layer.forward",
+      "event": "fsq_layer.forward/000001",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999812872513536,
+        "relative_rms": 0.00615557382782692,
+        "max_abs": 0.03125000000000022,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.0006490657779357,
+        "offset": 6.471558276700991e-06,
+        "residual_relative_rms": 0.006121229738143282
+      }
+    },
+    {
+      "component": "fusion_concat_proj.forward",
+      "event": "fusion_concat_proj.forward/000001",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999995768133987,
+        "relative_rms": 0.0009200443137143469,
+        "max_abs": 0.12500000000000056,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 0.9999860865655307,
+        "offset": 8.370932499728858e-06,
+        "residual_relative_rms": 0.0009199387114464116
+      }
+    },
+    {
+      "component": "lm_to_dit_proj.forward",
+      "event": "lm_to_dit_proj.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999993970180302,
+        "relative_rms": 0.0011050814926000727,
+        "max_abs": 0.03124999999999989,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.000122275418434,
+        "offset": -7.84164892001513e-07,
+        "residual_relative_rms": 0.0010982958862608791
+      }
+    },
+    {
+      "component": "res_to_dit_proj.forward",
+      "event": "res_to_dit_proj.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999993743053852,
+        "relative_rms": 0.0011195206754256836,
+        "max_abs": 0.0312500000000002,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.0000387284539143,
+        "offset": 9.252782516774806e-05,
+        "residual_relative_rms": 0.0011182487823648993
+      }
+    },
+    {
+      "component": "residual_lm.forward",
+      "event": "residual_lm.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999690243010364,
+        "relative_rms": 0.008193707330916653,
+        "max_abs": 0.2500000000000029,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 0.9976611895330859,
+        "offset": -4.705722909328329e-05,
+        "residual_relative_rms": 0.007852687072955281
+      }
+    },
+    {
+      "component": "stop_actn.forward",
+      "event": "stop_actn.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999999594317688,
+        "relative_rms": 0.0002843929542146668,
+        "max_abs": 0.003906249999999986,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 0.9999938530947364,
+        "offset": 2.3257266312654273e-05,
+        "residual_relative_rms": 0.00028389999847940853
+      }
+    },
+    {
+      "component": "stop_head.forward",
+      "event": "stop_head.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 1.0,
+        "relative_rms": 0.0,
+        "max_abs": 0.0,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.0,
+        "offset": 0.0,
+        "residual_relative_rms": 0.0
+      }
+    },
+    {
+      "component": "stop_proj.forward",
+      "event": "stop_proj.forward/000000",
+      "dtype": "bfloat16",
+      "conv_operand_dtype": null,
+      "metrics": {
+        "passed": true,
+        "pcc": 0.99999949543227,
+        "relative_rms": 0.0009184520632163894,
+        "max_abs": 0.03125000000000097,
+        "reason": null
+      },
+      "affine_diagnostics": {
+        "gain": 1.0000999065710368,
+        "offset": -9.712831204869085e-05,
+        "residual_relative_rms": 0.0009103044850846134
+      }
+    }
+  ],
+  "decoder_precision_diagnosis": [
+    {
+      "policy": "BF16 throughout",
+      "output": {
+        "passed": true,
+        "pcc": 0.9997970642969722,
+        "relative_rms": 0.07299735272004185,
+        "max_abs": 0.059538543224334654,
+        "reason": null,
+        "gain": 1.0697287016315633,
+        "offset": 0.00019692052006812946,
+        "residual_relative_rms": 0.0215542793534333
+      }
+    },
+    {
+      "policy": "FP32 storage and convolution operands",
+      "output": {
+        "passed": true,
+        "pcc": 0.9999368434354493,
+        "relative_rms": 0.04944863676973389,
+        "max_abs": 0.03671807050704952,
+        "reason": null,
+        "gain": 0.9517222276006571,
+        "offset": 2.0550459295793645e-06,
+        "residual_relative_rms": 0.010696816707145198
+      }
+    },
+    {
+      "policy": "FP32 storage with BF16 convolution operands",
+      "output": {
+        "passed": true,
+        "pcc": 0.9999540497816777,
+        "relative_rms": 0.012561082929597098,
+        "max_abs": 0.013906747102737413,
+        "reason": null,
+        "gain": 0.9917984879681624,
+        "offset": -4.5379666001937505e-05,
+        "residual_relative_rms": 0.009508165209335936
+      }
+    }
+  ],
+  "seed43_decoder": {
+    "component": "audio_vae.decode",
+    "event": "audio_vae.decode/000000",
+    "dtype": "float32",
+    "metrics": {
+      "passed": true,
+      "pcc": 0.9999751069531856,
+      "relative_rms": 0.01061461128363922,
+      "max_abs": 0.012484997510910058,
+      "reason": null
+    },
+    "affine_diagnostics": {
+      "gain": 0.9920223847555396,
+      "offset": 2.8932161561795392e-05,
+      "residual_relative_rms": 0.006999766331776843
+    }
+  },
+  "limitations": [
+    "Fresh native build is the submitted branch, not a rebase onto latest upstream main",
+    "CUDA captures retained: Torch2.10 text/voice; seed43 uses original Torch2.8 capture",
+    "Source-built suite was run locally on remote Blackhole, not upstream CI",
+    "CI asset provisioning and notification owner assignment require maintainers",
+    "Selected components/events only; AR KV-cache decode and integrated TT synthesis remain pending",
+    "Cold JIT cache may contribute to suite time; no steady-state performance claim"
+  ]
+}

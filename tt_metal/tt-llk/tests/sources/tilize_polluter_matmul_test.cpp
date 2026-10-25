@@ -12,17 +12,18 @@
 // from `buffer_A[0]` / `buffer_B[0]`; the run-0 tilize only exists to leave the
 // unpacker in a (possibly tiny `face_r_dim`) state. The run-1 transition is:
 //   `_llk_unpack_tilize_uninit_` (restores the tilize-mutated SrcA baseline) +
-//   `_llk_unpack_reconfig_data_format_src{a,b}_impl_<.. FACE_ROW_MAJOR>`
-//   (re-establishes the canonical regular strides / Tile_x_dim / Z-dim).
+//   `_llk_unpack_hw_configure_` (re-establishes the regular 32x32 operand baseline
+//   for both operands: descriptors, Tile_x_dim, strides).
 //
 // If that transition fails to fully reset the unpacker (e.g. leaves a tiny
-// `Tile_x_dim_cntx0`, a tilize-specific Z-dim, or a stale Y-stride), the regular
-// matmul reads its operands with the wrong layout and the result diverges from
-// `tilize(MatmulGolden(A, B))`.
+// `Tile_x_dim_cntx0`, a tilize-specific descriptor Z-dim, or `tileize_mode` with its
+// row pitch), the regular matmul reads its operands with the wrong layout and the
+// result diverges from `tilize(MatmulGolden(A, B))`.
 //
 // NOTE: run-0 tilize reads `buffer_A[0]` (which holds the tilized matmul operand)
-// as raw row-major input; its packed output goes to a scratch buffer and is
-// discarded. Only the run-1 matmul result is validated.
+// as raw row-major input; the 4-face polluter (two tiles wide) also reads on into
+// `buffer_B[0]`. Its packed output goes to a scratch buffer and is discarded. Only
+// the run-1 matmul result is validated.
 
 #include <algorithm>
 #include <cstdint>
@@ -59,8 +60,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     constexpr std::uint32_t mm_num_faces = 4; // regular matmul operands
 
     // ---- Run 0: tilize "polluter" (output discarded) ----
+    // Polluter width in tiles, from the Python test (POLLUTER_CT_DIM explains why it is two tiles wide).
+    constexpr std::uint32_t pol_ct_dim   = POLLUTER_CT_DIM;
     int run                              = 0;
-    const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
+    const std::uint32_t pol_block_ct_dim = _llk_unpack_tilize_block_ct_dim_wrapper_(pol_ct_dim);
     const std::uint32_t pol_tilize_nf    = pol_num_faces;
 
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -73,7 +76,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         pol_num_faces,
         pol_num_faces);
     _llk_unpack_tilize_init_wrapper_(
-        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, 1 /* ct_dim */, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
+        formats_array[run].unpack_A_src, formats_array[run].unpack_A_dst, pol_ct_dim, pol_face_r_dim, false /* narrow_tile */, pol_tilize_nf);
     _llk_unpack_tilize_wrapper_(
         L1_ADDRESS(params.buffer_A[0]),
         0 /* tile_index */,
@@ -96,9 +99,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // 32x32 operand baseline for BOTH operands before the matmul.
         //
         // `_llk_unpack_AB_matmul_init_` only reprograms x-end and the ZW counter (see its
-        // uninit doc) -- it does NOT reset the SrcA Y/Z strides, Tile_x_dim, or the operand
-        // tile descriptors, so without an explicit restore the polluter tilize state leaks
-        // into the matmul.
+        // uninit doc) -- it does NOT reset tileize_mode with its row pitch, Tile_x_dim, or the
+        // operand tile descriptors, so without an explicit restore the polluter tilize state
+        // leaks into the matmul.
         //
         // A *geometry change* (tiny polluter -> regular matmul) cannot be undone by
         // uninit + a stride-only reconfig alone: `_llk_unpack_reconfig_data_format_srca_impl_`
@@ -107,11 +110,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // idiomatic full reconfigure for a geometry change is `_llk_unpack_hw_configure_`
         // (configure_unpack_AB), which reprograms both descriptors to the regular baseline.
         // (For a geometry-matched polluter, face_r_dim==16, uninit alone already suffices.)
-#ifdef ARCH_WORMHOLE
         _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_num_faces, pol_face_r_dim);
-#else
-        _llk_unpack_tilize_uninit_wrapper_(formats_array[run].unpack_A_dst, pol_num_faces);
-#endif
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
             formats_array[run].unpack_A_src,
             formats_array[run].unpack_B_src,

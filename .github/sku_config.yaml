@@ -33,7 +33,7 @@ skus:
       - arch-wormhole_b0
       - pipeline-functional
       - topology-6u
-      - in-release
+      - in-service
 
   wh_galaxy_merge_gate:
     runs_on:
@@ -47,7 +47,7 @@ skus:
       - arch-wormhole_b0
       - pipeline-perf
       - topology-6u
-      - in-release
+      - in-service
 
   bh_galaxy:
     runs_on:
@@ -196,6 +196,10 @@ skus:
     runs_on:
       - tt-ubuntu-2204-medium-stable
     merge_queue_sku: cpu_medium_prio
+
+  cpu_xlarge:
+    runs_on:
+      - tt-ubuntu-2204-xlarge-stable
 
   # GitHub-hosted CPU-only runner: no Tenstorrent device, no Harbor access.
   # Used for host-only (CPU_-prefixed) subsets of device test binaries so scarce

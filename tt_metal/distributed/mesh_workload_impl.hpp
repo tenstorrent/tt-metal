@@ -66,7 +66,6 @@ private:
         // Offsets and binary sizes are computed for this MeshDevice and are not recomputed for another.
         int mesh_device_id = 0;
         bool runs_on_noc_multicast_only_cores = false;
-        bool runs_on_noc_unicast_only_cores = false;
     };
     FinalizedMetadata& get_finalized_metadata();
     uint32_t get_max_program_kernels_sizeB() { return get_finalized_metadata().max_program_kernels_sizeB; }
@@ -117,7 +116,6 @@ public:
     std::shared_ptr<MeshBuffer> prepare_for_command_list(MeshCommandQueue& mesh_cq);
     const std::unordered_set<SubDeviceId>& determine_sub_device_ids(MeshDevice* mesh_device);
     bool runs_on_noc_multicast_only_cores();
-    bool runs_on_noc_unicast_only_cores();
     uint32_t max_program_kernels_size() const {
         return finalized_metadata_.has_value() ? finalized_metadata_->max_program_kernels_sizeB : 0;
     }

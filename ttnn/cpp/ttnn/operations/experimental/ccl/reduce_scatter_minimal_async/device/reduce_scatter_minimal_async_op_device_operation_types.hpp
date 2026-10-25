@@ -48,6 +48,11 @@ struct ReduceScatterProgramArtifacts {
     }
 };
 
+struct ReduceScatterDescriptorArtifacts {
+    size_t reader_kernel_index = 0;
+    size_t writer_kernel_index = 0;
+};
+
 struct ReduceScatterMinimalAsyncParams {
     uint32_t dim;
     uint32_t num_links;

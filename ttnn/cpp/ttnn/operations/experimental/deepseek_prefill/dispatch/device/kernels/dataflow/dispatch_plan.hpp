@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #if defined(KERNEL_BUILD)
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"  // NOC_SPARSE_MCAST_WRITE_MAX_DESTS
+#include "hostdev/fabric_edm_packet_header.hpp"  // NOC_SPARSE_MCAST_WRITE_MAX_DESTS
 #endif
 
 // L1 record layouts shared across the dispatch kernels and the host program factory: the per-batch

@@ -1827,6 +1827,44 @@ def test_scaled_dot_product_attention_decode_non_causal_ignores_cur_pos_in_compa
         )
 
 
+def _gated_delta_rule_decode_inputs(device, B=2, T=3, H=2, HV=4, K=128, V=128):
+    q, k = (torch.nn.functional.normalize(torch.randn(B, T, H, K), dim=-1) for _ in range(2))
+    v = torch.randn(B, T, HV, V)
+    g = -torch.rand(B, T, HV) * 2
+    beta = torch.rand(B, T, HV)
+    initial_state = 0.05 * torch.randn(B, HV, K, V)
+    inputs = [_to_device(t, device, dtype=ttnn.float32) for t in (q, k, v, g, beta)]
+    return inputs, _to_device(initial_state, device, dtype=ttnn.float32)
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+@pytest.mark.parametrize(
+    "op_kwargs",
+    [
+        pytest.param({}, id="no_state"),
+        pytest.param({"output_final_state": True}, id="final_state"),
+        pytest.param({"output_per_token_state": True}, id="per_token_state"),
+    ],
+)
+def test_fused_recurrent_gated_delta_rule_in_comparison_mode(device, op_kwargs):
+    # GQA (HV = 2 H); the golden must take the op's (g, beta) order, not FLA's (beta, g).
+    inputs, initial_state = _gated_delta_rule_decode_inputs(device)
+    with comparison_mode():
+        ttnn.transformer.fused_recurrent_gated_delta_rule(
+            *inputs, initial_state=initial_state, memory_config=ttnn.DRAM_MEMORY_CONFIG, **op_kwargs
+        )
+
+
+@pytest.mark.requires_fast_runtime_mode_off
+def test_fused_recurrent_gated_delta_rule_scale_in_comparison_mode(device):
+    # o is linear in scale, so PCC cannot detect an ignored scale; compare values.
+    inputs, initial_state = _gated_delta_rule_decode_inputs(device)
+    operation = ttnn.transformer.fused_recurrent_gated_delta_rule
+    output, _ = operation(*inputs, initial_state=initial_state, scale=0.25)
+    golden, _ = _registered_golden_output(operation, *inputs, initial_state=initial_state, scale=0.25)
+    _assert_golden_dtype_and_close(golden, output, rtol=1e-2, atol=1e-3)
+
+
 def _signed_operands():
     return tuple(torch.rand(SINGLE_TILE, dtype=torch.bfloat16) * 4 - 2 for _ in range(2))
 

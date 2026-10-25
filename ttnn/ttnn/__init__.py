@@ -173,6 +173,7 @@ from ttnn._ttnn.fabric import (
     setup_routing_plane_connection,
     get_fabric_kernel_defines,
     fabric_connection_rt_args,
+    fabric_connection_rt_args_size,
     compute_fabric_connection_rt_args,
 )
 
@@ -180,6 +181,7 @@ from ttnn._ttnn.fabric import (
 from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
+    experimental_create_global_semaphore_at_address,
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
@@ -213,10 +215,10 @@ from ttnn._ttnn.d2d_stream_service import (
     D2DStreamService,
     D2DStreamServiceSender,
     D2DStreamServiceReceiver,
-)
-
-from ttnn._ttnn.counter_channel import (
-    InterProcessCounterChannel,
+    D2DStageGateConfig,
+    D2DStageGateDescriptor,
+    D2DStageGateMode,
+    D2D_STAGE_GATE_UNGATED_SLOT,
 )
 
 from ttnn._ttnn.layer_ack_service import (
@@ -306,6 +308,16 @@ from ttnn.types import (
     FaceGeometry,
     compute_program_descriptor_hash,
     TensorAccessorArgs,
+    attach_absent_mcast,
+    TransferMode,
+    Mcast,
+    McastCoreOrder,
+    McastSenderPlacement,
+    McastFixedSenderConfig,
+    McastExplicitFixedSenderConfig,
+    McastRotatingSenderConfig,
+    McastConfig,
+    McastDataReady,
 )
 
 from ttnn.device import (
@@ -322,6 +334,7 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_allocator_base_address,
+    experimental_get_l1_occupied_ranges,
     get_max_worker_l1_unreserved_size,
     get_dram_alignment,
     get_l1_alignment,
@@ -379,6 +392,11 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
+NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
+PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan
+PerNodeMeshDeviceMemorySpan = ttnn._ttnn.tensor.PerNodeMeshDeviceMemorySpan
+experimental_allocate_single_device_tensor = ttnn._ttnn.tensor.experimental_allocate_single_device_tensor
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
@@ -527,6 +545,7 @@ from ttnn.operations.reduction import (
 from ttnn.operations.ccl import (
     Topology,
     get_usable_topology,
+    get_num_links,
     DispatchAlgorithm,
     WorkerMode,
     MMSignalAggregatorMode,

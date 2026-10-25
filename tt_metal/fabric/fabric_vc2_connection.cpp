@@ -7,13 +7,14 @@
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include <optional>
 #include <vector>
 

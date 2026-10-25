@@ -11,8 +11,9 @@
 * the KDA carries must be zeroed at the head of a request. A carry summarises the whole prefix
   behind it, so leaving the previous request's carry in place is not a small error — it conditions
   every token of the new one on text it never saw; and
-* both chunk bounds must be 32-token aligned for KDA. Host bounds are checked before execution;
-  device-only trace metadata must satisfy the same contract on every replay.
+* the chunk start must be 32-token aligned for KDA; the end may be any real length. Host bounds
+  are checked before execution; device-only trace metadata must satisfy the same contract on
+  every replay.
 """
 
 from __future__ import annotations
@@ -258,20 +259,6 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             kda=kda,
         )
 
-    def warmup_ack_count(self) -> int:
-        """One record per KV-WRITING layer, not per layer.
-
-        `capture_trace()`'s warm pass fires the ack from `zero_pad_and_ack`, which a block only calls
-        when its attention wrote a KV slab. Kimi-K3 is hybrid: a 24-layer rank owns 6 MLA layers and
-        69 of the model's 93 layers are KDA and ack nothing. The shared implementation reports the
-        rank's LAYER count, so the runner's drain loop asked the FIFO for 24 records when 6 exist and
-        blocked on the seventh -- every traced 4-rank run hung after capture, before the request loop,
-        spinning at ~76% CPU with no log line after "layer-completion routing up".
-        """
-        if not self.config.use_trace or self._trace_d2h_service is None:
-            return 0
-        return len(self._my_mla_layer_ids())
-
     def prefill_chunk(self, *args, **kwargs):
         """Reset the KDA carries at the start of a request, then defer to the shared runtime.
 
@@ -287,7 +274,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         bound = inspect.signature(TtPrefillRuntime.prefill_chunk).bind_partial(self, *args, **kwargs)
         actual_start = bound.arguments.get("actual_start")
         # Validate before resetting carries or replaying a trace. Device-only
-        # metadata must satisfy the same aligned, nonempty-interval contract.
+        # metadata must satisfy the same aligned-start, nonempty-interval contract.
         validate_kda_bounds(actual_start, bound.arguments.get("actual_end"))
         if actual_start == 0:
             states = getattr(self.model, "kda_states", None)

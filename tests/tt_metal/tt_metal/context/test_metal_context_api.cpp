@@ -10,8 +10,12 @@
 #include <unistd.h>
 
 #include "context/context_descriptor.hpp"
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/program/program_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "tt_cluster.hpp"
 #include "impl/device/mock_device_util.hpp"
@@ -85,6 +89,31 @@ TEST_F(MetalContextTest, CreateMockInstances) {
     MetalEnv env_bh({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
     ContextId context_id_bh = MetalContext::create_instance(env_bh);
     EXPECT_EQ(context_id_bh, ContextId{2});
+
+    MetalContext::destroy_instance(false, context_id_wh);
+    MetalContext::destroy_instance(false, context_id_bh);
+}
+
+TEST_F(MetalContextTest, CircularBufferIndexLimitFollowsProgramEnv) {
+    MetalEnv env_wh({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1)});
+    ContextId context_id_wh = MetalContext::create_instance(env_wh);
+    MetalEnv env_bh({.mock_cluster_desc_path = experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1)});
+    ContextId context_id_bh = MetalContext::create_instance(env_bh);
+
+    // Within the config's storage on every architecture, but beyond the Wormhole limit.
+    constexpr uint8_t buffer_index = 40;
+    constexpr uint32_t page_size = 2048;
+    CircularBufferConfig config(page_size, {{buffer_index, tt::DataFormat::Float16_b}});
+    config.set_page_size(buffer_index, page_size);
+    EXPECT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
+
+    {
+        Program program_wh(std::make_shared<detail::ProgramImpl>(context_id_wh));
+        EXPECT_THROW(CreateCircularBuffer(program_wh, CoreCoord(0, 0), config), std::runtime_error);
+
+        Program program_bh(std::make_shared<detail::ProgramImpl>(context_id_bh));
+        EXPECT_NO_THROW(CreateCircularBuffer(program_bh, CoreCoord(0, 0), config));
+    }
 
     MetalContext::destroy_instance(false, context_id_wh);
     MetalContext::destroy_instance(false, context_id_bh);

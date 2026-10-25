@@ -205,7 +205,6 @@ void reduce_c() {
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
-    UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
 template <

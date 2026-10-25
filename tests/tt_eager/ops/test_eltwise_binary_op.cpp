@@ -23,6 +23,14 @@ using tt::tt_metal::Layout;
 using tt::tt_metal::distributed::MeshDevice;
 using ttnn::Tensor;
 
+namespace {
+
+// BF16 results can differ by one representable value depending on where the operation is rounded.
+constexpr float kBfloat16Rtol = 1e-2f;
+constexpr float kBfloat16Atol = 1e-3f;
+
+}  // namespace
+
 template <typename BinaryFunction>
 Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
     auto input_a_buffer = tt::tt_metal::host_buffer::get_as<bfloat16>(input_tensor_a);
@@ -42,8 +50,8 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
         input_tensor_a.layout());
 }
 
-template <auto HostFunction, typename DeviceFunction, typename... Args>
-bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, MeshDevice* device, Args... args) {
+template <auto HostFunction, typename DeviceFunction>
+bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, MeshDevice* device) {
     auto input_tensor_a = ttnn::random::random(shape, DataType::BFLOAT16);
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 
@@ -54,7 +62,7 @@ bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, M
                              .cpu()
                              .to_layout(Layout::ROW_MAJOR);
 
-    return ttnn::allclose<bfloat16>(host_output, device_output, args...);
+    return ttnn::allclose<bfloat16>(host_output, device_output, kBfloat16Rtol, kBfloat16Atol);
 }
 
 int main() {
@@ -82,7 +90,7 @@ int main() {
     {
         ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
         auto allclose = run_test<host_function<std::multiplies<float>>>(
-            shape, [](const auto& a, const auto& b) { return ttnn::multiply(a, b); }, device, 1e-2f, 1e-3f);
+            shape, [](const auto& a, const auto& b) { return ttnn::multiply(a, b); }, device);
         TT_FATAL(allclose, "Error");
     }
 
@@ -111,7 +119,7 @@ int main() {
         {
             ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             auto allclose = run_test<host_function<std::multiplies<float>>>(
-                shape, [](const auto& a, const auto& b) { return ttnn::multiply(a, b); }, device, 1e-2f, 1e-3f);
+                shape, [](const auto& a, const auto& b) { return ttnn::multiply(a, b); }, device);
             TT_FATAL(allclose, "Error");
         }
 
