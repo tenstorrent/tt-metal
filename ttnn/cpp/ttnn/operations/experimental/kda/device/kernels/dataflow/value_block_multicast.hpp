@@ -37,10 +37,13 @@ FORCE_INLINE uint32_t
 stage_contiguous_tiles(const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t base, uint32_t count) {
     buffer.reserve_back(count);
     const uint32_t entry_size = buffer.get_entry_size();
+    // A tile is one NoC packet, so each read takes the one-packet issue.
+    ASSERT(entry_size <= NOC_MAX_BURST_SIZE);
     uint32_t tile = 0;
-    // Each page carries its address from the iteration, so a read does not resolve its page id again.
+    // Each page carries its address from the iteration, which steps it from the previous page without a lookup.
     for (const auto& page : accessor.pages(base, base + count)) {
-        noc.async_read(page, buffer, entry_size, {}, {.offset_bytes = tile * entry_size});
+        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            page, buffer, entry_size, {}, {.offset_bytes = tile * entry_size});
         ++tile;
     }
     return buffer.get_write_ptr();
