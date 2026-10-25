@@ -612,7 +612,8 @@ void kernel_main() {
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
         subblock_h,
         subblock_w,
-        (K_num_blocks > 1)>();
+        (K_num_blocks > 1),
+        (M_blocks_per_core * N_blocks_per_core * (M_block_tiles / subblock_h) * (N_block_tiles / subblock_w))>();
     constexpr DataFormat mm_forced_key = ckernel::matmul_forced_form_key(mm_forced_form);
 #endif
 #else

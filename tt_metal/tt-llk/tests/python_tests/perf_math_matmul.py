@@ -312,8 +312,9 @@ def test_perf_math_matmul(
                     matmul_config.tile_dimensions.ct_dim,
                     matmul_config.tile_dimensions.rt_dim,
                     matmul_config.tile_dimensions.kt_dim,
+                    num_blocks,
                 )
-                if math_fidelity == MathFidelity.LoFi
+                if math_fidelity == MathFidelity.LoFi and matmul_config.dest_sync == DestSync.Full
                 else []
             ),
             *MATMUL_FORM_KEYS.for_block(
@@ -325,6 +326,7 @@ def test_perf_math_matmul(
                 dest_sync=matmul_config.dest_sync,
                 dest_acc=matmul_config.dest_acc,
                 throttle=throttle,
+                sections=num_blocks,
             ),
             *MATMUL_IN1_ALT.for_tiles(
                 formats,

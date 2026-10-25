@@ -195,18 +195,23 @@ struct matmul_forced_form_cell
     bool wide;           // width at least the height: the in1 side is reused
     char form;
     bool several = false; // only with several inner blocks (the sweeps run one)
+    int sections = 0;     // 0 any, 1 only a kernel of one DEST section (what the sweeps run), 2 only several sections
 };
 
 inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
     // Float32 to Bfp8_b at LoFi, one k step, 32-bit DEST: the 2x2 block reads 1.5 cycles behind main on the per row unpack; the four tile row and
     // column blocks lose with the hoisted form
-    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 0xFFFF, 2, false, 'R'},
+    // (one DEST section only: with 4 sections the hoisted form reads 0.7 cycles behind main on the math sweep)
+    {MathFidelity::LoFi, 0, 1, 1, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 0xFFFF, 2, false, 'R', false, 1},
     // Bfp8_b to Float32 at LoFi, two to four k steps, 16-bit DEST: the rows form reads up to 5 cycles under main from a 4 tile width (the
     // tile form leaves 0.14 to 0.19 over); the 3 tile width takes the hoisted tile form; the tall blocks keep the tile form
     {MathFidelity::LoFi, 0, 2, 4, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 4, 0xFFFF, 1, true, 'R'},
     {MathFidelity::LoFi, 0, 2, 4, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 3, 3, 1, true, 'h'},
     // Bfp8_b to Float32 at HiFi4, one k step, 16-bit DEST: the hoisted tile form on the wide blocks (the tall blocks lose with it)
-    {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 0xFFFF, 1, true, 'h'},
+    // (one DEST section: the blocks the sweeps run; several sections: only from 6 tiles wide, where ttnn gains 24 percent, the narrower ones read 0.3 cycles
+    // behind with 4 sections)
+    {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 0xFFFF, 1, true, 'h', false, 1},
+    {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 6, 0xFFFF, 1, true, 'h', false, 2},
     // Float16_b and Bfp8_b to Float32 at HiFi2 and HiFi4, one k step per inner block, 16-bit DEST: the 2x4 block (the row MOP leaves Float32 from a 16-bit
     // DEST on the tile form) reads 0.7 to 1.4 percent faster in ttnn with the hoisted rows form, 8 and 32 inner blocks
     {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
@@ -214,13 +219,14 @@ inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
     {MathFidelity::HiFi4, 0, 1, 1, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float32, 4, 4, 2, true, 'R', true},
 };
 
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, int sync, std::uint32_t h, std::uint32_t w, bool several_blocks = false>
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, int sync, std::uint32_t h, std::uint32_t w, bool several_blocks = false, std::uint32_t dest_sections = 1>
 constexpr char matmul_forced_form()
 {
     for (const matmul_forced_form_cell& c : matmul_forced_form_cells)
     {
         if (c.fidelity == math_fidelity && c.sync == sync && kt_per_section >= c.min_k && kt_per_section <= c.max_k && c.fp32_dest == fp32_dest &&
-            c.out == out_format && c.pack == pack_format && (c.in == in0 || c.in == in1) && w >= c.min_w && w <= c.max_w && h >= c.min_h && (!c.wide || w >= h) && (!c.several || several_blocks))
+            c.out == out_format && c.pack == pack_format && (c.in == in0 || c.in == in1) && w >= c.min_w && w <= c.max_w && h >= c.min_h && (!c.wide || w >= h) && (!c.several || several_blocks) &&
+            (c.sections == 0 || (c.sections == 1 ? dest_sections == 1 : dest_sections > 1)))
         {
             return c.form;
         }

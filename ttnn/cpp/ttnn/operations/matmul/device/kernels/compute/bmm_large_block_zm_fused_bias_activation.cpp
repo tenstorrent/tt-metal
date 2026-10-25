@@ -267,7 +267,8 @@ void kernel_main() {
         (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0),
         out_subblock_h,
         out_subblock_w,
-        (num_blocks_inner_dim > 1)>();
+        (num_blocks_inner_dim > 1),
+        (get_batch_from_reader ? 2 : batch * num_blocks_h_dim * num_blocks_w_dim * in0_num_subblocks * in1_num_subblocks)>();
     constexpr DataFormat bmm_forced_key = ckernel::matmul_forced_form_key(bmm_forced_form);
 #endif
     constexpr bool row_mop =

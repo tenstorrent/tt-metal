@@ -36,10 +36,10 @@ _MAIN_PART, _, _FORCED_PART = _HEADER.partition("matmul_forced_form_cells[] = {"
 _MAIN_CELLS = _cells(_MAIN_PART)
 # matmul_forced_form_cells: cells that take the form 'R' or 'h' whatever the table says
 _FORCED_CELLS = [
-    (fid, int(sync), int(mink), int(maxk, 0), acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(minw), int(maxw, 0), int(minh), wide == "true", form, several == "true")
-    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several in re.findall(
+    (fid, int(sync), int(mink), int(maxk, 0), acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(minw), int(maxw, 0), int(minh), wide == "true", form, several == "true", int(sections or 0))
+    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sections in re.findall(
         r"\{MathFidelity::(\w+), (\d), (\d+), (0x[0-9A-Fa-f]+|\d+), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), "
-        r"(\d+), (0x[0-9A-Fa-f]+|\d+), (\d+), (true|false), '(\w)'(?:, (true|false))?\},",
+        r"(\d+), (0x[0-9A-Fa-f]+|\d+), (\d+), (true|false), '(\w)'(?:, (true|false))?(?:, (\d))?\},",
         _FORCED_PART.split("};")[0],
     )
 ]
@@ -100,9 +100,9 @@ def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, 
     return _cell_hit(_MAIN_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
 
 
-def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, full_sync, rt, ct, several_blocks=False) -> str:
+def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, full_sync, rt, ct, several_blocks=False, sections=1) -> str:
     """matmul_forced_form of llk_matmul_forms.h: 'R', 'h' or '' (the table's form), for a block of rt x ct tiles."""
-    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several in _FORCED_CELLS:
+    for fid, sync, mink, maxk, acc, i, o, p, minw, maxw, minh, wide, form, several, sec in _FORCED_CELLS:
         if (
             fid == fidelity.name
             and sync == (1 if full_sync else 0)
@@ -115,6 +115,7 @@ def forced_form(fidelity, kb, fp32_dest, in_format, out_format, pack_format, ful
             and rt >= minh
             and (not wide or ct >= rt)
             and (not several or several_blocks)
+            and (sec == 0 or (sections == 1 if sec == 1 else sections > 1))
         ):
             return form
     return ""
