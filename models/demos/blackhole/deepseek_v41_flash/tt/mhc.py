@@ -162,7 +162,11 @@ class DSV41MHC:
                 xp = ttnn.pad(x, [(0, Tp - T), (0, 0), (0, 0), (0, 0)], 0.0)
                 outs = self.mixes(xp)
                 return tuple(ttnn.slice(o, [0, 0, 0, 0], [T, o.shape[1], o.shape[2], o.shape[3]]) for o in outs)
-            plan = proj_plan(T, self.dim, self.device)
+            # T=8 rows (the k=5 verify block of B=4: 6 rows padded to 8, or B=8 at k=3): two groups of 4 tokens = the T=4 program per group. That is the program the T=1 / T=4 decode rows run
+            # (they pad to 4), so the fp32 partial sums (and the Sinkhorn comb that amplifies their last bits) are bit-identical to plain decode; the 8-token group packs 4 partials per page
+            # instead of 8 and differs in the last bits (DSV41_MHC_MIXES_T4=0 restores it)
+            tg = 4 if T == 8 and os.environ.get("DSV41_MHC_MIXES_T4", "1") == "1" else 8
+            plan = proj_plan(T, self.dim, self.device, tg)
             part = mhc_proj2(x, self._wt(plan), self.mix_col, plan)
             return mhc_post2(part, self.consts9, plan, self._w.iters, self._w.eps, self.sq_eps, self.post_fidelity)
         kc = self.kc if T <= 8 else self.kc // 2  # more projection cores (fewer gathered rows per core) for big T

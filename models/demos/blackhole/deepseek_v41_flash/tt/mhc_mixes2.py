@@ -28,10 +28,12 @@ def _grid_cores(mesh, n):
 class ProjPlan:
     """Work split of the projection for T token rows per device."""
 
-    def __init__(self, T, D=5120, max_cores=100):
+    def __init__(self, T, D=5120, max_cores=100, tg=8):
         assert T % 4 == 0 and T <= 32
         self.T, self.D = T, D
-        self.TG = min(T, 8)  # tokens per core group (4 rows per token must fit one 32-row tile)
+        # tokens per core group (4 rows per token must fit one 32-row tile). tg=4 on a T=8 block (verify rows padded to 8) makes every group exactly the T=4 program: the packed partials hold
+        # PPT = 8 partials per page like T=4, so the fp32 sums (and the Sinkhorn comb that amplifies their last bits) are bit-identical to the T=1 / T=4 decode rows
+        self.TG = min(T, tg)
         self.G = T // self.TG
         self.NJ = D // 32
         self.S = next(
@@ -49,15 +51,15 @@ class ProjPlan:
 _PLANS = {}
 
 
-def proj_plan(T, D=5120, mesh=None):
-    key = (T, D)
+def proj_plan(T, D=5120, mesh=None, tg=8):
+    key = (T, D, tg)
     p = _PLANS.get(key)
     if p is None:
         mc = 100
         if mesh is not None:
             g = mesh.compute_with_storage_grid_size()
             mc = int(g.x) * int(g.y)
-        p = _PLANS[key] = ProjPlan(T, D, mc)
+        p = _PLANS[key] = ProjPlan(T, D, mc, tg)
     return p
 
 
