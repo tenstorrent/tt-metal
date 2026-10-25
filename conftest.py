@@ -653,6 +653,11 @@ def mesh_device(request, silicon_arch_name, device_params):
 
     updated_device_params = get_updated_device_params(device_params)
     updated_device_params.pop("require_exact_physical_num_devices", False)
+    # fp8wire experiment: TT_WORKER_L1_SIZE opens the mesh with a smaller worker L1, which moves the L1 allocator
+    # base up and so enlarges the kernel-config ring by the same number of bytes (ring = l1_unreserved_base -
+    # KERNEL_CONFIG). Unset: unchanged.
+    if os.environ.get("TT_WORKER_L1_SIZE"):
+        updated_device_params["worker_l1_size"] = int(os.environ["TT_WORKER_L1_SIZE"])
     fabric_config = updated_device_params.pop("fabric_config", None)
     fabric_tensix_config = updated_device_params.pop("fabric_tensix_config", None)
     reliability_mode = updated_device_params.pop("reliability_mode", None)
