@@ -895,6 +895,7 @@ class TtRoutedExpert(LightweightModule):
         if (dispatched_buffer.layout, dispatched_buffer.dtype) not in (
             (ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
             (ttnn.TILE_LAYOUT, ttnn.bfloat8_b),
+            (ttnn.ROW_MAJOR_LAYOUT, ttnn.fp8_e4m3),  # the fp8 wire's packed rows (GLM_FP8_RE_X)
         ):
             raise ValueError(
                 f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 or TILE bfloat8_b dispatch buffer, "

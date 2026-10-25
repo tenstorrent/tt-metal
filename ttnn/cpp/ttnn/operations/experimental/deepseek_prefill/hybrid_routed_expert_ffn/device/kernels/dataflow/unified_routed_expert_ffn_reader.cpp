@@ -203,7 +203,12 @@ void kernel_main() {
     // (X_RM_ELEM_BYTES each). Partial-stick reads index page_id=token-row,
     // offset_bytes=column window. Only used in the row-major path; the tile-page
     // x_acc above serves the TILE path.
+#ifdef URE_X_FP8
+    // fp8wire: x is the fp8 dispatch wire's packed rows [emb e4m3 | emb/128 fp32 pow2 scales]; a page is one row.
+    constexpr uint32_t x_rm_stick_bytes = URE_X_FP8_ROW_BYTES;
+#else
     constexpr uint32_t x_rm_stick_bytes = K_gate_tiles * TILE_HEIGHT * X_RM_ELEM_BYTES;
+#endif
     const auto x_acc_rm = TensorAccessor(x_args, x_addr, x_rm_stick_bytes);
 
     // gate/up/down accessor LAYOUT descriptors (compile-time). All experts share
@@ -290,6 +295,28 @@ void kernel_main() {
     CircularBuffer cb_start_scratch_obj(cb_start_scratch);
     CircularBuffer cb_x_rm_obj(cb_x_rm);
     CircularBuffer cb_activated_obj(cb_activated);
+#ifdef URE_X_FP8
+    // The owner multicasts the dequantized tiles its compute packed into URE_CB_X_DQ (not cb_x_tilized, which the
+    // compute uses for the unscaled e4m3 tiles). Scale tiles: one bfp8 tile per 1x128 block of a strip, row r all row
+    // r's scale. A pow2 scale is mantissa 1.0 (0x40) under its row's shared exponent, the fp32 exponent field, so the
+    // mantissas are set once here and only the 64 exponent bytes change per block.
+    CircularBuffer cb_x_dq_obj(URE_CB_X_DQ);
+    CircularBuffer cb_x_scale_obj(URE_CB_X_SCALE);
+    constexpr uint32_t X_SCALES_PER_STRIP = in0_block_w_gu / 4;
+    constexpr uint32_t X_SCALE_TILES_MAX = per_core_M_max * X_SCALES_PER_STRIP;
+    constexpr uint32_t X_SCALE_TILE_BYTES = 64 + 1024;  // bfp8: 64 shared exponents, then 1024 mantissas
+    constexpr uint32_t X_SCALE_SLOT = 64;               // one 64 B DRAM line of scales per stick
+    const uint32_t x_scale_raw_l1 = get_write_ptr(URE_CB_X_SCALE_RAW);
+    {
+        volatile tt_l1_ptr uint32_t* words =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(URE_CB_X_SCALE));
+        for (uint32_t t = 0; t < X_SCALE_TILES_MAX; ++t, words += X_SCALE_TILE_BYTES / 4) {
+            for (uint32_t w = 64 / 4; w < X_SCALE_TILE_BYTES / 4; ++w) {
+                words[w] = 0x40404040u;
+            }
+        }
+    }
+#endif
 
     // x CB for the in0 path: the reader is its only producer in both layouts.
     // TILE: a fixed per-row sender reads cb_in0_x tiles from DRAM and multicasts them.
@@ -633,11 +660,30 @@ void kernel_main() {
             // K-block b-A-2, a whole K-block earlier. A blocking read inside the K-block delayed
             // this core's acks and, on the weight-sender row, its gate read, which cost more
             // than the tilize it saved at small per_core_M.
+#ifdef URE_X_FP8
+            constexpr uint32_t X_ELEM_BYTES = 1;
+            // This K-block's scales start at byte EMB + b * X_SCALES_PER_STRIP * 4 of a row: read the 64 B line they
+            // sit in. A block's X_SCALES_PER_STRIP * 4 bytes never straddle a line (16 B at in0_block_w_gu 16).
+            static_assert(64 % (X_SCALES_PER_STRIP * 4) == 0, "a K-block's scales must not straddle a 64 B line");
+            // Two raw-scale slots (issue / finish parity), in case a core ever has two owned blocks in flight.
+            uint32_t x_scale_skip_words[2] = {0, 0};
+            uint32_t x_scale_issued = 0, x_scale_finished = 0;
+            constexpr uint32_t X_SCALE_RAW_SLOT_BYTES = per_core_M_max * TILE_HEIGHT * X_SCALE_SLOT;
+#else
+            constexpr uint32_t X_ELEM_BYTES = X_RM_ELEM_BYTES;
+#endif
             auto issue_x_rm_block = [&](uint32_t b) {
-                constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+                constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_ELEM_BYTES;
                 const uint32_t col_off_bytes = b * rm_kblock_bytes;
                 cb_x_rm_obj.reserve_back(g_in0_block_tiles_max);
                 uint32_t l1_x = cb_x_rm_obj.get_write_ptr();
+#ifdef URE_X_FP8
+                const uint32_t scale_first = URE_X_FP8_EMB + b * X_SCALES_PER_STRIP * 4;
+                const uint32_t scale_window = scale_first & ~63u;
+                const uint32_t raw_slot = x_scale_issued++ & 1;
+                x_scale_skip_words[raw_slot] = (scale_first - scale_window) / 4;
+                uint32_t l1_s = x_scale_raw_l1 + raw_slot * X_SCALE_RAW_SLOT_BYTES;
+#endif
                 for (uint32_t m = 0; m < valid_tile_rows; ++m) {
                     const uint32_t row_base = (this_core_first_row + m) * TILE_HEIGHT;
                     const uint32_t real_r =
@@ -650,12 +696,52 @@ void kernel_main() {
                             {.page_id = x_start_stick + row_base + r, .offset_bytes = col_off_bytes},
                             {});
                         l1_x += rm_kblock_bytes;
+#ifdef URE_X_FP8
+                        noc_read.async_read(
+                            x_acc_rm,
+                            CoreLocalMem<uint32_t>(l1_s + r * X_SCALE_SLOT),
+                            X_SCALE_SLOT,
+                            {.page_id = x_start_stick + row_base + r, .offset_bytes = scale_window},
+                            {});
+#endif
                     }
                     l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
+#ifdef URE_X_FP8
+                    l1_s += TILE_HEIGHT * X_SCALE_SLOT;
+#endif
                 }
             };
             auto finish_x_rm_block = [&]() {
                 noc_read.async_read_barrier();
+#ifdef URE_X_FP8
+                // One scale tile per (tile-row m, 1x128 block): row r's exponent byte goes into both face rows
+                // holding row r (faces 0/1 for r < 16, faces 2/3 below).
+                cb_x_scale_obj.reserve_back(X_SCALE_TILES_MAX);
+                {
+                    const uint32_t raw_slot = x_scale_finished++ & 1;
+                    const uint32_t raw_base = x_scale_raw_l1 + raw_slot * X_SCALE_RAW_SLOT_BYTES;
+                    invalidate_l1_cache();
+                    volatile tt_l1_ptr uint8_t* tiles =
+                        reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_x_scale_obj.get_write_ptr());
+                    for (uint32_t m = 0; m < valid_tile_rows; ++m) {
+                        for (uint32_t r = 0; r < TILE_HEIGHT; ++r) {
+                            volatile tt_l1_ptr uint32_t* row_scales =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                                    raw_base + (m * TILE_HEIGHT + r) * X_SCALE_SLOT) +
+                                x_scale_skip_words[raw_slot];
+                            const uint32_t exp0 = r < 16 ? r : 32 + (r - 16);
+                            for (uint32_t blk = 0; blk < X_SCALES_PER_STRIP; ++blk) {
+                                const uint8_t e = static_cast<uint8_t>(row_scales[blk] >> 23);
+                                volatile tt_l1_ptr uint8_t* tile =
+                                    tiles + (m * X_SCALES_PER_STRIP + blk) * X_SCALE_TILE_BYTES;
+                                tile[exp0] = e;
+                                tile[exp0 + 16] = e;
+                            }
+                        }
+                    }
+                }
+                cb_x_scale_obj.push_back(X_SCALE_TILES_MAX);
+#endif
                 cb_x_rm_obj.push_back(g_in0_block_tiles_max);
             };
             const uint32_t x_period = adaptive_chunk::x_owner_period(GRID_X_NOC, my_mt);
@@ -732,10 +818,15 @@ void kernel_main() {
                 // runs first then in1, ~60µs sequentially — same as before.
                 if (is_x_owner) {
                     // This core's compute tilized block kb into cb_x_tilized one block ago.
-                    cb_x_tilized_obj.wait_front(g_in0_block_tiles_max);
+#ifdef URE_X_FP8
+                    auto& x_src_obj = cb_x_dq_obj;
+#else
+                    auto& x_src_obj = cb_x_tilized_obj;
+#endif
+                    x_src_obj.wait_front(g_in0_block_tiles_max);
                     in0_ready_sem.wait(GRID_X_NOC - 1);
                     in0_ready_sem.set(0);
-                    const uint32_t src_l1 = cb_x_tilized_obj.get_read_ptr();
+                    const uint32_t src_l1 = x_src_obj.get_read_ptr();
                     const uint32_t dst_l1 = x_stage_obj.get_write_ptr();
                     const uint32_t mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
                     // Loopback (INCL_SRC) delivers the owner's own cb_in0_x copy, so the
@@ -762,7 +853,7 @@ void kernel_main() {
                     // Only the ack-wait proves the loopback copy LANDED (see phase 4's step 5);
                     // it also frees the staging slot for this core's next owned block.
                     noc.async_write_barrier();
-                    cb_x_tilized_obj.pop_front(g_in0_block_tiles_max);
+                    x_src_obj.pop_front(g_in0_block_tiles_max);
                     x_stage_obj.push_back(g_in0_block_tiles_max);
                 }
                 if (!tilize_once && is_in0_sender) {

@@ -1296,6 +1296,13 @@ constexpr uint32_t CB_X_RM = CB_BASE + 1;
 constexpr uint32_t CB_GATE_BIAS = CB_BASE + 17;
 constexpr uint32_t CB_UP_BIAS = CB_BASE + 18;
 constexpr uint32_t CB_DOWN_BIAS = CB_BASE + 19;
+// fp8wire: an FP8_E4M3 x (the fp8 dispatch wire's packed rows [emb e4m3 | emb/128 fp32 pow2 scales]). The K-block's
+// owner tilizes the e4m3 sticks into CB_X_TILIZED, multiplies each 1x128 block by its scale tile (CB_X_SCALE, built
+// by the reader from the raw scales it stages in CB_X_SCALE_RAW) into CB_X_DQ, and multicasts CB_X_DQ. They take the
+// unused +14 slot and the bias slots, which an fp8 x never has (validation rejects fuse_bias with it).
+constexpr uint32_t CB_X_DQ = CB_BASE + 14;
+constexpr uint32_t CB_X_SCALE = CB_BASE + 17;
+constexpr uint32_t CB_X_SCALE_RAW = CB_BASE + 18;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -1332,6 +1339,8 @@ void append_to_descriptor(
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
     const uint32_t K_gate_tiles = x_embedding(t.x) / TILE;     // = N_gate K = emb / TILE (fp8 x: packed rows)
+    // fp8wire: the unified half dequantizes an fp8 x in its tilize-once owner path (see CB_X_DQ).
+    const bool x_fp8 = x_is_fp8_rows(t.x);
     const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
     const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
     const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
@@ -1562,8 +1571,16 @@ void append_to_descriptor(
         uint64_t total = 0;
         total += static_cast<uint64_t>(M * w_gu * 2) * in0_x_tile_size;  // cb_in0_x
         if (op.x_is_row_major) {
-            total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
-            total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tilized (bf8_b)
+            if (x_fp8) {
+                total += static_cast<uint64_t>(M * w_gu) * tt::tile_size(tt::DataFormat::Fp8_e4m3);  // cb_x_rm (e4m3)
+                total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;  // cb_x_tilized (unscaled bf8_b)
+                total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;  // cb_x_dq (bf8_b)
+                total += static_cast<uint64_t>(M * (w_gu / 4)) * in0_x_tile_size;  // cb_x_scale
+                total += static_cast<uint64_t>(2 * M * TILE * 64);                 // cb_x_scale_raw
+            } else {
+                total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
+                total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tilized (bf8_b)
+            }
         }
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;                // cb_in1_gate
         total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;                  // cb_in1_up
@@ -1862,7 +1879,22 @@ void append_to_descriptor(
     // block per owner-rotation period, so one block is in flight per core. cb_x_rm is no
     // longer a multicast source; cb_x_tilized is, and its reader frees it only after the
     // multicast has been acked.
-    if (op.x_is_row_major) {
+    if (op.x_is_row_major && x_fp8) {
+        TT_FATAL(!op.fuse_bias, "unified_routed_expert_ffn: an fp8 x's circular buffers take the bias slots");
+        TT_FATAL(in0_block_w_gu % 4 == 0, "unified_routed_expert_ffn: an fp8 x needs K-blocks of whole 128 columns");
+        TT_FATAL(
+            fused::geo::hybrid_fp32_dest(),
+            "unified_routed_expert_ffn: an fp8 x is unpacked through a 32-bit DEST; set HYB_FP32_DEST=1");
+        make_cb(
+            CB_X_RM,
+            tt::DataFormat::Fp8_e4m3,
+            /*tiles=*/gu_in0_block_num_tiles,
+            tt::tile_size(tt::DataFormat::Fp8_e4m3));
+        make_cb(CB_X_TILIZED, in0_x_df, /*tiles=*/in0_block_w_gu, in0_x_tile_size);
+        make_cb(CB_X_DQ, in0_x_df, /*tiles=*/gu_in0_block_num_tiles, in0_x_tile_size);
+        make_cb(CB_X_SCALE, in0_x_df, /*tiles=*/per_core_M * (in0_block_w_gu / 4), in0_x_tile_size);
+        make_cb(CB_X_SCALE_RAW, tt::DataFormat::UInt32, /*tiles=*/1, 2 * per_core_M * TILE * 64);
+    } else if (op.x_is_row_major) {
         make_cb(
             CB_X_RM,
             tt::DataFormat::Float16_b,
@@ -1943,7 +1975,7 @@ void append_to_descriptor(
     check_ring("cb_in0_x", gu_in0_block_num_tiles * 2u, in0_block_w_gu);
     if (op.x_is_row_major) {
         check_ring("cb_x_rm", gu_in0_block_num_tiles, in0_block_w_gu);
-        check_ring("cb_x_tilized", gu_in0_block_num_tiles, in0_block_w_gu);
+        check_ring("cb_x_tilized", x_fp8 ? in0_block_w_gu : gu_in0_block_num_tiles, in0_block_w_gu);
     }
     // gate/up intermediates and their accumulators move one gate/up subblock at a time.
     check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
@@ -2145,6 +2177,17 @@ void append_to_descriptor(
         tt::tt_metal::TensorAccessorArgs(t.up_biases[0].buffer()).append_to(reader_ct_args);
         tt::tt_metal::TensorAccessorArgs(t.down_biases[0].buffer()).append_to(reader_ct_args);
         reader_defines["FUSE_BIAS"] = "1";
+    }
+    // fp8wire: an fp8 x's geometry for the reader and compute (see CB_X_DQ).
+    std::map<std::string, std::string> x_fp8_defines;
+    if (op.x_is_row_major && x_fp8) {
+        x_fp8_defines["URE_X_FP8"] = "1";
+        x_fp8_defines["URE_X_FP8_EMB"] = std::to_string(K_gate_tiles * TILE);
+        x_fp8_defines["URE_X_FP8_ROW_BYTES"] = std::to_string(t.x.buffer()->aligned_page_size());
+        x_fp8_defines["URE_CB_X_DQ"] = std::to_string(CB_X_DQ);
+        x_fp8_defines["URE_CB_X_SCALE"] = std::to_string(CB_X_SCALE);
+        x_fp8_defines["URE_CB_X_SCALE_RAW"] = std::to_string(CB_X_SCALE_RAW);
+        reader_defines.insert(x_fp8_defines.begin(), x_fp8_defines.end());
     }
     tt::tt_metal::KernelDescriptor reader_descriptor{
         .kernel_source =
@@ -2352,6 +2395,7 @@ void append_to_descriptor(
         compute_defines["FUSE_BIAS"] = "1";
     }
 
+    compute_defines.insert(x_fp8_defines.begin(), x_fp8_defines.end());
     tt::tt_metal::KernelDescriptor compute_descriptor{
         .kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/hybrid_routed_expert_ffn/device/kernels/compute/"
@@ -2368,6 +2412,12 @@ void append_to_descriptor(
                 .math_approx_mode = false,
             },
     };
+    if (op.x_is_row_major && x_fp8) {
+        // Blackhole unpacks an FP8_E4M3 buffer only into a 32-bit DEST.
+        auto& config = std::get<tt::tt_metal::ComputeConfigDescriptor>(compute_descriptor.config);
+        config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+        config.unpack_to_dest_mode[CB_X_RM] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
 
     // -------------------------- per-core runtime args ---------------------
     // Cross-core synchronization is now done entirely via L1-mcast: weights
@@ -2661,8 +2711,7 @@ void validate(const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertF
     //     fusing the standalone to_layout. Off preserves the pre-fusion path for
     //     standalone / Wormhole callers.
     if (op.x_is_row_major) {
-        // PROTOTYPE: an fp8 x is dequantized by the fused half only. This half still reads its sticks as bf16
-        // and must not run, so the caller has to keep every expert under the fused threshold.
+        // An fp8 x (the fp8 dispatch wire's packed rows) is dequantized by each half as it tilizes it.
         TT_FATAL(
             t.x.dtype() == tt::tt_metal::DataType::BFLOAT16 || x_is_fp8_rows(t.x),
             "x must be BFLOAT16 (or FP8_E4M3 rows) when x_is_row_major, got {}",
