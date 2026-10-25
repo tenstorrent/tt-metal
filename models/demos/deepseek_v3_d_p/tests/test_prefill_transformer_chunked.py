@@ -179,7 +179,8 @@ def _assert_splits_overrun():
         )
 
 
-_assert_splits_overrun()
+if CHUNK == PREFILL_CHUNK_TOKENS:  # the padded schedules are 5120-chunk schedules (see GLM_TEST_CHUNK)
+    _assert_splits_overrun()
 
 
 def _pad_overrun_summary(seq_len_cache, overruns):
