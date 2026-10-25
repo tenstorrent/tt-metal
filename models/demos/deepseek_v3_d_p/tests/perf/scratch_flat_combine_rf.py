@@ -508,12 +508,13 @@ def test_flat_combine_depth_soak(mesh_device, device_params, model, depth, calls
             routing,
             11,
             calls,
-            id=f"{m}-{chunk}-{routing}-pool11-soak",
+            id=f"{m}-{chunk}-{routing}-pool11-soak{calls // 1000}k",
         )  # fmt: skip
         for m, chunk, routing, calls in (
             ("glm53", 8192, "uniform", 20000),
             ("glm53", 8192, "zipf_spread_1.2", 20000),
             ("m3", 16384, "uniform", 20000),
+            ("glm53", 8192, "zipf_spread_1.2", 1_000_000),
         )
     ],
     indirect=["mesh_device", "device_params"],

@@ -1937,3 +1937,38 @@ D 8 (planner), pipelined, fused / flat (flat 362):
 TPROF (bk 2, filler, per link): every chip's local rows (the flat's own output) are done by 356-411 us - the flat is not
 slowed inside the fused call - while the senders end at 400-565 (the second mesh row last): the tail is the senders,
 whose bookkeeping (hand-off grants + output writes with the accumulators on their cells) takes 86-194 us of each.
+
+## 2026-10-25: shared landing pool with slot grants (landing='shared', test_flat_combine_landing, bh-lb-09 2x4)
+Why: on the Galaxy each accumulator's pool (~50 slots) is split into 31 rings, so a source owns ~1-2 slots and a
+burst from one source stalls while other sources' rings sit empty. Shared: the accumulator keeps a free list of its
+pool and grants specific slot ids to sources; the ids travel on the existing credit snapshot (count + a ring of G 8
+ids per source, each tagged 0x80 | seq & 0x7F so a stale or zeroed entry never matches). The home port validates the
+count up to the last tag-matching id before forwarding; a source writes its u-th row into grant u's slot only when the
+tag matches. The accumulator scans its owned slots, frees taken ones and regrants (fewest outstanding first, then most
+rows pending; at most G outstanding per source). Every row in flight has a reserved slot. Protocol model with negative
+tests: models/demos/moe_block/tests/test_combine_landing_model.py. Rings stay the default, unchanged.
+Restrictions: accumulators apart, non-deterministic, pool < 255 slots; piggyback off.
+
+Ports apart, pipelined, rings vs shared at the same pool, combine alone / fused (us), bk 4 + credit batching (Galaxy's
+source count); pool 11 = the Galaxy's slots per source (50 x 7 / 31), auto = the planner's 2x4 pool:
+| model | chunk | routing | pool | combine rings / shared | fused rings / shared | hidden rings / shared |
+|---|---|---|---|---|---|---|
+| GLM-5.3 | 8192 | uniform | 11 | 1130 / 1084 (0.96) | 1245 / 1233 | 46% / 45% |
+| GLM-5.3 | 8192 | zipf_spread 1.2 | 11 | 1098 / 1033 (0.94) | 1216 / 1147 | 64% / 68% |
+| GLM-5.3 | 16384 | uniform | 11 | 2368 / 2170 (0.92) | 2447 / 2400 | 40% / 37% |
+| M3 | 8192 | uniform | 11 | 597 / 561 (0.94) | 734 / 716 | 55% / 55% |
+| M3 | 8192 | zipf_spread 1.2 | 11 | 590 / 574 (0.97) | 786 / 752 | 87% / 92% |
+| M3 | 16384 | uniform | 11 | 1197 / 1109 (0.93) | 1314 / 1269 | 47% / 47% |
+| GLM-5.3 | 8192 | uniform | auto | 788 / 843 (1.07) | 906 / 932 | 65% / 64% |
+| GLM-5.3 | 16384 | uniform | auto | 1609 / 1789 (1.11) | 1831 / 2003 | 51% / 46% |
+| M3 | 8192 | uniform | auto | 423 / 474 (1.12) | 570 / 558 | 75% / 80% |
+| M3 | 16384 | uniform | auto | 840 / 912 (1.09) | 1014 / 1082 | 61% / 56% |
+- At the Galaxy's slots per source shared wins 3-8% on the combine, 1-6% fused. With deep pools it loses 7-12% on the
+  combine: grants cost a snapshot per batch of 8 and the accumulator's scan, while rings already never starve.
+- 5120 no-regression (bk 1, auto pool): rings GLM-5.3 456 / fused 563, M3 254 / 418 (as before); shared 495 / 559,
+  264 / 406.
+- TPROF mean per sender, GLM-5.3 8192 uniform pool 11, fused (alone), rings -> shared: idle 396 -> 274 (273 -> 182),
+  bookkeeping 388 -> 335, waiting on grants / credits 135 -> 313 (119 -> 283), sends equal. The senders stop idling on
+  one full ring and wait on the pool instead.
+- Soak, bk 4, pool 11, shared: GLM-5.3 8192 uniform and zipf, M3 16384 uniform, 20000 fused calls each, rel err
+  <= 2.4e-3, no hang; GLM-5.3 8192 zipf 1,000,000 fused calls clean (2.36e-3, 20 min) (test_flat_combine_landing_soak).

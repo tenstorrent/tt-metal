@@ -322,6 +322,11 @@ overlapped**, so for K3 on a small stage the overlap work is worth ~13% and can 
     sender on one accumulator's ring.
   - L1 per accumulator is N × L × D × 7.2 KB: D 8 on 2 × 4, D 4 on 4 × 4.
   - Untested: the torus (router deadlock freedom).
+  - **Shared landing pool (2026-10-25, `landing='shared'`, worklog "shared landing pool with slot
+    grants")**: the accumulator grants specific slot ids from one free list (ids ride the credit
+    snapshot, tag-validated). It pays only when slots per source are scarce: at the Galaxy's ~11
+    slots per source it beats rings by 3-8% on the combine (1-6% fused); with deep pools it loses
+    7-12%. Rings stay the default; use shared where the pool / sources ratio is Galaxy-like.
 - **When level 1 becomes link bound (2026-10-18, CPU model calibrated on 2 × 4;
   `scratch_combine_linkbound_model.py`, worklog "When the level-1 combine becomes link bound")**:
   the flat expert stays weight-stream bound up to 16K global tokens, the combine grows linearly.

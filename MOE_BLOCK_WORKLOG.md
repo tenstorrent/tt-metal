@@ -1693,3 +1693,8 @@ Structural (not fixed here):
 - Soaks, ops-head models (10k replays, every 25th checked): M3 640 PCC .9889, DeepSeek V4.1-Flash 640 .9909; with the
   earlier ones (K3 640 / 1024 / 1280, K3 640 zipf packed, GLM-5.3-Flash 640, GLM-5.3 1024, ring K3 640) every soak
   tier case is clean.
+
+## 2026-10-25: combine shared landing pool (details in FLAT_COMBINE_OVERLAP_WORKLOG.md)
+- `landing='shared'` (slot grants from one free list per accumulator) vs the default rings, ports apart, bk 4: at the
+  Galaxy's ~11 slots per source the combine is 3-8% faster (fused 1-6%); with the 2x4's deep pools 7-12% slower.
+  Rings stay the default. Soaked 20000 calls x 3 cases + 1M calls (GLM-5.3 8K zipf) clean.
