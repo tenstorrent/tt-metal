@@ -12,9 +12,11 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <utility>
+#include <variant>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
@@ -427,6 +429,15 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     if (bias.has_value()) {
         reader_writer_defines["FUSE_BIAS"] = "1";
     }
+    // mm track (TT_MM_REUSE_DUAL_NOC=1): the in1 reader issues every other in1 tile read of a
+    // DRAM-interleaved in1 on the second NoC, with both DM kernels in DM_DYNAMIC_NOC mode. Batched per-head weights
+    // (GLM seqq wkv_b1 / wkv_b2: 64 heads, one block per core) are bound by one reader RISC's DRAM read rate.
+    const char* dual_noc_env = std::getenv("TT_MM_REUSE_DUAL_NOC");
+    const bool in1_dual_noc = dual_noc_env != nullptr && dual_noc_env[0] == '1' && !in1_is_sharded &&
+                              b.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
+    if (in1_dual_noc) {
+        reader_writer_defines["IN1_DUAL_NOC"] = "1";
+    }
 
     std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
@@ -574,6 +585,26 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
             },
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
+    // mm track: when in1 streams from DRAM, the reader/writer that reads it runs on the DRAM-read NoC (NOC_0 on WH/BH:
+    // east-then-south, so DRAM return data fans out along rows) and the in0 reader takes NOC_1. The stock placement
+    // has the in1 DRAM reads ride the writer NoC (NOC_1: return data funnels up the DRAM columns).
+    // TT_MM_REUSE_IN1_NOC0=0 restores the stock placement.
+    const char* in1_noc0_env = std::getenv("TT_MM_REUSE_IN1_NOC0");
+    const bool in1_noc0 = !(in1_noc0_env != nullptr && in1_noc0_env[0] == '0') && !in1_is_sharded &&
+                          b.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM;
+    if (in1_noc0 || in1_dual_noc) {
+        auto& reader_dm = std::get<tt::tt_metal::experimental::DataMovementHardwareConfig>(reader.hw_config);
+        auto& reader_writer_dm =
+            std::get<tt::tt_metal::experimental::DataMovementHardwareConfig>(reader_writer.hw_config);
+        if (reader_dm.config_1xx.has_value() && reader_writer_dm.config_1xx.has_value()) {
+            std::swap(reader_dm.config_1xx->noc, reader_writer_dm.config_1xx->noc);
+            if (in1_dual_noc) {
+                // Dynamic mode must be set identically on both DM kernels of a node.
+                reader_dm.config_1xx->noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+                reader_writer_dm.config_1xx->noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+            }
+        }
+    }
     if (bias.has_value()) {
         reader_writer.dfb_bindings.push_back(DFBBinding{
             .dfb_spec_name = BIAS_DFB,

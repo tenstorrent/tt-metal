@@ -62,6 +62,10 @@ void kernel_main() {
     constexpr auto out_m_block_stride = get_arg(args::out_m_block_stride);
 
     const Noc noc;
+#ifdef IN1_DUAL_NOC
+    // mm track: every other in1 tile read goes out on the other NoC (both DM kernels run in DM_DYNAMIC_NOC mode).
+    const Noc noc_alt(1 - noc.get_noc_id());
+#endif
     // in1 block staging (this kernel fills it, compute drains it) and the output block
     // (compute fills it, this kernel drains it to the output tensor).
     DataflowBuffer dfb_in1(dfb::in1);
@@ -126,7 +130,12 @@ void kernel_main() {
             for (uint32_t h = 0; h < in1_block_h; ++h) {
                 uint32_t in1_tensor_tile_id = in1_tensor_row_start_tile_id;
                 for (uint32_t w = 0; w < in1_block_w; ++w) {
-                    noc.async_read(
+#ifdef IN1_DUAL_NOC
+                    const Noc& rd_noc = ((h * in1_block_w + w) & 1) ? noc_alt : noc;
+#else
+                    const Noc& rd_noc = noc;
+#endif
+                    rd_noc.async_read(
                         s1,
                         dfb_in1,
                         in1_single_tile_size_bytes,
@@ -140,6 +149,9 @@ void kernel_main() {
             in1_tensor_current_block_start_tile_id += in1_tensor_next_block_stride;
 
             noc.async_read_barrier();
+#ifdef IN1_DUAL_NOC
+            noc_alt.async_read_barrier();
+#endif
 
             dfb_in1.push_back(in1_block_num_tiles);
         }
