@@ -24,6 +24,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     TtSharedExpert,
     clamped_silu_glu,
+    get_program_configs,
     situ_glu,
 )
 
@@ -163,8 +164,21 @@ class TtFfn(TtSharedExpert):
             )
         logger.debug(f"After {self.activation} activation: {activated.shape}")
 
-        # Step 4: Down projection
-        output_full = ttnn.matmul(activated, self.down_proj, compute_kernel_config=self.compute_kernel_config)
+        # Step 4: Down projection. The auto config puts GLM-5.3's [640, 3072] x [3072, 6144] (per device, TP=4) on 96
+        # cores at ~40% of HiFi2 peak (227 us); the shared expert's 2D blocking (in0_block_w 16, 1x8 subblocks on the
+        # full grid) runs it in 112 us (one chip, PCC 0.99986 vs 0.99995). Scoped to that shape; others keep auto.
+        down_kwargs = {}
+        m_tiles = activated.padded_shape[-2] // ttnn.TILE_SIZE
+        down_k_tiles = self.down_proj.padded_shape[-2] // ttnn.TILE_SIZE
+        down_n_tiles = self.down_proj.padded_shape[-1] // ttnn.TILE_SIZE
+        if (down_k_tiles, down_n_tiles) == (96, 192) and m_tiles <= 20:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            _, _, down_kwargs["program_config"] = get_program_configs(
+                grid, m_tiles, down_n_tiles, down_k_tiles, down_k_tiles, down_n_tiles
+            )
+        output_full = ttnn.matmul(
+            activated, self.down_proj, compute_kernel_config=self.compute_kernel_config, **down_kwargs
+        )
         logger.debug(f"After down_proj matmul: {output_full.shape}")
 
         # Step 5: Reduce-scatter output across mesh columns when TP > 1
