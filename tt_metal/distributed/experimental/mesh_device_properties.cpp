@@ -7,7 +7,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "impl/context/metal_env_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {

@@ -7,10 +7,8 @@
 #include <array>
 #include <bit>
 #include <cstdint>
-#include <memory>
 #include <sstream>
 #include <string>
-#include <vector>
 
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/context/mesh_device_properties.hpp>
@@ -53,11 +51,16 @@ void ExpectMeshAnswersLike(
     }
 }
 
-// The legacy default context keeps its cluster open until atexit; releasing it lets later tests in this binary
-// open their own cluster. Ownership is released before mock mode is switched off so teardown sees the config the
-// context was created under.
+// The legacy default context keeps its cluster open until atexit and is reused as-is by later legacy opens, so it is
+// released on entry (an earlier test may have left one bound to a different cluster) and on exit (so later tests in
+// this binary can open their own cluster). On exit, ownership is released before mock mode is switched off so
+// teardown sees the config the context was created under.
 struct LegacyContextCleanup {
-    bool disable_mock_mode = false;
+    explicit LegacyContextCleanup(bool disable_mock = false) : disable_mock_mode(disable_mock) {
+        if (MetalContext::instance_exists()) {
+            tt::tt_metal::detail::ReleaseOwnership();
+        }
+    }
     ~LegacyContextCleanup() {
         if (MetalContext::instance_exists()) {
             tt::tt_metal::detail::ReleaseOwnership();
@@ -66,6 +69,8 @@ struct LegacyContextCleanup {
             experimental::disable_mock_mode();
         }
     }
+
+    bool disable_mock_mode;
 };
 
 }  // namespace
@@ -84,7 +89,7 @@ TEST(MeshDeviceProperties, CPU_ExplicitEnvMock) {
 }
 
 TEST(MeshDeviceProperties, CPU_LegacyMock) {
-    LegacyContextCleanup cleanup{.disable_mock_mode = true};
+    LegacyContextCleanup cleanup(/*disable_mock_mode=*/true);
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, /*num_chips=*/2);
 
     auto mesh = distributed::MeshDevice::create(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
