@@ -415,6 +415,34 @@ def test_flat_combine_depth(mesh_device, device_params, model, depth, mesh):
 
 
 @pytest.mark.parametrize(
+    "mesh_device, device_params, model, mode, per_dir",
+    [
+        pytest.param(
+            *_mesh_params("2x4", fabric_payload(MODELS[m]["H"])),
+            m,
+            mode,
+            pd,
+            id=f"{m}-{mode.replace(' ', '_')}-{'dirports' if pd else 'linkports'}",
+        )  # fmt: skip
+        for m in _DEPTH_MODELS
+        for mode in ("acc_on_ports", "ports apart")
+        for pd in (False, True)
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(3600)
+def test_flat_combine_layout(mesh_device, device_params, model, mode, per_dir):
+    """A combine layout forced (accumulators on the ports or apart, A <= 16; a port per link or per (direction, link)),
+    the planner's D - the Galaxy 4x4's layout (acc_on_ports, A 16) on the 2x4."""
+    c = closeout_cfg(
+        model, 5120, "2x4", routings=("uniform",), timing=True, pipe=True, ITERS=12, combine_mode=mode, a_max=16,
+        per_dir_ports=per_dir,
+    )  # fmt: skip
+    logger.info(f"layout {model} {mode} per_dir {per_dir}: {c}")
+    _run(mesh_device, c)
+
+
+@pytest.mark.parametrize(
     "mesh_device, device_params, model, depth, calls",
     [
         pytest.param(*_mesh_params("2x4", fabric_payload(MODELS[m]["H"])), m, d, 20000, id=f"{m}-D{d}-soak")

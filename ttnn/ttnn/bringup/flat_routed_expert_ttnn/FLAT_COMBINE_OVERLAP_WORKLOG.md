@@ -1927,3 +1927,13 @@ worker channel - more than real forwarding, which enters the routers from other 
   third of the Galaxy's loss (1.09 -> 1.22 of 1.77). Left: the Galaxy's flat itself (392 alone vs 363 here - GDDR speed
   / DRISC), multi-hop router forwarding (the filler is single-hop, from the worker channel) and the credits' multi-hop
   round trip (650 ns a hop).
+
+### The Galaxy 4x4 run's layout on the 2x4 (test_flat_combine_layout)
+That run (GLM-Flash fused 695 / flat 392) had combine_auto put A 16 accumulators on the ports (4x4 torus: 12 port
+cells of 19; host combine_auto at N 16: acc_on_ports D 8 vs ports apart D 7). On the 2x4, GLM-Flash, acc_on_ports A 16,
+D 8 (planner), pipelined, fused / flat (flat 362):
+- bk 1, no filler: port per link 402 (1.11), port per (direction, link) 453 (1.25).
+- bk 2 + Y filler 1.0 (+ credit batching): per link 498 (1.37), per (direction, link) 540 (1.49) - closest to 1.77 yet.
+TPROF (bk 2, filler, per link): every chip's local rows (the flat's own output) are done by 356-411 us - the flat is not
+slowed inside the fused call - while the senders end at 400-565 (the second mesh row last): the tail is the senders,
+whose bookkeeping (hand-off grants + output writes with the accumulators on their cells) takes 86-194 us of each.
