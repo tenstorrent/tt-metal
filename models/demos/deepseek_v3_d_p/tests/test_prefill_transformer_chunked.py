@@ -1732,12 +1732,26 @@ def run_glm_slab_mixed_chunks(
         num_users=1,
         dtype=ttnn.bfloat8_b,
     )
+    from models.demos.deepseek_v3_d_p.tt.tt_ccl import clear_tt_ccl_cache
+
     models = {}
     layer_min_pcc: dict[int, float] = {}
     per_size_min: dict[int, float] = {}
     kv_actual = 0
     mesh_device.enable_program_cache()
     for chunk, n_chunks in schedule:
+        if chunk not in models and models:
+            # ONE model at a time: two GLM models' CCL semaphores overflow the 1536 B L1_SMALL bank (slab-acc2 v0).
+            # The caches are test-owned, so drop the previous model and the per-mesh CCL state before the next.
+            for old in models.values():
+                old.release_sub_device_managers()
+            models.clear()
+            ttnn.synchronize_device(mesh_device)
+            clear_tt_ccl_cache()
+            gc.collect()
+            # Cached programs may hold the freed semaphores/buffers: start the next model from a clean program cache.
+            mesh_device.disable_and_clear_program_cache()
+            mesh_device.enable_program_cache()
         if chunk not in models:
             models[chunk] = TtPrefillTransformer(
                 mesh_device=mesh_device,
