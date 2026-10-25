@@ -69,6 +69,7 @@ add_subdirectory(multi_scale_deformable_attn)
 add_subdirectory(plusone)
 add_subdirectory(reshape)
 add_subdirectory(ssm)
+add_subdirectory(subdevice_sync)
 add_subdirectory(tensor_prefetcher)
 add_subdirectory(test)
 add_subdirectory(topk_router_gpt)
@@ -116,6 +117,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reshape
         TTNN::Ops::Experimental::SSM
+        TTNN::Ops::Experimental::SubdeviceSync
         TTNN::Ops::Experimental::TensorPrefetcher
         TTNN::Ops::Experimental::Test
         TTNN::Ops::Experimental::TopkRouterGpt
@@ -168,6 +170,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PlusOne>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reshape>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SSM>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::SubdeviceSync>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TensorPrefetcher>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Test>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkRouterGpt>
