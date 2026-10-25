@@ -35,7 +35,20 @@ public:
     std::vector<SubDeviceId> sub_device_ids;
     // Trace data per logical Device in a Mesh.
     std::vector<MeshTraceData> ordered_trace_data;
+    // The first and last programs per device range, for the dispatch at the trace boundary. Empty when the trace
+    // spans several sub-devices.
+    std::vector<std::pair<MeshCoordinateRange, TraceBoundaryPrograms>> boundary_programs;
     uint32_t total_trace_size = 0;
+
+    // The boundary programs of the device range holding `coord`, if recorded.
+    const TraceBoundaryPrograms* find_boundary_programs(const MeshCoordinate& coord) const {
+        for (const auto& [range, programs] : boundary_programs) {
+            if (range.contains(coord)) {
+                return &programs;
+            }
+        }
+        return nullptr;
+    }
 };
 
 // Ties a MeshTraceDescriptor (host side state) to a MeshBuffer (device side state)

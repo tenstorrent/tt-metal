@@ -69,13 +69,20 @@ void load_host_dispatch_state(
     DispatchArray<uint32_t>& expected_num_workers_completed_reset,
     DispatchArray<WorkerConfigBufferMgr>& config_buffer_mgr_reset);
 
+// Issues a trace replay: the trace-boundary barrier (wait for all workers, reset their launch message read pointers)
+// and the trace's exec buffer. `boundary` holds the trace's first and last programs on this device (may be null). If
+// the first program's kernel config writes are a separate exec buffer, it runs before the barrier when `previous`
+// (the trace the workers ran last, may be null) ended with a program whose kernel config does not overlap them, else
+// after it.
 void issue_trace_commands(
     distributed::MeshDevice* mesh_device,
     SystemMemoryManager& sysmem_manager,
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state);
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    const TraceBoundaryPrograms* boundary = nullptr,
+    const TraceBoundaryPrograms* previous = nullptr);
 
 uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices);
 

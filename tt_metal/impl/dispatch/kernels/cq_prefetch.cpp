@@ -2209,7 +2209,7 @@ uint32_t process_exec_buf_cmd(
     volatile CQPrefetchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQPrefetchCmd tt_l1_ptr*>(cmd_ptr_outer);
 
     // setup exec_buf_state the first time
-    exec_buf_state.page_id = 0;
+    exec_buf_state.page_id = cmd->exec_buf.start_page;
     exec_buf_state.base_addr = load_aligned<uint32_t>(&cmd->exec_buf.base_addr);
     exec_buf_state.log_page_size = load_aligned<uint32_t>(&cmd->exec_buf.log_page_size);
     exec_buf_state.pages = load_aligned<uint32_t>(&cmd->exec_buf.pages);

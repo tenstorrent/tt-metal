@@ -146,7 +146,8 @@ struct CQPrefetchRelayInlineCmd {
 } __attribute__((packed));
 
 struct CQPrefetchExecBufCmd {
-    uint8_t pad1;
+    // The first page to read, below the DRAM bank count (whole rows of pages across the banks go in base_addr).
+    uint8_t start_page;
     uint16_t pad2;
     uint32_t base_addr;
     uint32_t log_page_size;

@@ -88,6 +88,25 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
 
+// Whether the kernel config writes of a trace's first program can be issued apart from its launch: they all go to the
+// Tensix kernel config ring (no kernels on other core types, whose binaries may sit at fixed addresses, and no
+// CrossNode config buffer), and the program is launched fresh (binary sent, stall before its config).
+bool first_program_config_is_separable(
+    const Hal& hal,
+    tt_metal::detail::ProgramImpl& program,
+    const ProgramCommandSequence& sequence,
+    const TraceNode& node) {
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        if (hal.get_programmable_core_type(index) != HalProgrammableCoreType::TENSIX &&
+            !program.get_kernel_groups(index).empty()) {
+            return false;
+        }
+    }
+    const auto& md = node.dispatch_metadata;
+    return program.get_per_core_cross_node_dfbs().empty() && sequence.cross_node_config_updates.empty() &&
+           md.send_binary && md.stall_first && !md.stall_before_program;
+}
+
 // Only a profiler reads the recorded sub-device mapping back, and the values that decide whether to
 // record are constant across every program in a launch. Resolve them once, then record per program.
 class SubDeviceRecorder {
@@ -391,6 +410,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
             true /* clear_count */);
     }
     // Clear counter(s) on host to reflect update device state
+    cq_shared_state_->last_trace_replay.reset();
     for (auto sub_device_id : sub_device_ids) {
         expected_num_workers_completed_[*sub_device_id] = 0;
         cross_node_program_completion_counts_[*sub_device_id].clear();
@@ -422,6 +442,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
         auto& sub_device = sub_device_cq_owner[*sub_device_id];
         sub_device.take_ownership(sub_device_id, this->id_);
+        cq_shared_state_->last_trace_replay.reset();
     }
 
     TT_FATAL(
@@ -1203,6 +1224,7 @@ void FDMeshCommandQueue::reset_worker_state(
     }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
+    cq_shared_state_->last_trace_replay.reset();
     in_use_ = true;
     const auto devices = mesh_device_->impl().get_devices();
     auto cached =
@@ -1327,7 +1349,8 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
     auto lock = lock_api_function_();
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
-    submit_replay_buffer(trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer);
+    submit_replay_buffer(
+        trace_inst->desc->descriptors, trace_inst->desc->sub_device_ids, *trace_inst->mesh_buffer, trace_inst->desc);
     if (blocking) {
         this->finish_nolock();
     }
@@ -1487,7 +1510,8 @@ void FDMeshCommandQueue::drain_device_work() {
 void FDMeshCommandQueue::submit_replay_buffer(
     const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
     const std::vector<SubDeviceId>& sub_device_ids,
-    const MeshBuffer& buffer) {
+    const MeshBuffer& buffer,
+    const std::shared_ptr<const MeshTraceDescriptor>& trace) {
     const auto num_sub_devices = static_cast<uint32_t>(sub_device_ids.size());
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto sub_device_id : sub_device_ids) {
@@ -1505,15 +1529,31 @@ void FDMeshCommandQueue::submit_replay_buffer(
         buffer.num_pages(),
         buffer.address());
 
+    // The trace the workers ran last, if this queue replayed it and nothing else ran since: its last program may
+    // still be running while this trace's first program's kernel config is written.
+    const MeshTraceDescriptor* previous =
+        cq_shared_state_->last_trace_replay_cq_id == id_ ? cq_shared_state_->last_trace_replay.get() : nullptr;
+    const auto& view = mesh_device_->get_view();
     for (auto* device : mesh_device_->impl().get_devices()) {
+        const TraceBoundaryPrograms* boundary = nullptr;
+        const TraceBoundaryPrograms* previous_boundary = nullptr;
+        if ((trace != nullptr && !trace->boundary_programs.empty()) || previous != nullptr) {
+            const auto coord = view.find_device(device->id());
+            boundary = trace != nullptr ? trace->find_boundary_programs(coord) : nullptr;
+            previous_boundary = previous != nullptr ? previous->find_boundary_programs(coord) : nullptr;
+        }
         trace_dispatch::issue_trace_commands(
             mesh_device_,
             device->sysmem_manager(),
             dispatch_md,
             id_,
             expected_num_workers_completed_,
-            cq_shared_state_->worker_launch_message_buffer_state);
+            cq_shared_state_->worker_launch_message_buffer_state,
+            boundary,
+            previous_boundary);
     }
+    cq_shared_state_->last_trace_replay = trace;
+    cq_shared_state_->last_trace_replay_cq_id = id_;
 
     // The replayed exec buffer bypasses normal host cache tracking, so subsequent program enqueues must start from an
     // empty host-side view of the prefetcher cache.
@@ -1671,6 +1711,20 @@ void FDMeshCommandQueue::record_end() {
                 trace_worker_descriptor.num_traced_programs_needing_go_signal_multicast++;
             }
         }
+        // The first and last programs of this range, recorded for the trace-boundary dispatch when the trace runs on
+        // a single sub-device.
+        const bool record_boundary_programs = mesh_device_->num_sub_devices() == 1 && !trace_nodes.empty();
+        TraceBoundaryPrograms boundary_programs;
+        // Separate the first program's kernel config only when it does not overlap the last program's, so a back to
+        // back replay of this trace can write it early; otherwise it would only add an exec buffer to every replay.
+        // Not with a fixed trace region either, where the trace buffer's extra page could exceed a tuned size.
+        const bool separate_first_program_config =
+            record_boundary_programs && trace_nodes.size() >= 2 &&
+            mesh_device_->allocator_impl()->get_config().trace_region_size == 0 &&
+            !SimpleTraceAllocator::regions_overlap(
+                SimpleTraceAllocator::config_regions(hal, *trace_nodes.front()),
+                SimpleTraceAllocator::config_regions(hal, *trace_nodes.back()));
+
         DispatchArray<uint32_t> starting_workers_completed{};
         // SimpleTraceAllocator assumes the sync starts at 0, so keep track of the number of allocations to add.
         for (auto& [sub_device_id, trace_worker_descriptor] : trace_worker_descriptors) {
@@ -1743,14 +1797,38 @@ void FDMeshCommandQueue::record_end() {
                 });
             }
 
-            // Issue dispatch commands for this program
-            program_dispatch::write_program_command_sequence(
-                cached_program_command_sequence,
-                sysmem_manager_for_trace,
-                this->id_,
-                node.dispatch_metadata.stall_first,
-                node.dispatch_metadata.stall_before_program,
-                node.dispatch_metadata.send_binary);
+            // Issue dispatch commands for this program. The first program's kernel config writes go to a separate exec
+            // buffer when they only touch the kernel config ring, so the replay can run them ahead of the
+            // trace-boundary barrier (see trace_dispatch::issue_trace_commands).
+            if (separate_first_program_config && node_idx == 0 &&
+                first_program_config_is_separable(hal, program, cached_program_command_sequence, node)) {
+                auto& boundary = boundary_programs.first_program_config_commands;
+                program_dispatch::for_each_traced_program_config_chunk(
+                    cached_program_command_sequence, [&](const void* data, uint32_t bytes) {
+                        TT_ASSERT(bytes % sizeof(uint32_t) == 0);
+                        const auto* words = static_cast<const uint32_t*>(data);
+                        boundary.insert(boundary.end(), words, words + (bytes / sizeof(uint32_t)));
+                    });
+                boundary.insert(boundary.end(), exec_buf_end.begin(), exec_buf_end.end());
+                boundary_programs.first_program_config_regions = SimpleTraceAllocator::config_regions(hal, node);
+                program_dispatch::write_traced_program_launch_sequence(
+                    cached_program_command_sequence,
+                    sysmem_manager_for_trace,
+                    this->id_,
+                    node.dispatch_metadata.stall_first);
+            } else {
+                program_dispatch::write_program_command_sequence(
+                    cached_program_command_sequence,
+                    sysmem_manager_for_trace,
+                    this->id_,
+                    node.dispatch_metadata.stall_first,
+                    node.dispatch_metadata.stall_before_program,
+                    node.dispatch_metadata.send_binary);
+            }
+            if (record_boundary_programs && node_idx + 1 == trace_nodes.size()) {
+                boundary_programs.last_program_num_workers = num_workers;
+                boundary_programs.last_program_config_regions = SimpleTraceAllocator::config_regions(hal, node);
+            }
 
             // Update wptrs for tensix launch message in the device class
             if (mesh_node.multicast_go_signals) {
@@ -1766,6 +1844,9 @@ void FDMeshCommandQueue::record_end() {
         max_trace_size = std::max(max_trace_size, bypass_data.size());
 
         trace_ctx_->ordered_trace_data.push_back(MeshTraceData{range, std::move(bypass_data)});
+        if (record_boundary_programs) {
+            trace_ctx_->boundary_programs.emplace_back(range, std::move(boundary_programs));
+        }
 
         if (!overall_trace_worker_descriptors) {
             overall_trace_worker_descriptors = trace_worker_descriptors;
@@ -1841,6 +1922,7 @@ void FDMeshCommandQueue::wait_for_completion(bool reset_launch_msg_state) {
         }
         cq_shared_state_->sub_device_cq_owner.clear();
         cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
+        cq_shared_state_->last_trace_replay.reset();
         for (auto* device : mesh_device_->impl().get_devices()) {
             program_dispatch::reset_worker_dispatch_state_on_device(
                 mesh_device_,

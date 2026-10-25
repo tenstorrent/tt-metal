@@ -15,7 +15,12 @@
 namespace tt::tt_metal {
 
 std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator::RegionAllocator::allocate_region(
-    uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id, bool top_down) {
+    uint32_t size,
+    uint32_t trace_idx,
+    uint32_t data_type,
+    uint64_t program_id,
+    bool top_down,
+    const std::vector<std::pair<uint32_t, uint32_t>>& excluded) {
     std::optional<uint32_t> best_addr;
     float best_cost = std::numeric_limits<float>::infinity();
     std::optional<uint32_t> best_region_sync_idx;
@@ -38,6 +43,11 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
     // and marked_for_deletion in place. Returns true when the cost reached zero so the caller
     // can stop searching.
     auto evaluate = [&](uint32_t addr, std::map<uint32_t, MemoryUsage>::const_iterator scan_begin) {
+        for (const auto& [begin, end] : excluded) {
+            if (intersects(addr, size, begin, end - begin)) {
+                return false;
+            }
+        }
         float cost = 0;
         std::optional<uint32_t> region_sync_idx;
         bool now_in_use = false;
@@ -160,6 +170,16 @@ std::pair<std::optional<uint32_t>, std::optional<uint32_t>> SimpleTraceAllocator
         }
     }
 
+    // The walks above only try the slots next to existing regions: also try the slots next to each excluded range.
+    if (best_cost != 0) {
+        for (const auto& [begin, end] : excluded) {
+            if ((end + size <= ringbuffer_size_ && evaluate(end, regions_.cbegin())) ||
+                (begin >= size && evaluate(begin - size, regions_.cbegin()))) {
+                break;
+            }
+        }
+    }
+
     for (const auto& addr : marked_for_deletion) {
         auto it = regions_.find(addr);
         program_ids_memory_map_[it->second.data_type].erase(it->second.program_id);
@@ -205,10 +225,101 @@ void SimpleTraceAllocator::allocate_trace_programs(const Hal& hal, std::vector<T
         }
         allocate_trace_programs_on_subdevice(hal, trace_nodes, sub_device_id);
     }
+    if (sub_device_ids.size() == 1 && trace_nodes.size() >= 2) {
+        place_last_program_clear_of_first(hal, trace_nodes, *sub_device_ids.begin());
+    }
+}
+
+void SimpleTraceAllocator::place_last_program_clear_of_first(
+    const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id) {
+    const auto first_regions = config_regions(hal, *trace_nodes.front());
+    if (!regions_overlap(first_regions, config_regions(hal, *trace_nodes.back()))) {
+        return;
+    }
+    // Stalls until the program just before completes leave a gap between the two programs.
+    auto stalls_on_previous_program = [&]() {
+        uint32_t count = 0;
+        uint32_t workers_completed = 0;
+        for (size_t i = 0; i < trace_nodes.size(); i++) {
+            const auto& md = trace_nodes[i]->dispatch_metadata;
+            count += i > 0 && (md.stall_first || md.stall_before_program) && md.sync_count == workers_completed;
+            workers_completed += trace_nodes[i]->num_workers;
+        }
+        return count;
+    };
+    const uint32_t baseline_stalls = stalls_on_previous_program();
+    std::vector<TraceDispatchMetadata> baseline;
+    baseline.reserve(trace_nodes.size());
+    for (const auto* node : trace_nodes) {
+        baseline.push_back(node->dispatch_metadata);
+    }
+
+    // Placing the last program differently changes no earlier placement.
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> excluded(region_allocators_.size());
+    for (const auto& region : first_regions) {
+        const uint32_t start = ringbuffer_starts_[region.core_type_index];
+        excluded[region.core_type_index].emplace_back(region.begin - start, region.end - start);
+    }
+    for (auto& allocator : region_allocators_) {
+        allocator.reset_allocator();
+    }
+    allocate_trace_programs_on_subdevice(hal, trace_nodes, sub_device_id, &excluded);
+    if (regions_overlap(first_regions, config_regions(hal, *trace_nodes.back())) ||
+        stalls_on_previous_program() > baseline_stalls) {
+        for (size_t i = 0; i < trace_nodes.size(); i++) {
+            trace_nodes[i]->dispatch_metadata = baseline[i];
+        }
+    }
+}
+
+std::vector<KernelConfigRegion> SimpleTraceAllocator::config_regions(const Hal& hal, const TraceNode& node) {
+    std::vector<KernelConfigRegion> regions;
+    const auto& md = node.dispatch_metadata;
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        auto core_type = hal.get_programmable_core_type(index);
+        if (!hal.has_programmable_core_type(core_type) || core_type == HalProgrammableCoreType::IDLE_ETH ||
+            index >= md.nonbinary_kernel_config_addrs.size()) {
+            continue;
+        }
+        // The sizes allocate_trace_programs_on_subdevice places.
+        const ProgramConfig& program_config = node.program->get_program_config(index);
+        const bool separate_binary =
+            core_type == HalProgrammableCoreType::TENSIX && hal.get_core_kernel_stored_in_config_buffer(core_type);
+        const uint32_t non_binary_size =
+            separate_binary ? program_config.kernel_text_offset : node.program->get_program_config_sizes()[index];
+        if (non_binary_size > 0) {
+            const uint32_t begin = md.nonbinary_kernel_config_addrs[index].addr;
+            regions.push_back({index, begin, begin + non_binary_size});
+        }
+        if (separate_binary && program_config.kernel_text_size > 0) {
+            const uint32_t begin = md.binary_kernel_config_addrs[index].addr;
+            regions.push_back({index, begin, begin + program_config.kernel_text_size});
+        }
+    }
+    return regions;
+}
+
+bool SimpleTraceAllocator::regions_overlap(
+    const std::vector<KernelConfigRegion>& a, const std::vector<KernelConfigRegion>& b) {
+    return std::any_of(a.begin(), a.end(), [&](const KernelConfigRegion& x) {
+        return std::any_of(b.begin(), b.end(), [&](const KernelConfigRegion& y) {
+            return x.core_type_index == y.core_type_index && x.begin < y.end && y.begin < x.end;
+        });
+    });
 }
 
 void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
-    const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id) {
+    const Hal& hal,
+    std::vector<TraceNode*>& trace_nodes,
+    SubDeviceId sub_device_id,
+    const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>* last_program_excluded) {
+    static const std::vector<std::pair<uint32_t, uint32_t>> no_exclusions;
+    size_t last_program_idx = 0;
+    for (size_t i = 0; i < trace_nodes.size(); i++) {
+        if (trace_nodes[i]->sub_device_id == sub_device_id) {
+            last_program_idx = i;
+        }
+    }
     uint32_t expected_workers_completed = 0;
     uint32_t programmable_core_count = hal.get_programmable_core_type_count();
     // For core types where the binary goes to a fixed L1 address (not stored in the config buffer),
@@ -263,10 +374,18 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
             auto& allocator = region_allocators_[index];
 
             uint64_t pid = node.program->get_id();
+            const auto& non_binary_excluded = (i == last_program_idx && last_program_excluded != nullptr)
+                                                  ? (*last_program_excluded)[index]
+                                                  : no_exclusions;
+            const auto& binary_excluded = non_binary_excluded;
             // Non-binary entries are never reused, so place them top-down to leave the bottom of
             // the ringbuffer free for cached binaries.
-            auto [rta_sync_idx, rta_addr] =
-                allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid, /*top_down=*/true);
+            auto [rta_sync_idx, rta_addr] = allocator.allocate_region(
+                non_binary_size, i, ExtraData::kNonBinary, pid, /*top_down=*/true, non_binary_excluded);
+            if (!rta_addr.has_value() && !non_binary_excluded.empty()) {
+                std::tie(rta_sync_idx, rta_addr) =
+                    allocator.allocate_region(non_binary_size, i, ExtraData::kNonBinary, pid, /*top_down=*/true);
+            }
 
             nonbinary_sync_idx = merge_syncs(nonbinary_sync_idx, rta_sync_idx);
 
@@ -285,7 +404,11 @@ void SimpleTraceAllocator::allocate_trace_programs_on_subdevice(
                     // short-lived and pack it top-down. Otherwise allocate bottom-up so it can
                     // remain cached for future invocations of the same program.
                     bool binary_top_down = !extra_data_[i].next_use_idx[ExtraData::kBinary].has_value();
-                    auto res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid, binary_top_down);
+                    auto res = allocator.allocate_region(
+                        binary_size, i, ExtraData::kBinary, pid, binary_top_down, binary_excluded);
+                    if (!res.second.has_value() && !binary_excluded.empty()) {
+                        res = allocator.allocate_region(binary_size, i, ExtraData::kBinary, pid, binary_top_down);
+                    }
                     if (!res.second.has_value()) {
                         // Clear the allocator and try again. Should succeed unless the total size
                         // of the program is larger than the config buffer.

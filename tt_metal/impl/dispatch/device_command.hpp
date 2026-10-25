@@ -152,7 +152,9 @@ public:
     void add_dispatch_write_host(
         bool flush_prefetch, uint64_t data_sizeB, bool is_event, uint16_t pad1, const void* data = nullptr);
 
-    void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
+    // Runs `pages` pages of an interleaved DRAM buffer as commands, from page `start_page` (below the DRAM bank
+    // count) of the buffer at `base_addr`.
+    void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages, uint8_t start_page = 0);
 
     void add_dispatch_set_num_worker_sems(uint32_t num_worker_sems, DispatcherSelect dispatcher_type);
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <functional>
 
 #include <tt_stl/assert.hpp>
 #include "device.hpp"
@@ -22,6 +23,7 @@
 #include "dispatch/worker_config_buffer.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 
 namespace tt::tt_metal::trace_dispatch {
 
@@ -84,77 +86,153 @@ void issue_trace_commands(
     const TraceDispatchMetadata& dispatch_md,
     uint8_t cq_id,
     const DispatchArray<uint32_t>& expected_num_workers_completed,
-    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state) {
+    const DispatchArray<LaunchMessageRingBufferState>& worker_launch_message_buffer_state,
+    const TraceBoundaryPrograms* boundary,
+    const TraceBoundaryPrograms* previous) {
     MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
-    void* cmd_region = sysmem_manager.issue_queue_reserve(dispatch_md.cmd_sequence_sizeB, cq_id);
 
-    HugepageDeviceCommand command_sequence(metal_ctx, cmd_region, dispatch_md.cmd_sequence_sizeB);
+    const bool has_first_program_config = boundary != nullptr && boundary->first_program_config_num_pages > 0;
+    // The first program's kernel config can be written before the barrier when only the previous trace's last program
+    // may still be running (the wait below covers the others) and that program does not use the ranges it goes to.
+    const bool early_first_program_config =
+        has_first_program_config && previous != nullptr && dispatch_md.trace_worker_descriptors.size() == 1 &&
+        !previous->last_program_config_regions.empty() &&
+        expected_num_workers_completed[*dispatch_md.trace_worker_descriptors.begin()->first] >=
+            previous->last_program_num_workers &&
+        std::none_of(
+            boundary->first_program_config_regions.begin(),
+            boundary->first_program_config_regions.end(),
+            [&](const KernelConfigRegion& a) {
+                return std::any_of(
+                    previous->last_program_config_regions.begin(),
+                    previous->last_program_config_regions.end(),
+                    [&](const KernelConfigRegion& b) {
+                        return a.core_type_index == b.core_type_index && a.begin < b.end && b.begin < a.end;
+                    });
+            });
 
-    DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
-    if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
-        uint16_t index_bitmask = 0;
-        for (const auto& id : dispatch_md.sub_device_ids) {
-            index_bitmask |= 1 << *id;
-        }
-        command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
-        dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
+    const uint32_t exec_buf_sizeB = metal_ctx.hal().get_alignment(HalMemType::HOST);  // CQ_PREFETCH_CMD_EXEC_BUF
+    const uint32_t barrier_sizeB = dispatch_md.cmd_sequence_sizeB - exec_buf_sizeB;
+    uint32_t wait_sizeB = 0;
+    if (early_first_program_config) {
+        DeviceCommandCalculator calculator(metal_ctx);
+        calculator.add_dispatch_wait();
+        wait_sizeB = calculator.write_offset_bytes();
     }
 
-    for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        auto index = *id;
-
-        // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
-        command_sequence.add_dispatch_go_signal_mcast(
-            expected_num_workers_completed[index],
-            metal_ctx.hal().make_go_msg_u32(
-                dev_msgs::RUN_MSG_REPLAY_TRACE, metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index)),
+    // Wait until every program of the previous trace but the last has completed. Programs complete in order, so that
+    // is the worker count before the last program.
+    auto write_wait_for_previous = [&](void* region) {
+        const auto index = *dispatch_md.trace_worker_descriptors.begin()->first;
+        TT_ASSERT(expected_num_workers_completed[index] >= previous->last_program_num_workers);
+        HugepageDeviceCommand command(metal_ctx, region, wait_sizeB);
+        command.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+            0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-            desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
-                ? index
-                : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
-            worker_launch_message_buffer_state[index].get_mcast_wptr(),
-            dispatcher_for_go_signal);
-    }
+            expected_num_workers_completed[index] - previous->last_program_num_workers);
+    };
 
-    // Wait to ensure that all workers have reset their read_ptr. dispatch_d will stall until all workers have completed
-    // this step, before sending kernel config data to workers or notifying dispatch_s that its safe to send the
-    // go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
-    for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        auto index = *id;
-        uint32_t expected_num_workers = expected_num_workers_completed[index];
-        if (desc.num_traced_programs_needing_go_signal_multicast) {
-            expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
+    // The trace-boundary barrier: wait for all workers and reset their launch message read pointers.
+    auto write_barrier = [&](void* region) {
+        HugepageDeviceCommand command_sequence(metal_ctx, region, barrier_sizeB);
+
+        DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
+        if (metal_ctx.get_dispatch_query_manager().dispatch_s_enabled()) {
+            uint16_t index_bitmask = 0;
+            for (const auto& id : dispatch_md.sub_device_ids) {
+                index_bitmask |= 1 << *id;
+            }
+            command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
+            dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
         }
 
-        if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
+        for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
+            auto index = *id;
+
+            // Wait to ensure that all kernels have completed. Then send the reset_rd_ptr go_signal.
+            command_sequence.add_dispatch_go_signal_mcast(
+                expected_num_workers_completed[index],
+                metal_ctx.hal().make_go_msg_u32(
+                    dev_msgs::RUN_MSG_REPLAY_TRACE,
+                    metal_ctx.dispatch_mem_map().get_dispatch_message_update_offset(index)),
+                metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
+                desc.num_traced_programs_needing_go_signal_multicast && mesh_device->impl().has_noc_mcast_txns(id)
+                    ? index
+                    : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
+                worker_launch_message_buffer_state[index].get_mcast_wptr(),
+                dispatcher_for_go_signal);
+        }
+
+        // Wait to ensure that all workers have reset their read_ptr. dispatch_d will stall until all workers have
+        // completed this step, before sending kernel config data to workers or notifying dispatch_s that its safe to
+        // send the go_signal. Clear the dispatch <--> worker semaphore, since trace starts at 0.
+        for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
+            auto index = *id;
+            uint32_t expected_num_workers = expected_num_workers_completed[index];
+            if (desc.num_traced_programs_needing_go_signal_multicast) {
+                expected_num_workers += mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, id);
+            }
+
+            if (metal_ctx.get_dispatch_query_manager().distributed_dispatcher()) {
+                command_sequence.add_dispatch_wait(
+                    CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
+                    0,
+                    metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
+                    expected_num_workers,
+                    1);
+            }
             command_sequence.add_dispatch_wait(
                 CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
                 0,
                 metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-                expected_num_workers,
-                1);
+                expected_num_workers);
         }
-        command_sequence.add_dispatch_wait(
-            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM,
-            0,
-            metal_ctx.dispatch_mem_map().get_dispatch_stream_index(index),
-            expected_num_workers);
-    }
+    };
 
     uint32_t page_size_log2 = __builtin_ctz(dispatch_md.trace_buffer_page_size);
     TT_ASSERT(
         (dispatch_md.trace_buffer_page_size & (dispatch_md.trace_buffer_page_size - 1)) == 0,
         "Page size must be a power of 2");
+    auto write_exec_buf = [&](void* region, uint32_t address, uint32_t num_pages, uint32_t start_page) {
+        HugepageDeviceCommand command(metal_ctx, region, exec_buf_sizeB);
+        command.add_prefetch_exec_buf(address, page_size_log2, num_pages, start_page);
+    };
 
-    command_sequence.add_prefetch_exec_buf(
-        dispatch_md.trace_buffer_address, page_size_log2, dispatch_md.trace_buffer_num_pages);
+    // Each exec buffer ends a fetch queue entry that stalls the prefetcher, since it reuses the command data queue.
+    auto issue_entry = [&](uint32_t head_sizeB,
+                           const std::function<void(void*)>& write_head,
+                           uint32_t address,
+                           uint32_t num_pages,
+                           uint32_t start_page) {
+        const uint32_t sizeB = head_sizeB + exec_buf_sizeB;
+        auto* region = static_cast<uint8_t*>(sysmem_manager.issue_queue_reserve(sizeB, cq_id));
+        if (head_sizeB != 0) {
+            write_head(region);
+        }
+        write_exec_buf(region + head_sizeB, address, num_pages, start_page);
+        sysmem_manager.issue_queue_push_back(sizeB, cq_id);
+        sysmem_manager.fetch_queue_reserve_back(cq_id);
+        const bool stall_prefetcher = true;
+        sysmem_manager.fetch_queue_write(sizeB, cq_id, stall_prefetcher);
+    };
 
-    sysmem_manager.issue_queue_push_back(dispatch_md.cmd_sequence_sizeB, cq_id);
-
-    sysmem_manager.fetch_queue_reserve_back(cq_id);
-
-    const bool stall_prefetcher = true;
-    sysmem_manager.fetch_queue_write(dispatch_md.cmd_sequence_sizeB, cq_id, stall_prefetcher);
+    const uint32_t trace_address = dispatch_md.trace_buffer_address;
+    const uint32_t trace_pages = dispatch_md.trace_buffer_num_pages;
+    if (has_first_program_config) {
+        const uint32_t config_address = trace_address + boundary->first_program_config_address_offset;
+        const uint32_t config_start = boundary->first_program_config_start_page;
+        const uint32_t config_pages = boundary->first_program_config_num_pages;
+        if (early_first_program_config) {
+            issue_entry(wait_sizeB, write_wait_for_previous, config_address, config_pages, config_start);
+            issue_entry(barrier_sizeB, write_barrier, trace_address, trace_pages, 0);
+        } else {
+            issue_entry(barrier_sizeB, write_barrier, config_address, config_pages, config_start);
+            issue_entry(0, {}, trace_address, trace_pages, 0);
+        }
+        return;
+    }
+    issue_entry(barrier_sizeB, write_barrier, trace_address, trace_pages, 0);
 }
 
 uint32_t compute_trace_cmd_size(ContextId context_id, uint32_t num_sub_devices) {

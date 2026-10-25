@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include <vector>
 #include <optional>
 #include <api/tt-metalium/sub_device_types.hpp>
@@ -12,6 +13,10 @@
 #include "dispatch_settings.hpp"
 
 namespace tt::tt_metal {
+
+namespace distributed {
+class MeshTraceDescriptor;
+}
 
 // Keeps track of the ownership state of a sub-device's workers.
 class CQOwnerState {
@@ -31,6 +36,12 @@ private:
 // State that is shared across all command queues for a device.
 struct CQSharedState {
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state;
+
+    // The trace the workers ran last, when nothing else was dispatched to them since, and the command queue that
+    // replayed it. The next replay uses it to write its first program's kernel config early (see
+    // FDMeshCommandQueue::submit_replay_buffer).
+    std::shared_ptr<const distributed::MeshTraceDescriptor> last_trace_replay;
+    uint32_t last_trace_replay_cq_id = 0;
 
     // One entry per sub-device.
     std::vector<CQOwnerState> sub_device_cq_owner;

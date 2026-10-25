@@ -13,6 +13,7 @@
 
 #include <api/tt-metalium/device.hpp>
 
+#include "trace/trace_buffer.hpp"
 #include "trace/trace_node.hpp"
 
 namespace tt::tt_metal {
@@ -40,6 +41,10 @@ public:
     }
 
     void allocate_trace_programs(const Hal& hal, std::vector<TraceNode*>& trace_nodes);
+
+    // The kernel config ring ranges an allocated trace node writes: its non-binary data and its binary.
+    static std::vector<KernelConfigRegion> config_regions(const Hal& hal, const TraceNode& node);
+    static bool regions_overlap(const std::vector<KernelConfigRegion>& a, const std::vector<KernelConfigRegion>& b);
 
 private:
     struct ExtraData {
@@ -85,8 +90,14 @@ private:
         // slot ending just before each existing region). This is intended for short-lived data
         // (non-binary entries and binaries that won't be reused later in the trace) so that
         // long-lived cached binaries can stay packed at the bottom of the buffer.
+        // `excluded` lists ringbuffer ranges [begin, end) the region must not overlap.
         std::pair<std::optional<uint32_t>, std::optional<uint32_t>> allocate_region(
-            uint32_t size, uint32_t trace_idx, uint32_t data_type, uint64_t program_id, bool top_down = false);
+            uint32_t size,
+            uint32_t trace_idx,
+            uint32_t data_type,
+            uint64_t program_id,
+            bool top_down = false,
+            const std::vector<std::pair<uint32_t, uint32_t>>& excluded = {});
 
         void add_region(uint32_t data_type, uint64_t program_id, uint32_t addr) {
             program_ids_memory_map_[data_type][program_id] = addr;
@@ -121,7 +132,18 @@ private:
         std::vector<ExtraData>& extra_data_;
     };
 
+    // `last_program_excluded` holds, per programmable core type index, ringbuffer ranges the last program on the
+    // sub-device must not be placed in.
     void allocate_trace_programs_on_subdevice(
+        const Hal& hal,
+        std::vector<TraceNode*>& trace_nodes,
+        SubDeviceId sub_device_id,
+        const std::vector<std::vector<std::pair<uint32_t, uint32_t>>>* last_program_excluded = nullptr);
+
+    // Places the last program clear of the first one, so a back-to-back replay can write the first program's kernel
+    // config while the previous replay's last program still runs (see trace_dispatch::issue_trace_commands). Keeps
+    // the original placement if that is impossible or adds a stall on the program just before.
+    void place_last_program_clear_of_first(
         const Hal& hal, std::vector<TraceNode*>& trace_nodes, SubDeviceId sub_device_id);
 
     std::vector<ExtraData> extra_data_;

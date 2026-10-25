@@ -61,10 +61,12 @@ private:
     CoreCoord virtual_program_dispatch_core() const;
     CoreType dispatch_core_type() const;
 
+    // `trace` is the replayed trace's descriptor (null for a command list).
     void submit_replay_buffer(
         const std::unordered_map<SubDeviceId, TraceWorkerDescriptor>& worker_descriptors,
         const std::vector<SubDeviceId>& sub_device_ids,
-        const MeshBuffer& buffer);
+        const MeshBuffer& buffer,
+        const std::shared_ptr<const MeshTraceDescriptor>& trace = nullptr);
 
     void increment_num_entries_in_completion_queue();
     MeshEvent enqueue_record_event_helper(

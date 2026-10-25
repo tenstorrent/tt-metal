@@ -3184,6 +3184,67 @@ void pack_program_command_sequence(
     TT_FATAL(offset == size, "Packed command size mismatch: {} vs {}", offset, size);
 }
 
+namespace {
+// Writes `total_size` bytes of command chunks to the CQ: in one fetch queue entry when they fit, else one per chunk.
+template <typename VisitChunks>
+void write_command_chunks(
+    const MetalContext& metal_ctx,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    uint32_t total_size,
+    const VisitChunks& visit_chunks) {
+    bool one_shot = total_size <= metal_ctx.dispatch_mem_map().max_prefetch_command_size();
+    LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, total_size);
+    if (one_shot) {
+        manager.issue_queue_reserve(total_size, command_queue_id);
+    }
+    uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
+
+    visit_chunks([&](const void* data, uint32_t size_bytes) {
+        if (!size_bytes) {
+            return;
+        }
+
+        if (one_shot) {
+            // Already reserved. Write only. Defer push back until all commands are written
+            manager.cq_write(data, size_bytes, one_shot_write_ptr);
+            one_shot_write_ptr += size_bytes;
+        } else {
+            manager.issue_queue_reserve(size_bytes, command_queue_id);
+            manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
+            manager.issue_queue_push_back(size_bytes, command_queue_id);
+            manager.fetch_queue_reserve_back(command_queue_id);
+            manager.fetch_queue_write(size_bytes, command_queue_id);
+        }
+    });
+
+    if (one_shot) {
+        manager.issue_queue_push_back(total_size, command_queue_id);
+        manager.fetch_queue_reserve_back(command_queue_id);
+        manager.fetch_queue_write(total_size, command_queue_id);
+    }
+}
+
+template <typename ProcessChunk>
+void for_each_traced_program_launch_chunk_impl(
+    const ProgramCommandSequence& program_command_sequence, bool stall_first, const ProcessChunk& process_chunk) {
+    auto process_commands = [&](const auto& commands) {
+        if (commands.size_bytes() != 0) {
+            process_chunk(commands.data(), commands.size_bytes());
+        }
+    };
+    process_commands(program_command_sequence.preamble_command_sequence);
+    if (stall_first) {
+        process_commands(
+            program_command_sequence.stall_command_sequences[program_command_sequence.current_stall_seq_idx]);
+    }
+    // The kernel config was written by the separately issued config chunks: make sure it landed.
+    process_commands(program_command_sequence.wait_barrier_command_sequence);
+    process_commands(program_command_sequence.launch_msg_command_sequence);
+    process_commands(program_command_sequence.go_msg_command_sequence);
+}
+}  // namespace
+
 void write_program_command_sequence(
     const ProgramCommandSequence& program_command_sequence,
     SystemMemoryManager& manager,
@@ -3203,46 +3264,63 @@ void write_program_command_sequence(
         stall_before_program,
         send_binary);
 
-    // Check if it's possible to write all commands in a single fetch queue entry
-    uint32_t one_shot_fetch_size =
-        program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary);
-    bool one_shot = one_shot_fetch_size <= metal_ctx.dispatch_mem_map().max_prefetch_command_size();
-
-    LOG_TRACE_LAZY(tt::LogDispatch, "One-shot mode: {}, Fetch size: {} bytes", one_shot, one_shot_fetch_size);
-    if (one_shot) {
-        manager.issue_queue_reserve(one_shot_fetch_size, command_queue_id);
-    }
-    uint32_t one_shot_write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
-
-    auto write_data_to_cq = [&](const void* data, uint32_t size_bytes) {
-        if (!size_bytes) {
-            return;
-        }
-
-        if (one_shot) {
-            // Already reserved. Write only. Defer push back until all commands are written
-            manager.cq_write(data, size_bytes, one_shot_write_ptr);
-            one_shot_write_ptr += size_bytes;
-        } else {
-            manager.issue_queue_reserve(size_bytes, command_queue_id);
-            manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
-            manager.issue_queue_push_back(size_bytes, command_queue_id);
-            manager.fetch_queue_reserve_back(command_queue_id);
-            manager.fetch_queue_write(size_bytes, command_queue_id);
-        }
-    };
-
-    for_each_program_command_sequence_chunk_impl(
-        program_command_sequence, stall_first, stall_before_program, send_binary, write_data_to_cq);
-
-    if (one_shot) {
-        manager.issue_queue_push_back(one_shot_fetch_size, command_queue_id);
-        manager.fetch_queue_reserve_back(command_queue_id);
-        manager.fetch_queue_write(one_shot_fetch_size, command_queue_id);
-    }
+    write_command_chunks(
+        metal_ctx,
+        manager,
+        command_queue_id,
+        program_command_sequence.get_one_shot_fetch_size(stall_first, stall_before_program, send_binary),
+        [&](const auto& write_chunk) {
+            for_each_program_command_sequence_chunk_impl(
+                program_command_sequence, stall_first, stall_before_program, send_binary, write_chunk);
+        });
 
     LOG_TRACE_LAZY(tt::LogDispatch, "========== Finished Writing Program Command Sequence ==========");
     LOG_TRACE_LAZY(tt::LogDispatch, "");
+}
+
+void for_each_traced_program_config_chunk(
+    const ProgramCommandSequence& program_command_sequence,
+    const std::function<void(const void*, uint32_t)>& process_chunk) {
+    // The launch chunks repeat the preamble with the program's host id. This copy leaves it unprofiled, so the
+    // real-time profiler attributes no go signal to it (it may precede a trace-boundary go signal).
+    static constexpr uint32_t program_host_id_offset =
+        (sizeof(CQPrefetchCmd) + offsetof(CQDispatchCmd, set_write_offset.program_host_id));
+    const auto& preamble = program_command_sequence.preamble_command_sequence;
+    vector_aligned<uint8_t> unprofiled_preamble(
+        static_cast<const uint8_t*>(preamble.data()),
+        static_cast<const uint8_t*>(preamble.data()) + preamble.size_bytes());
+    const uint16_t unprofiled_host_id = 0;  // REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID
+    std::memcpy(unprofiled_preamble.data() + program_host_id_offset, &unprofiled_host_id, sizeof(unprofiled_host_id));
+    process_chunk(unprofiled_preamble.data(), unprofiled_preamble.size());
+
+    auto process_commands = [&](const auto& commands) {
+        if (commands.size_bytes() != 0) {
+            process_chunk(commands.data(), commands.size_bytes());
+        }
+    };
+    for (const auto& cmds : program_command_sequence.runtime_args_command_sequences) {
+        process_commands(cmds);
+    }
+    process_commands(program_command_sequence.program_config_buffer_command_sequence);
+    if (program_command_sequence.prefetcher_cache_used) {
+        process_commands(program_command_sequence.program_binary_setup_prefetcher_cache_command);
+    }
+    process_commands(program_command_sequence.program_binary_command_sequence);
+}
+
+void write_traced_program_launch_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall_first) {
+    TT_ASSERT(program_command_sequence.ctx != nullptr);
+    uint32_t total_size = 0;
+    for_each_traced_program_launch_chunk_impl(
+        program_command_sequence, stall_first, [&](const void*, uint32_t bytes) { total_size += bytes; });
+    write_command_chunks(
+        *program_command_sequence.ctx, manager, command_queue_id, total_size, [&](const auto& write_chunk) {
+            for_each_traced_program_launch_chunk_impl(program_command_sequence, stall_first, write_chunk);
+        });
 }
 
 TraceNode create_trace_node(

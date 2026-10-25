@@ -816,6 +816,38 @@ TEST_F(SimpleTraceAllocatorDeviceFixture, LargeTraceSequence) {
     }
 }
 
+TEST_F(SimpleTraceAllocatorDeviceFixture, LastProgramPlacedClearOfFirst) {
+    auto core_index = first_core_type_index(BinaryPlacement::InConfig);
+    if (!core_index.has_value()) {
+        GTEST_SKIP() << "No core type stores kernels in the config buffer on this architecture.";
+    }
+
+    // Four programs fill the ringbuffer, so each later one evicts the one four back: the ninth would land on the
+    // first. It goes on the sixth instead, so a back-to-back replay can write the first program's config while
+    // the previous replay's ninth still runs.
+    auto specs = make_program_specs(256, 1792, BinaryPlacement::InConfig);
+    std::vector<TraceNode> trace_nodes;
+    trace_nodes.reserve(9);
+    for (uint32_t index = 0; index < 9; ++index) {
+        trace_nodes.push_back(make_trace_node(specs, SubDeviceId{0}, 1));
+    }
+    auto trace_node_ptrs = make_trace_node_ptrs(trace_nodes);
+
+    auto allocator = make_allocator(8192);
+    allocator.allocate_trace_programs(hal_, trace_node_ptrs);
+
+    EXPECT_FALSE(SimpleTraceAllocator::regions_overlap(
+        SimpleTraceAllocator::config_regions(hal_, trace_nodes.front()),
+        SimpleTraceAllocator::config_regions(hal_, trace_nodes.back())));
+    // No program waits for the one just before it, which would leave a gap between the two.
+    for (uint32_t index = 1; index < trace_nodes.size(); ++index) {
+        const auto& metadata = trace_nodes[index].dispatch_metadata;
+        if (metadata.stall_first || metadata.stall_before_program) {
+            EXPECT_LT(metadata.sync_count, index) << "program " << index;
+        }
+    }
+}
+
 // Tests for non-TENSIX core types with binary in config buffer (e.g. Active ETH on Blackhole).
 // The dispatcher has no dedicated binary write offset for these core types, so the allocator
 // must keep the binary contiguous with the non-binary config.

@@ -53,10 +53,36 @@ void MeshTrace::populate_mesh_buffer(
     DeviceAddr dram_allocation_high_water_mark,
     DeviceAddr dram_deletion_high_water_mark,
     DeviceAddr max_live_trace_high_water_mark) {
-    uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
-    size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
-        unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));
-    size_t padded_size = round_up(unpadded_size, page_size);
+    auto& desc = *trace_buffer->desc;
+    const uint32_t num_dram_banks = mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM);
+    // A device range's data is its trace, then from the next page its first program's kernel config commands (if
+    // separate, see TraceBoundaryPrograms).
+    std::unordered_map<MeshCoordinateRange, uint64_t> trace_bytes_per_device_range;
+    for (const auto& mesh_trace_data : desc.ordered_trace_data) {
+        trace_bytes_per_device_range[mesh_trace_data.device_range] += mesh_trace_data.data.size() * sizeof(uint32_t);
+    }
+    uint64_t unpadded_size = desc.total_trace_size;
+    for (const auto& [device_range, programs] : desc.boundary_programs) {
+        unpadded_size = std::max<uint64_t>(
+            unpadded_size,
+            trace_bytes_per_device_range[device_range] +
+                (programs.first_program_config_commands.size() * sizeof(uint32_t)));
+    }
+    size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(unpadded_size, num_dram_banks);
+    uint64_t laid_out_size = desc.total_trace_size;
+    for (auto& [device_range, programs] : desc.boundary_programs) {
+        if (programs.first_program_config_commands.empty()) {
+            continue;
+        }
+        const uint64_t config_bytes = programs.first_program_config_commands.size() * sizeof(uint32_t);
+        const uint64_t config_page = round_up(trace_bytes_per_device_range[device_range], page_size) / page_size;
+        programs.first_program_config_address_offset = (config_page / num_dram_banks) * page_size;
+        programs.first_program_config_start_page = config_page % num_dram_banks;
+        programs.first_program_config_num_pages = (config_bytes + page_size - 1) / page_size;
+        const uint64_t config_offset = config_page * page_size;
+        laid_out_size = std::max(laid_out_size, config_offset + config_bytes);
+    }
+    size_t padded_size = round_up(laid_out_size, page_size);
 
     const auto current_trace_buffers_size = mesh_cq.device()->get_trace_buffers_size();
     mesh_cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
@@ -170,6 +196,25 @@ void MeshTrace::populate_mesh_buffer(
         mesh_cq.enqueue_write_shard_to_sub_grid(
             *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
+    }
+    for (auto& [device_range, programs] : desc.boundary_programs) {
+        if (programs.first_program_config_commands.empty()) {
+            continue;
+        }
+        // The replay only needs where the commands sit.
+        std::vector<uint32_t> write_data = std::move(programs.first_program_config_commands);
+        programs.first_program_config_commands = {};
+        write_data.resize(programs.first_program_config_num_pages * page_size / sizeof(uint32_t), 0);
+        const uint64_t config_offset =
+            (static_cast<uint64_t>(programs.first_program_config_address_offset) / page_size * num_dram_banks +
+             programs.first_program_config_start_page) *
+            page_size;
+        mesh_cq.enqueue_write_shard_to_sub_grid(
+            *(trace_buffer->mesh_buffer),
+            write_data.data(),
+            device_range,
+            true,
+            BufferRegion(config_offset, write_data.size() * sizeof(uint32_t)));
     }
 }
 

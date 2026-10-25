@@ -716,10 +716,12 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_host(
 }
 
 template <bool hugepage_write>
-void DeviceCommand<hugepage_write>::add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages) {
+void DeviceCommand<hugepage_write>::add_prefetch_exec_buf(
+    uint32_t base_addr, uint32_t log_page_size, uint32_t pages, uint8_t start_page) {
     uint32_t increment_sizeB = tt::align(sizeof(CQPrefetchCmd), this->pcie_alignment);
     auto initialize_exec_buf_cmd = [&](CQPrefetchCmd* exec_buf_cmd) {
         exec_buf_cmd->base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
+        exec_buf_cmd->exec_buf.start_page = start_page;
         exec_buf_cmd->exec_buf.base_addr = base_addr;
         exec_buf_cmd->exec_buf.log_page_size = log_page_size;
         exec_buf_cmd->exec_buf.pages = pages;

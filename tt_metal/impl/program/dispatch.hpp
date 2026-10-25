@@ -242,6 +242,21 @@ void write_program_command_sequence(
     bool stall_before_program,
     bool send_binary = true);
 
+// The first program of a trace can be written in two parts, so its kernel config writes can run ahead of the
+// trace-boundary barrier (see trace_dispatch::issue_trace_commands). The first part holds the kernel config writes:
+// runtime args, the CB / semaphore / common runtime arg config and the binaries (always sent).
+void for_each_traced_program_config_chunk(
+    const ProgramCommandSequence& program_command_sequence,
+    const std::function<void(const void*, uint32_t)>& process_chunk);
+
+// The second part: the write-offset preamble, an optional stall, a write barrier, the launch message and the go
+// signal.
+void write_traced_program_launch_sequence(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall_first);
+
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
