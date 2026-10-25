@@ -68,14 +68,16 @@ _GLUE_WKVB2_OUT_L1 = os.environ.get("GLUE_WKVB2_OUT_L1", "1") == "1"
 # q_b on the top-k sub-device (rows 2-9) with its grid anchored at (0, 2) (allowed_worker_cores, 11x8 = 88 cores,
 # per_core_N 5 -> 6). q_b is compute only, so no two programs of the region share a fabric router
 # (notes/pipeline/deadlock-matrix.md). The manager clear is the join; the rest of the Q stem (head split, wkv_b1,
-# in-place RoPE: full-grid ops) follows it. GLM_QPUSH_OVERLAP=1 enables it.
-_QPUSH_OVERLAP = os.environ.get("GLM_QPUSH_OVERLAP", "0") == "1"
+# in-place RoPE: full-grid ops) follows it. On by default (GLM_QPUSH_OVERLAP=0 disables): L10 traced on v14
+# 360.56/360.57 -> 359.22/359.13 ms (-0.38%, ~-21 us per shared layer), KVPE bit-identical (runs/20261025T210154Z-pre-wqp1.log).
+_QPUSH_OVERLAP = os.environ.get("GLM_QPUSH_OVERLAP", "1") == "1"
 # Fallback (GLM_QPUSH_QB_DRAM=1): the region's q_b output in DRAM instead of L1 (if an L1 one ever clashes with the
 # push's static CBs, which the enqueue check reports as a TT_FATAL).
 _QPUSH_QB_DRAM = os.environ.get("GLM_QPUSH_QB_DRAM", "0") == "1"
 # Full layers (GLM_QPUSH_FULL=1, needs GLM_QPUSH_OVERLAP=1): after the top-k || gather region a full layer plans its
 # successor's push (sparse_push_plan 120 cores -> the plan tables' full-mesh all-gather -> sparse_push_hot 120 cores);
-# the deferred q_b runs next to that all-gather, on the same manager and sub-devices as on shared layers.
+# the deferred q_b runs next to that all-gather, on the same manager and sub-devices as on shared layers. Opt-in: on v14
+# L10 it measured 359.46 ms vs 359.18 for shared layers alone (a ~67 us gather does not pay for the region's cost).
 _QPUSH_FULL = os.environ.get("GLM_QPUSH_FULL", "0") == "1"
 
 
