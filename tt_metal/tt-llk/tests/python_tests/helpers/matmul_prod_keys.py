@@ -16,9 +16,17 @@ _HEADER = (Path(__file__).resolve().parents[3] / "tt_llk_blackhole/llk_lib/llk_m
 _TABLE = re.findall(r'"([.rRh]{5})"', _HEADER)
 # matmul_main_form_cells of the header: cells whose keyed forms read slower than main's, which keep main's form
 _MAIN_CELLS = {
-    (fid, k1 == "true", acc == "true", DataFormat[i], DataFormat[o], DataFormat[p]): several_ok == "true"
-    for fid, k1, acc, i, o, p, several_ok in re.findall(
-        r"\{MathFidelity::(\w+), (true|false), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), (true|false)\},", _HEADER
+    (fid, k1 == "true", acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], int(sync or -1)): (
+        several_ok == "true",
+        int(min_row or 0),
+        int(max_row or 0xFFFF),
+        int(min_k or 0),
+        int(max_k or 0xFFFF),
+    )
+    for fid, k1, acc, i, o, p, several_ok, min_row, max_row, sync, min_k, max_k in re.findall(
+        r"\{MathFidelity::(\w+), (true|false), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), (true|false)"
+        r"(?:, (\d+))?(?:, (\d+))?(?:, (\d+))?(?:, (\d+))?(?:, (\d+))?\},",
+        _HEADER,
     )
 }
 _FMT = {
@@ -65,10 +73,13 @@ def lg_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pack_format, in1_forma
     )
 
 
-def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False) -> bool:
+def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False) -> bool:
     """matmul_main_form_cell_selected of llk_matmul_forms.h for equal in0 and in1 formats."""
-    ok = _MAIN_CELLS.get((fidelity.name, kb == 1, fp32_dest, in_format, out_format, pack_format))
-    return ok is not None and not (ok and several_blocks)
+    for sync in ((1,) if full_sync else (-1, 0)):
+        cell = _MAIN_CELLS.get((fidelity.name, kb == 1, fp32_dest, in_format, out_format, pack_format, sync))
+        if cell is not None and not (cell[0] and several_blocks) and cell[1] <= row_tiles <= cell[2] and cell[3] <= kb <= cell[4]:
+            return True
+    return False
 
 
 MAIN_FORM = (("tile", False), None)  # main's form: tile MOP, per-row unpack, unknown format key
@@ -83,14 +94,14 @@ def production_forms(in1_format, out_format, fp32_dest, fidelity, h, w, kb) -> d
         for l1 in (False, True) if nb > 1 else (False,):
             pf = partials_format(fp32_dest, l1, out_format) if nb > 1 else out_format
             tag = f"nb{nb}" + ("_l1acc" if l1 else "")
-            if main_form_cell(fidelity, kb, fp32_dest, in1_format, out_format, pf, nb > 1):
+            if main_form_cell(fidelity, kb, fp32_dest, in1_format, out_format, pf, nb > 1, max(h, w)):
                 out[("M2", tag)] = out[("LG", tag)] = MAIN_FORM
                 continue
             ch = form_char(kb, fidelity, True, fp32_dest, pf)
             out[("M2", tag)] = (form(m2_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pf), ch), pf)
             out[("LG", tag)] = (form(lg_row_mop(fidelity, h, w, kb, fp32_dest, out_format, pf, in1_format), ch), pf)
     pf = DataFormat.Float32 if fp32_dest else DataFormat.Float16_b
-    if main_form_cell(fidelity, kb, fp32_dest, in1_format, out_format, pf):
+    if main_form_cell(fidelity, kb, fp32_dest, in1_format, out_format, pf, False, max(h, w)):
         out[("MM", "interm")] = MAIN_FORM
     else:
         out[("MM", "interm")] = (form(h * w >= 8 and kb > 1, form_char(kb, fidelity, True, fp32_dest, pf)), pf)

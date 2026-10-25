@@ -70,6 +70,11 @@ struct matmul_main_form_cell
     DataFormat out;
     DataFormat pack;
     bool several_blocks_ok;
+    std::uint32_t min_row = 0;
+    std::uint32_t max_row = 0xFFFF;
+    int sync = -1; // 0 half, 1 full, -1 any
+    std::uint32_t min_k = 0;
+    std::uint32_t max_k = 0xFFFF;
 };
 
 inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
@@ -99,17 +104,21 @@ inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
     {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false},
     {MathFidelity::HiFi4, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, true},
     {MathFidelity::LoFi, false, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, false},
+    {MathFidelity::LoFi, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 7},
     {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
     {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
+    // LoFi at full sync: the seven tile row of a Float16_b block of two to four k steps reads slower than main's tile form
+    {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, false, 7, 7, 1, 2, 4},
 };
 
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks>
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0>
 constexpr bool matmul_main_form_cell_selected()
 {
     for (const matmul_main_form_cell& c : matmul_main_form_cells)
     {
         if (c.fidelity == math_fidelity && c.k1 == (kt_per_section == 1) && c.fp32_dest == fp32_dest && c.out == out_format && c.pack == pack_format &&
-            (c.in == in0 || c.in == in1) && !(c.several_blocks_ok && several_blocks))
+            (c.in == in0 || c.in == in1) && !(c.several_blocks_ok && several_blocks) && row_tiles >= c.min_row && row_tiles <= c.max_row && (c.sync < 0 || c.sync == sync) &&
+            kt_per_section >= c.min_k && kt_per_section <= c.max_k)
         {
             return true;
         }

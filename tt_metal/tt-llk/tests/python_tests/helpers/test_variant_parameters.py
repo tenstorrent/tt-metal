@@ -111,7 +111,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim)):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
@@ -340,11 +340,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         ):
             return [MATMUL_FORM_KEYS(0, formats.output_format, True)]
         # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
-        if math_fidelity is not None and dest_sync == DestSync.Half and dest_acc is not None:
+        if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
             from helpers.matmul_prod_keys import main_form_cell
 
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
-            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format):
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [

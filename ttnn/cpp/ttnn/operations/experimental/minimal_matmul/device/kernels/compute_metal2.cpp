@@ -584,7 +584,9 @@ void kernel_main() {
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in1)]),
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::out)]),
         static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::intermediate)]),
-        (K_num_blocks > 1)>();
+        (K_num_blocks > 1),
+        (subblock_w > subblock_h ? subblock_w : subblock_h),
+        (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0)>();
 #endif
 #endif
 #if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)

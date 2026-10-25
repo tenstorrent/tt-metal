@@ -241,7 +241,9 @@ void kernel_main() {
         in1_format,
         static_cast<DataFormat>(unpack_src_format[out_dfb_id]),
         static_cast<DataFormat>(unpack_src_format[num_blocks_inner_dim > 1 ? mm_partials_dfb_id : bmm_section_out_dfb_id]),
-        (num_blocks_inner_dim > 1)>();
+        (num_blocks_inner_dim > 1),
+        (out_subblock_w > out_subblock_h ? out_subblock_w : out_subblock_h),
+        (DST_SYNC_MODE == DstSync::SyncFull ? 1 : 0)>();
 #endif
     constexpr bool row_mop =
         !bmm_main_cell && (row_mop_fidelity || out_subblock_w >= 6 || (out_subblock_num_tiles >= 8 && in0_block_w > 1)) &&
