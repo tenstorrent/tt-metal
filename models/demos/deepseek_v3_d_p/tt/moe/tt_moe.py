@@ -55,6 +55,9 @@ _GLUE_MOE_XAG_WORKERS = int(os.environ.get("GLUE_MOE_XAG_WORKERS", "8")) or None
 # The clear drains both sub-devices = the join. GLM_MOE_PRELUDE_OVERLAP=1 enables it.
 _PRELUDE_OVERLAP = os.environ.get("GLM_MOE_PRELUDE_OVERLAP", "0") == "1"
 _PRELUDE_SPLIT = int(os.environ.get("GLM_MOE_PRELUDE_SPLIT", "8"))
+# Where the prelude forks: "routing" (after the gate: masked_bincount onwards) or "topk" (inside the gate, after the
+# logits' all-gather + reduce, so grouped_topk is on the routing side too; DEVICE_FP32 gate only).
+_PRELUDE_FORK = os.environ.get("GLM_MOE_PRELUDE_FORK", "routing")
 _prelude_managers: dict = {}
 
 
@@ -1087,6 +1090,26 @@ class TtMoe(LightweightModule):
             else:
                 padding_config = self.gate.build_padding_config(actual_isl, padding_side, actual_start or 0)
 
+        prelude = (
+            _PRELUDE_OVERLAP
+            and self.overlap_shared_expert_with_dispatch
+            and self.mesh_device.shape[1] > 1
+            and not return_intermediates
+            and not self.debug_token_count
+        )
+        x_gathered = []
+
+        def _prelude_fork():
+            # Load the prelude manager (drains: the gate's axis-1 all-gather is done) and issue the x all-gather
+            # first, on SD1; everything issued after it until the clear runs on SD0.
+            if self._trace_controller is not None:
+                self._trace_controller.sub_device_load(_prelude_manager(self.mesh_device))
+            else:
+                self.mesh_device.load_sub_device_manager(_prelude_manager(self.mesh_device))
+            x_gathered.append(self._x_all_gather(x, subdevice_id=ttnn.SubDeviceId(1)))
+
+        fork_in_gate = prelude and _PRELUDE_FORK == "topk" and self.gate.fallback_mode == GateComputeMode.DEVICE_FP32
+        self.gate.before_topk = _prelude_fork if fork_in_gate else None
         scores, indices, gate_logits = self.gate(
             ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])),
             actual_isl=actual_isl,
@@ -1096,23 +1119,13 @@ class TtMoe(LightweightModule):
             input_ids=input_ids,
         )
 
+        self.gate.before_topk = None
         self._dump_routing(indices, scores, actual_start or 0, cache_user_id, metadata is not None)
 
-        # Prelude overlap: issue the x all-gather first, on its own sub-device, then the routing chain on SD0.
-        prelude = (
-            _PRELUDE_OVERLAP
-            and self.overlap_shared_expert_with_dispatch
-            and self.mesh_device.shape[1] > 1
-            and not return_intermediates
-            and not self.debug_token_count
-        )
-        x_gathered = None
-        if prelude:
-            if self._trace_controller is not None:
-                self._trace_controller.sub_device_load(_prelude_manager(self.mesh_device))
-            else:
-                self.mesh_device.load_sub_device_manager(_prelude_manager(self.mesh_device))
-            x_gathered = self._x_all_gather(x, subdevice_id=ttnn.SubDeviceId(1))
+        # Prelude overlap (fork after the gate): issue the x all-gather first, on SD1, then the routing chain on SD0.
+        if prelude and not fork_in_gate:
+            _prelude_fork()
+        x_gathered = x_gathered[0] if x_gathered else None
 
         (
             tt_expert_offsets,
