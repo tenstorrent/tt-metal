@@ -290,16 +290,23 @@ class ParallelJob;
 class NumaAwareExecutor {
 public:
     // `index` is the executor's place in its pool; `published` is the pool's published parallel_for job, a slot of
-    // `jobs`. After its last task or call, the worker stays awake for `spin` before it parks.
+    // `jobs`. After its last task or call, the worker stays awake for `spin` before it parks, unless `park_after`
+    // names the job it last saw.
     NumaAwareExecutor(
         ContextId context_id,
         uint32_t physical_device_id,
         Completion& completion,
         uint32_t index,
         const std::atomic<uint64_t>& published,
+        const std::atomic<uint64_t>& park_after,
         const std::unique_ptr<ParallelJob>* jobs,
         std::chrono::nanoseconds spin) :
-        completion_(completion), index_(index), published_(published), jobs_(jobs), spin_(spin) {
+        completion_(completion),
+        index_(index),
+        published_(published),
+        park_after_(park_after),
+        jobs_(jobs),
+        spin_(spin) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
@@ -357,8 +364,12 @@ private:
         if (spin_until([this] { return has_work(); })) {
             return;
         }
-        if (spin_.count() > 0 &&
-            spin_for(spin_, [this] { return has_work() || shutdown_.load(std::memory_order_relaxed); })) {
+        // Stop spinning once the pool asks its workers to park after the job this one last saw.
+        auto park_requested = [this] { return park_after_.load(std::memory_order_relaxed) == seen_; };
+        if (spin_.count() > 0 && !park_requested() &&
+            spin_for(
+                spin_, [&] { return has_work() || shutdown_.load(std::memory_order_relaxed) || park_requested(); }) &&
+            !park_requested()) {
             return;
         }
         // seq_cst pairs with wake(): either the producer sees the worker parked, or the worker sees the work.
@@ -376,6 +387,7 @@ private:
     std::atomic<bool> shutdown_ = false;
     alignas(64) uint32_t index_ = 0;
     const std::atomic<uint64_t>& published_;
+    const std::atomic<uint64_t>& park_after_;
     const std::unique_ptr<ParallelJob>* jobs_ = nullptr;
     std::chrono::nanoseconds spin_{0};
     uint64_t seen_ = 0;  // The published word this worker last acted on; worker thread only.
@@ -638,7 +650,7 @@ public:
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id, physical_devices[i]->id(), completion_, i, published_, jobs_.data(), spin));
+                context_id, physical_devices[i]->id(), completion_, i, published_, park_after_, jobs_.data(), spin));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
             map_device(physical_devices[i]->id(), i);
         }
@@ -651,7 +663,7 @@ public:
 
         for (uint32_t i = 0; i < thread_count; i++) {
             workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
-                context_id, i, completion_, i, published_, jobs_.data(), std::chrono::nanoseconds(0)));
+                context_id, i, completion_, i, published_, park_after_, jobs_.data(), std::chrono::nanoseconds(0)));
             phys_device_to_thread_id_[i] = i;
             map_device(i, i);
         }
@@ -713,6 +725,10 @@ public:
         if (auto exception = job->finish()) {
             std::rethrow_exception(exception);
         }
+    }
+
+    void park_workers() override {
+        park_after_.store(published_.load(std::memory_order_relaxed), std::memory_order_relaxed);
     }
 
     void wait() override {
@@ -781,6 +797,8 @@ private:
     std::atomic<uint32_t> last_job_ = 0;
     // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
     alignas(64) std::atomic<uint64_t> published_ = 0;
+    // The published word after which idle workers park instead of spinning (park_workers).
+    alignas(64) std::atomic<uint64_t> park_after_ = UINT64_MAX;
     // Worker by physical device id (ParallelJob::NONE if none).
     std::vector<uint32_t> worker_of_device_;
     // Executors backing this pool.
