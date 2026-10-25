@@ -52,6 +52,7 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<ttnn::Tensor>& column_activation_output = std::nullopt,
     uint32_t column_activation_output_column = 0,
     uint32_t column_activation_columns = 0,
-    const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& column_activation = {});
+    const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& column_activation = {},
+    uint32_t column_activation_output_head_tiles = 0);
 
 }  // namespace ttnn::experimental::kda

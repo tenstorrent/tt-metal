@@ -196,6 +196,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             column_activation (list[ttnn.UnaryWithParam], optional): The eltwise unary chain, such as
                 ``[ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4, 0)]`` for the FP32-accurate sigmoid.
                 Defaults to an empty chain.
+            column_activation_output_head_tiles (int, optional): With > 0 the output is head-major,
+                ``[heads, rows, 32 * column_activation_output_head_tiles]``: its tile column ``j`` is tile
+                column ``j % column_activation_output_head_tiles`` of head
+                ``j // column_activation_output_head_tiles``. Defaults to 0 (a ``[rows, W]`` output).
 
         Returns:
             tuple[ttnn.Tensor, ...]: Four BFLOAT16 TILE tensors: head A/B followed by
@@ -238,7 +242,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("column_activation_output") = nb::none(),
         nb::arg("column_activation_output_column") = 0,
         nb::arg("column_activation_columns") = 0,
-        nb::arg("column_activation") = std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>{});
+        nb::arg("column_activation") = std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>{},
+        nb::arg("column_activation_output_head_tiles") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail

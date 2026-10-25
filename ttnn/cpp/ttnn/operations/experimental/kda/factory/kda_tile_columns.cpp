@@ -30,6 +30,17 @@ uint32_t tile_rows(const Tensor& tensor) {
 
 uint32_t row_tiles(const Tensor& tensor) { return tensor.padded_shape()[-1] / tt::constants::TILE_WIDTH; }
 
+// The output's tile rows and tile columns in its [rows, columns] view (head-major outputs fold their heads in).
+uint32_t output_tile_rows(const TileColumnActivationParams& params, const Tensor& output) {
+    return params.output_head_tiles == 0 ? tile_rows(output)
+                                         : tile_rows(output) / static_cast<uint32_t>(output.padded_shape()[0]);
+}
+
+uint32_t output_row_tiles(const TileColumnActivationParams& params, const Tensor& output) {
+    return params.output_head_tiles == 0 ? row_tiles(output)
+                                         : row_tiles(output) * static_cast<uint32_t>(output.padded_shape()[0]);
+}
+
 }  // namespace
 
 void check_tile_column_activation(
@@ -44,19 +55,26 @@ void check_tile_column_activation(
         check_allocated_device_tensor(*tensor, operation_name, name);
         check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
         check_dtype_in(*tensor, accepted, "BFLOAT16 or FLOAT32", operation_name, name);
-        check_interleaved(*tensor, operation_name, name);
         check_same_device(input, *tensor, operation_name, name);
     }
+    check_interleaved(input, operation_name, "column activation input");
+    TT_FATAL(
+        params.output_head_tiles == 0 ||
+            (output.padded_shape().rank() == 3 && row_tiles(output) == params.output_head_tiles),
+        "{}: a head-major column activation output must be [heads, rows, 32 * {}], got {}",
+        operation_name,
+        params.output_head_tiles,
+        output.padded_shape());
     TT_FATAL(params.columns > 0, "{}: the column activation needs at least one tile column", operation_name);
     TT_FATAL(
-        tile_rows(input) == tile_rows(output),
+        tile_rows(input) == output_tile_rows(params, output),
         "{}: the column activation's input and output have {} and {} tile rows",
         operation_name,
         tile_rows(input),
-        tile_rows(output));
+        output_tile_rows(params, output));
     TT_FATAL(
         params.input_column + params.columns <= row_tiles(input) &&
-            params.output_column + params.columns <= row_tiles(output),
+            params.output_column + params.columns <= output_row_tiles(params, output),
         "{}: tile columns [{}, {}) of the input ({} wide) or [{}, {}) of the output ({} wide) leave the tensor",
         operation_name,
         params.input_column,
@@ -64,7 +82,7 @@ void check_tile_column_activation(
         row_tiles(input),
         params.output_column,
         params.output_column + params.columns,
-        row_tiles(output));
+        output_row_tiles(params, output));
     for (const auto& op : params.op_chain) {
         // The chain runs in the generic unary kernel's SFPU_OP_CHAIN_0.
         TT_FATAL(
@@ -130,7 +148,11 @@ void add_tile_column_activation(
         .dfb_bindings = {m2::DFBBinding{out_dfb, "out", m2::DFBEndpointType::CONSUMER}},
         .tensor_bindings = {m2::TensorBinding{output_name, "output"}},
         .compile_time_args =
-            {{"columns", params.columns}, {"row_tiles", row_tiles(output)}, {"first_column", params.output_column}},
+            {{"columns", params.columns},
+             {"row_tiles", row_tiles(output)},
+             {"first_column", params.output_column},
+             {"head_tiles", params.output_head_tiles},
+             {"head_rows", output_tile_rows(params, output)}},
         .runtime_arg_schema = {.runtime_arg_names = {"first_tile", "num_tiles"}},
         .hw_config = ttnn::create_writer_datamovement_config(),
     });

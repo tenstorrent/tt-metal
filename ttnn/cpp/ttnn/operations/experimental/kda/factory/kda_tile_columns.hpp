@@ -22,13 +22,16 @@ namespace ttnn::experimental::prim::kda_factory_detail {
 // tensors with the same rows: the eltwise unary chain as ttnn's unary ops run it (copy into DST, the chain, pack, the
 // input unpacked as ttnn::unary unpacks it), at the output's format and compute_kernel_config's DST width (ttnn::unary
 // instead forces a 32-bit DST for a FLOAT32 input or output). An empty chain copies the columns, converting their
-// format.
+// format. With output_head_tiles > 0 the output is head-major, [heads, rows, 32 * output_head_tiles] (as the KDA ops'
+// head-first [B*H, T, V] tensors): output tile column j of its [rows, heads * output_head_tiles] view is tile column
+// j % output_head_tiles of head j / output_head_tiles. Either output may be interleaved or sharded.
 struct TileColumnActivationParams {
     std::vector<ttnn::operations::unary::EltwiseUnaryWithParam> op_chain;
     uint32_t input_column = 0;
     uint32_t output_column = 0;
     uint32_t columns = 0;
     DeviceComputeKernelConfig compute_kernel_config;
+    uint32_t output_head_tiles = 0;
 };
 
 void check_tile_column_activation(

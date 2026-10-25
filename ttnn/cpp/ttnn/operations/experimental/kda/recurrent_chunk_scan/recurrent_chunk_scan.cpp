@@ -119,7 +119,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
     const std::optional<ttnn::Tensor>& column_activation_output,
     uint32_t column_activation_output_column,
     uint32_t column_activation_columns,
-    const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& column_activation) {
+    const std::vector<ttnn::operations::unary::EltwiseUnaryWithParam>& column_activation,
+    uint32_t column_activation_output_head_tiles) {
     constexpr std::string_view operation_name = "summarize_chunk_recurrence";
     validate_protocol_inputs(v_beta, kd, q_decay, intra, k_dec_t, final_decay, t_inv, operation_name);
     auto [output_memory_config, kernel_config] = resolve_configs(v_beta, memory_config, compute_kernel_config);
@@ -137,7 +138,8 @@ std::vector<ttnn::Tensor> summarize_chunk_recurrence(
                 tt::tt_metal::MathFidelity::HiFi4,
                 /*default_approx_mode=*/false,
                 /*default_fp32_acc=*/true,
-                /*default_l1_acc=*/false)};
+                /*default_l1_acc=*/false),
+            .output_head_tiles = column_activation_output_head_tiles};
     }
     // The activation runs beside the summary on the worker cores its value blocks leave idle; when they cover the
     // grid it runs right after, as a program of its own on the whole grid.
