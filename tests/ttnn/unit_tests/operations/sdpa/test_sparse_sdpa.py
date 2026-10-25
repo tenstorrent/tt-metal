@@ -742,6 +742,7 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
 
 # ---- split-K work distribution (S > cores, S % cores != 0): tokens straddling two cores are merged ----
 @run_for_blackhole()
+@pytest.mark.parametrize("kdeq_batch", ["1", "2"], ids=["kdeq_l1_only", "kdeq_forced"])
 @pytest.mark.parametrize("split_k", ["1", "0"], ids=["splitk", "token_split"])
 @pytest.mark.parametrize(
     "H,S,T,TOPK,kc,nv_id",
@@ -752,12 +753,13 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
         (64, 130, 1024, 256, 64, "mixed"),  # 1 token + a sliver per core
     ],
 )
-def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, H, S, T, TOPK, kc, nv_id):
+def test_sparse_sdpa_scaled_fp8_split_k(device, monkeypatch, split_k, kdeq_batch, H, S, T, TOPK, kc, nv_id):
     """Split-K must match the whole-token split and the torch golden (PCC), incl. sentinel tails."""
     grid = device.compute_with_storage_grid_size()
     if S <= grid.x * grid.y:
         pytest.skip(f"split-K needs S > cores ({grid.x * grid.y})")
     monkeypatch.setenv("SPARSE_SDPA_SPLITK", split_k)  # split-K is the default; "0" = whole-token split
+    monkeypatch.setenv("SPARSE_SDPA_KDEQ_BATCH", kdeq_batch)  # "2" forces the batched K reconstruct on DRAM KV
     nv_fn = {
         "all": lambda s: TOPK,
         "mixed": lambda s: 1 + (s * 37) % TOPK,

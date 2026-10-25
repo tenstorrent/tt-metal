@@ -317,7 +317,8 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.push_output.has_value() ? t.push_output->tensor_spec() : t.q.tensor_spec(),
         t.push_batch_index_tensor.has_value(),
         t.push_hot_table.has_value(),
-        ::sparse_sdpa::split_k_enabled());
+        ::sparse_sdpa::split_k_enabled(),
+        ::sparse_sdpa::kdeq_batch_mode());
 }
 
 SparseSDPAOperation::program_factory_t SparseSDPAOperation::select_program_factory(
