@@ -37,8 +37,9 @@ chain; ``allocate_kv_cache`` reads ``num_blocks`` and ``block_size`` from the pl
 lane decoder's ``prepare`` as its warm hook (the lane tensors must exist before the chain captures) and captures the
 lane trace.  ``prefill_forward`` runs the B=1 chain prefill per row and imports it into the lane that owns
 ``empty_slots[i]``; ``decode_forward`` replays the lane trace once for all live rows.  A host map slot -> lane follows
-the plugin's ``slot_remap`` (no device moves: the lanes stay where they are).  ``max_num_seqs`` 1 keeps the single-slot
-path above unchanged.
+the plugin's ``slot_remap`` (no device moves: the lanes stay where they are).  A seeded host draw uses a generator
+seeded from (seed, position), so it does not depend on ``reset_sampling_state`` or on the other lanes.  ``max_num_seqs`` 1
+keeps the single-slot path above unchanged.
 
 vLLM imports this module in its registry inspection, frontend, engine and worker processes: no device is opened
 here and ``sys.argv`` is not read.
@@ -103,6 +104,7 @@ LONG_CHUNKS_VARIABLE = "QWEN38_LONG_CHUNKS"  # "1": the 128-row chunks without a
 PREFILL_SLAB_OFF = ("0", "off")
 BATCH_MAX_LANES = 32  # batch mode: max_num_seqs 2..32 (one 32-row tile)
 MAX_TOKENS_ALL_USERS_VARIABLE = "QWEN38_MAX_TOKENS_ALL_USERS"  # the KV token pool the plugin sizes its blocks from
+DECODE_LOG_INTERVAL = 256  # batch mode: one adapter log line per this many decode calls
 BATCH_LANE_INDEXER_FORM = "wide"
 KV_BYTES_PER_TOKEN = 12 * 512 * 2  # 12 QSA layers x one 512-wide bf16 row, per device
 BATCH_MIN_BLOCK_SIZE = 32  # the QSA page scatter works in 32-row slabs
@@ -281,6 +283,17 @@ def sample_from_row(
         probs, indices = probs[keep], indices[keep]
     noise = torch.empty_like(probs).exponential_(generator=generator)
     return int(indices[(probs / noise).argmax()])
+
+
+def position_generator(seed: int | None, position: int) -> torch.Generator | None:
+    """Batch mode's draw generator: seeded from the request's seed and the position of the token that produced the row,
+    so a draw does not depend on the plugin's layout resets (``reset_sampling_state`` fires for every row whenever a
+    request joins or leaves) or on the other lanes: alone or concurrent, a seeded request draws the same tokens.
+    ``None`` seed: the global RNG."""
+
+    if seed is None:
+        return None
+    return torch.Generator().manual_seed((int(seed) * 0x9E3779B97F4A7C15 + int(position)) % (1 << 63))
 
 
 def _sample_full_row(scaled: torch.Tensor, top_k: int, top_p: float, generator: torch.Generator | None) -> int:
@@ -477,6 +490,7 @@ class Qwen38ForCausalLM:
         self.lane_slots: list[Qwen38VLLMSlot] = [Qwen38VLLMSlot() for _ in range(batch_lanes)]  # per-lane policy/RNG
         self.batch_failed = False
         self._pending_note: dict[int, int] | None = None  # the moves decode_forward applied, not yet noted
+        self.decode_calls = 0  # batch mode: decode calls so far (the periodic log line)
         self.decode_stats: deque[dict[str, float]] = deque(maxlen=4096)  # per decode call: total/step/gather seconds
         self.dram: dict[
             str, dict[str, int]
@@ -1160,7 +1174,8 @@ class Qwen38ForCausalLM:
                 if policy.penalized:
                     prompt_ids = torch.tensor(prompts[i], dtype=torch.long)
                     apply_penalties(row, prompt_ids, torch.zeros(0, dtype=torch.long), policy)
-                out = torch.tensor([[sample_from_row(row, policy, lane_slot.generator)]], dtype=torch.int32)
+                generator = position_generator(policy.seed, len(prompts[i]) - 1)
+                out = torch.tensor([[sample_from_row(row, policy, generator)]], dtype=torch.int32)
             outputs.append(out)
         return torch.cat(outputs, dim=0), torch.zeros(rows, dtype=torch.long)
 
@@ -1275,7 +1290,8 @@ class Qwen38ForCausalLM:
                     values = logits[lane]
                     if row in histories:
                         apply_penalties(values, *histories[row], policies[row])
-                    out[row, 0] = sample_from_row(values, policies[row], self.lane_slots[lane].generator)
+                    generator = position_generator(policies[row].seed, positions[row])
+                    out[row, 0] = sample_from_row(values, policies[row], generator)
                     continue
                 token = int(lane_ids[lane])
                 if not 0 <= token < TOKENIZER_SIZE:
@@ -1299,6 +1315,15 @@ class Qwen38ForCausalLM:
                 "overhead_s": (now - started) - step_s,
             }
         )
+        self.decode_calls += 1
+        if self.decode_calls % DECODE_LOG_INTERVAL == 0:
+            recent = list(self.decode_stats)[-DECODE_LOG_INTERVAL:]
+            mean = lambda key: sum(entry[key] for entry in recent) / len(recent)  # noqa: E731
+            logger.info(
+                f"batch decode: {self.decode_calls} calls, last {len(recent)}: mean rows {mean('rows'):.2f}, "
+                f"total {mean('total_s') * 1e3:.2f} ms, replay {mean('step_s') * 1e3:.2f} ms, "
+                f"gather+sample {mean('gather_s') * 1e3:.2f} ms, overhead {mean('overhead_s') * 1e3:.2f} ms"
+            )
         return out
 
     def _read_lane_logits(self) -> torch.Tensor:
@@ -1362,6 +1387,7 @@ class Qwen38ForCausalLM:
         self.lane_slots = [Qwen38VLLMSlot() for _ in range(self.lanes)]
         self._pending_note = None
         self.decode_stats.clear()
+        self.decode_calls = 0
         try:
             self.chain.reset_and_seed(SEED_TOKEN_ID)
         except BaseException:

@@ -496,13 +496,13 @@ chunks, 0.74-0.90 with 2,048-row slabs (a 31,716-token prompt in 23.6 s, 2,118 t
 
 | capability | under vLLM | note |
 |---|---|---|
-| batch | 1 | one resident slot: `--max_num_seqs 1`, no data parallelism |
+| batch | 1, or 2-32 | `--max_num_seqs 1`: one resident slot; 2-32: batch mode (below); no data parallelism |
 | contexts | 8k, 32k, 64k, 128k, 256k | by `--max-model-len`; 256k is single-user |
 | sampling | vLLM's host sampler over the full row; or, with `"sample_on_device_mode": "decode_only"` in the `tt` block of `--additional-config`, the adapter's host sampler over the row's top 1024 candidates | temperature, top-p, top-k, min-p, penalties, `logit_bias`, logprobs, structured output; a greedy request reproduces this server's greedy stream (the `json` acceptance record matches the CPU reference 96/96; the other records diverge at the pinned A3 indices). vLLM's `Sampler` sorts the 248,320-wide row on every sampled (non-greedy) decode step, about 22 ms per token; under `decode_only` the plugin hands the request's temperature / top-k / top-p / seed / penalties to `decode_forward` and the adapter draws the token itself from the same row with vLLM's sampler semantics (same distribution, not the same token stream per seed), well under a millisecond; greedy stays the argmax. Requests with min-p, `logit_bias`, `bad_words`, `allowed_token_ids`, `min_tokens`, logprobs or structured output keep vLLM's full-row sampler (the plugin decides per step); prefill stays on it too (`"all"` is refused) |
-| prefill | the slab and chunk traces over the whole prompt | `QWEN38_PREFILL_SLAB` above; vLLM's chunked prefill and prefix caching are declared unsupported (the plugin disables them) |
-| decode | one traced step per token | `trace_mode` other than `all` is not honoured |
+| prefill | the slab and chunk traces over the whole prompt | `QWEN38_PREFILL_SLAB` above; vLLM's chunked prefill and prefix caching are declared unsupported (the plugin disables them); batch mode prefills one request at a time |
+| decode | one traced step per token | `trace_mode` other than `all` is not honoured; batch mode: one lane-trace step for all rows |
 | follow-up turns | re-prefilled | the prompt-end snapshot and prefix reuse are not used |
-| KV | the chain's resident caches | vLLM's block table and KV cache are accepted and ignored |
+| KV | the chain's resident caches; batch mode: vLLM's blocks | single slot: vLLM's block table and KV cache are accepted and ignored; batch mode: the QSA KV pool is vLLM's block pool |
 | MTP, the on-device sampler (`--device-sampler`), async decode | no | `--mtp` and the on-device sampler stay on this server; under vLLM the sampled token is drawn on the host (`decode_only`, above) |
 
 The tt-model container package of this tree (`sjettTT/qwen3.8-flash-next_p150x4`) ran this path until 2026-09-26
@@ -528,3 +528,34 @@ line `Registered TT model TTQwen4ExpForConditionalGeneration`):
 
     EXTRA_MODELS_DIR=$REPO/models/demos/blackhole/qwen38_flash_next/tools/vllm_bundle PYTHONPATH=<plugin>/ci/host-stubs \
         python -m pytest <plugin>/tests --ignore=<plugin>/tests/tt --log-cli-level=INFO
+
+### Batch mode (`--max_num_seqs` 2-32)
+
+The same launch with `--max_num_seqs B` serves B users on the plain lane body (`tools/qwen38_batch_decode.py`): one
+decode trace for all B lanes, over a paged QSA KV pool that is vLLM's block pool (a page is one vLLM block, block 0 is
+the scratch page). `--block_size` must be a power of two in 32..4096. `initialize_vllm_model` does not open the chain:
+`allocate_kv_cache` gets the block count and size, admits the pool against the free DRAM, opens the chain and captures
+the lane trace. A request is prefilled alone (the B=1 chain), then imported into its lane. The plugin's `slot_remap`
+moves only a host map (slot -> lane). A seeded host draw is seeded from (seed, token position), so a seeded request
+draws the same tokens alone and in a batch. `get_max_tokens_all_users` (the pool size vLLM uses) is
+`QWEN38_MAX_TOKENS_ALL_USERS` when set, else `min(max_model_len * B, DRAM cap)`; the cap was measured at context 32768
+(B=8: every user gets the full context; B=32 at 32704: 750,592 tokens). The adapter logs one line per 256 decode calls
+(`batch decode: ... replay ... overhead ...`).
+
+Measured on a QuietBox 2 (2026-10-24, `--max-model-len 32704 --block_size 64`, `decode_only`, `vllm bench serve`
+random dataset, `--ignore-eos`, greedy). Greedy tokens are the same alone, concurrent and on the single-slot server.
+
+| B | ISL/OSL, concurrency | TTFT mean | TPOT median | output tok/s |
+|---|---|---|---|---|
+| 1 (single slot) | 128/128 c1 | 0.34 s | 26.5 ms | 34.5 |
+| 8 | 128/128 c1 | 0.43 s | 33.6 ms | 27.2 |
+| 8 | 128/1024 c8 | 3.0 s | 43.1 ms | 177.6 |
+| 8 | 1024/128 c8 | 10.2 s | 44.1 ms | 60.1 |
+| 8 | 4096/128 c8 | 24.4 s | 44.5 ms | 31.0 |
+| 32 | 128/1024 c32 | 13.2 s | 80.9 ms | 342.1 |
+| 32 | 1024/128 c32 | 44.5 s | 81.6 ms | 72.9 |
+
+The plugin and the adapter add about 1-2 ms per step to the lane trace. The step time grows with the number of distinct
+tokens across the users (more routed experts). One user on a B=8 server pays the B=8 step (33.6 ms against 26.5 ms on
+the single-slot server). TTFT grows with concurrency x ISL, because each request is prefilled alone and the prefills
+run one after another. A preempted request is re-prefilled: its greedy tokens can change at a near-tie.

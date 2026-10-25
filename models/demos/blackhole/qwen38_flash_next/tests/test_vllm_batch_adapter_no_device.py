@@ -33,6 +33,7 @@ from models.demos.blackhole.qwen38_flash_next.tools.qwen38_vllm import (
     Qwen38ForCausalLM,
     Qwen38HostSamplingPolicy,
     greedy_batch_sampling_params,
+    position_generator,
     sample_from_row,
 )
 
@@ -705,8 +706,8 @@ def test_sampled_rows_draw_on_the_host_from_their_own_lane_with_their_own_seed(r
     p2 = Qwen38HostSamplingPolicy(0.8, 50, 1.0, seed=22)
     greedy_id = FakeDecoder.next_id(firsts[0], len(prompts[0]))
     assert out[0, 0] == greedy_id  # the plain greedy row is the device's token
-    assert out[1, 0] == _expected_draw(rig, 1, 1, p1, torch.Generator().manual_seed(11))
-    assert out[2, 0] == _expected_draw(rig, 2, 1, p2, torch.Generator().manual_seed(22))
+    assert out[1, 0] == _expected_draw(rig, 1, 1, p1, position_generator(11, len(prompts[1])))
+    assert out[2, 0] == _expected_draw(rig, 2, 1, p2, position_generator(22, len(prompts[2])))
     assert out[3:, 0].tolist() == [0] * 5
 
 
@@ -715,10 +716,9 @@ def test_generators_belong_to_the_request_and_follow_it_through_a_remap(rig: Rig
     firsts = firsts.reshape(-1).tolist()
     params = _sampling(8, temperature=[1.0, 1.0, 1.0], top_k=[20] * 3, top_p=[1.0] * 3, seed=[11, 22, 33])
     out = rig.decode(_rows_for(prompts, blocks, firsts, [0, 1, 2]) + [None] * 5, sampling_params=params)
-    gens = [torch.Generator().manual_seed(seed) for seed in (11, 22, 33)]
     policies = [Qwen38HostSamplingPolicy(1.0, 20, 1.0, seed=seed) for seed in (11, 22, 33)]
     for k in range(3):
-        assert out[k, 0] == _expected_draw(rig, k, 1, policies[k], gens[k])
+        assert out[k, 0] == _expected_draw(rig, k, 1, policies[k], position_generator((11, 22, 33)[k], len(prompts[k])))
     # step 2: rows swapped (request 2 now row 0, request 0 row 1, request 1 row 2); each request keeps its stream
     nxt = out[:3, 0].tolist()
     order = [2, 0, 1]
@@ -726,30 +726,34 @@ def test_generators_belong_to_the_request_and_follow_it_through_a_remap(rig: Rig
     params = _sampling(8, temperature=[1.0] * 3, top_k=[20] * 3, top_p=[1.0] * 3, seed=[33, 11, 22])
     out2 = rig.decode(rows, sampling_params=params, slot_remap=[2, 0, 1, 3, 4, 5, 6, 7])
     for row, request in enumerate(order):
-        assert out2[row, 0] == _expected_draw(rig, request, 2, policies[request], gens[request])
+        generator = position_generator((11, 22, 33)[request], len(prompts[request]) + 1)
+        assert out2[row, 0] == _expected_draw(rig, request, 2, policies[request], generator)
 
 
-def test_reset_sampling_state_reseeds_every_live_row(rig: Rig) -> None:
+def test_a_draw_depends_on_seed_and_position_only_not_on_reset_sampling_state(rig: Rig) -> None:
     prompts, blocks, firsts = _three(rig)
     firsts = firsts.reshape(-1).tolist()
     params = _sampling(8, temperature=[1.0] * 2, top_k=[20] * 2, top_p=[1.0] * 2, seed=[5, 6])
-    # live rows 0..2 need params for row 2 as well; row 2 greedy
     rows = _rows_for(prompts, blocks, firsts, [0, 1, 2]) + [None] * 5
     out = rig.decode(rows, sampling_params=params)
     policy0 = Qwen38HostSamplingPolicy(1.0, 20, 1.0, seed=5)
-    first_draw = out[0, 0]
-    assert first_draw == _expected_draw(rig, 0, 1, policy0, torch.Generator().manual_seed(5))
-    # step 2 without a reset continues the stream; step 3 with the reset restarts it from the seed
+    assert out[0, 0] == _expected_draw(rig, 0, 1, policy0, position_generator(5, len(prompts[0])))
     nxt = out[:3, 0].tolist()
     rows2 = [(nxt[i], len(prompts[i]) + 1, blocks[i]) for i in range(3)] + [None] * 5
-    gen = torch.Generator().manual_seed(5)
-    _expected_draw(rig, 0, 1, policy0, gen)  # consume the first draw
     out2 = rig.decode(rows2, sampling_params=params)
-    assert out2[0, 0] == _expected_draw(rig, 0, 2, policy0, gen)
+    assert out2[0, 0] == _expected_draw(rig, 0, 2, policy0, position_generator(5, len(prompts[0]) + 1))
     nxt = out2[:3, 0].tolist()
     rows3 = [(nxt[i], len(prompts[i]) + 2, blocks[i]) for i in range(3)] + [None] * 5
+    # the plugin resets every row's sampling state when any request joins or leaves: the stream must not move
     out3 = rig.decode(rows3, sampling_params=params, reset_sampling_state=True)
-    assert out3[0, 0] == _expected_draw(rig, 0, 3, policy0, torch.Generator().manual_seed(5))
+    assert out3[0, 0] == _expected_draw(rig, 0, 3, policy0, position_generator(5, len(prompts[0]) + 2))
+
+
+def test_position_generator_is_a_pure_function_of_seed_and_position() -> None:
+    assert position_generator(None, 3) is None
+    one = position_generator(7, 100).initial_seed()
+    assert one == position_generator(7, 100).initial_seed()
+    assert len({position_generator(seed, pos).initial_seed() for seed in (0, 1, 7) for pos in (0, 1, 100)}) == 9
 
 
 def test_a_new_request_in_a_lane_gets_a_fresh_policy_and_generator(rig: Rig) -> None:
