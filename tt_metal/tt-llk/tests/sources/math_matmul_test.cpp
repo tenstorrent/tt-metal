@@ -275,7 +275,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         _llk_math_matmul_<MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k>(DST_INDEX, CT_DIM, RT_DIM);
                     }
-                    #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                    #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_UNFUSED_POST)
+                    constexpr bool fused_post_flip = false;
+                    #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
                     constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
                     #else
                     constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;

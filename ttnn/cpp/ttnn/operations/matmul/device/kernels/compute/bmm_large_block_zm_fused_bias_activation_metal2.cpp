@@ -81,7 +81,8 @@ constexpr bool bmm_k_loop_cell =
      (MATH_FIDELITY == ckernel::MathFidelity::LoFi || MATH_FIDELITY == ckernel::MathFidelity::HiFi2)) ||
     (MATH_FIDELITY == ckernel::MathFidelity::LoFi && get_arg(args::num_blocks_inner_dim) == 1 &&
      ((get_arg(args::out_subblock_h) == 2 && get_arg(args::out_subblock_w) == 1 && get_arg(args::in0_block_w) >= 8) ||
-      (get_arg(args::out_subblock_w) == 2 && get_arg(args::out_subblock_h) <= 2 && get_arg(args::in0_block_w) >= 16)));
+      (get_arg(args::out_subblock_w) == 2 && get_arg(args::out_subblock_h) <= 2 && get_arg(args::in0_block_w) >= 16 &&
+       !(unpack_src_format[dfb::in0] == (uint8_t)DataFormat::Float32 && get_arg(args::out_subblock_h) == 1))));
 #endif
 #if defined(UCK_CHLKC_PACK)
 constexpr int bmm_in1_order = 0;
@@ -112,7 +113,8 @@ constexpr bool bmm_ttsync_cells = []() constexpr {
     }
     if (kt >= 2) {
         if (fid == ckernel::MathFidelity::LoFi && h <= 2 && w <= 2 && half) {
-            return !(h == 1 && w == 2 && f32 && out_f == (uint8_t)DataFormat::Float16_b) && !(h == 2 && w == 2 && f32);
+            return !(h == 1 && w == 2 && f32 && out_f == (uint8_t)DataFormat::Float16_b) && !(h == 2 && w == 2 && f32) &&
+                   !(h == 2 && w == 1 && f32 && f32_out && !DST_ACCUM_MODE);
         }
         return one && (fid == ckernel::MathFidelity::HiFi2 || fid == ckernel::MathFidelity::LoFi ||
                        (fid == ckernel::MathFidelity::HiFi3 && half &&
@@ -120,7 +122,8 @@ constexpr bool bmm_ttsync_cells = []() constexpr {
     }
     return one && half && (fid == ckernel::MathFidelity::HiFi2 || fid == ckernel::MathFidelity::LoFi) &&
            !(f32 && f32_out && !DST_ACCUM_MODE) &&
-           !(fid == ckernel::MathFidelity::HiFi2 && in_f == (uint8_t)DataFormat::Bfp8_b && f32_out && DST_ACCUM_MODE);
+           !(fid == ckernel::MathFidelity::HiFi2 && in_f == (uint8_t)DataFormat::Bfp8_b && f32_out && DST_ACCUM_MODE) &&
+           !(fid == ckernel::MathFidelity::HiFi2 && in_f == (uint8_t)DataFormat::Float16_b && f32_out && !DST_ACCUM_MODE);
 }();
 #endif
 // not when the partials are reloaded every block: the matmul init after each reload drains the unpack thread; not for

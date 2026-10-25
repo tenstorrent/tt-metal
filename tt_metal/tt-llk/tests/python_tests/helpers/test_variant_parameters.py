@@ -268,6 +268,32 @@ class MATMUL_STREAM_Z(TemplateParameter):
         return [MATMUL_STREAM_Z()] if formats.input_format in MATMUL_DENSE_STREAM_FORMATS else []
 
 
+def _matmul_unfused_post_cell(formats, math_fidelity, dest_sync, dest_acc, ct_dim: int, rt_dim: int, kt_dim: int, in0_r_dim: int = 32, cov_only: bool = False) -> bool:
+    """Half sync cells where the fused post and DEST flip of the harness reads slower than main's separate stalls (ABBA with pure-shift arms, 0.1 to 0.25 cycles):
+    Bfp8_b to Float16_b at HiFi2 on a row of 3 or 6 tiles, Float32 to Float32 at HiFi2 with a 16-bit DEST on 2x4 (and with a 32-bit one on 1x4 of an 8 row in0 tile),
+    and at LoFi with a 32-bit DEST on 4x1 over four k steps."""
+    if dest_sync != DestSync.Half:
+        return False
+    in_f, out_f = formats.input_format, formats.output_format
+    if math_fidelity == MathFidelity.HiFi2 and kt_dim == 1:
+        if in_f == out_f == DataFormat.Float32 and dest_acc == DestAccumulation.Yes and (ct_dim, rt_dim) == (4, 1) and in0_r_dim == 8:
+            return True
+        if cov_only:
+            return False
+        if in_f == DataFormat.Bfp8_b and out_f == DataFormat.Float16_b and dest_acc == DestAccumulation.No and rt_dim == 1 and ct_dim in (3, 6):
+            return True
+        if in_f == out_f == DataFormat.Float32 and dest_acc == DestAccumulation.No and (ct_dim, rt_dim) == (2, 4):
+            return True
+    return (
+        not cov_only
+        and math_fidelity == MathFidelity.LoFi
+        and kt_dim == 4
+        and in_f == out_f == DataFormat.Float32
+        and dest_acc == DestAccumulation.Yes
+        and (ct_dim, rt_dim) == (4, 1)
+    )
+
+
 def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt_dim: int, kt_dim: int, throttle: int) -> bool:
     """One Float16_b tile row of four k steps at HiFi2, full sync and a static throttle of 5: the k loop and the keyed forms read a cycle slower than main's, so it keeps main's."""
     return (
@@ -323,6 +349,8 @@ class MATMUL_K_LOOP(TemplateParameter):
             math_fidelity == MathFidelity.LoFi
             and (((rt_dim, ct_dim) == (2, 1) and kt_dim >= 8) or ((rt_dim, ct_dim) in ((1, 2), (2, 2)) and kt_dim >= 16))
         )
+        # a Float32 1x2 block reads 0.3 cycles slower in the k loop than in main's per-step unpack
+        key = key and not (fmt == DataFormat.Float32 and (rt_dim, ct_dim) == (1, 2))
         return [MATMUL_K_LOOP()] if key else []
 
 
@@ -393,10 +421,32 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         )
 
     @staticmethod
-    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1) -> list:
+    def for_block(formats, kt_dim: int, ct_dim: int = 0, rt_dim: int = 0, math_fidelity=None, dest_sync=None, dest_acc=None, unfuse_one_tile: bool = False, throttle: int = 0, sections: int = 1, in0_r_dim: int = 32, unfuse_cells: bool = False) -> list:
         """[MATMUL_FORM_KEYS(...)] on Blackhole, else []; row_le_8 when the block's row (the larger of ct_dim and rt_dim) has 8 tiles or fewer."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
             return []
+        unfused = (
+            # Bfp8_b input to a Float32 output at half sync reads slower with the fused post and DEST flip than main's separate stalls:
+            # at HiFi2 on one k step blocks with a 16-bit DEST (and the one tile block with a 32-bit one), at HiFi3 on the
+            # one k step blocks of up to five tiles that are not four rows tall
+            unfuse_one_tile
+            and dest_sync == DestSync.Half
+            and formats.input_format == DataFormat.Bfp8_b
+            and formats.output_format == DataFormat.Float32
+            and kt_dim == 1
+            and (
+                (math_fidelity == MathFidelity.HiFi2 and (dest_acc == DestAccumulation.No or (ct_dim, rt_dim) == (1, 1)))
+                or (
+                    math_fidelity == MathFidelity.HiFi3
+                    and dest_acc == DestAccumulation.No
+                    and (ct_dim * rt_dim <= 5 or (ct_dim, rt_dim) == (3, 2))
+                    and rt_dim < 4
+                )
+                or (math_fidelity == MathFidelity.HiFi4 and dest_acc == DestAccumulation.No and (ct_dim, rt_dim) == (1, 4))
+            )
+            or (unfuse_one_tile or unfuse_cells)
+            and _matmul_unfused_post_cell(formats, math_fidelity, dest_sync, dest_acc, ct_dim, rt_dim, kt_dim, in0_r_dim, not unfuse_one_tile)
+        )
         # a single Float32 tile at HiFi3 and half sync with a 32-bit DEST reads slower with the row MOP: the unknown-k key, which is the tile form
         if (
             (kt_dim, ct_dim, rt_dim) == (1, 1, 1)
@@ -448,30 +498,14 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             if forced:
                 return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else 2, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, forced)]
             if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim)):
-                return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8)]
+                return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, unfused)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
             MATMUL_FORM_KEYS(
                 1 if kt_dim == 1 else (2 if kt_dim <= 4 else 5),
                 formats.output_format,
                 0 < max(ct_dim, rt_dim) <= 8,
-                # Bfp8_b input to a Float32 output at half sync reads slower with the fused post and DEST flip than main's separate stalls:
-                # at HiFi2 on one k step blocks with a 16-bit DEST (and the one tile block with a 32-bit one), at HiFi3 on the
-                # one k step blocks of up to five tiles that are not four rows tall
-                unfuse_one_tile
-                and dest_sync == DestSync.Half
-                and formats.input_format == DataFormat.Bfp8_b
-                and formats.output_format == DataFormat.Float32
-                and kt_dim == 1
-                and (
-                    (math_fidelity == MathFidelity.HiFi2 and (dest_acc == DestAccumulation.No or (ct_dim, rt_dim) == (1, 1)))
-                    or (
-                        math_fidelity == MathFidelity.HiFi3
-                        and dest_acc == DestAccumulation.No
-                        and ct_dim * rt_dim <= 5
-                        and rt_dim < 4
-                    )
-                )
+                unfused,
             )
         ]
 
@@ -604,6 +638,9 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
                 take = False
             if rt_dim == 2 and ct_dim == 2 and in_f == DataFormat.Float32:
                 take = False
+            # a 2x1 block of Float32 to Float32 with a 16-bit DEST reads 0.3 cycles slower than the poll form
+            if fid == MathFidelity.LoFi and rt_dim == 2 and ct_dim == 1 and in_f == out_f == DataFormat.Float32 and not f32_acc:
+                take = False
         else:
             take = (
                 one
@@ -611,6 +648,7 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
                 and fid in (MathFidelity.HiFi2, MathFidelity.LoFi)
                 and not (in_f == DataFormat.Float32 and out_f == DataFormat.Float32 and not f32_acc)
                 and not (fid == MathFidelity.HiFi2 and in_f == DataFormat.Bfp8_b and out_f == DataFormat.Float32 and f32_acc)
+                and not (fid == MathFidelity.HiFi2 and in_f == DataFormat.Float16_b and out_f == DataFormat.Float32 and not f32_acc)
             )
         return [MATMUL_UNPACK_TTSYNC()] if take else []
 
