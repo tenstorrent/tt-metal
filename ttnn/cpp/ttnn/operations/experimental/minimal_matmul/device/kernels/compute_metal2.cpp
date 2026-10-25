@@ -404,6 +404,7 @@ template <
     DataFormat out_format,
     DataFormat in0_format,
     DataFormat in1_format,
+    uint32_t reuse_dir,
     typename In0Tok,
     typename In1Tok,
     typename OutTok>
@@ -429,7 +430,7 @@ void matmul_blocks(
             uint32_t in1_index = in1_index_offset;
 
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format>(
+                matmul_block<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format, reuse_dir>(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -477,6 +478,7 @@ template <
     DataFormat out_format,
     DataFormat in0_format,
     DataFormat in1_format,
+    uint32_t reuse_dir,
     typename In0Tok,
     typename In1Tok,
     typename IntermTok,
@@ -502,7 +504,7 @@ void matmul_blocks_swiglu(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
             for (uint32_t inner_dim = 0; inner_dim < K_block_tiles; inner_dim++) {
-                matmul_block<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format>(
+                matmul_block<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format, reuse_dir>(
                     in0_dfb,
                     in1_dfb,
                     in0_index,
@@ -527,7 +529,7 @@ void matmul_blocks_swiglu(
                     }
                 }
                 reconfig_data_format_srca(interm_dfb, in1_dfb);
-                matmul_block_init<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format>(
+                matmul_block_init<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format, reuse_dir>(
                     in0_dfb, in1_dfb, false /*transpose*/, subblock_w, subblock_h, K_block_tiles);
             }
             tile_regs_commit();
@@ -574,11 +576,20 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
     // cells where the keyed forms read slower than main's on the tt-llk sweep keep main's form (llk_matmul_forms.h)
 #if defined(UCK_CHLKC_PACK)
+    constexpr uint32_t mm_reuse_dir = 0;
     constexpr bool mm_main_cell = false;
     constexpr char mm_forced_form = 0;
     constexpr DataFormat mm_forced_key = DataFormat::Invalid;
 #else
-    constexpr bool mm_main_cell = ckernel::matmul_main_form_cell_selected<
+    // a block with one 32-bit and one 16-bit operand at LoFi holds the 32-bit operand (llk_matmul_forms.h matmul_reuse_dir); main's tile form
+    constexpr uint32_t mm_reuse_dir = ckernel::matmul_reuse_dir(
+        MATH_FIDELITY,
+        static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in0)]),
+        static_cast<DataFormat>(unpack_src_format[static_cast<uint32_t>(dfb::in1)]),
+        subblock_w,
+        subblock_h,
+        DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[static_cast<uint32_t>(dfb::out)] == (uint8_t)DataFormat::Float32);
+    constexpr bool mm_main_cell = mm_reuse_dir != 0 || ckernel::matmul_main_form_cell_selected<
         MATH_FIDELITY,
         K_block_tiles,
         DST_ACCUM_MODE,
@@ -604,6 +615,8 @@ void kernel_main() {
         (K_num_blocks > 1)>();
     constexpr DataFormat mm_forced_key = ckernel::matmul_forced_form_key(mm_forced_form);
 #endif
+#else
+    constexpr uint32_t mm_reuse_dir = 0;
 #endif
 #if defined(ARCH_BLACKHOLE) && !defined(SFPU_OP_INIT_ACTIVATION)
     // not with a fused activation: its SFPU init runs once, before the matmul inits that rewrite ADDR_MOD_3, 6 and 7
@@ -699,7 +712,7 @@ void kernel_main() {
             reconfig_data_format(dfb::in1, dfb::in0);
             pack_reconfig_data_format(dfb::intermediate);
             retarget_packer(dfb::intermediate);
-            matmul_block_init<row_mop, false, K_block_tiles, mm_pack_format, 0, mm_in0_format, mm_in1_format>(
+            matmul_block_init<row_mop, false, K_block_tiles, mm_pack_format, 0, mm_in0_format, mm_in1_format, mm_reuse_dir>(
                 dfb::in0,
                 dfb::in1,
                 false /*transpose*/,
@@ -721,7 +734,7 @@ void kernel_main() {
                     pack_reconfig_data_format(dfb::out);
                     // SwiGLU collapses the interleaved gate/up block to half its N width.
                     dfb_out.reserve_back(out_block_num_tiles >> 1);
-                    matmul_blocks_swiglu<swiglu_block_float_output, row_mop, K_block_tiles, mm_pack_format, mm_in0_format, mm_in1_format>(
+                    matmul_blocks_swiglu<swiglu_block_float_output, row_mop, K_block_tiles, mm_pack_format, mm_in0_format, mm_in1_format, mm_reuse_dir>(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,
@@ -738,7 +751,7 @@ void kernel_main() {
                         dfb_intermediate.pop_front(out_block_num_tiles);
                     }
                 } else {
-                    matmul_blocks<row_mop, K_block_tiles, mm_pack_format, mm_in0_format, mm_in1_format>(
+                    matmul_blocks<row_mop, K_block_tiles, mm_pack_format, mm_in0_format, mm_in1_format, mm_reuse_dir>(
                         dfb::in0,
                         dfb::in1,
                         dfb::intermediate,

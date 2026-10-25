@@ -92,7 +92,7 @@ FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_dfb_id, uint32_t i
     }
 }
 
-template <bool row_mop, uint32_t kt_per_section, DataFormat out_format, DataFormat in0_format, DataFormat in1_format>
+template <bool row_mop, uint32_t kt_per_section, DataFormat out_format, DataFormat in0_format, DataFormat in1_format, uint32_t reuse_dir = 0>
 FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t in0_dfb_id,
     uint32_t in1_dfb_id,
@@ -129,7 +129,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     mm_partials_dfb.pop_front(static_cast<uint16_t>(out_subblock_num_tiles));
     // Reconfigure srcA back
     reconfig_data_format_srca(mm_partials_reload_dfb_id, in1_dfb_id);
-    matmul_block_init<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format>(
+    matmul_block_init<row_mop, false, kt_per_section, out_format, 0, in0_format, in1_format, reuse_dir>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -227,15 +227,24 @@ void kernel_main() {
     constexpr uint32_t bmm_section_out_dfb_id = untilize_out ? mm_partials_dfb_id : out_dfb_id;
 #endif
 #if defined(UCK_CHLKC_PACK)
+    constexpr uint32_t bmm_reuse_dir = 0;
     constexpr bool bmm_main_cell = false;
     constexpr char bmm_forced_form = 0;
     constexpr DataFormat bmm_forced_key = DataFormat::Invalid;
 #else
+    // a block with one 32-bit and one 16-bit operand at LoFi holds the 32-bit operand (llk_matmul_forms.h matmul_reuse_dir); main's tile form
+    constexpr uint32_t bmm_reuse_dir = ckernel::matmul_reuse_dir(
+        MATH_FIDELITY,
+        static_cast<DataFormat>(unpack_src_format[in0_dfb_id]),
+        in1_format,
+        out_subblock_w,
+        out_subblock_h,
+        DST_SYNC_MODE == DstSync::SyncHalf && unpack_src_format[out_dfb_id] == (uint8_t)DataFormat::Float32);
     // one tile in one section for the whole kernel: the row MOP's init is not repaid (HiFi4 bf16 1x1 reads 6 to 14 ns slower than main)
     constexpr bool bmm_single_tile_kernel =
         out_subblock_num_tiles == 1 && !get_batch_from_reader &&
         batch * num_blocks_h_dim * num_blocks_w_dim * in0_num_subblocks * in1_num_subblocks * num_blocks_inner_dim == 1;
-    constexpr bool bmm_main_cell = bmm_single_tile_kernel || ckernel::matmul_main_form_cell_selected<
+    constexpr bool bmm_main_cell = bmm_single_tile_kernel || bmm_reuse_dir != 0 || ckernel::matmul_main_form_cell_selected<
         MATH_FIDELITY,
         in0_block_w,
         DST_ACCUM_MODE,
@@ -268,6 +277,7 @@ void kernel_main() {
         out_subblock_num_tiles >= 4 && (is_bfp8_b_format(in1_format) || is_bfp4_b_format(in1_format));
 #else
     constexpr bool row_mop = false;
+    constexpr uint32_t bmm_reuse_dir = 0;
 #endif
     // CB view the cross-block reload copies through: the UnpackToDestFp32-marked alias of the partials
     // CB when it is also read as an FPU operand (fused bias), otherwise the partials CB itself.
@@ -357,7 +367,7 @@ void kernel_main() {
     constexpr bool spill = num_blocks_inner_dim > 1;
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_dfb_id, in1_dfb_id, mm_partials_dfb_id);
-    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format>(
+    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
         in0_dfb_id, in1_dfb_id, static_cast<uint32_t>(in1_transpose_tile), out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
@@ -398,7 +408,7 @@ void kernel_main() {
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
-                        matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format>(
+                        matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
                             in0_dfb_id,
                             in1_dfb_id,
                             static_cast<uint32_t>(in1_transpose_tile),
@@ -435,7 +445,7 @@ void kernel_main() {
 
                             tile_regs_acquire();
                             if (enable_reload) {
-                                reload_from_cb_to_dst<row_mop, in0_block_w, mm_pack_format, mm_in0_format, mm_in1_format>(
+                                reload_from_cb_to_dst<row_mop, in0_block_w, mm_pack_format, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     mm_partials_dfb_id,
@@ -459,7 +469,7 @@ void kernel_main() {
                                 // accumulation is done by iterating matmul_block across inner dim
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride
                                 // in0
-                                matmul_block<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format>(
+                                matmul_block<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
                                     in0_dfb_id,
                                     in1_dfb_id,
                                     in0_index,
@@ -704,7 +714,7 @@ void kernel_main() {
                     reconfig_data_format_srca(mm_partials_dfb_id, in1_dfb_id);
 #endif
                     // reconfigure init for matmul
-                    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format>(
+                    matmul_block_init<row_mop, false, in0_block_w, mm_pack_format, 0, mm_in0_format, mm_in1_format, bmm_reuse_dir>(
                         in0_dfb_id,
                         in1_dfb_id,
                         static_cast<uint32_t>(in1_transpose_tile),
