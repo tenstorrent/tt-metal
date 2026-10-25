@@ -758,6 +758,10 @@ class ttMLA:
         self._seq_q = self._resolve_seq_sharded_q(seq_sharded_q)
         self._seq_q_out = os.getenv("MLA_SEQQ_OUT", "heads")
         assert self._seq_q_out in ("heads", "cols"), f"MLA_SEQQ_OUT must be heads or cols, got {self._seq_q_out}"
+        # Debug/reference: MLA_SEQQ_QA=allreduce keeps the head-sharded path's q_a stem (all-reduce + norm of all
+        # S/sp rows) and partitions the rows afterwards, isolating the reduce-scatter summation order.
+        self._seq_q_qa = os.getenv("MLA_SEQQ_QA", "rows")
+        assert self._seq_q_qa in ("rows", "allreduce"), f"MLA_SEQQ_QA must be rows or allreduce, got {self._seq_q_qa}"
         if self._seq_q:
             self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
             self.wkv_b1_weight = self._replicate_over_tp(self.wkv_b1_weight, dim=1)
@@ -1771,7 +1775,11 @@ class ttMLA:
         q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local)
         # Compute the q_a latent once and share it: the DSA indexer reads it for its queries, then
         # _q_stem consumes it for q_b_proj — so the sparse path does not recompute the q_a stem.
-        if self._seq_q:
+        if self._seq_q and self._seq_q_qa == "allreduce":
+            qr_all = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
+            qr, kv_a = ttnn.mesh_partition(qr_all, dim=2, cluster_axis=self.tp_axis), None
+            ttnn.deallocate(qr_all)
+        elif self._seq_q:
             # Only this TP rank's row quarter of the latent (see _q_a_latent_seq).
             q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local // self.tp_factor)
             qr, kv_a = self._q_a_latent_seq(hidden_states, seq_len_local, q_norm_mem_config), None

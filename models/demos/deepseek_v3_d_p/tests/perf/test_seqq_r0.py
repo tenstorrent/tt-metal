@@ -701,7 +701,12 @@ def test_seqq_r0(mesh_device, variant, config_only):
                 t_til, tw_b2_full, program_config=b2_pc160, memory_config=DRAM, dtype=dt, compute_kernel_config=hifi2
             )
             timer(f"O5 a2a s2h [64,160,256] {dn} (DRAM in)", lambda v=v: a2a(v, 2, 1))
-            cc = ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM)
+            try:  # bf16 [64,160,256] nlp_concat_heads fails its CB allocation (R0-1); keep going
+                cc = ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM)
+            except Exception as e:
+                log(f"FAIL O5 concat heads {dn}: {type(e).__name__}: {str(e)[:200]}")
+                _free(v)
+                continue
             timer(
                 f"O5 concat heads [64,160,256] {dn}",
                 lambda v=v: ttnn.experimental.nlp_concat_heads(v, memory_config=DRAM),
@@ -709,5 +714,160 @@ def test_seqq_r0(mesh_device, variant, config_only):
             timer(f"O5 a2a cols->rows [160,16384] {dn}", lambda cc=cc: a2a(cc, 2, 3))
             _free([v, cc])
         _free([t_til, h_b, attn_rm, tw_b2, tw_b2_full, tw_o])
+
+    # ======================= U. L1 placement around sparse_sdpa (seq path shapes) =======================
+    if want("u"):
+        from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+
+        hf = copy.deepcopy(config_only)
+        CACHE = 6 * S * SP
+        hf.max_seq_len = CACHE
+        rope_t = RotarySetup(hf, mesh, sp_axis=0).get_rope_tensors_indexed(CACHE, S * SP)
+        nope_full = torch.randn(1, NH, S * SP, KV_LORA)
+        rope_full = torch.randn(1, NH, S * SP, ROPE)
+
+        def part(x, mem):
+            t = mk(mesh, x, dims=(2, None))
+            o = ttnn.mesh_partition(t, dim=2, cluster_axis=1, memory_config=mem)
+            ttnn.deallocate(t)
+            return o
+
+        nope_l1, rope_in = part(nope_full, L1), part(rope_full, DRAM)
+        nope_dram = ttnn.to_memory_config(nope_l1, DRAM)
+
+        def rope_cat(mem, prefix=nope_l1):
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                rope_in,
+                rope_t["cos_matrix"],
+                rope_t["sin_matrix"],
+                rope_t["trans_matrix"],
+                kv_actual_global=5 * S * SP,
+                cluster_axis=0,
+                memory_config=mem,
+                seq_subshard_axis=1,
+                concat_prefix=prefix,
+            )
+
+        q_dram = rope_cat(DRAM)
+        for tag, mem in (("L1", L1),):
+            try:
+                q_l1 = rope_cat(mem)
+                cmp(f"U rope+cat out {tag} vs DRAM", q_l1, q_dram)
+                _free(q_l1)
+            except Exception as e:
+                log(f"FAIL U rope out {tag}: {type(e).__name__}: {str(e)[:300]}")
+        timer("U0 rope+cat [64,160] prefix L1 -> DRAM", lambda: rope_cat(DRAM))
+        timer("U0 rope+cat [64,160] prefix DRAM -> DRAM", lambda: rope_cat(DRAM, nope_dram))
+        timer("U1 rope+cat [64,160] prefix L1 -> L1", lambda: rope_cat(L1))
+        q_l1 = rope_cat(L1)
+        timer("U2 untilize [64,160,576] DRAM -> DRAM", lambda: ttnn.to_layout(q_dram, ttnn.ROW_MAJOR_LAYOUT))
+        timer(
+            "U2 untilize [64,160,576] DRAM -> L1",
+            lambda: ttnn.to_layout(q_dram, ttnn.ROW_MAJOR_LAYOUT, memory_config=L1),
+        )
+        timer("U2 untilize [64,160,576] L1 -> L1", lambda: ttnn.to_layout(q_l1, ttnn.ROW_MAJOR_LAYOUT))
+        timer(
+            "U2 untilize [64,160,576] L1 -> DRAM",
+            lambda: ttnn.to_layout(q_l1, ttnn.ROW_MAJOR_LAYOUT, memory_config=DRAM),
+        )
+        ref_rm = ttnn.to_layout(q_dram, ttnn.ROW_MAJOR_LAYOUT)
+        try:
+            cmp("U untilize L1->L1 vs DRAM->DRAM", ttnn.to_layout(q_l1, ttnn.ROW_MAJOR_LAYOUT), ref_rm)
+        except Exception as e:
+            log(f"FAIL U untilize L1: {type(e).__name__}: {str(e)[:300]}")
+        _free([q_l1, q_dram, ref_rm, nope_l1, nope_dram, rope_in])
+        # tilize of the sparse_sdpa output, then wkv_b2 from DRAM vs L1
+        attn = part(torch.randn(1, NH, S * SP, KV_LORA), DRAM)
+        attn_rm = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(attn)
+        tw_b2_full = mk(mesh, torch.randn(1, NH, KV_LORA, VDIM) * (1 / KV_LORA**0.5), ttnn.bfloat8_b)
+        b2_pc160 = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=GRID,
+            in0_block_w=2,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            per_core_M=5,
+            per_core_N=8,
+        )
+
+        def til_b2(til_mem):
+            t = ttnn.to_layout(attn_rm, ttnn.TILE_LAYOUT, memory_config=til_mem)
+            v = ttnn.linear(
+                t,
+                tw_b2_full,
+                program_config=b2_pc160,
+                memory_config=DRAM,
+                dtype=ttnn.bfloat8_b,
+                compute_kernel_config=hifi2,
+            )
+            ttnn.deallocate(t)
+            return v
+
+        timer("U3 tilize [64,160,512] DRAM -> DRAM", lambda: ttnn.to_layout(attn_rm, ttnn.TILE_LAYOUT))
+        timer(
+            "U3 tilize [64,160,512] DRAM -> L1",
+            lambda: ttnn.to_layout(attn_rm, ttnn.TILE_LAYOUT, memory_config=L1),
+        )
+        timer("U4 tilize DRAM + wkv_b2", lambda: til_b2(DRAM))
+        timer("U4 tilize L1 + wkv_b2", lambda: til_b2(L1))
+        try:
+            cmp("U tilize L1 + wkv_b2 vs DRAM", til_b2(L1), til_b2(DRAM))
+        except Exception as e:
+            log(f"FAIL U tilize L1: {type(e).__name__}: {str(e)[:300]}")
+        _free([attn_rm, tw_b2_full])
+
+    # ======================= B. q_b full program-config sweep =======================
+    if want("b"):
+        qr_loc = mk(mesh, torch.randn(1, 1, SQ, Q_LORA), mem=L1)
+        tw = mk(mesh, torch.randn(Q_LORA, NH * (NOPE + ROPE)) * (1 / Q_LORA**0.5), ttnn.bfloat8_b)
+
+        def qb(pc, mem=L1, dtype=ttnn.bfloat16):
+            kw = {"program_config": pc} if pc is not None else {}
+            return ttnn.linear(qr_loc, tw, memory_config=mem, dtype=dtype, compute_kernel_config=hifi2, **kw)
+
+        ref = qb(None)
+        cands = [("auto", None)]
+        for grid in ((11, 10), (12, 10)):
+            for n in (5, 6, 7):
+                if -(-512 // n) > grid[0] * grid[1]:
+                    continue
+                for kb in (1, 2, 4):
+                    cands.append((f"1d g{grid[0]}x{grid[1]} n{n} k{kb}", pc1d(n, kb, grid=grid)))
+        for x, n in ((8, 64), (16, 32)):
+            if x > 12:
+                continue
+            for kb in (1, 2):
+                cands.append(
+                    (
+                        f"2d x{x}y5 n{n} k{kb}",
+                        ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                            compute_with_storage_grid_size=(x, 5),
+                            in0_block_w=kb,
+                            out_subblock_h=1,
+                            out_subblock_w=8,
+                            per_core_M=1,
+                            per_core_N=n,
+                            transpose_mcast=False,
+                            fuse_batch=False,
+                            fused_activation=None,
+                        ),
+                    )
+                )
+        best = None
+        for tag, pc in cands:
+            us = timer(f"B q_b full [{tag}]", lambda pc=pc: qb(pc))
+            if us is not None:
+                try:
+                    o = qb(pc)
+                    p = cmp(f"B q_b full [{tag}] vs auto", o, ref, devs=(0, 31))
+                    _free(o)
+                except Exception as e:
+                    log(f"FAIL B pcc [{tag}]: {e}")
+                    p = 0
+                if p > 0.9999 and (best is None or us < best[0]):
+                    best = (us, tag)
+        log(f"B best q_b full config: {best}")
+        timer("B q_b full [auto] bfp8 out", lambda: qb(None, dtype=ttnn.bfloat8_b))
+        _free([ref, qr_loc, tw])
 
     log("DONE")
