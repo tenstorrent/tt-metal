@@ -63,6 +63,10 @@ _GLM_FP8_DISPATCH_SD_ROWS = int(os.environ.get("GLM_FP8_DISPATCH_SD_ROWS", "1"))
 # With the fp8 wire the dispatch rows finish well before the shared-expert chain, which then bounds the window: run
 # post_combine_reduce's weights reshape (depends only on the scores) on the dispatch rows after dispatch instead.
 _GLM_FP8_PCRW_SD0 = os.environ.get("GLM_FP8_PCRW_SD0", "0") == "1"
+# fp8wire: the fp8 COMBINE wire (port of the prototype's combine half). combine_fabric2d's untilizers quantize each
+# routed-expert output row to [e4m3 | fp32 pow2 scale per 128] (Q2), combine moves the packed rows, and
+# post_combine_reduce dequantizes them in its weighted sum (DQ2). Off by default; independent of GLM_FP8_DISPATCH.
+_GLM_FP8_COMBINE = os.environ.get("GLM_FP8_COMBINE", "0") == "1"
 
 # Four similarly-named dimensions, shown for Kimi-K3, the only variant where all four differ:
 #
@@ -537,6 +541,11 @@ class TtMoe(LightweightModule):
         if _GLM_FP8_DISPATCH_ENV is not None:
             fp8_dispatch_wire = _GLM_FP8_DISPATCH_ENV == "1"
         self.dispatch_fp8 = fp8_dispatch_wire and moe_transport == "fabric2d" and is_blackhole()
+        self.combine_fp8_scale_block = 128 if (_GLM_FP8_COMBINE and moe_transport == "fabric2d" and is_blackhole()) else 0
+        if self.combine_fp8_scale_block:
+            if self.routed_emb_dim % 128 != 0:
+                raise ValueError(f"TtMoe: the fp8 combine wire needs routed_emb_dim % 128 == 0, got {self.routed_emb_dim}")
+            logger.info("TtMoe: fp8 combine wire on (scale block 128)")
         self.fp8_scale_block = _GLM_FP8_SCALE_BLOCK
         if self.dispatch_fp8:
             if self.fp8_scale_block not in (32, 64, 128):
@@ -637,6 +646,7 @@ class TtMoe(LightweightModule):
                 emb_dim=self.routed_emb_dim,
                 cluster_axis=0,
                 num_links=self.row_num_links,
+                fp8_scale_block=self.combine_fp8_scale_block,
             )
         else:
             self.combine_module = TtCombineModule(
@@ -815,6 +825,7 @@ class TtMoe(LightweightModule):
                 self.num_experts_per_tok,
                 self.seq_len_per_chip,
                 self.row_num_links,
+                fp8_scale_block=self.combine_fp8_scale_block,
             )
 
     def release_sub_device_manager(self):
@@ -929,6 +940,7 @@ class TtMoe(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             combine_semaphores=self.combine_overlap_semaphores,
             forwarding_buffer=self.combine_forwarding_buffer,
+            combine_fp8_scale_block=self.combine_fp8_scale_block,
         )
 
     def forward(
@@ -1367,6 +1379,7 @@ class TtMoe(LightweightModule):
             weights=scores,
             indices=indices,
             expert_dispatch_table=self.tt_expert_dispatch_table,
+            fp8_scale_block_w=self.combine_fp8_scale_block,
         )
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
