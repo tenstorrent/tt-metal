@@ -21,11 +21,22 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn {
+// PROTOTYPE: x may be the fp8 dispatch wire's FP8_E4M3 ROW_MAJOR packed rows [emb e4m3 | emb / 128 fp32 scales],
+// which the fused half dequantizes as it tilizes. Its last dim is then the packed width, not the embedding.
+inline bool x_is_fp8_rows(const ttnn::Tensor& x) {
+    return x.dtype() == tt::tt_metal::DataType::FP8_E4M3 && x.layout() == tt::tt_metal::Layout::ROW_MAJOR;
+}
+inline uint32_t x_embedding(const ttnn::Tensor& x) {
+    const auto width = static_cast<uint32_t>(x.logical_shape()[-1]);
+    return x_is_fp8_rows(x) ? per_token_cast_to_fp8::packed_row_h(width, 128) : width;
+}
+
 // The worker rectangle both passes run on. Rows 0-1 are reserved for the combine op and one
 // column goes to dispatch, so 11x8 starting at y=2 is the whole grid this op may take.
 //

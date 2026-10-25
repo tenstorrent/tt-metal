@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -17,6 +18,15 @@ inline constexpr uint32_t DEST_LIMIT = 8;
 inline constexpr uint32_t OUT_SUBBLOCK_H_GU = 1;
 inline constexpr uint32_t OUT_SUBBLOCK_H_DN_MAX = 4;
 inline constexpr uint32_t ELTWISE_BLK = 8;
+
+// PROTOTYPE: HYB_FP32_DEST=1 runs the hybrid routed expert with an fp32 DEST accumulator, which in half sync holds
+// four tiles, not eight. Everything the blocking sizes against DEST then takes this budget instead.
+inline bool hybrid_fp32_dest() {
+    static const bool on = std::getenv("HYB_FP32_DEST") != nullptr && std::string(std::getenv("HYB_FP32_DEST")) == "1";
+    return on;
+}
+inline uint32_t dest_limit() { return hybrid_fp32_dest() ? DEST_LIMIT / 2 : DEST_LIMIT; }
+inline uint32_t eltwise_blk() { return hybrid_fp32_dest() ? ELTWISE_BLK / 2 : ELTWISE_BLK; }
 inline constexpr uint32_t DEPTH_W = 2;
 inline constexpr uint32_t DEPTH_X = 2;
 inline constexpr uint32_t DEPTH_H = 3;
@@ -79,6 +89,17 @@ inline constexpr uint32_t CB_MAILBOX_COMPUTE = 21;
 inline constexpr uint32_t CB_GATE_BIAS = 22;
 inline constexpr uint32_t CB_UP_BIAS = 23;
 inline constexpr uint32_t CB_DOWN_BIAS = 24;
+// PROTOTYPE, an FP8_E4M3 ROW_MAJOR x of packed rows [emb e4m3 | emb / 128 fp32 scales] (the fp8 dispatch wire's
+// rows, no separate dequantize): the injecting core tilizes its e4m3 K slice into CB_X_Q, multiplies each 1x128
+// block by its rows' scales (CB_X_SCALE, one bfp8 tile per 128 columns, row r all its scale) and packs the bf8
+// result into CB_X_TILES. The reader stages the slice's raw fp32 scales in CB_X_SCALE_RAW, one 64 B-aligned window
+// per stick. They take the bias slots, which an fp8 x never has: a CB index past the unified half's would grow the
+// per-core CB config, and the kernel config ring has no room for it.
+inline constexpr uint32_t CB_X_Q = CB_GATE_BIAS;
+inline constexpr uint32_t CB_X_SCALE = CB_UP_BIAS;
+inline constexpr uint32_t CB_X_SCALE_RAW = CB_DOWN_BIAS;
+// One stick's window of scales: kr_pad / 4 fp32 scales from wherever they start inside a 64 B line.
+inline constexpr uint32_t x_fp8_scale_slot_bytes(uint32_t kr_pad) { return (64 + kr_pad + 63) / 64 * 64; }
 
 inline constexpr uint32_t SEM_X_BASE = 0;
 inline constexpr uint32_t SEM_H_BASE = 2;
@@ -135,7 +156,9 @@ public:
         bool x_is_rm_,
         // Defaulted so the bias-free callers -- every one of them today -- are unchanged, and so
         // the constructor's L1-budget tuning sees the bias CBs like any other.
-        bool fuse_bias_ = false);
+        bool fuse_bias_ = false,
+        // PROTOTYPE: x is FP8_E4M3 packed rows; adds the CB_X_Q / CB_X_SCALE / CB_X_SCALE_RAW buffers.
+        bool x_fp8_ = false);
 
     std::vector<CbView> cb_layout(
         bool input_is_rm, uint32_t requested_out_tile, uint32_t idx_page, uint32_t counts_page) const;
@@ -151,6 +174,7 @@ public:
     std::string describe() const;
 
     bool fuse_bias;
+    bool x_fp8;
     uint32_t hgroups;
     uint32_t kgroups;
     uint32_t num_cores;
