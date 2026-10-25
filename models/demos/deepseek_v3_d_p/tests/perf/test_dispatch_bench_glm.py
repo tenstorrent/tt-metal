@@ -338,6 +338,16 @@ def test_dispatch_bench(mesh_device, device_params):
                     for o in outs:
                         ttnn.deallocate(o)
                     _beat(f"fab2d {spec} eager")
+                    if os.environ.get("DB_PROFILE", "0") == "1":
+                        # Device-profiler mode: a few synced eager launches, then dump zones (no trace).
+                        ttnn.ReadDeviceProfiler(mesh_device)
+                        for _ in range(3):
+                            for o in run2():
+                                ttnn.deallocate(o)
+                            ttnn.synchronize_device(mesh_device)
+                        ttnn.ReadDeviceProfiler(mesh_device)
+                        _beat(f"fab2d {spec} profiled")
+                        return 0.0
                     return _time_trace(
                         mesh_device, run2, k, int(os.environ.get("DB_FAB2D_REPLAYS", "4")), f"fab2d payload{payload} {spec}"
                     )
