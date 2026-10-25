@@ -30,8 +30,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         above it on the unified one. One program, so the layer can be overlapped with combine.
 
         Passing dispatched_metadata overlaps combine_fabric2d in the same program and returns
-        combine's output. dispatched_buffer must then be bfloat16 ROW_MAJOR (the routed expert hands
-        combine bfloat8_b tiles, as the two ops do back to back), and expert_offsets,
+        combine's output. dispatched_buffer must then be bfloat16 ROW_MAJOR or bfloat8_b TILE, and the routed
+        expert hands combine bfloat8_b tiles of its own, as the two ops do back to back. expert_offsets,
         replicated_global_expert_idx_table (the full table on every device), expert_region_offsets,
         combine_axis, combine_num_links, num_experts_per_tok and seq_len_per_chip are combine's.
         The overlap also needs fwd_arrived_semaphore, final_arrived_semaphore, expert_go_semaphore and
@@ -48,6 +48,9 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         args, which is what lets the union program fit its kernel-config ring at the production
         expert count. The caller builds it once, alongside the weights, and keeps the two in step:
         only its shape is checked.
+
+        combine_fp8_scale_block=128 has combine send fp8 tokens and return them as FP8_E4M3
+        [e4m3 | fp32 scale per 128] rows; see combine_fabric2d.
         )doc",
         &hybrid_routed_expert_moe,
         nb::arg("dispatched_buffer").noconvert(),
@@ -77,7 +80,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("expert_go_semaphore") = nb::none(),
         nb::arg("forwarding_buffer") = nb::none(),
         nb::arg("channel_semaphores") = std::vector<GlobalSemaphore>{},
-        nb::arg("weight_address_table") = nb::none());
+        nb::arg("weight_address_table") = nb::none(),
+        nb::arg("combine_fp8_scale_block") = 0);
 
     ttnn::bind_function<
         "hybrid_routed_expert_moe_channel_semaphore_count",
@@ -101,7 +105,7 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
 
         Create it once per mesh, before the first overlapped forward, and pass it as forwarding_buffer
         on every call. The arguments are the ones the overlapped call passes; emb_dim is the routed
-        token width.
+        token width, and fp8_scale_block the overlapped call's combine_fp8_scale_block.
         )doc",
         &hybrid_routed_expert_moe_forwarding_buffer,
         nb::arg("mesh_device"),
@@ -111,7 +115,8 @@ void bind_hybrid_routed_expert_ffn(nb::module_& mod) {
         nb::arg("num_experts_per_tok"),
         nb::arg("seq_len_per_chip"),
         nb::arg("combine_axis") = 0,
-        nb::arg("combine_num_links") = 2);
+        nb::arg("combine_num_links") = 2,
+        nb::arg("fp8_scale_block") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn::detail

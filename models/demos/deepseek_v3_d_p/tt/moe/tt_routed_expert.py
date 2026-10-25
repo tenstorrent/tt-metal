@@ -878,6 +878,7 @@ class TtRoutedExpert(LightweightModule):
         seq_len_per_chip: int,
         combine_semaphores,
         forwarding_buffer: Optional[ttnn.Tensor] = None,
+        combine_fp8_scale_block: int = 0,
     ) -> ttnn.Tensor:
         """The routed expert overlapped with combine_fabric2d in one program; returns combine's output.
 
@@ -885,9 +886,13 @@ class TtRoutedExpert(LightweightModule):
         counters, all kept by the caller for the mesh's lifetime; see TT_CCL.get_combine_overlap_semaphores.
         The op frees the rest of its L1 on return.
 
-        Blackhole only, on the ROW_MAJOR bf16 dispatch buffer: the routed expert writes bf8 tiles, as it does
-        for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the experts as in forward(), except that the
-        fused-only sentinel is not available: the one-program op always runs the unified half.
+        Blackhole only, on a ROW_MAJOR bf16 or a TILE bf8 dispatch buffer: the routed expert writes bf8 tiles, as it
+        does for the separate combine, and combine's untilizers dequantise them to bf16 rows. The threshold splits the
+        experts as in forward(), except that the fused-only sentinel is not available: the one-program op always runs
+        the unified half.
+
+        `combine_fp8_scale_block` 128 has the untilizers quantize the rows to fp8 instead, and combine returns
+        FP8_E4M3 [e4m3 | fp32 scale per 128] rows; `forwarding_buffer` must then be sized for them.
         """
         if not self._is_blackhole:
             raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
@@ -935,4 +940,5 @@ class TtRoutedExpert(LightweightModule):
             forwarding_buffer=forwarding_buffer,
             channel_semaphores=list(combine_semaphores[3:]),
             weight_address_table=self.weight_address_table,
+            combine_fp8_scale_block=combine_fp8_scale_block,
         )
