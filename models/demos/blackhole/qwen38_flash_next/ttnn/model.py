@@ -1175,6 +1175,11 @@ class Qwen38TTNNTextModel:
                 self._position_derive_lanes = fused_kernels.position_derive.derive_lanes_fused
         self._clean_feature_rows_hosts: dict[int, Any] = {}  # the -0.0 feature rows per chunk row count (host)
         self._state_owner = object()
+        # ids of the chunk states whose pad inputs hold the full-pass values (set by ``write_chunk_pad(None)``, dropped by
+        # a partial write and at release): the next full-pass write is skipped
+        self._chunk_pad_full: set[int] = set()
+        self._ring_select_tensors: tuple[Any, ...] | None = None  # the 32 hand-off ring selects (``_ring_selects``)
+        self._ring_select_users = 0  # live 32-row chunk states: the selects are released with the last one
         self._poisoned_error: Qwen38TTNNModelPoisonedError | None = None
         self._poisoned_device_owners: list[Any] = []
         self._active_snapshot: Qwen38TTNNTextModelSnapshot | None = None
@@ -2710,6 +2715,8 @@ class Qwen38TTNNTextModel:
                 raise ValueError(f"the base chunk state must be the {CHUNK_ROWS}-row one, got {base.rows} rows")
         gdn = next(layer.attention for layer in self.layers if layer.layer_type is Qwen38TTNNLayerType.GDN)
         qsa = next(layer.attention for layer in self.layers if layer.layer_type is Qwen38TTNNLayerType.QSA)
+        if rows == CHUNK_ROWS:
+            self._ring_selects()  # before any capture: the hand-off allocates nothing at request time
         rows_constants = gdn.allocate_rows_constants(rows)
         qsa_chunk_constants = None
         local_combine_output = None
@@ -2771,8 +2778,12 @@ class Qwen38TTNNTextModel:
                 position=state.position,
             )
             self._validate_chunk_state(result)
+            if rows == CHUNK_ROWS:
+                self._ring_select_users += 1
             return result
         except BaseException as error:
+            if rows == CHUNK_ROWS and not self._ring_select_users:
+                self._release_ring_selects()
             actions = [
                 (
                     f"target layer {index} chunk state",
@@ -2805,6 +2816,7 @@ class Qwen38TTNNTextModel:
         """Release a chunk state; a 128-row state goes before the 32-row state whose histories it shares."""
 
         self._validate_chunk_state(chunk_state)
+        self._chunk_pad_full.discard(id(chunk_state))
         actions = [
             (
                 f"target layer {index} chunk state",
@@ -2812,6 +2824,10 @@ class Qwen38TTNNTextModel:
             )
             for index, (layer, layer_state) in reversed(tuple(enumerate(zip(self.layers, chunk_state.layers))))
         ]
+        if chunk_state.accepted is not None:
+            self._ring_select_users -= 1
+            if not self._ring_select_users:
+                actions.append(("hand-off ring selects", self._release_ring_selects))
         actions.append(("chunk feature rows", lambda: ttnn.deallocate(chunk_state.feature_rows.tensor)))
         actions.append(("chunk RoPE rows", chunk_state.rope_rows.deallocate))
         actions.append(("chunk PLE rows", chunk_state.ple_rows.release))
@@ -2883,6 +2899,10 @@ class Qwen38TTNNTextModel:
             raise ValueError(
                 f"a padded {rows}-row pass holds {PADDED_PASS_MIN_ROWS}..{rows} real rows, got {real_rows}"
             )
+        full = real_rows is None
+        if full and id(chunk_state) in self._chunk_pad_full:
+            return  # the inputs already hold the full pass (the last write was one, nothing else writes them)
+        self._chunk_pad_full.discard(id(chunk_state))  # unknown until the writes below all landed
         images = gdn_module.pad_input_images(rows, real_rows)
 
         def write(host: torch.Tensor, dtype, target) -> None:
@@ -2919,6 +2939,8 @@ class Qwen38TTNNTextModel:
                     torch.full((1, 1, 1, 1), 1.0 - flag, dtype=torch.bfloat16), ttnn.bfloat16, ple.snapshot_keep[block]
                 )
                 write(torch.full((1, 1, 1, 1), flag, dtype=torch.bfloat16), ttnn.bfloat16, ple.snapshot_take[block])
+        if full:
+            self._chunk_pad_full.add(id(chunk_state))
 
     def chunk_rope_host_rows(
         self, chunk_state: Qwen38TTNNTextModelChunkState, positions: torch.Tensor
@@ -3178,6 +3200,30 @@ class Qwen38TTNNTextModel:
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=cq_id)
         return trace_id
 
+    def _ring_selects(self) -> tuple[Any, ...]:
+        """The hand-off's QSA raw-key ring selects (``qsa_module.chunk_handoff_ring_select_rows``: the select depends only
+        on ``prefilled % 32``), BF16 TILE ``[1,1,32,32]`` replicated, one persistent tensor per residue: built once
+        (``allocate_chunk_state`` builds them before any capture, so no allocation happens at request time) instead of
+        one host upload per hand-off."""
+
+        if self._ring_select_tensors is None:
+            self._ring_select_tensors = tuple(
+                ttnn.from_torch(
+                    qsa_module.chunk_handoff_ring_select_rows(residue),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+                )
+                for residue in range(CHUNK_ROWS)
+            )
+        return self._ring_select_tensors
+
+    def _release_ring_selects(self) -> None:
+        selects, self._ring_select_tensors = self._ring_select_tensors, None
+        _deallocate_unique(*(selects or ()))
+
     def finish_prefill(
         self,
         state: Qwen38TTNNTextModelGenericState,
@@ -3221,22 +3267,12 @@ class Qwen38TTNNTextModel:
                 for layer, layer_chunk, tail_chunk in zip(self.layers, chunk_state.layers, tail_state.layers):
                     layer.hand_off_padded_tail(layer_chunk, tail_chunk, real_rows=tail_rows)
                 self.write_chunk_pad(tail_state, None)
-            ring_select = ttnn.from_torch(
-                qsa_module.chunk_handoff_ring_select_rows(prefilled),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
-            )
-            try:
-                state.position.reset(prefilled, rope_shift)
-                for layer, layer_state, layer_chunk in zip(self.layers, state.layers, chunk_state.layers):
-                    layer.finish_chunk_state_inplace(
-                        layer_chunk, layer_state, prefilled=prefilled, qsa_ring_select=ring_select
-                    )
-            finally:
-                _deallocate_unique(ring_select)
+            ring_select = self._ring_selects()[prefilled % CHUNK_ROWS]
+            state.position.reset(prefilled, rope_shift)
+            for layer, layer_state, layer_chunk in zip(self.layers, state.layers, chunk_state.layers):
+                layer.finish_chunk_state_inplace(
+                    layer_chunk, layer_state, prefilled=prefilled, qsa_ring_select=ring_select
+                )
             self.write_chunk_accepted(chunk_state, CHUNK_ROWS - 1)
         except BaseException as error:
             self._mark_poisoned("finish_prefill", 0, error)
@@ -3445,6 +3481,22 @@ class Qwen38TTNNTextModel:
                 layer.reset_lane_inplace(layer_state, lane)
         except BaseException as error:
             self._mark_poisoned("admit_lane", 0, error)
+
+    def admit_lane_position(
+        self, state: Qwen38TTNNTextModelLaneState, lane: int, position: int, rope_shift: int = 0
+    ) -> None:
+        """:meth:`admit_lane` without the keep-mask resets: the position and shift rows take the lane (the residue rule
+        as there) and the lane's PLE n-gram context clears, no device write.  For an import that overwrites every buffer
+        the reset would zero (``lanes.Qwen38TTNNLaneImporter``, or the pager's re-admission of a full lane image): the
+        reset's work is dead there (48 layers of multiplies over the whole lane tensors, ~25 ms)."""
+
+        self._validate_lane_state(state)
+        state.position.admit(lane, position, rope_shift)  # the residue rule: a ValueError before any write
+        ple = state.layers[PLE_CHECKPOINT_LAYER].ple
+        if ple is not None:
+            contexts = list(ple.token_contexts)
+            contexts[lane] = None
+            ple.token_contexts = tuple(contexts)
 
     def write_lane_page_table(self, state: Qwen38TTNNTextModelLaneState, rows: Sequence[Sequence[int]]) -> None:
         """Host upload of the page table, in place (outside any trace): ``rows[u]`` = lane u's page ids (pages 1..

@@ -11,6 +11,7 @@ uploads, cache loads, layout changes, and collectives.
 from __future__ import annotations
 
 import operator
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Iterable
@@ -106,6 +107,11 @@ def admission_wait_steps(resident_residue: int, position: int) -> int:
     return (value - residue) % GDN_RESIDUE_CLASSES
 
 
+VALIDATE_EVERY = os.environ.get("QWEN38_VALIDATE_EVERY", "0") == "1"  # no validate_tensor memo (debugging)
+VALIDATED_MEMO_LIMIT = 1 << 16
+INVALID_TENSOR_ID = (1 << 64) - 1  # ttnn's unassigned / moved-from id, shared by many tensors: never memoized
+
+
 class TensorPlacement(str, Enum):
     HIDDEN_SHARDED = "hidden_sharded"
     EXPERT_SHARDED = "expert_sharded"
@@ -126,6 +132,8 @@ def _exact_integer(value, *, label: str, error_type: type[Exception] = RuntimeEr
     also implements ``__index__``, so reject it explicitly before conversion.
     """
 
+    if type(value) is int:  # the common case, and exactly what the checks below accept (a bool is not an int type)
+        return value
     if isinstance(value, bool):
         raise error_type(f"{label} must be an exact integer, not bool")
     try:
@@ -147,6 +155,8 @@ def _shape_tuple(
         items = tuple(value)
     except TypeError as error:
         raise error_type(f"{label} must be an iterable of exact integers") from error
+    if all(type(item) is int for item in items):  # the common case: no per-item label formatting or protocol calls
+        return items
     return tuple(
         _exact_integer(item, label=f"{label}[{index}]", error_type=error_type) for index, item in enumerate(items)
     )
@@ -320,6 +330,45 @@ class Qwen38MeshContract:
             )
 
     def validate_tensor(
+        self,
+        tensor,
+        *,
+        placement: TensorPlacement,
+        shard_dim: int | None = None,
+        require_device: bool = True,
+    ) -> None:
+        """:meth:`_validate_tensor`, skipped for a tensor that passed twice before with the same ``(placement,
+        shard_dim, require_device)``: a live tensor's shape, dtype, layout and topology do not change and its
+        ``tensor_id`` is never reused, so the eager hand-off paths that re-validate the same fixed-address state tensors on
+        every request (48 layers x 2-3 validations each, ~15 us a call: 60 ms of a request's fixed cost) pay the topology
+        queries twice per tensor.  The second pass is what separates the state tensors from the temporaries (validated
+        once each, thousands per warm pass): only a repeat is remembered, so the temporaries never evict the state's
+        entries.  Tensors without a ``tensor_id`` (test doubles) or with the invalid one are always validated; ``QWEN38_VALIDATE_EVERY=1`` turns
+        the memo off; both sets are cleared when full."""
+
+        key = None
+        tensor_id = getattr(tensor, "tensor_id", None)
+        if callable(tensor_id):
+            tensor_id = tensor_id()
+        if type(tensor_id) is int and tensor_id != INVALID_TENSOR_ID and not VALIDATE_EVERY:
+            key = (tensor_id, placement, shard_dim, require_device)
+            cache = self.__dict__
+            memo = cache.setdefault("_validated", set())
+            if key in memo:
+                return
+        self._validate_tensor(tensor, placement=placement, shard_dim=shard_dim, require_device=require_device)
+        if key is not None:
+            seen = cache.setdefault("_validated_once", set())
+            if key in seen:
+                if len(memo) >= VALIDATED_MEMO_LIMIT:
+                    memo.clear()
+                memo.add(key)
+            else:
+                if len(seen) >= VALIDATED_MEMO_LIMIT:
+                    seen.clear()
+                seen.add(key)
+
+    def _validate_tensor(
         self,
         tensor,
         *,

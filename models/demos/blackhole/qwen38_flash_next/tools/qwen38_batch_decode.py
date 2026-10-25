@@ -7,9 +7,11 @@
 B-lane state on the adapter's model, builds the lane pagers and the one-slot host pool and warms every program
 eagerly (``prepare``, the chain's warm hook: the lane tensors must exist before the chain captures its traces), then
 captures the ONE residue-free lane body (``capture`` after the chain opened) and checks the trace allocation tracker.
-A prompt is prefilled on the adapter's B=1 chain, evicted into the host slot, its GDN ring slots rotated into the
-canonical fixed-phase order and re-admitted into a lane (``admit``); ``step`` replays the one lane trace and returns
-one new greedy token per lane.
+A prompt is prefilled on the adapter's B=1 chain and moved into a lane (``admit``): paged lanes by the device-direct
+``Qwen38TTNNLaneImporter`` (no host round trip, no lane reset: the writes cover every buffer the reset would zero, its GDN
+ring slots rotated into the canonical fixed-phase order by the choice of source slot), the others (and
+``QWEN38_IMPORT_HOST=1``) through the host pager: evicted into the host slot, rotated, the lane reset and re-admitted;
+``step`` replays the one lane trace and returns one new greedy token per lane.
 
 Residue-free: the lanes sit at any positions (the GDN lane state keeps a per-lane conv shift register, see
 ``Qwen38TTNNGDNState.fixed_phase``).  No MTP.  ``Qwen38ContinuousBatch`` (host-only, below) is the continuous-batching policy over this decoder (P1d).
@@ -39,7 +41,11 @@ from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker, acknowle
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
-from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import Qwen38LaneHostPool, Qwen38TTNNLanePager
+from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
+    Qwen38LaneHostPool,
+    Qwen38TTNNLaneImporter,
+    Qwen38TTNNLanePager,
+)
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 
 WARM_TOKEN_ID = 1000  # any in-vocabulary id: the warm passes write garbage into lane state that a reset clears
@@ -145,6 +151,10 @@ class Qwen38PlainLaneDecoder:
         self.contexts: list[Any] = [None] * lanes
         self.ls = None
         self.pager_g = self.pager_l = self.pool = None
+        self.importer: Qwen38TTNNLaneImporter | None = None  # paged lanes: the device-direct import
+        # QWEN38_IMPORT_HOST=1: the host-pager import (evict, rotate, admit_lane reset, readmit) of P1 / P2: the
+        # reference of the bitwise import test and the fallback
+        self.host_import = os.environ.get("QWEN38_IMPORT_HOST", "0") == "1"
         self.captures: list[Any] = []
         self.trace_ids: list[int] = []
         self.timing: dict[str, Any] = {}
@@ -174,6 +184,8 @@ class Qwen38PlainLaneDecoder:
         self.pager_g = Qwen38TTNNLanePager(mesh, model.mesh_contract, gl)
         self.pager_l = Qwen38TTNNLanePager(mesh, model.mesh_contract, ll, buffers=self.pager_g)
         self.pool = Qwen38LaneHostPool(mesh, gl, slots=1)
+        if paging is not None:
+            self.importer = Qwen38TTNNLaneImporter(self.pager_l, gl)
         slot = self.pool.slots[0]
         self.pager_g.warm_moves(slot)
         self.pager_l.warm_moves(slot)
@@ -190,6 +202,12 @@ class Qwen38PlainLaneDecoder:
             # compile the scatter on the all-zero table (every write lands in the scratch page 0)
             for lane in sorted({0, lanes - 1}):
                 model.admit_lane_kv_paged(ls, chain.state, lane, ttnn.TILE_SIZE)
+            ttnn.synchronize_device(mesh)
+        if self.importer is not None:
+            # compile the device-direct import for every lane (its fill_cache batch index is a runtime argument; the
+            # warm pass compiles them all) and every ring phase
+            for lane in range(lanes):
+                self.importer.import_lane(lane, lane % 4)
             ttnn.synchronize_device(mesh)
         model.reset_lane_state_inplace(ls, zeros)
         contexts: Sequence[Any] = [None] * lanes
@@ -290,7 +308,6 @@ class Qwen38PlainLaneDecoder:
         if len(vm.slot.committed) != length:
             raise RuntimeError(f"adapter committed {len(vm.slot.committed)} tokens, expected {length}")
         prefilled = time.perf_counter()
-        slot = self.pool.slots[0]
         if self.paging is not None:
             if self.page_rows[lane]:
                 raise RuntimeError(f"lane {lane} still holds pages: release_lane first")
@@ -299,13 +316,7 @@ class Qwen38PlainLaneDecoder:
             self.page_rows[lane] = self.allocator.allocate(page_count)
             model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
             self.page_table_dirty = False  # the whole table, other lanes' pending changes included
-        self.pager_g.evict(0, slot)
-        self.pager_g.rotate_ring_canonical(slot, length)
-        slot.position = length
-        model.admit_lane(ls, lane, length, rope_shift=0)
-        if self.paging is not None:
-            model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
-        self.pager_l.readmit(slot, lane, position_row=None)
+        self.move_into_lane(lane, length)
         ttnn.synchronize_device(self.mesh)
         finished = time.perf_counter()
         self.timing.setdefault("admit_s", []).append(finished - prefilled)
@@ -315,6 +326,28 @@ class Qwen38PlainLaneDecoder:
         self.positions[lane] = length
         self.contexts[lane] = context
         return first_token
+
+    def move_into_lane(self, lane: int, length: int) -> None:
+        """The chain's generic state (after ``length`` tokens) into lane ``lane``: the page table row is already written.
+        Paged lanes import device to device (``Qwen38TTNNLaneImporter``: the lane's position row and PLE context, the KV
+        scatter, every other family written whole, no keep-mask reset: the writes cover what the reset zeroes); the
+        rest, and ``QWEN38_IMPORT_HOST=1``, go through the host pager (the generic image evicted, its ring slots rotated
+        into the canonical order, the lane reset, the image re-admitted)."""
+
+        model, ls = self.model, self.ls
+        if self.importer is not None and not self.host_import:
+            model.admit_lane_position(ls, lane, length, rope_shift=0)
+            model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
+            self.importer.import_lane(lane, length)
+            return
+        slot = self.pool.slots[0]
+        self.pager_g.evict(0, slot)
+        self.pager_g.rotate_ring_canonical(slot, length)
+        slot.position = length
+        model.admit_lane(ls, lane, length, rope_shift=0)
+        if self.paging is not None:
+            model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
+        self.pager_l.readmit(slot, lane, position_row=None)
 
     def release_lane(self, lane: int, write_table: bool = True) -> None:
         """Free lane ``lane``: paged, its pages go back to the allocator and its page-table row is zeroed (the lane then
@@ -396,17 +429,11 @@ class Qwen38PlainLaneDecoder:
         started = time.perf_counter()
         if self.page_rows[lane] or self.positions[lane] is not None:
             raise RuntimeError(f"lane {lane} is still live: release_lane_external first")
-        slot = self.pool.slots[0]
         self.page_rows[lane] = []
         self.set_page_row(lane, pages)
         model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
         self.page_table_dirty = False  # the whole table, other lanes' pending changes included
-        self.pager_g.evict(0, slot)
-        self.pager_g.rotate_ring_canonical(slot, length)
-        slot.position = length
-        model.admit_lane(ls, lane, length, rope_shift=0)
-        model.admit_lane_kv_paged(ls, self.chain.state, lane, length)
-        self.pager_l.readmit(slot, lane, position_row=None)
+        self.move_into_lane(lane, length)
         ttnn.synchronize_device(self.mesh)
         self.positions[lane] = length
         self.contexts[lane] = context

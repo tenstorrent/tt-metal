@@ -522,6 +522,7 @@ def pad_writer(monkeypatch):
     model = model_module.Qwen38TTNNTextModel.__new__(model_module.Qwen38TTNNTextModel)
     model.mesh_device = "mesh"
     model._validate_chunk_state = lambda chunk_state: None
+    model._chunk_pad_full = set()
     return SimpleNamespace(model=model, writes=writes)
 
 
@@ -551,6 +552,54 @@ def test_write_chunk_pad_writes_the_slab_inputs_the_row_masks_and_the_ple_block_
     block = 15 if real is None else (real - 1) // 128
     assert [float(writes[f"take{b}"].host) for b in range(16)] == [1.0 if b == block else 0.0 for b in range(16)]
     assert [float(writes[f"keep{b}"].host) for b in range(16)] == [0.0 if b == block else 1.0 for b in range(16)]
+
+
+def test_a_full_pass_write_is_skipped_while_the_inputs_hold_one(pad_writer) -> None:
+    """P3c: ``reset_chunk_state_inplace`` writes the full pass at every request; the second and later writes of the same
+    state are skipped until a partial write (or the release) drops the flag, and a failed write leaves it unknown."""
+
+    model, writes = pad_writer.model, pad_writer.writes
+    state = _pad_chunk_state(2048, slab=True)
+    model.write_chunk_pad(state, None)
+    assert id(state) in model._chunk_pad_full and writes
+    writes.clear()
+    model.write_chunk_pad(state, None)  # the inputs already hold the full pass
+    assert not writes
+    model.write_chunk_pad(state, 1000)  # a padded pass: written, and the flag drops
+    assert writes and id(state) not in model._chunk_pad_full
+    writes.clear()
+    model.write_chunk_pad(state, None)  # back to the full pass: written again
+    assert writes and id(state) in model._chunk_pad_full
+    writes.clear()
+    model.write_chunk_pad(state, 2048)  # every row real, spelled out: conservative, written and not flagged
+    assert writes and id(state) not in model._chunk_pad_full
+    other = _pad_chunk_state(128, slab=False)  # a flag is per state
+    model.write_chunk_pad(state, None)
+    writes.clear()
+    model.write_chunk_pad(other, None)
+    assert writes
+
+
+def test_a_failed_pad_write_leaves_the_full_pass_unknown(pad_writer, expect_error) -> None:
+    model = pad_writer.model
+    state = _pad_chunk_state(128, slab=False)
+    model.write_chunk_pad(state, None)
+    assert id(state) in model._chunk_pad_full
+    pad_writer.writes.clear()
+    original = model_module.ttnn.copy_host_to_device_tensor
+
+    def failing(tensor, target):
+        raise RuntimeError("device write failed")
+
+    model_module.ttnn.copy_host_to_device_tensor = failing
+    try:
+        with expect_error(RuntimeError, "device write failed"):
+            model.write_chunk_pad(state, 100)
+    finally:
+        model_module.ttnn.copy_host_to_device_tensor = original
+    assert id(state) not in model._chunk_pad_full
+    model.write_chunk_pad(state, None)  # unknown: rewritten
+    assert pad_writer.writes
 
 
 @pytest.mark.parametrize("real", (0, 8, 129, 2.5, True))
@@ -641,7 +690,7 @@ def test_the_hand_off_takes_the_real_rows_carries_before_it_reads_them_and_resto
         finish,
         "layer.hand_off_padded_tail(layer_chunk, tail_chunk, real_rows=tail_rows)",
         "self.write_chunk_pad(tail_state, None)",
-        "qsa_module.chunk_handoff_ring_select_rows(prefilled)",
+        "self._ring_selects()[prefilled % CHUNK_ROWS]",
         "layer.finish_chunk_state_inplace(",
     )
     reset = inspect.getsource(model_module.Qwen38TTNNTextModel.reset_chunk_state_inplace)

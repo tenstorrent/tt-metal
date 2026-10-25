@@ -332,6 +332,14 @@ def rotate_ring_image(image: torch.Tensor, position: int, ring: int = 4) -> torc
     return image[:, order].contiguous()
 
 
+def canonical_ring_source(index: int, position: int, ring: int = 4) -> int:
+    """The generic ring entry (``ring * layer + slot``) that fixed-phase lane entry ``index`` takes after ``position``
+    tokens: ``rotate_ring_image``'s order, ``out[j] = in[(position + j) % ring]`` within each layer."""
+
+    layer, slot = divmod(index, ring)
+    return layer * ring + (position + slot) % ring
+
+
 @dataclass(frozen=True)
 class Qwen38LaneMoveTiming:
     """Wall milliseconds of one page move by leg: the pack / unpack trace replay, the small transfers of the pack
@@ -749,6 +757,76 @@ class Qwen38TTNNLanePager:
             (done - trace_done) / 1e6,
             (done - started) / 1e6,
         )
+
+
+# ---------------------------------------------------------------- the device-direct importer
+
+
+class Qwen38TTNNLaneImporter:
+    """Moves the B=1 generic state into one lane of the lane state with device writes only (no host round trip), the
+    vLLM batch server's prefill import: what ``pager.evict`` + ``rotate_ring_canonical`` + ``pager.readmit`` do through
+    the host pool, with the same ops on the destination side.
+
+    ``pager`` is the LANE pager (its same-buffer views of the lane tensors, selection one-hots and compute config are
+    reused); ``source`` is the generic state's 1-lane layout (``generic_lane_layout``, KV excluded for a paged lane
+    state: ``admit_lane_kv_paged`` scatters it).  Per family the destination write is the pager's unpack body with the
+    generic tensor in place of the pack slice: ``fill_cache`` at the lane's batch index for the compressed index cache,
+    the recurrent state, the staging tile, the raw-key ring and the PLE slots (a copy of a whole tile region, bitwise),
+    the selection write ``slot * keep + hit @ row`` for the 144 ring slots, whose rotation into the fixed-phase order
+    is a choice of source slot: lane slot ``j`` of a GDN layer takes generic slot ``(p + j) % 4``, ``p = position % 4``
+    (``Qwen38TTNNLanePager.rotate_ring_canonical``).  A lane written here holds the same bytes as after the masked lane
+    reset followed by the pager's re-admission: every buffer the reset touches is overwritten whole (the recurrent
+    state, the ring slots, the staging tile, the raw-key ring, the PLE slots), so the import needs no reset.
+    """
+
+    def __init__(self, pager: Qwen38TTNNLanePager, source: Qwen38LaneLayout) -> None:
+        target = pager.layout
+        if target.conv and (2, ttnn.bfloat16) not in pager.onehots:
+            raise ValueError("the lane pager holds no ring-slot selection one-hots")
+        for name in FILL_FAMILIES:
+            if len(getattr(source, name)) != len(getattr(target, name)):
+                raise ValueError(f"source and lane layouts hold different {name} counts")
+        if len(source.conv) != len(target.conv):
+            raise ValueError("source and lane layouts hold different ring slot counts")
+        if source.lanes != 1 or source.allocated_context != target.allocated_context:
+            raise ValueError("the source is the 1-lane layout at the lane layout's context")
+        self.pager = pager
+        self.source = source
+        self.target = target
+        # The generic recurrent state ``[1,12,128,128]`` as the ``[1,1,1536,128]`` rows ``fill_cache`` takes.
+        self.sources = {name: tuple(getattr(source, name)) for name in FILL_FAMILIES if name != "recurrent"}
+        self.sources["recurrent"] = tuple(
+            ttnn.experimental.view(t, (1, 1, RECURRENT_ROWS, gdn_module.HEAD_DIM)) for t in source.recurrent
+        )
+
+    def import_lane(self, lane: int, position: int) -> None:
+        """Lane ``lane`` <- the generic state after ``position`` tokens (the lane's other families, the KV pages and the
+        position row are the caller's)."""
+
+        lane = _exact_index(lane, self.target.lanes, label="imported lane")
+        pager, target = self.pager, self.target
+        ring = gdn_module.CONV_KERNEL_SIZE
+        with corruptible_allocation_scope(pager.mesh_device):  # as the pager's moves
+            for name in FILL_FAMILIES:
+                for index, filled in enumerate(self.sources[name]):
+                    cache_view = pager.views[name][index]
+                    _landed(
+                        ttnn.fill_cache(cache_view, filled, batch_idx=lane), cache_view, f"lane import {name}[{index}]"
+                    )
+            hits, keeps = pager.onehots[(2, ttnn.bfloat16)]
+            for index, slot in enumerate(target.conv):
+                row = self.source.conv[canonical_ring_source(index, position, ring)]
+                placed = ttnn.matmul(
+                    hits[lane], row, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=pager.compute_config
+                )
+                kept = ttnn.multiply(slot, keeps[lane], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                _landed(ttnn.add(kept, placed, output_tensor=slot), slot, f"lane import conv[{index}] write")
+                _deallocate(placed, kept)
+
+    def release(self) -> None:
+        """The recurrent views alias the generic state's buffers: nothing to free."""
+
+        self.sources = {}
 
 
 # ---------------------------------------------------------------- the helper thread

@@ -367,13 +367,20 @@ def test_padded_plan_against_the_legacy_plan(mesh_device, harness, form):
     assert cost_free[2].padded_pass == kind and cost_free[2].plan == "cost"
 
 
-def relative_errors(a: dict, b: dict) -> dict[str, float]:
-    """The largest per-tensor relative L2 error ``|a - b| / |b|`` over the layers, by buffer family."""
+def relative_errors(a: dict, b: dict, staging_rows: int = 32) -> dict[str, float]:
+    """The largest per-tensor relative L2 error ``|a - b| / |b|`` over the layers, by buffer family.  ``staging_rows``:
+    the QSA staging tile ``[1,1,32,512]`` holds the prompt's open block in its first ``prefilled % 32`` rows (all 32 when the
+    block is complete: the hand-off zeroes it); the rows past them are the pass's padded rows (the next replay rewrites
+    them, nothing gathers them), so only the first ``staging_rows`` rows are compared."""
 
     worst: dict[str, float] = {}
     for name in a:
         family = name.rstrip("0123456789")
-        error = max(float((x - y).norm() / max(float(y.norm()), 1e-12)) for x, y in zip(a[name], b[name]))
+        rows = staging_rows if family == "qsa_staging" else None
+        error = max(
+            float((x[..., :rows, :] - y[..., :rows, :]).norm() / max(float(y[..., :rows, :].norm()), 1e-12))
+            for x, y in zip(a[name], b[name])
+        )
         worst[family] = max(worst.get(family, 0.0), error)
     return worst
 
@@ -440,11 +447,14 @@ def test_hand_off_state_against_the_other_plans(mesh_device, harness, form):
         logger.info(
             f"RESULT state_{form} early layers {key}_vs_legacy: " + ", ".join(f"{n} {e:.2e}" for n, e in value.items())
         )
+    staging_rows = (
+        len(prompt) - 1
+    ) % 32 or 32  # the head is prefilled; its open block's rows are the real staging rows
     report = {
         "early": early,
-        "cost_vs_legacy": relative_errors(states["cost"], states["legacy"]),
-        "short_vs_legacy": relative_errors(states["short"], states["legacy"]),
-        "cost_vs_short": relative_errors(states["cost"], states["short"]),
+        "cost_vs_legacy": relative_errors(states["cost"], states["legacy"], staging_rows),
+        "short_vs_legacy": relative_errors(states["short"], states["legacy"], staging_rows),
+        "cost_vs_short": relative_errors(states["cost"], states["short"], staging_rows),
         "legacy_vs_rerun": relative_errors(states["legacy2"], states["legacy"]),
     }
     for key, value in report.items():

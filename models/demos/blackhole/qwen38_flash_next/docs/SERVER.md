@@ -536,8 +536,11 @@ The same launch with `--max_num_seqs B` serves B users on the plain lane body (`
 decode trace for all B lanes, over a paged QSA KV pool that is vLLM's block pool (a page is one vLLM block, block 0 is
 the scratch page). `--block_size` must be a power of two in 32..4096. `initialize_vllm_model` does not open the chain:
 `allocate_kv_cache` gets the block count and size, admits the pool against the free DRAM, opens the chain and captures
-the lane trace. A request is prefilled alone (the B=1 chain), then imported into its lane. The plugin's `slot_remap`
-moves only a host map (slot -> lane). A seeded host draw is seeded from (seed, token position), so a seeded request
+the lane trace. A request is prefilled alone (the B=1 chain), then imported into its lane: device to device (the
+chain's state is written into the lane with `fill_cache` and one exact selection write per GDN ring slot, no host round
+trip and no lane reset: the writes cover every buffer a reset would zero; ~14 ms against 90 ms for the host-pager
+import, which `QWEN38_IMPORT_HOST=1` selects; `tests/test_vllm_fast_import_device.py` compares the two byte for byte).
+The plugin's `slot_remap` moves only a host map (slot -> lane). A seeded host draw is seeded from (seed, token position), so a seeded request
 draws the same tokens alone and in a batch. `get_max_tokens_all_users` (the pool size vLLM uses) is
 `QWEN38_MAX_TOKENS_ALL_USERS` when set, else `min(max_model_len * B, DRAM cap)`; the cap was measured at context 32768
 (B=8: every user gets the full context; B=32 at 32704: 750,592 tokens). The adapter logs one line per 256 decode calls

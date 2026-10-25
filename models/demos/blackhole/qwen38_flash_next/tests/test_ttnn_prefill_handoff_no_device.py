@@ -295,14 +295,17 @@ def test_handoff_order_and_the_traced_bodies_never_reach_it() -> None:
     _ordered(
         finish,
         (
-            "qsa_module.chunk_handoff_ring_select_rows(prefilled)",
+            "self._ring_selects()[prefilled % CHUNK_ROWS]",
             "state.position.reset(prefilled, rope_shift)",
             "layer.finish_chunk_state_inplace(",
-            "_deallocate_unique(ring_select)",
             "self.write_chunk_accepted(chunk_state, CHUNK_ROWS - 1)",
         ),
     )
-    assert finish.count("ttnn.from_torch(") == 1  # the ring select, uploaded once per prompt
+    # the ring select is one of 32 persistent tiles uploaded when the chunk state is allocated (P3c: no upload and no
+    # allocation per prompt); the select's content is qsa_module.chunk_handoff_ring_select_rows(prefilled % 32)
+    assert "from_torch" not in finish and "_deallocate_unique(ring_select)" not in finish
+    ring_selects = inspect.getsource(model_module.Qwen38TTNNTextModel._ring_selects)
+    assert "qsa_module.chunk_handoff_ring_select_rows(residue)" in ring_selects and "range(CHUNK_ROWS)" in ring_selects
     assert "0 <= prefilled <= self.allocated_context" in finish
     layer_finish = inspect.getsource(layer_module.Qwen38TTNNDecoderLayer.finish_chunk_state_inplace)
     _ordered(
