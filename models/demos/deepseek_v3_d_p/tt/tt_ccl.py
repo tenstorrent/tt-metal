@@ -99,7 +99,14 @@ def create_global_semaphores(mesh_device, cores, initial_value):
 # because the fronts are 160 KB/core/parity and L1 is already tight next to allopt's own fronts).
 _PIPE_STREAM_LOCAL = frozenset(
     n.strip()
-    for n in os.environ.get("PIPE_STREAM_LOCAL", "sparse_kv_push,get_sparse_kv_push").split(",")
+    for n in os.environ.get(
+        "PIPE_STREAM_LOCAL",
+        "sparse_kv_push,get_sparse_kv_push,"
+        # CCL semaphore pools and the shared-expert RS buffers: once a stream's CCL runs on the comm sub-device next to
+        # the other stream's work, the two must never hold the same handle / persistent buffer / keepalive slot.
+        "get_and_cycle_ag_semaphore_handles,get_and_cycle_rs_semaphore_handles,get_and_cycle_barrier_semaphore_handle,"
+        "get_shared_rs_intermediate,shared_rs_intermediate,set_shared_rs_input_keepalive,shared_rs_input_keepalive",
+    ).split(",")
     if n.strip()
 )
 

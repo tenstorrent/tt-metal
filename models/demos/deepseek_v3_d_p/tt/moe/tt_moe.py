@@ -23,7 +23,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_yield
+from models.demos.deepseek_v3_d_p.utils.pipeline import pipeline_active, pipeline_yield
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
@@ -1267,11 +1267,18 @@ class TtMoe(LightweightModule):
         # ========================================
         # Shared expert expects replicated input (full emb_dim)
         # Convert x to TILE_LAYOUT for shared expert
+        # Two-chunk pipeline, PIPE_SHARED_RS_COMM=1: the shared expert's RS joins dispatch on the comm column, so the
+        # residual fold (SD0, reads the RS output) moves after the post-window SD1 join below.
+        pipe_rs_comm = (
+            self._dispatch_on_comm and pipeline_active() and os.environ.get("PIPE_SHARED_RS_COMM", "0") == "1"
+        )
+        self.shared_expert.rs_comm_sd = self._psd.comm_sd_id if pipe_rs_comm else None
         shared_output = self.shared_expert(x)
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] Shared expert output shape: {shared_output.shape}")
         fold_residual = residual is not None and not return_intermediates
-        if fold_residual:
+        deferred_fold = fold_residual and pipe_rs_comm
+        if fold_residual and not deferred_fold:
             # Same sub-device (and so same in-order stream) as the shared expert's reduce-scatter, so the
             # add starts only once that RS has written shared_output, while dispatch still runs on its
             # own rows. The RS output is kept alive until after the window closes (freed below).
@@ -1313,6 +1320,9 @@ class TtMoe(LightweightModule):
                 restore_base_manager(self.mesh_device)
         for t in slackfill_outputs:  # after the join: nothing in flight can still use them
             ttnn.deallocate(t)
+        if deferred_fold:
+            shared_rs_output = shared_output
+            shared_output = ttnn.add(shared_rs_output, residual)
         # NOTE: padding_config is memoized + owned by the gate (build_padding_config caches it per
         # actual_isl so a captured trace's replay reuses the same device tensor instead of re-issuing a
         # host from_torch). Do NOT deallocate it here — it is reused across forwards/replays; freeing it

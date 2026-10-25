@@ -622,6 +622,13 @@ class TtSharedExpert(LightweightModule):
             # is identical each iteration — giving bit-exact determinism. The op overwrites the
             # intermediate before reading it, so no per-iteration re-zeroing is needed.
             rs_intermediate = self.tt_ccl.get_shared_rs_intermediate(output_full, self.topology)
+            # Two-chunk pipeline (TtMoe sets rs_comm_sd): run this RS on the comm column next to dispatch, after an
+            # SD0 fence so it never starts before the down projection (SD0) has written its input.
+            comm_sd = getattr(self, "rs_comm_sd", None)
+            if comm_sd is not None:
+                from models.demos.deepseek_v3_d_p.tt.persistent_sd import fence
+
+                fence(self.mesh_device, on_comm=False)
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output_full,
                 persistent_output_buffers=[rs_intermediate],
@@ -633,7 +640,8 @@ class TtSharedExpert(LightweightModule):
                 intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.topology,
                 cluster_axis=1,
-                subdevice_id=self.subdevice_id,
+                subdevice_id=comm_sd if comm_sd is not None else self.subdevice_id,
+                **({"num_workers_per_link": 1} if comm_sd is not None else {}),
             )
             # Keep the (fresh-per-iter) RS input alive until the next forward so the concurrent
             # dispatch cannot reuse its slot mid-flight. (The intermediate is kept alive by the cache.)
