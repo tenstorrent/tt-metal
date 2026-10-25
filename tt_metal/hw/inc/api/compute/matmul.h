@@ -60,7 +60,7 @@ constexpr bool mm_row_mop = MM_ROW_MOP != 0;
  * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
  * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
  * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
- * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
+ * | k_steps        | Consecutive inner-dimension steps accumulated into the same output block | uint32_t | >= 1                                          | False    |
  */
 // clang-format on
 ALWI void matmul_block_math_dynamic_throttle(
@@ -69,7 +69,8 @@ ALWI void matmul_block_math_dynamic_throttle(
     std::uint32_t idst,
     const std::uint32_t transpose,
     std::uint32_t ct_dim,
-    std::uint32_t rt_dim) {
+    std::uint32_t rt_dim,
+    std::uint32_t k_steps = 1) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Dynamic throttling is only available on Blackhole architecture
@@ -81,14 +82,14 @@ ALWI void matmul_block_math_dynamic_throttle(
                 llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE_MAX>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 1;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE_MAX>(idst, ct_dim, rt_dim, k_steps)));
     } else {
         if (throttled_mop_status != 0) {
             MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
-        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(idst, ct_dim, rt_dim)));
+        MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, mm_row_mop>(idst, ct_dim, rt_dim, k_steps)));
     }
 #endif
 }
@@ -296,6 +297,79 @@ ALWI void matmul_block(
     LLK_ASSERT(idst == 0, "non-default idst not supported on Quasar");
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul_block(ct_dim, rt_dim)));
+#endif
+}
+
+// clang-format off
+/**
+ * Runs k_steps consecutive matmul_block calls into the same output block: step k multiplies the in0 tiles at
+ * in0_tile_index + k by the in1 tiles at in1_tile_index + k * in1_k_stride and accumulates into DST at idst, so
+ *
+ *   matmul_block_k(in0, in1, i0, i1, idst, transpose, ct, rt, kt, k_steps, in1_k_stride)
+ *
+ * gives the same result, bit for bit, as
+ *
+ *   for (k = 0; k < k_steps; k++) matmul_block(in0, in1, i0 + k, i1 + k * in1_k_stride, idst, transpose, ct, rt, kt);
+ *
+ * which is the inner-dimension loop of a block matmul whose in0 block is row-major with kt_dim tiles per row and
+ * whose in1 block is row-major with in1_k_stride tiles per row. On Blackhole with MM_ROW_MOP and a single reuse
+ * row (rt_dim == 1, or ct_dim == 1) the math thread writes the DEST offset once for all steps and runs one MOP per
+ * step with nothing between the runs; elsewhere it is the loop above.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of the first step's tile in block A                           | uint32_t | Must be less than the size of the CB           | True     |
+ * | in1_tile_index | The index of the first step's tile in block B                           | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
+ * | kt_dim         | The inner dimension of block A (its row stride in tiles).               | uint32_t | Must be equal to block A column dimension      | True     |
+ * | k_steps        | The number of inner-dimension steps to accumulate.                      | uint32_t | >= 1                                           | True     |
+ * | in1_k_stride   | The tile stride between consecutive inner-dimension rows of block B.    | uint32_t | Any                                            | True     |
+ */
+// clang-format on
+ALWI void matmul_block_k(
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t ct_dim,
+    std::uint32_t rt_dim,
+    std::uint32_t kt_dim,
+    std::uint32_t k_steps,
+    std::uint32_t in1_k_stride,
+    std::uint32_t call_line = __builtin_LINE()) {
+#ifdef ARCH_BLACKHOLE
+    LLK_SAN_FUNCTION();
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK(({
+        for (std::uint32_t k = 0; k < k_steps; k++) {
+            llk_unpack_AB_matmul(
+                in0_cb_id, in1_cb_id, in0_tile_index + k, in1_tile_index + k * in1_k_stride, ct_dim, rt_dim, kt_dim);
+        }
+    }));
+    MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, k_steps)));
+#else
+    for (std::uint32_t k = 0; k < k_steps; k++) {
+        matmul_block(
+            in0_cb_id,
+            in1_cb_id,
+            in0_tile_index + k,
+            in1_tile_index + k * in1_k_stride,
+            idst,
+            transpose,
+            ct_dim,
+            rt_dim,
+            kt_dim,
+            call_line);
+    }
 #endif
 }
 
