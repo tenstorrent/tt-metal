@@ -449,6 +449,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a, const Constant
     return y;
 }
 
+// SFPCAST's Blackhole mode converting between 32-bit sign-magnitude and two's complement integers (an involution).
+constexpr unsigned SFPCAST_MOD1_INT32_SM32_BH = 3;
+
 // _sfpu_exp_fp32_accurate_ (guarded) of N independent rows, step by step across the rows up to the guards, so each
 // row's dependent instructions fill the latency of the others' (the single-row chain is latency-bound on Blackhole).
 // The same operations as _sfpu_exp_fp32_accurate_ on each row, so the result is bit-identical; only their order
@@ -476,13 +479,11 @@ sfpi_inline void _sfpu_exp_fp32_accurate_rows_(sfpi::vFloat (&a)[N]) {
     for (int n = 0; n < N; n++) {
         j[n] = sfpi::convert<sfpi::vFloat>(sm[n], sfpi::RoundMode::Nearest);
     }
+    // Blackhole's SFPCAST between sign-magnitude and two's complement (one instruction where abs and copysgn took
+    // three); it maps -0 to -2**31, but SFPSTOCHRND gives +0 for a zero magnitude.
 #pragma GCC unroll 2
     for (int n = 0; n < N; n++) {
-        i[n] = sfpi::abs(sfpi::as<sfpi::vInt>(sm[n]));
-    }
-#pragma GCC unroll 2
-    for (int n = 0; n < N; n++) {
-        i[n] = sfpi::as<sfpi::vInt>(sfpi::copysgn(sfpi::as<sfpi::vFloat>(i[n]), j[n]));
+        i[n] = sfpi::vInt(__builtin_rvtt_sfpcast(sm[n].get(), SFPCAST_MOD1_INT32_SM32_BH));
     }
 
     // f = a - j * ln2 (two-part Cody-Waite).
@@ -531,15 +532,14 @@ sfpi_inline void _sfpu_exp_fp32_accurate_rows_(sfpi::vFloat (&a)[N]) {
     // The guards, row by row: overflow gives infinity (or NaN), y = 2**i * r, underflow gives 0.
 #pragma GCC unroll 2
     for (int n = 0; n < N; n++) {
-        sfpi::vFloat y = r[n] * std::numeric_limits<float>::infinity();
+        a[n] = r[n] * std::numeric_limits<float>::infinity();
         sfpi::vInt e = sfpi::exexp(r[n], sfpi::ExponentMode::Biased) + i[n];
         v_if(sfpi::nearby(e < 255)) {
-            y = sfpi::setexp(r[n], e);
-            v_if(sfpi::nearby(e < 1)) { y = 0.0f; }
+            a[n] = sfpi::setexp(r[n], e);
+            v_if(sfpi::nearby(e < 1)) { a[n] = 0.0f; }
             v_endif;
         }
         v_endif;
-        a[n] = y;
     }
 }
 
