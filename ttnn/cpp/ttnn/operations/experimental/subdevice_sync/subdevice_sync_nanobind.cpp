@@ -12,27 +12,13 @@
 
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/subdevice_sync/subdevice_sync.hpp"
 
 namespace ttnn::operations::experimental::subdevice_sync::detail {
 
-void bind_subdevice_sync_operations(nb::module_& mod) {
-    mod.def(
-        "subdevice_signal",
-        [](const tt::tt_metal::GlobalSemaphore& semaphore,
-           tt::tt_metal::SubDeviceId subdevice_id,
-           const CoreCoord& core,
-           const CoreCoord& consumer_core,
-           uint32_t increment) {
-            ttnn::operations::experimental::subdevice_signal(semaphore, subdevice_id, core, consumer_core, increment);
-        },
-        nb::arg("semaphore"),
-        nb::kw_only(),
-        nb::arg("subdevice_id"),
-        nb::arg("core"),
-        nb::arg("consumer_core"),
-        nb::arg("increment") = 1,
-        R"doc(
+namespace {
+constexpr const char* SIGNAL_DOC = R"doc(
             In-trace cross-sub-device hand-off, producer side. Enqueues a one-core program on every chip of the
             semaphore's mesh, on ``core`` of the PRODUCER's sub-device ``subdevice_id``. Its go signal is sent only
             after every earlier program on ``subdevice_id`` has completed on all its cores; it then atomically adds
@@ -46,24 +32,9 @@ void bind_subdevice_sync_operations(nb::module_& mod) {
                 core (ttnn.CoreCoord): logical core that runs the signal kernel.
                 consumer_core (ttnn.CoreCoord): logical core holding the semaphore (the subdevice_wait core).
                 increment (int): default 1.
-        )doc");
+        )doc";
 
-    mod.def(
-        "subdevice_wait",
-        [](const tt::tt_metal::GlobalSemaphore& semaphore,
-           tt::tt_metal::SubDeviceId subdevice_id,
-           const CoreCoord& core,
-           uint32_t value,
-           uint32_t timeout_cycles) {
-            ttnn::operations::experimental::subdevice_wait(semaphore, subdevice_id, core, value, timeout_cycles);
-        },
-        nb::arg("semaphore"),
-        nb::kw_only(),
-        nb::arg("subdevice_id"),
-        nb::arg("core"),
-        nb::arg("value") = 1,
-        nb::arg("timeout_cycles") = 0,
-        R"doc(
+constexpr const char* WAIT_DOC = R"doc(
             In-trace cross-sub-device hand-off, consumer side. Enqueues a one-core program on every chip, on ``core``
             of the CONSUMER's sub-device ``subdevice_id``: it spins until ``semaphore`` (in its own L1) is >=
             ``value``, then atomically SUBTRACTS ``value`` (counting semaphore; increments that race with the
@@ -83,7 +54,54 @@ void bind_subdevice_sync_operations(nb::module_& mod) {
                 value (int): count to wait for and consume (default 1; e.g. 2 for two producers).
                 timeout_cycles (int): DEBUG ONLY, 0 = wait forever. On timeout the program exits without consuming
                     (the consumer then runs unordered): turns a would-be hang into detectable violations.
-        )doc");
+        )doc";
+
+constexpr const char* FENCE_DOC = R"doc(
+            Single-CQ cross-sub-device ordering without a semaphore. Enqueues an empty one-core program on
+            ``subdevice_id`` (on every chip). Its go signal waits for every earlier program on ``subdevice_id``, and
+            every program issued after it on the same CQ (any sub-device) waits behind its go. So
+            ``producer(SD0); subdevice_fence(subdevice_id=SD0); consumer(SD1)`` orders the consumer after the producer.
+            Not needed when the producer stream already issues another SD0 op before the consumer.
+
+            Args:
+                mesh_device (ttnn.MeshDevice)
+                subdevice_id (ttnn.SubDeviceId): the PRODUCER's sub-device.
+                core (ttnn.CoreCoord, optional): default first worker core of the sub-device.
+        )doc";
+
+}  // namespace
+
+void bind_subdevice_sync_operations(nb::module_& mod) {
+    ttnn::bind_function<"subdevice_signal", "ttnn.experimental.">(
+        mod,
+        SIGNAL_DOC,
+        &ttnn::operations::experimental::subdevice_signal,
+        nb::arg("semaphore"),
+        nb::kw_only(),
+        nb::arg("subdevice_id"),
+        nb::arg("core"),
+        nb::arg("consumer_core"),
+        nb::arg("increment") = 1);
+
+    ttnn::bind_function<"subdevice_wait", "ttnn.experimental.">(
+        mod,
+        WAIT_DOC,
+        &ttnn::operations::experimental::subdevice_wait,
+        nb::arg("semaphore"),
+        nb::kw_only(),
+        nb::arg("subdevice_id"),
+        nb::arg("core"),
+        nb::arg("value") = 1,
+        nb::arg("timeout_cycles") = 0);
+
+    ttnn::bind_function<"subdevice_fence", "ttnn.experimental.">(
+        mod,
+        FENCE_DOC,
+        &ttnn::operations::experimental::subdevice_fence,
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("subdevice_id"),
+        nb::arg("core") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::subdevice_sync::detail

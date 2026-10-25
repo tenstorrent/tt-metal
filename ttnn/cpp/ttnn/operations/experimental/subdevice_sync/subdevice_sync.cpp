@@ -9,6 +9,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/sub_device.hpp>
 
 namespace ttnn::operations::experimental {
 
@@ -61,6 +62,16 @@ void subdevice_wait(
         value,
         timeout_cycles,
         subdevice_id);
+}
+
+void subdevice_fence(
+    ttnn::MeshDevice& mesh_device, tt::tt_metal::SubDeviceId subdevice_id, const std::optional<CoreCoord>& core) {
+    const CoreCoord c =
+        core.value_or(mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id)
+                          .ranges()
+                          .front()
+                          .start_coord);
+    ttnn::prim::subdevice_sync(mesh_device, SubdeviceSyncMode::Fence, 0, c, c, 0, 0, subdevice_id);
 }
 
 }  // namespace ttnn::operations::experimental

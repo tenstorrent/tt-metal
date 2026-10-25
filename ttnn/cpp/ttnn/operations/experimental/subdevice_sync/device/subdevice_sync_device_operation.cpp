@@ -18,7 +18,7 @@ using namespace tt::tt_metal;
 void SubdeviceSyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(attrs.mesh_device != nullptr, "subdevice_sync: mesh_device is nullptr");
-    TT_FATAL(attrs.value > 0, "subdevice_sync: value must be > 0");
+    TT_FATAL(attrs.mode == SubdeviceSyncMode::Fence || attrs.value > 0, "subdevice_sync: value must be > 0");
     const SubDeviceId sd{attrs.sub_device_id};
     const auto sd_cores = attrs.mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, sd);
     TT_FATAL(
@@ -52,7 +52,10 @@ std::vector<uint32_t> runtime_args(const SubdeviceSyncDeviceOperation::operation
         const CoreCoord target = attrs.mesh_device->worker_core_from_logical_core(attrs.target_core);
         return {attrs.semaphore_address, static_cast<uint32_t>(target.x), static_cast<uint32_t>(target.y), attrs.value};
     }
-    return {attrs.semaphore_address, attrs.value, attrs.timeout_cycles};
+    if (attrs.mode == SubdeviceSyncMode::Wait) {
+        return {attrs.semaphore_address, attrs.value, attrs.timeout_cycles};
+    }
+    return {};
 }
 }  // namespace
 
@@ -67,10 +70,20 @@ ProgramDescriptor SubdeviceSyncDeviceOperation::SubdeviceSyncProgramFactory::cre
     // BRISC on NOC0: the go signal lands on BRISC, so this is the lowest-latency start; nothing else runs here.
     k.config = DataMovementConfigDescriptor{
         .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-    k.kernel_source = attrs.mode == SubdeviceSyncMode::Signal
-                          ? "ttnn/cpp/ttnn/operations/experimental/subdevice_sync/device/kernels/subdevice_signal.cpp"
-                          : "ttnn/cpp/ttnn/operations/experimental/subdevice_sync/device/kernels/subdevice_wait.cpp";
-    k.runtime_args.emplace_back(attrs.core, runtime_args(attrs));
+    switch (attrs.mode) {
+        case SubdeviceSyncMode::Signal:
+            k.kernel_source = "ttnn/cpp/ttnn/operations/experimental/subdevice_sync/device/kernels/subdevice_signal.cpp";
+            break;
+        case SubdeviceSyncMode::Wait:
+            k.kernel_source = "ttnn/cpp/ttnn/operations/experimental/subdevice_sync/device/kernels/subdevice_wait.cpp";
+            break;
+        case SubdeviceSyncMode::Fence:
+            k.kernel_source = "ttnn/cpp/ttnn/operations/experimental/subdevice_sync/device/kernels/subdevice_fence.cpp";
+            break;
+    }
+    if (attrs.mode != SubdeviceSyncMode::Fence) {
+        k.runtime_args.emplace_back(attrs.core, runtime_args(attrs));
+    }
     desc.kernels.push_back(std::move(k));
     return desc;
 }
@@ -81,6 +94,9 @@ void SubdeviceSyncDeviceOperation::SubdeviceSyncProgramFactory::override_runtime
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& /*tensor_return_value*/,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    if (attrs.mode == SubdeviceSyncMode::Fence) {
+        return;
+    }
     constexpr uint32_t kernel_idx = 0;
     auto& args = GetRuntimeArgs(program, kernel_idx, attrs.core);
     const auto v = runtime_args(attrs);

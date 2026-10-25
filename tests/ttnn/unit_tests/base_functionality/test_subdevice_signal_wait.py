@@ -131,6 +131,8 @@ class Harness:
             ttnn.apply_device_delay(m, [[self.delay_cycles] * self.cols for _ in range(self.rows)], subdevice_id=SD0)
         elif tok == "F":
             ttnn.apply_device_delay(m, [[0] * self.cols for _ in range(self.rows)], subdevice_id=SD0)
+        elif tok == "P":  # subdevice_fence on SD0 (1-core empty program)
+            ttnn.experimental.subdevice_fence(m, subdevice_id=SD0, core=FWD_SIGNAL_CORE)
         elif tok == "A":
             ttnn.add(self.x, 1.0, output_tensor=self.x, sub_device_id=SD0)
         elif tok == "K":
@@ -378,7 +380,7 @@ def _open(shape, num_cqs=1):
     return ttnn.open_mesh_device(ttnn.MeshShape(*shape), trace_region_size=TRACE_REGION, num_command_queues=num_cqs)
 
 
-@pytest.fixture(scope="module", params=[(1, 1)], ids=["1x1"])
+@pytest.fixture(scope="module", params=[(1, 1), (8, 4)], ids=["1x1", "8x4"])
 def harness(request):
     mesh = _open(request.param)
     h = Harness(mesh)
@@ -388,14 +390,21 @@ def harness(request):
 
 
 @pytest.mark.skipif(not HAS_OPS, reason="ttnn.experimental.subdevice_signal not built")
-def test_signal_wait_1000_replays(harness):
-    r = harness.run_variant("sw", "W D A S K E", 1000)
+def test_signal_wait_replays(harness):
+    r = harness.run_variant("sw", "W D A S K E", 1000 if harness.ndev == 1 else 100)
     assert r["total_viol"] == 0 and r["x_ok"] and r["e_ok"], r
 
 
 @pytest.mark.skipif(not HAS_OPS, reason="ttnn.experimental.subdevice_signal not built")
 def test_ping_pong_4_rounds(harness):
-    r = harness.run_variant("pp4", "W w D A S K E s", 250, nrounds=4)
+    r = harness.run_variant("pp4", "W w D A S K E s", 250 if harness.ndev == 1 else 25, nrounds=4)
+    assert r["total_viol"] == 0 and r["x_ok"] and r["e_ok"], r
+
+
+@pytest.mark.skipif(not HAS_OPS, reason="ttnn.experimental.subdevice_signal not built")
+def test_fence_orders_without_wait(harness):
+    # single CQ: the fence's go waits for A, and K's go is released after it
+    r = harness.run_variant("fence", "D A P K E", 1000 if harness.ndev == 1 else 100)
     assert r["total_viol"] == 0 and r["x_ok"] and r["e_ok"], r
 
 

@@ -43,4 +43,11 @@ void subdevice_wait(
     uint32_t value = 1,
     uint32_t timeout_cycles = 0);
 
+// subdevice_fence: an empty one-core program on `core` (default: first worker core) of `subdevice_id`. In one CQ every
+// program issued after it, on any sub-device, starts only after all programs issued before it on `subdevice_id` are
+// done (go signals are released in issue order; this one waits for its sub-device). This is the cheapest way to
+// order a consumer on another sub-device after a producer when the producer's stream has no later op to do it.
+void subdevice_fence(
+    ttnn::MeshDevice& mesh_device, tt::tt_metal::SubDeviceId subdevice_id, const std::optional<CoreCoord>& core = std::nullopt);
+
 }  // namespace ttnn::operations::experimental

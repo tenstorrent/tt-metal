@@ -20,7 +20,7 @@
 
 namespace ttnn::operations::experimental::subdevice_sync {
 
-enum class SubdeviceSyncMode : uint8_t { Signal = 0, Wait = 1 };
+enum class SubdeviceSyncMode : uint8_t { Signal = 0, Wait = 1, Fence = 2 };
 
 // One-core program used for in-trace cross-sub-device hand-offs (see subdevice_sync.hpp). The same program runs on
 // every chip of the mesh (chip-local semaphore, no cross-chip traffic).
@@ -37,8 +37,10 @@ struct SubdeviceSyncDeviceOperation {
 
         // Semaphore address, target core, value and timeout are runtime args re-applied on every cache hit, so one
         // cached program per (mode, core, sub-device) serves every hand-off edge.
-        static constexpr auto attribute_names = std::forward_as_tuple("mode", "core", "sub_device_id", "mesh_device");
-        auto attribute_values() const { return std::forward_as_tuple(mode, core, sub_device_id, mesh_device); }
+        // mesh_device must come FIRST: the launcher finds the device with get_first_object_of_type, which only
+        // inspects the first element of attribute_values().
+        static constexpr auto attribute_names = std::forward_as_tuple("mesh_device", "mode", "core", "sub_device_id");
+        auto attribute_values() const { return std::forward_as_tuple(mesh_device, mode, core, sub_device_id); }
     };
 
     struct tensor_args_t {};
