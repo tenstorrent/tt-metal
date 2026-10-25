@@ -17,7 +17,7 @@ import ttnn
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, get_num_dram_banks
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 from models.demos.deepseek_v3_d_p.tt.dflash_prefill.dflash_drafter_config import DFlashDrafterConfig
-from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, kv_slab_tokens
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
@@ -429,6 +429,8 @@ def populate_kv_chunk_address_table_block_cyclic(
     Returns:
         lookup_table: the same table, with config_id populated.
     """
+    # Fixed KV layout slab (GLM_KV_SLAB_TOKENS): the block-cyclic period of the cache is the slab, not the chunk.
+    layout_period = kv_slab_tokens(PREFILL_CHUNK_TOKENS)
 
     # Row a dense cache layer is published at; identity unless the cache is compacted.
     def _table_row(dense_layer):
@@ -451,13 +453,13 @@ def populate_kv_chunk_address_table_block_cyclic(
         # supersedes it, and a rank-local set_fabric_node_host(localhost) would fight the per-stage host.
         rows = mesh_shape[0]
 
-        tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
-        num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS  # number of 5k chunks in the seq len
+        tokens_per_chunk_local = layout_period // mesh_shape[sp_axis]  # 640 for 5k chunks
+        num_chunks_per_seq_len = seq_len // layout_period  # number of 5k chunks in the seq len
 
-        assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
+        assert seq_len % layout_period == 0, f"seq_len {seq_len} must be a multiple of {layout_period}"
 
         assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
-            f"{PREFILL_CHUNK_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+            f"{layout_period} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
             f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
         )
 
@@ -501,7 +503,7 @@ def populate_kv_chunk_address_table_block_cyclic(
                             aliases = aliases_of.get(table_row, ())
                             for seq_chunk in range(num_chunks_per_seq_len):
                                 chunk_token_start = (
-                                    seq_chunk * PREFILL_CHUNK_TOKENS
+                                    seq_chunk * layout_period
                                     + row * tokens_per_chunk_local
                                     + col * tokens_per_device
                                 )
@@ -543,16 +545,16 @@ def populate_kv_chunk_address_table_block_cyclic(
     # stage's own `count`.
     num_layers = len(layer_rows) if layer_rows is not None else config.num_layers - len(alias_rows or ())
 
-    assert seq_len % PREFILL_CHUNK_TOKENS == 0, f"seq_len {seq_len} must be a multiple of {PREFILL_CHUNK_TOKENS}"
-    num_chunks_per_seq_len = seq_len // PREFILL_CHUNK_TOKENS
+    assert seq_len % layout_period == 0, f"seq_len {seq_len} must be a multiple of {layout_period}"
+    num_chunks_per_seq_len = seq_len // layout_period
 
     assert (
         tt_kvpe_cache.shape[0] == num_users * num_layers
     ), f"cache batch dim {tt_kvpe_cache.shape[0]} != num_users({num_users}) * num_layers({num_layers})"
 
-    tokens_per_chunk_local = PREFILL_CHUNK_TOKENS // mesh_shape[sp_axis]  # 640 for 5k chunks
+    tokens_per_chunk_local = layout_period // mesh_shape[sp_axis]  # 640 for 5k chunks
     assert tokens_per_chunk_local % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK == 0, (
-        f"{PREFILL_CHUNK_TOKENS} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
+        f"{layout_period} tokens / sp({mesh_shape[sp_axis]}) = {tokens_per_chunk_local}, "
         f"not a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}"
     )
 
@@ -607,7 +609,7 @@ def populate_kv_chunk_address_table_block_cyclic(
                     aliases = aliases_of.get(table_row, ())
                     for seq_chunk in range(num_chunks_per_seq_len):
                         chunk_token_start = (
-                            seq_chunk * PREFILL_CHUNK_TOKENS
+                            seq_chunk * layout_period
                             + global_row * tokens_per_chunk_local
                             + col * tokens_per_device
                         )
