@@ -101,3 +101,42 @@ def test_the_note_sits_under_the_full_pipeline_line_only():
 def test_emit_e2e_tells_a_model_to_state_it():
     prompt = (_PA.parent.parent.parent / "scripts" / "tt_hw_planner" / "commands" / "emit_e2e.py").read_text()
     assert "<stage>_trace_repeats(): ZERO-ARG, OPTIONAL." in prompt
+
+
+def test_a_pass_that_states_no_count_says_every_stage_is_priced_at_one_run(monkeypatch):
+    """The silence itself is reported. Unstated and genuinely-once look identical to the ranking, so
+    the line that carries the total says which of the two it assumed."""
+    note = _note(monkeypatch, [], {"heavy": 42344.0, "light": 1297.0, "mid": 3012.0})
+    assert "no stage states a <stage>_trace_repeats count" in note
+    assert "priced at one run per request" in note
+
+
+def test_that_clause_names_no_stage_and_guesses_at_none(monkeypatch):
+    """Which stage loops is the pipeline's to say. A report that picked the biggest and called it a
+    loop would be wrong for every model whose heaviest stage genuinely runs once."""
+    note = _note(monkeypatch, [], {"heavy": 42344.0, "light": 1297.0})
+    assert "heavy" not in note and "light" not in note
+
+
+def test_a_stated_count_replaces_the_clause_rather_than_joining_it(monkeypatch):
+    rows = [{"kind": "stage_repeats", "depth": "loop", "value_ms": 50.0}]
+    note = _note(monkeypatch, rows, {"loop": 20.0, "once": 3000.0})
+    assert "loop 50x" in note
+    assert "no stage states" not in note, "the question is answered; the prompt goes away"
+
+
+def test_one_measured_stage_is_left_alone(monkeypatch):
+    """Nothing to rank against, so the missing count skews nothing worth a line."""
+    from cc_optimize import summary
+
+    assert summary._MIN_STAGES_FOR_REPEATS_NOTE == 2
+    assert _note(monkeypatch, [], {"only": 3000.0}) == ""
+    assert _note(monkeypatch, [], {"only": 3000.0, "unmeasured": 0.0}) == ""
+
+
+def test_the_clause_spells_the_seam_the_pipeline_must_add(monkeypatch):
+    """Named from stage_seams, not typed here: a renamed seam renames the advice with it."""
+    note = _note(monkeypatch, [], {"a": 2.0, "b": 1.0})
+    assert stage_seams.REPEATS in note
+    src = (_PA / "cc_optimize" / "summary.py").read_text()
+    assert "from agent.stage_seams import REPEATS as _repeats_seam" in src

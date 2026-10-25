@@ -1917,24 +1917,47 @@ def _pinned_ceiling_input(kind: str, stage, model: str = "", task: str = ""):
         return None
 
 
+# HOW MANY MEASURED STAGES MAKE A MISSING REPEAT COUNT WORTH SAYING. Below this there is no ranking
+# between stages for an unstated count to skew, so _per_request_note keeps quiet.
+_MIN_STAGES_FOR_REPEATS_NOTE = 2
+
+
 def _per_request_note(model: str = "", task: str = "") -> str:
-    """What the full-pipeline line covers, when a stage runs more than once per request; "" otherwise.
+    """What the full-pipeline line covers: the repeat counts the pipeline stated, or that it stated none.
 
     The pass times each stage's step once. A stage the pipeline replays per request -- it states how
-    many times through <stage>_trace_repeats, pinned as KIND_STAGE_REPEATS -- costs that many steps,
+    many times through the repeats seam, pinned as KIND_STAGE_REPEATS -- costs that many steps,
     so the line read as one request when it was one step of each stage: Qwen-Image-Edit's 35.7 s
-    covered 1 of its 50 denoise steps. Names and counts are the pipeline's own; with no stage stating
-    more than one, nothing is printed and the report is unchanged."""
+    covered 1 of its 50 denoise steps. Names and counts are the pipeline's own.
+
+    AND IT SAYS SO WHEN NOTHING WAS STATED. The seam is optional, so an unstated count is
+    indistinguishable from a stage that really does run once, and both the report and the ranking
+    price them alike -- which is how Qwen-Image-Edit's denoise came to sit at ~99% of a real edit
+    while being weighed like a single pass, with nothing on the page to show for it. A pass whose
+    pipeline stated no count at all gets one clause saying every stage is priced at one run. It
+    names no stage and guesses at none: which stage loops is the pipeline's to say, and the clause
+    exists to ask it to. A pass with fewer than two measured stages is left alone -- there is no
+    ranking between stages for a missing count to skew, and nothing to compare a share against.
+
+    The clause rides on the line under the full-pipeline total rather than on a warning of its own,
+    because it qualifies that number: a caveat printed anywhere else is one nobody reads."""
     try:
-        reps = _ledger().stage_repeats(model=model, task=task)
-        if not reps:
-            return ""
+        from agent.stage_seams import REPEATS as _repeats_seam
         from cc_optimize.perf_mcp import read_stage_ms
 
+        reps = _ledger().stage_repeats(model=model, task=task)
         stage_ms = read_stage_ms(model=model) or {}
+        known = {str(k).strip().lower(): v for k, v in stage_ms.items()}
+        lead = "  that pass ran each stage's step once; "
+        if not reps:
+            if len([v for v in known.values() if v > 0]) < _MIN_STAGES_FOR_REPEATS_NOTE:
+                return ""
+            return "%sno stage states a <stage>%s count, so every stage is priced at one run per request" % (
+                lead,
+                _repeats_seam,
+            )
         which = ", ".join("%s %dx" % (k, v) for k, v in sorted(reps.items()))
-        note = "  that pass ran each stage's step once; one request runs %s" % which
-        known = {k.lower(): v for k, v in stage_ms.items()}
+        note = "%sone request runs %s" % (lead, which)
         if known and all(k in known for k in reps):
             total = sum(v * reps.get(k, 1) for k, v in known.items())
             note += " -> ~%.0f ms per request (this run's stage times x repeats)" % total
