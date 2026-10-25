@@ -39,6 +39,10 @@ _GLUE_EPI_L1 = os.environ.get("GLUE_EPI_L1", "1") == "1"
 # glue track: L1 placement in the in-place-RoPE Q chain (head split outputs; the [16, S, 576] Q buffer).
 _GLUE_Q_HEADS_L1 = os.environ.get("GLUE_Q_HEADS_L1", "1") == "1"
 _GLUE_Q_OUT_L1 = os.environ.get("GLUE_Q_OUT_L1", "0") == "1"
+# glue track: seqq q_a norm on its 160 rows width-sharded over this many cores (0 = interleaved rms_norm, 5 cores).
+_GLUE_SEQQ_NORM_CORES = int(os.environ.get("GLUE_SEQQ_NORM_CORES", "32"))
+# glue track: workers per link for the seqq q_a reduce-scatter over rows; 0 = op default.
+_GLUE_SEQQ_RS_WORKERS = int(os.environ.get("GLUE_SEQQ_RS_WORKERS", "0")) or None
 
 
 class ttMLA:
@@ -781,17 +785,8 @@ class ttMLA:
         )
         if self._q_rope_inplace:
             self.wkv_b1_weight_padded = self._pad_wkv_b1_weight()
-            b1 = self._resolve_mm_cfg("wkv_b1", self.active_seq_len_local)["program_config"]
-            n_t = (self.kv_lora_rank + self.qk_rope_head_dim) // ttnn.TILE_SIZE
-            sub_w = max(w for w in range(1, 9) if n_t % w == 0)
-            grid = b1.compute_with_storage_grid_size
-            self._wkv_b1_padded_pc = ttnn.MatmulMultiCoreReuseProgramConfig(
-                compute_with_storage_grid_size=(grid.x, grid.y),
-                in0_block_w=b1.in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=sub_w,
-                per_core_M=b1.per_core_M,
-                per_core_N=n_t,
+            self._wkv_b1_padded_pc = self._padded_wkv_b1_program_config(
+                self._resolve_mm_cfg("wkv_b1", self.active_seq_len_local)["program_config"]
             )
 
         # Bind the attention core once, by config. Sparse ALWAYS uses the block-cyclic
@@ -819,6 +814,20 @@ class ttMLA:
             self.q_b_proj_weight = self._replicate_over_tp(self.q_b_proj_weight, dim=-1)
             self.wkv_b1_weight = self._replicate_over_tp(self.wkv_b1_weight, dim=1)
             self.wkv_b2_weight = self._replicate_over_tp(self.wkv_b2_weight, dim=1)
+        # glue track: in-place RoPE for the sequence-sharded Q stem too (see _q_stem_seq). The head-path padded
+        # weight built above is unused once Q is sequence-sharded; rebuild it from the TP-replicated wkv_b1.
+        self._q_rope_inplace_seq = False
+        if self._seq_q:
+            if self._q_rope_inplace:
+                ttnn.deallocate(self.wkv_b1_weight_padded)
+                self.wkv_b1_weight_padded = None
+                self._q_rope_inplace = False
+            rows = self.active_seq_len_local // self.tp_factor
+            cfg = self._resolve_mm_cfg("wkv_b1", rows) if self._is_blackhole else None
+            if os.environ.get("GLUE_Q_ROPE_INPLACE", "1") == "1" and cfg is not None:
+                self.wkv_b1_weight_padded = self._pad_wkv_b1_weight()
+                self._wkv_b1_padded_pc_seq = self._padded_wkv_b1_program_config(cfg["program_config"])
+                self._q_rope_inplace_seq = True
         if os.getenv("MLA_MEMLOG") and layer_idx in (0, layer_num - 2, layer_num - 1):
             self._log_dram(f"after MLA layer {layer_idx} weights (seq_q={self._seq_q})")
 
@@ -1354,6 +1363,20 @@ class ttMLA:
             epsilon=self.config.rms_norm_eps,
             memory_config=norm_memory_config,
             compute_kernel_config=self.default_compute_kernel_config,
+        )
+
+    def _padded_wkv_b1_program_config(self, b1) -> ttnn.MatmulMultiCoreReuseProgramConfig:
+        """The tuned wkv_b1 batched config with N widened to kv_lora_rank + rope (whole N per core)."""
+        n_t = (self.kv_lora_rank + self.qk_rope_head_dim) // ttnn.TILE_SIZE
+        sub_w = max(w for w in range(1, 9) if n_t % w == 0)
+        grid = b1.compute_with_storage_grid_size
+        return ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(grid.x, grid.y),
+            in0_block_w=b1.in0_block_w,
+            out_subblock_h=1,
+            out_subblock_w=sub_w,
+            per_core_M=b1.per_core_M,
+            per_core_N=n_t,
         )
 
     def _pad_wkv_b1_weight(self) -> ttnn.Tensor:
@@ -1939,7 +1962,8 @@ class ttMLA:
         if self._seq_q and self._seq_q_qa == "allreduce":
             qr_all = self._q_a_latent(hidden_states, seq_len_local, q_norm_mem_config)
             qr, kv_a = ttnn.mesh_partition(qr_all, dim=2, cluster_axis=self.tp_axis), None
-            ttnn.deallocate(qr_all)
+            if not self._q_distnorm:  # distnorm qr_all IS the persistent TP gather buffer
+                ttnn.deallocate(qr_all)
         elif self._seq_q:
             # Only this TP rank's row quarter of the latent (see _q_a_latent_seq).
             q_norm_mem_config = self._get_act_mem_config("q_b_proj", seq_len_local // self.tp_factor)
@@ -2752,10 +2776,58 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self.tp_ccl_topology,
             cluster_axis=self.tp_axis,
+            num_workers_per_link=_GLUE_SEQQ_RS_WORKERS,
         )
         ttnn.deallocate(qr)
-        out = self._q_a_norm(qr_rows, norm_memory_config)
+        if _GLUE_SEQQ_NORM_CORES:
+            out = self._q_a_norm_width_sharded(qr_rows, norm_memory_config, _GLUE_SEQQ_NORM_CORES)
+        else:
+            out = self._q_a_norm(qr_rows, norm_memory_config)
         ttnn.deallocate(qr_rows)
+        return out
+
+    def _q_a_norm_width_sharded(self, qr: ttnn.Tensor, out_memory_config: ttnn.MemoryConfig, cores: int) -> ttnn.Tensor:
+        """q_a RMSNorm with the rows width-sharded over `cores` cores (8 per grid row). The interleaved rms_norm runs
+        one core per 32-row tile row, i.e. 5 cores for seqq's 160 rows; the sharded one splits the 2048 channels and
+        reduces the row statistics across the shard grid (glue track, GLUE_SEQQ_NORM_CORES)."""
+        rows, width = qr.shape[-2], qr.shape[-1]
+        key = (rows, width, cores)
+        cfgs = getattr(self, "_q_norm_shard_cfgs", None)
+        if cfgs is None:
+            cfgs = self._q_norm_shard_cfgs = {}
+        if key not in cfgs:
+            gx = min(8, cores)
+            gy = cores // gx
+            block_w = width // ttnn.TILE_SIZE // cores
+            sub_w = max(w for w in (4, 3, 2, 1) if block_w % w == 0)
+            cfgs[key] = (
+                ttnn.create_sharded_memory_config(
+                    shape=(rows, width // cores),
+                    core_grid=ttnn.CoreGrid(x=gx, y=gy),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                ),
+                ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=[gx, gy],
+                    subblock_w=sub_w,
+                    block_h=rows // ttnn.TILE_SIZE,
+                    block_w=block_w,
+                    inplace=False,
+                ),
+            )
+        in_cfg, pc = cfgs[key]
+        xs = ttnn.to_memory_config(qr, in_cfg)
+        o = ttnn.rms_norm(
+            xs,
+            weight=self.q_a_layernorm_weight,
+            epsilon=self.config.rms_norm_eps,
+            program_config=pc,
+            compute_kernel_config=self.default_compute_kernel_config,
+        )
+        ttnn.deallocate(xs)
+        out = ttnn.sharded_to_interleaved(o, out_memory_config)
+        ttnn.deallocate(o)
         return out
 
     def _q_stem_seq(
@@ -2769,13 +2841,38 @@ class ttMLA:
         q_rows = qr.shape[2]
         tt_q = ttnn.linear(qr, self.q_b_proj_weight, **self._get_mm_kwargs("q_b_proj", q_rows))
         ttnn.deallocate(qr)
+        inplace = self._q_rope_inplace_seq and q_rows == self.active_seq_len_local // self.tp_factor
         tt_q_nope, tt_q_rope = ttnn.experimental.nlp_create_q_heads_split(
             tt_q,
             num_heads=self.num_heads,
             split_head_dim=self.qk_nope_head_dim,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG if (inplace and _GLUE_Q_HEADS_L1) else ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(tt_q)
+        if inplace:
+            # glue track (as _q_stem): [q_nope @ wkv_b1 | 0] straight into the [1, H, rows, 576] Q buffer, then the
+            # indexed RoPE writes the rotated q_pe into its last channels in place (no 512-channel concat copy).
+            tt_q = ttnn.linear(
+                tt_q_nope,
+                self.wkv_b1_weight_padded,
+                program_config=self._wkv_b1_padded_pc_seq,
+                memory_config=ttnn.L1_MEMORY_CONFIG if _GLUE_Q_OUT_L1 else ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+                compute_kernel_config=self.default_compute_kernel_config,
+            )
+            ttnn.deallocate(tt_q_nope)
+            ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                tt_q_rope,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                kv_actual_global=metadata[1] if metadata is not None else kv_actual_isl,
+                cluster_axis=self.sp_axis,
+                seq_subshard_axis=self.tp_axis,
+                output_tensor=tt_q,
+            )
+            ttnn.deallocate(tt_q_rope)
+            return tt_q
         tt_q_nope_abs = ttnn.linear(tt_q_nope, self.wkv_b1_weight, **self._get_mm_kwargs("wkv_b1", q_rows))
         ttnn.deallocate(tt_q_nope)
         # The rows are this TP rank's quarter of the SP slab: seq_subshard_axis adds that window to the rotated
