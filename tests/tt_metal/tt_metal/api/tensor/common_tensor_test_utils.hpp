@@ -7,6 +7,8 @@
 #include <array>
 #include <string>
 
+#include <gtest/gtest.h>
+
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
