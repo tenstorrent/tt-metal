@@ -318,6 +318,7 @@ ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAPar
         t.push_batch_index_tensor.has_value(),
         t.push_hot_table.has_value(),
         ::sparse_sdpa::split_k_enabled(),
+        ::sparse_sdpa::split_k_small_enabled(),
         ::sparse_sdpa::kdeq_batch_mode());
 }
 
