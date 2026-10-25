@@ -8,7 +8,8 @@ Usage:
 
 Description:
     The combine's hang words (sparse_combine_rf CombineProbes.hw, SPC_HW=1): every combine core's MISC words 476..511
-    (ports: loop counters, the blocked row, the layouts present at start; accumulators: rows done / wanted / taken)
+    (ports: loop counters, the blocked row, the layouts present at start; accumulators: rows done / wanted, per
+    source taken / still wanted, the most-wanted source's ring head - decoded)
     and its ring layout words (LAYR / LAYO), into generated/moe_block/combine_hw_dump.txt. Runs only when the probed
     combine wrote generated/moe_block/combine_hw.json (the misc / layout addresses and the cores).
 
@@ -42,6 +43,16 @@ def run(args, context: Context):
                 print(f"COMBINE_HW dev {dev.id} {x}-{y}: read failed {e}", file=out)
                 continue
             print(f"COMBINE_HW dev {dev.id} {x}-{y}: " + " ".join(f"{v:08x}" for v in w), file=out)
+            if w[20] >> 16 == 0x4143:  # (an accumulator: MISC 496 = 'AC' | calls)
+                m = lambda i: w[i - 476]  # noqa: E731
+                srcs = " ".join(f"{k}:{m(503 + k) & 0xFFFF}/{m(503 + k) >> 16}" for k in range(8))
+                print(
+                    f"  acc call {m(496) & 0xFFFF}: rows {m(497)} of {m(498)}, local {m(499)} of {m(500)}, me "
+                    f"{m(501) & 0xFF} home {m(501) >> 8 & 0xFF}, pass {m(502)} | per source taken / still wanted {srcs} "
+                    f"| the most-wanted source's ring: source {m(476) & 0xFF} depth {m(476) >> 8 & 0xFF} base "
+                    f"{m(476) >> 16}, head slot pieces landed (2 bits a piece) {m(477):04x}",
+                    file=out,
+                )
             for k in ("layr", "layo"):
                 if k in cfg:
                     v = read_words_from_device(
