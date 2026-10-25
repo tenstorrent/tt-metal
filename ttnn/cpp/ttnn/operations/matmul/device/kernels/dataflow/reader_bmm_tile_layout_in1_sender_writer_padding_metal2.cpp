@@ -170,6 +170,8 @@ void kernel_main() {
 
     const Noc noc;
     DataflowBuffer dfb_in1(dfb::in1);
+    // MM_IN1_PIPE: the in1 CB ring base (the write pointer before the first reserve)
+    [[maybe_unused]] const uint32_t in1_ring_base = dfb_in1.get_write_ptr();
     DataflowBuffer dfb_out(dfb::out);
     Semaphore sender_sem(sem::in1_mcast_sender);
     Semaphore receiver_sem(sem::in1_mcast_receiver);
@@ -402,6 +404,99 @@ void kernel_main() {
                     uint32_t l1_read_addr_in1_offset = 0;
 #endif  // IN1_DRAM_WIDTH_SHARDED
 
+#if defined(MM_IN1_PIPE) && !defined(FUSE_OP_ALL_GATHER) && !defined(ENABLE_PREFETCHER_PIPE) && \
+    !defined(ENABLE_GLOBAL_CB) && !defined(IN1_DRAM_WIDTH_SHARDED) && !defined(IN1_DRAM_HEIGHT_SHARDED) && \
+    !defined(IN1_SHARDED) && !defined(SKIP_MCAST)
+                    {
+                        // MM_IN1_PIPE (mm experiment): software-pipeline the in1 sender. Block b+1's DRAM reads are
+                        // issued into the other half of the double-buffered CB BEFORE block b is multicast, so the
+                        // DRAM read time overlaps the multicast instead of adding to it (per-block period was
+                        // read + mcast). Same bytes, same order of the CB protocol: bit-identical results.
+                        const uint32_t cb_bytes = dfb_in1.get_total_size_bytes();
+                        const bool pipelined = num_blocks_inner_dim > 1 && cb_bytes >= 2 * in1_block_size_bytes &&
+                                               (cb_bytes % in1_block_size_bytes) == 0;
+                        uint32_t next_tile_id = in1_tensor_current_inner_dim_block_start_tile_id;
+                        auto issue_in1_reads = [&](uint32_t dst_addr, uint32_t start_tile_id) {
+                            uint32_t off = 0;
+                            uint32_t row_tile_id = start_tile_id;
+                            for (uint32_t h = 0; h < in1_block_h; ++h) {
+                                uint32_t tile_id = row_tile_id;
+                                for (uint32_t w = 0; w < in1_block_w; ++w) {
+                                    if (bw < num_blocks_w_dim - 1 || w < last_block_w) {
+                                        noc.async_read(
+                                            s1,
+                                            CoreLocalMem<uint32_t>(dst_addr + off),
+                                            in1_single_tile_size_bytes,
+                                            {.page_id = tile_id},
+                                            {});
+                                    }
+                                    off += in1_aligned_tile_size_bytes;
+                                    tile_id += in1_tensor_stride_w;
+                                }
+                                row_tile_id += in1_tensor_stride_h;
+                            }
+                        };
+                        MM_TS_MARK("I1", 0);
+                        dfb_in1.reserve_back(in1_block_num_tiles);
+                        MM_TS_MARK("I1", 1);
+                        uint32_t cur_addr = dfb_in1.get_write_ptr();
+                        issue_in1_reads(cur_addr, next_tile_id);
+                        next_tile_id += in1_tensor_next_block_stride;
+                        for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
+                            noc.async_read_barrier();  // this block's tiles have landed
+                            MM_TS_MARK("I1", (block << 4) | 2);
+                            uint32_t next_addr = 0;
+                            if (pipelined && block + 1 < num_blocks_inner_dim) {
+                                // both halves free: the local compute has popped block-1 (the other half's last use)
+                                dfb_in1.reserve_back(2 * in1_block_num_tiles);
+                                next_addr = cur_addr + in1_block_size_bytes;
+                                if (next_addr >= in1_ring_base + cb_bytes) {
+                                    next_addr = in1_ring_base;
+                                }
+                                issue_in1_reads(next_addr, next_tile_id);
+                                next_tile_id += in1_tensor_next_block_stride;
+                            }
+                            sender_sem.wait(in1_mcast_num_dests);
+                            sender_sem.set(0);
+                            MM_TS_MARK("I1", (block << 4) | 3);
+                            const MulticastEndpoint mcast_dst;
+                            noc.async_write_multicast(
+                                CoreLocalMem<uint32_t>(cur_addr),
+                                mcast_dst,
+                                in1_block_size_bytes,
+                                in1_mcast_num_cores,
+                                {},
+                                {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                 .noc_y_start = in1_mcast_dest_noc_start_y,
+                                 .noc_x_end = in1_mcast_dest_noc_end_x,
+                                 .noc_y_end = in1_mcast_dest_noc_end_y,
+                                 .addr = cur_addr},
+                                true);
+#ifdef ARCH_BLACKHOLE
+                            noc.async_writes_flushed();
+#endif  // ARCH_BLACKHOLE
+                            receiver_sem.set_multicast(
+                                noc,
+                                in1_mcast_dest_noc_start_x,
+                                in1_mcast_dest_noc_start_y,
+                                in1_mcast_dest_noc_end_x,
+                                in1_mcast_dest_noc_end_y,
+                                in1_mcast_num_cores);
+                            MM_TS_MARK("I1", (block << 4) | 4);
+                            dfb_in1.push_back(in1_block_num_tiles);
+                            if (block + 1 < num_blocks_inner_dim) {
+                                if (pipelined) {
+                                    cur_addr = next_addr;
+                                } else {
+                                    dfb_in1.reserve_back(in1_block_num_tiles);
+                                    cur_addr = dfb_in1.get_write_ptr();
+                                    issue_in1_reads(cur_addr, next_tile_id);
+                                    next_tile_id += in1_tensor_next_block_stride;
+                                }
+                            }
+                        }
+                    }
+#else
                     for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
 #ifdef FUSE_OP_ALL_GATHER
                         fused_op_receiver.update_current_block_start_tile_id(
@@ -619,6 +714,7 @@ void kernel_main() {
                         }
 #endif
                     }
+#endif  // MM_IN1_PIPE
 #if defined(ENABLE_PREFETCHER_PIPE)
                     drain_in1_pipe_window(pipe, noc, num_blocks_inner_dim);
 #elif defined(ENABLE_GLOBAL_CB)
