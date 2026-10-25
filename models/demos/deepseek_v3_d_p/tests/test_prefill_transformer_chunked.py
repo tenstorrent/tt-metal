@@ -82,12 +82,15 @@ from models.demos.deepseek_v3_d_p.utils.test_utils import (
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
-CHUNK = PREFILL_CHUNK_TOKENS  # 5120 tokens per chunk
+# 5120 tokens per chunk. GLM_TEST_CHUNK overrides it for small-chunk studies (smallchunk agent): the GLM sparse path
+# needs whole 32-row tiles per (SP chip, TP rank), i.e. chunk % (8 * 4 * 32) == 0 -> 1024, 2048, 3072, ... on 8x4.
+CHUNK = int(os.environ.get("GLM_TEST_CHUNK", PREFILL_CHUNK_TOKENS))
 SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # Default KV cache for the no-PCC perf sweeps; callers needing a longer one pass run_chunked_transformer_
 # updated(seq_cache=...). Kept separate from SEQ_CACHE so the PCC tests (which assert against 55*1024)
 # are untouched.
-SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
+SEQ_CACHE_NOPCC = int(os.environ.get("GLM_TEST_SEQ_CACHE", 100 * 1024))  # 102400 KV cache length (1 user)
+# (GLM_TEST_SEQ_CACHE, e.g. 163840, lets preload95k run chunks_eleven: 97.3k + 11 chunks would otherwise skip.)
 
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
 # once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
@@ -130,7 +133,9 @@ _PADDED_FULL_55K = [
     1536,
     4448,
 ]  # sum == 55 * 1024
-assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_FULL_55K)
+assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(
+    v % 32 == 0 and 0 < v <= PREFILL_CHUNK_TOKENS for v in _PADDED_FULL_55K
+)  # the padded schedules are 5120-chunk schedules (their tests assume CHUNK == 5120)
 
 # 15k (15360) CI-sized variant of the above. Cost here tracks the CHUNK count, not the token count --
 # every chunk is a full CHUNK-wide padded tile regardless of its isl -- so 6 chunks runs ~3x faster
@@ -142,7 +147,7 @@ assert sum(_PADDED_FULL_55K) == SEQ_CACHE and all(v % 32 == 0 and 0 < v <= CHUNK
 #   * 2592 / 1568 / 800 / 3360 / 1920 are non-1024-aligned -> mid-tile rotation offsets;
 #   * 5120 keeps one exactly-full (unpadded) chunk in the mix.
 _PADDED_MID_15K = [2592, 1568, 5120, 800, 3360, 1920]  # sum == 15 * 1024
-assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= CHUNK for v in _PADDED_MID_15K)
+assert sum(_PADDED_MID_15K) == 15 * 1024 and all(v % 32 == 0 and 0 < v <= PREFILL_CHUNK_TOKENS for v in _PADDED_MID_15K)
 
 
 def _padded_cache_len(splits, preload_isl=0):
@@ -2704,7 +2709,8 @@ def glm_chunked_perf_gate(use_trace, num_layers, n_chunks, num_iters, preload_is
 # non-degenerate for routing) so larger ISLs than the trace can be measured. Requires a golden trace when >0.
 @pytest.mark.parametrize(
     "preload_isl",
-    [0, 5 * CHUNK, 10 * CHUNK, 19 * CHUNK],
+    # tokens of the 5120-chunk ladder rounded down to a CHUNK multiple (identical at CHUNK == 5120)
+    [(t * PREFILL_CHUNK_TOKENS // CHUNK) * CHUNK for t in (0, 5, 10, 19)],
     ids=["preload0", "preload25k", "preload50k", "preload95k"],
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
@@ -2798,7 +2804,8 @@ def test_kimi_prefill_transformer_chunked_perf(
 # non-degenerate for routing) so larger ISLs than the trace can be measured. Requires a golden trace when >0.
 @pytest.mark.parametrize(
     "preload_isl",
-    [0, 5 * CHUNK, 10 * CHUNK, 19 * CHUNK],
+    # tokens of the 5120-chunk ladder rounded down to a CHUNK multiple (identical at CHUNK == 5120)
+    [(t * PREFILL_CHUNK_TOKENS // CHUNK) * CHUNK for t in (0, 5, 10, 19)],
     ids=["preload0", "preload25k", "preload50k", "preload95k"],
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
@@ -3039,7 +3046,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # Requires a golden trace when >0.
 @pytest.mark.parametrize(
     "preload_isl",
-    [0, 5 * CHUNK, 10 * CHUNK, 19 * CHUNK],
+    # tokens of the 5120-chunk ladder rounded down to a CHUNK multiple (identical at CHUNK == 5120)
+    [(t * PREFILL_CHUNK_TOKENS // CHUNK) * CHUNK for t in (0, 5, 10, 19)],
     ids=["preload0", "preload25k", "preload50k", "preload95k"],
 )
 @pytest.mark.parametrize("num_layers", [1, 10, 78], ids=["L1", "L10", "L78"])
