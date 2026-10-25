@@ -174,11 +174,13 @@ def test_qpush_pair(mesh_device, device_params):
         """Trace `body` QP_N times, replay QP_R times; median us per iteration."""
         outs = []
         tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        for _ in range(n):
-            o = body()
-            if o is not None:
-                outs.append(o)
-        ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+        try:
+            for _ in range(n):
+                o = body()
+                if o is not None:
+                    outs.append(o)
+        finally:  # never leave a capture open: the mesh teardown would hang on it
+            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
         label[0] = name
         times = []
         for _ in range(r):
@@ -217,7 +219,8 @@ def test_qpush_pair(mesh_device, device_params):
             f"[qpush pair] RESULT q_b on SD0 (11x{gy} at ({box.start.x},{box.start.y}), per_core_N 6) bit-identical to "
             f"11x10: {same} (max abs diff {(ref_host.float() - off_host.float()).abs().max().item():.3e})"
         )
-        t_off = timed("qb_off (SD0)", lambda: qb(pc_off, out))
+        # The body returns None: qb's result aliases `out`, which timed() must not free.
+        t_off = timed("qb_off (SD0)", lambda: (qb(pc_off, out), None)[1])
         t_kvg = timed("kvg (SD1, full-mesh gather)", lambda: kvg())
 
         def pair():
