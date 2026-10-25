@@ -662,13 +662,15 @@ class ttMLA:
         # and gather semaphores, so it needs an overlap profile and must stay off for non-reuse layers.
         self._shared_q_overlap = None
         self._shared_q_overlap_mode = os.getenv("TT_GLM_SHARED_KV_OVERLAP", "off").lower()
-        if self._shared_q_overlap_mode not in ("off", "a2a", "a2a_untilize"):
-            raise ValueError(f"TT_GLM_SHARED_KV_OVERLAP={self._shared_q_overlap_mode!r}: expected off|a2a|a2a_untilize")
+        if self._shared_q_overlap_mode not in ("off", "a2a"):
+            # a2a_untilize was tried and is impossible at this shape: the sub_core_grids untilize path only takes
+            # tensors one tile row tall (TT_FATAL at untilize_device_operation.cpp:132 for q [1,64,160,576]).
+            raise ValueError(f"TT_GLM_SHARED_KV_OVERLAP={self._shared_q_overlap_mode!r}: expected off|a2a")
         # Full layers (prototype, env TT_GLM_FULL_A2A_OVERLAP = a2a | a2a_untilize | off): append the
         # heads->seq all-to-all (+untilize) to the top-k sub-device inside the existing top-k || gather region.
         self._full_a2a_overlap_mode = os.getenv("TT_GLM_FULL_A2A_OVERLAP", "off").lower()
-        if self._full_a2a_overlap_mode not in ("off", "a2a", "a2a_untilize"):
-            raise ValueError(f"TT_GLM_FULL_A2A_OVERLAP={self._full_a2a_overlap_mode!r}: expected off|a2a|a2a_untilize")
+        if self._full_a2a_overlap_mode not in ("off", "a2a"):
+            raise ValueError(f"TT_GLM_FULL_A2A_OVERLAP={self._full_a2a_overlap_mode!r}: expected off|a2a")
         if (
             self._shared_q_overlap_mode != "off"
             and requested_overlap_profile is not None
@@ -2144,6 +2146,11 @@ class ttMLA:
 
     def _a2a_on_subdevice(self, tt_q, resources, *, untilize):
         """heads->seq all-to-all on the overlap manager's top-k sub-device (+ optional untilize there)."""
+        # TT_GLM_OVERLAP_A2A_TOPO=linear keeps the a2a off the TP wrap links while a full-mesh gather/push runs
+        # concurrently (both on wrap links hung the traced replay on best-v4, 2026-10-25).
+        topo = {"linear": ttnn.Topology.Linear, "ring": ttnn.Topology.Ring}.get(
+            os.getenv("TT_GLM_OVERLAP_A2A_TOPO", "default").lower()
+        )
         q_seq_sharded = ttnn.experimental.all_to_all_async_generic(
             tt_q,
             in_dim=1,
@@ -2152,6 +2159,7 @@ class ttMLA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cluster_axis=self.tp_axis,
             subdevice_id=resources.topk_subdevice_id,
+            **({"topology": topo} if topo is not None else {}),
         )
         if not untilize:
             return q_seq_sharded  # still TILE; _sparse_mla untilizes it on the full grid
