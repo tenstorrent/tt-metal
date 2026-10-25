@@ -327,7 +327,9 @@ class DSV41Gate(TTMoEGate):
         from models.demos.blackhole.deepseek_v41_flash.tt.router_mm import router_fused
 
         T = tt_x.shape[2]
-        if T > 32 or self._E != 384 or tt_x.shape[3] != 5120:
+        if (
+            T > 16 or self._E != 384 or tt_x.shape[3] != 5120
+        ):  # T = 24 / 32: the 12 row-owner cores take 2-3 rows each, slower than the 4-op chain
             return self._forward_fused(tt_x)
         S = S or ROUTER_S
         wk, bt = self._mm_consts(S)

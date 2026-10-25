@@ -90,7 +90,7 @@ def test_router_mm_exact(mesh_device):
         tot = Stat()
         for L in layers:
             gate, _ = make_gate(md, L, 32)
-            for T in (4, 8, 16, 32):
+            for T in (4, 8, 16, 24, 32):
                 st = Stat()
                 for i in range(n_rand):
                     x = torch.randn(T, 5120) * (0.25, 0.5, 1.0, 2.0, 4.0)[i % 5]
@@ -143,7 +143,7 @@ def test_router_mm_timing(mesh_device):
     md = mesh_device
     gate, _ = make_gate(md, 2, 8)
     us = lambda fn: chain_ms(md, fn) * 1e3
-    for T in (4, 8, 16):
+    for T in (4, 8, 16, 24, 32):
         h = up(md, torch.randn(T, 5120))
         print(f"RMMT T={T:2d} old front end (mm+2 add) {us(lambda: old_chain(gate, h)):7.1f} us", flush=True)
         print(f"RMMT T={T:2d} old full (fused)         {us(lambda: gate._forward_fused(h)):7.1f} us", flush=True)
