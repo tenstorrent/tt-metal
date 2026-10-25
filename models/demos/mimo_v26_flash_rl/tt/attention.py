@@ -8,7 +8,7 @@ Per chip, one chunk of 5120 tokens:
     x [1, 1, 160, 4096] local rows -> all_gather over TP -> [640, 4096] (the SP row's tokens)
     -> fused qkv linear with the TP rank's own checkpoint slab -> [640, 16 x 192 | 192 | 192]
        (v is zero-padded 128 -> 192 so nlp_create_qkv_heads splits one projection; v is sliced back to 128 after;
-       full layers: fp32 out, QKV_FP32)
+       full layers: fp32 out, QKV_FP32; sliding layers: fp32 out, SWA_QKV_FP32, RoPE composed in fp32)
     -> RoPE (HF rotate_half) on dims 0-63 of q and k, cos / sin rows looked up at each local row's absolute position
     -> q x 192^-0.5 and v x attention_value_scale (fp32 tensor operands; FULL_SCALES_AFTER_PROJ off: folded into the
        q / v weight rows), q to bf16 for the SDPA
@@ -204,14 +204,17 @@ class ChunkMeta:
 
 
 class RopeTables:
-    """cos / sin [max_seq, rope_dim] bf16 ROW_MAJOR, replicated; HF layout (the half-split frequencies repeated)."""
+    """cos / sin [max_seq, rope_dim] bf16 ROW_MAJOR, replicated; HF layout (the half-split frequencies repeated).
+    Also the bf16 residuals (fp32 table - its bf16 rounding): ``lookup(fp32=True)`` returns hi + lo in fp32
+    (``ttnn.embedding`` takes bf16 tables only)."""
 
     def __init__(self, mesh, inv_freq: torch.Tensor, max_seq: int):
         pos = torch.arange(max_seq, dtype=torch.float32)
         emb = torch.outer(pos, inv_freq.float())
         emb = torch.cat((emb, emb), dim=-1)
         rep = ttnn.ReplicateTensorToMesh(mesh)
-        self.cos, self.sin = (
+        cos, sin = emb.cos(), emb.sin()
+        self.cos, self.sin, self.cos_lo, self.sin_lo = (
             ttnn.from_torch(
                 t.to(torch.bfloat16),
                 dtype=ttnn.bfloat16,
@@ -220,15 +223,27 @@ class RopeTables:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=rep,
             )
-            for t in (emb.cos(), emb.sin())
+            for t in (cos, sin, cos - cos.to(torch.bfloat16).float(), sin - sin.to(torch.bfloat16).float())
         )
 
-    def lookup(self, positions):
-        """positions [1, W] uint32 -> cos, sin [1, 1, W, rope_dim] bf16 TILE."""
+    def lookup(self, positions, fp32: bool = False):
+        """positions [1, W] uint32 -> cos, sin [1, 1, W, rope_dim] TILE: bf16, or fp32 (hi + lo) with ``fp32``."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
         out = []
-        for table in (self.cos, self.sin):
-            v = ttnn.embedding(positions, table, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            out.append(ttnn.unsqueeze_to_4D(v))
+        for table, lo_table in ((self.cos, self.cos_lo), (self.sin, self.sin_lo)):
+            v = ttnn.unsqueeze_to_4D(ttnn.embedding(positions, table, layout=ttnn.TILE_LAYOUT, memory_config=mc))
+            if fp32:
+                lo = ttnn.unsqueeze_to_4D(
+                    ttnn.embedding(positions, lo_table, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+                )
+                hi32 = ttnn.typecast(v, ttnn.float32, memory_config=mc)
+                lo32 = ttnn.typecast(lo, ttnn.float32, memory_config=mc)
+                for t in (v, lo):
+                    t.deallocate(True)
+                v = ttnn.add(hi32, lo32, memory_config=mc)
+                hi32.deallocate(True)
+                lo32.deallocate(True)
+            out.append(v)
         return out
 
 
@@ -459,7 +474,8 @@ class Attention:
         xg = ccl.gather_rows(x)
         # full layers: q / k / v stay fp32 through RoPE, so the cache writes round fp32 values to bfloat8_b (the
         # device's bf16 -> bfloat8_b typecast rounds the many exact ties away from zero: +0.28 % on k / v norms)
-        qkv_fp32 = not self.window and settings.get("QKV_FP32")
+        # sliding layers (SWA_QKV_FP32): the same, and the composed window softmax reads the fp32 q / k / v
+        qkv_fp32 = settings.get("SWA_QKV_FP32" if self.window else "QKV_FP32")
         qkv = ttnn.linear(
             xg,
             self.wqkv,
@@ -478,20 +494,29 @@ class Attention:
         )
         qkv.deallocate(True)
 
-        cos, sin = self.rope.lookup(self.meta.positions)
-        q = self._rope(q, cos, sin, R)
-        k = self._rope(k, cos, sin, R)
+        rope32 = qkv_fp32 and bool(self.window) and settings.get("SWA_ROPE_FP32")
+        cos, sin = self.rope.lookup(self.meta.positions, fp32=rope32)
+        rope = self._rope32 if rope32 else self._rope
+        q = rope(q, cos, sin, R)
+        k = rope(k, cos, sin, R)
         cos.deallocate(True)
         sin.deallocate(True)
         if self.scale_after:
             q = self._scale(q, self.scale32)
             v = self._scale(v, self.vscale32)
+        q_soft = None  # sliding layers: the composed softmax's q (fp32 with SWA_QKV_FP32)
         if qkv_fp32:  # the SDPA reads bf16 q
             q32 = q
             q = ttnn.typecast(q32, ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            q32.deallocate(True)
+            if self.window:
+                q_soft = q32
+            else:
+                q32.deallocate(True)
         if not self.fold_scales and not self.scale_after:
-            v = ttnn.multiply(v, self.v_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if qkv_fp32:
+                v = self._scale(v, self.vscale32)
+            else:
+                v = ttnn.multiply(v, self.v_scale, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if self.lkv > 1:  # pad rows zeroed before the write (zero_padded_kv_cache below takes single-head caches only)
             k = self._zero_pad_rows(k)
             v = self._zero_pad_rows(v)
@@ -530,8 +555,8 @@ class Attention:
                 t.deallocate(True)
 
         if self.window:
-            out = self._sliding_sdpa(q, k, v)
-            for t in (k, v, v_full):
+            out = self._sliding_sdpa(q, k, v, q_soft)
+            for t in (k, v, v_full) + ((q_soft,) if q_soft is not None else ()):
                 t.deallocate(True)
         else:
             out = self._full_sdpa(q)
@@ -597,7 +622,7 @@ class Attention:
             kv_cache_layer_idx=0,
         )
 
-    def _sliding_sdpa(self, q, k, v):
+    def _sliding_sdpa(self, q, k, v, q_soft=None):
         """Window + sink attention of this chip's rows. The ring SDPA (window, sink) brings the predecessor halo of
         K / V into its compact gather buffers (two slots: a chunk that wraps an SP slab needs both); the softmax
         itself is then composed in fp32 over [halo slot 0 | halo slot 1 | own rows] (``_window_softmax``): the
@@ -626,29 +651,33 @@ class Attention:
         out.deallocate(True)
         mc = ttnn.DRAM_MEMORY_CONFIG
         hv8 = ttnn.slice(buf_v, (0, 0, 0, 0), (1, self.lkv, 2 * halo, Dv), memory_config=mc)
-        hk = self._halo(buf_k, k)
-        hv = self._halo(hv8, v)
+        hk = self._halo(buf_k, k, k.dtype)
+        hv = self._halo(hv8, v, v.dtype)
         hv8.deallocate(True)
         k_ext = ttnn.concat((hk, k), dim=2, memory_config=mc)  # [1, lkv, 2 * halo + W, D]
         v_ext = ttnn.concat((hv, v), dim=2, memory_config=mc)
         hk.deallocate(True)
         hv.deallocate(True)
-        o = self._window_softmax(q, k_ext, v_ext)
+        o = self._window_softmax(q if q_soft is None else q_soft, k_ext, v_ext)
         k_ext.deallocate(True)
         v_ext.deallocate(True)
         return o
 
-    def _halo(self, ring_buf, own):
-        """[1, lkv, 2 HALO, d] bf16: rows before the chunk from the ring SDPA's gathered cache rows, rows inside it
-        from the SP all-gather of this chunk's bf16 ``own`` rows (one-hot select, exact), pad / unused rows 0."""
+    def _halo(self, ring_buf, own, dtype=ttnn.bfloat16):
+        """[1, lkv, 2 HALO, d] in ``dtype`` (``own``'s): rows before the chunk from the ring SDPA's gathered cache
+        rows, rows inside it from the SP all-gather of this chunk's ``own`` rows (one-hot select, exact), pad /
+        unused rows 0."""
         mc = ttnn.DRAM_MEMORY_CONFIG
-        cache = ttnn.typecast(ring_buf, ttnn.bfloat16, memory_config=mc)
+        cache = ttnn.typecast(ring_buf, dtype, memory_config=mc)
         from_cache = ttnn.multiply(cache, self.meta.halo_cached, memory_config=mc)
         cache.deallocate(True)
         gathered = ttnn.all_gather(own, dim=2, cluster_axis=ccl.SP_AXIS, memory_config=mc)  # [1, lkv, chunk, d]
-        inside = ttnn.matmul(
-            self.meta.halo_select, gathered, dtype=ttnn.bfloat16, memory_config=mc, compute_kernel_config=self.swa_cfg
-        )
+        if dtype == ttnn.float32:  # exact one-hot select of fp32 rows (split into bf16 hi + lo)
+            inside = self._mm32(self.meta.halo_select, gathered)
+        else:
+            inside = ttnn.matmul(
+                self.meta.halo_select, gathered, dtype=dtype, memory_config=mc, compute_kernel_config=self.swa_cfg
+            )
         gathered.deallocate(True)
         out = ttnn.add(from_cache, inside, memory_config=mc)
         from_cache.deallocate(True)
@@ -656,8 +685,9 @@ class Attention:
         return out
 
     def _window_softmax(self, q, k_ext, v_ext):
-        """fp32 softmax(q k^T + mask, sink) v per kv group: q [1, lh, W, D] bf16, k_ext / v_ext [1, lkv, N, D | Dv]
-        -> [1, lh, W, Dv] bf16. The scale is folded into q; the sink is one more logit per head."""
+        """fp32 softmax(q k^T + mask, sink) v per kv group: q [1, lh, W, D] bf16 / fp32, k_ext / v_ext
+        [1, lkv, N, D | Dv] -> [1, lh, W, Dv]. The softmax scale multiplies the fp32 scores; the sink is one more
+        logit per head."""
         mc, cfg = ttnn.DRAM_MEMORY_CONFIG, self.swa_cfg
         W, D, Dv = q.shape[2], self.head_dim, self.v_head_dim
         N = k_ext.shape[2]
@@ -668,7 +698,7 @@ class Attention:
             qg = ttnn.reshape(qg, (1, 1, rep * W, D))
             kg = ttnn.slice(k_ext, (0, g, 0, 0), (1, g + 1, N, D), memory_config=mc)
             vg = ttnn.slice(v_ext, (0, g, 0, 0), (1, g + 1, N, Dv), memory_config=mc)
-            sc = ttnn.matmul(qg, kg, transpose_b=True, dtype=ttnn.float32, memory_config=mc, compute_kernel_config=cfg)
+            sc = self._mm32(qg, kg, transpose_b=True)
             qg.deallocate(True)
             kg.deallocate(True)
             sc = ttnn.reshape(sc, (1, rep, W, N))
@@ -692,7 +722,7 @@ class Attention:
             for t in (ds, es, z, m2, sink):
                 t.deallocate(True)
             p = ttnn.reshape(p, (1, 1, rep * W, N))
-            o = ttnn.matmul(p, vg, dtype=ttnn.float32, memory_config=mc, compute_kernel_config=cfg)
+            o = self._mm32(p, vg)
             p.deallocate(True)
             vg.deallocate(True)
             o = ttnn.reshape(o, (1, rep, W, Dv))
@@ -708,6 +738,43 @@ class Attention:
         for t in outs:
             t.deallocate(True)
         return out
+
+    def _mm32(self, a, b, transpose_b=False):
+        """fp32-out matmul. SWA_SPLIT_MM with an fp32 operand: each fp32 operand is split into bf16 hi + lo (RNE
+        typecasts) and a b = ah bh + ah bl + al bh, every product exact in bf16 x bf16 -> fp32 dest; the matmul
+        reads fp32 operands at reduced (tf32-like) precision, which moved the sink-dominated output norm."""
+        mc, cfg = ttnn.DRAM_MEMORY_CONFIG, self.swa_cfg
+        kw = dict(transpose_b=transpose_b, dtype=ttnn.float32, memory_config=mc, compute_kernel_config=cfg)
+        if not settings.get("SWA_SPLIT_MM") or (a.dtype != ttnn.float32 and b.dtype != ttnn.float32):
+            return ttnn.matmul(a, b, **kw)
+        ah, al = self._split(a)
+        bh, bl = self._split(b)
+        out = ttnn.matmul(ah, bh, **kw)
+        for x, y in ((ah, bl), (al, bh)):
+            if x is None or y is None:
+                continue
+            t = ttnn.matmul(x, y, **kw)
+            s = ttnn.add(out, t, memory_config=mc)
+            out.deallocate(True)
+            t.deallocate(True)
+            out = s
+        for t in (ah, al, bh, bl):
+            if t is not None:
+                t.deallocate(True)
+        return out
+
+    def _split(self, t):
+        """fp32 t -> (hi, lo) bf16 with hi + lo = t to ~16 mantissa bits; a bf16 t -> (a copy, None)."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        if t.dtype != ttnn.float32:
+            return ttnn.clone(t, memory_config=mc), None
+        hi = ttnn.typecast(t, ttnn.bfloat16, memory_config=mc)
+        hi32 = ttnn.typecast(hi, ttnn.float32, memory_config=mc)
+        r = ttnn.subtract(t, hi32, memory_config=mc)
+        hi32.deallocate(True)
+        lo = ttnn.typecast(r, ttnn.bfloat16, memory_config=mc)
+        r.deallocate(True)
+        return hi, lo
 
     def _full_sdpa(self, q):
         D, Dv = self.head_dim, self.v_head_dim
@@ -726,6 +793,35 @@ class Attention:
             **self._ring_args(),
             **extra,
         )
+        return out
+
+    def _rope32(self, t, cos, sin, R):
+        """HF rotate_half RoPE on the first R dims of every head, composed from fp32 eltwise ops: t * cos +
+        rotate_half(t) * sin. The fused rotary_embedding reads fp32 operands at reduced precision (truncated), which
+        biased |q k| and so the sink-dominated sliding output (+1.9 % median row norm)."""
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        shape = tuple(t.shape)
+        h = R // 2
+        x1 = ttnn.slice(t, (0, 0, 0, 0), shape[:-1] + (h,), memory_config=mc)
+        x2 = ttnn.slice(t, (0, 0, 0, h), shape[:-1] + (R,), memory_config=mc)
+        rest = ttnn.slice(t, (0, 0, 0, R), shape, memory_config=mc)
+        rot = ttnn.slice(t, (0, 0, 0, 0), shape[:-1] + (R,), memory_config=mc)
+        t.deallocate(True)
+        n2 = ttnn.neg(x2, memory_config=mc)
+        x2.deallocate(True)
+        half = ttnn.concat((n2, x1), dim=-1, memory_config=mc)
+        n2.deallocate(True)
+        x1.deallocate(True)
+        a = ttnn.multiply(rot, cos, memory_config=mc)
+        b = ttnn.multiply(half, sin, memory_config=mc)
+        rot.deallocate(True)
+        half.deallocate(True)
+        rotated = ttnn.add(a, b, memory_config=mc)
+        a.deallocate(True)
+        b.deallocate(True)
+        out = ttnn.concat((rotated, rest), dim=-1, memory_config=mc)
+        rotated.deallocate(True)
+        rest.deallocate(True)
         return out
 
     def _rope(self, t, cos, sin, R):

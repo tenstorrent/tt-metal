@@ -81,6 +81,25 @@ TABLE = {
         "q to bf16 for the SDPA (bf16 -> bfloat8_b typecast biased +0.28 %: layer 5 column 774 0.078 vs limit 0.066) "
         "(C.attn_moe.attention)",
     ),
+    "SWA_QKV_FP32": Setting(
+        True,
+        (True, False),
+        "sliding layers: qkv projection out, head split, RoPE and the value scale in fp32; k / v cast fp32 -> "
+        "bfloat8_b for the caches, the composed window softmax reads fp32 q / k / v (bf16: median row norm -1.3 %, "
+        "ratio 0.970 in the layer-1 block) (S.sliding_moe.02)",
+    ),
+    "SWA_ROPE_FP32": Setting(
+        True,
+        (True, False),
+        "sliding layers with SWA_QKV_FP32: RoPE with fp32 cos / sin (bf16 table + bf16 residual table, added), "
+        "composed from fp32 eltwise ops instead of the fused rotary_embedding (S.sliding_moe.02)",
+    ),
+    "SWA_SPLIT_MM": Setting(
+        True,
+        (True, False),
+        "sliding layers: the composed softmax's q k^T and p v matmuls with fp32 operands split into bf16 hi + lo "
+        "(3 exact bf16 matmuls, fp32 dest) instead of one matmul on fp32 operands (S.sliding_moe.02)",
+    ),
     "FULL_SCALES_AFTER_PROJ": Setting(
         True,
         (True, False),
@@ -169,6 +188,9 @@ MAX_PRECISION = {
     "SDPA_EXACT_EXP": True,
     "SWA_OUT_FP32": True,
     "QKV_FP32": True,
+    "SWA_QKV_FP32": True,
+    "SWA_SPLIT_MM": True,
+    "SWA_ROPE_FP32": True,
     "MLP_FIDELITY": "HiFi4",
     "MLP_FP32_ACC": True,
     "MLP_INTER_FP32": True,

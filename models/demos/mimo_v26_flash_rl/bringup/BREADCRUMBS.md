@@ -223,3 +223,29 @@
   mismatch), auto_margin_min 3.16, 10 ops, host FLOPs 0. C.sliding_moe.router re-gated with the scatter mask: PASS,
   margin 3.06 (unchanged).
 - Re-run: `bfw job check --task C.attn_moe.router --gate-only`.
+
+## S.sliding_moe.02 (layer 1, attn_norm + attention on device): PASS
+
+- First gate: block PCC 0.999995, but the attention step vs the CPU step on the same inputs had rel 0.0141 (limit
+  0.0138), row-norm ratio min 0.970 and median bias -1.33 % (limit 1 %): margin 0.665. This is the -1.3 % bias the
+  component breadcrumb left unexplained; the swap test gates bias / ratio tighter than the component test.
+- Cause: the sink holds nearly all the softmax mass on sliding layers, so the output scales as exp(q.k - sink) and
+  any relative error in q / k turns into a norm bias. Three sources, fixed one at a time (gate after each):
+  - bf16 q / k / v out of the qkv linear and the biased device bf16 -> bfloat8_b cache cast. `SWA_QKV_FP32`: the
+    linear out, head split, RoPE and value scale in fp32 (as the full layers' `QKV_FP32`), k / v cast fp32 ->
+    bfloat8_b for the caches, and the composed softmax reads fp32 q and fp32 k / v (halo rows from the cache are
+    typecast to fp32; in-chunk halo rows come from the fp32 all-gather). Bias flipped to +1.1 %, ratio max 1.028.
+  - `ttnn.matmul` with fp32 operands is not fp32-exact (reduced input precision). `SWA_SPLIT_MM` (`_mm32`): every
+    matmul with an fp32 operand (scores, p @ v, the one-hot halo select) runs as hi*hi + hi*lo + lo*hi with bf16
+    hi / lo splits (RNE typecasts), fp32 dest. Bias +0.43 %, ratio max 1.0202: margin 0.99.
+  - The fused `rotary_embedding` on fp32 input with bf16 cos / sin (and fp32 cos / sin tables: `ttnn.embedding`
+    takes bf16 tables only, TT_FATAL). `SWA_ROPE_FP32`: cos / sin looked up from a bf16 table plus a bf16 residual
+    table and added in fp32; RoPE composed as t * cos + rotate_half(t) * sin with fp32 eltwise ops (`_rope32`).
+    Fp32 tables through the fused op alone made it worse (bias +1.9 %).
+- Gate: block PCC 0.999995; attention vs CPU rel 0.00265 (limit 0.0138), worst row 0.0046, ratio [0.9960, 1.0023],
+  bias -0.09 %; swap_margin_min 2.73; 173 device ops (was 88), host FLOPs 0.
+- C.sliding_moe.attention re-gated with the change: PASS, auto_margin_min 1.053 (was 1.006), vs CPU rel 0.00265,
+  worst column 1160 0.100 vs 0.106. Full layers unchanged (all new switches are sliding-only).
+- Cost: 3 matmuls per fp32 matmul and the composed RoPE; P.* can fuse (an fp32-score sink SDPA fork would remove
+  the composed softmax and the discarded ring SDPA output).
+- Re-run: `bfw job check --task S.sliding_moe.02 --gate-only`.
