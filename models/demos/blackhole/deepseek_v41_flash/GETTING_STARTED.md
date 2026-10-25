@@ -25,14 +25,16 @@ Both: speculative decoding k = 5, image input, prefix caching on, paged prefill 
 
 Once per host (the host needs the driver, 32 chips in `/dev/tenstorrent`, 1 GiB hugepages at `/dev/hugepages-1G`, Docker; disk: 476 GB checkpoint, 610 GB weight cache, 43 GB kernel cache, caches on a local disk):
 
+The weight cache is keyed by directory only, so each checkpoint needs its own empty `$CACHE` (the server stamps `$CACHE/weights/ckpt_id.json` with the checkpoint id on first use and refuses to start if the stamp names a different checkpoint). The default checkpoint is `DeepSeek-V4.1-Flash-1017`; never point it at a cache built from the earlier `DeepSeek-V4.1-Flash` checkpoint.
+
 ```bash
-export CKPT=/path/to/deepseek-v41-flash   # checkpoint, read-only
-export CACHE=/path/to/dsv41_cache         # weights/ unified/ kernels/, reused across starts
+export CKPT=/path/to/deepseek-v41-flash-1017   # checkpoint, read-only
+export CACHE=/path/to/dsv41_cache_1017         # weights/ unified/ kernels/, reused across starts
 export STATE=/path/to/dsv41_state         # scratch dirs the server writes
 export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
 
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
-hf download deepseek-ai/DeepSeek-V4.1-Flash --local-dir $CKPT        # 476 GB; a token may be needed
+hf download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir $CKPT        # 476 GB; a token may be needed
 
 # vLLM looks the model up in the Hugging Face cache, even offline: give it three small files
 R=$STATE/hf/hub/models--deepseek-ai--DeepSeek-V4.1-Flash

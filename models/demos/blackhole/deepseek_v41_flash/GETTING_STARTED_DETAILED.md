@@ -85,8 +85,8 @@ docker pull $IMAGE
 ### 3. Prepare checkpoint, caches and spec
 
 ```bash
-export CKPT=/path/to/deepseek-v41-flash        # the checkpoint (read-only for the container)
-export CACHE=/path/to/dsv41_cache              # weights/ and kernels/, reused across starts
+export CKPT=/path/to/deepseek-v41-flash-1017        # the checkpoint (read-only for the container)
+export CACHE=/path/to/dsv41_cache_1017              # weights/ and kernels/, reused across starts
 export STATE=/path/to/dsv41_state              # scratch dirs the server writes to
 export SPEC=$PWD/assets/runtime_spec_b16_k5_262144_vision.json   # run from models/demos/blackhole/deepseek_v41_flash/ in tt-metal
 export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-flash:0.24.0-0655530-4743e01
@@ -94,7 +94,7 @@ export IMAGE=ghcr.io/tenstorrent/tt-inference-server/vllm-tt-metal-src-dsv4.1-fl
 mkdir -p $CKPT $CACHE/weights $CACHE/unified $CACHE/kernels $STATE/cache_root $STATE/logs $STATE/traces
 
 # the checkpoint (476 GB); a Hugging Face token may be needed
-hf download deepseek-ai/DeepSeek-V4.1-Flash --local-dir $CKPT
+hf download deepseek-ai/DeepSeek-V4.1-Flash-1017 --local-dir $CKPT
 
 # vLLM looks the model up in the Hugging Face cache, even offline.
 # Give it the three small files from the checkpoint.
