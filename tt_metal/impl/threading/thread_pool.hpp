@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -42,6 +43,10 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 // All physical devices must belong to the same context ID.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices);
+// As above; after its last task or parallel_for call, each worker stays awake for `spin` before it parks, so that
+// back-to-back fan-outs reach it without a wake.
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
+    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices, std::chrono::microseconds spin);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
 // Call before the pages are faulted.

@@ -12,6 +12,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -172,6 +173,25 @@ bool spin_until(Ready ready) {
     return false;
 }
 
+// Polls for up to `window`. The pauses between polls leave most of the core to its SMT sibling, which often runs
+// the thread the poll is waiting for.
+template <typename Ready>
+bool spin_for(std::chrono::nanoseconds window, Ready ready) {
+    constexpr uint32_t POLLS_PER_CLOCK_READ = 32, PAUSES_PER_POLL = 8;
+    const auto deadline = std::chrono::steady_clock::now() + window;
+    do {
+        for (uint32_t i = 0; i < POLLS_PER_CLOCK_READ; i++) {
+            if (ready()) {
+                return true;
+            }
+            for (uint32_t pause = 0; pause < PAUSES_PER_POLL; pause++) {
+                ttsl::pause();
+            }
+        }
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
 // Tasks in flight across all workers of a pool, so that joining waits on one counter.
 class Completion {
 public:
@@ -269,8 +289,17 @@ class ParallelJob;
 // across threads.
 class NumaAwareExecutor {
 public:
-    NumaAwareExecutor(ContextId context_id, uint32_t physical_device_id, Completion& completion) :
-        completion_(completion) {
+    // `index` is the executor's place in its pool; `published` is the pool's published parallel_for job, a slot of
+    // `jobs`. After its last task or call, the worker stays awake for `spin` before it parks.
+    NumaAwareExecutor(
+        ContextId context_id,
+        uint32_t physical_device_id,
+        Completion& completion,
+        uint32_t index,
+        const std::atomic<uint64_t>& published,
+        const std::unique_ptr<ParallelJob>* jobs,
+        std::chrono::nanoseconds spin) :
+        completion_(completion), index_(index), published_(published), jobs_(jobs), spin_(spin) {
         // Set the priority for this process to 0 (niceness value in linux)
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() { worker_loop(); });
@@ -288,16 +317,19 @@ public:
     ~NumaAwareExecutor() { stop(); }
 
     // Joins the worker.
-    void stop();
+    void stop() {
+        if (!worker.joinable()) {
+            return;
+        }
+        shutdown_.store(true, std::memory_order_seq_cst);
+        wake();
+        worker.join();
+    }
 
     void enqueue(std::function<void()>&& f) {
         tasks_.push(std::move(f));
         wake();
     }
-
-    // Hands the worker a parallel_for job, taking over one of the job's references. A job the worker has not
-    // picked up yet is dropped: its caller runs any calls it still has.
-    void offer(ParallelJob* job) noexcept;
 
     // Enters the kernel only if the worker is parked.
     void wake() noexcept {
@@ -306,18 +338,27 @@ public:
         }
     }
 
+    uint32_t index() const { return index_; }
+
     // Returns the first exception thrown by a task since the last call, once the pool has joined.
     std::exception_ptr take_exception() { return std::exchange(stored_exception_, nullptr); }
 
 private:
     void worker_loop();
 
-    bool has_work() const { return !tasks_.empty() || job_.load(std::memory_order_seq_cst) != nullptr; }
+    // Takes part in the job `published` names, if that is still the job's current use.
+    void join(uint64_t published) noexcept;
 
-    // Spin briefly so back-to-back tasks are picked up without entering the kernel, then park until a
-    // producer publishes work or the executor shuts down.
+    bool has_work() const { return !tasks_.empty() || published_.load(std::memory_order_seq_cst) != seen_; }
+
+    // Stays awake for the spin window so back-to-back work is picked up without entering the kernel, then parks
+    // until a producer publishes work or the executor shuts down.
     void wait_for_work() {
         if (spin_until([this] { return has_work(); })) {
+            return;
+        }
+        if (spin_.count() > 0 &&
+            spin_for(spin_, [this] { return has_work() || shutdown_.load(std::memory_order_relaxed); })) {
             return;
         }
         // seq_cst pairs with wake(): either the producer sees the worker parked, or the worker sees the work.
@@ -333,29 +374,29 @@ private:
     std::thread worker;
     alignas(64) std::atomic<uint32_t> parked_ = 0;
     std::atomic<bool> shutdown_ = false;
-    alignas(64) std::atomic<ParallelJob*> job_ = nullptr;
+    alignas(64) uint32_t index_ = 0;
+    const std::atomic<uint64_t>& published_;
+    const std::unique_ptr<ParallelJob>* jobs_ = nullptr;
+    std::chrono::nanoseconds spin_{0};
+    uint64_t seen_ = 0;  // The published word this worker last acted on; worker thread only.
     std::exception_ptr stored_exception_;
 };
 
-// State of one parallel_for call, shared by the caller and the participating workers. Workers can still hold
-// it after the call has returned, so it is reference counted and deletes itself.
+// State of one parallel_for call. Jobs live in their pool's ring and are reused: workers find the published job
+// through the pool and may still hold it after its call has returned, so each use is a generation and a job is
+// reused only once nobody holds it.
 class ParallelJob {
 public:
     // Each worker that takes part wakes this many others before running its own calls, so that the caller
     // enters the kernel once per fan-out instead of once per worker.
     static constexpr size_t WAKE_FANOUT = 4;
+    static constexpr uint32_t NONE = UINT32_MAX;
 
     using Participants = ttsl::SmallVector<NumaAwareExecutor*, 32>;  // 32: one per Galaxy device
-    using ParticipantOfCall = ttsl::SmallVector<size_t, 32>;
 
-    ParallelJob(
-        const std::function<void(size_t)>& fn, Participants participants, ParticipantOfCall participant_of_call) :
-        fn_(fn),
-        claims_(participants.size()),
-        participant_of_call_(std::move(participant_of_call)),
-        participants_(std::move(participants)) {
-        remaining_.add(static_cast<int64_t>(participant_of_call_.size()));
-    }
+    // Sized for a pool of `capacity` workers; `slot` is the job's place in the pool's ring.
+    ParallelJob(size_t capacity, uint32_t slot) :
+        slot_(slot), claims_(capacity), participant_of_worker_(capacity, NONE) {}
 
     ParallelJob(const ParallelJob&) = delete;
     ParallelJob& operator=(const ParallelJob&) = delete;
@@ -363,15 +404,83 @@ public:
     ParallelJob& operator=(ParallelJob&&) = delete;
     ~ParallelJob() = default;
 
+    // Caller: takes the job if nobody holds it, starting its next generation in the same step.
+    bool try_acquire() noexcept {
+        uint64_t state = state_.load(std::memory_order_relaxed);
+        if ((state & HOLDERS) != 0) {
+            return false;
+        }
+        const uint64_t next = (((state >> 32) + 1) << 32) | 1;
+        if (!state_.compare_exchange_strong(state, next, std::memory_order_acquire, std::memory_order_relaxed)) {
+            return false;
+        }
+        generation_ = static_cast<uint32_t>(next >> 32);
+        return true;
+    }
+
+    // Worker: holds the job if `generation` is still its current use; a held job is not reused.
+    bool hold(uint32_t generation) noexcept {
+        if ((state_.fetch_add(1, std::memory_order_acq_rel) >> 32) == generation) {
+            return true;
+        }
+        release();
+        return false;
+    }
+
+    void release() noexcept { state_.fetch_sub(1, std::memory_order_acq_rel); }
+
+    // Caller: plans one call of fn per device id, each for the executor `executor_of` returns. A plan for the same
+    // devices as the job's last use is kept, so that the caller does not rewrite lines the workers read.
+    template <typename ExecutorOf>
+    void plan(const std::function<void(size_t)>& fn, ttsl::Span<const uint32_t> device_ids, ExecutorOf executor_of) {
+        if (fn_ != &fn) {
+            fn_ = &fn;
+        }
+        if (exception_) {
+            exception_ = nullptr;
+        }
+        auto& devices = plan_devices_.ids;
+        if (planned_ && std::equal(device_ids.begin(), device_ids.end(), devices.begin(), devices.end())) {
+            return;
+        }
+        planned_ = false;
+        for (auto* executor : participants_) {
+            participant_of_worker_[executor->index()] = NONE;
+        }
+        participants_.clear();
+        first_call_.clear();
+        last_call_.clear();
+        next_call_.assign(device_ids.size(), NONE);
+        for (uint32_t call = 0; call < device_ids.size(); call++) {
+            auto* executor = executor_of(device_ids[call]);
+            uint32_t& participant = participant_of_worker_[executor->index()];
+            if (participant == NONE) {
+                participant = static_cast<uint32_t>(participants_.size());
+                participants_.push_back(executor);
+                first_call_.push_back(call);
+                last_call_.push_back(call);
+            } else {
+                next_call_[last_call_[participant]] = call;
+                last_call_[participant] = call;
+            }
+        }
+        devices.assign(device_ids.begin(), device_ids.end());
+        planned_ = true;
+    }
+
     const Participants& participants() const { return participants_; }
 
-    void start() noexcept { refs_.store(participants_.size() + 1, std::memory_order_relaxed); }
+    // Caller: counts the planned calls in; workers may take part from now on.
+    void start() noexcept { remaining_.add(static_cast<int64_t>(next_call_.size())); }
 
-    // Wakes this worker's children, runs its calls and releases the job. A finished job is only released: its
-    // executors may be stopping.
+    // What the pool publishes for this use of the job: (generation << 32) | slot.
+    uint64_t published() const { return (static_cast<uint64_t>(generation_) << 32) | slot_; }
+
+    // Worker, holding the job: wakes its children, runs its calls and releases the job. A finished job is only
+    // released: its executors may be stopping.
     void participate(NumaAwareExecutor* executor) noexcept {
-        if (!remaining_.finished()) {
-            const size_t node = std::find(participants_.begin(), participants_.end(), executor) - participants_.begin();
+        const uint32_t node = remaining_.finished() ? NONE : participant_of_worker_[executor->index()];
+        if (node != NONE) {
             for_each_child(node, [this](size_t child) { wake_subtree(child); });
             run_if_unclaimed(node);
         }
@@ -380,15 +489,12 @@ public:
 
     // Runs all calls of participant `node` in order, so that calls for one worker never overlap.
     void run_if_unclaimed(size_t node) noexcept {
-        if (claims_[node].claimed.exchange(true, std::memory_order_acq_rel)) {
+        if (claims_[node].generation.exchange(generation_, std::memory_order_acq_rel) == generation_) {
             return;
         }
-        for (size_t call = 0; call < participant_of_call_.size(); call++) {
-            if (participant_of_call_[call] != node) {
-                continue;
-            }
+        for (uint32_t call = first_call_[node]; call != NONE; call = next_call_[call]) {
             try {
-                fn_(call);
+                (*fn_)(call);
             } catch (...) {
                 std::lock_guard lock(exception_mutex_);
                 if (!exception_) {
@@ -399,18 +505,12 @@ public:
         }
     }
 
-    // Caller: waits for every call, returns the first exception, and drops the caller's reference.
+    // Caller: waits for every call, returns the first exception, and releases the job.
     std::exception_ptr finish() noexcept {
         remaining_.wait();
         auto exception = exception_;
         release();
         return exception;
-    }
-
-    void release() noexcept {
-        if (refs_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            delete this;
-        }
     }
 
 private:
@@ -425,45 +525,48 @@ private:
 
     // Wakes `node`, or its children in its place if the caller already claimed it.
     void wake_subtree(size_t node) noexcept {
-        if (!claims_[node].claimed.load(std::memory_order_relaxed)) {
+        if (claims_[node].generation.load(std::memory_order_relaxed) != generation_) {
             participants_[node]->wake();
             return;
         }
         for_each_child(node, [this](size_t child) { wake_subtree(child); });
     }
 
+    // Holds the generation of the last use that claimed the participant, so a new use starts unclaimed.
     struct alignas(64) Claim {
-        std::atomic<bool> claimed = false;
+        std::atomic<uint32_t> generation = 0;
     };
 
+    static constexpr uint64_t HOLDERS = 0xffffffffULL;
+
+    // (generation << 32) | holders: the caller that acquired the job and the workers taking part.
+    std::atomic<uint64_t> state_ = 0;
+    uint32_t generation_ = 0;  // Of the current use; set by the caller on acquire, read by holders.
+    uint32_t slot_ = 0;
     // Valid until the caller returns, which happens only after every claimed call has finished.
-    const std::function<void(size_t)>& fn_;
+    const std::function<void(size_t)>* fn_ = nullptr;
     std::vector<Claim> claims_;  // Indexed by participant.
-    ParticipantOfCall participant_of_call_;
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     Participants participants_;
+    ttsl::SmallVector<uint32_t, 64> participant_of_worker_;  // Indexed by executor index; NONE if not taking part.
+    // Each participant's calls in call order: first_call_ and last_call_ by participant, next_call_ by call.
+    ttsl::SmallVector<uint32_t, 32> first_call_;
+    ttsl::SmallVector<uint32_t, 32> last_call_;
+    ttsl::SmallVector<uint32_t, 32> next_call_;
+    // The devices of the current plan; read by the caller only, so on lines of their own.
+    struct alignas(64) {
+        ttsl::SmallVector<uint32_t, 32> ids;
+    } plan_devices_;
+    bool planned_ = false;
     Completion remaining_;
-    std::atomic<size_t> refs_ = 0;
     std::mutex exception_mutex_;
     std::exception_ptr exception_;
 };
 
-inline void NumaAwareExecutor::stop() {
-    if (!worker.joinable()) {
-        return;
-    }
-    shutdown_.store(true, std::memory_order_seq_cst);
-    wake();
-    worker.join();
-    if (auto* job = job_.exchange(nullptr, std::memory_order_acquire)) {
-        job->release();
-    }
-}
-
-inline void NumaAwareExecutor::offer(ParallelJob* job) noexcept {
-    // seq_cst pairs with the worker's check before it parks.
-    if (auto* stale = job_.exchange(job, std::memory_order_seq_cst)) {
-        stale->release();
+inline void NumaAwareExecutor::join(uint64_t published) noexcept {
+    auto* job = jobs_[published & 0xffffffffULL].get();
+    if (job->hold(static_cast<uint32_t>(published >> 32))) {
+        job->participate(this);
     }
 }
 
@@ -483,10 +586,9 @@ inline void NumaAwareExecutor::worker_loop() {
             completion_.done();
             continue;
         }
-        if (job_.load(std::memory_order_relaxed) != nullptr) {
-            if (auto* job = job_.exchange(nullptr, std::memory_order_acquire)) {
-                job->participate(this);
-            }
+        if (const uint64_t published = published_.load(std::memory_order_acquire); published != seen_) {
+            seen_ = published;
+            join(published);
             continue;
         }
         if (shutdown_.load(std::memory_order_acquire)) {
@@ -527,23 +629,31 @@ public:
     // Constructor accepting the physical device IDs this pool is bound to. Each thread will be tied to a device, and is
     // guaranteed to be bound to a CPU core on a NUMA Node "closest" to that device.
     // All physical devices must belong to the same context ID.
-    DeviceBoundThreadPool(ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) :
+    DeviceBoundThreadPool(
+        ContextId context_id,
+        const std::vector<tt::tt_metal::Device*>& physical_devices,
+        std::chrono::nanoseconds spin = std::chrono::nanoseconds(0)) :
         num_workers_(physical_devices.size()) {
+        allocate_jobs();
         workers_.reserve(num_workers_);
         for (uint32_t i = 0; i < num_workers_; i++) {
-            workers_.emplace_back(
-                std::make_unique<NumaAwareExecutor>(context_id, physical_devices[i]->id(), completion_));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
+                context_id, physical_devices[i]->id(), completion_, i, published_, jobs_.data(), spin));
             phys_device_to_thread_id_[physical_devices[i]->id()] = i;
+            map_device(physical_devices[i]->id(), i);
         }
     }
     // Constructor accepting the number of threads to spawn. The threads in this pool will be bound to a specific CPU
     // core but they are not guaranteed to be "close" to any physical device.
     DeviceBoundThreadPool(ContextId context_id, uint32_t thread_count) : num_workers_(thread_count) {
+        allocate_jobs();
         workers_.reserve(thread_count);
 
         for (uint32_t i = 0; i < thread_count; i++) {
-            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(context_id, i, completion_));
+            workers_.emplace_back(std::make_unique<NumaAwareExecutor>(
+                context_id, i, completion_, i, published_, jobs_.data(), std::chrono::nanoseconds(0)));
             phys_device_to_thread_id_[i] = i;
+            map_device(i, i);
         }
     }
 
@@ -576,31 +686,25 @@ public:
         if (device_ids.empty()) {
             return;
         }
-        ParallelJob::Participants executors;
-        ParallelJob::ParticipantOfCall participant_of_call(device_ids.size());
-        for (size_t call = 0; call < device_ids.size(); call++) {
-            auto* executor = workers_[phys_device_to_thread_id_.at(device_ids[call])].get();
-            auto* participant = std::find(executors.begin(), executors.end(), executor);
-            participant_of_call[call] = participant - executors.begin();
-            if (participant == executors.end()) {
-                executors.push_back(executor);
-            }
+        auto* job = acquire_job();
+        try {
+            job->plan(fn, device_ids, [this](uint32_t device_id) { return workers_[worker_of(device_id)].get(); });
+        } catch (...) {
+            job->release();
+            throw;
         }
-        if (executors.size() == 1) {
+        const auto& participants = job->participants();
+        if (participants.size() == 1) {
+            job->release();
             run_on_caller(device_ids.size(), fn);
             return;
         }
-        auto owned = std::make_unique<ParallelJob>(fn, std::move(executors), std::move(participant_of_call));
-        // Nothing below throws: once offered, workers hold the job and the job refers to fn.
-        auto* job = owned.release();
+        // Nothing below throws: once published, workers hold the job and the job refers to fn.
         job->start();
-        const auto& participants = job->participants();
-        // Wake the first participant as soon as it has the job; it wakes the others as it starts.
-        participants[0]->offer(job);
+        // seq_cst pairs with the workers' check before they park: either the first participant sees the job, or
+        // wake() sees it parked. It wakes the others as it starts; awake workers see the job on their own.
+        published_.store(job->published(), std::memory_order_seq_cst);
         participants[0]->wake();
-        for (size_t position = 1; position < participants.size(); position++) {
-            participants[position]->offer(job);
-        }
         // The workers are woken first to last, so take participants from the back. The caller runs the calls of
         // every participant no worker has claimed, so the job finishes even if some workers are never woken.
         for (size_t node = participants.size(); node-- > 0;) {
@@ -631,15 +735,59 @@ public:
     }
 
 private:
+    void allocate_jobs() {
+        // A worker holds at most one job, while it takes part; each concurrent caller holds one more.
+        jobs_.resize(num_workers_ + 2);
+        for (uint32_t slot = 0; slot < jobs_.size(); slot++) {
+            jobs_[slot] = std::make_unique<ParallelJob>(num_workers_, slot);
+        }
+    }
+
+    // A job nobody holds, starting from the one used last: it is the most likely to still be in cache.
+    ParallelJob* acquire_job() {
+        const auto size = static_cast<uint32_t>(jobs_.size());
+        uint32_t slot = last_job_.load(std::memory_order_relaxed);
+        for (uint32_t probes = 1; !jobs_[slot]->try_acquire(); probes++) {
+            slot = slot + 1 == size ? 0 : slot + 1;
+            // All held: workers still taking part release theirs shortly.
+            if (probes % size == 0) {
+                ttsl::pause();
+            }
+        }
+        last_job_.store(slot, std::memory_order_relaxed);
+        return jobs_[slot].get();
+    }
+
+    void map_device(uint32_t device_id, uint32_t worker) {
+        if (worker_of_device_.size() <= device_id) {
+            worker_of_device_.resize(device_id + 1, ParallelJob::NONE);
+        }
+        worker_of_device_[device_id] = worker;
+    }
+
+    uint32_t worker_of(uint32_t device_id) const {
+        if (device_id >= worker_of_device_.size() || worker_of_device_[device_id] == ParallelJob::NONE) {
+            throw std::out_of_range("parallel_for: no worker is bound to this device");
+        }
+        return worker_of_device_[device_id];
+    }
+
     // Declared before the executors so that it outlives them.
     Completion completion_;
+    // Store the number of workers to repeated lookups
+    uint32_t num_workers_ = 0;
+    // parallel_for jobs, reused; declared before the executors, which refer to them.
+    std::vector<std::unique_ptr<ParallelJob>> jobs_;
+    std::atomic<uint32_t> last_job_ = 0;
+    // The job of the current parallel_for, (generation << 32) | slot; every worker watches it.
+    alignas(64) std::atomic<uint64_t> published_ = 0;
+    // Worker by physical device id (ParallelJob::NONE if none).
+    std::vector<uint32_t> worker_of_device_;
     // Executors backing this pool.
     std::vector<std::unique_ptr<NumaAwareExecutor>> workers_;
     // Used to pick threads when device_idx is not specified in the enqueue API
     std::atomic<uint32_t> thread_idx_ = 0;
     std::mutex exception_mutex_;
-    // Store the number of workers to repeated lookups
-    uint32_t num_workers_ = 0;
     // Mapping between the physical device id and its associated thread
     std::unordered_map<uint32_t, uint32_t> phys_device_to_thread_id_;
 };
@@ -666,6 +814,11 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices) {
     return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices);
+}
+
+std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
+    ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices, std::chrono::microseconds spin) {
+    return std::make_shared<thread_pool_impls::DeviceBoundThreadPool>(context_id, physical_devices, spin);
 }
 
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId /*context_id*/) {
