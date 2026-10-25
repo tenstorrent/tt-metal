@@ -92,7 +92,35 @@ def policy_pipe5(stream: int, tag: str, state: dict) -> bool:
     return True
 
 
-POLICIES = {"stub": policy_stub, "pipe": policy_pipe, "pipe5": policy_pipe5}
+def policy_pipe2(stream: int, tag: str, state: dict) -> bool:
+    """Like `pipe`, but each stream's attention is split at its first full-mesh fabric op ("kv_gather_start": the
+    ring indexer score in full layers, the sparse-KV push plan / dense KVPE gather in shared layers), so only the
+    part BEFORE it (norm, q_a, q/kv stems, KV write) runs inside the other stream's dispatch window:
+      A.attn1_0 A.attn2_0 A.pre0 | B.attn1_0 | A.post0 | B.attn2_0 B.pre0 | A.attn1_1 | B.post0 | A.attn2_1 A.pre1 | ...
+    Full-mesh ops next to dispatch_fabric2d hung (P1a on best-v4, ag0_linear in E0-v6c), axis-1 ops did not."""
+    st = state.setdefault(stream, {"in_attn1": True, "first": stream == 0})
+    if tag == "kv_gather_start":
+        if not st["in_attn1"]:
+            return False
+        st["in_attn1"] = False
+        if st["first"]:
+            st["first"] = False
+            return False
+        return True
+    if tag == "attn_end":
+        st["in_attn1"] = False  # attention without any full-mesh op: attn1 == attn
+        return False
+    if tag in ("moe_window_open", "layer_end"):
+        if tag == "layer_end":
+            st["in_attn1"] = True
+        if st["first"]:  # stream 0's first layer had no full-mesh op: hand over at its window as `pipe` does
+            st["first"] = False
+            return tag == "moe_window_open"
+        return True
+    return False
+
+
+POLICIES = {"stub": policy_stub, "pipe": policy_pipe, "pipe5": policy_pipe5, "pipe2": policy_pipe2}
 
 
 class TwoStreamRunner:
