@@ -159,7 +159,7 @@ extern thread_local DFBImplicitProgress g_dfb_progress[dfb::NUM_DFBS];
 // Kernel-exit handoff from each kernel DM to DM0.
 // A record holds a DM's loop, pos and share on one implicit-sync DFB side, indexed by the
 // side's lowest txn id. A DM signals that its records are written through its run state
-// (RUN_SYNC_MSG_DFB_FINISHING).
+// (RUN_SYNC_MSG_DFB_DRAINING).
 extern uint32_t g_dfb_exit_record[dfb::NUM_KERNEL_DM_HARTS][NUM_DFB_POOL_TXN_IDS];
 
 #endif
@@ -195,7 +195,7 @@ struct TxnDFBDescriptor {
         uint8_t tiles_to_ack;
     } __attribute__((packed));
     dfb_dm0_finish_info_t finish;  // read only by DM0's kernel-exit flush, not by the ISR
-    uint8_t _pad[10];              // pad 22 → 32 bytes
+    uint8_t _pad[9];               // pad 23 → 32 bytes
 };
 static_assert(sizeof(TxnDFBDescriptor) == 32, "TxnDFBDescriptor size is incorrect");
 static_assert(

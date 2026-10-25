@@ -212,6 +212,8 @@ std::vector<uint8_t> serialize_dm0_isr_txn_desc_pool_for_core(
             }
         }
 
+        prod_finish.num_txn_ids = dfb->producer_txn_descriptor.num_txn_ids;
+        cons_finish.num_txn_ids = dfb->consumer_txn_descriptor.num_txn_ids;
         const uint8_t num_prod_tcs = static_cast<uint8_t>(blob_producer_tcs.size());
         const uint8_t num_cons_tcs = static_cast<uint8_t>(blob_consumer_tcs.size());
         const auto prod_desc = producer_live ? build_dm0_txn_descriptor_image(
