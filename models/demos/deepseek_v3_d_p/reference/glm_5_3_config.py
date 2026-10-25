@@ -137,6 +137,9 @@ def glm_5_3_hf_config(max_seq: int = 8192):
         # worker rows below the Ethernet row (22 cores on QB2, 24 on LoudBox/Galaxy); TopK gets the other
         # eight rows. Shared layers reuse those indices.
         sparse_mla_overlap_profile="auto",
+        # Sequence-sharded absorbed Q (ttMLA._q_stem_seq): each chip builds Q for its TP-quarter rows x all 64 heads,
+        # removing the heads<->sequence all-to-all pair around sparse_sdpa. MLA_SEQ_SHARDED_Q=0 disables.
+        mla_seq_sharded_q=True,
         # Indexer reuse: the per-layer full/shared map (length NUM_LAYERS) plus the params it derives
         # from. Consumers read `indexer_types` by layer index; absent -> all layers full.
         indexer_types=GLM53Config.indexer_types(),
