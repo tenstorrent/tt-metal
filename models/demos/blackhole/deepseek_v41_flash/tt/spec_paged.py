@@ -29,6 +29,8 @@ from models.demos.blackhole.deepseek_v41_flash.tt.paged_attention import (
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_attention import SpecCompressedAttention
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_attention import _PagedMixin as _SpecFinish
 
+_FUSED_SCORE = os.environ.get("DSV41_IDX_FUSED", "1") == "1"
+
 RING_SPEC = 160  # 128 + margin (k <= 5 needs 133; 160 keeps the ring a multiple of 32)
 
 
@@ -49,6 +51,7 @@ class SpecIndexer(DSV41DecodeIndexer):
     def project(self, x, qr, st):
         U, n, R = self.T, self.n, self.R
         w = ttnn.linear(x, self.wproj, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=2, x=8))  # [1,1,R,32]
+        self._w_flat = w  # [1,1,R,32] tile: the gates as the fused score op reads them
         q = ttnn.linear(
             qr, self.wq_b, compute_kernel_config=self.ckc, core_grid=ttnn.CoreGrid(y=2, x=8)
         )  # [1,1,R,4096]
@@ -62,6 +65,26 @@ class SpecIndexer(DSV41DecodeIndexer):
                 q = ttnn.typecast(ttnn.reshape(self._fp4_blocks(x4), (R, 1, HEADS, DIM)), ttnn.bfloat16)
         q = ttnn.reshape(q, (U, 1, n * HEADS, DIM))  # the n rows of a user stacked on the head axis
         return q, ttnn.reshape(w, (R, 1, 1, HEADS))
+
+    def _nvalid_u32(self, st):
+        """st["nvalid"] (float32 [R,1,1,1] tile, valid entries of every row) -> uint32 [1,1,1,32] row-major (the fused score op's mask input); cached in ``st``."""
+        key = ("nvalid_u32", self.R)
+        if key not in st:
+            nv = ttnn.reshape(ttnn.to_layout(st["nvalid"], ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, self.R])
+            nv = ttnn.pad(nv, [(0, 0), (0, 0), (0, 0), (0, 32 - self.R)], 0.0)
+            st[key] = ttnn.typecast(nv, ttnn.uint32)
+        return st[key]
+
+    def forward(self, x, qr, st, return_scores=False):
+        if _FUSED_SCORE and not return_scores and "nvalid" in st and self.R <= 32:
+            # fused score + validity mask (tt/idx_score.py, bit-identical to score() + mask_scores(); DSV41_IDX_FUSED=0 restores the chain)
+            from models.demos.blackhole.deepseek_v41_flash.tt.idx_score import score_mask_fused
+
+            q, w = self.project(x, qr, st)
+            sc = score_mask_fused(q, self.k_cache, self._w_flat, self._nvalid_u32(st), self.n, self.n_score)
+            ids = ttnn.experimental.topk_large_indices(sc, k=self.topk, valid_length_tensor=st["valid"])
+            return ids if ids.shape[0] == self.R else ttnn.reshape(ids, [self.R, 1, 1, self.topk])
+        return super().forward(x, qr, st, return_scores)
 
     def score(self, q, w):
         U, n, R = self.T, self.n, self.R
