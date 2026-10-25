@@ -393,4 +393,98 @@ def test_dispatch_bench(mesh_device, device_params):
             mesh_device.clear_loaded_sub_device_manager()
             mesh_device.remove_sub_device_manager(mgr2)
 
+    if os.environ.get("DB_ROUTEOPS", "0") == "1":
+        # The MoE routing chain at production shapes: moe_grouped_topk -> masked_bincount -> offset_cumsum
+        # (with its internal axis-0 all-gather), as TtMoEGatePrefill / TtMoERoutingSetup call them.
+        spec = os.environ.get("DB_ROUTEOPS_ROUTING", "uniform")
+        indices = _routing(spec, table)
+        rows = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None))
+        tt_idx_tile = ttnn.from_torch(
+            indices.reshape(H * SEQ, TOPK).to(torch.int16),
+            mesh_mapper=rows,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        tt_mask = ttnn.from_torch(
+            table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(None, 0)),
+        )
+        hist_holder = []
+
+        def bincount():
+            h = ttnn.experimental.deepseek_prefill.masked_bincount(tt_idx_tile, tt_mask, E, TOPK)
+            return [h]
+
+        def cumsum():
+            if not hist_holder:
+                hist_holder.append(ttnn.experimental.deepseek_prefill.masked_bincount(tt_idx_tile, tt_mask, E, TOPK))
+            return list(
+                ttnn.experimental.deepseek_prefill.offset_cumsum(
+                    hist_holder[0],
+                    cluster_axis=0,
+                    num_links=NUM_LINKS,
+                    experts_per_chip=experts_per_chip,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            )
+
+        logits = ttnn.from_torch(
+            torch.randn(H * SEQ, E, dtype=torch.float32),
+            mesh_mapper=rows,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            dtype=ttnn.float32,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        bias = ttnn.from_torch(
+            (torch.randn(1, E) * 0.01).repeat(SEQ, 1).to(torch.bfloat16),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+        def topk():
+            return list(
+                ttnn.experimental.deepseek_prefill.moe_grouped_topk(
+                    logits,
+                    bias,
+                    n_groups=1,
+                    summed_experts_per_group=1,
+                    topk_groups=1,
+                    n_activated_experts=TOPK,
+                    route_scale=2.5,
+                    stable_sort=True,
+                    epsilon=1e-20,
+                    score_func="sigmoid",
+                    weights_layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+            )
+
+        for name, fn in [("grouped_topk", topk), ("masked_bincount", bincount), ("offset_cumsum", cumsum)]:
+
+            def one(name=name, fn=fn):
+                outs = fn()
+                ttnn.synchronize_device(mesh_device)
+                for o in outs:
+                    ttnn.deallocate(o)
+                _beat(f"{name} eager")
+                if os.environ.get("DB_PROFILE", "0") == "1":
+                    ttnn.ReadDeviceProfiler(mesh_device)
+                    for _ in range(3):
+                        for o in fn():
+                            ttnn.deallocate(o)
+                        ttnn.synchronize_device(mesh_device)
+                    ttnn.ReadDeviceProfiler(mesh_device)
+                    return 0.0
+                return _time_trace(mesh_device, fn, k, r, f"{name} {spec}")
+
+            guarded(name, one)
+
     logger.info(f"[dbench] SUMMARY payload={payload}: {results}")
