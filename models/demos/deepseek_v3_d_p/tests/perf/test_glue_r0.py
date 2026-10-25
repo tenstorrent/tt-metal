@@ -996,7 +996,7 @@ def test_glue_r0(mesh_device, variant, config_only):
         hf.max_seq_len = S * SP
         rope_t = RotarySetup(hf, mesh, sp_axis=0).get_rope_tensors_indexed(S * SP, S * SP)
         R = S // TP
-        H = 64
+        NH = 64
 
         def cfg160(key):
             e = MLA_MATMUL_CONFIG[key][R]
@@ -1004,10 +1004,10 @@ def test_glue_r0(mesh_device, variant, config_only):
 
         qb_cfg, b1_cfg = cfg160("q_b_proj"), cfg160("wkv_b1")
         qr = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=qb_cfg["act_mem_config"])
-        tw_qb = mk(mesh, torch.randn(Q_LORA, H * (NOPE + ROPE)) * (1 / Q_LORA**0.5), ttnn.bfloat8_b)
-        tw_b1 = mk(mesh, torch.randn(1, H, NOPE, KV_LORA) * (1 / NOPE**0.5), ttnn.bfloat8_b)
+        tw_qb = mk(mesh, torch.randn(Q_LORA, NH * (NOPE + ROPE)) * (1 / Q_LORA**0.5), ttnn.bfloat8_b)
+        tw_b1 = mk(mesh, torch.randn(1, NH, NOPE, KV_LORA) * (1 / NOPE**0.5), ttnn.bfloat8_b)
         wb = ttnn.typecast(tw_b1, ttnn.bfloat16)
-        zr = mk(mesh, torch.zeros(1, H, NOPE, ROPE))
+        zr = mk(mesh, torch.zeros(1, NH, NOPE, ROPE))
         cat = ttnn.concat([wb, zr], dim=-1)
         tw_b1p = ttnn.typecast(cat, ttnn.bfloat8_b)
         for t in (wb, zr, cat):
@@ -1025,7 +1025,7 @@ def test_glue_r0(mesh_device, variant, config_only):
             )
 
         def heads(t, mem=DRAM):
-            return ttnn.experimental.nlp_create_q_heads_split(t, num_heads=H, split_head_dim=NOPE, memory_config=mem)
+            return ttnn.experimental.nlp_create_q_heads_split(t, num_heads=NH, split_head_dim=NOPE, memory_config=mem)
 
         def rope(t, prefix=None, out=None):
             return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
