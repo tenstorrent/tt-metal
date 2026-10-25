@@ -18,6 +18,13 @@ namespace sparse_sdpa {
 // Per-NoC trid-ring depths for each gather half. Raw tiled rows favor a shallow ring; packed scaled rows
 // benefit from more outstanding reads because each transfer is smaller and has reconstruction work to overlap.
 constexpr uint32_t K_TRID_RING = 4;
+// Scaled-KV bytes read per packed row (experiment SPARSE_SDPA_READ_BYTES: e.g. 656 payload / 672 instead of the
+// 704-B page). 0 = the full page.
+#if defined(SPARSE_SDPA_READ_BYTES)
+constexpr uint32_t SCALED_K_READ_BYTES = SPARSE_SDPA_READ_BYTES;
+#else
+constexpr uint32_t SCALED_K_READ_BYTES = 0;
+#endif
 #if defined(SPARSE_SDPA_TRID_RING)
 constexpr uint32_t SCALED_K_TRID_RING = SPARSE_SDPA_TRID_RING;  // experiment: SPARSE_SDPA_TRID env (<= 15)
 #else
@@ -92,8 +99,10 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t lo,
     uint32_t hi,
     uint32_t k_row_bytes,
-    uint32_t page_offset) {
+    uint32_t page_offset,
+    uint32_t read_bytes = 0) {  // bytes moved per row (0 = k_row_bytes, the L1 row stride)
     constexpr uint32_t D = RingDepth;
+    const uint32_t nbytes = read_bytes != 0 ? read_bytes : k_row_bytes;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -110,12 +119,12 @@ FORCE_INLINE void trid_ring_gather(
         if constexpr (dbg::MASK & dbg::NO_GATHER) {
             (void)page_id;
         } else if (page_id < spill_rows.front_pages) {
-            noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_id}, {.addr = dst_l1 + p * k_row_bytes});
+            noc.async_read(kv, local_l1, nbytes, {.page_id = page_id}, {.addr = dst_l1 + p * k_row_bytes});
         } else {
             noc.async_read(
                 spill,
                 local_l1,
-                k_row_bytes,
+                nbytes,
                 {.page_id = page_id / spill_rows.rows,
                  .offset_bytes = (page_id % spill_rows.rows) * spill_rows.row_stride},
                 {.addr = dst_l1 + p * k_row_bytes});

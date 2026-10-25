@@ -234,7 +234,8 @@ void kernel_main() {
                         split,
                         rows,
                         packed_row_bytes,
-                        kv_batch_page_offset);
+                        kv_batch_page_offset,
+                        sparse_sdpa::SCALED_K_READ_BYTES);
                     // Expand the scale rows from the reader's gathered half while the writer handles its
                     // own half. The two RISCs write disjoint rows of the same FP32 broadcast tiles.
                     sparse_sdpa::scatter_packed_scales<scale_blocks>(

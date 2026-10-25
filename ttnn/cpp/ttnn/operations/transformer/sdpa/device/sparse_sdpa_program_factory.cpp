@@ -488,6 +488,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
             k->defines.emplace_back("SPARSE_SDPA_DBG", std::to_string(dbg));
         }
     }
+    if (const uint32_t rb = ::sparse_sdpa::read_bytes(); scaled_kv && rb != 0) {
+        TT_FATAL(rb % 16 == 0 && rb >= ::sparse_sdpa::packed_kv_payload_bytes(k_dim, v_dim) && rb <= packed_page_bytes,
+                 "SPARSE_SDPA_READ_BYTES {} must be a multiple of 16 in [payload, page]", rb);
+        for (auto* k : {&reader_desc, &writer_desc}) {
+            k->defines.emplace_back("SPARSE_SDPA_READ_BYTES", std::to_string(rb));
+        }
+    }
     if (const uint32_t trid = ::sparse_sdpa::trid_ring(); trid != 0) {
         for (auto* k : {&reader_desc, &writer_desc}) {
             k->defines.emplace_back("SPARSE_SDPA_TRID_RING", std::to_string(trid));

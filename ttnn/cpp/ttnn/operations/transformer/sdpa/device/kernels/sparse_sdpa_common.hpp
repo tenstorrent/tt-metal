@@ -154,6 +154,10 @@ inline uint32_t trid_ring() {
     const uint32_t n = v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
     return (n >= 2 && n <= 15) ? n : 0u;
 }
+inline uint32_t read_bytes() {
+    const char* v = std::getenv("SPARSE_SDPA_READ_BYTES");
+    return v ? static_cast<uint32_t>(std::strtoul(v, nullptr, 0)) : 0u;
+}
 // Split-K work distribution (prototype): SPARSE_SDPA_SPLITK=1 enables, unset/0 keeps the whole-token split.
 inline bool split_k_enabled() {
     const char* v = std::getenv("SPARSE_SDPA_SPLITK");

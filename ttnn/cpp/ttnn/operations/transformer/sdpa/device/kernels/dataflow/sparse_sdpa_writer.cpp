@@ -237,7 +237,8 @@ void kernel_main() {
                     0,
                     split,
                     packed_row_bytes,
-                    kv_batch_page_offset);
+                    kv_batch_page_offset,
+                    sparse_sdpa::SCALED_K_READ_BYTES);
                 sparse_sdpa::scatter_packed_scales<scale_blocks>(
                     dst_l1, scale_dst_l1, 0, split, packed_row_bytes, latent_row_bytes);
             } else {
