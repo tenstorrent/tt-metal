@@ -170,6 +170,7 @@ void wait_for_untilize() {
     }
 }
 
+using routing_index::frozen;
 using routing_index::slice_begin;
 
 // ===== Load-aware split of the opposite-chip flows =====
@@ -186,32 +187,43 @@ constexpr uint32_t MAX_RING = 16;
 struct OppositeSplit {
     uint32_t cw[MAX_RING];     // pairs of origin's opposite flow sent clockwise
     uint32_t total[MAX_RING];  // pairs of origin's opposite flow
+    uint32_t ratio[MAX_RING];  // cw share as a 16.16 fraction; cut of a run of n pages = (n * ratio) >> 16
 };
 OppositeSplit g_opp;
 
-uint32_t run_len(const Scratch& c, uint32_t origin_pos, uint32_t e);
-
+// The split only steers load, so the flow sizes are estimated from routed (not capacity-kept) counts: any value
+// works as long as every chip computes the same one, and they all read the same replicated tables.
 void compute_opposite_split(const Scratch& c) {
+    DeviceZoneScopedN("la_split");
     constexpr uint32_t P = ct.extent;
     static_assert(P <= MAX_RING, "ring too long for the opposite-split table");
     constexpr uint32_t m = P / 2;
     constexpr uint32_t L = ct.num_links;
+    constexpr uint32_t E = ct.num_routed_experts;
+    constexpr uint32_t EPC = ct.experts_per_chip;
     // Pages one stream may carry of one opposite flow: the host's forwarding-section reservation
     // (fwd_pages_per_stream: div_up(per_pair, streams)), less one page per expert of rounding.
-    constexpr uint32_t per_pair = ct.seq_len * (ct.topk < ct.experts_per_chip ? ct.topk : ct.experts_per_chip);
-    constexpr uint32_t opposite_cap = (per_pair + 2 * L - 1) / (2 * L) - ct.experts_per_chip;
+    constexpr uint32_t per_pair = ct.seq_len * (ct.topk < EPC ? ct.topk : EPC);
+    constexpr uint32_t opposite_cap = (per_pair + 2 * L - 1) / (2 * L) - EPC;
+    const uint32_t* offs = frozen(c.offsets);
+    const uint32_t* cnts = frozen(c.counts);
+    const uint32_t* region = frozen(c.region_offsets);
+    const uint32_t* experts = frozen(c.chip_experts);
     uint32_t lcw[P], lccw[P];
     for (uint32_t p = 0; p < P; p++) {
         lcw[p] = 0;
         lccw[p] = 0;
     }
     for (uint32_t h = 0; h < P; h++) {
+        const uint32_t* row = offs + h * E;
+        const uint32_t* next = offs + (h + 1) * E;
         g_opp.total[h] = 0;
         for (uint32_t d = 1; d < P; d++) {
             const uint32_t t = (h + d) % P;
             uint32_t f = 0;
-            for (uint32_t j = 0; j < ct.experts_per_chip; j++) {
-                f += run_len(c, h, c.chip_experts[t * ct.experts_per_chip + j]);
+            for (uint32_t j = 0; j < EPC; j++) {
+                const uint32_t e = experts[t * EPC + j];
+                f += (h + 1 < P ? next[e] : cnts[e] + region[e]) - row[e];
             }
             if (d < m) {
                 for (uint32_t k = 0; k < d; k++) {
@@ -226,107 +238,70 @@ void compute_opposite_split(const Scratch& c) {
             }
         }
     }
+    uint32_t cw[P];
     const auto place = [&](uint32_t h, int32_t sign) {
-        const uint32_t x = g_opp.cw[h], y = g_opp.total[h] - g_opp.cw[h];
+        const uint32_t x = cw[h], y = g_opp.total[h] - cw[h];
         for (uint32_t k = 0; k < m; k++) {
             lcw[(h + k) % P] += sign * (int32_t)x;
             lccw[(h + P - k) % P] += sign * (int32_t)y;
         }
     };
     for (uint32_t h = 0; h < P; h++) {
-        g_opp.cw[h] = g_opp.total[h] / 2;
+        cw[h] = g_opp.total[h] / 2;
         place(h, 1);
     }
-    for (uint32_t round = 0; round < 16; round++) {
+    constexpr int32_t hi = (int32_t)(L * opposite_cap);
+    for (uint32_t round = 0; round < 6; round++) {
         for (uint32_t h = 0; h < P; h++) {
             place(h, -1);
             uint32_t mcw = 0, mccw = 0;
             for (uint32_t k = 0; k < m; k++) {
-                mcw = lcw[(h + k) % P] > mcw ? lcw[(h + k) % P] : mcw;
-                mccw = lccw[(h + P - k) % P] > mccw ? lccw[(h + P - k) % P] : mccw;
+                const uint32_t a = lcw[(h + k) % P], b = lccw[(h + P - k) % P];
+                mcw = a > mcw ? a : mcw;
+                mccw = b > mccw ? b : mccw;
             }
             const int32_t n = (int32_t)g_opp.total[h];
             int32_t x = ((int32_t)mccw - (int32_t)mcw + n) / 2;
-            const int32_t hi = (int32_t)(L * opposite_cap);
-            const int32_t lo = n - hi;
             x = x < 0 ? 0 : (x > n ? n : x);
             x = x > hi ? hi : x;
-            x = x < lo ? lo : x;
-            if (lo > hi) {
+            x = x < n - hi ? n - hi : x;
+            if (n - hi > hi) {
                 x = n / 2;  // cannot happen below per_pair; keep the static split rather than overrun a reservation
             }
-            g_opp.cw[h] = (uint32_t)x;
+            cw[h] = (uint32_t)x;
             place(h, 1);
         }
     }
+    for (uint32_t h = 0; h < P; h++) {
+        g_opp.cw[h] = cw[h];
+        g_opp.ratio[h] = g_opp.total[h] ? (cw[h] << 16) / g_opp.total[h] : (1u << 15);
+    }
 }
 
-// Start of share `idx` of `count` of a run of n pages that origin_pos sends to dst_pos. Opposite-chip runs use the
-// load-aware split: share idx = 2*link + (ccw ? 1 : 0), cw shares first covering the first cw_n pages.
-uint32_t share_begin(uint32_t n, uint32_t idx, uint32_t count, uint32_t origin_pos) {
+// Start / end of share `idx` of `count` of a run of n pages that origin_pos sends to its opposite chip
+// (count == streams, share idx = 2*link + (ccw ? 1 : 0)): the first cw_n pages go clockwise, split evenly over
+// the links, the rest counter-clockwise. Any other run keeps the static even split.
+FORCE_INLINE uint32_t share_cut(uint32_t n, uint32_t idx, uint32_t origin_pos, uint32_t link_edge) {
+    const uint32_t cw_n = (n * g_opp.ratio[origin_pos]) >> 16;
+    return (idx % 2 == 0) ? slice_begin(cw_n, link_edge, ct.num_links)
+                          : cw_n + slice_begin(n - cw_n, link_edge, ct.num_links);
+}
+FORCE_INLINE uint32_t share_begin(uint32_t n, uint32_t idx, uint32_t count, uint32_t origin_pos) {
     if constexpr (LOAD_AWARE_OPPOSITE) {
-        if (count == 2 * ct.num_links && idx < count && g_opp.total[origin_pos] > 0) {
-            const uint32_t cw_n = (n * g_opp.cw[origin_pos]) / g_opp.total[origin_pos];
-            const uint32_t link = idx / 2;
-            return (idx % 2 == 0) ? slice_begin(cw_n, link, ct.num_links)
-                                  : cw_n + slice_begin(n - cw_n, link, ct.num_links);
+        if (count == 2 * ct.num_links) {
+            return share_cut(n, idx, origin_pos, idx / 2);
         }
     }
     return slice_begin(n, idx, count);
 }
-uint32_t share_end(uint32_t n, uint32_t idx, uint32_t count, uint32_t origin_pos) {
+FORCE_INLINE uint32_t share_end(uint32_t n, uint32_t idx, uint32_t count, uint32_t origin_pos) {
     if constexpr (LOAD_AWARE_OPPOSITE) {
-        if (count == 2 * ct.num_links && g_opp.total[origin_pos] > 0) {
-            const uint32_t cw_n = (n * g_opp.cw[origin_pos]) / g_opp.total[origin_pos];
-            const uint32_t link = idx / 2;
-            return (idx % 2 == 0) ? slice_begin(cw_n, link + 1, ct.num_links)
-                                  : cw_n + slice_begin(n - cw_n, link + 1, ct.num_links);
+        if (count == 2 * ct.num_links) {
+            return share_cut(n, idx, origin_pos, idx / 2 + 1);
         }
     }
     return slice_begin(n, idx + 1, count);
 }
-
-// The reader -> sender queue of queue_depth entries. Two monotonic counters with one writer each: this side
-// owns `filled`, the sender owns `freed`, and each uses the difference, so neither needs an atomic
-// read-modify-write. `claimed` runs ahead of `published` so several token reads are in flight at once.
-struct TokenQueue {
-    uint32_t claimed = 0;
-    // Entries whose fwd_meta is written. Only these are published: when a blocked claim flushes, other
-    // claimed entries may not have their command word yet.
-    uint32_t ready = 0;
-    uint32_t published = 0;
-
-    uint32_t claim_entry() {
-        volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ct.freed_addr);
-        while (true) {
-            invalidate_l1_cache();
-            if (claimed - *freed < ct.queue_depth) {
-                return claimed++ % ct.queue_depth;
-            }
-            // Publish before blocking, or the sender and this reader wait on each other.
-            flush_publish();
-        }
-    }
-
-    // The entry's fwd_meta is written; it may now be published.
-    void mark_ready() { ready++; }
-
-    // Returns the capacity of claims never marked ready. The sender never saw them.
-    void release_unready() {
-        ASSERT(claimed >= ready);
-        claimed = ready;
-    }
-
-    void flush_publish() {
-        if (published == ready) {
-            return;
-        }
-        // The tokens have to be in L1 before the sender is told the entries are filled.
-        noc_async_read_barrier();
-        noc_semaphore_inc(get_noc_addr(ct.filled_addr), ready - published);
-        published = ready;
-    }
-};
 
 // chunk: one stream's slice of the run for one (origin, expert); a descriptor expands into experts_per_chip
 // chunks, one per expert on the destination.
