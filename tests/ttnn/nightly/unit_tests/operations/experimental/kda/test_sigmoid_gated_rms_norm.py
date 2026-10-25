@@ -371,6 +371,85 @@ def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
     ttnn.deallocate(output_tt)
 
 
+def _item_sharded(device: ttnn.Device, item_shape: list[int]) -> ttnn.MemoryConfig:
+    """One item (a [32, V] row tile of a head) per shard, round-robin over the worker grid: the KDA layer's layout."""
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=ttnn.NdShardSpec(
+            shard_shape=item_shape,
+            grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]),
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "num_heads, sequence, activated_heads, gate_column_offset, sharded",
+    [
+        (24, 640, 14, 0, False),
+        (24, 640, 14, 64, False),
+        (24, 640, 14, 0, True),
+        (24, 640, 18, 0, True),
+        (12, 64, 5, 0, False),
+        (24, 1280, 24, 0, False),
+    ],
+    ids=[
+        "h24-s640-a14",
+        "h24-s640-a14-offset",
+        "h24-s640-a14-sharded",
+        "h24-s640-a18-sharded",
+        "h12-s64-a5",
+        "h24-s1280-all",
+    ],
+)
+def test_sigmoid_gated_rms_norm_activated_heads_match_in_kernel_sigmoid(
+    device: ttnn.Device, num_heads: int, sequence: int, activated_heads: int, gate_column_offset: int, sharded: bool
+) -> None:
+    """The first heads' gate already activated (FP32 [heads, T, V], by ttnn.sigmoid: the accurate SFPU sigmoid the norm
+    runs, on the same BF16 values in an FP32 DST), the others' gate from an offset: the norm's output bit for bit. The
+    items are dealt round-robin: h24-s640 puts 2 or 1 sigmoid items beside 2 or 3 activated ones on each core, h12-s64
+    one item per core, h24-s1280 (no gate left to activate) two groups per core. Sharded, the input ([BH, NC, 32, V],
+    as the entry correction writes it) and the activated gate hold one item per shard, round-robin, so each core reads
+    them from its own L1."""
+    host, (input_tt, gate_tt, weight_tt) = _device_inputs(
+        device, sequence=sequence, num_heads=num_heads, input_dtype=ttnn.bfloat16, seed=4214
+    )
+    gate = host[1]
+    split = activated_heads * _VALUE_DIM
+    generator = torch.Generator().manual_seed(4215)
+    pad = torch.randn(_BATCH, sequence, gate_column_offset, generator=generator, dtype=torch.bfloat16)
+    rest = gate[..., split:] if split < gate.shape[-1] else gate[..., :_VALUE_DIM]
+    rest_tt = _to_device(torch.cat((pad, rest), dim=-1), device, dtype=ttnn.bfloat16)
+    head_first = gate[0, :, :split].reshape(sequence, activated_heads, _VALUE_DIM).permute(1, 0, 2).contiguous()
+    activated_tt = ttnn.sigmoid(ttnn.typecast(_to_device(head_first, device, dtype=ttnn.bfloat16), ttnn.float32))
+    assert activated_tt.dtype == ttnn.float32
+    norm_input_tt = input_tt
+    if sharded:
+        chunks = sequence // 32
+        norm_input_tt = ttnn.to_memory_config(
+            ttnn.reshape(input_tt, (num_heads, chunks, 32, _VALUE_DIM)), _item_sharded(device, [1, 1, 32, _VALUE_DIM])
+        )
+        activated_tt = ttnn.to_memory_config(activated_tt, _item_sharded(device, [1, 32, _VALUE_DIM]))
+    config = _production_compute_kernel_config(device)
+    expected = _run(
+        input_tt, gate_tt, weight_tt, num_heads=num_heads, compute_kernel_config=config, output_dtype=ttnn.bfloat16
+    )
+    actual = ttnn.experimental.kda.sigmoid_gated_rms_norm(
+        norm_input_tt,
+        rest_tt,
+        weight_tt,
+        num_heads,
+        epsilon=_EPSILON,
+        compute_kernel_config=config,
+        output_dtype=ttnn.bfloat16,
+        gate_column_offset=gate_column_offset,
+        activated_gate=activated_tt,
+    )
+    assert_bit_identical(ttnn.to_torch(expected), ttnn.to_torch(actual), name="activated heads")
+
+
 @pytest.mark.requires_host_iommu
 @pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")

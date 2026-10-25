@@ -23,8 +23,11 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         output ``[B, T, H*V]`` for the following output projection.
 
         Args:
-            input (ttnn.Tensor): Input tensor ``[B*H, T, V]``. Must be an
-                interleaved TILE-layout device tensor with FLOAT32 or BFLOAT16 dtype.
+            input (ttnn.Tensor): Input tensor ``[B*H, T, V]``. Must be a TILE-layout
+                device tensor with FLOAT32 or BFLOAT16 dtype, interleaved or sharded. Sharded, the
+                op deals its (row tile, head) items round-robin over the shard cores: an input (and
+                activated gate) sharded one ``[1, 32, V]`` item per shard, round-robin, is then read
+                from each core's own L1.
             gate (ttnn.Tensor): Sigmoid gate ``[B, T, W]`` with ``W >= gate_column_offset + H*V``.
                 Must be an interleaved TILE-layout BFLOAT16 device tensor.
             weight (ttnn.Tensor): Per-value RMSNorm weight ``[V]``. Must be an
@@ -43,6 +46,12 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
             gate_column_offset (int): Tile-aligned first gate column; the gate is read from
                 columns ``[offset, offset + H*V)``, so a fused projection's gate columns need not
                 be sliced out first. Defaults to 0.
+            activated_gate (ttnn.Tensor, optional): FLOAT32 ``[B*Ha, T, V]`` (laid out as the input) holding
+                sigmoid(gate) of heads ``[0, Ha)``, activated elsewhere. The gate then holds only heads ``[Ha, H)``,
+                from ``gate_column_offset``, and the op deals its (row tile, head) items round-robin over its cores,
+                so the items that still need a sigmoid spread evenly. An activated gate holding the FP32-accurate
+                sigmoid of the same BFLOAT16 gate values, computed in an FP32 DST, gives the same output bit for bit.
+                Defaults to None (no head activated).
 
         Returns:
             ttnn.Tensor: A new TILE-layout tensor with shape ``[B, T, H*V]``.
@@ -61,7 +70,8 @@ void bind_sigmoid_gated_rms_norm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output_dtype") = ttnn::DataType::FLOAT32,
-        nb::arg("gate_column_offset") = 0);
+        nb::arg("gate_column_offset") = 0,
+        nb::arg("activated_gate") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::sigmoid_gated_rms_norm::detail

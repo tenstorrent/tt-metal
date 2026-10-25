@@ -18,13 +18,14 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 namespace {
 
-void check_tiled_device(const Tensor& tensor, const char* name, std::initializer_list<DataType> dtypes) {
+void check_tiled_device(
+    const Tensor& tensor, const char* name, std::initializer_list<DataType> dtypes, bool may_be_sharded = false) {
     TT_FATAL(
         tensor.storage_type() == StorageType::DEVICE && tensor.buffer() != nullptr,
         "sigmoid_gated_rms_norm: {} must be an allocated device tensor",
         name);
     TT_FATAL(tensor.layout() == Layout::TILE, "sigmoid_gated_rms_norm: {} must use TILE layout", name);
-    TT_FATAL(!tensor.is_sharded(), "sigmoid_gated_rms_norm: {} must use interleaved memory", name);
+    TT_FATAL(!tensor.is_sharded() || may_be_sharded, "sigmoid_gated_rms_norm: {} must use interleaved memory", name);
     TT_FATAL(
         std::find(dtypes.begin(), dtypes.end(), tensor.dtype()) != dtypes.end(),
         "sigmoid_gated_rms_norm: {} has unsupported dtype {}",
@@ -41,7 +42,8 @@ SigmoidGatedRmsNormOperation::program_factory_t SigmoidGatedRmsNormOperation::se
 
 void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
-    check_tiled_device(in.input, "input", {DataType::FLOAT32, DataType::BFLOAT16});
+    // The input and the activated gate may be sharded (one item per shard, round-robin, keeps a core's reads local).
+    check_tiled_device(in.input, "input", {DataType::FLOAT32, DataType::BFLOAT16}, true);
     check_tiled_device(in.gate, "gate", {DataType::BFLOAT16});
     check_tiled_device(in.weight, "weight", {DataType::BFLOAT16});
     TT_FATAL(
@@ -64,21 +66,43 @@ void SigmoidGatedRmsNormOperation::validate_on_program_cache_miss(
     const auto& input_shape = in.input.logical_shape();
     const auto& gate_shape = in.gate.logical_shape();
     const auto& weight_shape = in.weight.logical_shape();
-    TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
+    TT_FATAL(
+        input_shape.rank() == 3 || (input_shape.rank() == 4 && input_shape[2] % tt::constants::TILE_HEIGHT == 0),
+        "sigmoid_gated_rms_norm: input must be [B*H,T,V] or [B*H,C,L,V] (T = C*L, L tile aligned)");
     TT_FATAL(gate_shape.rank() == 3, "sigmoid_gated_rms_norm: gate must be rank 3 [B,T,W]");
     TT_FATAL(weight_shape.rank() == 1, "sigmoid_gated_rms_norm: weight must be [V]");
     TT_FATAL(
-        input_shape[0] == attrs.batch * attrs.num_heads && input_shape[1] == attrs.sequence &&
-            input_shape[2] == attrs.value_dim,
+        input_shape[0] == attrs.batch * attrs.num_heads && input_shape[-1] == attrs.value_dim &&
+            in.input.logical_volume() == uint64_t{attrs.batch} * attrs.num_heads * attrs.sequence * attrs.value_dim,
         "sigmoid_gated_rms_norm: input shape does not match derived attributes");
     TT_FATAL(
         attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0,
         "sigmoid_gated_rms_norm: gate_column_offset must be tile aligned");
-    const uint64_t gate_width = uint64_t{attrs.num_heads} * attrs.value_dim;
+    TT_FATAL(
+        attrs.activated_heads <= attrs.num_heads && (attrs.activated_heads == 0) == !in.activated_gate.has_value(),
+        "sigmoid_gated_rms_norm: activated_heads {} needs an activated_gate and at most num_heads {}",
+        attrs.activated_heads,
+        attrs.num_heads);
+    if (in.activated_gate.has_value()) {
+        const auto& activated = *in.activated_gate;
+        // FP32 only: the product reads it where it reads the kernel's own FP32 sigmoid buffer.
+        check_tiled_device(activated, "activated_gate", {DataType::FLOAT32}, true);
+        TT_FATAL(
+            activated.device() == in.input.device(),
+            "sigmoid_gated_rms_norm: activated_gate must be on the input's device");
+        const auto& activated_shape = activated.logical_shape();
+        TT_FATAL(
+            activated_shape.rank() == 3 && activated_shape[0] == attrs.batch * attrs.activated_heads &&
+                activated_shape[1] == attrs.sequence && activated_shape[2] == attrs.value_dim,
+            "sigmoid_gated_rms_norm: activated_gate {} must be [B * activated_heads, T, V], laid out as the input",
+            activated_shape);
+    }
+    const uint64_t gate_width = uint64_t{attrs.num_heads - attrs.activated_heads} * attrs.value_dim;
     TT_FATAL(
         gate_shape[0] == attrs.batch && gate_shape[1] == attrs.sequence &&
             gate_shape[2] >= attrs.gate_column_offset + gate_width,
-        "sigmoid_gated_rms_norm: gate {} must be [B, T, W] and hold H*V = {} columns at gate_column_offset {}",
+        "sigmoid_gated_rms_norm: gate {} must be [B, T, W] and hold (H - activated_heads)*V = {} columns at "
+        "gate_column_offset {}",
         gate_shape,
         gate_width,
         attrs.gate_column_offset);
@@ -130,9 +154,12 @@ Tensor sigmoid_gated_rms_norm(
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
     DataType output_dtype,
-    uint32_t gate_column_offset) {
+    uint32_t gate_column_offset,
+    const std::optional<Tensor>& activated_gate) {
     const auto& input_shape = input.logical_shape();
-    TT_FATAL(input_shape.rank() == 3, "sigmoid_gated_rms_norm: input must be [B*H,T,V]");
+    TT_FATAL(
+        input_shape.rank() == 3 || input_shape.rank() == 4,
+        "sigmoid_gated_rms_norm: input must be [B*H,T,V] or [B*H,C,L,V]");
     TT_FATAL(num_heads > 0, "sigmoid_gated_rms_norm: num_heads must be positive");
     TT_FATAL(
         input_shape[0] % num_heads == 0, "sigmoid_gated_rms_norm: leading dimension must be divisible by num_heads");
@@ -141,14 +168,16 @@ Tensor sigmoid_gated_rms_norm(
         SigmoidGatedRmsNormParams{
             .batch = batch,
             .num_heads = num_heads,
-            .sequence = static_cast<uint32_t>(input_shape[1]),
-            .value_dim = static_cast<uint32_t>(input_shape[2]),
+            .sequence = static_cast<uint32_t>(input.logical_volume() / input_shape[0] / input_shape[-1]),
+            .value_dim = static_cast<uint32_t>(input_shape[-1]),
             .epsilon = epsilon,
             .output_mem_config = output_mem_config,
             .output_dtype = output_dtype,
             .compute_kernel_config = compute_kernel_config,
-            .gate_column_offset = gate_column_offset},
-        SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight});
+            .gate_column_offset = gate_column_offset,
+            .activated_heads =
+                activated_gate.has_value() ? static_cast<uint32_t>(activated_gate->logical_shape()[0] / batch) : 0u},
+        SigmoidGatedRmsNormInputs{.input = input, .gate = gate, .weight = weight, .activated_gate = activated_gate});
     return results[0];
 }
 

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -23,12 +24,16 @@ struct SigmoidGatedRmsNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // Gate columns start at this element offset within each row of the gate tensor.
     uint32_t gate_column_offset = 0;
+    // Heads [0, activated_heads) take their sigmoid(gate) from activated_gate; the gate holds heads
+    // [activated_heads, num_heads) from gate_column_offset.
+    uint32_t activated_heads = 0;
 };
 
 struct SigmoidGatedRmsNormInputs {
     Tensor input;
     Tensor gate;
     Tensor weight;
+    std::optional<Tensor> activated_gate;
 };
 
 }  // namespace ttnn::experimental::prim

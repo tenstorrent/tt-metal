@@ -6,22 +6,33 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/sigmoid_gated_rms_norm/device/kernels/norm_items.hpp"
 
 // Reads each group's gate, then writes the group's outputs. The gate and the inputs (the reader's) are the op's input
-// traffic; carried on both NoCs, they land in half the time.
-template <uint32_t Vt, uint32_t H, uint32_t Mt, uint32_t gate_row_tiles, uint32_t gate_offset_tiles, uint32_t G>
-TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
+// traffic; carried on both NoCs, they land in half the time. The gate tensor holds heads [Ha, H) from
+// gate_offset_tiles (the reader reads the other heads' activated gate).
+template <
+    uint32_t Vt,
+    uint32_t H,
+    uint32_t Ha,
+    uint32_t Mt,
+    uint32_t gate_row_tiles,
+    uint32_t gate_offset_tiles,
+    uint32_t G,
+    uint32_t max_items>
+TT_KERNEL void writer(uint32_t first_item, uint32_t item_stride, uint32_t item_count) {
     const auto g_acc = TensorAccessor(tensor::gate);
     const auto out_acc = TensorAccessor(tensor::output);
     Noc noc;
     DataflowBuffer gate(dfb::gate);
     DataflowBuffer out(dfb::out);
+    const NormItems<H, Ha, Mt, max_items> core_items(first_item, item_stride, item_count);
+    const uint32_t wi_count = item_count;
 
-    // Item j's gate tiles land at `slot` items from the gate buffer's write pointer.
-    auto read_gate = [&](uint32_t wi, uint32_t slot) {
-        const uint32_t bh = wi / Mt;
-        const uint32_t mt = wi % Mt;
-        const uint32_t gate_base = (bh / H * Mt + mt) * gate_row_tiles + gate_offset_tiles + bh % H * Vt;
+    // Item k's gate tiles land at `slot` items from the gate buffer's write pointer.
+    auto read_gate = [&](uint32_t k, uint32_t slot) {
+        const auto item = core_items[k];
+        const uint32_t gate_base = (item.b * Mt + item.mt) * gate_row_tiles + gate_offset_tiles + (item.h - Ha) * Vt;
         for (uint32_t vt = 0; vt < Vt; vt++) {
             noc.async_read(
                 g_acc,
@@ -34,25 +45,26 @@ TT_KERNEL void writer(uint32_t wi_start, uint32_t wi_count) {
 
     for (uint32_t first = 0; first < wi_count; first += G) {
         const uint32_t items = wi_count - first < G ? wi_count - first : G;
-        // The compute kernel starts on the first item's gate sigmoid: that gate lands on its own.
-        gate.reserve_back(items * Vt);
-        read_gate(wi_start + first, 0);
-        noc.async_read_barrier();
-        gate.push_back(Vt);
-        if (items > 1) {
-            // Offsets from the write pointer, which the first gate's push moved on by one item.
-            for (uint32_t j = 1; j < items; j++) {
-                read_gate(wi_start + first + j, j - 1);
-            }
+        const uint32_t raw = core_items.raw_in(first, items);
+        if (raw > 0) {
+            // The compute kernel starts on the first item's gate sigmoid: that gate lands on its own.
+            gate.reserve_back(raw * Vt);
+            read_gate(first, 0);
             noc.async_read_barrier();
-            gate.push_back((items - 1) * Vt);
+            gate.push_back(Vt);
+            if (raw > 1) {
+                // Offsets from the write pointer, which the first gate's push moved on by one item.
+                for (uint32_t j = 1; j < raw; j++) {
+                    read_gate(first + j, j - 1);
+                }
+                noc.async_read_barrier();
+                gate.push_back((raw - 1) * Vt);
+            }
         }
 
         for (uint32_t j = 0; j < items; j++) {
-            const uint32_t wi = wi_start + first + j;
-            const uint32_t bh = wi / Mt;
-            const uint32_t mt = wi % Mt;
-            const uint32_t out_base = (bh / H * Mt + mt) * H * Vt + bh % H * Vt;
+            const auto item = core_items[first + j];
+            const uint32_t out_base = (item.b * Mt + item.mt) * H * Vt + item.h * Vt;
             out.wait_front(Vt);
             for (uint32_t vt = 0; vt < Vt; vt++) {
                 noc.async_write(

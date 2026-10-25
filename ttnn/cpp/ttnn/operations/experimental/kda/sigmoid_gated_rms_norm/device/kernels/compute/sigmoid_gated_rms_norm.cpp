@@ -134,17 +134,18 @@ void activate_gate(uint32_t j, DFB& gate, DFB& sig) {
     sig.push_back(Vt);
 }
 
-// out = weighted * sigmoid(gate) for the next `items` items.
-template <uint32_t Vt, typename DFB>
-void multiply_output(uint32_t items, DFB& tmp, DFB& sig, DFB& out) {
+// out = weighted * sigmoid(gate) for the next `items` items, the sigmoids read from `sig_id` (the kernel's own sig, or
+// the activated gate: both FP32, unpacked to the source registers).
+template <uint32_t Vt, typename Id, typename DFB>
+void multiply_output(uint32_t items, DFB& tmp, Id sig_id, DFB& sig, DFB& out) {
     pack_reconfig_data_format(dfb::out);
-    reconfig_data_format(dfb::tmp, dfb::sig);
-    mul_init(dfb::tmp, dfb::sig);
+    reconfig_data_format(dfb::tmp, sig_id);
+    mul_init(dfb::tmp, sig_id);
     for (uint32_t j = 0; j < items; j++) {
         tmp.wait_front(Vt);
         sig.wait_front(Vt);
         out.reserve_back(Vt);
-        blocked(Vt, dfb::out, [](uint32_t i, uint32_t dst) { mul_tiles(dfb::tmp, dfb::sig, i, i, dst); });
+        blocked(Vt, dfb::out, [sig_id](uint32_t i, uint32_t dst) { mul_tiles(dfb::tmp, sig_id, i, i, dst); });
         out.push_back(Vt);
         tmp.pop_front(Vt);
         sig.pop_front(Vt);
@@ -154,8 +155,9 @@ void multiply_output(uint32_t items, DFB& tmp, DFB& sig, DFB& out) {
 // Gate sigmoids of a group before its RMS chain starts: they take about as long as the group's inputs take to land.
 constexpr uint32_t leading_sigmoids = 2;
 
+// A group's items that need a sigmoid lead it (raw of them); the rest read their activated gate (ACTIVATED_GATE).
 template <uint32_t Vt, uint32_t G>
-TT_KERNEL void compute(uint32_t wi_count) {
+TT_KERNEL void compute(uint32_t raw_count, uint32_t act_count) {
     compute_kernel_hw_startup(dfb::x, dfb::scaler, dfb::out);
     DataflowBuffer x(dfb::x);
     DataflowBuffer gate(dfb::gate);
@@ -167,20 +169,25 @@ TT_KERNEL void compute(uint32_t wi_count) {
     DataflowBuffer sig(dfb::sig);
     DataflowBuffer out(dfb::out);
     DataflowBuffer epsilon(dfb::epsilon);
+#ifdef ACTIVATED_GATE
+    DataflowBuffer activated(dfb::activated);
+#endif
+    const uint32_t wi_count = raw_count + act_count;
     for (uint32_t first = 0; first < wi_count; first += G) {
         const uint32_t items = wi_count - first < G ? wi_count - first : G;
+        const uint32_t raw = first >= raw_count ? 0 : (raw_count - first < items ? raw_count - first : items);
         // The gate sigmoids fill the chain's waits: the first ones run while the group's inputs land (the gate comes
         // first, on the other NoC), the next one between the reduction and the inverse RMS that needs its last tile.
         // The last one runs after the products of the items whose sigmoids are ready, so their writes overlap it.
         uint32_t sigmoids = 0;
-        while (sigmoids < items && sigmoids < leading_sigmoids) {
+        while (sigmoids < raw && sigmoids < leading_sigmoids) {
             activate_gate<Vt>(sigmoids++, gate, sig);
         }
         square<Vt>(items, x, tmp);
         compute_kernel_lib::
             reduce<ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW, dfb::tmp, dfb::scaler, dfb::stats>(
                 compute_kernel_lib::ReduceInputBlockShape::of(items, Vt));
-        if (sigmoids < items) {
+        if (sigmoids < raw) {
             activate_gate<Vt>(sigmoids++, gate, sig);
         }
         if (first == 0) {
@@ -194,12 +201,21 @@ TT_KERNEL void compute(uint32_t wi_count) {
         }
         apply_weight<Vt>(items, norm, tmp);
         uint32_t products = 0;
-        while (sigmoids < items) {
-            multiply_output<Vt>(sigmoids - products, tmp, sig, out);
+        while (sigmoids < raw) {
+            multiply_output<Vt>(sigmoids - products, tmp, dfb::sig, sig, out);
             products = sigmoids;
             activate_gate<Vt>(sigmoids++, gate, sig);
         }
-        multiply_output<Vt>(items - products, tmp, sig, out);
-        gate.pop_front(items * Vt);
+        if (raw > products) {
+            multiply_output<Vt>(raw - products, tmp, dfb::sig, sig, out);
+        }
+#ifdef ACTIVATED_GATE
+        if (items > raw) {
+            multiply_output<Vt>(items - raw, tmp, dfb::activated, activated, out);
+        }
+#endif
+        if (raw > 0) {
+            gate.pop_front(raw * Vt);
+        }
     }
 }
