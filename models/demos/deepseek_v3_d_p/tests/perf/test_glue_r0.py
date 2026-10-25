@@ -988,4 +988,146 @@ def test_glue_r0(mesh_device, variant, config_only):
         timer("I gate mm -> L1", lambda: gmm(L1))
         timer("I gate mm -> DRAM", lambda: gmm(DRAM))
 
+    # ======================= J. seqq Q stem (160 TP-quarter rows x all 64 heads): in-place RoPE =======================
+    if want("j"):
+        from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+
+        hf = copy.deepcopy(config_only)
+        hf.max_seq_len = S * SP
+        rope_t = RotarySetup(hf, mesh, sp_axis=0).get_rope_tensors_indexed(S * SP, S * SP)
+        R = S // TP
+        NH = 64
+
+        def cfg160(key):
+            e = MLA_MATMUL_CONFIG[key][R]
+            return e[0] if isinstance(e, list) else e
+
+        qb_cfg, b1_cfg = cfg160("q_b_proj"), cfg160("wkv_b1")
+        qr = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=qb_cfg["act_mem_config"])
+        tw_qb = mk(mesh, torch.randn(Q_LORA, NH * (NOPE + ROPE)) * (1 / Q_LORA**0.5), ttnn.bfloat8_b)
+        tw_b1 = mk(mesh, torch.randn(1, NH, NOPE, KV_LORA) * (1 / NOPE**0.5), ttnn.bfloat8_b)
+        wb = ttnn.typecast(tw_b1, ttnn.bfloat16)
+        zr = mk(mesh, torch.zeros(1, NH, NOPE, ROPE))
+        cat = ttnn.concat([wb, zr], dim=-1)
+        tw_b1p = ttnn.typecast(cat, ttnn.bfloat8_b)
+        for t in (wb, zr, cat):
+            ttnn.deallocate(t)
+        b1pc = b1_cfg["program_config"]
+        pc_p = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(11, 10), in0_block_w=b1pc.in0_block_w, out_subblock_h=1, out_subblock_w=6,
+            per_core_M=b1pc.per_core_M, per_core_N=18,
+        )
+
+        def qb():
+            return ttnn.linear(
+                qr, tw_qb, program_config=qb_cfg["program_config"], memory_config=qb_cfg["out_mem_config"],
+                dtype=ttnn.bfloat16, compute_kernel_config=hifi2,
+            )
+
+        def heads(t, mem=DRAM):
+            return ttnn.experimental.nlp_create_q_heads_split(t, num_heads=NH, split_head_dim=NOPE, memory_config=mem)
+
+        def rope(t, prefix=None, out=None):
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                t, rope_t["cos_matrix"], rope_t["sin_matrix"], rope_t["trans_matrix"], kv_actual_global=0,
+                cluster_axis=0, seq_subshard_axis=1, concat_prefix=prefix,
+                **({"output_tensor": out} if out is not None else {}),
+            )
+
+        def base_chain():
+            q = qb()
+            qn, qp = heads(q)
+            ttnn.deallocate(q)
+            qa = ttnn.linear(qn, tw_b1, program_config=b1pc, memory_config=b1_cfg["out_mem_config"], dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+            ttnn.deallocate(qn)
+            out = rope(qp, prefix=qa)
+            ttnn.deallocate(qa)
+            ttnn.deallocate(qp)
+            return out
+
+        def inplace_chain(hmem=DRAM):
+            q = qb()
+            qn, qp = heads(q, hmem)
+            ttnn.deallocate(q)
+            out = ttnn.linear(qn, tw_b1p, program_config=pc_p, memory_config=DRAM, dtype=ttnn.bfloat16, compute_kernel_config=hifi2)
+            ttnn.deallocate(qn)
+            rope(qp, out=out)
+            ttnn.deallocate(qp)
+            return out
+
+        ref = base_chain()
+        for tag, hm in (("heads DRAM", DRAM), ("heads L1", L1)):
+            try:
+                o = inplace_chain(hm)
+                cmp(f"J seqq in-place [{tag}] vs base chain", o, ref)
+                _free(o)
+            except Exception as e:
+                log(f"FAIL J seqq in-place [{tag}]: {type(e).__name__}: {str(e)[:400]}")
+                traceback.print_exc()
+        _free(ref)
+        timer("J0 seqq q chain base (q_b160, heads64, wkv_b1 L1, rope+concat512)", base_chain)
+        timer("J1 seqq q chain in-place (heads DRAM, wkv_b1 N576 DRAM, rope in place)", lambda: inplace_chain(DRAM))
+        timer("J1 seqq q chain in-place (heads L1, wkv_b1 N576 DRAM, rope in place)", lambda: inplace_chain(L1))
+
+    # ======================= K. seqq q_a norm on 160 rows: interleaved (5 cores) vs width-sharded =======================
+    if want("k"):
+        R = S // TP
+        g_q = torch.rand(Q_LORA) + 0.5
+        tg_q = mk(mesh, g_q.reshape(1, 1, -1, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
+        x160 = mk(mesh, torch.randn(1, 1, R, Q_LORA), mem=DRAM)
+
+        def base_norm():
+            return ttnn.rms_norm(x160, weight=tg_q, epsilon=EPS, memory_config=L1, compute_kernel_config=hifi2)
+
+        ref = base_norm()
+        tiles = Q_LORA // 32
+        for gx, gy in ((8, 1), (8, 2), (8, 4), (8, 8)):
+            n = gx * gy
+            bw = tiles // n
+            sw = max(w for w in (4, 3, 2, 1) if bw % w == 0)
+            try:
+                in_cfg = ttnn.create_sharded_memory_config(
+                    shape=(R, Q_LORA // n), core_grid=ttnn.CoreGrid(x=gx, y=gy), strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR, use_height_and_width_as_shard_shape=True,
+                )
+                pc = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=[gx, gy], subblock_w=sw, block_h=R // 32, block_w=bw, inplace=False
+                )
+
+                def sh_norm(in_cfg=in_cfg, pc=pc, unshard=True):
+                    xs = ttnn.to_memory_config(x160, in_cfg)
+                    o = ttnn.rms_norm(xs, weight=tg_q, epsilon=EPS, program_config=pc, compute_kernel_config=hifi2)
+                    ttnn.deallocate(xs)
+                    if not unshard:
+                        return o
+                    oi = ttnn.sharded_to_interleaved(o, L1)
+                    ttnn.deallocate(o)
+                    return oi
+
+                o = sh_norm()
+                cmp(f"K width-sharded norm160 {n} cores vs interleaved", o, ref)
+                _free(o)
+                timer(f"K1 reshard + sharded norm160 ({gx}x{gy}={n} cores) + unshard L1", sh_norm)
+                timer(f"K2 reshard + sharded norm160 ({n} cores), no unshard", lambda f=sh_norm: f(unshard=False))
+                timer(f"K3 reshard only ({n} cores)", lambda in_cfg=in_cfg: ttnn.to_memory_config(x160, in_cfg))
+            except Exception as e:
+                log(f"FAIL K {gx}x{gy}: {type(e).__name__}: {str(e)[:300]}")
+                traceback.print_exc()
+        _free(ref)
+        timer("K0 interleaved rms_norm [160,2048] DRAM->L1 (seqq production)", base_norm)
+
+    # ======================= L. seqq q_a RS over rows (dim 2) worker sweep =======================
+    if want("l"):
+        qa_p = mk(mesh, torch.randn(1, 1, S, Q_LORA), mem=L1)  # q_a partial [640,2048] L1 (replicated data)
+        try:
+            r0 = rs(qa_p, dim=2)
+            r8 = rs(qa_p, dim=2, workers=8)
+            cmp("L RS dim2 8 workers vs default", r8, r0)
+            _free([r0, r8])
+        except Exception as e:
+            log(f"FAIL L pcc: {type(e).__name__}: {str(e)[:300]}")
+        for w in (None, 4, 8):
+            timer(f"L RS dim2 [640,2048]->[160,2048] workers={w}", lambda w=w: rs(qa_p, dim=2, workers=w))
+        _free(qa_p)
+
     log("DONE")
