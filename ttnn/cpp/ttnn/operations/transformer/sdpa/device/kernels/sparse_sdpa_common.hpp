@@ -5,6 +5,9 @@
 #pragma once
 
 #include <stdint.h>
+#if !defined(KERNEL_BUILD)
+#include <cstdlib>
+#endif
 
 // Host/device constants shared by the sparse-SDPA factory and JIT kernels. Keep this header free of host-only and
 // kernel-only dependencies so both compilation paths use the same protocol and packed-cache geometry.
@@ -68,19 +71,42 @@ constexpr uint32_t SPLIT = 1;
 constexpr uint32_t IS_LAST = 2;
 constexpr uint32_t DST_L1 = 3;
 constexpr uint32_t SCALE_DST_L1 = 4;
-constexpr uint32_t WORD_COUNT = 5;
+constexpr uint32_t EMPTY = 5;  // split-K: the segment has no active chunk (no gather, no ack)
+constexpr uint32_t WORD_COUNT = 6;
 constexpr uint32_t PAGE_BYTES = align_cb_page(WORD_COUNT * sizeof(uint32_t));
 }  // namespace gather_request
 
 // Reader -> compute token control message.
 namespace control_message {
-constexpr uint32_t ACTIVE_CHUNKS = 0;
+constexpr uint32_t ACTIVE_CHUNKS = 0;  // active chunks in THIS segment (the whole token unless split-K)
 constexpr uint32_t VALID_KEYS = 1;
-constexpr uint32_t WORD_COUNT = 2;
+constexpr uint32_t CHUNK_BASE = 2;  // first (token-global) chunk index of the segment
+constexpr uint32_t SEG_KIND = 3;    // seg_kind::*
+constexpr uint32_t WORD_COUNT = 4;
 constexpr uint32_t PAGE_BYTES = align_cb_page(WORD_COUNT * sizeof(uint32_t));
 }  // namespace control_message
 
 constexpr uint32_t ACK_PAGE_BYTES = CB_PAGE_ALIGNMENT;
+
+// Split-K work distribution (S > cores and S % cores != 0, e.g. GLM: 160 query rows per chip on 96/120 cores): the
+// (token, k-chunk) units are dealt contiguously over the cores, so a token may straddle two neighbouring cores. Core i
+// runs, in order: an optional HEAD segment (the last chunks of token tok_start-1; its unnormalized flash state
+// (out, max, partial row-sum) is NoC-written into core i-1's receive CBs + a semaphore), its FULL tokens, and an
+// optional TAIL segment (the first chunks of token tok_start+tok_count; core i+1's HEAD state is merged in before the
+// normalize). The HEAD runs first on its core, so the TAIL's wait is normally already satisfied.
+namespace seg_kind {
+constexpr uint32_t FULL = 0;
+constexpr uint32_t HEAD = 1;
+constexpr uint32_t TAIL = 2;
+}  // namespace seg_kind
+// Per-core runtime args (all three kernels). HEAD_C0 = first chunk of the HEAD segment (0 = none); TAIL_C1 = chunk
+// count of the TAIL segment (0 = none); PREV_NOC_X/Y = core i-1 (HEAD destination).
+namespace split_rt_arg {
+enum : uint32_t { TOK_START = 0, TOK_COUNT, HEAD_C0, TAIL_C1, PREV_NOC_X, PREV_NOC_Y, END };
+}
+// Values the HEAD sender adds to core i-1's semaphore.
+constexpr uint32_t SPLIT_PARTIAL_EMPTY = 1;  // the HEAD had no active chunk (sentinel tail): nothing to merge
+constexpr uint32_t SPLIT_PARTIAL_VALID = 2;
 
 // Compile-time argument positions. The factory checks the vector size against each END value before appending
 // TensorAccessorArgs, while the kernels use the same names to decode the stream.
@@ -110,6 +136,7 @@ enum : uint32_t {
     PACKED_ROW_BYTES,
     CB_KREQ,
     CB_KACK,
+    SPLIT_K,
     END,
 };
 }  // namespace reader_ct_arg
@@ -139,6 +166,14 @@ enum : uint32_t {
     USE_ATTENTION_SINK,
     CB_ATTENTION_SINK,
     CB_SINK_SCRATCH,
+    SPLIT_K,
+    CB_SEND_OUT,
+    CB_SEND_MAX,
+    CB_SEND_SUM,
+    CB_RECV_OUT,
+    CB_RECV_MAX,
+    CB_RECV_SUM,
+    CB_MERGE_CTRL,
     END,
 };
 }  // namespace writer_ct_arg
@@ -180,8 +215,26 @@ enum : uint32_t {
     PACKED_ROW_BYTES,
     USE_ATTENTION_SINK,
     CB_ATTENTION_SINK,
+    SPLIT_K,
+    CB_SEND_OUT,
+    CB_SEND_MAX,
+    CB_SEND_SUM,
+    CB_RECV_OUT,
+    CB_RECV_MAX,
+    CB_RECV_SUM,
+    CB_MERGE_CTRL,
+    CB_MMAX,
+    CB_CORR2,
     END,
 };
 }  // namespace compute_ct_arg
+
+#if !defined(KERNEL_BUILD)
+// Host: split-K is on whenever it applies; SPARSE_SDPA_SPLITK=0 restores the whole-token split (A/B, bisection).
+inline bool split_k_enabled() {
+    const char* v = std::getenv("SPARSE_SDPA_SPLITK");
+    return v == nullptr || v[0] != '0';
+}
+#endif
 
 }  // namespace sparse_sdpa

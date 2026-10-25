@@ -76,8 +76,11 @@ void kernel_main() {
     const uint32_t q_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::Q_ADDRESS);
     const uint32_t kv_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_ADDRESS);
     const uint32_t idx_addr = get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::INDICES_ADDRESS);
-    const uint32_t tok_start = get_arg_val<uint32_t>(0);
-    const uint32_t tok_count = get_arg_val<uint32_t>(1);
+    const uint32_t tok_start = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::TOK_START);
+    const uint32_t tok_count = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::TOK_COUNT);
+    const uint32_t head_c0 = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::HEAD_C0);
+    const uint32_t tail_c1 = get_arg_val<uint32_t>(sparse_sdpa::split_rt_arg::TAIL_C1);
+    constexpr uint32_t n_chunks = topk / k_chunk;
     // Indexed KV cache: page offset (cache_batch_idx * T) selecting the cache's batch slot; 0 if not indexed.
     const uint32_t kv_batch_page_offset =
         get_common_arg_val<uint32_t>(sparse_sdpa::reader_common_arg::KV_BATCH_PAGE_OFFSET);
@@ -106,7 +109,19 @@ void kernel_main() {
     const uint32_t idx_l1 = idx_cb.get_write_ptr();
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
 
-    for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
+    // Segments: [HEAD (split-K)] FULL tokens [TAIL (split-K)]; without split-K only FULL tokens.
+    const uint32_t head_segs = head_c0 != 0 ? 1u : 0u;
+    const uint32_t n_segs = head_segs + tok_count + (tail_c1 != 0 ? 1u : 0u);
+    for (uint32_t seg = 0; seg < n_segs; ++seg) {
+        uint32_t tok, c_lo, c_hi, kind;
+        if (seg < head_segs) {
+            tok = tok_start - 1, c_lo = head_c0, c_hi = n_chunks, kind = sparse_sdpa::seg_kind::HEAD;
+        } else {
+            const uint32_t f = seg - head_segs;
+            tok = tok_start + f, c_lo = 0;
+            c_hi = f < tok_count ? n_chunks : tail_c1;
+            kind = f < tok_count ? sparse_sdpa::seg_kind::FULL : sparse_sdpa::seg_kind::TAIL;
+        }
         // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
         q_cb.reserve_back(H);
         for (uint32_t h = 0; h < H; ++h) {
@@ -133,19 +148,34 @@ void kernel_main() {
             }
             nv = lo == 0 ? 1 : lo;  // contract guarantees >=1 valid; guard anyway
         }
-        const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;
+        const uint32_t n_active = (nv + k_chunk - 1) / k_chunk;  // whole-token active chunk count
+        const uint32_t seg_hi = c_hi < n_active ? c_hi : n_active;
+        const uint32_t n_seg = seg_hi > c_lo ? seg_hi - c_lo : 0u;  // only a HEAD segment can be empty
 
         // hand the active chunk count + valid-key count to compute (it can't issue DRAM reads to derive
         // them). nv lets compute place the boundary mask (which key tiles of the last chunk to -inf).
         ctrl_cb.reserve_back(1);
         {
             volatile tt_l1_ptr uint32_t* cp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ctrl_cb.get_write_ptr());
-            cp[sparse_sdpa::control_message::ACTIVE_CHUNKS] = n_active;
+            cp[sparse_sdpa::control_message::ACTIVE_CHUNKS] = n_seg;
             cp[sparse_sdpa::control_message::VALID_KEYS] = nv;
+            cp[sparse_sdpa::control_message::CHUNK_BASE] = c_lo;
+            cp[sparse_sdpa::control_message::SEG_KIND] = kind;
         }
         ctrl_cb.push_back(1);
 
-        for (uint32_t chunk = 0; chunk < n_active; ++chunk) {
+        if (n_seg == 0) {
+            // Empty HEAD: tell the writer (it signals core i-1 that there is nothing to merge).
+            kreq_cb.reserve_back(1);
+            {
+                volatile tt_l1_ptr uint32_t* request =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
+                request[sparse_sdpa::gather_request::IS_LAST] = 1;
+                request[sparse_sdpa::gather_request::EMPTY] = 1;
+            }
+            kreq_cb.push_back(1);
+        }
+        for (uint32_t chunk = c_lo; chunk < seg_hi; ++chunk) {
             const uint32_t base = chunk * k_chunk;
             const uint32_t valid = (nv - base) < k_chunk ? (nv - base) : k_chunk;  // (0, k_chunk]
 
@@ -163,7 +193,7 @@ void kernel_main() {
                     const uint32_t k_write_ptr = k_cb.get_write_ptr();
                     const uint32_t scale_write_ptr = scale_bcast_cb.get_write_ptr();
                     const uint32_t slab_base = base + row_base;
-                    const bool is_last_slab = (chunk == n_active - 1) && (row_tile == row_tiles - 1);
+                    const bool is_last_slab = (chunk == seg_hi - 1) && (row_tile == row_tiles - 1);
 
                     kreq_cb.reserve_back(1);
                     {
@@ -174,6 +204,7 @@ void kernel_main() {
                         request[sparse_sdpa::gather_request::IS_LAST] = is_last_slab;
                         request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
                         request[sparse_sdpa::gather_request::SCALE_DST_L1] = scale_write_ptr;
+                        request[sparse_sdpa::gather_request::EMPTY] = 0;
                     }
                     kreq_cb.push_back(1);
 
@@ -230,8 +261,9 @@ void kernel_main() {
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_write_ptr());
                     request[sparse_sdpa::gather_request::BASE] = base;
                     request[sparse_sdpa::gather_request::SPLIT] = half;
-                    request[sparse_sdpa::gather_request::IS_LAST] = chunk == n_active - 1;
+                    request[sparse_sdpa::gather_request::IS_LAST] = chunk == seg_hi - 1;
                     request[sparse_sdpa::gather_request::DST_L1] = k_write_ptr;
+                    request[sparse_sdpa::gather_request::EMPTY] = 0;
                 }
                 kreq_cb.push_back(1);
                 // Reader gathers its half [half, valid) on its NoC (depth-4 trid ring, shared helper).

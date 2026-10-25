@@ -49,6 +49,16 @@ enum SparseCB : uint32_t {
     cb_k_rope_tile,     // scaled FP8 only: one K chunk's BF16 RoPE tiles
     cb_attention_sink,  // persistent first-column vector: one sink scalar per head
     cb_sink_scratch,    // writer scratch for gathering sink scalars
+    // split-K (sparse_sdpa_common.hpp seg_kind): this core's HEAD flash state out, the neighbour's HEAD state in
+    cb_send_out,    // [Sqt, vDHt] unnormalized out (compute -> writer -> core i-1)
+    cb_send_max,    // [Sqt] running max
+    cb_send_sum,    // [Sqt] partial row-sum
+    cb_recv_out,    // core i+1's HEAD state, NoC-written straight into these CBs' base
+    cb_recv_max,
+    cb_recv_sum,
+    cb_merge_ctrl,  // writer -> compute: the neighbour's semaphore value (SPLIT_PARTIAL_*)
+    cb_mmax,        // merged max
+    cb_corr2,       // exp(recv_max - merged_max)
     cb_count
 };
 
@@ -179,6 +189,25 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         cb(cb_sink_scratch, H * sizeof(uint16_t), 1, bf);
     }
 
+    // Split-K: deal (token, chunk) units contiguously over the cores when whole tokens do not divide evenly. GLM per
+    // chip has 160 query rows: on 96 cores the whole-token split leaves 64 cores with 2 tokens and 32 with 1
+    // (makespan 2 tokens); split-K gives every core 26-27 of the 2560 chunk units (1.67 tokens). Merges are pairwise
+    // between neighbouring cores, at most one per core (needs Sqt <= 4 so a merge fits DST once).
+    const uint32_t n_chunks = topk / k_chunk;
+    const bool split_k = scaled_kv && !use_attention_sink && S > num_cores && (S % num_cores) != 0 && Sqt <= 4 &&
+                         ::sparse_sdpa::split_k_enabled();
+    if (split_k) {
+        for (uint32_t id : {cb_send_out, cb_recv_out}) {
+            cb(id, tile_bytes, Sqt * vDHt, bf);
+        }
+        for (uint32_t id : {cb_send_max, cb_send_sum, cb_recv_max, cb_recv_sum, cb_mmax, cb_corr2}) {
+            cb(id, tile_bytes, Sqt, bf);
+        }
+        cb(cb_merge_ctrl, ::sparse_sdpa::control_message::PAGE_BYTES, 1, bf);
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = 0, .core_type = tt::CoreType::WORKER, .core_ranges = core_grid, .initial_value = 0});
+    }
+
     // ---- compile-time args ----
     // CB ids are passed to each kernel as compile-time args (the SparseCB enum is the single source).
     // Keep each block's order in sync with the kernel's reads. Layout: scalars, then CB ids, then the
@@ -212,6 +241,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_ct.insert(
         reader_ct.end(),
         {static_cast<uint32_t>(scaled_kv), v_dim, cb_k_scale_bcast, packed_page_bytes, cb_kreq, cb_kack});
+    reader_ct.push_back(static_cast<uint32_t>(split_k));
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
@@ -233,6 +263,16 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         writer_ct.end(),
         {static_cast<uint32_t>(scaled_kv), k_dim, kv_elem_bytes, cb_idx, cb_kreq, cb_kack, packed_page_bytes});
     writer_ct.insert(writer_ct.end(), {static_cast<uint32_t>(use_attention_sink), cb_attention_sink, cb_sink_scratch});
+    writer_ct.insert(
+        writer_ct.end(),
+        {static_cast<uint32_t>(split_k),
+         cb_send_out,
+         cb_send_max,
+         cb_send_sum,
+         cb_recv_out,
+         cb_recv_max,
+         cb_recv_sum,
+         cb_merge_ctrl});
     TT_FATAL(
         writer_ct.size() == ::sparse_sdpa::writer_ct_arg::END,
         "sparse_sdpa writer compile-time argument layout is out of sync");
@@ -312,6 +352,18 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     compute_ct.push_back(qsb);
     compute_ct.push_back(packed_page_bytes);
     compute_ct.insert(compute_ct.end(), {static_cast<uint32_t>(use_attention_sink), cb_attention_sink});
+    compute_ct.insert(
+        compute_ct.end(),
+        {static_cast<uint32_t>(split_k),
+         cb_send_out,
+         cb_send_max,
+         cb_send_sum,
+         cb_recv_out,
+         cb_recv_max,
+         cb_recv_sum,
+         cb_merge_ctrl,
+         cb_mmax,
+         cb_corr2});
     TT_FATAL(
         compute_ct.size() == ::sparse_sdpa::compute_ct_arg::END,
         "sparse_sdpa compute compile-time argument layout is out of sync");
@@ -368,13 +420,32 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     reader_desc.common_runtime_args.insert(reader_desc.common_runtime_args.end(), reader_crt.begin(), reader_crt.end());
     writer_desc.common_runtime_args.insert(writer_desc.common_runtime_args.end(), writer_crt.begin(), writer_crt.end());
 
+    const uint64_t total_units = static_cast<uint64_t>(S) * n_chunks;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
-        reader_desc.emplace_runtime_args(core, {tok_start, tok_count});
-        writer_desc.emplace_runtime_args(core, {tok_start, tok_count});
-        compute_desc.emplace_runtime_args(core, {tok_start, tok_count});
+        uint32_t head_c0 = 0, tail_c1 = 0, prev_x = 0, prev_y = 0;
+        if (split_k) {
+            // Core i owns units [b0, b1) of the token-major (token, chunk) order.
+            const uint64_t b0 = total_units * i / num_cores;
+            const uint64_t b1 = total_units * (i + 1) / num_cores;
+            const uint32_t t0 = b0 / n_chunks, c0 = b0 % n_chunks, t1 = b1 / n_chunks, c1 = b1 % n_chunks;
+            TT_FATAL(b1 - b0 >= n_chunks, "sparse_sdpa split-K needs >= one token of units per core");
+            head_c0 = c0;                         // HEAD = token t0, chunks [c0, n_chunks)
+            tok_start = c0 != 0 ? t0 + 1 : t0;  // FULL tokens [tok_start, t1)
+            tok_count = t1 - tok_start;
+            tail_c1 = c1;  // TAIL = token t1, chunks [0, c1)
+            if (head_c0 != 0) {
+                TT_FATAL(i > 0, "sparse_sdpa split-K: core 0 cannot have a HEAD segment");
+                const auto prev = device->worker_core_from_logical_core(cores[i - 1]);
+                prev_x = prev.x;
+                prev_y = prev.y;
+            }
+        }
+        reader_desc.emplace_runtime_args(core, {tok_start, tok_count, head_c0, tail_c1, prev_x, prev_y});
+        writer_desc.emplace_runtime_args(core, {tok_start, tok_count, head_c0, tail_c1, prev_x, prev_y});
+        compute_desc.emplace_runtime_args(core, {tok_start, tok_count, head_c0, tail_c1, prev_x, prev_y});
     }
 
     desc.kernels.push_back(std::move(reader_desc));
