@@ -8,6 +8,7 @@
 #include <tuple>
 #include <utility>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
@@ -422,6 +423,21 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t max_active_tokens) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
+    // Static circular buffers grow up from the L1 allocator base and L1 buffers are allocated top-down, so the CB
+    // region must end below the lowest live L1 buffer (e.g. the sparse KV-push L1 fronts, kept for the whole forward).
+    // 0 when nothing is allocated: the program is then the one this op has always built. Rounded to 16 KB so small
+    // changes in what else is allocated do not each miss the program cache.
+    uint32_t l1_budget_bytes = 0;
+    {
+        auto* device = x.device();
+        const auto lowest = device->lowest_occupied_compute_l1_address();
+        const uint32_t base = device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        constexpr uint32_t kBudgetGranule = 16 * 1024;
+        if (lowest.has_value() && *lowest > base) {
+            const uint32_t free_below = static_cast<uint32_t>(*lowest) - base;
+            l1_budget_bytes = free_below >= kBudgetGranule ? (free_below / kBudgetGranule) * kBudgetGranule : 64u;
+        }
+    }
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .m_tiles = m_tiles,
@@ -431,7 +447,8 @@ ttnn::Tensor unified_routed_expert_moe(
             .fuse_bias = !gate_biases.empty(),
             .compute_kernel_config = compute_kernel_config,
             .min_active_tokens = min_active_tokens,
-            .max_active_tokens = max_active_tokens},
+            .max_active_tokens = max_active_tokens,
+            .l1_budget_bytes = l1_budget_bytes},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

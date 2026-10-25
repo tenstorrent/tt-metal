@@ -450,7 +450,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         l1_device->l1_size_per_core(),
         l1_reserved,
         L1_SCRATCH_MARGIN);
-    const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
+    uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
+    // Narrowed to what is free below the lowest live L1 buffer, when the entry found one (see l1_budget_bytes).
+    if (op.l1_budget_bytes != 0) {
+        const uint64_t free_budget =
+            op.l1_budget_bytes > L1_SCRATCH_MARGIN ? static_cast<uint64_t>(op.l1_budget_bytes) - L1_SCRATCH_MARGIN : 0;
+        l1_budget = std::min(l1_budget, free_budget);
+    }
 
     // Fit (per_core_M, in0_block_w_gu) to the real L1 budget. Candidate widths are
     // divisors of K_gate_tiles no wider than the request, largest first; candidate

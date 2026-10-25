@@ -100,6 +100,11 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t min_active_tokens = 0;
     uint32_t max_active_tokens = std::numeric_limits<uint32_t>::max();
 
+    // Per-core L1 the circular buffers may take (before the scratch margin), 0 = everything above the allocator base.
+    // Set to what is free below the lowest live L1 buffer when one exists, so a persistent L1 tensor another op keeps
+    // alive narrows the blocking instead of clashing with it at enqueue. Hashed for the same reason as the band.
+    uint32_t l1_budget_bytes = 0;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
         "experts_per_chip",
@@ -107,10 +112,18 @@ struct UnifiedRoutedExpertFfnParams {
         "activation",
         "fuse_bias",
         "min_active_tokens",
-        "max_active_tokens");
+        "max_active_tokens",
+        "l1_budget_bytes");
     auto attribute_values() const {
         return std::forward_as_tuple(
-            m_tiles, experts_per_chip, x_is_row_major, activation, fuse_bias, min_active_tokens, max_active_tokens);
+            m_tiles,
+            experts_per_chip,
+            x_is_row_major,
+            activation,
+            fuse_bias,
+            min_active_tokens,
+            max_active_tokens,
+            l1_budget_bytes);
     }
 };
 
