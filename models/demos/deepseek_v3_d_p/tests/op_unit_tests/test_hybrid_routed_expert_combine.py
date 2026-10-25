@@ -658,6 +658,9 @@ def _build_case(mesh_device, device_params, threshold_id, model_id, dg0_only=Fal
             final_arrived_semaphore=final_arrived,
             expert_go_semaphore=expert_go,
             channel_semaphores=overlap_semaphores[3:],
+            # fp8wire: HRE_COMBINE_FP8=1 has combine's untilizers quantize to fp8 rows (perf only; the output is then
+            # packed FP8_E4M3 and the bf16 reference check does not apply).
+            combine_fp8_scale_block=128 if os.environ.get("HRE_COMBINE_FP8") == "1" else 0,
         )
 
     reference = []
@@ -880,7 +883,7 @@ def _perf_one(mesh_device, device_params, threshold_id, model_id, variant):
             ttnn.release_trace(mesh_device, overlap_trace)
             del overlap_out
     logger.warning(
-        f"HRE_PERF x={os.environ.get('HRE_X', 'bf16')} counts={os.environ.get('HRE_COUNTS', threshold_id)} threshold={os.environ.get('HRE_THRESHOLD', '-')} "
+        f"HRE_PERF x={os.environ.get('HRE_X', 'bf16')} cfp8={os.environ.get('HRE_COMBINE_FP8', '0')} counts={os.environ.get('HRE_COUNTS', threshold_id)} threshold={os.environ.get('HRE_THRESHOLD', '-')} "
         f"re_us={traced_re_us:.1f} combine_us={traced_combine_us:.1f} overlap_us={traced_overlap_us:.1f}"
     )
     if run != {"re", "combine", "overlap"} or os.environ.get("HRE_SPECS"):
