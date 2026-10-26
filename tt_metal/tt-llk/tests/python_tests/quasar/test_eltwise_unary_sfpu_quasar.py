@@ -924,6 +924,17 @@ _QSR_EXTRA_MATHOPS = (
 )
 _BH_UNARY_OPS = sfpu_unary_ops()
 
+_TTSIM_DROPOUT_CFG_REASON = (
+    "Quasar ttsim does not implement the tensix_cfg_wr32 register 82 write used "
+    "by dropout_init; Dropout remains covered on silicon"
+)
+
+
+def _skip_ttsim_dropout(request, mathop):
+    if mathop == MathOperation.Dropout and request.config.getoption("--run-simulator"):
+        pytest.skip(_TTSIM_DROPOUT_CFG_REASON)
+
+
 OP_CONFIGS = [
     OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES),
     OpConfig(MathOperation.Square, TENSOR_DIMS, DEST_SYNC_MODES),
@@ -1412,6 +1423,7 @@ def test_eltwise_unary_sfpu_int32_quasar(
     input_dimensions=runtime(list(TENSOR_DIMS)),
 )
 def test_eltwise_unary_sfpu_qsr_extra_quasar(
+    request,
     mathop,
     formats,
     dest_acc,
@@ -1419,7 +1431,8 @@ def test_eltwise_unary_sfpu_qsr_extra_quasar(
     dest_sync,
     input_dimensions,
 ):
-    """Relu, Cumsum and Ema: in OP_CONFIGS but not in BH sfpu_unary_ops()."""
+    """Quasar-only ops that are in OP_CONFIGS but not in BH sfpu_unary_ops()."""
+    _skip_ttsim_dropout(request, mathop)
     run_eltwise_unary_sfpu_quasar(
         formats,
         dest_acc,
@@ -2103,8 +2116,9 @@ def _check_row_pair_masks_vary(name, dropped):
         )
     ],
 )
-def test_dropout_reseed_quasar(dropout_variant):
+def test_dropout_reseed_quasar(request, dropout_variant):
     """Seeds A, A, B at p = 1/2: masks look random, the same seed repeats the mask, a different one changes it."""
+    _skip_ttsim_dropout(request, MathOperation.Dropout)
     _, variant = dropout_variant[0]
     formats = variant.formats
 
