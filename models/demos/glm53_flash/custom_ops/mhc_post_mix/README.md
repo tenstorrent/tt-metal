@@ -84,3 +84,15 @@ position it copies x_0..x_{n-1}, y and post into the resident slots once; per st
 `mhc_sfpu::stream_mix` (per band: 4 accumulators in LREGs, one coefficient slot load + 4 data loads + 4 FMAs per
 term), packs `out`, and releases the dest WITHOUT clearing (`_llk_pack_dest_section_done_<..., false>`) so the
 operands stay for the next stream; `collapse` keeps accumulating across streams and scales by `1/n` on the last.
+
+## Work split (2026-10-26, `_agents/mhc_roofline/STATUS.md`)
+
+`MhcPostMix(split="extras")` (`GLM53_MHC_POST_SPLIT=extras`; v2 streams mode only): 128 positions over the 120 cores of
+a 12x10 grid leave 8 cores with two positions, which bound the op (~34 us for ~15 us of per-position work). The plan
+(`plan_positions` -> `delegate_units`, cached per shape) hands those cores' second positions to 32 one-position cores
+as (position, output stream) "extras" (runtime args `[n_extra, p, j, ...]` after each kernel's base args, kernels
+compiled with `MHC_MAX_EXTRA=4`): the same operand loads, one `stream_mix`, one output tile -- every output tile is
+still computed by exactly one core, so the result is bit-identical to the tile split. Critical path 12 -> 9 cost
+units; grids without two-position cores (13x10) and prefill shapes (1024 positions) keep the plain plan by
+construction. Collapse and h-mode never split (one output tile per position). The v2 reader and writer end with
+`noc_async_full_barrier()`.

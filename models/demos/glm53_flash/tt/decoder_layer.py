@@ -198,8 +198,14 @@ class TtDecoderLayer(LightweightModule):
             hc = hc.select(streams)
         if getattr(hc, "fuses_norm", False):
             kw = dict(collapse=True) if collapse else {}
+            # prefill-scope calls (one-tile slabs routed to the fast path) take the one-core norm: TtMHCFast.forward
             return hc.forward(
-                streams, sublayer, sublayer_dtype=ttnn.bfloat16, norm=(norm_w, self.cfg.rms_norm_eps), **kw
+                streams,
+                sublayer,
+                sublayer_dtype=ttnn.bfloat16,
+                norm=(norm_w, self.cfg.rms_norm_eps),
+                prefill=self.mesh.in_prefill,
+                **kw,
             )
         if collapse:
             raise NotImplementedError("collapse needs a supports_collapse hyper-connection (TtMHCFast)")

@@ -32,7 +32,7 @@ import torch
 
 import ttnn
 from models.demos.glm53_flash.custom_ops.mhc_post_mix.op import KERNEL_DIR as POST_KERNEL_DIR
-from models.demos.glm53_flash.custom_ops.mhc_post_mix.op import NUM_CBS, f32_bits
+from models.demos.glm53_flash.custom_ops.mhc_post_mix.op import NUM_CBS, delegate_units, f32_bits
 
 KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
@@ -120,6 +120,16 @@ class MhcPreBlock:
     MAX_COLS = (
         2  # column tiles per core (C/32 = 128 column tiles need >= 64 cores; a 12x10 grid gives 8 two-column cores)
     )
+    # the "extras" work split (`split="extras"`, kernels compiled with MHC_MAX_EXTRA): a two-column core projects only
+    # its first column; the second column's n stream tiles are projected as single "extra" tiles on single-column,
+    # non-leader cores (at most MAX_EXTRA per core; `plan_work_extras`). The h / norm phases keep both columns on the
+    # owner. Cost model in split_x / project passes: a column = its 4 tiles + a fixed part, an extra = 1 tile + the
+    # fixed part -> 12x10: the critical path 10 -> 7 (32 extras on 32 of the 112 single-column cores); 13x10 (no
+    # two-column cores) and 8x8 (every core two columns, no recipient) keep the column plan.
+    MAX_EXTRA = 2
+    COL_COST, EXTRA_COST = 5, 2
+    SINKHORN_MODES = ("llk", "fused")
+    SPLIT_MODES = ("cols", "extras")
     SEM_ARRIVE1, SEM_ARRIVE2, SEM_PRE, SEM_RS2 = 0, 1, 2, 3
     # kernel ABI (checked against the kernel sources by tests/custom_ops/test_mhc_pre_block_host.py):
     # reader compile-time args: 9 CB ids + n, gy, gx, Ct + 4 semaphore ids = 17, then the NoC y table (gy entries),
@@ -145,12 +155,21 @@ class MhcPreBlock:
         rms_eps: float,
         debug: bool = False,
         exact: bool = False,
+        sinkhorn: str = "llk",
+        split: str = "cols",
     ):
         """``fn [(2+n)*n, n*C]`` (bf16-exact values), ``consts`` the Sinkhorn constants ``[8,32,32]`` fp32 on
         device (``build_consts``), ``norm_weight [C]`` the sublayer's RMSNorm weight; ``norm_eps`` is the
         hyper-connection's projection eps, ``rms_eps`` the sublayer norm's. Builds device uploads: never call
-        inside a trace capture (the model builds the op in its eager warm-up step)."""
+        inside a trace capture (the model builds the op in its eager warm-up step).
+        ``sinkhorn``: ``"llk"`` (the mhc_split_sinkhorn tile sequence, one LLK op per CB hop) or ``"fused"`` (one dest
+        pass per normalisation, compile define MHC_SINKHORN_FUSED); ``split``: ``"cols"`` (column tiles only) or
+        ``"extras"`` (delegated stream tiles, define MHC_MAX_EXTRA; FPU projection only). Both change the compiled
+        program (its defines), neither its tensors or ABI; the defaults are today's program."""
+        assert sinkhorn in self.SINKHORN_MODES and split in self.SPLIT_MODES, (sinkhorn, split)
         self.device, self.n, self.C = device, n, C
+        self.sinkhorn = sinkhorn
+        self.split = split if not exact else "cols"  # the exact SFPU projection has no extras path
         self.device_id = int(device.id())
         self.nC = n * C
         self.Ct = C // TILE
@@ -204,6 +223,13 @@ class MhcPreBlock:
         ncores = self.gx * self.gy
         assert ncores * self.MAX_COLS >= self.Ct, f"grid {self.gx}x{self.gy} < {self.Ct} column tiles / {self.MAX_COLS}"
         self.work = self.plan_work(ncores, self.Ct, self.MAX_COLS)  # (count, first column tile) per core k = x*gy + y
+        # extras split: (count, c0, count_proj, [(stream, column), ...]) per core; max_extra = the kernels' define
+        self.work_ext = None
+        self.max_extra = 0
+        if self.split == "extras":
+            crit, plan = self.plan_work_extras(ncores, self.Ct, self.MAX_COLS, self.gy, self.MAX_EXTRA, n)
+            if any(ex for _, _, _, ex in plan):
+                self.work_ext, self.max_extra = plan, self.MAX_EXTRA
         # NoC coordinates of the logical grid rows / columns (translated coordinates: the same on every chip)
         self.noc_x = [device.worker_core_from_logical_core(ttnn.CoreCoord(x, 0)).x for x in range(self.gx)]
         self.noc_y = [device.worker_core_from_logical_core(ttnn.CoreCoord(0, y)).y for y in range(self.gy)]
@@ -227,12 +253,34 @@ class MhcPreBlock:
         return work
 
     @classmethod
-    def cb_plan(cls, n: int, gx: int, gy: int, frep: int) -> dict[str, tuple[int, object]]:
-        """CB name -> (tiles, dtype): the per-core circular buffers (every core allocates the whole plan)."""
+    def plan_work_extras(cls, ncores: int, Ct: int, max_cols: int, gy: int, max_extra: int, n: int):
+        """``plan_work`` plus the delegation of the two-column cores' second columns: ``(critical path, plan)`` with
+        ``plan[k] = (count, c0, count_proj, extras)`` -- ``count`` / ``c0`` as ``plan_work`` (the h / norm phases),
+        ``count_proj`` the columns core ``k`` projects itself, ``extras`` the ``(stream i, column c)`` tiles it
+        projects for others. Recipients: single-column cores that are neither a column leader (row 0: they sum their
+        column's partials next) nor the coordinator, from the end of the grid; ``delegate_units`` picks how many
+        two-column cores delegate (0 when it would not shorten the critical path)."""
+        work = cls.plan_work(ncores, Ct, max_cols)
+        counts = [c for c, _ in work]
+        eligible = [counts[k] == 1 and (k % gy) != 0 for k in range(ncores)]
+        crit, new_counts, extras = delegate_units(
+            counts, n, cls.COL_COST, cls.EXTRA_COST, max_extra, eligible, prefer_last=True
+        )
+        plan = []
+        for k, (count, c0) in enumerate(work):
+            ex = [(part, work[owner][1] + work[owner][0] - 1) for owner, part in extras[k]]
+            assert new_counts[k] in (count, count - 1) and (new_counts[k] == count or count == 2)
+            plan.append((count, c0, new_counts[k], ex))
+        return crit, plan
+
+    @classmethod
+    def cb_plan(cls, n: int, gx: int, gy: int, frep: int, max_extra: int = 0) -> dict[str, tuple[int, object]]:
+        """CB name -> (tiles, dtype): the per-core circular buffers (every core allocates the whole plan).
+        ``max_extra``: the extras split's per-core extra tiles (X / FN / PARTS grow by them)."""
         mc = cls.MAX_COLS
         return {
-            "X": (n * mc, ttnn.float32),
-            "FN": (n * mc * frep, ttnn.bfloat16),
+            "X": (n * mc + max_extra, ttnn.float32),
+            "FN": ((n * mc + max_extra) * frep, ttnn.bfloat16),
             "MASK": (1, ttnn.float32),
             "HI": (n, ttnn.bfloat16),
             "LO": (n, ttnn.bfloat16),
@@ -259,7 +307,7 @@ class MhcPreBlock:
             "HSQ": (2, ttnn.float32),
             "RS2OUT": (1, ttnn.float32),
             "OUT": (2, ttnn.bfloat16),
-            "PARTS": (mc, ttnn.float32),
+            "PARTS": (mc + (1 if max_extra else 0), ttnn.float32),
             "DBG": (3, ttnn.float32),
         }
 
@@ -337,10 +385,15 @@ class MhcPreBlock:
         post_addr: int,
         comb_addr: int,
         hn_addr: int,
+        count_proj: int | None = None,
+        extras: tuple = (),
+        max_extra: int = 0,
     ) -> tuple[list[int], list[int], list[int]]:
         """(reader, writer, compute) runtime args of logical core ``(xi, yi)``: buffer addresses, the work item, the
         leader / coordinator flags, the NoC coordinates of this column's leader (row 0) and of the coordinator
-        (0, 0), and this core's slot in their gather buffers (its logical row / column)."""
+        (0, 0), and this core's slot in their gather buffers (its logical row / column). With ``max_extra > 0`` (the
+        extras split) the reader gets ``[count_proj, n_extra, i0, c0, ...]`` (padded to ``max_extra`` pairs) and the
+        compute kernel ``[count_proj, n_extra]`` appended; without, the vectors are the pre-split ones."""
         leader = int(yi == 0)
         coord = int(xi == 0 and yi == 0)
         reader = [x_addr, fn_addr, consts_addr, w_addr, count, c0, leader, coord, noc_x[xi], mask_addr]
@@ -360,6 +413,15 @@ class MhcPreBlock:
             xi,
         ]
         compute = [count, leader, coord]
+        if max_extra:
+            assert len(extras) <= max_extra, (extras, max_extra)
+            cp = count if count_proj is None else int(count_proj)
+            tail = [cp, len(extras)]
+            for i, c in extras:
+                tail += [int(i), int(c)]
+            tail += [0, 0] * (max_extra - len(extras))
+            reader = reader + tail
+            compute = compute + [cp, len(extras)]
         return reader, writer, compute
 
     # ------------------------------------------------------------------ reference
@@ -414,8 +476,13 @@ class MhcPreBlock:
                 format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=CB[name], data_format=dtype, page_size=page)],
             )
 
-        plan = self.cb_plan(n, gx, gy, self.frep)
+        plan = self.cb_plan(n, gx, gy, self.frep, self.max_extra)
         cbs = [cb(name) for name in plan]
+        defines = []
+        if self.sinkhorn == "fused":
+            defines.append(("MHC_SINKHORN_FUSED", "1"))
+        if self.max_extra:
+            defines.append(("MHC_MAX_EXTRA", str(self.max_extra)))
         sems = [
             ttnn.SemaphoreDescriptor(s, ttnn.CoreType.WORKER, self.cores, 0)
             for s in (self.SEM_ARRIVE1, self.SEM_ARRIVE2, self.SEM_PRE, self.SEM_RS2)
@@ -457,9 +524,14 @@ class MhcPreBlock:
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for xi in range(gx):
             for yi in range(gy):
-                count, c0 = self.work[xi * gy + yi]
+                k = xi * gy + yi
+                count, c0 = self.work[k]
+                ext = {}
+                if self.work_ext is not None:
+                    _, _, count_proj, extras = self.work_ext[k]
+                    ext = dict(count_proj=count_proj, extras=tuple(extras), max_extra=self.max_extra)
                 r, w, c = self.runtime_args_for_core(
-                    xi=xi, yi=yi, count=count, c0=c0, noc_x=self.noc_x, noc_y=self.noc_y, **addrs
+                    xi=xi, yi=yi, count=count, c0=c0, noc_x=self.noc_x, noc_y=self.noc_y, **addrs, **ext
                 )
                 reader_rt[xi][yi] = r
                 writer_rt[xi][yi] = w
@@ -494,6 +566,7 @@ class MhcPreBlock:
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
+                defines=defines,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "writer_mhc_pre_block.cpp"),
@@ -501,6 +574,7 @@ class MhcPreBlock:
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
+                defines=defines,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "compute_mhc_pre_block.cpp"),
@@ -509,6 +583,7 @@ class MhcPreBlock:
                 runtime_args=compute_rt,
                 config=compute_cfg,
                 compiler_include_paths=[str(POST_KERNEL_DIR)],
+                defines=defines,
             ),
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)

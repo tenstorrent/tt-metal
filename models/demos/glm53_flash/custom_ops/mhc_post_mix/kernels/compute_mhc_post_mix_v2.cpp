@@ -15,6 +15,14 @@
 // packed, and the dest released WITHOUT clearing so the operands stay for the next stream. With ``collapse``
 // the n streams accumulate into one tile scaled by 1/n.
 // Dest slots: 0..n-1 = x_i, n = y, n+1 = comb tile of the current stream, n+2 = post, n+3 = out (n = 4 -> 8).
+//
+// MHC_MAX_EXTRA > 0 (compile define; op.py's "extras" work split): after its positions the core evaluates up to
+// MHC_MAX_EXTRA (position, output stream j) units of positions owned by other cores (runtime args [n_extra, p0, j0,
+// ...] after `count`): the same operands as a full position, one stream_mix, one output tile. Streams only (no
+// collapse, no HMODE: a split of their single output tile would need a cross-core sum).
+#ifndef MHC_MAX_EXTRA
+#define MHC_MAX_EXTRA 0
+#endif
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -47,6 +55,9 @@ static_assert(N % 2 == 0 && N <= 4, "the x8 expansion pairs coefficients and kee
 
 constexpr uint32_t D_Y = N, D_COMB = N + 1, D_POST = N + 2, D_OUT = N + 3;
 constexpr uint32_t COEF_TILES = HMODE ? 1 : N + 1;  // comb lane tiles of streams 0..N-1, then post (or just pre)
+constexpr uint32_t MAX_EXTRA = MHC_MAX_EXTRA;
+constexpr uint32_t EXTRA_BASE = 2;  // runtime args: [start, count, n_extra, p0, j0, p1, j1, ...]
+static_assert(MAX_EXTRA == 0 || (!COLLAPSE && !HMODE), "extras split the n output streams of a position");
 
 // the packer frees the dest for the math thread without zeroing it: the operand slots survive the pack
 FORCE_INLINE void release_keep_dest() { PACK((_llk_pack_dest_section_done_<DST_SYNC_MODE, DST_ACCUM_MODE, false>())); }
@@ -106,6 +117,100 @@ FORCE_INLINE void h_position() {
     cbx.pop_front(N);
 }
 
+// the coefficient tiles of token-tile r (released when the token-tile changes)
+FORCE_INLINE void coefficients_for(uint32_t r, uint32_t& cur_r) {
+    CircularBuffer cbcoef(CB_COEF);
+    if (r == cur_r) {
+        return;
+    }
+    if (cur_r != 0xFFFFFFFFu) {
+        cbcoef.pop_front(COEF_TILES);
+    }
+    if constexpr (EXPAND) {
+        expand_coefficients();
+    }
+    cbcoef.wait_front(COEF_TILES);
+    cur_r = r;
+}
+
+// the resident operands of a position: x_0..x_{N-1}, y and the post tile into the dest (one acquire)
+FORCE_INLINE void load_position_operands() {
+    CircularBuffer cbx(CB_X), cby(CB_Y);
+    cbx.wait_front(N);
+    cby.wait_front(1);
+    tile_regs_acquire();
+    copy_init(CB_X);
+    for (uint32_t i = 0; i < N; ++i) {
+        copy_tile(CB_X, i, i);
+    }
+    reconfig_data_format_srca(CB_X, CB_Y);
+    copy_init(CB_Y);
+    copy_tile(CB_Y, 0, D_Y);  // bf16 y widens on unpack (exact)
+    reconfig_data_format_srca(CB_Y, CB_COEF);
+    copy_init(CB_COEF);
+    copy_tile(CB_COEF, N, D_POST);
+    sfpu_bcast_col_init();
+}
+
+// a full position: every output stream j (or the collapsed mean)
+FORCE_INLINE void full_position() {
+    CircularBuffer cbx(CB_X), cby(CB_Y), cbo(CB_OUT);
+    load_position_operands();
+    for (uint32_t j = 0; j < N; ++j) {
+        if (j != 0 && !COLLAPSE) {
+            tile_regs_acquire();  // the previous stream was packed and released without clearing
+        }
+        copy_tile(CB_COEF, j, D_COMB);
+        const bool accumulate = COLLAPSE && j != 0;
+        const bool scale = COLLAPSE && j == N - 1;
+        MATH((_llk_math_eltwise_binary_sfpu_params_(
+            mhc_sfpu::stream_mix,
+            D_OUT,
+            D_COMB,
+            D_OUT,
+            VectorMode::None,
+            D_POST,
+            D_Y,
+            N,
+            j,
+            accumulate,
+            scale,
+            INV_N_BITS)));
+        if (COLLAPSE && j != N - 1) {
+            continue;
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        cbo.reserve_back(1);
+        pack_tile(D_OUT, CB_OUT);
+        cbo.push_back(1);
+        if (j == N - 1) {
+            tile_regs_release();
+        } else {
+            release_keep_dest();
+        }
+    }
+    cbx.pop_front(N);
+    cby.pop_front(1);
+}
+
+// an extra: output stream j of a position owned by another core (streams mode only)
+FORCE_INLINE void extra_position(uint32_t j) {
+    CircularBuffer cbx(CB_X), cby(CB_Y), cbo(CB_OUT);
+    load_position_operands();
+    copy_tile(CB_COEF, j, D_COMB);
+    MATH((_llk_math_eltwise_binary_sfpu_params_(
+        mhc_sfpu::stream_mix, D_OUT, D_COMB, D_OUT, VectorMode::None, D_POST, D_Y, N, j, false, false, INV_N_BITS)));
+    tile_regs_commit();
+    tile_regs_wait();
+    cbo.reserve_back(1);
+    pack_tile(D_OUT, CB_OUT);
+    cbo.push_back(1);
+    tile_regs_release();
+    cbx.pop_front(N);
+    cby.pop_front(1);
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -113,77 +218,25 @@ void kernel_main() {
     const uint32_t start_pos = get_arg_val<uint32_t>(0);
     const uint32_t num_pos = get_arg_val<uint32_t>(1);
 
-    CircularBuffer cbx(CB_X), cby(CB_Y), cbcoef(CB_COEF), cbo(CB_OUT);
+    CircularBuffer cbcoef(CB_COEF);
 
     uint32_t cur_r = 0xFFFFFFFFu;
     for (uint32_t p = start_pos; p < start_pos + num_pos; ++p) {
-        const uint32_t r = p / CT;
-        if (r != cur_r) {
-            if (cur_r != 0xFFFFFFFFu) {
-                cbcoef.pop_front(COEF_TILES);
-            }
-            if constexpr (EXPAND) {
-                expand_coefficients();
-            }
-            cbcoef.wait_front(COEF_TILES);
-            cur_r = r;
-        }
-
+        coefficients_for(p / CT, cur_r);
         if constexpr (HMODE) {
             h_position();
-            continue;
+        } else {
+            full_position();
         }
-        cbx.wait_front(N);
-        cby.wait_front(1);
-        tile_regs_acquire();
-        copy_init(CB_X);
-        for (uint32_t i = 0; i < N; ++i) {
-            copy_tile(CB_X, i, i);
+    }
+    if constexpr (MAX_EXTRA > 0) {
+        const uint32_t n_extra = get_arg_val<uint32_t>(EXTRA_BASE);
+        for (uint32_t e = 0; e < n_extra && e < MAX_EXTRA; ++e) {
+            const uint32_t p = get_arg_val<uint32_t>(EXTRA_BASE + 1 + 2 * e);
+            const uint32_t j = get_arg_val<uint32_t>(EXTRA_BASE + 2 + 2 * e);
+            coefficients_for(p / CT, cur_r);
+            extra_position(j);
         }
-        reconfig_data_format_srca(CB_X, CB_Y);
-        copy_init(CB_Y);
-        copy_tile(CB_Y, 0, D_Y);  // bf16 y widens on unpack (exact)
-        reconfig_data_format_srca(CB_Y, CB_COEF);
-        copy_init(CB_COEF);
-        copy_tile(CB_COEF, N, D_POST);
-        sfpu_bcast_col_init();
-
-        for (uint32_t j = 0; j < N; ++j) {
-            if (j != 0 && !COLLAPSE) {
-                tile_regs_acquire();  // the previous stream was packed and released without clearing
-            }
-            copy_tile(CB_COEF, j, D_COMB);
-            const bool accumulate = COLLAPSE && j != 0;
-            const bool scale = COLLAPSE && j == N - 1;
-            MATH((_llk_math_eltwise_binary_sfpu_params_(
-                mhc_sfpu::stream_mix,
-                D_OUT,
-                D_COMB,
-                D_OUT,
-                VectorMode::None,
-                D_POST,
-                D_Y,
-                N,
-                j,
-                accumulate,
-                scale,
-                INV_N_BITS)));
-            if (COLLAPSE && j != N - 1) {
-                continue;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            cbo.reserve_back(1);
-            pack_tile(D_OUT, CB_OUT);
-            cbo.push_back(1);
-            if (j == N - 1) {
-                tile_regs_release();
-            } else {
-                release_keep_dest();
-            }
-        }
-        cbx.pop_front(N);
-        cby.pop_front(1);
     }
     if (cur_r != 0xFFFFFFFFu) {
         cbcoef.pop_front(COEF_TILES);

@@ -28,6 +28,68 @@ KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
 NUM_CBS = 64  # unpack_to_dest_mode entries (>= the number of CBs the build knows)
 FP32_TILE_BYTES = TILE * TILE * 4
+# the "extras" work split (v2, streams mode): a core's work unit is a (token-tile, column-tile) position = n output
+# streams; when the positions do not divide over the grid (128 on a 12x10 grid: 8 cores take two), the heaviest cores
+# hand the n output streams of their last position to lightly loaded cores as (position, stream) "extras", each read
+# like a position but evaluated and written for one stream. The define MHC_MAX_EXTRA bounds a core's extras (the runtime
+# args are padded to it: one program per split mode, whatever the plan); the cost model deals them (`delegate_units`).
+POST_MAX_EXTRA = 4
+POST_UNIT_COST = 6  # one position: n = 4 stream passes + ~2 passes' worth of reads / writes / dest loads
+POST_EXTRA_COST = 3  # one extra: one stream pass + the same reads / loads
+SPLIT_MODES = ("tile", "extras")
+
+
+def delegate_units(
+    counts: list[int],
+    n_parts: int,
+    unit_cost: int,
+    extra_cost: int,
+    max_extra: int,
+    eligible: list[bool],
+    *,
+    prefer_last: bool = True,
+):
+    """Rebalance a per-core unit count: the cores with the most units ("donors") hand the ``n_parts`` parts of their
+    LAST unit to eligible non-donor cores (at most ``max_extra`` parts per recipient, the cheapest recipient first,
+    ties to the last / first core by ``prefer_last``). The number of donating cores ``d`` is chosen to minimise the
+    critical path ``max_k(count_k * unit_cost + extras_k * extra_cost)`` (ties: the fewest donors), so a plan that
+    does not help (prefill-sized unit counts, a grid of all-donor cores) stays whole.
+    Returns ``(critical_path, new_counts, extras)``: ``extras[k]`` = list of ``(donor core, part)``; ``new_counts[k]``
+    is ``counts[k] - 1`` for a donor. Device-free; the pre-block and post-mix planners share it."""
+    ncores = len(counts)
+    assert len(eligible) == ncores and n_parts >= 1 and max_extra >= 0
+    base = [c * unit_cost for c in counts]
+    best = (max(base) if base else 0, list(counts), [[] for _ in range(ncores)])
+    if ncores == 0 or max(counts) == 0 or max_extra == 0:
+        return best
+    top = max(counts)
+    donors = [k for k in range(ncores) if counts[k] == top]
+    donor_set = set(donors)
+    for d in range(1, len(donors) + 1):
+        cost = list(base)
+        new_counts = list(counts)
+        extras = [[] for _ in range(ncores)]
+        for owner in donors[:d]:
+            cost[owner] -= unit_cost
+            new_counts[owner] -= 1
+        ok = True
+        for owner in donors[:d]:
+            for part in range(n_parts):
+                cands = [k for k in range(ncores) if eligible[k] and k not in donor_set and len(extras[k]) < max_extra]
+                if not cands:
+                    ok = False
+                    break
+                k = min(cands, key=(lambda k: (cost[k], -k)) if prefer_last else (lambda k: (cost[k], k)))
+                extras[k].append((owner, part))
+                cost[k] += extra_cost
+            if not ok:
+                break
+        if not ok:
+            break
+        crit = max(cost)
+        if crit < best[0]:
+            best = (crit, new_counts, extras)
+    return best
 
 
 def f32_bits(v: float) -> int:
@@ -45,6 +107,53 @@ def split_work(total: int, grid) -> list[tuple[ttnn.CoreCoord, int, int]]:
         out.append((ttnn.CoreCoord(i // grid.y, i % grid.y), start, count))
         start += count
     return out
+
+
+_PLAN_CACHE: dict[tuple, tuple] = {}
+
+
+def plan_positions(total: int, grid, n: int, split: str = "tile", allow_extras: bool = True):
+    """The v2 work plan: ``(core, start, count, extras)`` per core, ``extras`` = list of ``(position, stream j)``.
+    ``split="tile"``: ``split_work`` as is; ``"extras"``: ``delegate_units`` over it (``POST_*`` cost model) when
+    ``allow_extras`` (streams mode) -- a position's n streams go to n cores at most ``POST_MAX_EXTRA`` each, from the
+    last cores of the grid. Returns the plan and its critical path in cost units (``(plan, crit)``). Cached per
+    ``(total, grid, n, split, allow_extras)``: the plan is a pure function of the static shape, computed once per shape
+    on the host (the eager warm-up), never inside a captured call."""
+    assert split in SPLIT_MODES, split
+    key = (int(total), int(grid.x), int(grid.y), int(n), split, bool(allow_extras))
+    hit = _PLAN_CACHE.get(key)
+    if hit is not None:
+        return hit
+    plan = _plan_positions(total, grid, n, split, allow_extras)
+    _PLAN_CACHE[key] = plan
+    return plan
+
+
+def _plan_positions(total: int, grid, n: int, split: str, allow_extras: bool):
+    work = split_work(total, grid)
+    counts = [w[2] for w in work]
+    if split == "tile" or not allow_extras or not work:
+        return [(core, start, count, []) for core, start, count in work], (
+            max(counts) if counts else 0
+        ) * POST_UNIT_COST
+    crit, new_counts, extras = delegate_units(
+        counts, n, POST_UNIT_COST, POST_EXTRA_COST, POST_MAX_EXTRA, [True] * len(work), prefer_last=True
+    )
+    plan = []
+    for k, (core, start, count) in enumerate(work):
+        ex = [(work[owner][1] + work[owner][2] - 1, part) for owner, part in extras[k]]
+        plan.append((core, start, new_counts[k], ex))
+    return plan, crit
+
+
+def extra_args(extras: list[tuple[int, int]], max_extra: int) -> list[int]:
+    """``[n_extra, p0, j0, p1, j1, ...]`` padded to ``max_extra`` pairs (a fixed runtime-arg count per program)."""
+    assert len(extras) <= max_extra, (len(extras), max_extra)
+    flat = [len(extras)]
+    for p, j in extras:
+        flat += [int(p), int(j)]
+    flat += [0, 0] * (max_extra - len(extras))
+    return flat
 
 
 def core_range_set(cores: list[ttnn.CoreCoord], grid) -> ttnn.CoreRangeSet:
@@ -77,10 +186,16 @@ class MhcPostMix:
     # the column sets one SFPU slot load covers, see kernels/mhc_sfpu_x8.h); OUT as above.
     CB_COEF = 3
 
-    def __init__(self, n: int = 4, math_fidelity=ttnn.MathFidelity.HiFi4, version: int = 1):
+    def __init__(self, n: int = 4, math_fidelity=ttnn.MathFidelity.HiFi4, version: int = 1, split: str = "tile"):
+        """``split``: ``"tile"`` (one work unit per (token-tile, column-tile) position, today's deal) or ``"extras"``
+        (v2 streams mode: the heaviest cores' last positions split by output stream over lightly loaded cores,
+        ``plan_positions``; the kernels are compiled with ``MHC_MAX_EXTRA`` and take the extra units after their
+        positions). ``GLM53_MHC_POST_SPLIT`` in tt/mhc.py."""
+        assert split in SPLIT_MODES, split
         self.n = n
         self.fidelity = math_fidelity
         self.version = version
+        self.split = split
 
     # ------------------------------------------------------------------ reference
     @staticmethod
@@ -262,8 +377,11 @@ class MhcPostMix:
         out_tiles = 1 if collapse else n
         y_bytes = FP32_TILE_BYTES if y.dtype == ttnn.float32 else FP32_TILE_BYTES // 2
         grid = x.device().compute_with_storage_grid_size()
-        work = split_work(R * Ct, grid)
+        # the extras split serves the streams mode only (a collapsed / h-mode position has one output tile)
+        use_extras = self.split == "extras" and not collapse and not hmode
+        work, _crit = plan_positions(R * Ct, grid, n, self.split, allow_extras=use_extras)
         cores = core_range_set([w[0] for w in work], grid)
+        defines = [("MHC_MAX_EXTRA", str(POST_MAX_EXTRA))] if use_extras else []
 
         def cb(index, tiles, dtype=ttnn.float32, page=FP32_TILE_BYTES):
             return ttnn.CBDescriptor(
@@ -299,7 +417,8 @@ class MhcPostMix:
         ]
 
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for core, start, count in work:
+        for core, start, count, extras in work:
+            tail = extra_args(extras, POST_MAX_EXTRA) if use_extras else []
             reader_rt[core.x][core.y] = [
                 x.buffer_address(),
                 y.buffer_address(),
@@ -307,9 +426,9 @@ class MhcPostMix:
                 comb.buffer_address(),
                 start,
                 count,
-            ]
-            writer_rt[core.x][core.y] = [out.buffer_address(), start, count]
-            compute_rt[core.x][core.y] = [start, count]
+            ] + tail
+            writer_rt[core.x][core.y] = [out.buffer_address(), start, count] + tail
+            compute_rt[core.x][core.y] = [start, count] + tail
 
         # fp32 operands unpack straight into the fp32 dest (SrcA holds 19 bits); dst_full_sync_en: the whole
         # 8-slot fp32 dest per acquire, kept resident across the per-stream packs
@@ -330,6 +449,7 @@ class MhcPostMix:
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
                 config=ttnn.ReaderConfigDescriptor(),
+                defines=defines,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "writer_mhc_post_mix_v2.cpp"),
@@ -337,6 +457,7 @@ class MhcPostMix:
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
+                defines=defines,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "compute_mhc_post_mix_v2.cpp"),
@@ -345,6 +466,7 @@ class MhcPostMix:
                 runtime_args=compute_rt,
                 config=compute_cfg,
                 compiler_include_paths=[str(KERNEL_DIR)],
+                defines=defines,
             ),
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
