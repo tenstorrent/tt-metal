@@ -46,6 +46,45 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
 
+_KDA_L1_NAMES = {
+    "prep": ("recurrence", "KDA_PREPARATION_L1_BYTES_PER_CORE"),
+    "qkv": ("kda", "KDA_QKV_L1_BYTES_PER_CORE"),
+    "decay": ("kda", "KDA_DECAY_L1_BYTES_PER_CORE"),
+    "norm": ("kda", "KDA_NORM_OUTPUT_L1_BYTES_PER_CORE"),
+    "partial": ("kda", "KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE"),
+}
+
+
+class _kda_l1_budgets:
+    """G53F-0220: set the d_p KDA modules' per-core L1 budget constants from ``GLM53_KDA_L1_KB`` ("name=KiB,...") for the
+    duration of one ttKDA construction (its placement decisions read them), then restore them."""
+
+    def __init__(self, knob: str):
+        self.knob, self.saved = knob, []
+
+    def __enter__(self):
+        if not self.knob:
+            return self
+        import models.demos.deepseek_v3_d_p.tt.kda.kda as kda_mod
+        import models.demos.deepseek_v3_d_p.tt.kda.recurrence as rec_mod
+
+        mods = {"kda": kda_mod, "recurrence": rec_mod}
+        for item in self.knob.split(","):
+            name, _, kib = item.strip().partition("=")
+            if not name:
+                continue
+            mod_name, const = _KDA_L1_NAMES[name]
+            mod = mods[mod_name]
+            self.saved.append((mod, const, getattr(mod, const)))
+            setattr(mod, const, int(kib) * 1024)
+        return self
+
+    def __exit__(self, *exc):
+        for mod, const, old in reversed(self.saved):
+            setattr(mod, const, old)
+        return False
+
+
 L2_NORM_EPS = 1e-6  # FLA l2norm: x / sqrt(sum(x^2) + 1e-6)
 # decode path: "composite" (GLM53_KDA_FUSED=0) | "block" (GLM53_KDA_FUSED=1: one kda_decode program for the whole block)
 _FUSED_MODES = {"0": "composite", "1": "block", "composite": "composite", "block": "block"}
@@ -359,7 +398,13 @@ class TtKDA(LightweightModule):
         """ttKDA instance for one physical (32-aligned) chunk length; weights are shared."""
         if active_seq_len % ttnn.TILE_SIZE:
             raise ValueError(f"active_seq_len must be a multiple of {ttnn.TILE_SIZE}, got {active_seq_len}")
-        layer = self._prefill_layers.get(active_seq_len)
+        # tt-blaze G53F-0220: GLM53_KDA_L1_KB="prep=600,qkv=256,decay=96,norm=..,partial=.." raises ttKDA's per-core L1
+        # budgets (d_p kda/config.py: 320 / 112 / 48 KiB ...) for the instances built under it; at 16 K chunks (2048 rows
+        # per device, 16 heads) the 546 KiB chunk terms, the conv Q/K/V and the decay gate fall back to DRAM. Placement
+        # only (the same kernels and arithmetic). Read at build time; the knob is part of the cache key.
+        l1_knob = os.environ.get("GLM53_KDA_L1_KB", "")
+        key = (active_seq_len, l1_knob) if l1_knob else active_seq_len
+        layer = self._prefill_layers.get(key)
         if layer is None:
             kw = {}
             if self.mesh.rows > 1:
@@ -381,19 +426,20 @@ class TtKDA(LightweightModule):
                 from models.common.modules.tt_ccl import get_tt_ccl
 
                 tt_ccl = get_tt_ccl(self.device)  # ttKDA's TP reduce-scatter semaphores (one set per mesh)
-            layer = ttKDA(
-                self.device,
-                self.kcfg,
-                None,
-                layer_idx=self.layer_idx,
-                weights=self.prefill_weights,
-                tt_ccl=tt_ccl,
-                sp_axis=0,
-                tp_axis=1,
-                program_config=program_config,
-                active_seq_len=active_seq_len,
-            )
-            self._prefill_layers[active_seq_len] = layer
+            with _kda_l1_budgets(l1_knob):
+                layer = ttKDA(
+                    self.device,
+                    self.kcfg,
+                    None,
+                    layer_idx=self.layer_idx,
+                    weights=self.prefill_weights,
+                    tt_ccl=tt_ccl,
+                    sp_axis=0,
+                    tp_axis=1,
+                    program_config=program_config,
+                    active_seq_len=active_seq_len,
+                )
+            self._prefill_layers[key] = layer
         return layer
 
     def prefill_forward(
