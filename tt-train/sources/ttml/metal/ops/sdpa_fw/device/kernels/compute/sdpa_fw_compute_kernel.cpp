@@ -338,7 +338,19 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
         cb_push_back(alias_cb_cur_max, rows);
         cb_wait_front(alias_cb_cur_max, rows);
 
-        // (2) P = exp(scale * (S - max)) written over S (pop + reserve lands on the same slots), plus
+        // (2) alpha = exp(scale * (old max - new max)): the running sum and output of the previous steps
+        //     were computed against the old max, so they get scaled by alpha before this step's are added.
+        if (!first_step) {
+            cb_reserve_back(cb_exp_max_diff, rows);
+            for (uint32_t r = 0; r < rows; ++r) {
+                update_exp_max_diff<scaler_bits, scaler_bf16_bits>(
+                    alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, r);
+            }
+            cb_push_back(cb_exp_max_diff, rows);
+            cb_pop_front(alias_cb_prev_max, rows);
+        }
+
+        // (3) P = exp(scale * (S - max)) written over S (pop + reserve lands on the same slots), plus
         //     each row's sum of P
         cb_pop_front(cb_attention_weights, score_tiles);
         cb_reserve_back(cb_attention_weights, score_tiles);
@@ -350,28 +362,26 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
         cb_push_back(cb_attention_weights, score_tiles);
         cb_push_back(alias_cb_cur_sum_exp, rows);
 
-        // (3) O_step = P @ V
+        // (4) O = O_prev * alpha + P @ V, in one DST pass per output block
         matmul_qk_by_v<Sk_chunk_t, rows>(
-            vWt, pv_block_h, pv_block_w, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
+            vWt,
+            pv_block_h,
+            pv_block_w,
+            cb_attention_weights,
+            cb_value,
+            alias_cb_prev_mm_out,
+            cb_exp_max_diff,
+            alias_cb_cur_mm_out,
+            /* rescale */ !first_step);
 
         cb_pop_front(cb_attention_weights, score_tiles);
         cb_pop_front(cb_value, v_tiles);
 
-        // (4) fold into the running sum and output: both from previous steps were computed against the
-        //     old max, so scale them by exp(scale * (old max - new max)) before adding this step's.
+        // (5) sum = sum_prev * alpha + sum_step, in place (CB holds exactly rows tiles, pop + reserve lands
+        //     on the same slots)
         if (!first_step) {
-            cb_reserve_back(cb_exp_max_diff, rows);
-            for (uint32_t r = 0; r < rows; ++r) {
-                update_exp_max_diff<scaler_bits, scaler_bf16_bits>(
-                    alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, r);
-            }
-            cb_push_back(cb_exp_max_diff, rows);
-            cb_pop_front(alias_cb_prev_max, rows);
-
-            cb_wait_front(cb_exp_max_diff, rows);
             cb_wait_front(alias_cb_prev_sum_exp, rows);
             cb_wait_front(alias_cb_cur_sum_exp, rows);
-            // in place (CB holds exactly rows tiles, pop + reserve lands on the same slots)
             cb_pop_front(alias_cb_cur_sum_exp, rows);
             cb_reserve_back(alias_cb_cur_sum_exp, rows);
             for (uint32_t r = 0; r < rows; ++r) {
@@ -379,8 +389,6 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
             }
             cb_push_back(alias_cb_cur_sum_exp, rows);
             cb_pop_front(alias_cb_prev_sum_exp, rows);
-
-            update_cur_mm_out<rows>(vWt, block_size, alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
 
             cb_pop_front(cb_exp_max_diff, rows);
             cb_pop_front(alias_cb_prev_mm_out, out_tiles);
