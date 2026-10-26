@@ -252,50 +252,14 @@ def _reduce_set(value, data_axes) -> set:
     return {axis for axis in data_axes if not is_sharded_on_axis(value, axis)}
 
 
-def _links_per_axis(mesh) -> dict:
-    """Ethernet links the collectives use on each axis of ``mesh``, as the fabric control plane reports them."""
-    device = _device()
-    return {axis: int(ttnn.get_num_links(device, axis)) for axis in range(len(tuple(mesh.shape)))}
-
-
 def _assert_mean_over_axis(before: list, after: list, mesh_shape, axis: int, what: str) -> None:
-    """``after`` holds, on every device, the mean of ``before`` over mesh axis ``axis`` (bf16 sum then exact scale).
-
-    On a mismatch the message names ``what`` and, per device in mesh row-major order, how many elements are off and
-    whether that device's ``before`` equals the first device's of its group along the other axes (identical copies
-    there mean the reduction, not the pairing, is what went wrong)."""
+    """``after`` holds, on every device, the mean of ``before`` over mesh axis ``axis`` (bf16 sum then exact scale)."""
     shape = tuple(mesh_shape)
     b = np.stack(before).reshape(shape + before[0].shape)
     a = np.stack(after).reshape(shape + after[0].shape)
     expected = np.broadcast_to(b.mean(axis=axis, keepdims=True), b.shape)
-    off = ~np.isclose(a, expected, rtol=2e-2, atol=1e-4)
-    per_device = {coord: int(off[coord].sum()) for coord in np.ndindex(shape) if off[coord].any()}
-    same_before = {
-        coord: bool(np.array_equal(b[coord], b[tuple(c if i == axis else 0 for i, c in enumerate(coord))]))
-        for coord in np.ndindex(shape)
-    }
-    if per_device:
-        # Printed before the assertion so it survives a crash later in the session (a failed test's traceback keeps
-        # device tensors alive, and releasing the MetalEnv over them is a known segfault, #57798).
-        tiles = {}
-        for coord in per_device:
-            o = off[coord].reshape(off[coord].shape[-2], off[coord].shape[-1])
-            if o.shape[0] % 32 == 0 and o.shape[1] % 32 == 0:
-                grid = o.reshape(o.shape[0] // 32, 32, o.shape[1] // 32, 32).any(axis=(1, 3))
-                tiles[coord] = [tuple(int(v) for v in ij) for ij in np.argwhere(grid)]
-        print(
-            f"\n[mean-over-axis] {what}: axis {axis}, elements off per device {per_device}, tiles off {tiles}, "
-            f"before equal to the first device of its group {same_before}, "
-            f"max abs diff {float(np.abs(a - expected).max()):.4g}",
-            flush=True,
-        )
     np.testing.assert_allclose(
-        a,
-        expected,
-        rtol=2e-2,
-        atol=1e-4,
-        err_msg=f"{what}: after vs mean of before over mesh axis {axis}; elements off per device {per_device}; "
-        f"before equal to the first device of its group {same_before}",
+        a, expected, rtol=2e-2, atol=1e-4, err_msg=f"{what}: after vs mean of before over mesh axis {axis}"
     )
 
 
@@ -498,15 +462,12 @@ class TestDPxTP:
 
         ttml.core.distributed.synchronize_gradients(params, [dp])
 
-        links = _links_per_axis(dp_tp_mesh)
         for name, t in params.items():
             grad = t.get_grad()
             assert not is_sharded_on_axis(grad, dp), name
             if name.endswith(TP_SHARDED_SUFFIXES):
                 assert is_sharded_on_axis(grad, tp), f"{name}: the TP shard did not survive the dp all_reduce"
-            _assert_mean_over_axis(
-                before[name], _shards(grad), dp_tp_mesh.shape, dp, f"{name} (links per axis {links})"
-            )
+            _assert_mean_over_axis(before[name], _shards(grad), dp_tp_mesh.shape, dp, name)
 
 
 # --- HSDP on [2, 2] ("dp", "fsdp") ------------------------------------------------------------------------------
@@ -548,12 +509,11 @@ class TestHSDP:
 
         ttml.core.distributed.synchronize_gradients(params, [dp])
 
-        links = _links_per_axis(hsdp_mesh)
         for name, t in params.items():
             grad = t.get_grad()
             assert not is_sharded_on_axis(grad, dp), name
             assert is_sharded_on_axis(grad, fsdp), name
-            _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp, f"{name} (links per axis {links})")
+            _assert_mean_over_axis(before[name], _shards(grad), hsdp_mesh.shape, dp, name)
 
         head = params["Model/head/weight"]
         reduced = ttnn.multiply(ttml.core.distributed.all_reduce(head.get_grad(), cluster_axis=fsdp), 1.0 / F)
