@@ -642,6 +642,27 @@ private:
         return InterleavedAddrGen<IsDram>::get_noc_addr(id, offset, noc);
     }
 
+    // A page's location split as get_noc_addr computes it: its bank, and its address in that bank without the bank's
+    // offset. A walk over consecutive pages advances these with an add and a wrap instead of a divide per page
+    // (tensor_accessor::PagesAddressIteratorInterleaved).
+    FORCE_INLINE
+    void transfer_page_location(const uint32_t id, uint32_t& bank, uint32_t& bank_row_addr) const {
+        const uint32_t row = interleaved_addr_gen::get_bank_offset_index<IsDram>(id);
+        bank = interleaved_addr_gen::get_bank_index<IsDram>(id, row);
+        bank_row_addr = row * InterleavedAddrGen<IsDram>::aligned_page_size + this->bank_base_address;
+    }
+
+    // get_noc_addr(id, 0, noc) of the page transfer_page_location placed at (bank, bank_row_addr).
+    FORCE_INLINE
+    std::uint64_t transfer_bank_noc_addr(const uint32_t bank, const uint32_t bank_row_addr, uint8_t noc) const {
+        return noc_address_backend::bank_address<IsDram>(
+            bank, bank_row_addr + interleaved_addr_gen::get_bank_offset<IsDram>(bank), noc);
+    }
+
+    // Bytes between consecutive pages of one bank.
+    FORCE_INLINE
+    uint32_t transfer_bank_page_stride() const { return InterleavedAddrGen<IsDram>::aligned_page_size; }
+
     friend struct tensor_accessor::detail::TransferAccess;
 };
 #endif
