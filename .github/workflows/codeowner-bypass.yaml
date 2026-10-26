@@ -1,31 +1,48 @@
 name: CodeOwner Bypass
 
-# Two PR-comment commands:
+# Lets a PR skip code-owner review without the infra team owning the merge.
 #
 #   /codeowners bypass  A member of @tenstorrent/codeowner-bypass blesses the PR.
 #                       The only effect is the `codeowner-bypass` label.
-#   /enqueue            The PR author (or a bypass-team member) puts a blessed PR
-#                       into the merge queue. The enqueue is made with the
-#                       CODEOWNERS_GROUP_ANALYSIS_PAT identity, which is a bypass
-#                       actor on the `main-codeowner-bypass` ruleset, so code-owner
-#                       review is skipped. Required checks and the queue still apply.
 #
-# The label alone is not proof: anyone with write access can add a label by hand.
-# `/enqueue` therefore requires that the most recent `labeled` event for the label
-# was made by the bot identity. If a PR is evicted from the queue, comment
-# `/enqueue` again; the label stays.
+# The developer then just clicks "Merge when ready" like on any other PR. When ALL
+# of the following hold, this workflow puts the PR in the merge queue as the bot
+# (CODEOWNERS_GROUP_ANALYSIS_PAT), which is a bypass actor on the
+# `main-codeowner-bypass` ruleset, so code-owner review is skipped:
 #
-# Triggered by issue_comment, which always runs the workflow from the default
-# branch. PR code is never checked out.
+#   1. the PR carries `codeowner-bypass`, and the latest `labeled` event for it was
+#      made by the bot (a label added by hand by someone with write access doesn't count)
+#   2. auto-merge ("Merge when ready") is enabled on the PR
+#   3. every status check the ruleset requires is green on the PR's head commit
+#
+# The same idempotent check runs from every event that can complete the condition,
+# and whichever fires last acts: auto-merge enabled, the label applied, or a workflow
+# that produces a required check finishing. No polling. If a PR is evicted from the
+# queue GitHub disables auto-merge, so the developer clicks "Merge when ready" again,
+# exactly as on a regular PR.
+#
+# Triggers run from the default branch (issue_comment, pull_request_target,
+# workflow_run). PR code is never checked out.
 
 on:
   issue_comment:
     types: [created]
+  pull_request_target:
+    types: [auto_merge_enabled, labeled]
+  workflow_run:
+    # Workflows that produce the required checks (see the main ruleset). Keep in sync.
+    workflows:
+      - PR Gate
+      - Merge Gate
+      - "[post-commit] all - Static checks, linters etc."
+    types: [completed]
 
 permissions:
   contents: read
   pull-requests: write
   issues: write
+  checks: read
+  statuses: read
 
 env:
   BYPASS_LABEL: codeowner-bypass
@@ -37,6 +54,7 @@ env:
 jobs:
   bless:
     if: >-
+      github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       startsWith(github.event.comment.body, '/codeowner')
     runs-on: ubuntu-slim
@@ -81,88 +99,117 @@ jobs:
           fi
 
           gh label create "$BYPASS_LABEL" --color B60205 \
-            --description "Blessed by the codeowner-bypass team; the author may /enqueue" 2>/dev/null || true
+            --description "Blessed by the codeowner-bypass team; Merge when ready will enqueue it" 2>/dev/null || true
           # Re-adding a label that is already present records no new `labeled`
-          # event, so drop it first: /enqueue checks that the latest one is ours.
+          # event, so drop it first: the enqueue job checks that the latest one is ours.
           gh api -X DELETE "repos/$GH_REPO/issues/$PR_NUMBER/labels/$BYPASS_LABEL" > /dev/null 2>&1 || true
           gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/labels" -f "labels[]=$BYPASS_LABEL" > /dev/null
 
-          reply "✅ Blessed for code-owner bypass by @$COMMENT_AUTHOR. The PR author can now comment \`/enqueue\` to put it in the merge queue (comment it again if the PR is evicted). Required checks and the merge queue still apply."
+          reply "✅ Blessed for code-owner bypass by @$COMMENT_AUTHOR. Click **Merge when ready**: once auto-merge is on and all required checks are green, the bot enqueues the PR (click it again if the PR is evicted). Required checks and the merge queue still apply."
 
   enqueue:
     if: >-
-      github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/enqueue')
+      github.event_name == 'pull_request_target' && github.event.label.name == 'codeowner-bypass' ||
+      github.event_name == 'pull_request_target' && github.event.action == 'auto_merge_enabled' ||
+      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-slim
     concurrency:
-      group: codeowner-bypass-${{ github.event.issue.number }}
+      group: codeowner-bypass-enqueue-${{ github.event.pull_request.number || github.event.workflow_run.head_sha }}
       cancel-in-progress: false
     steps:
-      - name: Enqueue a blessed PR
+      - name: Enqueue a blessed PR once everything is satisfied
         env:
-          COMMENT_BODY: ${{ github.event.comment.body }}
-          COMMENT_ID: ${{ github.event.comment.id }}
-          COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
-          PR_NUMBER: ${{ github.event.issue.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
 
-          if ! printf '%s\n' "$COMMENT_BODY" | grep -Eq '^/enqueue[[:space:]]*$'; then
-            echo "Not an /enqueue command; nothing to do."
-            exit 0
+          # Not a failure: just not time to enqueue yet.
+          skip() { echo "Skipping: $1"; exit 0; }
+
+          # --- Which PR? -------------------------------------------------------
+          PR_NUMBER="${EVENT_PR_NUMBER:-${RUN_PR_NUMBER:-}}"
+          if [ -z "$PR_NUMBER" ] && [ -n "$RUN_HEAD_SHA" ]; then
+            # workflow_run leaves pull_requests empty for fork PRs; look the PR up by SHA.
+            PR_NUMBER=$(gh api "repos/$GH_REPO/commits/$RUN_HEAD_SHA/pulls" \
+              --jq '[.[] | select(.state == "open")] | first | .number // empty')
+          fi
+          [ -n "$PR_NUMBER" ] || skip "no open PR for this event"
+
+          # --- Cheap checks first: PR state, auto-merge, label -----------------
+          PR=$(gh api graphql -f query='
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  id state isDraft headRefOid baseRefName isInMergeQueue
+                  autoMergeRequest { enabledAt }
+                  labels(first: 100) { nodes { name } }
+                }
+              }
+            }' -f owner="${GH_REPO%%/*}" -f name="${GH_REPO##*/}" -F number="$PR_NUMBER" \
+            --jq .data.repository.pullRequest)
+
+          [ "$(jq -r .state <<<"$PR")" = "OPEN" ] || skip "PR #$PR_NUMBER is not open"
+          [ "$(jq -r .isDraft <<<"$PR")" = "false" ] || skip "PR #$PR_NUMBER is a draft"
+          [ "$(jq -r .isInMergeQueue <<<"$PR")" = "false" ] || skip "PR #$PR_NUMBER is already in the merge queue"
+          [ "$(jq -r '.autoMergeRequest != null' <<<"$PR")" = "true" ] || skip "auto-merge is not enabled on PR #$PR_NUMBER"
+          jq -e --arg l "$BYPASS_LABEL" '[.labels.nodes[].name] | index($l) != null' <<<"$PR" > /dev/null \
+            || skip "PR #$PR_NUMBER has no $BYPASS_LABEL label"
+
+          HEAD_SHA=$(jq -r .headRefOid <<<"$PR")
+          BASE_REF=$(jq -r .baseRefName <<<"$PR")
+          PR_NODE_ID=$(jq -r .id <<<"$PR")
+          # A finished run for an older commit says nothing about the current head.
+          if [ -n "$RUN_HEAD_SHA" ] && [ "$RUN_HEAD_SHA" != "$HEAD_SHA" ]; then
+            skip "workflow run is for $RUN_HEAD_SHA, PR head is $HEAD_SHA"
           fi
 
-          reply() {
-            gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" -f body="$1" > /dev/null
-          }
-
-          gh api -X POST "repos/$GH_REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes > /dev/null || true
-
-          PR=$(gh api "repos/$GH_REPO/pulls/$PR_NUMBER")
-          PR_STATE=$(jq -r .state <<<"$PR")
-          PR_DRAFT=$(jq -r .draft <<<"$PR")
-          PR_AUTHOR=$(jq -r .user.login <<<"$PR")
-          PR_NODE_ID=$(jq -r .node_id <<<"$PR")
-
-          if [ "$PR_STATE" != "open" ] || [ "$PR_DRAFT" = "true" ]; then
-            reply "❌ \`/enqueue\`: PR must be open and not a draft."
-            exit 0
-          fi
-
-          # Who may enqueue: the PR author, or a bypass-team member.
-          if [ "$COMMENT_AUTHOR" != "$PR_AUTHOR" ]; then
-            STATE=$(gh api "orgs/$ORG/teams/$BYPASS_TEAM/memberships/$COMMENT_AUTHOR" --jq .state 2>/dev/null || echo none)
-            if [ "$STATE" != "active" ]; then
-              reply "❌ @$COMMENT_AUTHOR: only the PR author or a member of @$ORG/$BYPASS_TEAM can \`/enqueue\` this PR."
-              exit 0
-            fi
-          fi
-
-          # The label must be present...
-          HAS_LABEL=$(jq -r --arg l "$BYPASS_LABEL" '[.labels[]?.name] | index($l) != null' <<<"$(gh api "repos/$GH_REPO/issues/$PR_NUMBER")")
-          # ...and the most recent application of it must have been made by the bot,
-          # not by someone with write access adding the label by hand.
+          # The latest application of the label must be the bot's, not a hand-added one.
           BOT_LOGIN=$(gh api user --jq .login)
           LABELER=$(gh api --paginate "repos/$GH_REPO/issues/$PR_NUMBER/timeline" \
             | jq -rs --arg l "$BYPASS_LABEL" \
                 '[.[][] | select(.event == "labeled" and .label.name == $l)] | last | .actor.login // ""')
+          [ "$LABELER" = "$BOT_LOGIN" ] || skip "$BYPASS_LABEL was last applied by '$LABELER', not the bot"
 
-          if [ "$HAS_LABEL" != "true" ] || [ "$LABELER" != "$BOT_LOGIN" ]; then
-            echo "has_label=$HAS_LABEL labeler=$LABELER bot=$BOT_LOGIN"
-            reply "❌ \`/enqueue\`: this PR has not been blessed for code-owner bypass. A member of @$ORG/$BYPASS_TEAM must comment \`/codeowners bypass\` first."
-            exit 0
+          # --- Every required check must be green on the head commit -----------
+          # PR Gate Status is not an aggregate of everything required, so read the
+          # list from the ruleset and verify each context.
+          REQUIRED=$(gh api "repos/$GH_REPO/rules/branches/$BASE_REF" \
+            --jq '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | unique | .[]')
+          [ -n "$REQUIRED" ] || { echo "::error::could not read required status checks for $BASE_REF"; exit 1; }
+
+          # Newest check run per name (rerun = higher id), plus legacy commit statuses.
+          CHECKS=$(gh api --paginate "repos/$GH_REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
+            --jq '.check_runs[] | {name, id, status, conclusion}' | jq -s \
+            'group_by(.name) | map(max_by(.id) | {key: .name, value: (if .status == "completed" then .conclusion else "pending" end)}) | from_entries')
+          STATUSES=$(gh api "repos/$GH_REPO/commits/$HEAD_SHA/status?per_page=100" \
+            --jq '[.statuses[] | {key: .context, value: (if .state == "success" then "success" else .state end)}] | from_entries')
+
+          NOT_GREEN=""
+          while IFS= read -r CTX; do
+            RESULT=$(jq -r --arg c "$CTX" --argjson s "$STATUSES" '.[$c] // $s[$c] // "missing"' <<<"$CHECKS")
+            case "$RESULT" in
+              success|neutral|skipped) ;;
+              *) NOT_GREEN="$NOT_GREEN\n  - $CTX: $RESULT" ;;
+            esac
+          done <<<"$REQUIRED"
+          if [ -n "$NOT_GREEN" ]; then
+            skip "required checks not green on $HEAD_SHA:$(printf '%b' "$NOT_GREEN")"
           fi
 
-          # Enqueue as the bot, which is a bypass actor on main-codeowner-bypass.
+          # --- Enqueue as the bot (bypass actor on main-codeowner-bypass) ------
           if OUT=$(gh api graphql \
               -f query='mutation($id: ID!) { enqueuePullRequest(input: {pullRequestId: $id}) { mergeQueueEntry { position } } }' \
               -f id="$PR_NODE_ID" 2>&1); then
             POS=$(jq -r '.data.enqueuePullRequest.mergeQueueEntry.position // "?"' <<<"$OUT")
-            reply "✅ Enqueued by @$COMMENT_AUTHOR (queue position $POS). If the PR is evicted, comment \`/enqueue\` again."
+            gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+              -f body="✅ Code-owner bypass: auto-merge is on and all required checks are green, so the bot enqueued this PR (queue position $POS). If it is evicted, click **Merge when ready** again." > /dev/null
           else
             echo "$OUT"
-            # Surface GitHub's reason (failing checks, already queued, conflicts, ...).
             MSG=$(jq -r '.errors[0].message // empty' <<<"$OUT" 2>/dev/null || true)
-            reply "❌ \`/enqueue\` failed: ${MSG:-see the workflow run for details}."
+            gh api -X POST "repos/$GH_REPO/issues/$PR_NUMBER/comments" \
+              -f body="❌ Code-owner bypass: enqueue failed: ${MSG:-see the workflow run for details}." > /dev/null
             exit 1
           fi
