@@ -2110,3 +2110,26 @@ Logs: /localdev/mstaletovic/routings/ (go.sh, go.out, routings.json).
   one relay NCRISC's acked writes reach (~35 GB/s).
 Next: keep every RISC at <= today's load - the primaries read nothing and feed only their snake; the two helpers read /
 tilize half of x each and write every super-block into both primaries' landing rings.
+
+### x read once by the helpers: default (2026-10-26, bh-lb-09, one chip; block on the 2x4)
+Every read-once form so far overloaded one RISC (the joined snake's crossing, or a primary sending 1.5x). Now (plan
+xdual, layout.x_once -1): the primaries read nothing and feed only their own snake (as when reading twice); each
+rectangle's one helper reads / tilizes the super-blocks g % 2 == k and writes every one into both primaries' landing
+rings (helper k = ring k, 2 slots each; arrivals on semaphore {4, 7}[k] there, credits back on 5 / 6). x leaves DRAM
+once, two 32-core snakes, the crossing is half of x each way, no relay sends more than a primary did before.
+Bit-exact (M 128 and six routings' real rows). us a call, x read twice -> helpers:
+| | M 32 | Galaxy M | M 128 | M 256 | M 512 | M 1024 |
+|---|---|---|---|---|---|---|
+| GLM-5.3 E 8 (160) | 402 -> 403 | 522 -> 483 | 495 -> 458 | 635 -> 560 | 956 -> 876 | 1714 -> 1636 |
+| GLM-Flash E 9 (142) | 306 -> 306 | 380 -> 355 | 373 -> 342 | 475 -> 458 | 720 -> 687 | 1296 -> 1286 |
+| K3 E 28 (91) | 1110 -> 1093 | 1216 -> 1181 | 1326 -> 1237 | 1705 -> 1545 | 2785 -> 2554 | 4983 -> 4961 |
+| K2.7 E 12 (107) | 694 -> 694 | 807 -> 749 | 822 -> 763 | 1055 -> 931 | 1655 -> 1609 | 3086 -> 3075 |
+| routings (GLM-5.3 / GLM-Flash / K3 / K2.7) | uniform | zipf | zipf_rev | hot50 | half_empty | random |
+|---|---|---|---|---|---|---|
+| read twice | 534 / 387 / 1222 / 803 | 530 / 399 / 1281 / 812 | 524 / 401 / 1294 / 821 | 555 / 409 / 1227 / 795 | 387 / 293 / 776 / 539 | 520 / 390 / 1254 / 817 |
+| helpers | 479 / 358 / 1181 / 748 | 486 / 359 / 1238 / 763 | 485 / 363 / 1250 / 769 | 520 / 384 / 1216 / 739 | 356 / 271 / 699 / 467 | 499 / 366 / 1202 / 780 |
+- No per-call choice needed: never slower anywhere measured. The one-snake form stays as layout.x_once 1 (and the auto
+  fallback for two-rectangle plans with more helpers, rows_hint <= 320); probe MIMO_FL_XDUAL=0/1 overrides.
+- Block (2x4 traced, device): K3 g224 chunk 1280 experts + combine 1206 (twice) / 1170 (one snake) / 1164 us, block
+  1982 -> 1944; GLM-Flash 1231 (combine-bound). test_closeout_flat 9/9, test_closeout_plans, 20k-call soaks at the four
+  Galaxy loads (no hang). Logs: /localdev/mstaletovic/x1/ (xd*, xdv*, val5*, blk5*), routings/ (rt_*_xd).

@@ -373,7 +373,10 @@ void kernel_main() {
 #ifdef XMC_HELPER
         if (from_helper) {
             const uint32_t hxy = get_arg_val<uint32_t>(hh ? 16 + hh : 14);
-            noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(5)), 1);  // its slot is free again
+#ifndef XMC_CREDIT_SEM
+#define XMC_CREDIT_SEM 5  // (the helper's credit semaphore for this primary: 5, or 6 for primary 1 with XDUAL)
+#endif
+            noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(XMC_CREDIT_SEM)), 1);  // slot free
         } else {
             cb_pop_front(sb_cb, sb_tiles);
         }

@@ -152,7 +152,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const auto [x0, x1, y0, y1] = p.rects[k];
         rects_full = rects_full && rect_cores[k].size() == (x1 - x0 + 1) * (y1 - y0 + 1);
     }
-    const bool x_probe2 = (cstr(pr.x2) && std::atoi(cstr(pr.x2)) != 0) || p.xfwd;
+    const bool x_probe2 = (cstr(pr.x2) && std::atoi(cstr(pr.x2)) != 0) || p.xfwd || p.xdual;
     const bool x_once =
         lo.x_once > 0 || (lo.x_once < 0 && once_ok && rects_full && !x_probe2 && (lo.x_path < 0 || lo.x_path == 3) &&
                           p.nh >= 1 && lo.rows_hint > 0 && lo.rows_hint <= 320);
@@ -216,7 +216,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         log_info(
             tt::LogOp,
             "flat_routed_expert: x {}{} (snakes {} pieces {} NCRISC forwarder {} NOC{} depth {})",
-            x_once ? "read once, " : "",
+            x_once ? "read once (one snake), " : (p.xdual ? "read once (helpers), " : ""),
             xo.mode == 0   ? "multicast"
             : xo.mode == 1 ? "unicast tree"
             : xo.mode == 2 ? "unicast column chains"
@@ -1048,7 +1048,9 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         const bool xhelp_noc0 = cstr(pr.xhelp_noc0) != nullptr && !x_once;
         // (probe MIMO_FL_XHELP_ALL=1: the helpers read and tilize all of x, the primaries only multicast - and read it
         // all on small-M calls, the role split's)
-        const bool xhelp_all = cstr(pr.xhelp_all) != nullptr;
+        // (p.xdual: the helpers-only mode with both rectangles' helpers feeding both primaries)
+        const bool xhelp_all = cstr(pr.xhelp_all) != nullptr || p.xdual;
+        TT_FATAL(!p.xdual || (x_chain && !x_once && !x_two), "MIMO_FL_XDUAL: the snakes, not with x_once / X2");
         TT_FATAL(
             !xhelp_all || (!x_once && !x_two && !p.xfwd && !xsolo && !xprim_only),
             "MIMO_FL_XHELP_ALL: not with X1 / X2 / XFWD / XSOLO / XPRIM_ONLY");
@@ -1090,7 +1092,7 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             {{"SE_SBT", sbt},
              {"XMC_WHOLE_SB", "1"},
              {"XMC_HELPER", "1"},
-             {"SE_XNH", std::to_string(p.nh)},
+             {"SE_XNH", std::to_string(p.xdual ? 2u : p.nh)},
              {"XMC_ZERO_WORDS", "1"}});
         if (xprim_only) {
             TT_FATAL(x_once, "MIMO_FL_XPRIM_ONLY needs layout.x_once");
@@ -1116,18 +1118,33 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
         }
         // (x read once with forwarding: one kernel per primary, its half XMC_FWD_K)
         std::vector<KernelHandle> kxms;
-        for (uint32_t q = 0; q < (p.xfwd ? prim.size() : 1u); ++q) {
+        // (xdual: one kernel per primary, its credits to the helpers on its own semaphore - 5 / 6 there)
+        for (uint32_t q = 0; q < (p.xfwd || p.xdual ? prim.size() : 1u); ++q) {
             kxms.push_back(
                 dm("se11_xmc.cpp",
-                   p.xfwd ? std::vector<CoreCoord>{prim[q]} : prim,
+                   p.xfwd || p.xdual ? std::vector<CoreCoord>{prim[q]} : prim,
                    DataMovementProcessor::RISCV_1,
                    x_mc_noc,
                    {1, MT, p.x_tile, p.x_slots, XARR, WORD, KBLK, E, p.nsb},
-                   p.xfwd ? with(xmc_def, {{"XMC_FWD", "1"}, {"XMC_FWD_K", std::to_string(q)}}) : xmc_def,
+                   p.xfwd    ? with(xmc_def, {{"XMC_FWD", "1"}, {"XMC_FWD_K", std::to_string(q)}})
+                   : p.xdual ? with(xmc_def, {{"XMC_CREDIT_SEM", std::to_string(5 + q)}})
+                             : xmc_def,
                    x_mode));
         }
         std::vector<KernelHandle> khl;
-        for (uint32_t j = 0; j < p.nh; ++j) {
+        // (xdual: one kernel per helper k - its arrivals are semaphore {4, 7}[k] on both primaries, its credits come
+        // back on 5 (primary 0) and 6 (primary 1))
+        for (uint32_t k = 0; p.xdual && k < NR; ++k) {
+            khl.push_back(
+                dm("se13_xhelp.cpp",
+                   {p.relays[NR + k]},
+                   DataMovementProcessor::RISCV_1,
+                   x_mc_noc,
+                   {1, MT, p.x_tile, p.land_slots, k ? 7u : 4u, 5, E, p.nsb},
+                   with(dyn_def, {{"SE_SBT", sbt}, {"SE_X2", "1"}, {"SE_XDUAL", "6"}}),
+                   x_mode));
+        }
+        for (uint32_t j = 0; !p.xdual && j < p.nh; ++j) {
             const std::vector<CoreCoord> hl =
                 x_once ? std::vector<CoreCoord>{p.relays[NR + NR * j + k0]}
                        : std::vector<CoreCoord>(p.relays.begin() + NR + NR * j, p.relays.begin() + NR + NR * j + NR);
@@ -1184,7 +1201,12 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
             }
             if (xhelp_all) {  // helper j: super-blocks g % NH == j; the primary none (its kernel idles off small M)
                 xr = Args{};
-                xr.a(AddrSrc::X).lit(idx < NR ? 1u : p.nh).lit(idx < NR ? 0u : (idx - NR) / NR).cat(dyn).lits(sgx(k));
+                // (xdual: helper k the super-blocks g % 2 == k of the whole stream)
+                xr.a(AddrSrc::X)
+                    .lit(idx < NR ? 1u : (p.xdual ? NR : p.nh))
+                    .lit(idx < NR ? 0u : (p.xdual ? k : (idx - NR) / NR))
+                    .cat(dyn)
+                    .lits(sgx(k));
                 if (indexed) {
                     xr.a(AddrSrc::TokenIndex);
                     xr.a(AddrSrc::Arena, p.ti_off);
@@ -1219,12 +1241,14 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                 } else {
                     xm.lits({0, 0, 0});
                 }
-                xm
-                    .lit(pk(p.relays[idx + NR]))
-                    .a(AddrSrc::Arena, p.land_off)
-                    .lit(p.land_slots);
+                // (helper 0's xy, the landing rings, their slots, helpers 1..'s xy; xdual: both rectangles' helpers,
+                // rectangle 0's first - helper k's ring k)
+                xm.lit(pk(p.relays[p.xdual ? NR : idx + NR])).a(AddrSrc::Arena, p.land_off).lit(p.land_slots);
                 for (uint32_t j = 1; j < p.nh; ++j) {
                     xm.lit(pk(p.relays[NR + NR * j + idx]));
+                }
+                if (p.xdual) {
+                    xm.lit(pk(p.relays[NR + 1]));
                 }
                 xm.cat(dyn).lits(sgx(k));
                 if (p.xfwd) {  // the forward ring, the other primary, the ring's slots (se11_xmc.cpp XMC_FWD)
@@ -1236,21 +1260,24 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                         xm.lit(pk(p.gu[ci]));
                     }
                 }
-                add_rt(kxms[p.xfwd ? idx : 0], rl, xm);
+                add_rt(kxms[p.xfwd || p.xdual ? idx : 0], rl, xm);
             } else {
                 const uint32_t j = (idx - NR) / NR;
                 Args hl;
-                hl.lit(pk(p.relays[idx % NR]))
-                    .a(AddrSrc::Arena, p.land_off + j * p.land_slots * sbb)
+                hl.lit(pk(p.relays[p.xdual ? 0 : idx % NR]))  // (xdual: primary 0 first, ring k on both primaries)
+                    .a(AddrSrc::Arena, p.land_off + (p.xdual ? k : j) * p.land_slots * sbb)
                     .lit(xprim_only ? 0 : rl_sb(idx))
                     .lit(xhelp_all ? p.nh : 1 + p.nh)
                     .lit(xprim_only ? 0xFFFFFFu : (xhelp_all ? j : j + 1))
                     .cat(dyn)
                     .lits(sgx(k));
-                if (x_two || p.xfwd) {  // (se13_xhelp.cpp SE_X2: the primary's own stream: every NR-th from k)
+                if (x_two || p.xfwd || p.xdual) {  // (se13_xhelp.cpp SE_X2: every NR-th super-block from k)
                     hl.lit(NR).lit(k);
                 }
-                add_rt(khl[j], rl, hl);
+                if (p.xdual) {  // (SE_XDUAL: the second primary)
+                    hl.lit(pk(p.relays[1]));
+                }
+                add_rt(khl[p.xdual ? k : j], rl, hl);
             }
         }
     }

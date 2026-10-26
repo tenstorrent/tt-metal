@@ -47,11 +47,12 @@ struct FlatLayoutOptions {
     int32_t x_fwd_noc = -1;      // the forwarding NoC (-1: NOC0 with the NCRISC forwarder, else the receivers')
     int32_t x_fwd_depth = -1;    // pieces in flight per forwarder (-1: 3 with the NCRISC forwarder, else 6)
     int32_t x_relay_depth = -1;  // relay head-write batches in flight, 1..8 (-1: 4)
-    // x read from DRAM once (rectangle 0's relays read and tilize it; with snakes its primary feeds one snake that runs
-    // through both rectangles, else it multicasts into both). -1: on where the plan has two full rectangles on the
-    // snakes, rows_hint <= 320 and no X2 / XFWD probe (GLM-5.3 / GLM-Flash / K3 / K2.7 at Galaxy loads -6.1 / -2.9 /
-    // -1.6 / -5.7%; above 320 rows an expert one 64-core snake loses to two);
-    // 0 off (each rectangle's relays read all of x: 2x the x DRAM bytes); 1 on (fails where the plan cannot)
+    // x read from DRAM once. -1 (default): where the plan has two full rectangles on the snakes with one helper each,
+    // the helpers read / tilize half of x each and feed both primaries, each primary only its own snake (the plan's
+    // xdual: GLM-5.3 / GLM-Flash / K3 / K2.7 at Galaxy loads -7.5 / -6.6 / -2.9 / -7.2%, never slower at M 32..1024 or
+    // under skewed routings); else, with two full rectangles on the snakes and rows_hint <= 320, rectangle 0's relays
+    // read it and its primary feeds one snake through both rectangles. 0 off (each rectangle's relays read all of x:
+    // 2x the x DRAM bytes); 1 the one-snake / multicast form (fails where the plan cannot)
     int32_t x_once = -1;
     int32_t dw_batch = -1;       // down-weight blocks per read barrier (-1: DW_BATCH)
     uint32_t pin_ratio = 8;      // pin only an expert this many times the next one's rows (0: always pin)
@@ -176,6 +177,7 @@ struct FlatProbes {
     std::optional<std::string> x1_heads;            // MIMO_FL_X1_HEADS
     std::optional<std::string> x1_rect;             // MIMO_FL_X1_RECT
     std::optional<std::string> fw_slots;            // MIMO_FL_FW_SLOTS
+    std::optional<std::string> xdual;               // MIMO_FL_XDUAL
     std::optional<std::string> xdown;               // MIMO_FL_XDOWN
     std::optional<std::string> xfwd;                // MIMO_FL_XFWD
     std::optional<std::string> xhelp_all;           // MIMO_FL_XHELP_ALL

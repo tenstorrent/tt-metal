@@ -133,6 +133,7 @@ FlatProbes FlatProbes::from_env() {
     p.x1_heads = read("MIMO_FL_X1_HEADS");
     p.x1_rect = read("MIMO_FL_X1_RECT");
     p.fw_slots = read("MIMO_FL_FW_SLOTS");
+    p.xdual = read("MIMO_FL_XDUAL");
     p.xdown = read("MIMO_FL_XDOWN");
     p.xfwd = read("MIMO_FL_XFWD");
     p.xhelp_all = read("MIMO_FL_XHELP_ALL");

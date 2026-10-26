@@ -1277,7 +1277,30 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     if (const char* fs = cstr(pr.fw_slots)) {  // (probe: XFWD forward ring super-blocks, default 2)
         p.fw_slots = static_cast<uint32_t>(std::atoi(fs));
     }
-    p.fw_off = p.land_off + al(p.nh * p.land_slots * p.mt * p.sbt * p.x_tile);
+    // x read once by the helpers (layout.x_once -1, the default): two rectangles full of gate/up cores on the snakes,
+    // one helper each - each helper reads / tilizes half of x (super-blocks g % 2 == k) and writes every super-block
+    // into both primaries' landing rings (2 slots each); the primaries read nothing and feed only their own snake. x
+    // leaves DRAM once and no relay sends more than a primary did before (bit-exact; GLM-5.3 / GLM-Flash / K3 / K2.7
+    // at Galaxy loads 522 / 380 / 1216 / 807 -> 483 / 355 / 1181 / 749 us, never slower at M 32..1024 or under six
+    // routings, FLAT_EXPERT_WORKLOG.md). Probe MIMO_FL_XDUAL=0/1 overrides.
+    {
+        bool full = p.rects.size() == 2;
+        for (uint32_t k = 0; full && k < 2; ++k) {
+            const auto [x0, x1, y0, y1] = p.rects[k];
+            uint32_t n = 0;
+            for (const auto& c : p.gu) {
+                n += p.rect_of(c) == k;
+            }
+            full = n == (x1 - x0 + 1) * (y1 - y0 + 1);
+        }
+        const bool can = p.nsg == 1 && p.rects.size() == 2 && !p.group_rect && p.nh == 1 && !p.xfwd && full &&
+                         !(cstr(pr.x2) && std::atoi(cstr(pr.x2)) != 0) && (lo.x_path < 0 || lo.x_path == 3);
+        p.xdual = cstr(pr.xdual) ? std::atoi(cstr(pr.xdual)) != 0 && can : lo.x_once < 0 && can;
+        if (p.xdual) {
+            p.land_slots = std::min(p.land_slots, 2u);  // (two landing rings a primary)
+        }
+    }
+    p.fw_off = p.land_off + al((p.xdual ? 2 : p.nh) * p.land_slots * p.mt * p.sbt * p.x_tile);
     p.ti_off = p.fw_off + (p.xfwd ? al(p.fw_slots * p.mt * p.sbt * p.x_tile) : 0);
     const uint32_t relay_bytes = p.ti_off;
     TT_FATAL(relay_bytes <= L1_BANK, "flat_routed_expert: relay arena does not fit");
