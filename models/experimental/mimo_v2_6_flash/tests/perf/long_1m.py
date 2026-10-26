@@ -99,37 +99,50 @@ def capacity(gen, cfg, args):
         say(f"row {r} DRAM per chip after decode: {dram_gb(model.mesh_device)[0]:.2f} GB")
 
 
+def depth(r, slot):
+    """Slot 0 of row r at DEPTHS[r], slot 1 at DEPTHS[3 - r], further slots shifted round."""
+    return DEPTHS[(r if slot % 2 == 0 else 3 - r) + slot // 2 & 3]
+
+
 def passkey(gen, cfg, args):
     tok = AutoTokenizer.from_pretrained(common.MODEL_PATH)
     models = gen.models[: args.rows]
-    keys = [int(k) for k in torch.randint(10000, 100000, (4,), generator=torch.Generator().manual_seed(61419))]
+    slots = range(args.users)
+    keys = [int(k) for k in torch.randint(10000, 100000, (16,), generator=torch.Generator().manual_seed(61419))]
+    key = {(r, s): keys[s * 4 + r] for r in range(len(models)) for s in slots}  # slot 0 keeps the 1-user keys
     t0 = time.time()
-    prompts = [passkey_prompt(tok, args.context, DEPTHS[r], keys[r]) for r in range(len(models))]
-    say(f"{len(models)} passkey prompts of {args.context} tokens built in {time.time() - t0:.0f} s")
+    prompts = {(r, s): passkey_prompt(tok, args.context, depth(r, s), key[(r, s)]) for (r, s) in key}
+    say(f"{len(prompts)} passkey prompts of {args.context} tokens built in {time.time() - t0:.0f} s")
 
+    # The users of a row run one after the other; the rows' chunks are enqueued round-robin.
     n, chunk = args.context, args.chunk
     t0 = time.time()
-    pending = {}
-    for s in range(0, n, chunk):
-        for r, model in enumerate(models):
-            h = model.prefill_enqueue(prompts[r][s : s + chunk], 0, start_pos=s, chunk_size=chunk)
-            if s + chunk < n:
-                h["logits"].deallocate(True)
-            else:
-                pending[r] = h
-        if s // chunk % 32 == 0:
-            say(f"enqueued chunks to position {s + chunk} on {len(models)} rows at {time.time() - t0:.0f} s")
-    say(f"host enqueue of every chunk done at {time.time() - t0:.1f} s")
     first, ttft = {}, {}
-    for r, model in enumerate(models):
-        first[r] = model.prefill_read(pending[r])[0]
-        ttft[r] = time.time() - t0
-        say(f"row {r} TTFT {ttft[r]:.1f} s ({n / ttft[r]:.0f} tokens/s), next token {first[r].argmax().item()}")
+    for s in slots:
+        pending = {}
+        for c in range(0, n, chunk):
+            for r, model in enumerate(models):
+                h = model.prefill_enqueue(prompts[(r, s)][c : c + chunk], s, start_pos=c, chunk_size=chunk)
+                if c + chunk < n:
+                    h["logits"].deallocate(True)
+                else:
+                    pending[r] = h
+            if c // chunk % 64 == 0:
+                say(
+                    f"slot {s}: enqueued chunks to position {c + chunk} on {len(models)} rows at {time.time() - t0:.0f} s"
+                )
+        for r, model in enumerate(models):
+            first[(r, s)] = model.prefill_read(pending[r])[0]
+            ttft[(r, s)] = time.time() - t0
+            say(
+                f"row {r} slot {s} TTFT {ttft[(r, s)]:.1f} s from the start of the run, next token "
+                f"{first[(r, s)].argmax().item()}"
+            )
     for r, model in enumerate(models):
         say(f"row {r} DRAM per chip after prefill: {dram_gb(model.mesh_device)[0]:.2f} GB")
 
-    users = [r * args.users for r in range(len(models))]
-    gen_tokens = {u: [int(first[gen.locate(u)[0]].argmax())] for u in users}
+    users = {r * args.users + s: (r, s) for (r, s) in key}
+    gen_tokens = {u: [int(first[rs].argmax())] for u, rs in users.items()}
     positions = {u: n for u in users}
     step_times = []
     for _ in range(args.decode - 1):
@@ -140,13 +153,16 @@ def passkey(gen, cfg, args):
             gen_tokens[u].append(int(lg.argmax()))
             positions[u] += 1
     found = {}
-    for r in range(len(models)):
-        text = tok.decode(gen_tokens[r * args.users])
-        found[r] = str(keys[r]) in text
-        say(f"row {r} key {keys[r]} at {DEPTHS[r]:.0%}: greedy {text!r} found {found[r]}")
+    for u, (r, s) in sorted(users.items()):
+        text = tok.decode(gen_tokens[u])
+        found[(r, s)] = str(key[(r, s)]) in text
+        say(f"row {r} slot {s} key {key[(r, s)]} at {depth(r, s):.0%}: greedy {text!r} found {found[(r, s)]}")
     if step_times:
         say(f"decode steps (untraced, logits read): median {sorted(step_times)[len(step_times) // 2] * 1e3:.0f} ms")
-    say(f"RESULT rows {len(models)} context {n} TTFT {[round(ttft[r], 1) for r in ttft]} found {found}")
+    say(
+        f"RESULT rows {len(models)} users/row {args.users} context {n} "
+        f"TTFT {[(r, s, round(t, 1)) for (r, s), t in sorted(ttft.items())]} found {sorted(found.items())}"
+    )
 
 
 def main():
