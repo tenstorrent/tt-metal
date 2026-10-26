@@ -45,6 +45,12 @@ void PrepareChunkRecurrenceOperation::validate_on_program_cache_miss(
     TT_FATAL(arch == tt::ARCH::BLACKHOLE, "{} is only supported on Blackhole, got {}", operation_name, arch);
     check_output_interleaved(attrs.output_mem_config, operation_name);
     check_compute_config(attrs.compute_kernel_config, operation_name);
+    // The FPU forms the q/k norm squares and the gate scale as exact BF16 products, which only HiFi4 guarantees.
+    TT_FATAL(
+        attrs.compute_kernel_config.math_fidelity == MathFidelity::HiFi4,
+        "{}: math_fidelity must be HiFi4, got {}",
+        operation_name,
+        attrs.compute_kernel_config.math_fidelity);
 
     const auto& q_shape = in.q.logical_shape();
     const auto& k_shape = in.k.logical_shape();

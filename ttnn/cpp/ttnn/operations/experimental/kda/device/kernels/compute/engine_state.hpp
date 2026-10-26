@@ -41,6 +41,13 @@ public:
         srcb(src_b);
     }
 
+    // Reconfigure srcA even when its format is unchanged. After an SFPU or transpose pass a skipped reconfiguration
+    // changed bits in otherwise-unspecified output lanes; kept so every lane stays bit-identical.
+    FORCE_INLINE void reset_srca(uint32_t operand) {
+        reconfig_data_format_srca(operand);
+        src_a_ = operand;
+    }
+
     // Configure a block matmul of in0 (srcB) by in1 (srcA). The tiles of every operand passed through here are full,
     // untransposed 32x32 tiles, so the init depends only on the geometry: a caller that needs in1 transposed must
     // bypass this class.
