@@ -661,34 +661,7 @@ def run(
         ),
     ]
     io = [projected, history, *taps, constants, selects, scalars, q_c, k_c, v, beta_c, g_c, sig]
-    # Bytes and flops by construction from the two unit lists: group A reads one window per unit, the taps once per
-    # column-group run and the selection / scalar tiles once per core; group B reads one a/b pair or z head per unit.
-    # Flops: the six exact selection matmuls plus one operation per element of every pass.
-    tile, fp32_tile = fp.TILE_BYTES[BF16], fp.TILE_BYTES[FP32]
-    tap_runs = sum(len({split.a_units[i][0] for i in range(w.start, w.start + w.count)}) for w in split.a_work)
-    unit_elements = HEAD_TILES * TILE * TILE
-    fir_flops = HEAD_TILES * HISTORY_ROWS * 2 * (2 * TILE**3)
-    unit_passes = {"q": 7 + 1 + 3 + 2, "k": 7 + 1 + 3 + 1, "v": 7 + 1 + 1}
-    meta = fp.program_meta(
-        NAME,
-        "verify_rows" if chunks == 1 else "slab",
-        int(rows),
-        reads=(history,),
-        writes=(q_c, k_c, v, beta_c, g_c, sig),
-        dram_bytes=(
-            len(split.a_units) * 2 * HEAD_TILES * tile
-            + tap_runs * CONV_KERNEL * HEAD_TILES * tile
-            + chunks * (2 + HEADS * HEAD_TILES) * tile
-            + len(split.a_work) * (SELECT_TILES + SCALAR_TILES) * tile
-            + len(split.b_work) * CONST_TILES * fp32_tile
-        ),
-        flops=(
-            sum(fir_flops + unit_passes[group_kind(group)] * unit_elements for group, _chunk in split.a_units)
-            + chunks * (4 + 2 * HEADS * HEAD_TILES) * TILE * TILE
-        ),
-        cores=len(split.a_work) + len(split.b_work),
-    )
-    fp.run_program(io, fp.program_descriptor(kernels, cbs), meta=meta)
+    fp.run_program(io, fp.program_descriptor(kernels, cbs))
     return q_c, k_c, v, beta_c, g_c, sig
 
 

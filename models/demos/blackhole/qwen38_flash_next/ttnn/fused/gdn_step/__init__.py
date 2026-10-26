@@ -38,27 +38,6 @@ A_COLUMN = QKV_WIDTH + VALUE_WIDTH
 B_COLUMN = A_COLUMN + fp.TILE
 PROJECTION_WIDTH = B_COLUMN + fp.TILE
 STATE_TILES = 16
-# debug taps in program order (one fp32 tile each); the writer stores them per item as [rows*12, DEBUG_TILES, 32, 32]
-DEBUG_TAPS = (
-    "conv_sum0",
-    *(f"conv{t}" for t in range(12)),
-    "q_sum",
-    "q_sum_eps",
-    "q_rsqrt",
-    "q_unit0",
-    "beta",
-    "decay",
-    "sdec0",
-    "vread0",
-    "deltab0",
-    "kcol0",
-    "snew0",
-    "o0",
-    "o1",
-    "o2",
-    "o3",
-)
-DEBUG_TILES = len(DEBUG_TAPS)
 EPS = 1.0e-6
 
 BF16, FP32 = ttnn.bfloat16, ttnn.float32
@@ -91,7 +70,7 @@ CBS = (
     (26, BF16, 4),
     (27, FP32, 1),
 )
-CB_SNEW, CB_OUTS, CB_DEBUG = 24, 25, 28
+CB_SNEW, CB_OUTS = 24, 25
 # fp32 CBs consumed only by copy_tile (exact unpack to DST); matmul, reduce and broadcast operands stay Default
 FP32_COPY_CBS = (5, 7, 18, 19, 21, 22)
 
@@ -126,12 +105,12 @@ def constant_tiles(mesh, dt_bias, neg_exp_A):
     )
 
 
-def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debug=None):
+def run(projected, older, newest, taps, constants, norm, recurrent, out):
     """The program on explicit tensors (local shapes, one tile row): ``projected`` [1,1,rows,4160] bf16;
     ``older`` the three older ring slots and ``newest`` the slot this token lands in, [1,1,rows,2560] bf16;
     ``taps`` 4 x [1,1,1,2560] bf16; ``constants`` from ``constant_tiles``; ``norm`` [1,1,1,128] bf16;
     ``recurrent`` [rows,12,128,128] fp32 (updated in place); ``out`` [1,1,rows,1536] bf16 (any memory layout the
-    TensorAccessor addresses); ``debug`` an optional [rows*12*18, 32, 32] fp32 tap tensor."""
+    TensorAccessor addresses)."""
 
     rows = fp.rows_of(projected)
     if fp.tile_width_of(projected) != PROJECTION_WIDTH:
@@ -177,11 +156,6 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
             ],
         )
     )
-    if debug is not None:
-        writer_cta.extend(fp.accessor_args(debug))
-        writer_addrs.append(debug.buffer_address())
-        defines.append(("DEBUG_TAPS", "1"))
-        cbs.append(fp.cb_descriptor(CB_DEBUG, FP32, fp.TILE_BYTES[FP32], DEBUG_TILES, cores))
 
     reader = fp.reader_kernel(READER, cores, reader_cta, [(w.core, [*reader_addrs, w.count, *pairs(w)]) for w in work])
     writer = fp.writer_kernel(
@@ -198,21 +172,7 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
         unpack_to_dest_fp32=FP32_COPY_CBS,
     )
     io = [projected, *older, *taps, constants, norm, recurrent, newest]
-    if debug is not None:
-        io.append(debug)
-    # dram_bytes: the constant tiles once per core; flops per lane: the conv, the l2 norms, the delta-rule update and
-    # read-out on 12 heads of 128 x 128, and the gated norm
-    meta = fp.program_meta(
-        NAME,
-        "step",
-        rows,
-        reads=(projected, *older, *taps, norm, recurrent),
-        writes=(recurrent, newest, out, *([debug] if debug is not None else [])),
-        dram_bytes=len(work) * 2 * fp.TILE_BYTES[FP32],
-        flops=rows * (2 * 4 * QKV_WIDTH + 6 * 2 * QK_WIDTH + 8 * HEADS * HEAD_DIM * HEAD_DIM + 6 * VALUE_WIDTH),
-        cores=len(work),
-    )
-    fp.run_program([*io, out], fp.program_descriptor([reader, writer, compute], cbs), meta=meta)
+    fp.run_program([*io, out], fp.program_descriptor([reader, writer, compute], cbs))
     return out
 
 

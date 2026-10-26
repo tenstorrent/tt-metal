@@ -206,24 +206,9 @@ def greedy_candidates(
         )  # 128 bytes per tile (its two grains) + the pair
     else:
         scan_pages = max(w.count for w in work) + 1  # one 2 KB slot per tile + the pairs
-    kernel = CANDIDATE_ROW if candidates else NAME
-    # the scan reads the lane rows of its tiles (two 64-byte grains per row per tile at rows 1 and in the lane split,
-    # whole tiles otherwise), writes one 16-byte pair per (row, core) and, with candidates, its sorted list; one
-    # compare per element, plus the insertion into the list
-    tile_read = min(2048, 128 * rows) if (rows == 1 or split) else 2048
-    meta = fp.program_meta(
-        kernel,
-        "scan",
-        rows,
-        writes=(pairs, *([lists] if candidates else [])),
-        dram_bytes=tiles * tile_read,
-        flops=rows * tiles * TILE * (1 + (2 if candidates else 0)),
-        cores=len(work),
-    )
     fp.run_program(
         scan_tensors,
         fp.program_descriptor([scan], cbs=[fp.cb_descriptor(CB_STAGE, ttnn.bfloat16, 2048, scan_pages, grid)]),
-        meta=meta,
     )
     values = fp.allocate((1, 1, rows, 1), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, memory_config)
     indices = fp.allocate((1, 1, rows), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh, memory_config)
@@ -245,17 +230,6 @@ def greedy_candidates(
             "candidates": candidates,
         },
     )
-    # the pairs (and the lists, the vocab start) and the zero tile in, the value tile, the indices row, the packed rows
-    # (and the shard row) out; one compare per pair, plus the merge of the cores' lists
-    meta = fp.program_meta(
-        kernel,
-        "merge",
-        rows,
-        reads=(pairs, zero_bf16, *([lists, vocab_start] if candidates else [])),
-        writes=(values, indices, packed, *([row] if candidates else [])),
-        flops=rows * cores * (1 + (candidates if candidates else 0)),
-        cores=1,
-    )
     fp.run_program(
         tensors,
         fp.program_descriptor(
@@ -266,7 +240,6 @@ def greedy_candidates(
                 )
             ],
         ),
-        meta=meta,
     )
     ttnn.deallocate(pairs)
     if candidates:
@@ -348,21 +321,9 @@ def resolve(gathered, tie_break, vocab_starts, *, into=None, memory_config=ttnn.
     )
     row_bytes = (devices * stride * 4 + 63) & ~63
     pages = RESOLVE_STAGE_PAGES if rows == 1 and stride == PACKED_LANES else -(-(4096 + rows * row_bytes + 128) // 4096)
-    # the gathered packed rows, the tie-break and vocab-start rows and the zero tile in, the token tile out (twice
-    # with ``into``); per row the tie-break subtract, the first maximum over the devices and the rebase add
-    meta = fp.program_meta(
-        NAME,
-        "resolve",
-        rows,
-        reads=(gathered, tie_break, vocab_starts, zero_fp32),
-        writes=(token_row, *([into] if into is not None else [])),
-        flops=rows * devices * 3,
-        cores=1,
-    )
     fp.run_program(
         tensors,
         fp.program_descriptor([kernel], cbs=[fp.cb_descriptor(CB_STAGE, ttnn.float32, 4096, pages, one)]),
-        meta=meta,
     )
     token_row.update_tensor_topology(tie_break.tensor_topology())  # replicated, as the chain's token row
     return token_row

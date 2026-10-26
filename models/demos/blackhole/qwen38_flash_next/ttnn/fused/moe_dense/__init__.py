@@ -323,23 +323,9 @@ def moe_dense(
     sigmoid = fp.allocate((1, 1, fp.TILE, fp.TILE), BF16, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
     sparse_rows = fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
     fidelity = _fidelity_of(compute_kernel_config)
-    lanes = len(rt.lane_cores(plan.topk, len(rt._core_plan(rows))))
-    # G1 as router_tail states it; G2 and G3 stream their shards and the down weight once; FLOPs: the top-k, the
-    # eltwise's silu / product / sigmoid and the down matmul 2 x rows x K x N.
     meta = fp.program_meta(
         NAME,
         "composite",
-        rows,
-        reads=(gate_up_scalar_ws, down, full_hidden),
-        writes=(scores, indices, partial, sigmoid, sparse_rows),
-        dram_bytes=lanes * (fp.tensor_bytes(index_template) + fp.tensor_bytes(logits)),
-        l1_bytes=DOWN_WORKERS * K_TILES * fp.TILE_BYTES[BF16],
-        flops=rows * rt.EXPERTS * (5 + 2 * rt.WIDTH_TILES)
-        + rows * top_k * 3
-        + rows * se.LOCAL_INTERMEDIATE * 3
-        + rows * fp.TILE
-        + 2 * rows * se.LOCAL_INTERMEDIATE * HIDDEN,
-        cores=lanes + se.STORAGE_CORES + DOWN_WORKERS + len(plan.untilize_cores()),
         # every output is per device the same shape as the chain's (replicated placements, as the caller stamped them)
         outputs=((scores, None), (indices, None), (partial, None), (sigmoid, None), (sparse_rows, None)),
     )
@@ -400,14 +386,9 @@ def moe_dense_composed(
     fp.run_program(
         [gate_up_scalar_ws, intermediate, sigmoid],
         se.shared_eltwise_program(gate_up_scalar_ws, intermediate, sigmoid),
-        meta=fp.program_meta(  # the chain's eltwise program as shared_expert states it
+        meta=fp.program_meta(
             NAME,
             "composed_eltwise",
-            rows,
-            reads=(gate_up_scalar_ws,),
-            writes=(intermediate, sigmoid),
-            flops=rows * se.LOCAL_INTERMEDIATE * 3 + rows * fp.TILE,
-            cores=se.STORAGE_CORES,
             outputs=((intermediate, None), (sigmoid, None)),
         ),
     )

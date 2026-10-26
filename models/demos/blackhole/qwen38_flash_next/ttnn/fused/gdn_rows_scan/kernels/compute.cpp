@@ -38,7 +38,7 @@ constexpr uint32_t CB_P = 0, CB_S = 1, CB_T = 2, CB_Z = 3, CB_AB = 4, CB_DTNA = 
 constexpr uint32_t CB_MASK = 8, CB_SCALER = 9, CB_CONVSUM = 10, CB_QKV = 11, CB_SQ = 12, CB_GALL = 13, CB_UNIT = 14;
 constexpr uint32_t CB_QROW = 15, CB_KROW = 16, CB_KCOL = 17, CB_BETA = 18, CB_DECAY = 19, CB_SDEC = 20, CB_SDECC = 21;
 constexpr uint32_t CB_VREAD = 22, CB_DELTAB = 23, CB_SNEW = 24, CB_OUTS = 25, CB_OUTG = 26, CB_RS = 27;
-constexpr uint32_t CB_DBG = 28, CB_OROWS = 29, CB_SNEWC = 30, CB_OBF = 31;
+constexpr uint32_t CB_OROWS = 29, CB_SNEWC = 30, CB_OBF = 31;
 // The gated norm reuses recurrence buffers of the same format and depth. CB_OBF (each row's o) is not aliased with
 // CB_CONVSUM as in gdn_step, because here the writer pops it.
 constexpr uint32_t CB_NRMW = CB_SQ, CB_NRM = CB_UNIT, CB_SIG = CB_VREAD, CB_SQO = CB_DELTAB;
@@ -54,17 +54,6 @@ constexpr uint32_t QK_SCALE = 0x3DB504F3;  // 128^-0.5
 constexpr uint32_t F_ONE = 0x3F800000, F_TWENTY = 0x41A00000;
 static_assert(ROWS >= 1 && ROWS <= 32, "rows of one tile");
 static_assert(VBT == 4 || VBT == 1, "a whole head or one of four column blocks");
-
-#ifdef DEBUG_TAPS
-// pack DST tile idst a second time into the debug CB; restore_cb is the CB the surrounding code packs into
-ALWI void tap(uint32_t idst, uint32_t restore_cb) {
-    cb_reserve_back(CB_DBG, 1);
-    pack_reconfig_data_format(CB_DBG);
-    pack_tile(idst, CB_DBG);
-    cb_push_back(CB_DBG, 1);
-    pack_reconfig_data_format(restore_cb);
-}
-#endif
 
 // conv[t] = silu(bf16(sum_i slot_i[t] * tap_i[t])) for the item's NT tiles; taps broadcast row 0.  The reader
 // pushes the inputs per tile (CB_S tile-major: tile t's slots at 3t + i; CB_T: its taps at 4t + i).
@@ -103,11 +92,6 @@ ALWI void conv_silu() {
         pack_reconfig_data_format(CB_QKV);
         pack_tile(0, CB_QKV);
         cb_push_back(CB_QKV, 1);
-#ifdef DEBUG_TAPS
-        if (t == 0 || t == QK_TILES) {
-            tap(0, CB_QKV);
-        }
-#endif
         tile_regs_release();
         cb_pop_front(CB_CONVSUM, 1);
     }
@@ -201,9 +185,6 @@ ALWI void l2_norm(uint32_t base, uint32_t out_cb) {
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_cb);
-#ifdef DEBUG_TAPS
-        tap(0, out_cb);
-#endif
         tile_regs_release();
     }
     cb_push_back(out_cb, HT);
@@ -223,11 +204,6 @@ ALWI void k_columns() {
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, CB_KCOL);
-#ifdef DEBUG_TAPS
-        if (i == 0) {
-            tap(0, CB_KCOL);
-        }
-#endif
         tile_regs_release();
     }
     cb_push_back(CB_KCOL, HT);
@@ -290,32 +266,6 @@ ALWI void gates_all() {
     tile_regs_release();
 }
 
-#ifdef DEBUG_TAPS
-// the per-row gate taps (beta, decay) in the gates block's place: the reader's replicated tiles, once they exist
-ALWI void tap_gate_tiles() {
-    cb_wait_front(CB_BETA, ROWS);
-    cb_wait_front(CB_DECAY, ROWS);
-    for (uint32_t row = 0; row < ROWS; ++row) {
-        tile_regs_acquire();
-        reconfig_data_format_srca(CB_BETA);
-        copy_init(CB_BETA);
-        copy_tile(CB_BETA, row, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        tap(0, CB_KCOL);
-        tile_regs_release();
-        tile_regs_acquire();
-        reconfig_data_format_srca(CB_DECAY);
-        copy_init(CB_DECAY);
-        copy_tile(CB_DECAY, row, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        tap(0, CB_KCOL);
-        tile_regs_release();
-    }
-}
-#endif
-
 // One row: S' = S * decay; v_read = k S'; delta_b = ((v - v_read) * M_row) * beta; S_new = S' + k^T delta_b;
 // o = (q S_new) * 128^-0.5.  The state comes from CB_STATE on the first row and from the previous row's CB_SNEWC
 // afterwards; the consumed state is handed to the writer through the CB_OUTS alias (prefix state row).
@@ -343,11 +293,6 @@ ALWI void recurrence(uint32_t row, bool first) {
         pack_tile(2, CB_SDEC);
         pack_tile(0, CB_SDECC);
         pack_tile(2, CB_SDECC);
-#ifdef DEBUG_TAPS
-        if (t == 0) {
-            tap(0, CB_SDEC);
-        }
-#endif
         tile_regs_release();
     }
     cb_push_back(CB_SDEC, ST);
@@ -375,9 +320,6 @@ ALWI void recurrence(uint32_t row, bool first) {
         pack_tile(j, CB_VREAD);
     }
     cb_push_back(CB_VREAD, VBT);
-#ifdef DEBUG_TAPS
-    tap(0, CB_VREAD);
-#endif
     tile_regs_release();
 
     cb_wait_front(CB_VREAD, VBT);
@@ -405,11 +347,6 @@ ALWI void recurrence(uint32_t row, bool first) {
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, CB_DELTAB);
-#ifdef DEBUG_TAPS
-        if (j == 0) {
-            tap(0, CB_DELTAB);
-        }
-#endif
         tile_regs_release();
     }
     cb_push_back(CB_DELTAB, VBT);
@@ -440,11 +377,6 @@ ALWI void recurrence(uint32_t row, bool first) {
         for (uint32_t j = 0; j < VBT; ++j) {
             pack_tile(j, CB_SNEWC);
         }
-#ifdef DEBUG_TAPS
-        if (i == 0) {
-            tap(0, CB_SNEW);
-        }
-#endif
         tile_regs_release();
     }
     cb_push_back(CB_SNEW, ST);
@@ -474,9 +406,6 @@ ALWI void recurrence(uint32_t row, bool first) {
         pack_tile(j, CB_OBF);
     }
     cb_push_back(CB_OBF, VBT);
-#ifdef DEBUG_TAPS
-    tap(0, CB_OBF);
-#endif
     tile_regs_release();
     cb_pop_front(CB_SNEW, ST);
 }
@@ -628,9 +557,6 @@ void kernel_main() {
         }
         cb_pop_front(CB_AB, 2);
         cb_pop_front(CB_DTNA, 2);
-#ifdef DEBUG_TAPS
-        tap_gate_tiles();
-#endif
         cb_wait_front(CB_QKV, VBT);
         cb_wait_front(CB_QROW, HT);
         {

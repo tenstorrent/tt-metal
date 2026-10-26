@@ -14,30 +14,21 @@
 #include "../../kernels/row_mask.h"
 
 namespace {
-constexpr uint32_t CB_OUTS = 25, CB_OUTG = 26, CB_DBG = 28, CB_OROWS = 29, CB_OBF = 31;
+constexpr uint32_t CB_OUTS = 25, CB_OUTG = 26, CB_OROWS = 29, CB_OBF = 31;
 constexpr uint32_t ROWS = get_compile_time_arg_val(0);
 constexpr uint32_t VBT = get_compile_time_arg_val(1);
 constexpr uint32_t HEADS = 12, HT = 4, ST = HT * VBT, STATE_TILES = HT * HT;
 constexpr uint32_t PEERS = HT / VBT - 1;  // 0 for the whole-head item, 3 for one column block of four
 constexpr uint32_t BF16_TILE = 2048, FP32_TILE = 4096;
-constexpr uint32_t DBG_TILES =
-    11 + 7 * ROWS;  // per item: conv q0, conv v0, q0..3, k0..3, kcol0; per row 2 gate + 5 taps
 static_assert(VBT == HT || VBT == 1, "a whole head or one of four column blocks");
 }  // namespace
 
 void kernel_main() {
     constexpr auto prefix_args = TensorAccessorArgs<2>();
     constexpr auto out_args = TensorAccessorArgs<prefix_args.next_compile_time_args_offset()>();
-#ifdef DEBUG_TAPS
-    constexpr auto dbg_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-#endif
     uint32_t arg = 0;
     const uint32_t prefix_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t out_addr = get_arg_val<uint32_t>(arg++);
-#ifdef DEBUG_TAPS
-    const uint32_t dbg_addr = get_arg_val<uint32_t>(arg++);
-    const auto dbg = TensorAccessor(dbg_args, dbg_addr);
-#endif
     const uint32_t items = get_arg_val<uint32_t>(arg++);
     const auto prefix = TensorAccessor(prefix_args, prefix_addr);
     const auto out = TensorAccessor(out_args, out_addr);
@@ -109,16 +100,5 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(CB_OUTG, HT);
         }
-#ifdef DEBUG_TAPS
-        cb_wait_front(CB_DBG, DBG_TILES);
-        {
-            const uint32_t l1 = get_read_ptr(CB_DBG);
-            for (uint32_t t = 0; t < DBG_TILES; ++t) {
-                noc_async_write_page((head * (HT / VBT) + vb) * DBG_TILES + t, dbg, l1 + t * FP32_TILE);
-            }
-        }
-        noc_async_write_barrier();
-        cb_pop_front(CB_DBG, DBG_TILES);
-#endif
     }
 }

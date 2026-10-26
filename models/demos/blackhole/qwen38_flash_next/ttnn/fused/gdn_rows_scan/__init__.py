@@ -28,7 +28,6 @@ from ..gdn_step import (
     HEAD_DIM,
     HEADS,
     PROJECTION_WIDTH,
-    QK_WIDTH,
     QKV_WIDTH,
     STATE_TILES,
     VALUE_WIDTH,
@@ -67,12 +66,7 @@ BF16, FP32 = ttnn.bfloat16, ttnn.float32
 # Circular buffers of the scan program (index, dtype, pages), the indices shared with the three kernels; the state
 # hand-off CB_SNEWC (30) / CB_OUTS (25) is one allocation under two indices (the compute reads the next row's state
 # back, the writer drains it), at twice the item's state tiles so a row's pack overlaps the previous state's drain.
-CB_STATE, CB_SNEW, CB_OUTS, CB_DEBUG, CB_SNEWC, CB_OROWS, CB_OBF = 7, 24, 25, 28, 30, 29, 31
-# debug taps (DEBUG_TAPS builds) in program order, one fp32 tile each: per item, then per row
-ITEM_TAPS = ("conv_q0", "conv_v0", *(f"q{t}" for t in range(4)), *(f"k{t}" for t in range(4)))  # the conv and the norms
-GATE_TAPS = ("beta", "decay")  # per row, in the gates block after the norms (the reader's replicated tiles)
-LATE_TAPS = ("kcol0",)  # after the gates: the k columns
-ROW_TAPS = ("sdec0", "vread0", "deltab0", "snew0", "o0")  # per row, in the recurrence
+CB_STATE, CB_SNEW, CB_OUTS, CB_SNEWC, CB_OROWS, CB_OBF = 7, 24, 25, 30, 29, 31
 # fp32 CBs consumed only by copy_tile (exact unpack to DST); matmul, reduce and broadcast operands stay Default
 FP32_COPY_CBS = (5, 7, 18, 19, 21, 22, 30)
 
@@ -125,20 +119,13 @@ def _items(split: int) -> list[tuple[int, int]]:
     return [(head, vb) for head in range(HEADS) for vb in range(split)]
 
 
-def debug_tiles(rows: int) -> int:
-    """Tap tiles per item of a DEBUG_TAPS build: the item taps, then the row taps for every row."""
-
-    return len(ITEM_TAPS) + len(LATE_TAPS) + (len(GATE_TAPS) + len(ROW_TAPS)) * rows
-
-
-def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, split: int | None = None, debug=None):
+def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, split: int | None = None):
     """The scan program on explicit tensors (local shapes).
 
     ``projected`` [1,1,32,4160] bf16 TILE (rows past the real ones finite); ``history`` [1,1,32,2560] bf16 (rows 0..2
     valid); ``taps`` 4 x [1,1,1,2560] bf16; ``constants`` from ``gdn_step.constant_tiles``; ``norm`` [1,1,1,128] bf16;
     ``recurrent`` [1,12,128,128] fp32 (read only); ``prefix`` [rows,12,128,128] fp32 (slot a = the state after a + 1
-    rows); ``out`` [1,1,32,1536] bf16 (rows >= rows exact zeros). ``split`` overrides ``SPLIT``; ``debug`` is an
-    optional ``[items, debug_tiles(rows), 32, 32]`` fp32 tensor for a DEBUG_TAPS build's intermediates."""
+    rows); ``out`` [1,1,32,1536] bf16 (rows >= rows exact zeros). ``split`` overrides ``SPLIT``."""
 
     rows = int(prefix.shape[0])
     split = SPLIT if split is None else int(split)
@@ -200,16 +187,10 @@ def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, sp
     writer_cta = [rows, vbt, *fp.accessor_args(prefix), *fp.accessor_args(out)]
     writer_addrs = [prefix.buffer_address(), out.buffer_address()]
     defines = [("INP_FLOAT32", "1")]
-    if debug is not None:
-        writer_cta.extend(fp.accessor_args(debug))
-        writer_addrs.append(debug.buffer_address())
-        defines.append(("DEBUG_TAPS", "1"))
     cbs = [
         fp.cb_descriptor(index, dtype, fp.TILE_BYTES[dtype], pages, cores)
         for index, dtype, pages in cb_table(rows, vbt)
     ]
-    if debug is not None:
-        cbs.append(fp.cb_descriptor(CB_DEBUG, FP32, fp.TILE_BYTES[FP32], debug_tiles(rows), cores))
     cbs.append(
         ttnn.CBDescriptor(
             total_size=2 * HT * vbt * fp.TILE_BYTES[FP32],
@@ -236,20 +217,13 @@ def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, sp
         fp32_dest=True,
         unpack_to_dest_fp32=FP32_COPY_CBS,
     )
-    io = [projected, history, *taps, constants, norm, recurrent, *([debug] if debug is not None else []), prefix, out]
-    # flops: the 4-tap conv and two l2 norms over the 32-row tile, per row the fp32 delta-rule update and read-out on
-    # 12 heads of 128 x 128, and the gated norm
+    io = [projected, history, *taps, constants, norm, recurrent, prefix, out]
     meta = fp.program_meta(
         NAME,
         "verify_rows",
-        rows,
-        reads=(projected, history, *taps, constants, norm, recurrent),
-        writes=(prefix, out, *([debug] if debug is not None else [])),
-        flops=TILE * (2 * 4 * QKV_WIDTH + 6 * 2 * QK_WIDTH + 6 * VALUE_WIDTH) + rows * 8 * HEADS * HEAD_DIM * HEAD_DIM,
-        cores=len(work),
         # the gated tile head-sharded on dim 3 as the wrap stamps it, the prefix states on the heads (dim 1) as the
-        # recurrent state is; the debug taps are a host readback (replicated)
-        outputs=((out, 3), (prefix, 1), *([(debug, None)] if debug is not None else [])),
+        # recurrent state is
+        outputs=((out, 3), (prefix, 1)),
     )
     descriptor = fp.program_descriptor([reader, writer, compute], cbs, semaphores=[fp.semaphore_descriptor(0, cores)])
     fp.run_program(io, descriptor, meta=meta)
@@ -284,15 +258,9 @@ def run_pick(accepted, prefix, recurrent):
         fp.cb_descriptor(1, FP32, fp.TILE_BYTES[FP32], HT, cores),
     ]
     kernel = fp.reader_kernel(PICK, cores, cta, [(w.core, [*addrs, w.count, *pairs(w)]) for w in work])
-    # the accept scalar once per core, one prefix slot read, the state written
     meta = fp.program_meta(
         NAME,
         "commit_pick",
-        rows,
-        writes=(recurrent,),
-        partial=((prefix, HEADS * STATE_TILES * fp.TILE_BYTES[FP32]),),
-        dram_bytes=len(work) * fp.TILE_BYTES[FP32],
-        cores=len(work),
         outputs=((recurrent, 1),),  # the state slot written in place: head-sharded on dim 1, as allocated
     )
     fp.run_program([accepted, prefix, recurrent], fp.program_descriptor([kernel], cbs), meta=meta)
@@ -406,19 +374,9 @@ def run_lanes(projected, history, taps, constants, norm, recurrent, prefix, out,
         unpack_to_dest_fp32=FP32_COPY_CBS,
     )
     io = [projected, history, *taps, constants, norm, recurrent, prefix, out]
-    # flops per item: the 4-tap conv and two l2 norms over the 32-row tile, per lane row the fp32 delta-rule update
-    # and read-out on one head of 128 x 128, and the gated norm
     meta = fp.program_meta(
         NAME,
         "verify_rows_lanes",
-        lanes * rows,
-        reads=(projected, *taps, constants, norm, recurrent),
-        writes=(prefix, out),
-        partial=((history, lanes * (2 * HT + vbt) * HEADS * fp.TILE_BYTES[BF16]),),
-        dram_bytes=(lanes - 1) * (fp.tensor_bytes(projected) + sum(fp.tensor_bytes(t) for t in taps)),
-        flops=lanes
-        * (TILE * (2 * 4 * QKV_WIDTH + 6 * 2 * QK_WIDTH + 6 * VALUE_WIDTH) + rows * 8 * HEADS * HEAD_DIM * HEAD_DIM),
-        cores=len(work),
         outputs=((out, 3), (prefix, 1)),
     )
     descriptor = fp.program_descriptor([reader, writer, compute], cbs)
@@ -464,15 +422,9 @@ def run_pick_lanes(counts, prefix, recurrent, *, lanes: int, rows: int):
         fp.cb_descriptor(1, FP32, fp.TILE_BYTES[FP32], HT, cores),
     ]
     kernel = fp.reader_kernel(PICK_LANES, cores, cta, [(w.core, [*addrs, w.count, *triples(w)]) for w in work])
-    # the counts once per core, one prefix slot read per lane (at most), the lane states written
     meta = fp.program_meta(
         NAME,
         "commit_pick_lanes",
-        lanes * rows,
-        writes=(recurrent,),
-        partial=((prefix, lanes * HEADS * STATE_TILES * fp.TILE_BYTES[FP32]),),
-        dram_bytes=len(work) * lanes * fp.TILE_BYTES[FP32],
-        cores=len(work),
         outputs=((recurrent, 1),),
     )
     fp.run_program([counts, prefix, recurrent], fp.program_descriptor([kernel], cbs), meta=meta)

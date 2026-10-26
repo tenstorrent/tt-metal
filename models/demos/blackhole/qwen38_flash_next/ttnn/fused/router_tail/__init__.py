@@ -249,23 +249,9 @@ def router_tail_into(logits, scores, indices, *, top_k: int = TOP_K):
                 f"router tail {name} output must be ROW_MAJOR {dtype} [.., {rows}, {top_k}], got {list(shape)} {tensor.dtype}"
             )
     index_template = router_tail_prepare(logits.device())
-    plan = _core_plan(rows)
-    # every core streams the logits tile row and the index template; per token the softmax, the bitonic top-k over the
-    # 16 width tiles and the sum / division / typecasts of the k scores
-    meta = fp.program_meta(
-        NAME,
-        "lanes",
-        rows,
-        writes=(scores, indices),
-        dram_bytes=len(plan) * (fp.tensor_bytes(index_template) + (0 if fp.in_l1(logits) else fp.tensor_bytes(logits))),
-        l1_bytes=len(plan) * fp.tensor_bytes(logits) if fp.in_l1(logits) else 0,
-        flops=rows * EXPERTS * (5 + 2 * WIDTH_TILES) + rows * top_k * 3,
-        cores=len(plan),
-    )
     fp.run_program(
         [logits, index_template, scores, indices],
         router_tail_program(logits, index_template, scores, indices, rows=rows, top_k=top_k),
-        meta=meta,
     )
     return scores, indices
 

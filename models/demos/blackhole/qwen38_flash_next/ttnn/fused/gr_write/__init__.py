@@ -100,21 +100,9 @@ def gr_write(block_output, residual, injection, *, memory_config=ttnn.DRAM_MEMOR
     output = fp.allocate((1, BRANCHES, rows, LOCAL_HIDDEN), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, memory_config)
     grid = mesh.compute_with_storage_grid_size()
     cores = min(UNITS, grid.x * grid.y)
-    # the block output is read once per branch tile and the injection once per core; a multiply and an add per element
-    meta = fp.program_meta(
-        NAME,
-        "write",
-        rows,
-        reads=(residual,),
-        writes=(output,),
-        dram_bytes=BRANCHES * fp.tensor_bytes(block_output) + cores * fp.tensor_bytes(injection),
-        flops=2 * rows * BRANCHES * LOCAL_HIDDEN,
-        cores=cores,
-    )
     fp.run_program(
         [block_output, residual, injection, output],
         gr_write_program(block_output, residual, injection, output, cores=cores),
-        meta=meta,
     )
     output.update_tensor_topology(residual.tensor_topology())  # generic_op leaves the allocation's placement
     return output

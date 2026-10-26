@@ -97,17 +97,8 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
             ),
         ]
 
-    blocks = 1 if single_row else 2
     return qsa_block.KVStage(
-        cores=[core],
-        cb_descriptors=cb_descriptors,
-        kernels=kernels,
-        io=[position, rows, kv_cache],
-        reads=(position, rows),
-        writes=(),
-        partial=((kv_cache, blocks * fp.TILE * ROW_BYTES),),
-        flops=0,
-        name="main_tail_rows",
+        cores=[core], cb_descriptors=cb_descriptors, kernels=kernels, io=[position, rows, kv_cache]
     )
 
 

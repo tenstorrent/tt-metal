@@ -306,25 +306,9 @@ def mtp_accept(
         named={"cb_stage": CB_STAGE, "rows": rows, "lanes": LANES, "table_size": TABLE_SIZE},
     )
     pages = -(-stage_bytes(rows) // TILE_BYTES)
-    # flops: per evaluated row the sampler tail's six passes over the lanes, plus one for the decision and the draw
-    meta = fp.program_meta(
-        NAME,
-        "accept",
-        rows,
-        reads=(candidate_rows, draft_lanes),
-        writes=(accept_tile, accept_index, next_token, alignment_tokens, statistics),
-        partial=(
-            (constants.policy_row, GRAIN),
-            (constants.uniforms, TOKEN_ROW_SHAPE[3] * 4),
-            (constants.weight_table, rows * MAX_TOP_K * GRAIN),
-        ),
-        flops=rows * LANES * 7,
-        cores=1,
-    )
     fp.run_program(
         accessed,
         fp.program_descriptor([kernel], cbs=[fp.cb_descriptor(CB_STAGE, ttnn.float32, TILE_BYTES, pages, one)]),
-        meta=meta,
     )
     return fp.stamp_topology(statistics, candidate_rows)
 

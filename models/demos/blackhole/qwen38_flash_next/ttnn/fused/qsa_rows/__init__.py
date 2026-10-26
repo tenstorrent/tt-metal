@@ -194,14 +194,6 @@ def post_attention_rows(attention, qg_ws, *, memory_config=None, qg_first: int =
     meta = fp.program_meta(
         NAME,
         "post_attention_rows",
-        rows,
-        partial=(
-            (attention, qsa_block.LOCAL_HEADS * rows * qsa_block.HEAD_DIM * 2),
-            (qg_ws, qsa_block.LOCAL_HEADS * qsa_block.HEAD_TILES * fp.TILE_BYTES[ttnn.bfloat16]),
-        ),
-        writes=(out,),
-        flops=2 * rows * qsa_block.OUT_WIDTH,
-        cores=len(work),
         outputs=((out, 3),),
     )
     return fp.run_program([attention, qg_ws, out], fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)

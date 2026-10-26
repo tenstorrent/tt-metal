@@ -194,15 +194,9 @@ def position_derive(
     compile_args = [a for t in tensors for a in fp.accessor_args(t)]
     reader = fp.reader_kernel(KERNEL, grid, compile_args, [(core, [t.buffer_address() for t in tensors])], named=named)
     cbs = [fp.cb_descriptor(CB_STAGE, ttnn.bfloat16, STAGE_PAGE_BYTES, STAGE_PAGES, grid)]
-    # dram_bytes: the four table rows
     meta = fp.program_meta(
         NAME,
         "derive",
-        1,
-        reads=(position, bf16_tpl, u32_tpl, tile_tpl, rope_shift),
-        writes=tuple(outs.values()),
-        dram_bytes=4 * ROPE_DIM * 2,
-        cores=1,
         outputs=tuple((tensor, position) for tensor in outs.values()),  # replicated, as the position is
     )
     fp.run_program(tensors, fp.program_descriptor([reader], cbs=cbs), meta=meta)
@@ -296,19 +290,6 @@ def position_derive_lanes(
     meta = fp.program_meta(
         NAME,
         "derive_lanes",
-        lanes,
-        writes=tuple(outs.values()),
-        dram_bytes=TILE
-        * (
-            fp.tensor_bytes(position_row)
-            + fp.tensor_bytes(lane_offsets)
-            + fp.tensor_bytes(bf16_tpl)
-            + fp.tensor_bytes(u32_tpl)
-            + fp.tensor_bytes(tile_tpl)
-            + fp.tensor_bytes(rope_shift_row)
-            + 4 * ROPE_DIM * 2
-        ),
-        cores=TILE,
         outputs=tuple((tensor, position_row) for tensor in outs.values()),  # replicated, as the position row is
     )
     fp.run_program(tensors, fp.program_descriptor([reader], cbs=cbs), meta=meta)

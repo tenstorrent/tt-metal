@@ -252,17 +252,7 @@ def post_cast(o, o16):
         approx=False,
         unpack_to_dest_fp32=CAST_FP32_COPY_CBS,
     )
-    # every page of o read and of o16 written once; one rounding operation per element
-    meta = fp.program_meta(
-        NAME,
-        "cast_verify" if chunks == 1 else "cast",
-        chunks * TILE,
-        reads=(o,),
-        writes=(o16,),
-        flops=HEADS * chunks * TILE * HEAD_DIM,
-        cores=len(work),
-    )
-    return fp.run_program([o, o16], fp.program_descriptor([reader, writer, compute], cbs), meta=meta)
+    return fp.run_program([o, o16], fp.program_descriptor([reader, writer, compute], cbs))
 
 
 def post_norm(o16, sig, norm, scalars, projected, gated, history_next=None, *, rows=None, history=True):
@@ -352,20 +342,7 @@ def post_norm(o16, sig, norm, scalars, projected, gated, history_next=None, *, r
     io = [o16, sig, norm, scalars, projected, gated]
     if history:
         io.append(history_next)
-    # o16, sig and gated a page per unit, gamma and the constant tiles once per core, with history the projection's
-    # last-row q|k|v tiles and history_next; one operation per element per norm step and for the gate
-    meta = fp.program_meta(
-        NAME,
-        "norm" if history else "norm_verify",
-        int(rows),
-        reads=(o16, sig),
-        writes=(gated, history_next) if history else (gated,),
-        partial=((projected, HISTORY_HEADS * HISTORY_COLUMNS * fp.TILE_BYTES[BF16]),) if history else (),
-        dram_bytes=len(work) * (HEAD_TILES + SCALAR_TILES) * fp.TILE_BYTES[BF16],
-        flops=5 * HEADS * chunks * TILE * HEAD_DIM,
-        cores=len(work),
-    )
-    fp.run_program(io, fp.program_descriptor([reader, writer, compute], cbs), meta=meta)
+    fp.run_program(io, fp.program_descriptor([reader, writer, compute], cbs))
     return gated, (history_next if history else None)
 
 

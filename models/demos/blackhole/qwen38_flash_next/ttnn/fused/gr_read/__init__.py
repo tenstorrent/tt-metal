@@ -156,14 +156,9 @@ def stats(residual):
     )
     compute = fp.compute_kernel(STATS, cores, [HIDDEN_TILES], fp32_dest=True)
     writer = _writer(cores, [(out, 16)], [(w.core, [(1, w.start, 1, 1)]) for w in work])
-    meta = fp.program_meta(  # the residual in (each core its branch), the stats tiles out; square and sum per element
+    meta = fp.program_meta(
         NAME,
         "stats",
-        rows,
-        reads=(residual,),
-        writes=(out,),
-        flops=2 * rows * FLAT_WIDTH,
-        cores=len(work),
         outputs=((out, 3),),
     )
     return fp.run_program([residual, out], fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)
@@ -192,7 +187,6 @@ def noc_map(mesh) -> dict[tuple[int, int], tuple[int, int]]:
             fp.program_descriptor(
                 [probe], cbs=[fp.cb_descriptor(0, ttnn.uint32, fp.TILE_BYTES[ttnn.uint32], 1, core_set)]
             ),
-            meta=fp.program_meta(NAME, "noc_probe", 1, writes=(out,), cores=len(cores)),  # once per mesh
         )
         maps = []
         for shard in ttnn.get_device_tensors(out):  # one probe tile per device of the mesh
@@ -350,16 +344,9 @@ def normalize_down(residual, gathered_stats, norm_scale, down_inject):
     )
     down = fp.compute_kernel(DOWN, w_set, [FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fp32_dest=True)
     writer = _writer(w_set, [(partial, 17)], [(core, [(1, w, 1, 1)]) for w, core in enumerate(workers)])
-    # l1_bytes: the flat row multicast to the down cores; flops: the norm's four passes, then the down+inject matmul
     meta = fp.program_meta(
         NAME,
         "normalize_down",
-        rows,
-        reads=(residual, gathered_stats, norm_scale, down_inject),
-        writes=(normalized, partial),
-        l1_bytes=len(workers) * fp.tensor_bytes(normalized),
-        flops=4 * rows * FLAT_WIDTH + 2 * rows * FLAT_WIDTH * PARTIAL_WIDTH,
-        cores=len(workers) + len(producers),
         outputs=((normalized, 3),),  # the partial is a partial sum the caller hands to its gather
     )
     fp.run_program(
@@ -468,16 +455,9 @@ def low_rank_gate(gathered_partials, normalized, up):
         unpack_to_dest_fp32=(10, 12, 13),
     )
     writer = _writer(w_set, [(block, 18)], [(core, [(1, j, 1, 1)]) for j, core in enumerate(workers)])
-    # l1_bytes: the low-rank row multicast to the gate cores; flops: the fold, the up matmul, the gate and branch sum
     meta = fp.program_meta(
         NAME,
         "low_rank_gate",
-        rows,
-        reads=(gathered_partials, normalized, up),
-        writes=(block, injection),
-        l1_bytes=len(workers) * PARTIAL_TILES * TILE_BF16,
-        flops=(TP_SIZE + 3) * rows * PARTIAL_WIDTH + 2 * rows * PARTIAL_WIDTH * FLAT_WIDTH + 3 * rows * FLAT_WIDTH,
-        cores=len(workers) + len(producers),
         outputs=((block, 3), (injection, None)),
     )
     fp.run_program(

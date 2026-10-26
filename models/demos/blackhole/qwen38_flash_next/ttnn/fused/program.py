@@ -10,13 +10,12 @@ repository root), circular buffers, semaphores and per-core runtime args describ
 Rows contract: every decode activation is one 32-row tile with ``rows`` valid rows (1 for decode, up to 32 for lanes
 and MTP verify); ``rows_of`` reads and checks it.  A kernel takes the padded tile and produces only the valid rows.
 
-The profiler sees every fused program as ``GenericOp``, so each builder passes ``meta=program_meta(...)`` stating its
-kernel, form, rows, bytes and FLOPs; with ``record_program_meta`` on, launches are recorded with their device op ids.
+generic_op leaves each output with its allocation's default placement, so a builder declares its outputs' placements
+with ``program_meta`` and ``run_program`` stamps them after the launch.
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -31,9 +30,6 @@ CB_COUNT = (
 )
 REPO_ROOT = Path(__file__).resolve().parents[6]
 KERNEL_ROOT = "models/demos/blackhole/qwen38_flash_next/ttnn/fused"
-# Must match tt-metal's ReaderConfig / WriterConfig default NoCs. A NOC_1 multicast starts at the bottom-right corner.
-READER_NOC = 0
-WRITER_NOC = 1
 ELEMENT_BYTES = {ttnn.bfloat16: 2, ttnn.uint16: 2, ttnn.float32: 4, ttnn.uint32: 4, ttnn.int32: 4}
 TILE_BYTES = {
     ttnn.bfloat16: 2048,
@@ -44,19 +40,6 @@ TILE_BYTES = {
     ttnn.bfloat8_b: 1088,
     ttnn.bfloat4_b: 576,
 }
-
-
-def multicast_corners(x0: int, y0: int, x1: int, y1: int, *, noc: int) -> tuple[int, int, int, int]:
-    """The (start_x, start_y, end_x, end_y) a multicast on ``noc`` needs for a NoC-0 rectangle (x0, y0)..(x1, y1).
-
-    NOC_0 starts top-left, NOC_1 bottom-right. A kernel that swaps on ``noc_index`` itself must be given the
-    top-left-first rectangle instead, never both."""
-
-    if noc not in (READER_NOC, WRITER_NOC):
-        raise ValueError(f"noc must be 0 or 1, got {noc}")
-    if x0 > x1 or y0 > y1:
-        raise ValueError(f"rectangle corners out of order: ({x0}, {y0}) .. ({x1}, {y1})")
-    return (x0, y0, x1, y1) if noc == READER_NOC else (x1, y1, x0, y0)
 
 
 def kernel_source(name: str, file: str) -> str:
@@ -271,78 +254,18 @@ def stamp_topology(tensor, reference, shard_dim: int | None = None):
 
 @dataclass(frozen=True)
 class FusedProgramMeta:
-    """One fused program as its builder states it, computed from the shapes the descriptor was built from.
+    """The written buffers of one fused program as its builder declares them.
 
-    ``kernel`` is the registry name, ``variant`` the program form, ``rows`` the valid rows served. ``dram_bytes`` counts
-    an operand every core streams once per core and a data-dependent partial read at its bound; ``l1_bytes`` counts
-    other bytes moved through L1; ``flops`` is the arithmetic issued (a matmul 2MNK, 0 for data movement)."""
+    ``kernel`` is the registry name, ``variant`` the program form."""
 
     kernel: str
     variant: str
-    rows: int
-    dram_bytes: int
-    l1_bytes: int
-    flops: int
-    cores: int = 0  # the cores the program runs on (0 = not stated)
     # ``(tensor, placement)`` pairs for the written buffers: ``None`` replicated, an int the sharded dim, a tensor "as
     # that tensor's". ``run_program`` stamps them; generic_op leaves the allocation's default placement.
-    outputs: tuple = ()
+    outputs: tuple
 
 
-@dataclass(frozen=True)
-class FusedProgramRecord:
-    """One recorded launch: the device operation ids ``[first_id, end_id)`` it spanned and its meta."""
-
-    first_id: int
-    end_id: int
-    meta: FusedProgramMeta
-
-    def covers(self, base: int) -> bool:
-        return self.first_id <= base < self.end_id
-
-
-_META_RECORDS: list[FusedProgramRecord] = []
-_META_RECORDING = False
-
-
-def tensor_bytes(tensor) -> int:
-    """The bytes of ``tensor``'s padded volume in its dtype (block floats by whole tiles)."""
-
-    volume = math.prod(int(v) for v in _padded_shape(tensor))
-    if tensor.dtype in ELEMENT_BYTES:
-        return volume * ELEMENT_BYTES[tensor.dtype]
-    if tensor.dtype in TILE_BYTES:
-        return volume // (TILE * TILE) * TILE_BYTES[tensor.dtype]
-    raise ValueError(f"no byte size for dtype {tensor.dtype}")
-
-
-def in_l1(tensor) -> bool:
-    """Whether ``tensor``'s buffer lives in L1 (a host fake without a memory config counts as DRAM)."""
-
-    try:
-        return tensor.memory_config().buffer_type == ttnn.BufferType.L1
-    except (AttributeError, RuntimeError, TypeError):
-        return False
-
-
-def program_meta(
-    kernel: str,
-    variant: str,
-    rows: int,
-    *,
-    reads: Iterable = (),
-    writes: Iterable = (),
-    partial: Iterable = (),
-    flops: int = 0,
-    dram_bytes: int = 0,
-    l1_bytes: int = 0,
-    cores: int = 0,
-    outputs: Iterable = (),
-) -> FusedProgramMeta:
-    """The meta of one program: each tensor of ``reads`` / ``writes`` once and each ``(tensor, bytes)`` of ``partial``,
-    to ``dram_bytes`` or ``l1_bytes`` by where its buffer lives, plus the explicit bytes and FLOPs."""
-
-    dram, l1 = int(dram_bytes), int(l1_bytes)
+def program_meta(kernel: str, variant: str, *, outputs: Iterable) -> FusedProgramMeta:
     declared = []
     for entry in outputs:
         tensor, placement = entry
@@ -351,40 +274,7 @@ def program_meta(
                 f"program meta of {kernel}/{variant}: an output placement is None, a shard dim or a tensor"
             )
         declared.append((tensor, placement))
-    for tensor, count in [*((t, None) for t in (*reads, *writes)), *partial]:
-        size = tensor_bytes(tensor) if count is None else int(count)
-        if in_l1(tensor):
-            l1 += size
-        else:
-            dram += size
-    if dram < 0 or l1 < 0 or int(flops) < 0 or int(rows) < 1:
-        raise ValueError(f"program meta of {kernel}/{variant}: bytes and flops must be >= 0 and rows >= 1")
-    return FusedProgramMeta(str(kernel), str(variant), int(rows), dram, l1, int(flops), int(cores), tuple(declared))
-
-
-def record_program_meta(enabled: bool = True) -> None:
-    """Switch the recording of launches on or off (the default: no host cost)."""
-
-    global _META_RECORDING
-    _META_RECORDING = bool(enabled)
-
-
-def program_meta_recording() -> bool:
-    return _META_RECORDING
-
-
-def reset_program_meta() -> None:
-    _META_RECORDS.clear()
-
-
-def program_meta_records() -> tuple[FusedProgramRecord, ...]:
-    """Every launch recorded since the last reset, in call order."""
-
-    return tuple(_META_RECORDS)
-
-
-def _device_operation_id() -> int:
-    return int(ttnn._ttnn.get_device_operation_id())
+    return FusedProgramMeta(str(kernel), str(variant), tuple(declared))
 
 
 def restamp_outputs(outputs, io_tensors: Sequence, result=None) -> None:
@@ -410,46 +300,10 @@ def restamp_outputs(outputs, io_tensors: Sequence, result=None) -> None:
 def run_program(io_tensors: Sequence, descriptor, *, meta: FusedProgramMeta | None = None):
     """Inputs first, pre-allocated outputs last; returns the last tensor.
 
-    ``descriptor`` is a ProgramDescriptor or a MeshProgramDescriptor; ``meta`` is recorded while recording is on and its
-    ``outputs`` are stamped with their declared placements after the launch."""
+    ``descriptor`` is a ProgramDescriptor or a MeshProgramDescriptor; ``meta``'s ``outputs`` are stamped with their
+    declared placements after the launch."""
 
-    if not _META_RECORDING or meta is None:
-        result = ttnn.generic_op(list(io_tensors), descriptor)
-    else:
-        first = _device_operation_id()
-        result = ttnn.generic_op(list(io_tensors), descriptor)
-        _META_RECORDS.append(FusedProgramRecord(first, max(first + 1, _device_operation_id()), meta))
+    result = ttnn.generic_op(list(io_tensors), descriptor)
     if meta is not None:
         restamp_outputs(meta.outputs, io_tensors, result)
     return result
-
-
-def traced_us_per_call(mesh, call, *, calls: int = 20, replays: int = 10, release=None) -> float:
-    """Host wall per call of ``call()`` captured ``calls`` times in one trace and replayed ``replays`` times.
-
-    ``call`` runs once eagerly before the capture, since a program not in the program cache cannot load during trace
-    capture; the first replay is untimed. ``release(result)`` frees what ``call`` returns."""
-
-    import time
-
-    def free(result):
-        for tensor in result if isinstance(result, (tuple, list)) else (result,):
-            if hasattr(tensor, "injection"):  # a GR state
-                ttnn.deallocate(tensor.injection)
-            elif tensor is not None:
-                ttnn.deallocate(tensor)
-
-    release = free if release is None else release
-    release(call())
-    trace = ttnn.begin_trace_capture(mesh, cq_id=0)
-    kept = [call() for _ in range(calls)]
-    ttnn.end_trace_capture(mesh, trace, cq_id=0)
-    ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-    started = time.perf_counter()
-    for _ in range(replays):
-        ttnn.execute_trace(mesh, trace, cq_id=0, blocking=True)
-    elapsed = time.perf_counter() - started
-    ttnn.release_trace(mesh, trace)
-    for result in kept:
-        release(result)
-    return round(elapsed / (replays * calls) * 1e6, 2)

@@ -44,8 +44,8 @@ def test_cb_indices_agree_between_kernels_and_python():
         assert compute[name] == index, name
     for rows, vbt in ((5, 4), (2, 1), (8, 4)):
         table = module.cb_table(rows, vbt)
-        declared = {index for index, _, _ in table} | {module.CB_SNEWC, module.CB_OUTS, module.CB_DEBUG}
-        assert len(declared) == len(table) + 3 and max(declared) <= 31
+        declared = {index for index, _, _ in table} | {module.CB_SNEWC, module.CB_OUTS}
+        assert len(declared) == len(table) + 2 and max(declared) <= 31
         used = set(compute.values())
         assert used <= declared, sorted(used - declared)
         # the depths that follow the item: the conv tiles, the state tiles, one a/b pair and one mask per row
@@ -104,8 +104,8 @@ def test_kernel_argument_layouts():
     assert reader.count("get_arg_val<uint32_t>(arg++)") == 10 + 2  # 9 addresses, items, then (head, vb)
     assert "TensorAccessorArgs<2>" in reader and "get_compile_time_arg_val(0)" in reader
     writer = (KERNELS / "writer.cpp").read_text()
-    assert writer.count("TensorAccessorArgs<") == 3 and "TensorAccessorArgs<2>" in writer  # prefix, out, debug
-    assert writer.count("get_arg_val<uint32_t>(arg++)") == 3 + 1 + 2 + 2  # + the debug address, the peers' (x, y)
+    assert writer.count("TensorAccessorArgs<") == 2 and "TensorAccessorArgs<2>" in writer  # prefix, out
+    assert writer.count("get_arg_val<uint32_t>(arg++)") == 2 + 1 + 2 + 2  # addresses, items, (head, vb), peers' (x, y)
     assert "noc_semaphore_wait_min(sem, PEERS)" in writer and "get_semaphore(0)" in writer
     pick = (KERNELS / "pick.cpp").read_text()
     assert pick.count("TensorAccessorArgs<") == 3 and "TensorAccessorArgs<1>" in pick  # accepted, prefix, recurrent
@@ -308,7 +308,7 @@ def test_the_fused_body_is_the_wraps_frame_around_one_program():
     # the placements come from the launch itself (the program meta's outputs), not from a hand stamp after it
     assert calls.count("run") == 1 and "fp.stamp_topology" not in calls
     source = inspect.getsource(module)
-    assert "outputs=((out, 3), (prefix, 1), *([(debug, None)] if debug is not None else []))," in source
+    assert "outputs=((out, 3), (prefix, 1))," in source
     assert "outputs=((recurrent, 1),)," in source  # commit_pick: the state slot written in place
 
 

@@ -91,10 +91,7 @@ def stats(x):
     )
     compute = fp.compute_kernel(gr.STATS, one, [LOCAL_TILES], fp32_dest=True)
     writer = gr._writer(one, [(out, 16)], [(core, [(1, 0, 1, 1)])])
-    meta = fp.program_meta(  # the row-block in, the stats tile out; square and sum per element
-        NAME, "stats", BRANCHES, reads=(x,), writes=(out,), flops=2 * BRANCHES * LOCAL_HIDDEN, cores=1
-    )
-    return fp.run_program([x, out], fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)
+    return fp.run_program([x, out], fp.program_descriptor([reader, compute, writer], cbs=cbs))
 
 
 def normalize(x, gathered_stats, weight):
@@ -141,18 +138,7 @@ def normalize(x, gathered_stats, weight):
     )
     compute = fp.compute_kernel(NORM_COMPUTE, one, [LOCAL_TILES, STATS_TILES, 4, 16], fp32_dest=True)
     writer = gr._writer(one, [(out, 16)], [(core, [(LOCAL_TILES, 0, 1, 4)])])
-    meta = fp.program_meta(  # the row-block, the gathered stats and the weight in, the normalized block out
-        NAME,
-        "normalize",
-        BRANCHES,
-        reads=(x, gathered_stats, weight),
-        writes=(out,),
-        flops=4 * BRANCHES * LOCAL_HIDDEN,
-        cores=1,
-    )
-    return fp.run_program(
-        [x, gathered_stats, weight, out], fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta
-    )
+    return fp.run_program([x, gathered_stats, weight, out], fp.program_descriptor([reader, compute, writer], cbs=cbs))
 
 
 def group_norm_composed(x, gathered_stats, weight, compute_config, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
@@ -227,18 +213,7 @@ def gate(key_global, query_global, value, *, debug: bool = False):
         [(core, [out.buffer_address(), dbg[0].buffer_address(), dbg[1].buffer_address(), 0])],
     )
     io = [key_global, query_global, value, scale, zero, out] + (dbg if debug else [])
-    # the two global norms, the value row and the constants in, the gated block out; the fp32 product and sum over
-    # the 4 x 2560 gate inputs, the scalar chain, the value repeated and gated
-    meta = fp.program_meta(
-        NAME,
-        "gate",
-        BRANCHES,
-        reads=(key_global, query_global, value, scale, zero),
-        writes=(out, *(dbg if debug else [])),
-        flops=4 * BRANCHES * HIDDEN + 8 * BRANCHES + BRANCHES * LOCAL_HIDDEN,
-        cores=1,
-    )
-    fp.run_program(io, fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)
+    fp.run_program(io, fp.program_descriptor([reader, compute, writer], cbs=cbs))
     return (out, dbg[0], dbg[1]) if debug else out
 
 
@@ -340,19 +315,7 @@ def conv(
         [(w.core, [out.buffer_address(), w.start, injected.buffer_address()]) for w in work],
     )
     io = list(inputs) + others + ([inject_residual, out, injected] if inject else [out])  # each buffer once
-    # with ``shift`` the nine state copies (eight rows read, nine written); per element the multiply, three macs, the
-    # silu and the add (and the residual add)
-    meta = fp.program_meta(
-        NAME,
-        "conv_inject" if inject else "conv",
-        BRANCHES,
-        reads=(state_rows[0], state_rows[3], state_rows[6], normalized, gated, *((inject_residual,) if inject else ())),
-        writes=(injected,) if inject else (out,),
-        dram_bytes=sum(fp.tensor_bytes(w) for w in taps) + int(shift) * (8 + 9) * fp.tensor_bytes(normalized),
-        flops=(9 + int(inject)) * BRANCHES * LOCAL_HIDDEN,
-        cores=len(work),
-    )
-    fp.run_program(io, fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)
+    fp.run_program(io, fp.program_descriptor([reader, compute, writer], cbs=cbs))
     if inject:
         ttnn.deallocate(out)
         return injected
@@ -543,10 +506,7 @@ def stats_lanes(x, lanes: int):
     )
     compute = fp.compute_kernel(gr.STATS, core_set, [LOCAL_TILES], fp32_dest=True)
     writer = gr._writer(core_set, [(out, 16)], [(c, [(1, u, 1, 1)]) for u, c in enumerate(cores)])
-    meta = fp.program_meta(
-        NAME, "stats_lanes", lanes, reads=(x,), writes=(out,), flops=2 * lanes * BRANCHES * LOCAL_HIDDEN, cores=lanes
-    )
-    return fp.run_program([x, out], fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)
+    return fp.run_program([x, out], fp.program_descriptor([reader, compute, writer], cbs=cbs))
 
 
 def normalize_lanes(x, gathered_stats, weight, lanes: int):
@@ -595,19 +555,7 @@ def normalize_lanes(x, gathered_stats, weight, lanes: int):
     writer = gr._writer(
         core_set, [(out, 16)], [(c, [(LOCAL_TILES, u * LOCAL_TILES, 1, 4)]) for u, c in enumerate(cores)]
     )
-    meta = fp.program_meta(  # the weight once per lane core
-        NAME,
-        "normalize_lanes",
-        lanes,
-        reads=(x, gathered_stats),
-        writes=(out,),
-        dram_bytes=lanes * fp.tensor_bytes(weight),
-        flops=4 * lanes * BRANCHES * LOCAL_HIDDEN,
-        cores=lanes,
-    )
-    return fp.run_program(
-        [x, gathered_stats, weight, out], fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta
-    )
+    return fp.run_program([x, gathered_stats, weight, out], fp.program_descriptor([reader, compute, writer], cbs=cbs))
 
 
 def gate_lanes(key_global, query_global, value, lanes: int):
@@ -655,17 +603,7 @@ def gate_lanes(key_global, query_global, value, lanes: int):
             for u, c in enumerate(cores)
         ],
     )
-    meta = fp.program_meta(  # the constants once per lane core
-        NAME,
-        "gate_lanes",
-        lanes,
-        reads=(key_global, query_global, value),
-        writes=(out,),
-        dram_bytes=lanes * (fp.tensor_bytes(scale) + fp.tensor_bytes(zero)),
-        flops=lanes * (4 * BRANCHES * HIDDEN + 8 * BRANCHES + BRANCHES * LOCAL_HIDDEN),
-        cores=lanes,
-    )
-    fp.run_program([*tensors, out], fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)
+    fp.run_program([*tensors, out], fp.program_descriptor([reader, compute, writer], cbs=cbs))
     return out
 
 
@@ -721,17 +659,7 @@ def conv_lanes(state_rows, normalized, taps, gated, lanes: int, *, mac_form: int
         [(w.core, [out.buffer_address(), w.start * per_core, out.buffer_address()]) for w in work],
     )
     io = list(inputs) + others + [out]  # each buffer once
-    meta = fp.program_meta(  # as ``conv`` on the B row-blocks; the taps once per lane block
-        NAME,
-        "conv_lanes",
-        lanes,
-        reads=(state_rows[0], state_rows[3], state_rows[6], normalized, gated),
-        writes=(out,),
-        dram_bytes=lanes * sum(fp.tensor_bytes(w) for w in taps) + int(shift) * (8 + 9) * fp.tensor_bytes(normalized),
-        flops=9 * lanes * BRANCHES * LOCAL_HIDDEN,
-        cores=len(work),
-    )
-    fp.run_program(io, fp.program_descriptor([reader, compute, writer], cbs=cbs), meta=meta)
+    fp.run_program(io, fp.program_descriptor([reader, compute, writer], cbs=cbs))
     return out
 
 

@@ -247,20 +247,9 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             page_strides=(1, PT),
         ),
     ]
-    # dram_bytes: every device's stats and partial tiles landing in the gathered tensors; l1_bytes: the u row and recip
-    # multicasts and the tiles handed to the transport cores
     meta = fp.program_meta(
         NAME,
         "stats_recip_down_gather",
-        rows,
-        reads=(residual, norm_scale, down_inject),
-        writes=(normalized,),
-        dram_bytes=TP_SIZE * (B * T_BF16 + PT * T_FP32),
-        l1_bytes=len(workers) * (fp.tensor_bytes(normalized) + B * T_FP32) + B * T_BF16 + PT * T_FP32,
-        flops=6 * rows * gr_read.FLAT_WIDTH
-        + 2 * rows * gr_read.FLAT_WIDTH * gr_read.PARTIAL_WIDTH
-        + 2 * rows * B * gr_read.PARTIAL_WIDTH,
-        cores=len(workers) + len(producers) + links,
         outputs=((gathered_stats, None), (normalized, 3), (gathered, None)),
     )
     fp.run_program(

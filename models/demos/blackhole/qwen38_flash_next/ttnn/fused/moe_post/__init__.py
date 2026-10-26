@@ -189,32 +189,8 @@ def moe_post(pages, scores, indices, owner, shared, *, sigmoid=None, memory_conf
     fp.run_program(
         io,
         moe_post_program(pages, scores, indices, owner, shared, sigmoid, out, rows=rows),
-        meta=moe_post_meta(pages, scores, indices, owner, shared, sigmoid, out, rows=rows),
     )
     return out
-
-
-def moe_post_meta(pages, scores, indices, owner, shared, sigmoid, out, *, rows: int) -> "fp.FusedProgramMeta":
-    """What the program moves and issues: the owned fragments at their bound (every slot owned), the routing and owner
-    rows once per core, the shared partial and sigmoid once, the sum out; per output element the ten-slot MAC, the add
-    and, with the sigmoid, its multiply."""
-
-    cores = HIDDEN_TILES
-    routing = fp.tensor_bytes(scores) + fp.tensor_bytes(indices)
-    per_core = cores * (routing + fp.tensor_bytes(owner))
-    l1 = per_core if fp.in_l1(scores) else 0
-    reads = (pages, shared) + (() if sigmoid is None else (sigmoid,))
-    return fp.program_meta(
-        NAME,
-        "post" if sigmoid is None else "post_sigmoid",
-        rows,
-        reads=reads,
-        writes=(out,),
-        dram_bytes=0 if l1 else per_core,
-        l1_bytes=l1,
-        flops=rows * HIDDEN * (2 * TOP_K + 1 + (0 if sigmoid is None else 1)),
-        cores=cores,
-    )
 
 
 def _compute_config(mesh):
