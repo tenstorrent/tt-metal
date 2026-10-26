@@ -11,12 +11,34 @@
 
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
+#include <nanobind/stl/optional.h>
 
 namespace ttnn::global_semaphore {
 
 void py_module_types(nb::module_& mod) { nb::class_<GlobalSemaphore>(mod, "global_semaphore"); }
 
 void py_module(nb::module_& mod) {
+    mod.def(
+        "experimental_create_global_semaphore_at_address",
+        [](tt::tt_metal::distributed::MeshDevice& mesh,
+           const tt::tt_metal::CoreRangeSet& cores,
+           std::optional<uint32_t> initial_value,
+           tt::tt_metal::BufferType buffer_type,
+           uint64_t address) {
+            // The Metal entry point validates every destination before initializing storage.
+            using namespace tt::tt_metal;
+            TT_FATAL(buffer_type == BufferType::L1, "Address-based semaphores require ordinary SRAM");
+            return tt::tt_metal::experimental::CreateGlobalSemaphore(mesh, cores, initial_value, buffer_type, address);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("cores"),
+        nb::arg("initial_value"),
+        nb::arg("buffer_type"),
+        nb::arg("address"),
+        nb::keep_alive<0, 1>(),
+        "Initialize a non-owning semaphore at one address on all supplied mesh devices and cores. "
+        "Metal validates alignment and the padded write range against allocatable SRAM; the caller retains backing.");
     mod.def(
         "create_global_semaphore",
         &ttnn::global_semaphore::create_global_semaphore,

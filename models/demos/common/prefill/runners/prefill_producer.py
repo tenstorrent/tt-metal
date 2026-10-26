@@ -283,10 +283,9 @@ def _completion_layers_per_chunk(kv_table) -> int:
     """Layer completions one chunk produces across all ranks.
 
     NUM_ACK_LAYERS counts only what the model's own layers emit; DFlash acks the drafter's context K/V
-    past the verifier's last layer, so the runner emits more. Read the wider count off the published
-    table rather than re-deriving the drafter's depth here: a drafter config spans the same global layer
-    axis the acks are numbered on, and the table is the only thing this device-less process and the
-    runner both see.
+    past the verifier's last layer, so the runner emits more. The drafter config's rows continue the model's
+    layer axis, so its depth is the config's extent past NUM_LAYERS -- read off the published table, the only
+    thing this device-less process and the runner both see.
     """
     base = NUM_ACK_LAYERS + MTP_DECODE_LEVELS
     if kv_table is None:
@@ -294,7 +293,7 @@ def _completion_layers_per_chunk(kv_table) -> int:
     dflash = [name for name in _config_names(kv_table) if name.startswith("dflash_")]
     if not dflash:
         return base
-    return kv_table.config(kv_table.config_id_of(dflash[0])).num_layers
+    return base + kv_table.config(kv_table.config_id_of(dflash[0])).num_layers - NUM_LAYERS
 
 
 def _completion_layer_bound(chunk_layers: int) -> int:

@@ -10,7 +10,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import distinct_dest_accumulation_modes
-from helpers.data_format_inference import effective_dest_acc
+from helpers.data_format_inference import effective_dest_acc, unpacks_to_dest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -870,7 +870,7 @@ def _relu_max_probe_spec(threshold, formats, dest_acc):
         values += [float("inf"), float("-inf"), float("nan"), _NEGATIVE_NAN]
     if negative_zero_delivered(formats.input_format, dest_acc):
         values.append(-0.0)
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes:
+    if unpacks_to_dest(formats.input_format, dest_acc):
         values += [
             _FP32_MIN_SUBNORMAL,
             -_FP32_MIN_SUBNORMAL,
@@ -1466,9 +1466,7 @@ def eltwise_unary_sfpu(
         ),
         dest_acc=dest_acc,
         # dest_acc off: Float32 unpacks to 16-bit in src regs (later copied to dest for SFPU op)
-        unpack_to_dest=(
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        unpack_to_dest=unpacks_to_dest(formats.input_format, dest_acc),
     )
 
     res_from_L1 = configuration.run().result

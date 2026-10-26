@@ -63,6 +63,10 @@ struct ChunkGdnFusedProgramConfig {
     // 1 double credit, 2 wrong canary, 3 short push, 4 wrong owner, 5 no credit) so the fault test can prove the named
     // check trips. 0 = none. Hashed.
     uint32_t handoff_fault = 0;
+    // Heads per launch: the BH heads run as ceil(BH / wave_heads) programs of (nearly) equal size, each with
+    // its own geometry for its head count. nullopt = the op's plan: one program up to 32 heads when a geometry
+    // fits, else the fewest waves of at most 24 heads.
+    std::optional<uint32_t> wave_heads;
 };
 
 using ChunkGdnProgramConfig =
