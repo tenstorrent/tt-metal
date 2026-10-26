@@ -255,7 +255,7 @@ CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's
   what bf16 scores alone give, so no indexer change since 2026-10-17 is needed to explain them.
 - enc_source_engram_17 also hits pytest-timeout (300 s) in the same run.
 
-## DS41-120: real-time profiler off on chips 7 and 10 (8x4 Galaxy, FIX.3)
+## Real-time profiler off on chips 7 and 10 (8x4 Galaxy, FIX.3, DS41-120)
 
 - Host: kernel cmdline `iommu=pt` (Weka's NIC needs passthrough); `/etc/systemd/system/tt-iommu-domains.service`
   (`/usr/local/sbin/tt-iommu-domains.sh apply`, oneshot at boot, 2026-10-22 10:16) unbinds each TT card, writes
@@ -279,7 +279,7 @@ CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's
 - Fix at the cause needs root: `sudo systemctl restart tt-iommu-domains` (idempotent; converts only the two cards).
   Durable: the service should also run on a TT device add (udev), the host owner's change. Metal side (outside this
   model's paths): take the IOMMU state per chip (or refuse a mixed cluster loudly), and expose which chips run the
-  real-time profiler. Model side: tt/rt_profiler_check.py, called at device_params (host, sysfs) and device_model
-  (device, records per chip), Setting RT_PROFILER_CHECK warn / raise / off.
+  real-time profiler. Check: framework F194 (orchestrator.iommu_mismatch / iommu_problem, sysfs): a PREFLIGHT warning at
+  launch; no model-side check (FIX.3's tt/rt_profiler_check.py was reverted by the overseer: a host fact is the framework's).
 - Other effect of the mismatch, not measured: chips 7 / 10 run dispatch over hugepage sysmem (identity), the other 30
   over IOMMU-mapped sysmem.
