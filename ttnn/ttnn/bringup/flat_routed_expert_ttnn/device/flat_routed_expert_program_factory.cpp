@@ -325,13 +325,13 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
     // 495 / 526 with x read per rectangle - the primary's acked head writes cap ~35 GB/s)
     std::vector<uint32_t> once_heads;
     if (x_once) {
-        const bool join = x_chain_mode == 3 && !cstr(pr.x1_heads);
+        // (rectangles with different snake counts cannot pair their snakes: the primary feeds every head instead)
+        const bool join = x_chain_mode == 3 && !cstr(pr.x1_heads) && NR == 2 && x_heads[0].size() == x_heads[1].size();
         for (uint32_t i = 0; i < (join ? 1u : NR); ++i) {
             const uint32_t k = (k0 + i) % NR;
             once_heads.insert(once_heads.end(), x_heads[k].begin(), x_heads[k].end());
         }
         if (join) {
-            TT_FATAL(NR == 2 && x_heads[0].size() == x_heads[1].size(), "flat x_once snakes: two rectangles alike");
             for (size_t g = 0; g < x_heads[0].size(); ++g) {
                 const uint32_t t = x_tails[k0][g], h = x_heads[1 - k0][g];
                 xlink[t].succ0 = pk(p.gu[h]);

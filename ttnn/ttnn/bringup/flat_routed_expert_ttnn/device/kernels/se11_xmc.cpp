@@ -275,14 +275,20 @@ void kernel_main() {
 #ifdef XMC_CHAIN
                 // Batches in flight are only counted into the heads' XARR on retirement: every wait retires the
                 // acknowledged ones, else a compute that needs the whole ring (row passes: all Ht / KBLK blocks of a
-                // sub-block resident, GLM-5.3 24 of 24) never sees the last batch and never frees one (deadlock)
-                while (gidx(sent) >= min_freed() + x_slots) {
+                // sub-block resident, GLM-5.3 24 of 24) never sees the last batch and never frees one (deadlock). The
+                // wait is for the same slot the batch needs (with XMC_WHOLE_SB the super-block's last block - waiting
+                // on the first one only could spin here without retiring: codex review) and retires at least once
+                do {
                     invalidate_l1_cache();
                     chain_retire(XMC_CHAIN_DEPTH);
 #ifdef XMC_FWD
                     fw_poll();
 #endif
-                }
+#ifdef XMC_WHOLE_SB
+                } while (gidx(sent + (per_sb - 1 - i)) >= min_freed() + x_slots);
+#else
+                } while (gidx(sent) >= min_freed() + x_slots);
+#endif
                 continue;
 #endif
 #ifdef XMC_WHOLE_SB

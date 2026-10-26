@@ -1275,7 +1275,9 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.land_off = p.sb_off + al(p.sb_slots * p.mt * p.sbt * p.x_tile);
     p.xfwd = cstr(pr.xfwd) && std::atoi(cstr(pr.xfwd)) != 0 && p.nsg == 1 && p.rects.size() == 2 && !p.group_rect;
     if (const char* fs = cstr(pr.fw_slots)) {  // (probe: XFWD forward ring super-blocks, default 2)
-        p.fw_slots = static_cast<uint32_t>(std::atoi(fs));
+        const int v = std::atoi(fs);
+        TT_FATAL(v >= 1 && v <= 8, "MIMO_FL_FW_SLOTS={}: 1..8", v);
+        p.fw_slots = static_cast<uint32_t>(v);
     }
     // x read once by the helpers (layout.x_once -1, the default): two rectangles full of gate/up cores on the snakes,
     // one helper each - each helper reads / tilizes half of x (super-blocks g % 2 == k) and writes every super-block
