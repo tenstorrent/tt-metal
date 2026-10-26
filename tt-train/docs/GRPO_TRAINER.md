@@ -681,7 +681,9 @@ Each checkpoint directory contains:
 | `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |
 
 To start from a checkpoint's weights, point `model_source` at the checkpoint
-directory (it contains `checkpoint.pkl` and the tokenizer files).
+directory (it contains `checkpoint.pkl` and the tokenizer files). A
+`model.safetensors` with ttml parameter names (the old GRPO checkpoint format)
+raises `ValueError`, and a HuggingFace source must provide every model weight.
 
 ---
 

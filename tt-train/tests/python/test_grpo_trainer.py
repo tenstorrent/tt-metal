@@ -43,10 +43,12 @@ import pytest
 import ttml
 import ttnn
 from datasets import Dataset
+from safetensors.numpy import save_file
 from transformers import AutoTokenizer
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import build_mesh, repeat_interleave
+from ttml.models.llama import load_from_safetensors
 from ttml.modules import RunMode
 from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
 from ttml.trainers.grpo_trainer import (
@@ -360,6 +362,28 @@ def test_save_checkpoint_header_records_given_learning_rate(monkeypatch, tmp_pat
     save_checkpoint(SimpleNamespace(parameters=lambda: {}), 2, str(tmp_path), optimizer=optimizer, learning_rate=0.5)
 
     assert headers[0]["learning_rate"] == 0.5
+
+
+def _save_old_format_checkpoint(directory):
+    save_file({"Llama/fc/weight": np.zeros((2, 2), np.float32)}, str(directory / "model.safetensors"))
+
+
+@pytest.mark.parametrize("model_type", ["llama", "qwen3"])
+def test_setup_ttml_model_rejects_old_checkpoint_format(tmp_path, expect_error, model_type):
+    _save_old_format_checkpoint(tmp_path)
+    transformer_config = TransformerConfig({"transformer_config": {"model_type": model_type}})
+    with expect_error(ValueError, "old GRPO checkpoint format"):
+        grpo_ttml_model.setup_ttml_model(transformer_config, DEVICE_CONFIG, str(tmp_path))
+
+
+def test_llama_strict_load_raises_on_unloaded_parameters(tmp_path, expect_error):
+    _save_old_format_checkpoint(tmp_path)
+    model = SimpleNamespace(parameters=lambda: {"Llama/fc/weight": None})
+    config = SimpleNamespace(
+        use_tp=False, num_attention_heads=1, num_key_value_heads=1, weight_tying=None, num_hidden_layers=0
+    )
+    with expect_error(RuntimeError, "1 model parameters were NOT loaded"):
+        load_from_safetensors(model, tmp_path, config, strict=True)
 
 
 def test_layout_microbatch_aligns_old_logprobs_mask_and_targets():

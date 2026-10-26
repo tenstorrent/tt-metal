@@ -69,12 +69,34 @@ def _download_hf_repo(model_source: str) -> str:
     )
 
 
+def _reject_old_checkpoint_format(model_source: str) -> None:
+    if not os.path.isdir(model_source):
+        return
+    path = os.path.join(model_source, "model.safetensors")
+    if not os.path.isfile(path):
+        return
+    from safetensors import safe_open
+
+    with safe_open(path, framework="numpy") as f:
+        if any("/" in key for key in f.keys()):
+            raise ValueError(
+                f"{path} holds ttml parameter names, the old GRPO checkpoint format, which is not loaded. "
+                f"Pass a directory with {CHECKPOINT_FILE}, or a HuggingFace model ID or directory."
+            )
+
+
 def load_hf_state_dict(model_source: str) -> dict:
     """Return a HuggingFace float state-dict for ``model_source``."""
     from transformers import AutoModelForCausalLM
 
     path = model_source if os.path.isdir(model_source) else _download_hf_repo(model_source)
-    hf_model = AutoModelForCausalLM.from_pretrained(path, torch_dtype=torch.float32, trust_remote_code=True)
+    hf_model, loading_info = AutoModelForCausalLM.from_pretrained(
+        path, torch_dtype=torch.float32, trust_remote_code=True, output_loading_info=True
+    )
+    if loading_info["missing_keys"]:
+        raise RuntimeError(
+            f"{path} is missing {len(loading_info['missing_keys'])} weights: {loading_info['missing_keys']}"
+        )
     state_dict = hf_model.state_dict()
     del hf_model
     return state_dict
@@ -102,6 +124,7 @@ def setup_ttml_model(
     if model_kind not in _SUPPORTED_KINDS:
         raise ValueError(f"setup_ttml_model: model_type must be one of {_SUPPORTED_KINDS}, got {model_kind!r}")
 
+    _reject_old_checkpoint_format(model_source)
     open_device(model_kind, device_config)
     if model_kind == "llama":
         return _build_llama(transformer_config, device_config, model_source)
@@ -153,7 +176,7 @@ def _build_llama(tf_config: TransformerConfig, device_config: DeviceConfig, mode
     else:
         hf_path = model_source if os.path.isdir(model_source) else _download_hf_repo(model_source)
         logging.info("Loading HuggingFace weights from: %s", hf_path)
-        load_from_safetensors(tt_model, hf_path, llama_cfg)
+        load_from_safetensors(tt_model, hf_path, llama_cfg, strict=True)
 
     return tt_model, tokenizer
 
