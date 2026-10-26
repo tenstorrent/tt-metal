@@ -5,6 +5,7 @@
 #include "ops/rope_op.hpp"
 
 #include <numbers>
+#include <unordered_map>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -191,6 +192,24 @@ autograd::TensorPtr rope(
     return out;
 }
 
+// cos/sin rows gathered for one position_ids tensor, one entry per head count.
+// Every layer of a forward passes the same position_ids, so only the first call per head count gathers;
+// a different position_ids tensor (the next step) or a new value set on it clears the entries.
+struct RopeRowsCache {
+    struct Rows {
+        ttnn::Tensor cos;
+        ttnn::Tensor sin;
+        ttnn::Tensor neg_sin;
+    };
+    autograd::TensorPtr position_ids;
+    uint64_t position_ids_value_id = ttnn::Tensor::INVALID_TENSOR_ID;
+    // Q and K need the same cos/sin values, but in tensors of different shapes. The kernel needs one cos/sin row
+    // for each flattened (batch, head) row of its input, and Q and K have different head counts. The head count is
+    // the only thing that changes the shape, and the positions are the only thing that changes the values. So
+    // within one step, the head count is enough to tell the two cached tensors apart.
+    std::unordered_map<uint32_t, Rows> rows_by_head_count;
+};
+
 namespace {
 
 ttnn::Tensor rotate_per_head(
@@ -208,13 +227,35 @@ ttnn::Tensor rotate_per_head(
     return ttnn::reshape(rotated, shape);
 }
 
+RopeRowsCache::Rows gather_rows(const RotaryEmbeddingParams& params, const ttnn::Tensor& ids, uint32_t num_heads) {
+    const uint32_t batch = ids.logical_shape()[0];
+    const uint32_t seq_len = ids.logical_shape()[1];
+
+    auto gather = [&](const ttnn::Tensor& table) {
+        auto rows = ttnn::embedding(ids, table, std::nullopt, ttnn::Layout::TILE);
+        rows = ttnn::reshape(rows, ttnn::Shape{batch, 1U, seq_len, params.head_dim});
+        rows = ttnn::repeat(rows, ttnn::Shape{1U, num_heads, 1U, 1U});
+        return ttnn::reshape(rows, ttnn::Shape{1U, batch * num_heads, seq_len, params.head_dim});
+    };
+    auto sin = gather(params.sin_table);
+    return {gather(params.cos_table), sin, ttnn::neg(sin)};
+}
+
 }  // namespace
 
-std::pair<ttnn::Tensor, ttnn::Tensor> gather_rows(
-    const RotaryEmbeddingParams& params, const autograd::TensorPtr& position_ids, uint32_t num_heads) {
+autograd::TensorPtr rope(
+    const autograd::TensorPtr& input, const RotaryEmbeddingParams& params, const autograd::TensorPtr& position_ids) {
+    validate_rope_input_and_params(input, params);
+
+    const auto input_shape = input->get_value().logical_shape();
     const auto& ids = position_ids->get_value();
     const auto ids_shape = ids.logical_shape();
-    TT_FATAL(ids_shape.rank() == 2U, "RoPE position_ids must have shape [B, S], but got {}", ids_shape);
+    TT_FATAL(
+        ids_shape.rank() == 2U && ids_shape[0] == input_shape[0] && ids_shape[1] == input_shape[2],
+        "RoPE position_ids must have shape [{}, {}], but got {}",
+        input_shape[0],
+        input_shape[2],
+        ids_shape);
     TT_FATAL(
         ids.dtype() == ttnn::DataType::UINT32 && ids.layout() == ttnn::Layout::ROW_MAJOR,
         "RoPE position_ids must be UINT32 ROW_MAJOR, but got {} {}",
@@ -224,36 +265,25 @@ std::pair<ttnn::Tensor, ttnn::Tensor> gather_rows(
         !autograd::ctx().is_parallelism_context_initialized() ||
             autograd::ctx().get_parallelism_context().get_cp_size() <= 1,
         "RoPE position_ids are not supported with context parallelism");
-    const uint32_t batch = ids_shape[0];
-    const uint32_t seq_len = ids_shape[1];
+    TT_FATAL(params.rows_cache, "RoPE position_ids require rope_params from build_rope_params");
 
-    auto gather = [&](const ttnn::Tensor& table) {
-        auto rows = ttnn::embedding(ids, table, std::nullopt, ttnn::Layout::TILE);
-        rows = ttnn::reshape(rows, ttnn::Shape{batch, 1U, seq_len, params.head_dim});
-        rows = ttnn::repeat(rows, ttnn::Shape{1U, num_heads, 1U, 1U});
-        return ttnn::reshape(rows, ttnn::Shape{1U, batch * num_heads, seq_len, params.head_dim});
-    };
-    return {gather(params.cos_table), gather(params.sin_table)};
-}
-
-autograd::TensorPtr rope(
-    const autograd::TensorPtr& input,
-    const RotaryEmbeddingParams& params,
-    const ttnn::Tensor& cos,
-    const ttnn::Tensor& sin) {
-    validate_rope_input_and_params(input, params);
-
-    const auto input_shape = input->get_value().logical_shape();
-    const auto expected = ttnn::Shape{1U, input_shape[0] * input_shape[1], input_shape[2], input_shape[3]};
-    if (cos.logical_shape() != expected || sin.logical_shape() != expected) {
-        throw std::runtime_error(fmt::format(
-            "RoPE cos/sin must have shape {}, but got {} and {}", expected, cos.logical_shape(), sin.logical_shape()));
+    auto& cache = *params.rows_cache;
+    if (cache.position_ids != position_ids || cache.position_ids_value_id != ids.tensor_id) {
+        cache.position_ids = position_ids;
+        cache.position_ids_value_id = ids.tensor_id;
+        cache.rows_by_head_count.clear();
     }
+    const uint32_t num_heads = input_shape[1];
+    auto it = cache.rows_by_head_count.find(num_heads);
+    if (it == cache.rows_by_head_count.end()) {
+        it = cache.rows_by_head_count.emplace(num_heads, gather_rows(params, ids, num_heads)).first;
+    }
+    const auto rows = it->second;
 
-    auto out = autograd::create_tensor(rotate_per_head(input->get_value(), cos, sin, params.trans_mat));
+    auto out = autograd::create_tensor(rotate_per_head(input->get_value(), rows.cos, rows.sin, params.trans_mat));
 
-    autograd::GradFunction grad_fn = [input, out, cos, sin, trans_mat = params.trans_mat]() {
-        input->add_grad(rotate_per_head(out->get_grad(), cos, ttnn::neg(sin), trans_mat));
+    autograd::GradFunction grad_fn = [input, out, rows, trans_mat = params.trans_mat]() {
+        input->add_grad(rotate_per_head(out->get_grad(), rows.cos, rows.neg_sin, trans_mat));
     };
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, input));
 
@@ -367,6 +397,7 @@ RotaryEmbeddingParams build_rope_params(
         .cos_table = to_table(cos_freqs),
         .sin_table = to_table(sin_freqs),
         .trans_mat = trans_mat,
+        .rows_cache = std::make_shared<RopeRowsCache>(),
 
         .sequence_length = local_seq_len,
         .head_dim = head_dim,
