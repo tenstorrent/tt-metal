@@ -29,7 +29,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     make_kimi_k3_device_case,
     make_synthetic_kimi_k3_test_case,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE, l1_when_it_fits
+from models.demos.deepseek_v3_d_p.tt.kda.config import (
+    KDA_PARTIAL_OUTPUT_L1_BYTES_PER_CORE,
+    kda_worker_l1_size,
+    l1_when_it_fits,
+)
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, reduce_scatter_tp_partials, ttKDA
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
@@ -329,7 +333,7 @@ def _trace_device_samples_ms(
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE),
+            torus_xy_device_params(l1_small_size=_L1_SMALL_SIZE, worker_l1_size=kda_worker_l1_size),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),

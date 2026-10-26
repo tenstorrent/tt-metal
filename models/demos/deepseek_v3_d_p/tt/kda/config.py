@@ -152,6 +152,20 @@ def matmul_grid(grid: ttnn.CoreCoord, max_cores: int) -> ttnn.CoreCoord:
     return ttnn.CoreCoord(max(1, min(grid.x, max_cores // grid.y)), grid.y)
 
 
+# Kernel-config ring a KDA mesh opens with, instead of the HAL's 69 KiB: dispatch writes the next KDA program's
+# binaries while the current one runs (chunk preparation's alone are ~67 KiB), for 43 KiB less allocatable L1 per core.
+KDA_KERNEL_CONFIG_RING_BYTES = 112 * 1024
+
+
+def kda_worker_l1_size() -> int:
+    """The worker L1 size that leaves KDA_KERNEL_CONFIG_RING_BYTES between the firmware map and the allocatable L1.
+
+    The HAL's maximum is the L1 end minus the firmware map's end. Called when the mesh is opened, not at import:
+    the query initialises the Metal context.
+    """
+    return ttnn.get_max_worker_l1_unreserved_size() - KDA_KERNEL_CONFIG_RING_BYTES
+
+
 # Rows per device the projection schedules were tuned at: Galaxy SP8xTP4 at T=5120.
 _TUNED_PROJECTION_ROWS = 640
 
@@ -246,20 +260,26 @@ def tuned_projection_matmul_configs(
 KIMI_K3_PROJECTION_DTYPE = ttnn.bfloat8_b
 
 
+# Chunks per summary group: Galaxy SP8xTP4 at T=5120 runs one 20-chunk group per head.
+_MAX_GROUP_CHUNKS = 20
+
+
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
-    # Fixed production/proxy geometries; native worker capacity is validated by
-    # the recurrence constructor for the actual TP-local head count and device.
-    group_chunks = {32: 1, 64: 2, 128: 4, 256: 8, 320: 10, 640: 20, 1280: 20, 2560: 20, 5120: 20}
-    if active_seq_len_local not in group_chunks:
-        raise ValueError(f"no tuned Kimi-K3 recurrence configuration for local T={active_seq_len_local}")
+    # Native worker capacity is validated by the recurrence constructor for the actual TP-local head count and device.
+    if active_seq_len_local <= 0 or active_seq_len_local % KDA_CHUNK_SIZE:
+        raise ValueError(f"Kimi-K3 needs a positive, chunk-aligned local T, got {active_seq_len_local}")
+    # One summary group per head up to _MAX_GROUP_CHUNKS chunks (the SP relay takes one group per head), else the
+    # largest group of at most that many chunks that divides the rank's chunks.
+    num_chunks = active_seq_len_local // KDA_CHUNK_SIZE
+    summary_group_chunks = max(d for d in range(1, min(num_chunks, _MAX_GROUP_CHUNKS) + 1) if num_chunks % d == 0)
     return KDAProgramConfig(
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped",
-            summary_group_chunks=group_chunks[active_seq_len_local],
+            summary_group_chunks=summary_group_chunks,
             # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
             high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
             relay_affine_prefix=True,
@@ -279,9 +299,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         input_projection_k_block=8,
         output_projection_k_block=8,
         input_projection_extra_gate_tiles=5,
-        # The output gate beside the relay (and the projections on the matmul program) also at T=1024, 2048 and
-        # 2560: 0.752 -> 0.740 ms, 0.913 -> 0.839 ms and 1.021 -> 0.871 ms.
-        overlap_output_gate=active_seq_len_local in (128, 256, 320, _TUNED_PROJECTION_ROWS),
+        # The output gate beside the relay (and the projections on the matmul program) wherever the relay runs one
+        # group per head.
+        overlap_output_gate=num_chunks <= _MAX_GROUP_CHUNKS,
     )
 
 
