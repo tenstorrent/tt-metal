@@ -385,8 +385,8 @@ TEST_F(UnitMeshAnyDispatchFixture, Pack22DFBsUseSharedTCSlotPool) {
     }
 
     constexpr uint32_t num_dfbs = 22;
-    static_assert(num_dfbs <= ::dfb::MAX_ACTIVE_DFBS_PACK);
-    static_assert(num_dfbs <= ::dfb::MAX_PACK_TC_SLOTS);
+    static_assert(num_dfbs <= ::dfb::MAX_ACTIVE_DFBS_TRISC);
+    static_assert(num_dfbs <= ::dfb::MAX_TRISC_TC_SLOTS);
 
     const m2::KernelSpecName pack_name{"pack"};
     auto pack = make_compute_kernel(

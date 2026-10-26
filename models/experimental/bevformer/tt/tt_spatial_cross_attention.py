@@ -62,6 +62,8 @@ class SCARebatchPlan:
         inverse_index: One gather index per contribution slot, each selecting the camera row that
             feeds a query. Slots a query does not fill point at a padded row.
         count: Camera-contributor count with shape ``[batch_size, num_queries, 1]``.
+        num_valid_queries: Valid row count of each camera row block, in ``row_mask`` order. MSDA computes
+            only these rows; the padding past them is masked by ``row_mask``.
         is_empty: Whether the visibility mask contains no valid query-camera pairs.
     """
 
@@ -71,6 +73,7 @@ class SCARebatchPlan:
     row_mask: Optional[ttnn.Tensor]
     inverse_index: tuple[ttnn.Tensor, ...]
     count: Optional[ttnn.Tensor]
+    num_valid_queries: tuple[int, ...] = ()
     is_empty: bool = False
 
 
@@ -110,12 +113,12 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
         )
 
     # Tile-align so folding num_cams into the row dim stays a view; unaligned would move data.
-    # Costs up to TILE_SIZE padded rows per camera through MSDA, discarded afterwards. Aligning
+    # The padded rows are allocated but not computed: MSDA stops at each camera's valid count. Aligning
     # max_len + 1 keeps at least one padded row per camera, which aggregation needs as a zero
     # source for queries that fewer than max_count cameras see.
     rebatch_len = ((max_len // ttnn.TILE_SIZE) + 1) * ttnn.TILE_SIZE
 
-    # Compact each camera to the queries it sees, so MSDA runs on rebatch_len rows, not all of
+    # Compact each camera to the queries it sees, so MSDA runs on its valid rows, not all of
     # them. IDs are batch-local; num_queries marks padding, clamped away because embedding
     # rejects out-of-range indices.
     # TODO: vectorize this index construction off the host
@@ -167,7 +170,8 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
         ttnn.TILE_LAYOUT,
     )
 
-    row_mask = torch.arange(rebatch_len) < valid_per_cam.sum(-1).t().reshape(bs * num_cams, 1)
+    num_valid_queries = valid_per_cam.sum(-1).t().reshape(bs * num_cams, 1)
+    row_mask = torch.arange(rebatch_len) < num_valid_queries
     row_mask = ttnn.from_torch(
         row_mask.to(torch.bfloat16).unsqueeze(-1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
@@ -182,6 +186,7 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
         row_mask=row_mask,
         inverse_index=tuple(_flat_row_index(inverse_ids[slot], device) for slot in range(max_count)),
         count=count,
+        num_valid_queries=tuple(num_valid_queries.flatten().tolist()),
     )
 
 
@@ -357,6 +362,7 @@ class TTSpatialCrossAttention:
             query=queries_batched,
             value=value_reshaped,
             reference_points=reference_points_batched,
+            num_valid_queries=rebatch_plan.num_valid_queries,
             **kwargs,
         )
 
@@ -375,7 +381,8 @@ class TTSpatialCrossAttention:
         # gather per contribution slot rather than a scatter: ttnn.scatter only writes along the
         # last dimension and transposes all three operands to get there.
         #
-        # Selecting zero makes padded rows neutral even if attention produces NaN or infinity.
+        # MSDA leaves the padded rows unwritten, so they can hold any bit pattern, NaN included.
+        # Selecting zero makes them neutral; multiplying by row_mask would not.
         # Each contribution is already BF16. Adding those tensors rounds after every camera, so a
         # 1 sitting next to 256 disappears before the cancelling term arrives (256 + 1 + -256
         # comes back as 2). The running sum stays in FP32 and is rounded once, after the last camera.

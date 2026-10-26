@@ -8,7 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
-from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_rm
+from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -73,19 +73,29 @@ parameters = {
 # If invalidated, the vector will still be stored but will be skipped.
 # Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
-        if (test_vector["input_a_dtype"] == ttnn.float32 and test_vector["grad_dtype"] == ttnn.float32) or (
-            test_vector["input_a_dtype"] == ttnn.bfloat16 or test_vector["grad_dtype"] == ttnn.bfloat16
-        ):
-            return False, None
-        else:
-            return True, "Row major is only supported for fp32 & fp16"
     if not test_vector["keepdim"]:
         return True, "keepdim = false is not supported"
-    if not isinstance(test_vector["dim"], int):
+    dim = test_vector["dim"]
+    if not isinstance(dim, int):
         return True, "dim can only be integer value"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        # What used to stand here invalidated every ROW_MAJOR vector, quoting "Unary operation
+        # requires tensor to be in Tile layout when working with non-sharded input tensor".
+        # That string appears in no ttnn operation; prod_bw documents BFLOAT16 in TILE and
+        # ROW_MAJOR. The rules below are the ones ROW_MAJOR really carries, and they are
+        # scoped to ROW_MAJOR so that the TILE vectors keep generating exactly as before.
+        input_shape = test_vector["input_shape"]
+        if dim >= len(input_shape):
+            return True, f"dim {dim} does not address an axis of {input_shape}"
+        if test_vector["input_a_dtype"] != ttnn.bfloat16 or test_vector["grad_dtype"] != ttnn.bfloat16:
+            return True, "prod_bw documents BFLOAT16 only, and bfloat8_b is tile-only"
+        # A ROW_MAJOR row takes at least 4 bytes on device, so a bfloat16 tensor must be an
+        # even number of elements wide (docs/source/ttnn/ttnn/tensor.rst). keepdim keeps the
+        # reduced axis at 1, so reducing the last axis leaves a gradient one element wide.
+        grad_width = 1 if dim == len(input_shape) - 1 else input_shape[-1]
+        for who, width in (("input", input_shape[-1]), ("gradient", grad_width)):
+            if width % 2 != 0:
+                return True, f"ROW_MAJOR bfloat16 {who} must be an even number of elements wide, got {width}"
 
     return False, None
 

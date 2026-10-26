@@ -20,8 +20,8 @@
 #include <gtest/gtest.h>
 
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include <cstdint>
 #include <cstdio>

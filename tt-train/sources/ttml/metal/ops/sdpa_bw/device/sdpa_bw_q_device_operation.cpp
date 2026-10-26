@@ -188,6 +188,46 @@ void SDPABackwardQDeviceOperation::validate_on_program_cache_miss(
         "Mask tensor provided but mask_type is not Arbitrary. "
         "Use AttentionMaskType::Arbitrary to apply a custom mask, "
         "or remove the mask tensor for None/Causal modes.");
+
+    // Validate gate input. The program factory keys CB creation and kernel defines off
+    // `has_gate`, so it must agree with whether a gate tensor was actually passed.
+    TT_FATAL(
+        operation_attributes.has_gate == tensor_args.gate.has_value(),
+        "has_gate ({}) must match whether a gate tensor was provided ({}).",
+        operation_attributes.has_gate,
+        tensor_args.gate.has_value());
+
+    if (tensor_args.gate.has_value()) {
+        const auto& gate = tensor_args.gate.value();
+        check_device_tensor(gate, "SDPABackwardQ", "gate", any_memory_layout);
+        TT_FATAL(gate.device() == query.device(), "Gate must be on the same device as query");
+        // The forward gates the attention output elementwise, so the gate has the same (B, H, S, vE) shape as
+        // grad_output.
+        TT_FATAL(
+            gate.logical_shape() == grad_output_shape,
+            "Gate shape must match grad_output shape (B, H, S, vE). Got gate={}, grad_output={}",
+            gate.logical_shape(),
+            grad_output_shape);
+    }
+
+    // A preallocated grad_gate only makes sense when the gate is present.
+    TT_FATAL(
+        tensor_args.gate.has_value() || !tensor_args.preallocated_grad_gate.has_value(),
+        "preallocated_grad_gate requires a gate tensor.");
+
+    // The writer fills grad_gate with (B, H, S, vE) BFLOAT16 tiles, so a caller-provided buffer of another shape
+    // or dtype would be overrun or misread.
+    if (tensor_args.preallocated_grad_gate.has_value()) {
+        const auto& grad_gate = tensor_args.preallocated_grad_gate.value();
+        check_device_tensor(grad_gate, "SDPABackwardQ", "preallocated_grad_gate", any_memory_layout);
+        TT_FATAL(grad_gate.device() == query.device(), "preallocated_grad_gate must be on the same device as query");
+        TT_FATAL(
+            grad_gate.logical_shape() == grad_output_shape,
+            "preallocated_grad_gate shape must match grad_output shape (B, H, S, vE). Got preallocated_grad_gate={}, "
+            "grad_output={}",
+            grad_gate.logical_shape(),
+            grad_output_shape);
+    }
 }
 
 SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::compute_output_specs(
@@ -214,22 +254,51 @@ SDPABackwardQDeviceOperation::spec_return_value_t SDPABackwardQDeviceOperation::
                 tt::tt_metal::TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config));
         }();
 
-    return {grad_query_spec, u_scaler_spec};
+    // Gate outputs: grad_gate = dY * Y * (1 - sigmoid(G)) and the gated upstream gradient
+    // dO = dY * sigmoid(G) that the KV kernel consumes in place of grad_output. Both have
+    // grad_output's shape (B, H, S, vE) and are only produced when a gate is present.
+    std::optional<tt::tt_metal::TensorSpec> grad_gate_spec = std::nullopt;
+    std::optional<tt::tt_metal::TensorSpec> gated_grad_output_spec = std::nullopt;
+    if (operation_attributes.has_gate) {
+        const auto& grad_output = tensor_args.grad_output;
+        const auto grad_output_like_spec = tt::tt_metal::TensorSpec(
+            grad_output.logical_shape(),
+            tt::tt_metal::TensorLayout(grad_output.dtype(), tt::tt_metal::Layout::TILE, grad_output.memory_config()));
+
+        grad_gate_spec = tensor_args.preallocated_grad_gate.has_value()
+                             ? tensor_args.preallocated_grad_gate->tensor_spec()
+                             : grad_output_like_spec;
+        gated_grad_output_spec = grad_output_like_spec;
+    }
+
+    return {grad_query_spec, u_scaler_spec, grad_gate_spec, gated_grad_output_spec};
 }
 
 SDPABackwardQDeviceOperation::tensor_return_value_t SDPABackwardQDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto [grad_query_spec, u_scaler_spec] = compute_output_specs(operation_attributes, tensor_args);
+    auto [grad_query_spec, u_scaler_spec, grad_gate_spec, gated_grad_output_spec] =
+        compute_output_specs(operation_attributes, tensor_args);
+
+    auto* device = tensor_args.query.device();
 
     ttnn::Tensor grad_query = tensor_args.preallocated_grad_query.has_value()
                                   ? tensor_args.preallocated_grad_query.value()
-                                  : ttnn::create_device_tensor(grad_query_spec, tensor_args.query.device());
+                                  : ttnn::create_device_tensor(grad_query_spec, device);
 
     ttnn::Tensor u_scaler = tensor_args.preallocated_u_scaler.has_value()
                                 ? tensor_args.preallocated_u_scaler.value()
-                                : ttnn::create_device_tensor(u_scaler_spec, tensor_args.query.device());
+                                : ttnn::create_device_tensor(u_scaler_spec, device);
 
-    return {grad_query, u_scaler};
+    std::optional<ttnn::Tensor> grad_gate = std::nullopt;
+    std::optional<ttnn::Tensor> gated_grad_output = std::nullopt;
+    if (operation_attributes.has_gate) {
+        grad_gate = tensor_args.preallocated_grad_gate.has_value()
+                        ? tensor_args.preallocated_grad_gate.value()
+                        : ttnn::create_device_tensor(grad_gate_spec.value(), device);
+        gated_grad_output = ttnn::create_device_tensor(gated_grad_output_spec.value(), device);
+    }
+
+    return {grad_query, u_scaler, grad_gate, gated_grad_output};
 }
 
 }  // namespace ttml::metal::ops::sdpa_bw::device
@@ -247,11 +316,13 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const ttnn::Tensor& intermediates,
     const float dropout_probability,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
-    const std::optional<ttnn::Tensor>& preallocated_u_scaler) {
+    const std::optional<ttnn::Tensor>& preallocated_u_scaler,
+    const std::optional<ttnn::Tensor>& gate,
+    const std::optional<ttnn::Tensor>& preallocated_grad_gate) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
 
-    auto operation_attributes =
-        OperationType::operation_attributes_t{.mask_type = mask_type, .dropout_probability = dropout_probability};
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .mask_type = mask_type, .dropout_probability = dropout_probability, .has_gate = gate.has_value()};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,
@@ -263,6 +334,8 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
         .intermediates = intermediates,
         .preallocated_grad_query = preallocated_grad_query,
         .preallocated_u_scaler = preallocated_u_scaler,
+        .gate = gate,
+        .preallocated_grad_gate = preallocated_grad_gate,
     };
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
