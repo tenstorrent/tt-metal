@@ -255,7 +255,7 @@ def test_pipeline_distilled(
                 rendered = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{clip_number}.mp4")
                 shutil.copyfile(rendered, vbench_bundle.clip_path(bundle, 0, clip_seed))
             vbench_bundle.write_manifest(
-                bundle, prompts=[{"text": prompt, "thresholds": thresholds}], seeds=seeds, **scorer
+                bundle, prompts=[vbench_bundle.GatePrompt(prompt, thresholds)], seeds=seeds, **scorer
             )
             if export_dir:
                 logger.info(f"VBench bundle written to {export_dir}; scored after pytest")
