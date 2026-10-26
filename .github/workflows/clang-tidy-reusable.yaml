@@ -32,6 +32,21 @@ on:
         type: boolean
         default: false
         description: "Export clang-tidy fixes and post inline review suggestions on the PR diff"
+      clang-tidy-version:
+        required: false
+        type: string
+        default: "20"
+        description: "LLVM major version of clang-tidy. Versions other than 20 are installed from apt.llvm.org."
+      disable-ctcache:
+        required: false
+        type: boolean
+        default: false
+        description: "Run every TU through clang-tidy instead of reusing cached results"
+      allow-warnings:
+        required: false
+        type: boolean
+        default: false
+        description: "Drop --warnings-as-errors so findings do not fail compile edges"
 
 jobs:
   clang-tidy:
@@ -125,18 +140,33 @@ jobs:
             echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
           fi
 
+      - name: Install clang-tidy ${{ inputs.clang-tidy-version }}
+        if: ${{ inputs.clang-tidy-version != '20' }}
+        env:
+          LLVM_VERSION: ${{ inputs.clang-tidy-version }}
+        run: |
+          . /etc/os-release
+          keyring=/usr/share/keyrings/llvm-snapshot.asc
+          curl -fsSL -o "$keyring" https://apt.llvm.org/llvm-snapshot.gpg.key
+          echo "deb [signed-by=$keyring] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-${LLVM_VERSION} main" \
+            > "/etc/apt/sources.list.d/llvm-${LLVM_VERSION}.list"
+          apt-get update
+          apt-get install -y --no-install-recommends "clang-tidy-${LLVM_VERSION}"
+          "clang-tidy-${LLVM_VERSION}" --version
+          echo "CLANG_TIDY_BIN=clang-tidy-${LLVM_VERSION}" >> "$GITHUB_ENV"
+
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
         # ctcache is writable from all non-fork refs (including PR branches)
         # so repeated commits to a branch benefit from cached clang-tidy results.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: ${{ !inputs.disable-ctcache && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           # ctcache is not published on PyPI — install from pinned commit SHA (tag 1.2.0)
           # Pinned to SHA (not tag) to avoid supply-chain risk from mutable git tags
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
-          CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
+          CT_VERSION=$("${CLANG_TIDY_BIN:-clang-tidy-20}" --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
           {
             echo "CTCACHE_S3_BUCKET=ctcache"
             echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"
@@ -197,7 +227,7 @@ jobs:
         # (IAM policy, ACL, proxy stripping PUT) with nothing to catch it. Writes,
         # reads back, and deletes a per-invocation sentinel object; warns (does not
         # fail the job) on error so a broken ctcache doesn't block clang-tidy analysis.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: ${{ !inputs.disable-ctcache && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
           python3 - << 'PYEOF'
           import os, sys, uuid
@@ -273,9 +303,13 @@ jobs:
         run: |
           # --warnings-as-errors=* turns each clang-tidy diagnostic into a failing
           # compile edge; the build preset's -k0 keeps going so all fixes still export.
+          tidy="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes"
+          if [ "${{ inputs.allow-warnings }}" != "true" ]; then
+            tidy="${tidy};--warnings-as-errors=*"
+          fi
           cmake --preset clang-tidy-fix-parallel \
-            -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
-            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
+            -DCMAKE_CXX_CLANG_TIDY="${tidy}" \
+            -DCMAKE_C_CLANG_TIDY="${tidy}" \
             -DTT_USE_SYSTEM_SFPI=ON
 
       - name: Pack CPM cache
