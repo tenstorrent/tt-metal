@@ -15,6 +15,7 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include "ttnn/operations/experimental/quasar/op_slicing/op_slicing.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/data_movement/move/move.hpp"
@@ -780,9 +781,14 @@ static std::vector<Tensor> pool2d_DRAM(
         applied_shard_scheme,
         return_indices,
         pool_type,
-        input_tensor.dtype(),
+        // Every slice is gathered ROW_MAJOR (a TILE input is untilized below, BFLOAT8_B -> BFLOAT16), so size
+        // the slices for what the per-slice pool actually reads. Sizing them for TILE would align the channels
+        // to the tile width and the NHW to the tile height, which the ROW_MAJOR gather does not produce.
+        input_tensor.layout() == Layout::TILE
+            ? ttnn::operations::data_movement::untilize_output_dtype(input_tensor.dtype())
+            : input_tensor.dtype(),
         dtype,
-        input_tensor.layout(),
+        Layout::ROW_MAJOR,
         output_layout,
         compute_kernel_config,
         config_tensor_in_dram,

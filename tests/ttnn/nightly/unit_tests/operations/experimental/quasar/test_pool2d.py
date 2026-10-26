@@ -77,6 +77,8 @@ def _run_case(
     out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
     dram_slice=None,  # None = sharded L1 input; ("height" | "width", n) = DRAM input, n slices
     rm_input=False,  # force ROW_MAJOR input even when C % 32 == 0
+    tile_input=False,  # force TILE input even when C % 32 != 0 (channels padded to the tile width)
+    shard_scheme=None,  # applied_shard_scheme: None = the op's choice | "height" | "width" | "block"
 ):
     pattern = pattern or PATTERN
     kernel, stride, padding, dilation = list(kernel), list(stride), list(padding), list(dilation)
@@ -84,7 +86,7 @@ def _run_case(
     out_w = (in_w - kernel[1] + 2 * padding[1]) // stride[1] + 1
     tensor_height = batch * in_h * in_w
     assert tensor_height % 32 == 0, f"N*H*W={tensor_height} must be a multiple of 32"
-    tiled_input = (channels % 32 == 0 and not rm_input) or dtype == "bf8b"
+    tiled_input = (channels % 32 == 0 and not rm_input) or dtype == "bf8b" or tile_input
 
     x_nhwc = _build_input(pattern, batch, in_h, in_w, channels, SEED, 0).to(torch.bfloat16)
     if dtype == "bf8b":
@@ -181,6 +183,11 @@ def _run_case(
             **(dict(dilation=dilation) if pool == "max" else {}),  # avg_pool2d takes no dilation
             **({} if count_include_pad is None else dict(count_include_pad=count_include_pad)),
             **({} if dram_slice_config is None else dict(dram_slice_config=dram_slice_config)),
+            **(
+                {}
+                if shard_scheme is None
+                else dict(applied_shard_scheme=getattr(ttnn.TensorMemoryLayout, f"{shard_scheme.upper()}_SHARDED"))
+            ),
         )
         ttnn.synchronize_device(device)
         return out
@@ -533,6 +540,12 @@ DRAM_SLICED_CASES = [
     ("max_k3x3_s2_h2_rm", dict(channels=32, in_h=16, in_w=16, rm_input=True, dram_slice=("height", 2))),
     ("max_k3x3_s2_h2_tile", dict(channels=32, in_h=16, in_w=16, dram_slice=("height", 2))),
     ("max_k3x3_s2_w2_tile", dict(channels=32, in_h=16, in_w=16, dram_slice=("width", 2))),
+    # TILE input with C % 32 != 0, height-sharded: the slices are gathered ROW_MAJOR, so they are 40 channels
+    # wide, not the tile-padded 64
+    (
+        "max_k3x3_s2_h2_tile_c40",
+        dict(channels=40, in_h=16, in_w=16, tile_input=True, shard_scheme="height", dram_slice=("height", 2)),
+    ),
     (
         "avg_k2x2_s2_h2_tile",
         dict(
