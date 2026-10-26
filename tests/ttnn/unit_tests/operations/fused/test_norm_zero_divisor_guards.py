@@ -79,3 +79,20 @@ def test_norm_post_all_gather_rejects_zero_hw(device, expect_error, op):
     stats = ttnn.from_torch(torch.zeros(1, 1, 32, 64).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "Input must have non-zero height and width"):
         getattr(ttnn, op)(x, stats)
+
+
+# A sharded input skips both checks above and goes straight to the sharded layernorm, whose shard
+# validation divided the volume by the width.
+def test_norm_pre_all_gather_sharded_rejects_zero_width(device, expect_error):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    x = ttnn.from_torch(torch.zeros(1, 1, 32, 0).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(1, 1), subblock_w=1, block_h=1, block_w=1, inplace=False
+    )
+    with expect_error(RuntimeError, "Sharded input must have a non-zero width"):
+        ttnn.layer_norm_pre_all_gather(x, program_config=program_config)
