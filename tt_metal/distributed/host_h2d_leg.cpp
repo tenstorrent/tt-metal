@@ -103,7 +103,7 @@ std::unique_ptr<H2DLeg> H2DLeg::create(
     im.fifo_bytes = static_cast<uint32_t>(fifo64);
     // Empty is legal, not malformed: a mesh whose slots are all remote has no local device
     // (mesh_device.cpp:839), and this leg needs one to ring the doorbell on.
-    const std::vector<IDevice*> devices = mesh->get_devices();
+    const auto devices = mesh->impl().get_devices();
     if (devices.empty()) {
         err = "H2DLeg::create: the mesh has no local device";
         return nullptr;

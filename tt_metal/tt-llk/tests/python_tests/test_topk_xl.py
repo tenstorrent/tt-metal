@@ -228,6 +228,7 @@ def _variant(
     blaze_compat=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
+    extra_templates=(),
 ):
     """
     Build the stimulus and the TestConfig for one variant. Returns (config, rows).
@@ -238,7 +239,10 @@ def _variant(
     """
     tail_elements = K if tail_elements is None else tail_elements
     tiles_per_seq = _tiles_per_sequence(K)
-    result_tiles = (1 if index_op == TopKXLIndexOp.RemoveMsb else 2) * tiles_per_seq
+    fused_region_only = (
+        index_op == TopKXLIndexOp.RemoveMsb or sort_mode == TopKXLSortMode.Columns
+    )
+    result_tiles = (1 if fused_region_only else 2) * tiles_per_seq
     # 32-bit input does unpack_to_dest (is_32bit_input), while bf16 goes
     # through SrcA then the MATH A2D datacopy.
     is_32bit = formats.input_format in (DataFormat.Float32, DataFormat.Int32)
@@ -273,6 +277,7 @@ def _variant(
                 reinit_after_copy=reinit_after_copy,
                 blaze_compat=blaze_compat,
             ),
+            *extra_templates,
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -930,6 +935,52 @@ def test_topk_xl_local_sort_early_exit(K, sort_direction):
             f"missing {sorted(expected - {o for _, o in entries})[:8]}, "
             f"unexpected {sorted({o for _, o in entries} - expected)[:8]}"
         )
+
+
+# The topk_large_indices column body (k <= 64): each column keeps the top 64 of its members over all chunks.
+@parametrize(num_chunks=[2, 4], sort_direction=list(TopKSortDirection))
+def test_topk_xl_rebuild_columns(num_chunks, sort_direction):
+    K = 1024
+    result, rows = _run(
+        K,
+        num_chunks=num_chunks,
+        sort_mode=TopKXLSortMode.Columns,
+        sort_direction=sort_direction,
+    )
+    words = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+    assert (
+        words.numel() == ELEMENTS_PER_TILE
+    ), f"expected one fused tile, got {words.numel()} words"
+    row = rows[0]
+    hi16 = lambda w: (int(w) >> 16) & 0xFFFF
+    row_hi16 = [(int(v) >> 16) & 0xFFFF for v in row.view(torch.int32).tolist()]
+
+    columns = {}
+    for offset in range(K):
+        position = _sort_position(offset, K)
+        columns.setdefault(position // 64, []).append((position, offset))
+
+    ascending = sort_direction == TopKSortDirection.Ascending
+    for column, members in sorted(columns.items()):
+        sequence = [int(words[offset]) for _, offset in sorted(members)]
+        values = [hi16(w) for w in sequence]
+        assert values == sorted(
+            values, reverse=not ascending
+        ), f"column {column} is not sorted {'ascending' if ascending else 'descending'}"
+        candidates = [
+            row_hi16[c * K + offset] for _, offset in members for c in range(num_chunks)
+        ]
+        assert (
+            sorted(values, reverse=True) == sorted(candidates, reverse=True)[:64]
+        ), f"column {column} does not hold the top 64 of its members"
+        for w in sequence:
+            offset = _index_to_chunk_offset(w & 0xFFFF, K)
+            assert (
+                _sort_position(offset, K) // 64 == column
+            ), f"column {column} holds offset {offset} from another column"
+            assert hi16(w) in {
+                row_hi16[c * K + offset] for c in range(num_chunks)
+            }, f"column {column}: index of offset {offset} is not paired with its value"
 
 
 # row_major=true stamps each element's chunk offset instead of the tile coordinate the

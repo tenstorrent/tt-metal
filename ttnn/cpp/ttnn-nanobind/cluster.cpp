@@ -69,6 +69,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
     mod.def(
         "get_chip_unique_id_from_fabric_node_id",
         &ttnn::cluster::get_chip_unique_id_from_fabric_node_id,
+        nb::arg("mesh_device"),
         nb::arg("mesh_id"),
         nb::arg("chip_id"),
         R"doc(
@@ -79,6 +80,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
             logical device id (ttnn.MeshDevice.get_device_id), which collides across the meshes on a host.
 
             Args:
+                mesh_device (ttnn.MeshDevice): Mesh device used to resolve the node.
                 mesh_id (int): The fabric mesh id of the node.
                 chip_id (int): The fabric chip id of the node within the mesh.
 
@@ -89,7 +91,7 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 >>> import ttnn
                 >>> fnid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
                 >>> unique_id = ttnn.cluster.get_chip_unique_id_from_fabric_node_id(
-                ...     int(fnid.mesh_id), int(fnid.chip_id))
+                ...     mesh_device, int(fnid.mesh_id), int(fnid.chip_id))
         )doc");
 
     // Raw NOC read/write access to a device core. Coordinates are TRANSLATED NOC

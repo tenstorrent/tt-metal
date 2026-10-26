@@ -46,9 +46,8 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tile.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/int8.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -192,6 +191,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     // base_scale = 1 / ln(10): log10
     {"log_with_base", {{"SFPU_OP_CHAIN_0", "log_with_base_tile_init(); log_with_base_tile(0, 0x3EDE5BD9u);"}}},
     {"tiled_prod", {{"SFPU_OP_CHAIN_0", "tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
+    // tiled_prod must stay inside its tile: Dest tile 1 holds a second copy of the input while the op
+    // runs on tile 0, and tile 1 is what gets packed, so it must come back unchanged.
+    {"tiled_prod_next_tile",
+     {{"SFPU_PACK_DST_INDEX", "1"},
+      {"SFPU_OP_CHAIN_0", "copy_tile(in0_id, 0, 1); tiled_prod_tile_init(); tiled_prod_tile(0);"}}},
     {"alt_complex_rotate90", {{"SFPU_OP_CHAIN_0", "alt_complex_rotate90_tile_init(); alt_complex_rotate90_tile(0);"}}},
     {"abs", {{"SFPU_OP_CHAIN_0", "abs_tile_init(); abs_tile(0);"}}},
     {"fill", {{"SFPU_OP_FILL_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "fill_tile_init(); fill_tile(0, 5.0f);"}}},
@@ -250,7 +254,7 @@ bool is_exact_unary_sfpu_op(const std::string& op_name) {
     return op_name == "ceil" || op_name == "floor" || op_name == "trunc" || op_name == "frac" || op_name == "round" ||
            op_name == "isinf" || op_name == "isposinf" || op_name == "isneginf" || op_name == "isnan" ||
            op_name == "isfinite" || op_name == "logical_not" || op_name == "heaviside" || op_name == "identity" ||
-           op_name == "abs" || op_name == "fill" || op_name.starts_with("unary_");
+           op_name == "abs" || op_name == "fill" || op_name == "tiled_prod_next_tile" || op_name.starts_with("unary_");
 }
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
@@ -456,7 +460,7 @@ inline size_t tile_order_index(size_t row, size_t col) {
 
 // Ops that move values across the tile, so their golden works on whole tiles.
 bool is_tile_layout_sfpu_op(const std::string& op_name) {
-    return op_name == "tiled_prod" || op_name == "alt_complex_rotate90";
+    return op_name == "tiled_prod" || op_name == "tiled_prod_next_tile" || op_name == "alt_complex_rotate90";
 }
 
 // One 1024-element tile, face order in and out. `store` rounds a value the way Dest holds it.
@@ -475,28 +479,28 @@ std::vector<float> tile_layout_golden(
         return out;
     }
     if (op_name == "tiled_prod") {
-        // Every SFPU lane (row r of each 4-row group, column 2c + parity) keeps a running product over
-        // its 8 values per face; a face's ninth step multiplies into the next face's first row, so the
-        // chain runs through faces 0-3 (the last face's ninth step lands past the tile, not modelled).
+        // One call per tile: every SFPU lane (row r of each 4-row group, column 2c + parity) keeps one
+        // running product over its 8 values per face through faces 0-3, storing each partial product.
+        // The product is carried in a register across faces, so nothing is stored outside the tile.
         const auto position = [](size_t face, size_t step, size_t lane_row, size_t lane_col) {
             return std::pair{16 * (face / 2) + 4 * (step / 2) + lane_row, 16 * (face % 2) + 2 * lane_col + (step & 1)};
         };
         for (size_t lane_row = 0; lane_row < 4; ++lane_row) {
             for (size_t lane_col = 0; lane_col < 8; ++lane_col) {
+                float product = 1.0f;
                 for (size_t face = 0; face < 4; ++face) {
-                    float product = 1.0f;
-                    for (size_t step = 0; step < 9; ++step) {
-                        const size_t target_face = step == 8 ? face + 1 : face;
-                        if (target_face == 4) {
-                            break;
-                        }
-                        const auto [row, col] = position(target_face, step % 8, lane_row, lane_col);
+                    for (size_t step = 0; step < 8; ++step) {
+                        const auto [row, col] = position(face, step, lane_row, lane_col);
                         product = product * at(row, col);
                         at(row, col) = store(product);
                     }
                 }
             }
         }
+        return out;
+    }
+    if (op_name == "tiled_prod_next_tile") {
+        // The packed tile is the untouched neighbour (Dest tile 1), i.e. the input itself.
         return out;
     }
     TT_THROW("Unsupported layout op_name in test");
@@ -1258,8 +1262,8 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         op_name == "xielu" || op_name == "power" || op_name == "abs" || op_name == "fill") {
         return uniform(-3.0f, 3.0f);
     }
-    if (op_name == "tiled_prod") {
-        // A lane's running product spans ~33 values: keep them near 1.
+    if (op_name.starts_with("tiled_prod")) {
+        // A lane's running product spans 32 values: keep them near 1.
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(0.9f, 1.1f, numel, seed);
     }
     if ((op_name == "sqrt") || (op_name == "log") || (op_name == "rsqrt")) {
@@ -1397,8 +1401,8 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
         return {lhs, rhs};
     }
     if (is_int8_binary_sfpu_op(op_name)) {
-        auto lhs = create_random_vector_of_int8(numel, seed);
-        auto rhs = create_random_vector_of_int8(numel, seed + 1);
+        auto lhs = tt::test_utils::create_random_vector_of_int8(numel, seed);
+        auto rhs = tt::test_utils::create_random_vector_of_int8(numel, seed + 1);
         return {lhs, rhs};
     }
     TT_THROW("Unsupported binary op_name in test");
@@ -1723,7 +1727,7 @@ struct SfpuConfig {
     bool unpack_to_dest =
         false;  // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
     bool en_32bit_dest = false;
-    size_t out_dfb_entries = 0;        // 0 = num_tiles; fewer entries make the packer wait on the writer (pack back-pressure)
+    size_t out_dfb_entries = 0;  // 0 = num_tiles; fewer entries make the packer wait on the writer (pack back-pressure)
     // DEST placement (unary path of eltwise_sfpu_2_0.cpp). dst_tile_start: DEST index the tile(s) land at and are
     // packed back from. section_ntiles > 0: one DEST section of that many tiles per tile_regs_acquire instead of one
     // tile, placed with one copy_block, or with one copy_tile per tile when section_use_copy_tile is set. Section
@@ -2071,10 +2075,38 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
     sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
 
     const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
-    const bool ok = is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
-                            : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
+    const bool ok =
+        is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
+                : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
     if (!ok && is_fp32) {
         log_fp32_tile_match_fractions(dest_buffer_data, packed_golden, packed_input, test_config.num_tiles);
+    } else if (
+        !ok && !is_fp32 && sfpu_util::is_tile_layout_sfpu_op(test_config.sfpu_op) &&
+        sfpu_util::is_exact_unary_sfpu_op(test_config.sfpu_op)) {
+        // Name the elements that differ in (tile, row, col) of the 32x32 tile, so a store that lands
+        // outside its tile shows up as the positions it hit.
+        const auto got = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
+        const auto want = unpack_vector<bfloat16, uint32_t>(packed_golden);
+        size_t mismatches = 0;
+        for (size_t i = 0; i < got.size(); ++i) {
+            if (got[i] == want[i]) {
+                continue;
+            }
+            if (mismatches++ < 8) {
+                const size_t in_tile = i % 1024, face = in_tile / 256;
+                const size_t row = (face / 2) * 16 + (in_tile % 256) / 16, col = (face % 2) * 16 + in_tile % 16;
+                log_error(
+                    tt::LogTest,
+                    "{}: tile {} row {} col {}: got {} want {}",
+                    test_config.sfpu_op,
+                    i / 1024,
+                    row,
+                    col,
+                    static_cast<float>(got[i]),
+                    static_cast<float>(want[i]));
+            }
+        }
+        log_error(tt::LogTest, "{}: {} of {} elements differ", test_config.sfpu_op, mismatches, got.size());
     }
     return ok;
 }
@@ -2996,6 +3028,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
+        std::make_tuple(1, "tiled_prod_next_tile"),
         std::make_tuple(1, "alt_complex_rotate90"),
         std::make_tuple(1, "abs"),
         std::make_tuple(1, "fill"),
@@ -3258,6 +3291,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "expm1"),
         std::make_tuple(1, "log_with_base"),
         std::make_tuple(1, "tiled_prod"),
+        std::make_tuple(1, "tiled_prod_next_tile"),
         std::make_tuple(1, "alt_complex_rotate90"),
         std::make_tuple(1, "abs"),
         std::make_tuple(1, "fill"),

@@ -30,6 +30,7 @@ enum class MorehSoftmaxOp {
 
 bool is_moreh_softmax_w_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config);
 bool is_moreh_softmax_h_small_available(const Tensor& tensor, const DeviceComputeKernelConfig& compute_kernel_config);
+tt::DataFormat get_intermed_data_format(tt::DataFormat data_format, bool fp32_dest_acc_en);
 
 struct MorehSoftmaxOperation {
     struct operation_attributes_t {

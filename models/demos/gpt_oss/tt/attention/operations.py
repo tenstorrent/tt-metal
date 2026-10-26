@@ -250,7 +250,7 @@ def apply_allgather_and_slice(rs_out, mesh_config, ccl_manager, hidden_size: int
     return gathered
 
 
-def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
+def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int, use_all_reduce=False):
     """
     Apply tensor parallel allreduce if needed.
 
@@ -261,15 +261,25 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
         batch_size: Batch size for final reshape
         seq_len: Sequence length for final reshape
         hidden_size: Hidden size for final reshape
+        use_all_reduce: ttnn.all_reduce instead of mesh_config.allreduce (the fused decode configuration, see below)
 
     Returns:
         Tensor after allreduce (if TP > 1) or original tensor
     """
     if mesh_config.tp > 1:
-        tensor_allreduced = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        # ``mesh_config.allreduce`` now frees its input internally between
-        # reduce_scatter and all_gather to keep peak DRAM within bounds for
-        # long-context prefill; don't deallocate again here.
+        if use_all_reduce:
+            # (the fused decode configuration, gpt-oss-20b on QuietBox 2) ttnn.all_reduce, as the MoE prefill: there the
+            # reduce_scatter_minimal_async + all_gather_async pair below gave a nondeterministic 32-row block on one
+            # device whenever the L1 / DRAM layout changed (e.g. the DFlash buffers).
+            tensor_allreduced = ttnn.all_reduce(
+                tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.tp_axis
+            )
+            tensor.deallocate(True)
+        else:
+            tensor_allreduced = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
+            # ``mesh_config.allreduce`` now frees its input internally between
+            # reduce_scatter and all_gather to keep peak DRAM within bounds for
+            # long-context prefill; don't deallocate again here.
         tensor = tensor_allreduced
 
         # Remove padding added in weights.py for tile-aligned CCL operations.
