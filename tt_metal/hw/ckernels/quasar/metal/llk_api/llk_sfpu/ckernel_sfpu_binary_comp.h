@@ -11,10 +11,8 @@
 #include "cmath_common.h"
 #include "llk_defs.h"
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 // Int32 binary comparison for relational ops (signed), ported from BH.
 // All ops reduce to computing LT(X, Y) with optional operand swap and result
@@ -25,34 +23,32 @@ template <
     bool APPROXIMATION_MODE,
     int ITERATIONS,
     SfpuType RELATIONAL_OP,
-    bool SIGN_MAGNITUDE_FORMAT     = false,
+    bool SIGN_MAGNITUDE_FORMAT = false,
     trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
-inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
-{
+inline void calculate_binary_comp_int32(
+    const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
-        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge,
+        RELATIONAL_OP == SfpuType::lt || RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le ||
+            RELATIONAL_OP == SfpuType::ge,
         "Supported operation types: lt, gt, le, ge");
 
     constexpr bool swap_operands = (RELATIONAL_OP == SfpuType::gt || RELATIONAL_OP == SfpuType::le);
     constexpr bool invert_result = (RELATIONAL_OP == SfpuType::le || RELATIONAL_OP == SfpuType::ge);
 
-    if constexpr (invert_result)
-    {
+    if constexpr (invert_result) {
         TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, 0x01);
     }
 
     constexpr std::uint32_t tile_stride = 1U << trisc::get_dest_tile_size_log2(TILE_SHAPE);
-    const std::uint32_t idx_x           = (swap_operands ? dst_index_in1 : dst_index_in0) * tile_stride;
-    const std::uint32_t idx_y           = (swap_operands ? dst_index_in0 : dst_index_in1) * tile_stride;
-    const std::uint32_t out_offset      = dst_index_out * tile_stride;
+    const std::uint32_t idx_x = (swap_operands ? dst_index_in1 : dst_index_in0) * tile_stride;
+    const std::uint32_t idx_y = (swap_operands ? dst_index_in0 : dst_index_in1) * tile_stride;
+    const std::uint32_t out_offset = dst_index_out * tile_stride;
 
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, idx_x + (d << 1));
         TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::INT32, ADDR_MOD_7, 0, idx_y + (d << 1));
 
-        if constexpr (SIGN_MAGNITUDE_FORMAT)
-        {
+        if constexpr (SIGN_MAGNITUDE_FORMAT) {
             TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
             TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::SM32_TO_2SC);
 
@@ -60,15 +56,12 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
             TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG1, 6);
             TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG1, p_sfpu::LREG1, 1);
 
-            if constexpr (invert_result)
-            {
+            if constexpr (invert_result) {
                 TTI_SFPXOR(p_sfpu::LREG7, p_sfpu::LREG1);
             }
 
             TTI_SFPCAST(p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::sfp_sfpcast_mod::TWO_SC_TO_SM);
-        }
-        else
-        {
+        } else {
             TTI_SFPMOV(p_sfpu::LREG0, p_sfpu::LREG2, 0);
             TTI_SFPMOV(p_sfpu::LREG1, p_sfpu::LREG3, 0);
             TTI_SFPSHFT((-31) & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, 1);
@@ -86,8 +79,7 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
             TTI_SFPMOV(p_sfpu::LREG2, p_sfpu::LREG1, 0);
             TTI_SFPENCC(0, 0);
 
-            if constexpr (invert_result)
-            {
+            if constexpr (invert_result) {
                 TTI_SFPXOR(p_sfpu::LREG7, p_sfpu::LREG1);
             }
         }
@@ -96,5 +88,5 @@ inline void calculate_binary_comp_int32(const std::uint32_t dst_index_in0, const
     }
 }
 
-} // namespace sfpu
-} // namespace ckernel
+}  // namespace sfpu
+}  // namespace ckernel
