@@ -53,11 +53,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     MeshDevice* device = input_tensor.device();
 
-    // Quasar has no UInt32 format. Wormhole and Blackhole still use a 32-bit destination for it.
-    const bool is_quasar = device->arch() == tt::ARCH::QUASAR;
     bool fp32_dest_acc_en = src0_dfb_data_format == tt::DataFormat::Float32 ||
                             src0_dfb_data_format == tt::DataFormat::Int32 ||
-                            (!is_quasar && src0_dfb_data_format == tt::DataFormat::UInt32);
+                            src0_dfb_data_format == tt::DataFormat::UInt32;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
@@ -180,9 +178,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     // setting only fp32_dest_acc_en and unpack_to_dest_mode; every other field kept its Metal
     // default, which ComputeHardwareConfig's defaults reproduce.
     ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
-    // Same formats as fp32_dest_acc_en. transpose_tile unpacks them to dest, which on Quasar
-    // requires the kernel to be built with UnpackToDestEn.
-    if (fp32_dest_acc_en) {
+    if (src0_dfb_data_format == tt::DataFormat::Float32) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
         if (row_major) {
             compute_hw.unpack_modes.insert({TILIZE, UnpackMode::UnpackToDest});

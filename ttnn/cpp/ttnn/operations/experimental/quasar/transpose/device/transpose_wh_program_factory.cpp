@@ -56,11 +56,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     const tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     const uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    // transpose_tile takes the unpack-to-dest path for these formats, and that path is only
-    // valid when the kernel is built with UnpackToDestEn. Keep the two flags together.
-    // Quasar has no UInt32 format.
-    const bool fp32_dest_acc_en =
-        src0_cb_data_format == tt::DataFormat::Float32 || src0_cb_data_format == tt::DataFormat::Int32;
+    const bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32 ||
+                                  src0_cb_data_format == tt::DataFormat::Int32 ||
+                                  src0_cb_data_format == tt::DataFormat::UInt32;
+    const bool src_is_float32 = src0_cb_data_format == tt::DataFormat::Float32;
 
     log_debug(tt::LogOp, "transpose_wh");
     log_debug(tt::LogOp, "row_major: {}", row_major);
@@ -196,8 +195,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
         ttnn::ComputeKernelConfig compute_cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
-        if (fp32_dest_acc_en) {
-            // Both the source and the tile-formatted intermediate feed transpose_tile.
+        if (src_is_float32) {
+            // Keep the source CB and the tile-formatted intermediate (cb_tilize) in full Float32
+            // on the unpack-to-dest path; both feed the transpose.
             compute_hw.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
             compute_hw.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
         }
@@ -295,7 +295,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
         ttnn::ComputeKernelConfig compute_cfg{
             .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
         ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
-        if (fp32_dest_acc_en) {
+        if (src_is_float32) {
             compute_hw.unpack_modes.emplace(CB_IN0, tt::tt_metal::UnpackMode::UnpackToDest);
         }
 

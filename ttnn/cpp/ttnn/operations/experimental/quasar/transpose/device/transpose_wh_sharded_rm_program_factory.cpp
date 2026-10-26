@@ -77,10 +77,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     const uint32_t shard_height = shard_spec.shape[0];
     const uint32_t num_hw_blocks_per_core = shard_height / H;
 
-    // transpose_tile takes the unpack-to-dest path for a 32-bit dest format, so the kernel must be
-    // built with both a 32-bit destination and UnpackToDestEn.
-    const bool fp32_dest_acc_en =
-        src0_cb_data_format == tt::DataFormat::Float32 || src0_cb_data_format == tt::DataFormat::Int32;
+    const bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
     const auto& all_cores = shard_spec.grid;
 
     const bool ht_gt_8 = ht > 8;
@@ -178,8 +175,9 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     ttnn::ComputeKernelConfig compute_cfg{
         .math_fidelity = MathFidelity::HiFi4, .math_approx_mode = false, .fp32_dest_acc_en = fp32_dest_acc_en};
     ComputeHardwareConfig compute_hw = ttnn::to_compute_hardware_config(compute_cfg);
-    if (fp32_dest_acc_en) {
-        // cb_tilize is what transpose_tile reads. cb_in feeds the tilize that produces it.
+    if (src0_cb_data_format == tt::DataFormat::Float32) {
+        // Keep both the tilize input (cb_in) and its output (cb_tilize, which feeds the transpose)
+        // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32.
         compute_hw.unpack_modes.emplace(CB_IN, tt::tt_metal::UnpackMode::UnpackToDest);
         compute_hw.unpack_modes.emplace(CB_TILIZE, tt::tt_metal::UnpackMode::UnpackToDest);
     }
