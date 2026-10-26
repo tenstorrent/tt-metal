@@ -219,6 +219,9 @@ struct WorkerToFabricEdmSenderBase {
                 : reinterpret_cast<volatile tt_reg_ptr uint32_t*>(
                       get_stream_reg_read_addr(this->worker_credits_stream_id));
         this->edm_buffer_remote_free_slots_update_addr = get_stream_reg_write_addr(sender_channel_credits_stream_id);
+#if defined(FABRIC_WORKER_CREDIT_TO_LOCAL_STREAM)
+        this->edm_buffer_remote_free_slots_stream_id = sender_channel_credits_stream_id;
+#endif
         this->edm_buffer_local_free_slots_update_ptr =
             !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE
                 ? reinterpret_cast<volatile tt_reg_ptr uint32_t*>(from_remote_buffer_free_slots_ptr)
@@ -648,6 +651,9 @@ struct WorkerToFabricEdmSenderBase {
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_read_ptr;
     volatile tt_reg_ptr uint32_t* edm_buffer_local_free_slots_update_ptr;
     size_t edm_buffer_remote_free_slots_update_addr;
+#if defined(FABRIC_WORKER_CREDIT_TO_LOCAL_STREAM)
+    uint8_t edm_buffer_remote_free_slots_stream_id;
+#endif
     size_t edm_connection_handshake_l1_addr;
     size_t edm_worker_location_info_addr;
     // Note that for persistent (fabric to fabric connections), this only gets read once and actually points to the free
@@ -682,6 +688,9 @@ private:
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
         if constexpr (stateful_api) {
+#if defined(FABRIC_WORKER_CREDIT_TO_LOCAL_STREAM)
+            static_assert(!stateful_api, "FABRIC_WORKER_CREDIT_TO_LOCAL_STREAM has no stateful credit update");
+#endif
             if constexpr (enable_deadlock_avoidance) {
                 noc_inline_dw_write_with_state<true, false, true, false, false, InlineWriteDst::REG>(
                     0,  // val unused
@@ -696,10 +705,18 @@ private:
                     noc);
             }
         } else {
+#if defined(FABRIC_WORKER_CREDIT_TO_LOCAL_STREAM)
+            // The router's credit stream is on this core, so the add is local; the slot's payload and header must
+            // land before the router sees the credit.
+            ASSERT(this->edm_noc_x == my_x[noc] && this->edm_noc_y == my_y[noc]);
+            noc_async_write_barrier(noc);
+            increment_local_update_ptr_val(this->edm_buffer_remote_free_slots_stream_id, -1);
+#else
             auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
             const uint64_t noc_sem_addr =
                 get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
             noc_inline_dw_write<InlineWriteDst::REG>(noc_sem_addr, packed_val, 0xf, noc);
+#endif
         }
         if constexpr (I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             // Write to the atomic increment stream register (write of -1 will subtract 1)
