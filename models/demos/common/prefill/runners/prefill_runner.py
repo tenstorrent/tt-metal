@@ -140,10 +140,12 @@ CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
 
 D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 # The D2D FIFO must hold the L1-aligned metadata: 256 B, grown in 256 B steps for a wide packed forward.
-D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", -(-D2D_METADATA_SIZE_BYTES // 256) * 256))
-if D2D_FIFO_SIZE_BYTES < -(-D2D_METADATA_SIZE_BYTES // 256) * 256:
+_D2D_FIFO_MIN_BYTES = -(-D2D_METADATA_SIZE_BYTES // 256) * 256
+D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", _D2D_FIFO_MIN_BYTES))
+if D2D_FIFO_SIZE_BYTES < _D2D_FIFO_MIN_BYTES:
     raise ValueError(
-        f"PREFILL_PP_D2D_FIFO_BYTES={D2D_FIFO_SIZE_BYTES} is smaller than the {D2D_METADATA_SIZE_BYTES} B D2D record"
+        f"PREFILL_PP_D2D_FIFO_BYTES={D2D_FIFO_SIZE_BYTES} must be >= {_D2D_FIFO_MIN_BYTES} B "
+        f"(the {D2D_METADATA_SIZE_BYTES} B D2D record, in 256 B steps)"
     )
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
 assert (
@@ -950,6 +952,11 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
     _assert_ranks_agree_on_config(rank, num_ranks)
+    check_packed_forward_support(
+        FORWARD_CHUNKS,
+        supports_packed_forward=ADAPTER.supports_packed_forward,
+        indexer_indices=num_ranks > 1 and ADAPTER.passes_indexer_indices,
+    )
 
     layer_split = compute_layer_split(
         NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS + int(DFLASH_ENABLED)

@@ -61,6 +61,8 @@ class MyModelAdapter(PrefillModelAdapter):
     supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Gates
                                # PREFILL_FORWARD_TOKENS_BUDGET > chunk size; the runner checks it before building
                                # the runtime.
+    passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Packed
+                               # forwards do not carry them, so the runner refuses F > 1 across ranks.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to

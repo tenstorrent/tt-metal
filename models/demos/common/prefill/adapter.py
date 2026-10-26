@@ -159,6 +159,8 @@ class PrefillModelAdapter(ABC):
     # Whether the runtime implements prefill_forward (several chunks per forward), so the runner may run with
     # PREFILL_FORWARD_TOKENS_BUDGET above the chunk size. See docs/ADDING_A_PREFILL_MODEL.md.
     supports_packed_forward: bool = False
+    # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
+    passes_indexer_indices: bool = False
 
     def fabric_payload_size(self) -> int:
         """The fabric packet payload the mesh is opened with. It is fixed at mesh open, before the model is
