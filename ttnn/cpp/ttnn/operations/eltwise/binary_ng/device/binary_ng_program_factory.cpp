@@ -660,11 +660,6 @@ void for_each_core_runtime_args(
         rt_is_quant_op
             ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].get_param_if<float>(0).value_or(0.0f))
             : 0u;
-    const bool rt_is_requant = op_type == BinaryOpType::REQUANT;
-    const uint32_t requant_out_zero_point =
-        rt_is_requant
-            ? std::bit_cast<uint32_t>(operation_attributes.post_activations[0].get_param_if<float>(1).value_or(0.0f))
-            : 0u;
     uint32_t compute_scalar_value = quantization_zero_point;
     if (b.has_value() && (operation_attributes.binary_op_type == BinaryOpType::WHERE_TTS ||
                           operation_attributes.binary_op_type == BinaryOpType::WHERE_TST)) {
@@ -907,8 +902,9 @@ void for_each_core_runtime_args(
             };
         }
 
-        if (rt_is_requant) {
-            compute_runtime_args.push_back(requant_out_zero_point);  // QUANT_OUT_ZERO_POINT_RT_ARGS_IDX
+        if (op_type == BinaryOpType::REQUANT) {
+            compute_runtime_args.push_back(std::bit_cast<uint32_t>(
+                operation_attributes.post_activations[0].get_param_if<float>(1).value_or(0.0f)));
         }
 
         fn(core, reader_runtime_args, writer_runtime_args, compute_runtime_args, /*has_work=*/true);
