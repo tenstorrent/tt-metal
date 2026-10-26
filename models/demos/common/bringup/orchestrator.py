@@ -1915,6 +1915,11 @@ class Orchestrator:
                 self.led.update(tid, status="STOPPED", reason=[reason], history_add={"t": now(), "status": "STOPPED"})
                 return STOPPED
             task = self.led.task(tid)
+        if task.get("step") == "perf" or PROFILE_TEST in gate_command(task):  # F194: a profile needs every chip
+            why = iommu_problem()
+            if why:
+                self.stop_task(task, f"not started: {why}")
+                return STOPPED
         if self.perf_pick(task):  # F57: no gate before or after the agent; the owner decides on the A/B report
             return self.perf_step(task)
         if task.get("step") == "perf" and role is None:  # F122: the final task: the quick picks' full gates first
@@ -2175,6 +2180,52 @@ def decide(orch: Orchestrator, tid: str, decision: str, note: str = "") -> int:
     return 0
 
 
+SYSFS_TT = "/sys/class/tenstorrent"  # F194 (a selftest points it at a fake tree)
+IOMMU_SERVICES = ("/etc/systemd/system/tt-iommu-domains.service", "/lib/systemd/system/tt-iommu-domains.service")
+
+
+def iommu_mismatch(root: str | None = None) -> dict[int, tuple[str, str]]:
+    """F194: {card index: (PCI address, IOMMU domain type)} for the cards whose domain is translated (DMA / DMA-FQ)
+    differently from the majority of the box. Metal keeps ONE IOMMU flag for the whole cluster (that of the first MMIO
+    chip), so such a card takes the wrong pinned-memory path: on the 8x4 Galaxy two cards re-enumerated after a board
+    reset came back `identity` among `DMA-FQ` ones and lost the real-time profiler (DeepSeek-V4.1 FIX.3, DS41-120).
+    Empty when the box is uniform or has no IOMMU groups."""
+    import glob
+
+    kinds = {}
+    for cls in glob.glob(os.path.join(root or SYSFS_TT, "tenstorrent!*")):
+        try:
+            dev = os.path.realpath(os.path.join(cls, "device"))
+            kinds[int(cls.rsplit("!", 1)[1])] = (
+                os.path.basename(dev),
+                Path(dev, "iommu_group", "type").read_text().strip(),
+            )
+        except (OSError, ValueError):
+            continue
+    translated = {i for i, (_, k) in kinds.items() if k.startswith("DMA")}
+    odd = translated if len(translated) * 2 < len(kinds) else set(kinds) - translated
+    return {i: kinds[i] for i in sorted(odd)}
+
+
+def iommu_problem(root: str | None = None) -> str | None:
+    """F194: one line for a mixed-IOMMU box (the cause and the root-only fix), or None."""
+    bad = iommu_mismatch(root)
+    if not bad:
+        return None
+    cards = ", ".join(f"/dev/tenstorrent/{i} ({bdf}: {kind})" for i, (bdf, kind) in bad.items())
+    svc = next((s for s in IOMMU_SERVICES if os.path.exists(s)), None)
+    fix = (
+        f"`sudo systemctl restart {Path(svc).stem}` with no mesh open"
+        if svc
+        else "re-apply the host's IOMMU domain setup for those cards with no mesh open"
+    )
+    return (
+        f"IOMMU domains differ across the box's cards: {cards}; Metal uses one IOMMU mode for all, so these cards' "
+        f"pinned host buffers fail (the real-time profiler loses them: no device time from those chips). Fix (root, a "
+        f"person): {fix}"
+    )
+
+
 def commit_preflight(repo) -> list[str]:
     """F191: what would make a gate's commit fail, checked when the run starts (CK.1 on the 8x4 node: a passed gate's
     commit was refused for a missing git identity, found only after the gate). Empty when a commit can go through.
@@ -2278,6 +2329,9 @@ def main(argv=None) -> int:
         if bad:
             print(f"{now()} STOPPED: the run did not start: fix the preflight problems above, then {a.command}")
             return STOPPED
+        warn = iommu_problem()  # F194: only a profile needs every chip; the profiling tasks stop on it (run_task)
+        if warn:
+            print(f"{now()} PREFLIGHT (warning): {warn}", flush=True)
     orch.pause_file.unlink(missing_ok=True)
     orch.attempts_override = a.attempts
     if a.command == "resume":

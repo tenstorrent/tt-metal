@@ -2058,3 +2058,23 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   failed; the work may be done meanwhile, F87); from RUNNING (cut off) its agent starts again. Tasks with a precheck
   are unchanged. Selftest test_orchestrator.py::test_a_fix_job_cut_off_mid_agent_restarts_its_agent_not_a_passing_gate
   (fails without the fix); test_overseer.py's F87 test now writes the resume entry's `from` as `resume` does.
+
+## F194: a box with mixed IOMMU domains is reported at launch; a profiling task does not start on it (2026-10-26, owner)
+- DeepSeek-V4.1 galaxy_8x4-full: every 8x4 mesh open logged "Real-time profiler disabled on device 7 / 10" and nothing
+  stopped X.1 from profiling without them. FIX.3 found the cause: two cards re-enumerated after a board reset came back
+  in an `identity` IOMMU domain among `DMA-FQ` ones; Metal keeps one IOMMU flag for the cluster, so their pinned D2H
+  buffer fails (EINVAL). The fix is a root command (on that node `sudo systemctl restart tt-iommu-domains`).
+- A host fact, so a framework check, not model code (the overseer first routed it as a model fix job; its agent wired a
+  check into the model's hooks, which voided W.1's stamp: reverted). orchestrator.iommu_mismatch / iommu_problem read
+  sysfs (/sys/class/tenstorrent/*/device/iommu_group/type): the cards translated differently from the majority, with
+  the fix. `run|resume` prints `PREFLIGHT (warning): ...`; a task with step perf or a test_profile.py gate stops
+  ("not started: ...") while the box is mixed. Stamp-skipped file: no passed unit re-runs. Selftest test_host_iommu.py.
+
+## F194: a box with mixed IOMMU domains is reported at launch; a profiling task does not start on it (2026-10-26, owner)
+- DeepSeek-V4.1 galaxy_8x4-full FIX.3: two Galaxy cards re-enumerated after a board reset came back in an `identity`
+  IOMMU domain among `DMA-FQ` ones; Metal keeps one IOMMU flag for the cluster, so their pinned D2H buffer fails and the
+  real-time profiler loses chips 7 / 10. Fix is root-only (here `sudo systemctl restart tt-iommu-domains`).
+- A host fact, so a framework check (the agent's model-side check was reverted: it voided W.1's stamp).
+  orchestrator.iommu_mismatch / iommu_problem read sysfs; `run|resume` prints `PREFLIGHT (warning): ...`; a task with
+  step perf or a test_profile.py gate stops ("not started: ...") while the box is mixed. Stamp-skipped file.
+  Selftest test_host_iommu.py.
