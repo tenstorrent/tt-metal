@@ -91,10 +91,58 @@ def _unflat(y, shape):
     return y if shape is None else ttnn.reshape(y, (*shape[:3], y.shape[-1]))
 
 
+# minimal_matmul (M, K, N) blocks and subblock per (K, N), from tests/perf/sweep_matmul.py (R1-2f, M = 131072,
+# HiFi4; doc/optimize/iter_01/r1_2f/matmul_sweep.md): 2.0-2.5x faster than ttnn.linear's default config
+MM_BLOCKS = {
+    (512, 1536): (8, 8, 8, 2, 2),
+    (512, 2048): (8, 8, 8, 4, 1),
+    (512, 512): (4, 8, 8, 4, 1),
+    (2048, 512): (8, 8, 4, 4, 1),
+    (64, 512): (4, 2, 8, 2, 2),
+    (512, 288): (8, 8, 4, 1, 4),
+}
+MM_MIN_M_TILES = 64  # below this the default linear
+
+
+def _mm_config(xf, w):
+    import ttnn
+
+    m_tiles = xf.padded_shape[-2] // TILE
+    K, N = w.padded_shape[-2], w.padded_shape[-1]
+    if m_tiles < MM_MIN_M_TILES or (K, N) not in MM_BLOCKS or w.dtype == ttnn.float32:
+        return None  # only the swept roles (fp32-weight gate projections keep the default linear)
+    k_tiles = K // TILE
+    mb, kb, nb, sh, sw = MM_BLOCKS[(K, N)]
+    kb = max(d for d in range(1, min(kb, k_tiles) + 1) if k_tiles % d == 0)
+    grid = xf.device().compute_with_storage_grid_size()
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=mb,
+        K_block_size=kb,
+        N_block_size=nb,
+        subblock_h=sh,
+        subblock_w=sw,
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+    )
+
+
 def linear(x, w, precision: Precision, bias=None, activation=None, dtype=None, config=None, role=None):
     import ttnn
 
     xf, shape = _flat(x)
+    mm = _mm_config(xf, w)
+    if mm is not None:
+        acts = {"silu": ttnn.UnaryOpType.SILU}
+        y = ttnn.experimental.minimal_matmul(
+            xf,
+            w,
+            bias_tensor=bias,
+            fused_activation=None if activation is None else ttnn.UnaryWithParam(acts[activation]),
+            config=mm,
+            dtype=ttnn.bfloat16 if dtype is None else dtype,
+            compute_kernel_config=precision.matmul_config(role) if config is None else config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return _unflat(y, shape)
     y = ttnn.linear(
         xf,
         w,

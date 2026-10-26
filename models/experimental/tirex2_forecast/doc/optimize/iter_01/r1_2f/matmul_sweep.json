@@ -1,0 +1,706 @@
+[
+ {
+  "role": "mlstm_qkv",
+  "config": "linear default",
+  "ms": 5.706016905605793,
+  "pcc": 1.0
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K8 N8 sub2x2",
+  "ms": 2.531841630116105,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K8 N8 sub1x4",
+  "ms": 2.6628649793565273,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K8 N8 sub4x1",
+  "ms": 2.5345359463244677,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K16 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K16 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K16 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M16 K8 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M16 K8 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M16 K8 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K8 N4 sub2x2",
+  "ms": 2.6130457408726215,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K8 N4 sub1x4",
+  "ms": 2.6008759159594774,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K8 N4 sub4x1",
+  "ms": 2.5945650413632393,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M4 K8 N8 sub2x2",
+  "ms": 2.919376827776432,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M4 K8 N8 sub1x4",
+  "ms": 2.8867428191006184,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M4 K8 N8 sub4x1",
+  "ms": 2.8592280577868223,
+  "pcc": 0.9999999997600746
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M16 K16 N4 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M16 K16 N4 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M16 K16 N4 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K16 N16 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K16 N16 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_qkv",
+  "config": "minimal M8 K16 N16 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "linear default",
+  "ms": 1.9923062063753605,
+  "pcc": 1.0
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K8 N8 sub2x2",
+  "ms": 1.0311100631952286,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K8 N8 sub1x4",
+  "ms": 0.9952052496373653,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K8 N8 sub4x1",
+  "ms": 0.9910308290272951,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K16 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K16 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K16 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M16 K8 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M16 K8 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M16 K8 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K8 N4 sub2x2",
+  "ms": 1.0375049896538258,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K8 N4 sub1x4",
+  "ms": 1.0421748738735914,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K8 N4 sub4x1",
+  "ms": 1.0399110615253448,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M4 K8 N8 sub2x2",
+  "ms": 0.9742861147969961,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M4 K8 N8 sub1x4",
+  "ms": 0.9277414064854383,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M4 K8 N8 sub4x1",
+  "ms": 0.924841733649373,
+  "pcc": 0.9999999997568747
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M16 K16 N4 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M16 K16 N4 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M16 K16 N4 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K16 N16 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K16 N16 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "mlstm_o_out",
+  "config": "minimal M8 K16 N16 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "linear default",
+  "ms": 6.672507850453258,
+  "pcc": 1.0
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K8 N8 sub2x2",
+  "ms": 2.72995512932539,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K8 N8 sub1x4",
+  "ms": 2.6513298507779837,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K8 N8 sub4x1",
+  "ms": 2.6553405914455652,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K16 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K16 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K16 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M16 K8 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M16 K8 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M16 K8 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K8 N4 sub2x2",
+  "ms": 2.6006512343883514,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K8 N4 sub1x4",
+  "ms": 2.59202066808939,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K8 N4 sub4x1",
+  "ms": 2.573801204562187,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M4 K8 N8 sub2x2",
+  "ms": 2.6375409215688705,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M4 K8 N8 sub1x4",
+  "ms": 2.650615992024541,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M4 K8 N8 sub4x1",
+  "ms": 2.664166036993265,
+  "pcc": 0.9999999996389548
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M16 K16 N4 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M16 K16 N4 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M16 K16 N4 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K16 N16 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K16 N16 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "ffn_down",
+  "config": "minimal M8 K16 N16 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "linear default",
+  "ms": 10.79098554328084,
+  "pcc": 1.0
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K8 N8 sub2x2",
+  "ms": 5.632607964798808,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K8 N8 sub1x4",
+  "ms": 5.513024283573031,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K8 N8 sub4x1",
+  "ms": 5.367575446143746,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K16 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K16 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K16 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M16 K8 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M16 K8 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M16 K8 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K8 N4 sub2x2",
+  "ms": 5.58572867885232,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K8 N4 sub1x4",
+  "ms": 5.546363536268473,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K8 N4 sub4x1",
+  "ms": 5.5939380545169115,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M4 K8 N8 sub2x2",
+  "ms": 6.479074712842703,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M4 K8 N8 sub1x4",
+  "ms": 6.445881212130189,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M4 K8 N8 sub4x1",
+  "ms": 6.130198948085308,
+  "pcc": 0.9999999759408288
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M16 K16 N4 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M16 K16 N4 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M16 K16 N4 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K16 N16 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K16 N16 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "w_in",
+  "config": "minimal M8 K16 N16 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "embed_hidden",
+  "config": "linear default",
+  "ms": 0.9302312973886728,
+  "pcc": 1.0
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N8 sub2x2",
+  "ms": 0.7066335529088974,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N8 sub1x4",
+  "ms": 0.7183782290667295,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N8 sub4x1",
+  "ms": 0.6935733836144209,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M16 K2 N8 sub2x2",
+  "ms": 0.6907188799232244,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M16 K2 N8 sub1x4",
+  "ms": 0.7120191585272551,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M16 K2 N8 sub4x1",
+  "ms": 0.6796638481318951,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N4 sub2x2",
+  "ms": 0.6890033837407827,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N4 sub1x4",
+  "ms": 0.6649135611951351,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N4 sub4x1",
+  "ms": 0.6830138154327869,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M4 K2 N8 sub2x2",
+  "ms": 0.6114288698881865,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M4 K2 N8 sub1x4",
+  "ms": 0.6566692609339952,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M4 K2 N8 sub4x1",
+  "ms": 0.6920790765434504,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M16 K2 N4 sub2x2",
+  "ms": 0.7095839828252792,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M16 K2 N4 sub1x4",
+  "ms": 0.6781639531254768,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M16 K2 N4 sub4x1",
+  "ms": 0.6973990239202976,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N16 sub2x2",
+  "ms": 0.7628779858350754,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N16 sub1x4",
+  "ms": 0.729577848687768,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "embed_hidden",
+  "config": "minimal M8 K2 N16 sub4x1",
+  "ms": 0.7632030174136162,
+  "pcc": 0.9999999999995944
+ },
+ {
+  "role": "head_out",
+  "config": "linear default",
+  "ms": 1.1710799299180508,
+  "pcc": 1.0
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K8 N8 sub2x2",
+  "ms": 0.6288539152592421,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K8 N8 sub1x4",
+  "ms": 0.5760150961577892,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K8 N8 sub4x1",
+  "ms": 0.5758495535701513,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K16 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K16 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K16 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M16 K8 N8 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M16 K8 N8 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M16 K8 N8 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K8 N4 sub2x2",
+  "ms": 0.5703151691704988,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K8 N4 sub1x4",
+  "ms": 0.5694746505469084,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K8 N4 sub4x1",
+  "ms": 0.5703794304281473,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M4 K8 N8 sub2x2",
+  "ms": 0.6212794687598944,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M4 K8 N8 sub1x4",
+  "ms": 0.6064788904041052,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M4 K8 N8 sub4x1",
+  "ms": 0.6056244019418955,
+  "pcc": 0.9999999997420717
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M16 K16 N4 sub2x2",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M16 K16 N4 sub1x4",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M16 K16 N4 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ },
+ {
+  "role": "head_out",
+  "config": "minimal M8 K16 N9 sub4x1",
+  "error": "TT_THROW @ /home/andy/tt-metal/tt_metal/impl/dataflow_buffer/dataflow_buffer.cpp:3087: tt::exception"
+ }
+]
