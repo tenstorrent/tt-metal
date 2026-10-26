@@ -40,7 +40,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     KDARecurrenceProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, _ProjectedInputs, ttKDA
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
@@ -229,10 +229,12 @@ class _GlmKDA(ttKDA):
         if os.environ.get("GLM_KDA_PREP_L1", "0") != "1":
             self.recurrence._preparation_memory = ttnn.DRAM_MEMORY_CONFIG
         # explicit projection schedules (tt/mm_configs.py; tests/test_matmul_tune.py at 2560 rows per chip): input
-        # projection minimal_matmul M4 K8 N4 (1.511 -> 1.260 ms, 91% of HiFi4), o_proj 2D multicast (0.504 -> 0.450 ms)
+        # projection minimal_matmul M4 K8 N8 sb4x1 (ttnn.linear auto 1.405 -> 1.169 ms, 90% of HiFi4; _project_inputs),
+        # o_proj 2D multicast (0.496 -> 0.444 ms)
+        self.input_projection_minimal_matmul_config = None
         if mm_configs.ENABLED:
             k_o, n_o = tuple(self.weights.output_projection.shape)[-2:]
-            self.input_projection_minimal_matmul_config = mm_configs.minimal_config(self.device, 4, 8, 4, 1, 4)
+            self.input_projection_minimal_matmul_config = mm_configs.minimal_config(self.device, 4, 8, 8, 4, 1)
             self.output_projection_program_config = mm_configs.mm2d(
                 self.device, self.active_seq_len_local, k_o, n_o, ttnn.float32, ttnn.bfloat16, ttnn.float32
             )
@@ -245,6 +247,26 @@ class _GlmKDA(ttKDA):
             self.kda_compute_config = ttnn.init_device_compute_kernel_config(
                 arch, math_fidelity=fid, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
             )
+
+    def _project_inputs(self, hidden_states: ttnn.Tensor) -> _ProjectedInputs:
+        """ttKDA's fused input projection on minimal_matmul (main's ttKDA runs ttnn.linear, 20% slower at GLM's
+        2560 x 4096 x 8352); the semantic column offsets as ttKDA's."""
+        if self.input_projection_minimal_matmul_config is None:
+            return super()._project_inputs(hidden_states)
+        projected = ttnn.experimental.minimal_matmul(
+            hidden_states,
+            self.weights.input_projection,
+            config=self.input_projection_minimal_matmul_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.input_projection_compute_config,
+        )
+        auxiliary_start = self._convolution_width
+        return _ProjectedInputs(
+            projected=projected,
+            decay_rank_offset=auxiliary_start,
+            output_gate_offset=auxiliary_start + self.config.head_k_dim,
+            beta_offset=auxiliary_start + self.config.head_k_dim + self.config.v_dim,
+        )
 
     row_partial = False  # set per call by TtKdaAttention: skip the TP reduction, return o_proj's bf16 partial
 
@@ -333,6 +355,7 @@ class TtKdaAttention(LightweightModule):
             ),
             tp_ccl_topology=ttnn.Topology.Linear,
             gated_rms_output_dtype=ttnn.float32,
+            input_projection_math_fidelity=kda_fidelity(),
             output_projection_math_fidelity=kda_fidelity(),
         )
 

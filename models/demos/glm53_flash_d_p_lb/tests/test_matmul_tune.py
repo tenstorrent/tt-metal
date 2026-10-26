@@ -35,6 +35,8 @@ SHAPES = {
     "mla_o": (640, 16384, 4096, BF16, BF16, BF16, HIFI2, 11),
     "se_down": (5120, 256, 4096, FP32, BF16, FP32, HIFI4, 42),
     "kda_o": (2560, 2048, 4096, FP32, BF16, FP32, HIFI4, 34),
+    "kda_in_h2": (2560, 4096, 8352, BF16, BF16, BF16, HIFI2, 34),  # (the projections alone at HiFi2: K3's fidelity)
+    "kda_o_h2": (2560, 2048, 4096, FP32, BF16, FP32, HIFI2, 34),
     "router": (2560, 4096, 288, FP32, FP32, FP32, HIFI4, 42),
     "se_gate": (5120, 4096, 256, BF16, BF16, FP32, HIFI4, 84),
     "se_gate_up": (5120, 4096, 512, BF16, BF16, FP32, HIFI4, 42),
