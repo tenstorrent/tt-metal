@@ -13,8 +13,8 @@ Two columns added 2026-10-26 on every row of both parts, so that the ledger trac
 the other could use:
 - **Applies to**: the ERISC program the idea concerns: E0 (`sender_erisc`), E1 (`receiver_erisc`), both, or test
   (tests, tools, test infrastructure).
-- **In the lead?**: whether `fabric_exp/variants/v3z` (the lead since 2026-10-26, RESULTS §98; v3v6 before it) has
-  it: yes on E0, yes on E1, no, or n/a (tools, settings, out of scope). A short note says in what form when it differs
+- **In the lead?**: whether `fabric_exp/variants/v3q` (the lead since 2026-10-26, RESULTS §98; v3z, v3v6 before it)
+  has it: yes on E0, yes on E1, no, or n/a (tools, settings, out of scope). A short note says in what form when it differs
   from the row.
 
 Counts, part 1 (94 classified rows): **IN 31 · LOST-SUBSTANCE 19 · LOST-CONTEXT 8 · LOST-UNCLEAR 3 · MIXED 5 · OPEN 28**.
@@ -226,10 +226,10 @@ Status key: **IN** in the current build (flag bit in 13129088, or hard-wired in 
 
 # Phase 1 part (RESULTS §82–§98 and the Phase 1 notes)
 
-Classified against the lead, `fabric_exp/variants/v3z` (RESULTS §98, adopted 2026-10-26; v3v6 before it): E0 = v3yb's
-(v3tk's E0 with its per-round work out of line, A1, register access through the helpers, A2, and completions taken
-before the send decision, A3), E1 = v3x3's (v3v6's with holds bounded by the ring, E1-28, and no record-word cut,
-E1-35). Reference numbers are v3a's (s79mc without its hints) unless the row names another base; "means" are
+Classified against the lead, `fabric_exp/variants/v3q` (RESULTS §98, adopted 2026-10-26; v3z and v3v6 before it): v3zy's
+code written readably (P14), byte-identical to v3zy. E0 = v3y's (v3tk's E0 with its per-round work out of line, A1,
+and register access through the helpers, A2; without v3z's worker change, A3), E1 = v3x3's (v3v6's with holds bounded
+by the ring, E1-28, and no record-word cut, E1-35). Reference numbers are v3a's (s79mc without its hints) unless the row names another base; "means" are
 suite-mean changes (4352 / mix / flushmix / 1D, sometimes flushmix4) at -O3 / -O2 / -Os.
 
 Status key for this part: **IN** in the lead. **LOST-SUBSTANCE** rejected for a reason independent of codegen (hang,
@@ -237,9 +237,9 @@ inherent work, latency, a rule). **LOST-CONTEXT** lost with evidence pointing at
 built or queued but not decided. **WITHDRAWN** a rule or explanation that was proposed and then shown wrong. Tools are
 IN when in use. "Found in" is the design (or tool) and the ERISC it changed.
 
-Counts (106 rows): **IN 73** (36 of them tools, findings, rules and practices) **· OPEN 13 · LOST-SUBSTANCE 11 ·
+Counts (109 rows): **IN 73** (36 of them tools, findings, rules and practices) **· OPEN 15 · LOST-SUBSTANCE 12 ·
 LOST-CONTEXT 3 · WITHDRAWN 4**, and 2 rows split between IN and LOST-SUBSTANCE (E0-4, E1-6). By "applies to": E0 25,
-E1 35, both 21, test 25. Cross-pollination (applies to both, in the lead on one ERISC only): P4 (per-round work out
+E1 37, both 22, test 25. Cross-pollination (applies to both, in the lead on one ERISC only): P4 (per-round work out
 of line) and P13 (register access through the provided helpers) went from E1 to E0 in v3z (A1, A2); R1 (no
 check-then-defer race: E1 patched, E0 none found) and R2 (holds bounded by the window: E1 by the ring since v3z, E0
 holds nothing) hold on both. E0_AUDIT.md has the E0 side.
@@ -331,6 +331,8 @@ holds nothing) hold on both. E0_AUDIT.md has the E0 side.
 | E1-33 | §98 | Forwarded fused gap vs v3a (+4.6 in v3t) | v3v2, E1 | 154.9 / 155.0 / 157.5 vs v3a -O3 155.2 | **IN** (closed) | E1 | yes on E1 | |
 | E1-35 | §98, V3E1 §12.21 | No record-word batch cut: a batch reads the four records from its oldest slot, across two words if it must (as v3tk) | v3x_nocut / v3x3, E1 | Job 346: every bursty loss back to v3tk's (16 B N8 G500 129.7 / 130.0; N/S 4352 B N32 G500 134.4); EW_MixSize4 −3.8; steady means +1.0 / +0.4 / +0.5 / +0.8 vs v3x; NS_Chunk4Fused_Flush +10 (v3tk's level) | **IN** (v3z: battery passed, jobs 347–351) | E1 | yes on E1 | v3x3 = v3x_nocut with mainline comments, PT_LOAD-identical |
 | E1-36 | §98, V3E1 §12.21 | The cut only on passes that handle a packet | v3x2, E1 | Job 346: recovers about half of each bursty loss (16 B N8 G500 131.9 / 133.2; N/S 4352 B N32 G500 138.1) | **LOST-SUBSTANCE** (bursty senders) | E1 | no | |
+| E1-37 | §98 | Plain completion check: every slot of a batch read (`transaction_flushed`), credits slot by slot, no read-class records, no bounded wait | v3p, E1 | Jobs 354–360: means vs v3zy +3.9 to +9.3 (-O3), +7.4 to +11.5 (-O2), +8.8 to +14.3 (-Os); E1-bound rows +10 to +15 at -O3. Four status reads per batch, each used at once (~40 cycles per batch) | **LOST-SUBSTANCE** (cost) | E1 | no | v3q keeps the one-read check, written readably (P14) |
+| E1-38 | §98 | No completion batching: every slot credited on its own | v3p_b1, E1 | Steady 2D small writes floor ~133 (the far E0 handles a frame per packet), means +1.9 to +7.2 vs v3p at -O3; bursts of 1–4 with gaps equal (within 0.4), 8–32 at 16 B +4 to +9, at 4352 B −2 to +1; 1D one-hop writes −10.7; VC1 best on every row (8-slot rings: e.g. multicast 241.5 vs v3zy 254.5) | **OPEN** (batch of 1 on small rings) | E1 | no | Batching pays on 16-slot rings, costs on 8-slot rings. v3q16 (batch of 1 below 16 slots, job 027 on a09u32): VC1 multicast −13 to −14 vs v3q, 4352 B 1-hop at v3z's level, but 16 B 1-hop at -Os +4 to +9 vs v3q |
 | E1-34 | V3E1 §12.18 | Give the 2D worker channel spare slots (an 82nd slot; `TT_FABRIC_EXP_WORKER_SLOTS=20`) to take the window off the one-hop rows | v3w analysis | Run cancelled | **WITHDRAWN** (user: do not rely on slot counts) | test | n/a | |
 
 ## P4. Structure and stability (both programs)
@@ -350,6 +352,7 @@ holds nothing) hold on both. E0_AUDIT.md has the E0 side.
 | P11 | §84–§98 | Code size must not grow with the channel count; VC1 E0 + E1 within the 26,624 B buffer at -O3 | all designs | v3a 29,704 B → v3l 26,096 → v3v6 25,116 → v3z 25,096 | **IN** | both | yes on E0 and E1 | |
 | P12 | §82, §88 | Production builds VC1 at -Os only because v2 did not fit; v3 fits at -O3 | Phase 1 | v3z VC1 -O3 25,096 B | **OPEN** (host: `get_kernel_opt_level`) | both | n/a | |
 | P13 | §98 | NoC programming through the provided NoC APIs, wrapped in named helpers; propose API additions rather than hand-rolling | user, 2026-10-25 | E1: local-write preset ported at equal counts; raw status reads kept with proposed accessors (E1-20) | **IN** (E0 since v3z: A2) | both | yes on E0 and E1 | E0_AUDIT §4: v3y uses the existing helpers, PT_LOAD-identical |
+| P14 | §98 | The lead's tricks written readably: the completion check's two facts stated once, named helpers (`in_each_byte`, `newest_slot_in`, `writes_outgoing`, `batch_slot_trid`, `all_channels_free`, `for_each_channel`) | v3q, both | Byte-identical to v3zy on every config at -O3/-O2/-Os; offline edit check as v3zy. A lambda for the slot's transaction ID changed the 1D E1 loop (−47 instructions); a plain function did not | **IN** (the lead's source form) | both | yes on E0 and E1 | User review of v3zy (2026-10-26): send_completions and visit_forwarding_channels hard to follow |
 
 ## P5. Timing robustness and credits (both programs)
 
@@ -385,7 +388,7 @@ holds nothing) hold on both. E0_AUDIT.md has the E0 side.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | A1 | E0_AUDIT §1 | E0's once-per-round and rare work out of line (`termination_requested`, `next_round`, `end_round`, `run_router_command`) | v3y, E0 | Offline: a per-round edit (one more termination test) re-lays out v3v6's whole `run_main_loop` (600–1,600 differing lines, pass paths −1 to +14 score); v3y: loop moved only. Four cold edits never DIFF; `hb` now "same". Hardware as v3yb (jobs 339–345): passes everything; -O3/-O2 means within ±0.4 of v3v6, -Os +0.2 to +1.2 | **IN** (v3z: jitter band and offline edit checks hold on E0, jobs 350–351) | E0 | yes on E0 | Applies P4 to E0 |
 | A2 | E0_AUDIT §4 | E0's TX-queue and stream-register accesses through the provided helpers (`eth_txq_reg_read`, `increment_local_update_ptr_val`, `remote_update_ptr_val`, `NOC_STREAM_READ_REG`) | v3y, E0 | PT_LOAD-identical to v3v6 on every config at every level (E0 and E1) | **IN** (in v3yb, so in v3z) | E0 | yes on E0 | Applies P13 to E0 |
-| A3 | E0_AUDIT §2 | The worker visit takes completions before its send decision when it has a packet but no far room, so freed room is used in the same pass | v3yb / v3yc, E0 | Emulator: credit frame → send lag 1 pass → 0 on every hot config; pass paths at -O3 equal or shorter, -Os worker send +1 taken. Hardware (jobs 339–345): VC1 1-hop −4 to −13 at every level, multicast unchanged; 2D/1D means within ±0.4 at -O3/-O2 | **IN** (v3z: battery passed, jobs 347–351) | E0 | yes on E0 | |
+| A3 | E0_AUDIT §2 | The worker visit takes completions before its send decision when it has a packet but no far room, so freed room is used in the same pass | v3yb / v3yc, E0 | Emulator: credit frame → send lag 1 pass → 0 on every hot config; pass paths at -O3 equal or shorter, -Os worker send +1 taken. Hardware (jobs 339–345): VC1 1-hop −4 to −13 at every level, multicast unchanged; 2D/1D means within ±0.4 at -O3/-O2. With v3x's E1 (jobs 352–353, v3zc vs v3zy): VC1 1-hop −4 to −8 but VC1 multicast +13 | **OPEN** (out of the lead since v3q: mixed effects on multi-mesh routers, mechanism not measured; in v3z, jobs 347–351) | E0 | no | Revisit with the phase/cost analysis |
 | A4 | E0_AUDIT §2 | The same in every forwarding visit | v3yb drafts, E0 | -Os forwarded pass +8 instructions +3 taken; VC1 E0 +1.2 KB (sum 26,304 B) | **LOST-SUBSTANCE** (offline: cost on every forwarded pass; size) | E0 | no | A forwarded flow waits on its own channel's credits in the builder's layouts |
 | A5 | E0_AUDIT §2 | The idle context switch is counted in rounds (SWITCH_INTERVAL = 32 on every logged E0), so its wall-clock threshold moves with the idle pass's length | audit, E0 | ~33 rounds × 32 passes × 25–40 cycles ≈ 26k–42k cycles | **OPEN** (proposal: a cycle threshold; protocol/host) | E0 | n/a | A deliberate cliff for traffic with long gaps |
 | A6 | E0_AUDIT §3 | E0 holds no completion or credit: one worker credit or upstream credit per visit with new completions | audit, E0 | — | **IN** (finding) | E0 | yes on E0 | R2 holds on E0 |

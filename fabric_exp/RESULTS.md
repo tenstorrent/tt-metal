@@ -6498,6 +6498,129 @@ same-session reference).
     the -Os 4352 mean (+2.1).
   - Adopted as the lead (user, 2026-10-26). VC1 -O3 code: E0 13,268 B + E1 11,828 B = 25,096 B (v3v6 25,116).
 
+**VC1 multicast: repeat and attribution** (jobs 352–353; labels p32*, p33*).
+- **Repeat** (job 352, 16 runs, all clean): v3z and v3x, four interleaved pairs at the builder's level (-Os) and at
+  -O3. Every row repeats within about 1 cycle.
+  - Multicast: v3z is 14.3 (-Os) and 12.8 (-O3) behind v3x, on both entries in every run. The gap is real.
+  - 1-hop rows: v3z 2.8 to 8.9 ahead.
+  - The CSV's two multicast entries are not in a fixed mesh order (one v3x run swapped them), so compare means.
+- **Attribution** (job 353, -O3, two rounds, all clean). Two exact compositions, each ERISC PT_LOAD-identical to its
+  parent on all 536 -O3 configs:
+  - v3zy = v3y's E0 (per-round work out of line, helpers) + v3x3's E1;
+  - v3zc = v3yc's E0 (helpers, the worker change) + v3x3's E1.
+
+| VC1 row (-O3) | v3x | v3z | v3zy | v3zc |
+| --- | --- | --- | --- | --- |
+| 1-hop E/W 16 B | 176.2 | 167.3 | 174.9 | 168.2 |
+| 1-hop E/W 4352 B | 189.7 | 182.4 | 190.5 | 183.1 |
+| 1-hop N/S 16 B | 180.5 | 174.5 | 180.9 | 173.2 |
+| 1-hop N/S 4352 B | 193.4 | 187.8 | 191.9 | 187.6 |
+| Multicast 4352 B | 254.8 | 267.6 | 254.4 | 267.2 |
+
+  - The worker change (E0_AUDIT §2, ledger A3: the worker visit takes completions before its send decision) gives
+    both the 1-hop gains and the multicast cost. The per-round restructuring (A1) moves neither.
+  - With v3v6's E1 the same change left multicast unchanged (v3yb vs v3v6), so it interacts with v3x's ring-bounded
+    credit holds. The mechanism is not measured.
+  - 2D at -O3 (one run each, p30nc → p31z, E0 v3v6 → v3yb): MeshMulticast write +2.7; the other rows within row
+    noise. FWD_MixCmd's −37 is its known bimodality (§39): about 153 or about 197 on any build (jzs_base 199.1,
+    jzs_base2 154.3).
+- **Compile coverage on v3z** (`coverage.py`, 41 cases): 1,259 / 1,395 at -O3, -O2 and -Os, case by case as v3tk.
+  The failures are the inherited ones (`*_nofuse`, Wormhole VC1 IRAM at -O3/-O2).
+
+**Plain source and batching** (jobs 354–360, all clean; labels p34*, p34_*). The user asked what v3's completion and
+forwarding tricks buy against main, and whether completion batching earns its place on bursty traffic. Three variants,
+each through validation (RELAXED and STRICT), the suites at three levels, the hook probe, VC1 (34/34 at every level)
+and bursts:
+- **v3zy** (v3z without the worker change A3) as the reference.
+- **v3p**: v3zy written plainly. E1 checks every slot of a batch (`transaction_flushed` per slot) and credits slot by
+  slot; no read-class records, no bounded wait. E0's forwarding visit goes through small helpers (its pass code is
+  v3zy's to within one instruction, in the emulator).
+- **v3p_b1**: v3p without batching (every slot credited on its own, in E1's program and the generic loop).
+
+Results:
+- **v3zy against v3z:** 2D and 1D means within ±1 at every level; VC1 1-hop rows +3.5 to +8.7, multicast −12 to −14
+  (as job 353).
+- **v3p costs E1, not E0.** Its completion check makes four status reads per batch, each used at once (about 40
+  cycles per batch), and one credit per slot (about 9 instructions each).
+
+| v3p against v3zy (4352 / mix / flushmix / flushmix4 / 1D) | -O3 | -O2 | -Os |
+| --- | --- | --- | --- |
+| means | +6.2 / +6.3 / +3.9 / +9.3 / +5.5 | +9.9 / +10.5 / +7.9 / +11.5 / +7.4 | +12.4 / +14.3 / +10.9 / +13.5 / +8.8 |
+
+  E1-bound rows lose 10 to 15 at -O3 (scatter, fused, atomics). v3zy's one-read check is load-bearing.
+- **Without batching (v3p_b1 against v3p, -O3):**
+  - Steady 2D small writes stop at a floor of about 133, where the far E0 handles a credit frame per packet:
+    EW_PureWrite16 121.8 → 132.9 (v3zy 116.3). Means +5.5 / +7.2 / +3.3 / +1.9.
+  - 1D one-hop writes are better without batching: 127.5 (v3p 138.2, v3zy 129.4). They are bound by the worker's
+    credit loop.
+- **Bursts** (`exp_burst.yaml`, -O3):
+  - Bursts of 1 to 4 packets with 500- or 2000-cycle gaps are identical in all three designs (within 0.4). The gaps
+    set the rate, and the worker (17 slots) never waits for credits, so when they come back does not matter.
+  - Bursts of 8 to 32 packets: batching is better by 4 to 9 at 16 B; at 4352 B no batching is equal or better by up
+    to 2. Back-to-back single 16 B packets: batching is better by 15 to 16.
+- **VC1: no batching is best on every row at every level.** These routers' VC0 rings have 8 slots, so batches are 2
+  slots, and holding one slot of 8 costs more than the frame it saves.
+
+| VC1 row (-O3) | v3z | v3zy | v3p | v3p_b1 |
+| --- | --- | --- | --- | --- |
+| 1-hop E/W 16 B | 167.2 | 175.0 | 171.4 | 162.1 |
+| 1-hop E/W 4352 B | 182.6 | 190.6 | 197.3 | 179.5 |
+| 1-hop N/S 16 B | 174.6 | 181.3 | 177.0 | 170.1 |
+| 1-hop N/S 4352 B | 187.7 | 192.0 | 201.6 | 183.6 |
+| Multicast 4352 B | 267.5 | 254.5 | 256.6 | 241.5 |
+
+- **v3q** is v3zy's algorithm written readably: E1's completion check states the two facts it rests on and uses named
+  helpers (`in_each_byte`, `newest_slot_in`, `writes_outgoing`, `batch_slot_trid`); E0's combined idle test is one
+  helper (`all_channels_free`). It is byte-identical to v3zy on every config at -O3, -O2 and -Os, so v3zy's numbers
+  are v3q's. Offline edit check: as v3zy (v3p's E1 VC1 loop moved under rxreorder; v3q's does not). A first draft
+  with a lambda for the slot's transaction ID changed the 1D E1 loop (−47 instructions); a plain function did not.
+- **Verdict:** the specialized completion check pays 4 to 14 cycles/packet on E1-bound rows; batching pays on
+  16-slot rings with steady small packets and costs on 8-slot rings; it does not hurt short bursts.
+
+**Host move to bh-lb-120-a09u32** (2026-10-26; that host's broker jobs 024–027).
+- On a08u24 the v3q16 VC1 run (job 361) failed at device open: UMD waited over 240 s on Ethernet training for one core
+  of device 4, so no kernel loaded and no test ran. Another tenant then held that device.
+- Host check (job 024, read-only; `consolidation/hostcheck_runs.sh`, `topo_dump.py`, `fabric_exp/a09u32_cluster_desc.yaml`):
+  the same cube wiring as a08u24 (12 chip pairs, 2 links each, all trained at 400G). Chips {0,1,2,3} and {4,5,6,7}
+  are the two 2x2 faces with 8 links between them, so the VC1 split's rank binding works unchanged. Two ports are down
+  (chip 3 eth (10,1), chip 5 eth (6,1)); neither is a mesh link.
+- Offline builds need the logged runs' generated headers, firmware ELFs and precompiled headers from their kernel
+  caches; copied from a08u24 (`~/.tt-metal-cache-import`, merged into the same cache paths). v3q's offline -O3 build
+  on a09u32 is byte-identical to a08u24's on all 536 configs.
+- Calibration (jobs 025–026: v3q, which is v3zy's code, against a08u24's v3zy): all validation clean, VC1 34/34 at
+  every level. Suite means within ±0.5 at -O3 and ±0.8 at -O2 / -Os; VC1 1-hop rows within 0.3.
+- **VC1 multicast depends on the host.** a08u24's two meshes gave 247 / 262 at -O3, a09u32's give 279 / 279, with
+  identical code. The row depends on how each 2x2 is placed on the chips and links, so compare it only within a host.
+
+**Batching only on rings of 16+ slots** (v3q16; job 027 on a09u32, 18 VC1 runs, all clean). v3q16 is v3q with rings
+under 16 slots credited slot by slot. Offline it differs from v3q only on the 48 VC1 E1 configs (the VC1 routers'
+8-slot VC0 rings), so only VC1 was run: v3q16, v3q and v3z interleaved, two rounds, at the builder's level (-Os), -O2
+and -O3. Repeats agree within 0.2.
+
+| VC1 row (-Os / -O2 / -O3) | v3z | v3q | v3q16 |
+| --- | --- | --- | --- |
+| 1-hop E/W 16 B | 174.8 / 168.1 / 167.4 | 180.1 / 176.2 / 175.0 | 184.2 / 172.2 / 171.8 |
+| 1-hop E/W 4352 B | 186.5 / 182.3 / 182.3 | 190.4 / 191.1 / 190.5 | 188.3 / 183.5 / 183.1 |
+| 1-hop N/S 16 B | 185.0 / 172.9 / 174.6 | 188.5 / 179.8 / 181.5 | 197.1 / 182.7 / 180.8 |
+| 1-hop N/S 4352 B | 193.1 / 187.4 / 187.9 | 197.8 / 192.8 / 191.9 | 198.7 / 188.9 / 188.1 |
+| Multicast 4352 B | 290.2 / 287.1 / 286.7 | 282.6 / 279.7 / 278.7 | 269.8 / 265.7 / 264.3 |
+
+- Multicast: v3q16 is the best of the three at every level, 13 to 14 below v3q and 20 to 22 below v3z.
+- 1-hop 4352 B: v3q16 is back at v3z's level (within 0.2 to 1.9) and 1 to 8 below v3q, except N/S at -Os (+0.9).
+- 1-hop 16 B: mixed. At -O2 / -O3 E/W is 3 to 4 below v3q; at -Os (the level VC1 builds use) v3q16 is 4.1 (E/W)
+  and 8.6 (N/S) above v3q. Against v3z the 16 B rows are 4 to 12 higher everywhere.
+- v3p_b1 (no batching anywhere, the plain E1 check, no bounded wait; a08u24, where VC1 1-hop rows calibrate within 0.3)
+  had VC1 16 B rows about 10 below v3q16 at -Os and -O3. v3q16 keeps v3zy's bounded completion wait, which with
+  one-slot batches can apply on every pass without a packet. That is a hypothesis; untested.
+
+**Decisions (user, 2026-10-26, after the consolidated summary).**
+- Lead: **v3q** (v3zy's code written readably; no worker change A3). v3z's worker change stays open, to revisit with
+  the phase/cost analysis.
+- v3q16 (batching only on 16+-slot rings) and further variant experiments: on hold.
+- Flow control on by default in validation: not pursued. It is a test-infrastructure question, and the receiver start
+  gate fixed the race.
+- Profiling real VC1 (inter-mesh) traffic: on hold.
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then

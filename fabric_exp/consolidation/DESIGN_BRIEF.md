@@ -52,7 +52,7 @@ These hold for every design and override anything older below.
   (§96), the perturbation sweep (§98) for anything touching credit timing, and the burst benchmark for anything that
   holds credits.
 
-## Starting point (2026-10-24; the lead is now `fabric_exp/variants/v3z`, RESULTS §98)
+## Starting point (2026-10-24; the lead is now `fabric_exp/variants/v3q`, RESULTS §98)
 `fabric_exp/variants/v3a/`: the faithful consolidation of s79mc as `fabric_erisc_router_v3.cpp` plus a few shared
 headers. Its code is instruction-for-instruction s79mc without the study's five branch hints, on all 440 logged
 configs at -O3, -O2 and -Os. Measured (as s79mc without hints, RESULTS §83), cycles/packet:

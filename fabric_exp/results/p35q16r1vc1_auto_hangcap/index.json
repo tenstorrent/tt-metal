@@ -1,0 +1,76 @@
+{
+ "argv": [
+  "fabric_exp/consolidation/hang_capture.py",
+  "fabric_exp/results/p35q16r1vc1_auto_hangcap",
+  "--time-budget",
+  "220",
+  "--meta",
+  "label=p35q16r1vc1_auto",
+  "--meta",
+  "level=auto",
+  "--meta",
+  "cache=/home/aagarwal/.tt-metal-cache-p1vc1-v3q16-auto",
+  "--meta",
+  "yaml=fabric_exp/vc1/vc1_split.yaml",
+  "--meta",
+  "reason=timeout 240s"
+ ],
+ "chips": {},
+ "complete": false,
+ "constants": {
+  "l1_size": 524288,
+  "l1_words": {
+   "0x10c": "launch_msg_rd_ptr",
+   "0x590": "go_msg0",
+   "0x6fe50": "fabric_postcode",
+   "0x7cc70": "fabric_heartbeat"
+  },
+  "num_streams": 32,
+  "num_txq": 3,
+  "soft_reset_reg": 4289798576,
+  "stream_base": 4289986560,
+  "stream_regs": [
+   4,
+   10,
+   297
+  ],
+  "stream_stride": 4096,
+  "txq_base": 4290314240,
+  "txq_stride": 4096
+ },
+ "device_holders_at_start": [],
+ "end_time": "2026-10-26T18:07:11+0000",
+ "errors": [
+  "capture: SigbusError: SIGBUS signal detected: Device access failed."
+ ],
+ "eth_connections": [],
+ "format": 2,
+ "host": "bh-lb-120-a08u24",
+ "meta": {
+  "cache": "/home/aagarwal/.tt-metal-cache-p1vc1-v3q16-auto",
+  "label": "p35q16r1vc1_auto",
+  "level": "auto",
+  "reason": "timeout 240s",
+  "yaml": "fabric_exp/vc1/vc1_split.yaml"
+ },
+ "n_read_errors": 0,
+ "n_reads": 0,
+ "pid": 1167554,
+ "start_time": "2026-10-26T18:03:26+0000",
+ "timings": {
+  "elapsed_s": 224.196,
+  "kernel_elfs_s": 0.001
+ },
+ "tool": "hang_capture.py",
+ "traceback": "Traceback (most recent call last):\n  File \"/home/aagarwal/tt-metal/fabric_exp/consolidation/hang_capture.py\", line 746, in main\n    cap.open_device()\n  File \"/home/aagarwal/tt-metal/fabric_exp/consolidation/hang_capture.py\", line 237, in open_device\n    self.ctx = init_ttexalens(noc_id=noc, safe_mode=True)\n  File \"/home/aagarwal/tt-metal/python_env/lib/python3.10/site-packages/ttexalens/tt_exalens_init.py\", line 46, in init_ttexalens\n    umd_api = local_init(init_jtag=init_jtag, noc_id=noc_id, simulation_directory=simulation_directory)\n  File \"/home/aagarwal/tt-metal/python_env/lib/python3.10/site-packages/ttexalens/umd_api.py\", line 339, in local_init\n    communicator = UmdApi(init_jtag=init_jtag, noc_id=noc_id, simulation_directory=simulation_directory)\n  File \"/home/aagarwal/tt-metal/python_env/lib/python3.10/site-packages/ttexalens/umd_api.py\", line 128, in __init__\n    self.cluster_descriptor, devices = tt_umd.TopologyDiscovery.discover(\ntt_umd.tt_umd.SigbusError: SIGBUS signal detected: Device access failed.\n",
+ "versions": {
+  "tt-exalens": "0.4.1",
+  "tt-umd": "0.9.12"
+ },
+ "workers": {
+  "kernel_elfs": {
+   "files": [],
+   "source": "/home/aagarwal/.tt-metal-cache-p1vc1-v3q16-auto"
+  }
+ }
+}

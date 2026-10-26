@@ -1,0 +1,3 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+FullRingUnicastDeadlockQuick,CHIP_UNICAST,NOC_UNICAST_WRITE,Ring,"[8]",1,1024,1,1437323051.000000,6574722.358641,6.732516,6.732516,6.732516,0.000000,1.000000
+FabricMuxFullRingMulticastDeadlockCheckQuick,CHIP_MULTICAST,NOC_UNICAST_WRITE,Ring,"[8]",1,1024,1,2857258310.000000,3307366.354287,3.386743,3.386743,3.386743,0.000000,1.000000
