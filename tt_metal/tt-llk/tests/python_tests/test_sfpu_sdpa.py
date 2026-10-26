@@ -37,6 +37,7 @@ from helpers.test_variant_parameters import (
     SDPA_EXP_SCALE,
     SDPA_OP,
     SDPA_SOFTPLUS_PARAMS,
+    fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -95,10 +96,6 @@ class Precision(Enum):
 
 CORRECTION_TILE_NAMES = ("prev_max", "worker_max", "cur_max", "prev_sum", "worker_sum")
 CORRECTION_SCALE_BF16_VALUES = (0x3F80, 0x3E80)  # (1.0, 0.25)
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _bf16_to_float(pattern: int) -> float:
@@ -210,9 +207,9 @@ def _templates(variant: Variant):
         DEST_SYNC(variant.dest_sync),
         SDPA_EXP_SCALE(scale_bf16=variant.exp_scale_bf16),
         SDPA_SOFTPLUS_PARAMS(
-            softplus_beta_bits=_f32_bits(variant.softplus.beta),
-            softplus_beta_reciprocal_bits=_f32_bits(1.0 / variant.softplus.beta),
-            softplus_threshold_bits=_f32_bits(variant.softplus.threshold),
+            softplus_beta_bits=fp32_bits(variant.softplus.beta),
+            softplus_beta_reciprocal_bits=fp32_bits(1.0 / variant.softplus.beta),
+            softplus_threshold_bits=fp32_bits(variant.softplus.threshold),
         ),
     ]
 

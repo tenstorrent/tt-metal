@@ -40,6 +40,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     SFPU_UNARY_SCALAR,
     VECTOR_MODE,
+    fp32_bits,
     generate_input_dim,
 )
 
@@ -102,10 +103,6 @@ _TORCH_COMPARE = {
 }
 
 
-def _bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
 @parametrize(
     mathop=list(_TORCH_COMPARE),
     threshold=THRESHOLDS,
@@ -123,7 +120,7 @@ def test_sfpu_comp_unary_threshold(mathop, threshold):
             generate_input_dim([TILE_DIM, TILE_DIM], [TILE_DIM, TILE_DIM]),
             APPROX_MODE(ApproximationMode.No),
             MATH_OP(mathop=mathop),
-            SFPU_UNARY_SCALAR(_bits(threshold)),
+            SFPU_UNARY_SCALAR(fp32_bits(threshold)),
             VECTOR_MODE(VectorMode.RC),
             DEST_SYNC(),
         ],
@@ -168,7 +165,7 @@ def test_sfpu_comp_unary_threshold(mathop, threshold):
         }
     )
     assert not wrong, (
-        f"{mathop.name}(x, {threshold:g}) with value=0x{_bits(threshold):08X} disagrees with torch on "
+        f"{mathop.name}(x, {threshold:g}) with value=0x{fp32_bits(threshold):08X} disagrees with torch on "
         f"{len(wrong)} inputs:\n"
         + "\n".join(
             f"  x = {x:.9g}: got {got}, expected {want}" for x, got, want in wrong

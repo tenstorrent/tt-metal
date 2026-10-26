@@ -37,6 +37,7 @@ from helpers.test_variant_parameters import (
     EMA_ALPHA_BETA,
     EMA_INTERLEAVED_INIT,
     TILE_COUNT,
+    fp32_bits,
 )
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
@@ -57,10 +58,6 @@ AFTER_INIT_NUM_TIME_TILES = 2
 # deliberately: it is the cheapest check that the carry term is actually multiplied
 # in rather than ignored.
 _ALPHA_STEPS = 1000
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _ema_golden(input_2d: torch.Tensor, alpha: float, beta: float) -> torch.Tensor:
@@ -139,7 +136,7 @@ def _run_ema_on_device(
         formats,
         templates=[
             APPROX_MODE(ApproximationMode.No),
-            EMA_ALPHA_BETA(alpha_bits=_f32_bits(alpha), beta_bits=_f32_bits(beta)),
+            EMA_ALPHA_BETA(alpha_bits=fp32_bits(alpha), beta_bits=fp32_bits(beta)),
             EMA_INTERLEAVED_INIT(binary_init_before_ema=binary_init_before_ema),
         ],
         runtimes=[

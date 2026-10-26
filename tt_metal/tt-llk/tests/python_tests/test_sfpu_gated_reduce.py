@@ -8,7 +8,6 @@ batch across three DEST acquisitions. Later batches reinitialize sigmoid after
 an approximate-exp initializer overwrites its reciprocal constant.
 """
 
-import struct
 
 import pytest
 import torch
@@ -29,6 +28,7 @@ from helpers.test_variant_parameters import (
     GATED_REDUCE_PARAMS,
     GATED_REDUCE_SCALARS,
     TILE_COUNT,
+    fp32_bits,
 )
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
 
@@ -39,10 +39,6 @@ DATUMS = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 BF16 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
 BF16_TO_FP32 = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32)
 FP32 = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
-
-
-def _bits(value):
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _run(
@@ -96,7 +92,7 @@ def _run(
         templates=[GATED_REDUCE_PARAMS(gate, up, flags, rows), DEST_SYNC(sync)],
         runtimes=[
             TILE_COUNT(TILES),
-            GATED_REDUCE_SCALARS(*map(_bits, (scale, out_scale, limit, alpha))),
+            GATED_REDUCE_SCALARS(*map(fp32_bits, (scale, out_scale, limit, alpha))),
         ],
         variant_stimuli=StimuliConfig(
             source.flatten(),

@@ -15,7 +15,6 @@ tanh saturates to +-1 by |x| around 5, so the test covers the linear region, the
 knee, and deep saturation.
 """
 
-import struct
 from dataclasses import dataclass
 
 import torch
@@ -32,6 +31,7 @@ from helpers.test_variant_parameters import (
     SFPU_UNARY_SCALAR,
     TILE_COUNT,
     TemplateParameter,
+    fp32_bits,
 )
 from helpers.utils import passed_test
 
@@ -53,10 +53,6 @@ SATURATED_ABS = 6.0
 # Gemma's final logit softcap is 30.0. 1.0 is the degenerate pass-through case,
 # and 0.5 exercises a cap below 1.
 CAPS = [30.0, 1.0, 0.5]
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _valid_dest_acc(formats):
@@ -115,7 +111,7 @@ def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
         "sources/sfpu_logit_softcap_test.cpp",
         formats,
         templates=[
-            SFPU_UNARY_SCALAR(value_bits=_fp32_bits(cap)),
+            SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
         ],
         runtimes=[
             TILE_COUNT(1),
@@ -193,7 +189,7 @@ def test_sfpu_logit_softcap_polynomial_rounding(cap, input_range):
             "sources/sfpu_logit_softcap_test.cpp",
             InputOutputFormat(DataFormat.Float16_b, DataFormat.Float32),
             templates=[
-                SFPU_UNARY_SCALAR(value_bits=_fp32_bits(cap)),
+                SFPU_UNARY_SCALAR(value_bits=fp32_bits(cap)),
                 LOGIT_SOFTCAP_POLYNOMIAL(),
             ],
             runtimes=[TILE_COUNT(3)],

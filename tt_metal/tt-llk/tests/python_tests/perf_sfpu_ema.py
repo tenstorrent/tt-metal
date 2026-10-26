@@ -17,7 +17,6 @@ cycles/tile lands in the TILE_LOOP row of the .post.csv as mean(MATH_ISOLATE).
 Both DEST widths are swept; the Float32 form unpacks straight to Dest and has no datacopy.
 """
 
-import struct
 
 import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -38,16 +37,13 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
+    fp32_bits,
 )
 
 # Same smoothing factor as the functional test, so the perf and correctness runs
 # exercise the identical constant pair.
 EMA_ALPHA = 0.25
 EMA_BETA = 1.0 - EMA_ALPHA
-
-
-def _f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def _dest_acc_modes(formats):
@@ -92,7 +88,7 @@ def test_perf_sfpu_ema(
         templates=[
             APPROX_MODE(ApproximationMode.No),
             EMA_ALPHA_BETA(
-                alpha_bits=_f32_bits(EMA_ALPHA), beta_bits=_f32_bits(EMA_BETA)
+                alpha_bits=fp32_bits(EMA_ALPHA), beta_bits=fp32_bits(EMA_BETA)
             ),
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),

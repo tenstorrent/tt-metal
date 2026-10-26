@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import struct
 from dataclasses import dataclass
 
 import pytest
@@ -41,6 +40,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
+    fp32_bits,
 )
 from helpers.tile_constants import (
     DEFAULT_TILE_C_DIM,
@@ -100,10 +100,6 @@ _RAND_COL_MIN_DISTINCT_DIVISOR = 4
 _RAND_CORR_MAX_ROW_OFFSET = 8
 _RAND_CORR_MAX_COL_OFFSET = 4
 _RAND_MAX_OFFSET_CORRELATION = 0.08
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
 def generate_rand_combinations():
@@ -265,8 +261,8 @@ def _rand_config(
                 DEST_SYNC(dest_sync),
                 TYPECAST_FORMATS(),
                 RAND_RANGE(
-                    rand_from_bits=_fp32_bits(case.from_value),
-                    rand_scale_bits=_fp32_bits(case.scale),
+                    rand_from_bits=fp32_bits(case.from_value),
+                    rand_scale_bits=fp32_bits(case.scale),
                 ),
                 RAND_SEED(rand_seed=seed),
             ],

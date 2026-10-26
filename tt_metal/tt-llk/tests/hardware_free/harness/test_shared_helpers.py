@@ -8,7 +8,16 @@ from helpers.constraints import is_valid_quasar_dest_mode_conversion
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import quasar_dest_sync_modes
+from helpers.test_variant_parameters import fp32_bits
 from helpers.utils import result_tensor
+
+
+@pytest.mark.parametrize(
+    "value, bits",
+    [(1.0, 0x3F800000), (-2.0, 0xC0000000), (0.0, 0), (float("inf"), 0x7F800000)],
+)
+def test_fp32_bits(value, bits):
+    assert fp32_bits(value) == bits
 
 
 def test_quasar_dest_sync_modes():
