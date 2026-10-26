@@ -406,6 +406,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Always a second operation.
+#ifdef ARCH_BLACKHOLE
+                SFPU_UNARY_CALL(
+                    dest_sync,
+                    is_fp32_dest_acc_en,
+                    calculate_bitonic_topk_merge,
+                    (APPROX,
+                     is_fp32_dest_acc_en,
+                     TOPK_SORT_DIRECTION,
+                     NETWORK_STABLE_SORT,
+                     TOPK_FUSED_STABLE,
+                     TOPK_RANK_STAMPED,
+                     TOPK_TIE_ORDER,
+                     TOPK_TAG_BITS,
+                     TOPK_K),
+                    dst_index,
+                    vector_mode,
+                    current_iteration);
+#else
                 SFPU_UNARY_CALL(
                     dest_sync,
                     is_fp32_dest_acc_en,
@@ -422,6 +440,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     vector_mode,
                     current_iteration,
                     TOPK_K);
+#endif
 
                 // Additional last operation.
                 if (last_iteration)

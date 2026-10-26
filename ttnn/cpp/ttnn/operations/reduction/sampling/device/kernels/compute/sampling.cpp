@@ -322,13 +322,13 @@ void top_k() {
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge<
+                ckernel::topk_merge<K,
                     /*idir=*/false,
                     stable_sort,
                     DST_ACCUM_MODE,
                     /*fused=*/false,
                     /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(0, m_iter, K);
+                    ckernel::TopkTieOrder::Descending>(0, m_iter);
                 // sort within the larger 32 values
                 ckernel::topk_rebuild<
                     stable_sort,

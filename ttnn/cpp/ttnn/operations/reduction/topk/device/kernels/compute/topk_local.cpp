@@ -166,9 +166,8 @@ void kernel_main() {
         // - Iteration n: Compare tiles with distance 2^n → groups of 64*(2^(n+1)) elements
         // Final iteration produces locally sorted TopK results for this width chunk.
         for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
-            process_iteration<network_stable, fused_keys, tie_order>(
+            process_iteration<network_stable, fused_keys, tie_order, K, logk>(
                 m_iter,                      // Current merge iteration (0 to logWt-1)
-                K,                           // TopK value (number of elements to find)
                 Wt,                          // Width tiles in local chunk
                 num_k_sequences,             // Number of K-element sequences (updated each iter)
                 tiles_per_seq,               // Tiles per sequence (ceil(K/32))
@@ -180,7 +179,6 @@ void kernel_main() {
                 index_dest_end,              // Destination register 3 (second indices)
                 !direction_init,             // Base sort direction
                 switch_dir,                  // Whether to switch direction per iteration
-                logk,                        // log2(K) for bitonic network depth
                 seq_per_2tiles,              // Sequences that fit in 2 tiles
                 largest);                    // Find largest (true) or smallest (false)
         }  // m_iter loop
