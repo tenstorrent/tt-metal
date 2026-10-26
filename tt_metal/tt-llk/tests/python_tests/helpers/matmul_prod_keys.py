@@ -19,14 +19,16 @@ _NUM = r"(0x[0-9A-Fa-f]+|\d+)"
 _CELL = (
     r"\{MathFidelity::(\w+), (true|false), (true|false), DataFormat::(\w+), DataFormat::(\w+), DataFormat::(\w+), (true|false)"
     + (r"(?:, " + _NUM + r")?") * 6
-    + r"\},"
+    + r"(?:, DataFormat::(\w+))?\},"
 )
 
 
 def _cells(text: str) -> dict:
     out = {}
     for fid, k1, acc, i, o, p, several_ok, *rest in re.findall(_CELL, text):
-        n = [int(x, 0) if x else d for x, d in zip(rest, (0, 0xFFFF, -1, 0, 0xFFFF, 0))]
+        if rest[6]:  # a mixed pair: the harness sweeps equal in0 and in1 formats, so the cell never applies there
+            continue
+        n = [int(x, 0) if x else d for x, d in zip(rest[:6], (0, 0xFFFF, -1, 0, 0xFFFF, 0))]
         out[(fid, k1 == "true", acc == "true", DataFormat[i], DataFormat[o], DataFormat[p], n[2])] = (several_ok == "true", n[0], n[1], n[3], n[4], n[5])
     return out
 

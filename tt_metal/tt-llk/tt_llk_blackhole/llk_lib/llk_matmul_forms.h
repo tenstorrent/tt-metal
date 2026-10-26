@@ -123,6 +123,7 @@ struct matmul_main_form_cell
     std::uint32_t min_k = 0;
     std::uint32_t max_k = 0xFFFF;
     std::uint32_t min_dim = 0; // the smaller side of the block, in tiles
+    DataFormat other = DataFormat::Invalid; // when set, the operand that is not `in` must have this format (a mixed pair)
 };
 
 inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
@@ -155,6 +156,9 @@ inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
     {MathFidelity::LoFi, false, false, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 7},
     {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false},
     {MathFidelity::LoFi, false, false, DataFormat::Float16_b, DataFormat::Bfp8_b, DataFormat::Float16_b, false},
+    // LoFi, half sync, 16-bit DEST, Float16_b output, a 2x2 block over four k steps with one Float32 and one Float16_b operand: the rows form reads 0.26 % slower than main's
+    // on the legacy single core (ttnn ABBA); the Float32 by Float32 block of the same shape gains 3.6 % from it and keeps it
+    {MathFidelity::LoFi, false, false, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, false, 2, 2, 0, 4, 4, 2, DataFormat::Float16_b},
     // LoFi at full sync: the row MOP of a Float32 input to Bfp8_b with a 32-bit DEST reads 2.6 cycles slower than the tile form on four row blocks; so do the Float16_b and Float32 outputs of a Float32 input (+2.6 and +0.6) on 4x2 and 2x4 blocks (1x4 and 4x1 not measured)
     {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Bfp8_b, false, 4, 4, 1, 2, 4},
     {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float16_b, false, 4, 4, 1, 2, 4, 2},
@@ -167,7 +171,8 @@ constexpr bool matmul_main_form_cell_selected()
     for (const matmul_main_form_cell& c : matmul_main_form_cells)
     {
         if (c.fidelity == math_fidelity && c.k1 == (kt_per_section == 1) && c.fp32_dest == fp32_dest && c.out == out_format && c.pack == pack_format &&
-            (c.in == in0 || c.in == in1) && !(c.several_blocks_ok && several_blocks) && row_tiles >= c.min_row && row_tiles <= c.max_row && (c.sync < 0 || c.sync == sync) &&
+            (c.in == in0 || c.in == in1) && (c.other == DataFormat::Invalid || (c.in == in0 && in1 == c.other) || (c.in == in1 && in0 == c.other)) &&
+            !(c.several_blocks_ok && several_blocks) && row_tiles >= c.min_row && row_tiles <= c.max_row && (c.sync < 0 || c.sync == sync) &&
             kt_per_section >= c.min_k && kt_per_section <= c.max_k && min_side >= c.min_dim)
         {
             return true;
