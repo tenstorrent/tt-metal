@@ -27,6 +27,7 @@
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 // BH fast-untilize is the row-major counterpart to fast-tilize. Regular
 // pack_untilize first loads/copies tiles into DEST tile-by-tile, then the
 // packer reads two interfaces per PACR for a 4-face tile row. This path groups
@@ -176,5 +177,39 @@ ALWI void fast_untilize_uninit(uint32_t ocb) {
     pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
 #endif
 }
+
+#else   // ARCH_QUASAR
+// Quasar has no separate fast-untilize LLK path - its regular pack_untilize is already fast, so these
+// wrappers just forward to the plain pack_untilize_* implementation. One call covers one tile-row
+// (block_rt_dim = 1). Tile indices are a Blackhole fast-path detail; pack_untilize uses the CB cursors.
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void fast_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
+    pack_untilize_init<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, ocb, call_line);
+}
+
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void fast_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
+    pack_untilize_init_skip_remap<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(icb, ocb, call_line);
+}
+
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void fast_untilize_block(
+    uint32_t icb,
+    uint32_t ocb,
+    [[maybe_unused]] uint32_t input_tile_index = 0,
+    [[maybe_unused]] uint32_t output_tile_index = 0) {
+    static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
+    pack_untilize_block<full_ct_dim, full_ct_dim, is_fp32_dest_acc_en>(
+        icb, 1 /*block_rt_dim*/, ocb, 0 /*block_c_index*/);
+}
+
+template <std::uint32_t full_ct_dim, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void fast_untilize_uninit(uint32_t ocb) {
+    static_assert(full_ct_dim > 0, "fast_untilize full_ct_dim must be greater than 0");
+    pack_untilize_uninit<is_fp32_dest_acc_en>(ocb);
+}
+#endif  // ARCH_QUASAR
 
 }  // namespace ckernel
