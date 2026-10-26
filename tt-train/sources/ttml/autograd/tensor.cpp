@@ -73,6 +73,18 @@ void Tensor::backward(bool retain_graph) {
 
     auto& graph_nodes = graph.get_graph_nodes();
     std::ranges::reverse(sorted_nodes);
+
+    // Non-leaf gradients are working adjoints for one traversal. Clear them before
+    // replaying a retained graph so a previous traversal cannot be propagated again.
+    // The root seed belongs to the caller and leaf gradients intentionally accumulate.
+    for (const auto& node_id : sorted_nodes) {
+        for (const auto& weak_output : graph_nodes[node_id].outputs) {
+            if (auto output = weak_output.lock(); output != nullptr && output.get() != this) {
+                output->set_grad(ttnn::Tensor{});
+            }
+        }
+    }
+
     try_init_grad(/* init_ones */ true);
     for (const auto& node_id : sorted_nodes) {
         graph_nodes[node_id].grad_function();
@@ -104,6 +116,9 @@ void Tensor::set_node(const std::optional<NodeId>& node) {
         throw std::runtime_error("Graph node is already set for this tensor!");
     }
     m_node_id = node;
+    if (m_node_id.has_value()) {
+        m_node_id->get_graph().set_node_output(m_node_id->get_id(), shared_from_this());
+    }
 }
 
 void print_tensor_stats(const autograd::TensorPtr& tensor, const std::string& name) {
