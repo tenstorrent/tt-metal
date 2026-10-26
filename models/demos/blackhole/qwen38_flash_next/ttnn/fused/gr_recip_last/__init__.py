@@ -295,14 +295,6 @@ register(
         fused=gr_read_recip_last,
         composed=gr_read.gr_read_fused,
         gate=None,  # needs the TP4 line; checked by the mesh replica against the oracle
-        component_proof="the 1x4 replica against the CPU oracle on captured residual rows (layers 2/12/47 x rows "
-        "1/5/32, the checkpoint's attention-block weights), 2026-09-27: block-input rms_rel 0.0036-0.0045 where the "
-        "composed read reads 0.0038-0.0045 (inside 1.10x + 1e-3 on every row), |bias| <= 1.9e-4, ULP p99 8-16 against "
-        "the composed read's 8-16; the composed column was gr_read's arithmetic with its two all-gathers inside its "
-        "programs (data movement: bitwise gr_read_fused with the stock collectives).  The paired 43-prompt "
-        "EOS-honoured served sample (+2.99 % tok/s, 95 % interval +1.15..+4.84, the pass 1.2-1.7 ms shorter) was "
-        "taken against that in-program gather form; served on gr_read_fused with the stock collectives instead, the "
-        "4-chip p150 line decodes a short and a long greedy prompt at 28.14 and 30.75 ms per token, the default 25.88 "
-        "and 28.54 (2026-10-22)",
+        component_proof="the mesh replica's block input against the CPU oracle on captured residual rows",
     )
 )

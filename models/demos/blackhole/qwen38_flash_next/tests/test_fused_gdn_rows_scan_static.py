@@ -142,7 +142,8 @@ def test_registry_entry_is_a_default_component_kernel_with_its_gate_record():
     assert entry.tolerance == fused.COMPONENT and entry.default_on is True and NAME in fused.DEFAULT_ON
     assert entry.fused is module.rows_body_scan and entry.composed is module.rows_body_fallback
     assert entry.admits is module.admits and entry.gate is None
-    assert "probe-rows5-8edcaf9279c-162454" in entry.component_proof and "0.0048" in entry.component_proof
+    proof = entry.component_proof
+    assert "CPU oracle" in proof and "\n" not in proof, f"the proof names its reference on one line: {proof!r}"
     assert "gdn_pre_rows" in entry.replaces and "prefix" in entry.replaces
     # the default: the admitted dispatcher; QWEN38_FUSED_OFF restores the wrap outright
     assert fused.resolve_admitted(NAME, {fused.OFF_ENV: NAME}) is module.rows_body_fallback

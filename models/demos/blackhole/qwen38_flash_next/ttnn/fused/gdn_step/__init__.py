@@ -318,8 +318,7 @@ register(
         fused=gdn_step,
         composed=gdn_step_composed,
         admits=admits,
-        component_proof="the fused GDN step probe against the CPU oracle, four p150, 2026-09-25: state error 0.0048 and "
-        "gated output 0.0098 for the fused step, 0.0081 and 0.0234 for the composed chain",
+        component_proof="the fused step's state and gated output against the CPU oracle on real inputs",
         # the audit capture holds no GDN recurrent state; checked by the real-input step probe against the oracle
         gate=None,
     )

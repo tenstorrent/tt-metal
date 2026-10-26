@@ -803,12 +803,7 @@ register(
         composed=rows_body_fallback,
         admits=admits,
         # COMPONENT against the wrap's chunk form; component_proof records the gate run against the CPU oracle.
-        component_proof=(
-            "the fused GDN step probe's rows column against the CPU oracle, one p150 die, 2026-09-26 (run "
-            "probe-rows5-8edcaf9279c-162454, --rows 5, 64 steps): state error 0.0048 and gated output 0.0098 for "
-            "the fold's five rows, open and closed loop, 0.0048 and 0.0098 for the fused step and 0.0081 and "
-            "0.0234 for the composed chain; every window's slots and rows bitwise the fused step run sequentially"
-        ),
+        component_proof="per-row state and gated output against the CPU oracle; bitwise the fused step run row by row",
         gate=None,
     )
 )
