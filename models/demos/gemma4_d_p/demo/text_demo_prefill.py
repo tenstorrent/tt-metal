@@ -35,7 +35,9 @@ except ModuleNotFoundError:
 
 MODEL_DTYPE = ttnn.bfloat16
 PREFILL_CHUNK_SIZES = (2048, 4096, 8192, 16384, 32768)
-LAYER_PERF_CONTEXT_LENGTHS = (262144,)
+LAYER_PERF_CONTEXT_LENGTHS = (262144, 245760)
+# Layer perf also at 3, 5 and 6 lanes of 2048 (#59851); 245760 is a context all of 6144-12288 divide.
+LAYER_PERF_CHUNK_SIZES = (2048, 4096, 6144, 8192, 10240, 12288, 16384, 32768)
 # Contexts (in units of 1024 tokens) reported in the wall-time table.
 REPORT_CONTEXT_KS = (1, 10, 100, 256)
 TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_000_000))
@@ -452,7 +454,7 @@ def _perf_signposts(layer_type, chunk_size, chunk_idx):
 @pytest.mark.timeout(7200)
 @parametrize_mesh_with_fabric([(8, 4), (4, 8)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 @pytest.mark.parametrize("context_len", LAYER_PERF_CONTEXT_LENGTHS, ids=lambda c: f"ctx_{c // 1024}k")
-@pytest.mark.parametrize("chunk_size", PREFILL_CHUNK_SIZES, ids=lambda c: f"sz{c}")
+@pytest.mark.parametrize("chunk_size", LAYER_PERF_CHUNK_SIZES, ids=lambda c: f"sz{c}")
 @pytest.mark.parametrize("layer_type", ["global", "local", "both"])
 @pytest.mark.parametrize(
     "chunk_idx",
