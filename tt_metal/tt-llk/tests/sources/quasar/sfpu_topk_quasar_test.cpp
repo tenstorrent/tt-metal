@@ -187,6 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Restore the value format before the SFPU network; the TopK value
     // SFPLOAD/SFPSTORE paths also use explicit FP16B as a guard.
     const DataFormat value_math_format = static_cast<DataFormat>(formats.math);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(value_math_format, value_math_format);
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row)
     {
