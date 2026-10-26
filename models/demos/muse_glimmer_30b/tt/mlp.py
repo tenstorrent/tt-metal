@@ -6,6 +6,7 @@
 
 import ttnn
 from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, dram_sharded_enabled
+from models.demos.muse_glimmer_30b.tt.common import decode_memcfg, is_decode
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_column_parallel, pack_down
 
 PREFILL_CHUNK = 2048
@@ -70,16 +71,22 @@ class MuseGlimmerMLP:
         )
 
     def _forward_chunk(self, x):
-        gate = self.w_gate(x)
-        up = self.w_up(x)
-        h = ttnn.mul(
-            gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        decode = is_decode(x)
+        silu = [ttnn.UnaryOpType.SILU]
+        if decode:
+            gate, up = self.w_gate.decode(x), self.w_up.decode(x)
+            h = ttnn.mul(gate, up, input_tensor_a_activations=silu)
+        else:
+            gate, up = self.w_gate(x), self.w_up(x)
+            h = ttnn.mul(gate, up, input_tensor_a_activations=silu, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
-        out = self.w_down(h)
+        out = self.w_down.decode(h) if decode else self.w_down(h)
         ttnn.deallocate(h)
-        reduced = self.ccl.all_reduce(out)
+        if decode:
+            reduced = self.ccl.all_reduce(out, memory_config=decode_memcfg(self.args.hidden_size))
+        else:
+            reduced = self.ccl.all_reduce(out)
         if reduced is not out:
             ttnn.deallocate(out)
         return reduced

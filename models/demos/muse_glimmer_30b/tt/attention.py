@@ -7,6 +7,8 @@
 Op sequences adapted from models/demos/gemma4/tt/attention/{decode,prefill}.py.
 """
 
+import functools
+
 import torch
 
 import ttnn
@@ -17,14 +19,30 @@ from models.demos.gemma4.tt.attention.operations import (
     apply_rope_decode_peruser,
     chunked_prefill_sdpa,
     chunked_prefill_sdpa_sliding,
-    concat_heads,
     prefill_sdpa_program_config,
-    split_qkv_heads_decode,
 )
 from models.demos.gemma4.tt.dram_sharded import _PREFILL_CUTOFF, TILE_SIZE, DramShardedLinear, can_dram_shard
-from models.demos.muse_glimmer_30b.tt.common import as_tt, matmul_compute_config, sdpa_compute_config, shard_mapper
+from models.demos.muse_glimmer_30b.tt.common import (
+    as_tt,
+    decode_memcfg,
+    is_decode,
+    matmul_compute_config,
+    sdpa_compute_config,
+    shard_mapper,
+)
 from models.demos.muse_glimmer_30b.tt.rms_norm import per_head_rms_norm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_o, pack_qkvg
+
+
+@functools.lru_cache(maxsize=None)
+def heads_memcfg(batch, head_dim):
+    """[1, batch, heads, head_dim] height-sharded L1, one user per core (first `batch` cores of an 8x8 grid)."""
+    cores = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(8, 8), row_wise=True)
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(cores, [32, head_dim], ttnn.ShardOrientation.ROW_MAJOR),
+    )
 
 
 def dram_sharded_enabled(k: int, n: int, dtype) -> bool:
@@ -85,6 +103,24 @@ class MuseLinear:
             outp.deallocate(True)
             return out
         return self.linear(x, compute_kernel_config=cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def decode(self, x):
+        """Decode matmul (M = 32): L1 width-sharded output; falls back to __call__ when not DRAM-sharded."""
+        if not self.sharded:
+            return self(x)
+        lin = self.linear
+        own = not (x.is_sharded() and x.memory_config() == lin._act_memcfg)
+        x_sh = ttnn.to_memory_config(x, lin._act_memcfg) if own else x
+        out = ttnn.linear(
+            x_sh,
+            self.weight,
+            program_config=lin._decode_pc,
+            compute_kernel_config=self.decode_cfg,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        if own:
+            x_sh.deallocate(True)
+        return out
 
 
 def allocate_kv_cache(args, mesh_device, num_blocks: int | None = None) -> tuple:
@@ -152,17 +188,27 @@ class MuseGlimmerAttention:
         xqkvg.deallocate(True)
         return qkv, gate
 
-    def _gate_oproj(self, attn, gate):
+    def _gate_oproj(self, attn, gate, out_mem=ttnn.DRAM_MEMORY_CONFIG):
         """attn * sigmoid(gate) -> o_proj (partial sums) -> all_reduce."""
         # Accurate sigmoid: the gate multiplies every attention output element.
         sg = ttnn.sigmoid(gate, mode=ttnn.SigmoidMode.Accurate)
         gate.deallocate(True)
-        gated = ttnn.mul(attn, sg)
-        attn.deallocate(True)
-        sg.deallocate(True)
-        out = self.wo(gated)
-        gated.deallocate(True)
-        reduced = self.ccl.all_reduce(out)
+        if is_decode(attn):
+            attn_m = ttnn.to_memory_config(attn, sg.memory_config())
+            gated = ttnn.mul(attn_m, sg)
+            attn_m.deallocate(True)
+            attn.deallocate(True)
+            sg.deallocate(True)
+            out = self.wo.decode(gated)
+            gated.deallocate(True)
+            reduced = self.ccl.all_reduce(out, memory_config=out_mem)
+        else:
+            gated = ttnn.mul(attn, sg)
+            attn.deallocate(True)
+            sg.deallocate(True)
+            out = self.wo(gated)
+            gated.deallocate(True)
+            reduced = self.ccl.all_reduce(out)
         if reduced is not out:
             out.deallocate(True)
         return reduced
@@ -229,25 +275,25 @@ class MuseGlimmerAttention:
     def forward_decode(self, x, current_pos, rope, kv_cache, page_table):
         a = self.args
         k_cache, v_cache = kv_cache
+        heads_mem = heads_memcfg(x.shape[-2], a.head_dim)
         batch = x.shape[-2]
 
-        xqkvg = self.wqkvg(x)
+        xqkvg = self.wqkvg.decode(x)
         qkv, gate = self._split_qkv_gate(xqkvg)
-        # Blackhole nlp_create_qkv_heads_decode misreads DRAM input, so qkv is staged in L1 first; outputs L1 height-sharded [1,B,heads,128].
-        q, k, v = split_qkv_heads_decode(
-            qkv,
-            _HeadCfg(a),
-            is_global=False,
-            tp=a.tp,
-            kv_replicated=a.kv_replicated,
+        qkv = ttnn.to_memory_config(qkv, decode_memcfg(a.qkv_width_local))
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
+            qkv, num_heads=a.q_heads_local, num_kv_heads=a.kv_heads_local, memory_config=heads_mem
         )
+        qkv.deallocate(True)
         kv_sharded_mem = k.memory_config()
 
-        # Per-head norm in DRAM. fp32_acc=False for decode like gemma4 (its fp32 config lowered paged-decode PCC).
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
-        q = per_head_rms_norm(q, a.rms_norm_eps, self.mesh_device, fp32_acc=False)
-        k = per_head_rms_norm(k, a.rms_norm_eps, self.mesh_device, fp32_acc=False)
+        # Per-head weightless norm in L1. No fp32 acc for decode (the fp32 config lowered paged-decode PCC).
+        q = ttnn.rms_norm(
+            ttnn.to_memory_config(q, ttnn.L1_MEMORY_CONFIG), epsilon=a.rms_norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        k = ttnn.rms_norm(
+            ttnn.to_memory_config(k, ttnn.L1_MEMORY_CONFIG), epsilon=a.rms_norm_eps, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
 
         if self.uses_rope and rope is not None:
             cos_b, sin_b = rope
@@ -268,6 +314,7 @@ class MuseGlimmerAttention:
         k.deallocate(True)
         v.deallocate(True)
 
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)  # SDPA decode needs DRAM or sharded q
         grid = self.mesh_device.compute_with_storage_grid_size()
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
@@ -291,20 +338,11 @@ class MuseGlimmerAttention:
             sdpa = ttnn.transformer.scaled_dot_product_attention_decode(q, k_cache, v_cache, **sdpa_kwargs)
         q.deallocate(True)
 
-        attn = concat_heads(
-            sdpa,
-            is_decode_mode=True,
-            num_heads=a.q_heads_local,
-            head_dim=a.head_dim,
-            mesh_device=self.mesh_device,
-        )  # [1,1,B,ql*128] DRAM
+        attn = ttnn.experimental.nlp_concat_heads_decode(
+            ttnn.to_memory_config(sdpa, heads_mem), num_heads=a.q_heads_local
+        )  # [1,1,B,ql*128] L1 width-sharded
+        if attn.shape[2] != batch:  # the concat output is padded to 32 rows
+            w = attn.shape[-1]
+            attn = ttnn.reshape(attn, ttnn.Shape([1, 1, batch, w]), ttnn.Shape([1, 1, 32, w]))
         sdpa.deallocate(True)
-        return self._gate_oproj(attn, gate)
-
-
-class _HeadCfg:
-    """Adapter exposing the head counts gemma4's split_qkv_heads_decode reads (global counts)."""
-
-    def __init__(self, args):
-        self.num_attention_heads = args.num_attention_heads
-        self.num_key_value_heads = args.num_key_value_heads
+        return self._gate_oproj(attn, gate, out_mem=decode_memcfg(a.hidden_size))

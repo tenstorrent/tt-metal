@@ -4,6 +4,8 @@
 
 """Shared helpers: compute configs, mesh mappers, as_tt, RoPE tables."""
 
+import functools
+
 import torch
 
 import ttnn
@@ -29,6 +31,21 @@ def norm_compute_config(mesh_device):
 
 def sdpa_compute_config(mesh_device):
     return _cfg(mesh_device, ttnn.MathFidelity.HiFi4, False)
+
+
+@functools.lru_cache(maxsize=None)
+def decode_memcfg(width):
+    """L1 width-sharded memory config for a [32, width] decode activation."""
+    tiles = width // 32
+    n = max(c for c in range(1, 65) if tiles % c == 0)
+    cores = ttnn.num_cores_to_corerangeset(n, ttnn.CoreCoord(8, 8), row_wise=True)
+    spec = ttnn.ShardSpec(cores, [32, width // n], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
+
+
+def is_decode(x):
+    """True for a 4-D activation with 32 rows."""
+    return len(x.shape) == 4 and x.shape[-2] == 32
 
 
 def replicate_mapper(mesh_device):

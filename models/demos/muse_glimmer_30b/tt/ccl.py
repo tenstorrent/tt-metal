@@ -9,6 +9,7 @@ import os
 from loguru import logger
 
 import ttnn
+from models.demos.muse_glimmer_30b.tt.common import decode_memcfg, is_decode
 
 # 1x4 systems that are ring-wired
 RING_MESH_DEVICES = {"P300x2", "QB2"}
@@ -60,7 +61,6 @@ class MuseCCL:
             topology = ttnn.Topology.Ring if self.ring else default_topology(self.tp)
         self.topology = topology
         self.num_links = num_links if num_links is not None else default_num_links(mesh_device)
-        self._decode_mems = {}
         if self.ring:
             grid = mesh_device.compute_with_storage_grid_size()
             cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -69,23 +69,11 @@ class MuseCCL:
             self._ar_buffers = {}
         logger.info(f"MuseCCL: tp={self.tp} topology={self.topology} num_links={self.num_links} ring={self.ring}")
 
-    def _decode_mem(self, width):
-        """L1 width-sharded memory config for a [32, width] tensor."""
-        if width not in self._decode_mems:
-            tiles = width // 32
-            n = max(c for c in range(1, 65) if tiles % c == 0)
-            cores = ttnn.num_cores_to_corerangeset(n, ttnn.CoreCoord(8, 8), row_wise=True)
-            spec = ttnn.ShardSpec(cores, [32, width // n], ttnn.ShardOrientation.ROW_MAJOR)
-            self._decode_mems[width] = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec
-            )
-        return self._decode_mems[width]
-
     def all_reduce(self, x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         if self.tp == 1:
             return x
-        if self.ring and len(x.shape) == 4 and x.shape[-2] == 32:
-            mem = self._decode_mem(x.shape[-1])
+        if self.ring and is_decode(x):
+            mem = decode_memcfg(x.shape[-1])
             xs = ttnn.to_memory_config(x, mem)
             key = (tuple(x.shape), x.dtype)
             if key not in self._ar_buffers:
@@ -113,6 +101,8 @@ class MuseCCL:
             )
             self._ar_idx = 1 - self._ar_idx
             xs.deallocate(True)
+            if memory_config.is_sharded():
+                return out
             res = ttnn.sharded_to_interleaved(out, memory_config)
             out.deallocate(True)
             return res

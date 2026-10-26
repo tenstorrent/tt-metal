@@ -16,6 +16,7 @@ from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
 from models.demos.muse_glimmer_30b.tt.common import (
     RopeTables,
     as_tt,
+    decode_memcfg,
     matmul_compute_config,
     replicate_mapper,
     shard_mapper,
@@ -147,7 +148,7 @@ class MuseGlimmerModel:
             g = self.ccl.all_gather(e, dim=3)
             ttnn.deallocate(e)
             e = g
-        out = self.embed_norm(e)
+        out = self.embed_norm(e, memory_config=decode_memcfg(self.args.hidden_size) if m == 32 else None)
         ttnn.deallocate(e)
         return out
 
