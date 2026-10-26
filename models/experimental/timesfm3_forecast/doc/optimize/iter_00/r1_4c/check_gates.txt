@@ -1,0 +1,85 @@
+== forward/paper/accuracy
+   pcc_normalized         0.999933  >= 0.999  round 0 0.999928  ok
+   pcc_spread             0.999883  >= 0.999  round 0 0.999881  ok
+   pcc_row_p01            0.813748  >= 0.7  ok
+   pcc_row_min            0.662280  >= 0.5  ok
+   pcc_row_p01_active     0.998383  >= 0.99  round 0 0.998487  ok
+   pcc_row_min_active     0.990954  >= 0.95  ok
+   spread_ratio_p01       0.917842  >= 0.9  round 0 0.930061  ok
+   spread_ratio_p50       1.010238  in (0.97, 1.03)  ok
+   spread_ratio_p99       1.031710  <= 1.1  round 0 1.032863  ok
+   spread_ratio_min       0.688603  >= 0.6  ok
+   spread_ratio_max       1.060127  <= 1.25  ok
+   pcc_final              0.999997  >= 0.99  round 0 0.999997  ok
+   pcc_final_spread       0.999932  >= 0.999  round 0 0.999929  ok
+== forward/paper/performance
+   pcc_normalized         0.999929  >= 0.995  round 0 0.999928  ok
+   pcc_spread             0.999886  >= 0.998  round 0 0.999881  ok
+   pcc_row_p01            0.814355  >= 0.5  ok
+   pcc_row_min            0.495253  >= 0.3  ok
+   pcc_row_p01_active     0.998073  >= 0.97  round 0 0.997792  ok
+   pcc_row_min_active     0.993177  >= 0.85  ok
+   spread_ratio_p01       0.910487  >= 0.9  round 0 0.900041  ok
+   spread_ratio_p50       1.010127  in (0.97, 1.03)  ok
+   spread_ratio_p99       1.030759  <= 1.1  round 0 1.031352  ok
+   spread_ratio_min       0.752636  >= 0.5  ok
+   spread_ratio_max       1.055622  <= 1.25  ok
+   pcc_final              0.999997  >= 0.98  round 0 0.999997  ok
+   pcc_final_spread       0.999923  >= 0.998  round 0 0.999927  ok
+== forward/long_context/accuracy
+   pcc_normalized         0.999962  >= 0.999  round 0 0.999960  ok
+   pcc_spread             0.999923  >= 0.999  round 0 0.999923  ok
+   pcc_row_p01            0.848822  >= 0.7  ok
+   pcc_row_min            0.835123  >= 0.5  ok
+   pcc_row_p01_active     0.999504  >= 0.99  round 0 0.999505  ok
+   pcc_row_min_active     0.999487  >= 0.95  ok
+   spread_ratio_p01       0.985040  >= 0.9  round 0 0.989710  ok
+   spread_ratio_p50       1.010374  in (0.97, 1.03)  ok
+   spread_ratio_p99       1.016231  <= 1.1  round 0 1.016052  ok
+   spread_ratio_min       0.983671  >= 0.6  ok
+   spread_ratio_max       1.016470  <= 1.25  ok
+   pcc_final              0.999996  >= 0.99  round 0 0.999996  ok
+   pcc_final_spread       0.999956  >= 0.999  round 0 0.999951  ok
+== forward/long_context/performance
+   pcc_normalized         0.999959  >= 0.995  round 0 0.999962  ok
+   pcc_spread             0.999925  >= 0.998  round 0 0.999923  ok
+   pcc_row_p01            0.851681  >= 0.5  ok
+   pcc_row_min            0.849948  >= 0.3  ok
+   pcc_row_p01_active     0.999448  >= 0.97  round 0 0.999456  ok
+   pcc_row_min_active     0.999407  >= 0.85  ok
+   spread_ratio_p01       0.983750  >= 0.9  round 0 0.982819  ok
+   spread_ratio_p50       1.011822  in (0.97, 1.03)  ok
+   spread_ratio_p99       1.017192  <= 1.1  round 0 1.017765  ok
+   spread_ratio_min       0.981759  >= 0.5  ok
+   spread_ratio_max       1.017263  <= 1.25  ok
+   pcc_final              0.999992  >= 0.98  round 0 0.999995  ok
+   pcc_final_spread       0.999956  >= 0.998  round 0 0.999950  ok
+== forward/multivariate/accuracy
+   pcc_normalized         0.999933  >= 0.999  round 0 0.999936  ok
+   pcc_spread             0.999906  >= 0.999  round 0 0.999924  ok
+   pcc_row_p01            0.998681  >= 0.7  ok
+   pcc_row_min            0.994859  >= 0.5  ok
+   pcc_row_p01_active     0.999039  >= 0.99  round 0 0.999223  ok
+   pcc_row_min_active     0.996446  >= 0.95  ok
+   spread_ratio_p01       0.975563  >= 0.9  round 0 0.977919  ok
+   spread_ratio_p50       1.011225  in (0.97, 1.03)  ok
+   spread_ratio_p99       1.027574  <= 1.1  round 0 1.030435  ok
+   spread_ratio_min       0.860692  >= 0.6  ok
+   spread_ratio_max       1.054472  <= 1.25  ok
+   pcc_final              1.000000  >= 0.99  round 0 1.000000  ok
+   pcc_final_spread       0.999891  >= 0.999  round 0 0.999923  ok
+== forward/multivariate/performance
+   pcc_normalized         0.999929  >= 0.995  round 0 0.999933  ok
+   pcc_spread             0.999908  >= 0.998  round 0 0.999909  ok
+   pcc_row_p01            0.998461  >= 0.5  ok
+   pcc_row_min            0.992614  >= 0.3  ok
+   pcc_row_p01_active     0.998712  >= 0.97  round 0 0.998856  ok
+   pcc_row_min_active     0.995932  >= 0.85  ok
+   spread_ratio_p01       0.971117  >= 0.9  round 0 0.971323  ok
+   spread_ratio_p50       1.011814  in (0.97, 1.03)  ok
+   spread_ratio_p99       1.031530  <= 1.1  round 0 1.031926  ok
+   spread_ratio_min       0.832335  >= 0.5  ok
+   spread_ratio_max       1.057605  <= 1.25  ok
+   pcc_final              1.000000  >= 0.98  round 0 1.000000  ok
+   pcc_final_spread       0.999911  >= 0.998  round 0 0.999909  ok
+all gates hold

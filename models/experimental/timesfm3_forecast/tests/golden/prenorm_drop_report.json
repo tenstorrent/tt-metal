@@ -1,0 +1,28 @@
+[
+ {
+  "case": "16 x 2048->64 (left-padded, NaN)",
+  "rel": 3.1097695092976564e-10,
+  "min_rms2_over_eps": {
+   "var": 4328562.730757337,
+   "ffn": 726806.7236269864
+  },
+  "pass": true
+ },
+ {
+  "case": "4 items x 8 variates",
+  "rel": 1.897545929671737e-11,
+  "min_rms2_over_eps": {
+   "ffn": 694641.124101158
+  },
+  "pass": true
+ },
+ {
+  "case": "realistic 16 x 2048->64",
+  "rel": 2.0454877027111018e-11,
+  "min_rms2_over_eps": {
+   "var": 4268135.876133636,
+   "ffn": 543767.4035021362
+  },
+  "pass": true
+ }
+]

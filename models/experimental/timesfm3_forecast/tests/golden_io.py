@@ -76,6 +76,7 @@ GATES = {
         "pcc_row_p01_active": (">=", 0.99),
         "pcc_row_min_active": (">=", 0.95),
         "spread_ratio_p01": (">=", 0.9),
+        "spread_ratio_p50": ("in", (0.97, 1.03)),
         "spread_ratio_p99": ("<=", 1.1),
         "spread_ratio_min": (">=", 0.6),
         "spread_ratio_max": ("<=", 1.25),
@@ -90,6 +91,7 @@ GATES = {
         "pcc_row_p01_active": (">=", 0.97),
         "pcc_row_min_active": (">=", 0.85),
         "spread_ratio_p01": (">=", 0.9),
+        "spread_ratio_p50": ("in", (0.97, 1.03)),
         "spread_ratio_p99": ("<=", 1.1),
         "spread_ratio_min": (">=", 0.5),
         "spread_ratio_max": ("<=", 1.25),
@@ -97,18 +99,21 @@ GATES = {
         "pcc_final_spread": (">=", 0.998),
     },
 }
-# Allowed drift from round 0 for an accepted candidate (``check_gates.py``), per D3: higher-is-better metrics may fall
-# at most this far, ``spread_ratio_p99`` may rise at most this far. Min/max metrics are floor-only (no drift).
+# Allowed drift from round 0 for an accepted candidate (``check_gates.py``), per D3 and D4: higher-is-better metrics
+# may fall at most this far, ``spread_ratio_p99`` may rise at most this far, ``spread_ratio_p50`` may move this far
+# either way. Min/max metrics and the all-row ``pcc_row_p01`` (D4) are floor-only (no drift).
 DRIFT = {
     "pcc_normalized": 0.0005,
     "pcc_spread": 0.0005,
     "pcc_final_spread": 0.0005,
     "pcc_final": 0.01,
-    "pcc_row_p01": 0.01,
     "pcc_row_p01_active": 0.01,
     "spread_ratio_p01": 0.01,
+    "spread_ratio_p50": 0.005,
     "spread_ratio_p99": 0.01,
 }
+# Per-case drift overrides, (case name, metric) -> band (D4: the paper golden's p01 moves ~0.04 under order-only changes).
+DRIFT_CASE = {("paper", "spread_ratio_p01"): 0.03}
 
 
 def gate_failures(metrics: dict, precision: str) -> dict:
@@ -119,7 +124,11 @@ def gate_failures(metrics: dict, precision: str) -> dict:
             out[k] = (None, op, bound)
             continue
         v = metrics[k]
-        if (op == ">=" and not v >= bound) or (op == "<=" and not v <= bound):
+        if (
+            (op == ">=" and not v >= bound)
+            or (op == "<=" and not v <= bound)
+            or (op == "in" and not bound[0] <= v <= bound[1])
+        ):
             out[k] = (v, op, bound)
     return out
 
@@ -159,6 +168,7 @@ def head_metrics(expected: torch.Tensor, got: torch.Tensor, active: torch.Tensor
     ratio = ratio[active] if active.any() else ratio
     return {
         "spread_ratio_p01": float(torch.quantile(ratio, 0.01)),
+        "spread_ratio_p50": float(torch.quantile(ratio, 0.5)),
         "spread_ratio_p99": float(torch.quantile(ratio, 0.99)),
         "spread_ratio_min": float(ratio.min()),
         "spread_ratio_max": float(ratio.max()),
@@ -177,6 +187,15 @@ def inflate_quantiles(head: torch.Tensor, factor: float = 2.0) -> torch.Tensor:
     h = torch.as_tensor(head).reshape(head.shape[0], -1, NUM_QUANTILES)
     m = h.mean(-1, keepdim=True)
     return (m + factor * (h - m)).reshape(head.shape).contiguous()
+
+
+def scale_bands(head: torch.Tensor, factor, rows=None) -> torch.Tensor:
+    """PLAN v1.9 broken outputs: the band of ``rows`` (all rows if None) scaled by ``factor`` around the quantile mean."""
+    h = torch.as_tensor(head).reshape(head.shape[0], -1, NUM_QUANTILES).clone()
+    sel = slice(None) if rows is None else torch.as_tensor(rows)
+    m = h[sel].mean(-1, keepdim=True)
+    h[sel] = m + factor * (h[sel] - m)
+    return h.reshape(head.shape).contiguous()
 
 
 def collapse_quantiles(head: torch.Tensor) -> torch.Tensor:

@@ -8,7 +8,8 @@
 For every record (``test``, ``name``, ``precision``) of the candidate:
 - every metric of ``golden_io.GATES[precision]`` must hold;
 - against the matching round-0 record, a higher-is-better metric may fall by at most ``golden_io.DRIFT`` and
-  ``spread_ratio_p99`` may rise by at most its drift; metrics without a ``golden_io.DRIFT`` entry (the min/max
+  ``spread_ratio_p99`` may rise by at most its drift, ``spread_ratio_p50`` may move either way by at most its drift
+  (``golden_io.DRIFT_CASE`` overrides a band per case); metrics without a ``golden_io.DRIFT`` entry (the min/max
   metrics) are floor-only;
 - every round-0 record must be present in the candidate.
 Device time is judged separately by ``compare_bench.py``. Exits 1 if any check fails.
@@ -22,9 +23,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
-from models.experimental.timesfm3_forecast.tests.golden_io import DRIFT, GATES, gate_failures  # noqa: E402
+from models.experimental.timesfm3_forecast.tests.golden_io import DRIFT, DRIFT_CASE, GATES, gate_failures  # noqa: E402
 
 LOWER_IS_BETTER = {"spread_ratio_p99"}
+TWO_SIDED = {"spread_ratio_p50"}
 
 
 def _key(r: dict) -> tuple:
@@ -50,8 +52,11 @@ def main(candidate: str, round0: str) -> int:
             drift_ok, ref = True, None
             if key in base and metric in base[key] and metric in DRIFT:
                 ref = base[key][metric]
-                band = DRIFT[metric]
-                drift_ok = v <= ref + band if metric in LOWER_IS_BETTER else v >= ref - band
+                band = DRIFT_CASE.get((r["name"], metric), DRIFT[metric])
+                if metric in TWO_SIDED:
+                    drift_ok = abs(v - ref) <= band
+                else:
+                    drift_ok = v <= ref + band if metric in LOWER_IS_BETTER else v >= ref - band
             status = "ok" if gate_ok and drift_ok else ("GATE" if not gate_ok else "DRIFT")
             bad += status != "ok"
             ref_s = "" if ref is None else f"  round 0 {ref:.6f}"

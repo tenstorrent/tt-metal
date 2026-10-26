@@ -158,16 +158,58 @@ def upload_vector(device, v: torch.Tensor):
     return upload(device, v.reshape(1, -1))
 
 
-def linear(x, weight, precision: TtPrecision, *, bias=None, activation=None, compute_kernel_config=None):
+# R1-4 (``doc/optimize/iter_00/r1_4/matmul_sweep.json``): the fastest config per weight kind, at M = 65536 and 16384.
+MATMUL_2D_QKV = ("2d", 8)  # bf16 QKV (N = 4608): 2D multicast on 11 x 10, out block cap 8
+MATMUL_MINIMAL_QKV_BF8 = ("mm", (8, 8, 8, 2, 2))
+MATMUL_MINIMAL = ("mm", (16, 8, 4, 4, 1))  # every other per-token linear (K, N <= 1536)
+
+
+def _matmul_choice(weight, k_tiles: int, n_tiles: int):
     import ttnn
 
+    if n_tiles > 48:
+        return MATMUL_MINIMAL_QKV_BF8 if weight.dtype == ttnn.bfloat8_b else MATMUL_2D_QKV
+    return MATMUL_MINIMAL
+
+
+def linear(
+    x, weight, precision: TtPrecision, *, bias=None, activation=None, compute_kernel_config=None, tuned=True
+):
+    """``x @ weight``; per-token linears with M >= 512 rows take the R1-4 program config (``tuned``)."""
+    import ttnn
+
+    from models.experimental.timesfm3_forecast.tt import program_configs as pc
+
+    kernel = precision.matmul_config() if compute_kernel_config is None else compute_kernel_config
+    shape = x.padded_shape
+    m = 1
+    for i in range(len(shape) - 1):
+        m *= shape[i]
+    if tuned and bias is None and m >= 512:
+        m_tiles, k_tiles, n_tiles = m // TILE, x.padded_shape[-1] // TILE, weight.padded_shape[-1] // TILE
+        kind, arg = _matmul_choice(weight, k_tiles, n_tiles)
+        act = pc.fused_activation(activation)
+        if kind == "mm":
+            grid = x.device().compute_with_storage_grid_size()
+            return ttnn.experimental.minimal_matmul(
+                x,
+                weight,
+                fused_activation=act,
+                config=pc.minimal_config((grid.x, grid.y), m_tiles, k_tiles, n_tiles, arg),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=kernel,
+            )
+        cfg = pc.matmul_2d_config((11, 10), m_tiles, k_tiles, n_tiles, fused_activation=act, out_block_cap=arg)
+        return ttnn.linear(
+            x, weight, program_config=cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG, compute_kernel_config=kernel
+        )
     return ttnn.linear(
         x,
         weight,
         bias=bias,
         activation=activation,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        compute_kernel_config=precision.matmul_config() if compute_kernel_config is None else compute_kernel_config,
+        compute_kernel_config=kernel,
     )
 
 

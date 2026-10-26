@@ -240,12 +240,12 @@ class TtTimesFM3:
             program_config=program_config,
             compute_kernel_config=self.precision.sdpa_config(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_concat_heads=True,
         )
         for t in (q, k, v):
             ttnn.deallocate(t)
-        merged = ttnn.transformer.concatenate_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(ctx)
-        return merged
+        b, _, n, width = ctx.shape  # (B, 1, n, heads * 96): the heads are already side by side
+        return ttnn.reshape(ctx, (b, n, width))
 
     def _qk_norm(self, q, k, w):
         import ttnn

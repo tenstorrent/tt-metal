@@ -132,12 +132,59 @@ def test_broken_bands_fail_the_gates(name):
             must_fail = [
                 k
                 for k, (o, _) in GATES[precision].items()
-                if o == op
+                if o in (op, "in")
                 and k != "pcc_final"
                 and (per_row or not (k.startswith("pcc_row") or k.startswith("spread_ratio")))
             ]
             passing = [k for k in must_fail if k not in failing]
             assert not passing, f"{name}: the {label.lower()} output passes the {precision} {passing}"
+
+
+@pytest.mark.parametrize("name", [n for n in ALL if n.startswith("bench_")])
+def test_v19_broken_outputs_fail_a_floor(name):
+    """PLAN v1.9: inactive-row bands collapsed, ~1 % of active rows at a 0.3x band, and every band at 0.88x / 1.12x
+    must each fail at least one floor in each precision (head metrics; the scores are printed for the gate)."""
+    from models.experimental.timesfm3_forecast.tests.golden_io import (
+        active_rows,
+        gate_failures,
+        head_metrics,
+        scale_bands,
+    )
+
+    g = load_golden(name)
+    hi = _prepare(g)
+    head = (
+        g["head_readout"]
+        if "head_readout" in g
+        else g["head_raw"].reshape(hi.rows, hi.num_patches, -1)[:, hi.readout_tokens.start : hi.readout_tokens.stop]
+    )
+    active = active_rows(head)
+    act_idx = torch.nonzero(active).flatten()
+    cases = [
+        (
+            "active 1% at 0.3x",
+            scale_bands(
+                head,
+                0.3,
+                act_idx[
+                    torch.randperm(len(act_idx), generator=torch.Generator().manual_seed(0))[
+                        : max(1, len(act_idx) // 100)
+                    ]
+                ],
+            ),
+        ),
+        ("all x0.88", scale_bands(head, 0.88)),
+        ("all x1.12", scale_bands(head, 1.12)),
+    ]
+    if (~active).any():
+        cases.insert(0, ("inactive collapsed", scale_bands(head, 0.0, torch.nonzero(~active).flatten())))
+    for label, broken in cases:
+        m = head_metrics(head, broken, active)
+        print(f"[BROKEN {label}] {name}: " + ", ".join(f"{k} {v:.5f}" for k, v in m.items()))
+        for precision in ("accuracy", "performance"):
+            fails = gate_failures(m, precision)
+            print(f"   {precision}: fails {sorted(fails)}")
+            assert fails, f"{name}: '{label}' passes every {precision} floor"
 
 
 @pytest.mark.parametrize("horizon", [64, 128])
