@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from tt_metal.fabric.debug.visualizer.common.manifest_lookup import ManifestError, lookup
+from tt_metal.fabric.debug.visualizer.common.router_paths import LeafKind, get_router_path, walk_router
 
 # A register, core or stream, is one 32-bit word.
 REGISTER_BYTES = 4
@@ -96,36 +97,6 @@ def _get_stream_registers(manifest: dict, where: str) -> _StreamRegisters:
     )
 
 
-def _walk(
-    node,
-    path: str,
-    where: str,
-    stream_registers: _StreamRegisters,
-    regions: dict[str, L1Read],
-    streams: dict[tuple[int, str], RegisterRead],
-):
-    """
-    Adds every region and stream reference at or under `node` to `regions` and `streams`. `path` is the node's path
-    inside the router and `where` its dotted path in the manifest.
-    """
-    if isinstance(node, dict):
-        if "address" in node:
-            regions[path] = _l1_read(node, where)
-            return
-        if "stream_id" in node:
-            stream_id = lookup(node, "stream_id", "integer", where=where)
-            register = lookup(node, "register", "string", where=where)
-            streams[stream_id, register] = stream_registers.read(stream_id, register, where)
-            return
-        children = [(key, f"{where}.{key}", child) for key, child in node.items()]
-    elif isinstance(node, list):
-        children = [(index, f"{where}[{index}]", child) for index, child in enumerate(node)]
-    else:
-        return
-    for key, child_where, child in children:
-        _walk(child, f"{path}/{key}" if path else str(key), child_where, stream_registers, regions, streams)
-
-
 def _get_core(router: dict, key: str, where: str) -> tuple[int, int]:
     core = lookup(router, f"identity.{key}", "array", of="integer", where=where)
     if len(core) != 2:
@@ -146,7 +117,14 @@ def _get_router_plan(
 ) -> RouterPlan:
     regions: dict[str, L1Read] = {}
     streams: dict[tuple[int, str], RegisterRead] = {}
-    _walk(router, "", where, stream_registers, regions, streams)
+    for leaf in walk_router(router, where):
+        if leaf.kind is LeafKind.REGION:
+            regions[leaf.path] = _l1_read(leaf.node, leaf.where)
+        elif leaf.kind is LeafKind.STREAM:
+            stream_id = lookup(leaf.node, "stream_id", "integer", where=leaf.where)
+            register = lookup(leaf.node, "register", "string", where=leaf.where)
+            streams[stream_id, register] = stream_registers.read(stream_id, register, leaf.where)
+        # An element reference points into a region, which is read whole.
     return RouterPlan(
         path=path,
         asic_id=asic_id,
@@ -209,7 +187,7 @@ def get_read_plan(manifest: dict) -> ReadPlan:
                 routers.append(
                     _get_router_plan(
                         router,
-                        f"{mesh_key}/{chip_key}/{router_key}",
+                        get_router_path(mesh_key, chip_key, router_key),
                         f"{chip_where}.routers.{router_key}",
                         asic_id,
                         stream_registers,

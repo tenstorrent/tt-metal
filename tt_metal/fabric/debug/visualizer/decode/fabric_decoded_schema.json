@@ -1,0 +1,445 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fabric decoded snapshot",
+  "description": "The shape of a decoded file (README.md in this directory). A value decoded from L1 takes the shape of its manifest type, so values are any JSON here.",
+  "type": "object",
+  "properties": {
+    "kind": { "const": "fabric_decoded" },
+    "decoded_version": { "const": 1 },
+    "decoded_at": { "$ref": "#/$defs/utc" },
+    "decoder": { "oneOf": [{ "$ref": "#/$defs/checkout" }, { "type": "null" }] },
+    "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/source" } },
+    "routing_tables": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/router_path" },
+      "additionalProperties": { "$ref": "#/$defs/routing_table" }
+    },
+    "routers": {
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/router_path" },
+      "additionalProperties": { "$ref": "#/$defs/router" }
+    }
+  },
+  "required": ["kind", "decoded_version", "decoded_at", "decoder", "sources", "routing_tables", "routers"],
+  "additionalProperties": false,
+
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "name": { "type": "string", "pattern": "^[a-z0-9_]+$" },
+    "word": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "utc": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "router_path": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+/[EWNSZ][0-9]+$" },
+    "chip_key": { "type": "string", "pattern": "^M[0-9]+/C[0-9]+$" },
+    "channel_path": { "type": "string", "pattern": "^channels/(senders|receivers)/vc[0-9]+/ch[0-9]+$" },
+    "path": { "type": "string", "pattern": "^[^/]+(/[^/]+)*$" },
+    "value": {},
+    "optional_string": { "type": ["string", "null"] },
+    "direction": { "enum": ["east", "west", "north", "south", "z"] },
+    "optional_direction": { "oneOf": [{ "$ref": "#/$defs/direction" }, { "type": "null" }] },
+    "checkout": {
+      "type": "object",
+      "properties": {
+        "git_sha": { "type": "string" },
+        "git_dirty": { "type": "boolean" }
+      },
+      "required": ["git_sha", "git_dirty"],
+      "additionalProperties": false
+    },
+    "file": {
+      "type": "object",
+      "properties": {
+        "file": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      },
+      "required": ["file", "sha256"],
+      "additionalProperties": false
+    },
+    "source": {
+      "type": "object",
+      "properties": {
+        "snapshot": { "$ref": "#/$defs/file" },
+        "manifest": {
+          "type": "object",
+          "properties": {
+            "file": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" },
+            "run": { "type": "object" }
+          },
+          "required": ["file", "sha256", "run"],
+          "additionalProperties": false
+        },
+        "capture": { "type": "object" },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["snapshot", "manifest", "capture", "warnings"],
+      "additionalProperties": false
+    },
+    "stream": {
+      "type": "object",
+      "properties": {
+        "stream_id": { "$ref": "#/$defs/count" },
+        "register": { "$ref": "#/$defs/name" },
+        "bits": { "type": "integer", "minimum": 1, "maximum": 32 },
+        "before": { "$ref": "#/$defs/value" },
+        "after": { "$ref": "#/$defs/value" },
+        "before_word": { "type": ["integer", "null"], "minimum": 0 },
+        "after_word": { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "required": ["stream_id", "register", "bits", "before", "after", "before_word", "after_word"],
+      "additionalProperties": false
+    },
+    "element": {
+      "type": "object",
+      "properties": {
+        "array": { "$ref": "#/$defs/path" },
+        "index": { "$ref": "#/$defs/count" },
+        "value": { "$ref": "#/$defs/value" }
+      },
+      "required": ["array", "index", "value"],
+      "additionalProperties": false
+    },
+    "optional_boolean": { "oneOf": [{ "type": "boolean" }, { "type": "null" }] },
+    "health": {
+      "type": "object",
+      "properties": {
+        "t_ns": { "type": "array", "items": { "type": "integer" } },
+        "eriscs": {
+          "type": "object",
+          "propertyNames": { "pattern": "^erisc[0-9]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "physical_erisc": { "$ref": "#/$defs/count" },
+              "mask": { "$ref": "#/$defs/word" },
+              "in_reset": { "type": "array", "items": { "$ref": "#/$defs/optional_boolean" } }
+            },
+            "required": ["physical_erisc", "mask", "in_reset"],
+            "additionalProperties": false
+          }
+        },
+        "wall_clock": {
+          "type": "object",
+          "properties": {
+            "cycles": { "type": "array", "items": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }] } },
+            "rises": { "$ref": "#/$defs/optional_boolean" },
+            "mhz": { "oneOf": [{ "type": "number" }, { "type": "null" }] }
+          },
+          "required": ["cycles", "rises", "mhz"],
+          "additionalProperties": false
+        },
+        "heartbeat": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "words": { "type": "array", "items": { "oneOf": [{ "$ref": "#/$defs/word" }, { "type": "null" }] } },
+                "router_magic": { "type": "array", "items": { "$ref": "#/$defs/optional_boolean" } },
+                "changed": { "$ref": "#/$defs/optional_boolean" }
+              },
+              "required": ["words", "router_magic", "changed"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        }
+      },
+      "required": ["t_ns", "eriscs", "wall_clock", "heartbeat"],
+      "additionalProperties": false
+    },
+    "router": {
+      "type": "object",
+      "properties": {
+        "source": { "$ref": "#/$defs/count" },
+        "error": { "oneOf": [{ "type": "object" }, { "type": "null" }] },
+        "areas": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "regions": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/path" },
+          "additionalProperties": { "$ref": "#/$defs/value" }
+        },
+        "streams": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/path" },
+          "additionalProperties": { "$ref": "#/$defs/stream" }
+        },
+        "elements": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/path" },
+          "additionalProperties": { "$ref": "#/$defs/element" }
+        },
+        "health": { "$ref": "#/$defs/health" },
+        "routing": { "oneOf": [{ "$ref": "#/$defs/routing" }, { "type": "null" }] },
+        "channels": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/channel_path" },
+          "additionalProperties": {
+            "oneOf": [{ "$ref": "#/$defs/sender_channel" }, { "$ref": "#/$defs/receiver_channel" }]
+          }
+        }
+      },
+      "required": ["source", "error", "areas", "regions", "streams", "elements", "health", "routing", "channels"],
+      "additionalProperties": false
+    },
+
+    "chip_walk_2d": {
+      "type": "object",
+      "properties": {
+        "delivers": { "type": "array", "items": { "$ref": "#/$defs/chip_key" } },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "src": { "$ref": "#/$defs/chip_key" },
+              "direction": { "$ref": "#/$defs/direction" },
+              "dst": { "$ref": "#/$defs/chip_key" }
+            },
+            "required": ["src", "direction", "dst"],
+            "additionalProperties": false
+          }
+        },
+        "exits": { "type": "array", "items": { "$ref": "#/$defs/chip_key" } },
+        "odd": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "chip": { "$ref": "#/$defs/chip_key" },
+              "kind": { "enum": ["off_edge", "no_z_peer", "ignored_bit", "unknown_bits", "empty", "revisit"] },
+              "direction": { "$ref": "#/$defs/optional_direction" }
+            },
+            "required": ["chip", "kind", "direction"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["delivers", "steps", "exits", "odd"],
+      "additionalProperties": false
+    },
+    "tree_edges": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "child": { "$ref": "#/$defs/count" },
+          "parent": { "$ref": "#/$defs/count" },
+          "direction": { "$ref": "#/$defs/optional_direction" }
+        },
+        "required": ["child", "parent", "direction"],
+        "additionalProperties": false
+      }
+    },
+    "routing_table": {
+      "type": "object",
+      "properties": {
+        "chip": { "$ref": "#/$defs/chip_key" },
+        "routers": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/router_path" } },
+        "raw": { "$ref": "#/$defs/value" },
+        "fields": { "type": "object" },
+        "route_table_2d": {
+          "oneOf": [
+            {
+              "type": "object",
+              "propertyNames": { "$ref": "#/$defs/chip_key" },
+              "additionalProperties": { "$ref": "#/$defs/chip_walk_2d" }
+            },
+            { "type": "null" }
+          ]
+        },
+        "mcast_trees": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": { "y": { "$ref": "#/$defs/tree_edges" }, "x": { "$ref": "#/$defs/tree_edges" } },
+              "required": ["y", "x"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "path_table_1d": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "entries": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "hops_away": { "$ref": "#/$defs/count" },
+                      "hops": { "oneOf": [{ "type": "array", "items": { "$ref": "#/$defs/name" } }, { "type": "null" }] },
+                      "problem": { "$ref": "#/$defs/optional_string" }
+                    },
+                    "required": ["hops_away", "hops", "problem"],
+                    "additionalProperties": false
+                  }
+                },
+                "zero_entries": { "$ref": "#/$defs/count" }
+              },
+              "required": ["entries", "zero_entries"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        }
+      },
+      "required": ["chip", "routers", "raw", "fields", "route_table_2d", "mcast_trees", "path_table_1d"],
+      "additionalProperties": false
+    },
+    "routing": {
+      "type": "object",
+      "properties": {
+        "table_key": { "$ref": "#/$defs/router_path" },
+        "state_manager": { "$ref": "#/$defs/value" },
+        "raw": { "$ref": "#/$defs/value" }
+      },
+      "required": ["table_key", "state_manager", "raw"],
+      "additionalProperties": false
+    },
+
+    "flow_count": {
+      "type": "object",
+      "properties": {
+        "before": { "type": ["integer", "null"] },
+        "after": { "type": ["integer", "null"] },
+        "not_observable": { "$ref": "#/$defs/optional_string" }
+      },
+      "required": ["before", "after", "not_observable"],
+      "additionalProperties": false
+    },
+    "credit": {
+      "type": "object",
+      "properties": {
+        "frees": { "enum": ["receiver_slot", "sender_slot"] },
+        "backing": { "enum": ["stream_register", "l1_counter"] },
+        "backing_reasons": { "type": "array", "items": { "type": "string" } },
+        "pending": { "$ref": "#/$defs/flow_count" },
+        "total_landed": { "$ref": "#/$defs/flow_count" },
+        "peer_total_sent": { "$ref": "#/$defs/flow_count" },
+        "on_link": { "$ref": "#/$defs/flow_count" }
+      },
+      "required": ["frees", "backing", "backing_reasons", "pending", "total_landed", "peer_total_sent", "on_link"],
+      "additionalProperties": false
+    },
+    "slots": { "oneOf": [{ "type": "array", "items": { "$ref": "#/$defs/slot" } }, { "type": "null" }] },
+    "sender_channel": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "sender" },
+        "depth": { "$ref": "#/$defs/count" },
+        "producer": { "$ref": "#/$defs/optional_string" },
+        "connection": { "$ref": "#/$defs/value" },
+        "producer_core": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "x": { "$ref": "#/$defs/count" },
+                "y": { "$ref": "#/$defs/count" },
+                "whose": { "enum": ["current", "last"] }
+              },
+              "required": ["x", "y", "whose"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "unsent": { "$ref": "#/$defs/flow_count" },
+        "uncredited": { "$ref": "#/$defs/flow_count" },
+        "credits": {
+          "type": "object",
+          "propertyNames": { "enum": ["completed", "acked"] },
+          "additionalProperties": { "$ref": "#/$defs/credit" }
+        },
+        "speedy_batch": { "oneOf": [{ "$ref": "#/$defs/count" }, { "type": "null" }] },
+        "within_bounds": { "$ref": "#/$defs/optional_boolean" },
+        "moved": { "$ref": "#/$defs/optional_boolean" },
+        "slots": { "$ref": "#/$defs/slots" }
+      },
+      "required": [
+        "kind", "depth", "producer", "connection", "producer_core", "unsent", "uncredited", "credits", "speedy_batch",
+        "within_bounds", "moved", "slots"
+      ],
+      "additionalProperties": false
+    },
+    "receiver_channel": {
+      "type": "object",
+      "properties": {
+        "kind": { "const": "receiver" },
+        "depth": { "$ref": "#/$defs/count" },
+        "waiting": { "$ref": "#/$defs/flow_count" },
+        "unacked": { "$ref": "#/$defs/flow_count" },
+        "moved": { "$ref": "#/$defs/optional_boolean" },
+        "slots": { "$ref": "#/$defs/slots" }
+      },
+      "required": ["kind", "depth", "waiting", "unacked", "moved", "slots"],
+      "additionalProperties": false
+    },
+
+    "route_1d": {
+      "type": "object",
+      "properties": {
+        "hops": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "hop": { "$ref": "#/$defs/name" },
+              "chip": { "oneOf": [{ "$ref": "#/$defs/chip_key" }, { "type": "null" }] }
+            },
+            "required": ["hop", "chip"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["hops"],
+      "additionalProperties": false
+    },
+    "route_2d": {
+      "type": "object",
+      "properties": {
+        "start": { "$ref": "#/$defs/chip_key" },
+        "entered_from": { "$ref": "#/$defs/optional_direction" },
+        "walk": { "oneOf": [{ "$ref": "#/$defs/chip_walk_2d" }, { "type": "null" }] },
+        "landing": { "type": "boolean" },
+        "rebuilt": { "$ref": "#/$defs/optional_boolean" }
+      },
+      "required": ["start", "entered_from", "walk", "landing", "rebuilt"],
+      "additionalProperties": false
+    },
+    "slot": {
+      "type": "object",
+      "properties": {
+        "empty": { "type": "boolean" },
+        "header": { "oneOf": [{ "type": "object" }, { "type": "null" }] },
+        "route": { "oneOf": [{ "$ref": "#/$defs/route_1d" }, { "$ref": "#/$defs/route_2d" }, { "type": "null" }] },
+        "scatter": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "encoding": { "$ref": "#/$defs/name" },
+                  "amount": { "$ref": "#/$defs/count" }
+                },
+                "required": ["encoding", "amount"],
+                "additionalProperties": false
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "problems": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["empty", "header", "route", "scatter", "problems"],
+      "additionalProperties": false
+    }
+  }
+}

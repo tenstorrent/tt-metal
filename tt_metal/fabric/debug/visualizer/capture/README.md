@@ -21,7 +21,7 @@ register) pair is read once, however many nodes name it.
 indices as numbers. `channels/senders/vc0/ch0/ring_buffer` is the router's
 `["channels"]["senders"]["vc0"]["ch0"]["ring_buffer"]`. A router's path is `M<mesh>/C<chip>/<router key>`, such as
 `M0/C0/E1`, the string `link.peer` uses. Decode finds a region's manifest node, and so its layout, by following its
-path.
+path. [`router_paths.py`](../common/router_paths.py) implements the rule once, for capture and decode.
 
 ## The snapshot
 
@@ -122,6 +122,7 @@ When neither is at the logical core, that is an `open` error for the router.
 | [`tests/test_exalens.py`](tests/test_exalens.py) | Cases for finding a router's chip and core and reading it, with fake ttexalens objects |
 | [`tests/check_capture.py`](tests/check_capture.py) | Takes a snapshot of each manifest CI writes, with a fake device, and checks it |
 | [`../common/manifest_lookup.py`](../common/manifest_lookup.py) | `lookup`, which reads a manifest value and checks its JSON type, and `ManifestError`. Shared with decode |
+| [`../common/router_paths.py`](../common/router_paths.py) | The path rule: `walk_router` finds every region and stream reference under a router, and `get_node` finds the node at a path. Shared with decode |
 
 ## Running the tests
 
