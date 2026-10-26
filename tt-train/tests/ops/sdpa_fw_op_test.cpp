@@ -1425,6 +1425,7 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
 struct ChunkKnobs {
     uint32_t q_chunk_size;
     uint32_t k_chunk_size;
+    uint32_t heads_per_item = 0U;
 };
 
 // One Q row with a wide K step, many Q rows with one K tile, square, and both rectangles.
@@ -1433,8 +1434,12 @@ const std::vector<ChunkKnobs> kChunkKnobSweep = {{32, 256}, {128, 32}, {64, 64},
 void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
     for (const auto& knobs : sweep) {
         SDPATestConfig config = base;
-        config.program_config = {.q_chunk_size = knobs.q_chunk_size, .k_chunk_size = knobs.k_chunk_size};
-        config.test_name = fmt::format("{}_q{}_k{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size);
+        config.program_config = {
+            .q_chunk_size = knobs.q_chunk_size,
+            .k_chunk_size = knobs.k_chunk_size,
+            .heads_per_item = knobs.heads_per_item};
+        config.test_name =
+            fmt::format("{}_q{}_k{}_h{}", base.test_name, knobs.q_chunk_size, knobs.k_chunk_size, knobs.heads_per_item);
         SCOPED_TRACE(config.test_name);
         run_sdpa_test(config);
     }
@@ -1484,6 +1489,56 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_NonPow2) {
         {{96, 96}, {32, 96}, {96, 32}, {128, 96}, {96, 384}});
 }
 
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Causal_HeadStacking) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // GQA with 4 heads per group: stacks of 2 and 4 heads, with 1..4 Q rows each.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 2U,
+            .sequence_length = 256U,
+            .query_dim = 512U,      // 8 heads * 64
+            .key_value_dim = 128U,  // 2 kv heads * 64
+            .num_query_heads = 8U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::Causal,
+            .test_name = "ChunkKnobs_Causal_HeadStacking"},
+        {{32, 64, 4}, {128, 256, 2}, {64, 32, 4}, {128, 64, 4}, {0, 0, 2}});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary_HeadStacking) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // The (1, 1, S, S) mask is read once per step and shared by the stacked heads.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 256U,
+            .query_dim = 256U,     // 4 heads * 64
+            .key_value_dim = 64U,  // 1 kv head * 64
+            .num_query_heads = 4U,
+            .num_key_heads = 1U,
+            .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
+            .test_name = "ChunkKnobs_Arbitrary_HeadStacking"},
+        {{64, 64, 2}, {32, 128, 4}});
+}
+
+TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_None_Gate_HeadStacking) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
+    // No mask, vWt < qWt, gate: the gate rows are stacked like the Q rows.
+    run_chunk_knob_sweep(
+        SDPATestConfig{
+            .batch_size = 1U,
+            .sequence_length = 256U,
+            .query_dim = 512U,      // 4 heads * 128
+            .key_value_dim = 256U,  // 2 kv heads * 128
+            .value_dim = 128U,      // 2 kv heads * 64
+            .num_query_heads = 4U,
+            .num_key_heads = 2U,
+            .mask_type = ttml::metal::AttentionMaskType::None,
+            .use_gate = true,
+            .test_name = "ChunkKnobs_None_Gate_HeadStacking"},
+        {{64, 128, 2}, {128, 64, 2}});
+}
+
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Arbitrary) {
     SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     run_chunk_knob_sweep(SDPATestConfig{
@@ -1524,7 +1579,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
     auto query = make(1U);
     auto key = make(2U);
     auto value = make(3U);
-    auto run = [&](uint32_t q_chunk_size, uint32_t k_chunk_size) {
+    auto run = [&](uint32_t q_chunk_size, uint32_t k_chunk_size, uint32_t heads_per_item = 0U) {
         return metal::sdpa_fw(
             query,
             key,
@@ -1534,7 +1589,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
             0.0F,
             false,
             std::nullopt,
-            {.q_chunk_size = q_chunk_size, .k_chunk_size = k_chunk_size});
+            {.q_chunk_size = q_chunk_size, .k_chunk_size = k_chunk_size, .heads_per_item = heads_per_item});
     };
     EXPECT_NO_THROW(run(0U, 0U));
     EXPECT_NO_THROW(run(S, S));
@@ -1542,6 +1597,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Rejected) {
     EXPECT_THROW(run(0U, 48U), std::exception) << "k_chunk_size must be a tile multiple";
     EXPECT_THROW(run(96U, 0U), std::exception) << "q_chunk_size must divide the sequence length";
     EXPECT_THROW(run(0U, 2U * S), std::exception) << "k_chunk_size must divide the sequence length";
+    EXPECT_THROW(run(0U, 0U, 2U), std::exception) << "heads_per_item must divide the heads per kv head (1 here)";
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
@@ -1553,6 +1609,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ChangeProgramHash) {
     q_changed.program_config.q_chunk_size = 128U;
     Params k_changed = base;
     k_changed.program_config.k_chunk_size = 128U;
+    Params h_changed = base;
+    h_changed.program_config.heads_per_item = 2U;
+    EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(h_changed));
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(q_changed));
     EXPECT_NE(ttsl::hash::hash_objects_with_default_seed(base), ttsl::hash::hash_objects_with_default_seed(k_changed));
     EXPECT_NE(
