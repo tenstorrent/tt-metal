@@ -3,6 +3,8 @@
 #   - the device-free unit tests
 #   - the manifest fixtures on mock clusters
 #   - the schema check on every manifest the above runs write
+#   - capture's unit tests
+#   - capture's check, which takes a snapshot of each of the same manifests with a fake device
 # CI runs it on a CPU runner, as fabric-cpu-manifest in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml. The
 # manifest fixtures also run on hardware, through run_cpp_fabric_tests.sh's Fabric1D/2D fixture filters.
 #
@@ -19,6 +21,8 @@ T3K_ON_TWO_RANKS=$CLUSTER_DESCS/wormhole/t3k_cluster_desc/t3k_2x4_big_mesh_clust
 BH_4XP150=tt_metal/third_party/umd/tests/cluster_descriptor_examples/blackhole_4xP150.yaml
 SPLIT_T3K_RANK_BINDINGS=tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml
 CHECK_SCHEMA=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py
+CAPTURE_TESTS=tt_metal/fabric/debug/visualizer/capture/tests
+CHECK_CAPTURE=tt_metal.fabric.debug.visualizer.capture.tests.check_capture
 # tt-run, without needing it installed.
 TT_RUN=ttnn/ttnn/distributed/ttrun.py
 
@@ -64,3 +68,14 @@ expect_manifests split_t3k 2
 
 echo "== Schema check"
 python3 "$CHECK_SCHEMA" "$OUT_DIR"
+
+echo "== Capture unit tests"
+python3 -m unittest discover -s "$CAPTURE_TESTS" -t . 2>&1 | tee "$OUT_DIR/capture_unit_tests.log"
+# Before Python 3.12, unittest passes when it finds no tests.
+if ! grep -q '^Ran [1-9]' "$OUT_DIR/capture_unit_tests.log"; then
+    echo "Fabric manifest: found no capture unit tests under $CAPTURE_TESTS"
+    exit 1
+fi
+
+echo "== Capture check"
+python3 -m "$CHECK_CAPTURE" "$OUT_DIR"
