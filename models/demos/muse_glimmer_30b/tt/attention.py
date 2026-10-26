@@ -20,7 +20,7 @@ from models.demos.gemma4.tt.attention.operations import (
     chunked_prefill_sdpa,
     chunked_prefill_sdpa_sliding,
 )
-from models.demos.gemma4.tt.dram_sharded import _PREFILL_CUTOFF, TILE_SIZE, DramShardedLinear, can_dram_shard
+from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.muse_glimmer_30b.tt.common import (
     as_tt,
     decode_memcfg,
@@ -64,11 +64,12 @@ def dram_sharded_enabled(k: int, n: int, dtype) -> bool:
 
 
 class MuseLinear:
-    """Per-rank weight [k, n] served by DramShardedLinear (decode + prefill) when eligible, else ttnn.linear.
+    """Per-rank weight [k, n] served by DramShardedLinear when eligible, else ttnn.linear.
 
     Decode compute config (group "attn" -> HiFi2 config; group "mlp" -> None, i.e. LoFi without fp32 acc):
       * DRAM-sharded decode (M <= 32): the group's decode config.
-      * DRAM-sharded prefill (M > 32) and the non-sharded fallback: the HiFi2/fp32-acc config.
+      * DRAM-sharded prefill (M > 32): minimal_matmul from 512 rows on the same DRAM-sharded weight (HiFi2/fp32-acc config).
+      * The non-sharded fallback: ttnn.linear with the HiFi2/fp32-acc config.
     Output is DRAM interleaved in all paths.
     """
 
@@ -88,6 +89,8 @@ class MuseLinear:
         block=2,
     ):
         self.k, self.n = k, n
+        self.mesh_device = mesh_device
+        self._prefill_cfgs = {}
         self.hifi_cfg = matmul_compute_config(mesh_device)
         self.decode_cfg = self.hifi_cfg if group == "attn" else None
         self.sharded = dram_sharded_enabled(k, n, dtype) if sharded is None else sharded
@@ -119,25 +122,32 @@ class MuseLinear:
         m = 1
         for d in range(len(x.shape) - 1):
             m *= int(x.shape[d])
-        cfg = self.decode_cfg if m <= TILE_SIZE else self.hifi_cfg
-        # DramShardedLinear's chunk+concat fallback (M > cutoff and M % cutoff != 0) returns an already-deallocated
-        # buffer when there is a single chunk. Pad rows to a multiple of the cutoff and slice back
-        # (matmul rows are independent, so numerics are unchanged).
-        if (
-            m > _PREFILL_CUTOFF
-            and m % _PREFILL_CUTOFF != 0
-            and len(x.shape) == 4
-            and int(x.shape[0]) == 1
-            and int(x.shape[1]) == 1
-        ):
-            mp = -(-m // _PREFILL_CUTOFF) * _PREFILL_CUTOFF
-            xp = ttnn.pad(x, [(0, 0), (0, 0), (0, mp - m), (0, 0)], value=0.0)
-            outp = self.linear(xp, compute_kernel_config=cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            xp.deallocate(True)
-            out = ttnn.slice(outp, [0, 0, 0, 0], [1, 1, m, int(outp.shape[-1])])
-            outp.deallocate(True)
-            return out
-        return self.linear(x, compute_kernel_config=cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if TILE_SIZE < m < 512:
+            # minimal_matmul is faster from 512 rows (measured on QB2); short prompts keep the 2D matmul.
+            return self.linear(x, compute_kernel_config=self.hifi_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if m >= 512:
+            return ttnn.experimental.minimal_matmul(
+                x,
+                self.weight,
+                config=self._prefill_cfg(m),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=self.hifi_cfg,
+            )
+        return self.linear(x, compute_kernel_config=self.decode_cfg, out_memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _prefill_cfg(self, m):
+        """minimal_matmul blocks measured on QB2 (bf8 weights, HiFi2 fp32 acc)."""
+        big = m >= 8192
+        if big not in self._prefill_cfgs:
+            self._prefill_cfgs[big] = ttnn.MinimalMatmulConfig(
+                M_block_size=8 if big else 4,
+                K_block_size=8 if big else 4,
+                N_block_size=8 if big else 16,
+                subblock_h=2 if big else 1,
+                subblock_w=2 if big else 4,
+                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            )
+        return self._prefill_cfgs[big]
 
     def decode(self, x):
         """Decode matmul (M = 32): L1 width-sharded output; falls back to __call__ when not DRAM-sharded."""
