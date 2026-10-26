@@ -126,8 +126,7 @@ void kernel_main() {
         run += (counts[l] + 31u) & ~31u;
     }
     if (write_tables) {
-        // global [E] rows in place of the staged local counts: walk from the top so counts[l] is read before
-        // overwritten
+        // the global [E] rows over the staged local counts, top down: counts[l] is read before it is overwritten
         for (uint32_t e = E; e-- > 0;) {
             const uint32_t l = e - lo;
             const bool local = l < E_LOC;
