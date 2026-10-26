@@ -820,6 +820,21 @@ uint64_t Kernel::compute_hash() const {
     return hasher.digest();
 }
 
+std::size_t Kernel::logical_runtime_arg_count(const CoreCoord& logical_core) const {
+    TT_FATAL(
+        logical_core.x < this->core_to_runtime_args_.size() &&
+            logical_core.y < this->core_to_runtime_args_[logical_core.x].size(),
+        "Cannot get runtime args for kernel {} that is not placed on core {}",
+        this->name(),
+        logical_core.str());
+    const auto& stored = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    // Absent storage and a watcher count word with no user args are both a logical zero.
+    if (stored.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return stored.size() - this->watcher_count_word_offset_;
+}
+
 std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
@@ -847,6 +862,13 @@ std::vector<std::vector<std::vector<uint32_t>>>& Kernel::runtime_args() { return
 std::vector<std::vector<RuntimeArgsData>>& Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
 
 std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runtime_args_; }
+
+std::size_t Kernel::logical_common_runtime_arg_count() const {
+    if (this->common_runtime_args_.size() <= this->watcher_count_word_offset_) {
+        return 0;
+    }
+    return this->common_runtime_args_.size() - this->watcher_count_word_offset_;
+}
 
 RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 

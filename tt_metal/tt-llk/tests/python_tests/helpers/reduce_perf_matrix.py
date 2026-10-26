@@ -54,6 +54,27 @@ SCALAR_REPRESENTATIVE = dict(
 )
 
 
+# The core matrix already measures PERF_TILE_COUNT tiles; this sweep adds the other
+# block lengths on one representative config.
+BLOCK_LENGTH_TILE_COUNTS = [1, 8, 32]
+BLOCK_LENGTH_REPRESENTATIVE = dict(
+    formats=[InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)],
+    dest_acc=[DestAccumulation.No],
+    reduce_dim=[ReduceDimension.Row],
+    pool_type=[ReducePool.Sum],
+)
+
+
+def reduce_to_one_modes(reduce_dim, pool_type):
+    """Production REDUCE_ROW Max/Sum folds a whole row of tiles into one DEST tile."""
+    if reduce_dim == ReduceDimension.Row and pool_type in (
+        ReducePool.Max,
+        ReducePool.Sum,
+    ):
+        return [False, True]
+    return [False]
+
+
 def perf_math_fidelities(pool_type, valid_fidelities=None):
     """GMPOOL (Max) ignores fidelity; LoFi and HiFi4 bracket the fidelity phase count.
 
