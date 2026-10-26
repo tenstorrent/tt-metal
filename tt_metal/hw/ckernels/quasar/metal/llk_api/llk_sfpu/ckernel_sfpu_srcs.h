@@ -12,7 +12,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_operand.h"
+#include "ckernel_sfpu_operand.h"
 #include "sfpu_impl.h"
 
 namespace ckernel::sfpu {

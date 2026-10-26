@@ -13,7 +13,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_operand.h"
+#include "ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {

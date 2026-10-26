@@ -17,7 +17,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_operand.h"
+#include "ckernel_sfpu_operand.h"
 // After sfpi.h: the Blackhole 21f helpers below use PolynomialEvaluator.
 #include "ckernel_sfpu_polyval.h"
 
@@ -219,19 +219,29 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_bf16_(sfpi::vFloat val) {
 // silicon-verified -- no Quasar target available.
 // unsafe = true drops the overflow/underflow guards, as the Blackhole template of the same name does;
 // only for callers that already bound the argument inside exp's finite range.
-template <bool unsafe = false>
+//
+// base_two = true computes 2^a instead of e^a. The reduction is then exact: j = round(a) and
+// a - j are both representable, so the only rounding before the polynomial is one multiply by
+// ln 2 on |a - j| <= 1/2. Passing a * ln2 to the base-e form instead rounds the argument,
+// and that relative error grows into the result in proportion to |a| (tens of ULP near 2^-126).
+template <bool unsafe = false, bool base_two = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     sfpi::vInt i;
     sfpi::vFloat f, r, j;
 
-    // j = round(a / ln2) (as a float) and i = the same value as an integer, interleaved with the
-    // first coefficient of the polynomial.
     r = 1.37805939e-3f;
-    j = _sfpu_round_to_nearest_int32_(1.442695f * a, i);
+    if constexpr (base_two) {
+        // j = round(a) and i = the same value as an integer, f = (a - j) * ln2.
+        j = _sfpu_round_to_nearest_int32_(a, i);
+        f = (a - j) * 6.93147182e-1f;
+    } else {
+        // j = round(a / ln2) (as a float) and i = the same value as an integer.
+        j = _sfpu_round_to_nearest_int32_(1.442695f * a, i);
 
-    // f = a - j*ln2 (two-part Cody-Waite).
-    f = j * -6.93145752e-1f + a;
-    f = j * -1.42860677e-6f + f;
+        // f = a - j*ln2 (two-part Cody-Waite).
+        f = j * -6.93145752e-1f + a;
+        f = j * -1.42860677e-6f + f;
+    }
 
     // r = exp(f) on [-ln2/2, ln2/2] via a degree-6 minimax polynomial in Horner form.
     r = r * f + 8.37312452e-3f;  // 0x1.125edcp-7
@@ -241,16 +251,19 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
     r = r * f + 1.0f;
     r = r * f + 1.0f;
 
-    // exp(a) = 2^i * exp(f), applied via the result's biased exponent e. The legal IEEE-754 range
-    // is 1..254, and i pushes e outside it for |a| beyond ~88. Writing (i + 127) << 23 directly
-    // would wrap into the sign bit there -- Quasar's integer adder is 32-bit two's complement and
-    // SHFT discards the high bits (Quasar/Trinity SFPU MAS), so a = -100 yields i + 127 = -17 ->
-    // 0xF7800000 = -2^112 rather than ~0. Nothing routes large-magnitude inputs away from this
-    // path (calculate_exponential selects purely on EN_32BIT_DEST / APPROXIMATION_MODE).
+    // exp(a) = 2^i * exp(f) (2^a = 2^i * exp(f) for base_two), applied via the result's biased
+    // exponent e. The legal IEEE-754 range is 1..254, and i pushes e outside it for |a| beyond ~88
+    // (~127 for base_two). Writing (i + 127) << 23 directly would wrap into the sign bit there --
+    // Quasar's integer adder is 32-bit two's complement and SHFT discards the high bits
+    // (Quasar/Trinity SFPU MAS), so base-e a = -100 yields i + 127 = -17 -> 0xF7800000 = -2^112
+    // rather than ~0 (base_two wraps the same way from a ~ -128). Nothing routes large-magnitude
+    // inputs away from this path (calculate_exponential selects purely on EN_32BIT_DEST /
+    // APPROXIMATION_MODE).
     //
     // Seed y with the overflow result unpredicated, as the Blackhole source does, and take the
-    // exponent path only when e is in range. Seeding from a (not from the polynomial, which is
-    // NaN for a = +-Inf because f = j*-ln2 + a is -Inf + Inf) keeps exp(+Inf) = +Inf.
+    // exponent path only when e is in range. Seeding from a (not from the polynomial, which in
+    // base e is NaN for a = +-Inf because f = j*-ln2 + a is -Inf + Inf) keeps exp(+Inf) = +Inf in
+    // either mode.
     //
     // NB: the earlier Quasar port bug was elsewhere -- the Blackhole kernel's sign-magnitude
     // rounding (abs(as<vInt>(convert<vSMag16>(x))) + copysgn feeding a two's-complement add),
@@ -271,6 +284,12 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 }
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
+
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. As in base e
+// above, -NaN lands in the underflow arm (0). The only caller, logaddexp2, zeroes NaN gaps first.
+sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
+}
 
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat _sfpu_exp_accurate_(sfpi::vFloat val);
