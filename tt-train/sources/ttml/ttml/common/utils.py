@@ -7,9 +7,14 @@
 from __future__ import annotations
 
 import os, random
+from typing import TypeVar
+
 import numpy as np
 import ttnn
 import ttml
+
+# A numpy array or a torch tensor: the row permutations below use only reshape and swapaxes.
+Rows = TypeVar("Rows")
 
 
 def set_seed(seed: int = 42):
@@ -165,16 +170,28 @@ def resolve_padded_load_shape(src_shape, target_shape, expected_shape=None, *, n
     )
 
 
-def unpermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
-    """Reorder axis 0 from HF's per-head ``[first_half, second_half]`` to the interleaved pairs TTML's
-    RoPE expects: ``[0, half, 1, half + 1, ...]``. Other axes are unchanged."""
+def _rows_per_head(w: Rows, num_heads: int) -> int:
     rows = w.shape[0]
-    if rows % n_heads != 0:
-        raise RuntimeError(f"rows {rows} not divisible by n_heads {n_heads}")
-    per_head = rows // n_heads
+    if rows % num_heads != 0:
+        raise RuntimeError(f"rows {rows} not divisible by num_heads {num_heads}")
+    per_head = rows // num_heads
     if per_head % 2 != 0:
         raise RuntimeError(f"rows per head {per_head} must be even")
-    return w.reshape(n_heads, 2, per_head // 2, *w.shape[1:]).swapaxes(1, 2).reshape(w.shape)
+    return per_head
+
+
+def unpermute_proj_rows(w: Rows, num_heads: int) -> Rows:
+    """Reorder axis 0 from HF's per-head ``[first_half, second_half]`` to the interleaved pairs TTML's
+    RoPE expects: ``[0, half, 1, half + 1, ...]``. Other axes are unchanged."""
+    per_head = _rows_per_head(w, num_heads)
+    return w.reshape(num_heads, 2, per_head // 2, *w.shape[1:]).swapaxes(1, 2).reshape(w.shape)
+
+
+def repermute_proj_rows(w: Rows, num_heads: int) -> Rows:
+    """The inverse of :func:`unpermute_proj_rows`: TTML's interleaved pairs back to HF's per-head
+    ``[first_half, second_half]``."""
+    per_head = _rows_per_head(w, num_heads)
+    return w.reshape(num_heads, per_head // 2, 2, *w.shape[1:]).swapaxes(1, 2).reshape(w.shape)
 
 
 def initialize_device(yaml_config: dict):
