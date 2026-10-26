@@ -593,6 +593,9 @@ DEVICE_SETTINGS = {
     # the shared expert: separate (default; its own gather / reduce-scatter) or folded into the token-split block
     # (GLM_EXPERTS_MODE=ts: split over each mesh row, its x in the dispatch, its partials in the combine)
     "shared_expert": "GLM_SHARED_EXPERT",
+    # the MoE layers: ag (default: the MiMo all-gather ops), ts (the K3 token-split block), block (the MoE block,
+    # models/demos/moe_block: router + shared expert + routed experts in one call)
+    "experts_mode": "GLM_EXPERTS_MODE",
 }
 
 

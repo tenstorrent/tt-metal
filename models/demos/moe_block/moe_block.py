@@ -483,6 +483,7 @@ class MoEBlock(LightweightModule):
                     layout=options.head_layout,
                     logits_first=options.logits_first,
                     router_split=options.router_split,
+                    fidelity=dtypes.shared_fidelity,
                 )
                 self._warm_up_head()
                 self.fused.head.settle_arena()
@@ -1041,8 +1042,9 @@ class FusedHead:
         # exchange's ports and the tail's K halves are a link each)
         if g.links != 2:
             return f"{g.links} links (built for 2)"
-        if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity != ttnn.MathFidelity.HiFi2:
-            return "shared expert: bf8 weights at HiFi2"
+        hifi = (ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
+        if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity not in hifi:
+            return "shared expert: bf8 weights at HiFi2 / 3 / 4"
         return True
 
     def __init__(
@@ -1058,6 +1060,7 @@ class FusedHead:
         layout=None,
         logits_first=None,
         router_split=False,
+        fidelity=ttnn.MathFidelity.HiFi2,  # (the shared expert's: MoEDtypes.shared_fidelity)
     ):
         from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec, RoutingSpec
 
@@ -1082,6 +1085,7 @@ class FusedHead:
             H=H,
             I=Is // g.tp,
             glu=model.shared_expert_activation.kind,
+            fidelity=fidelity,
             num_links=g.links,
             rs_dim=-1 if latent else -2,  # (K3: the latent up lands the width split, the shared output too)
             rs_mode="fused",

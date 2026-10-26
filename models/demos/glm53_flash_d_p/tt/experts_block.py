@@ -62,7 +62,9 @@ class TtExpertsBlock:
         self.mesh, self.layer, self.chunk = mesh, layer, max_chunk
         self.links = int(os.environ.get("GLM_MOE_LINKS", "2"))
         self.g = Geometry.of(mesh, m, max_chunk, self.links, zigzag=False)
-        self.dtypes = MoEDtypes()
+        # the shared expert at HiFi3 (bf8 weights): the whole model's last-chunk top1 over 6 runs 0.687 at HiFi2, 0.708
+        # at HiFi3 (ag path 0.705), 0.700 at HiFi4; 11335 -> 11295 tok/s
+        self.dtypes = MoEDtypes(shared_fidelity=ttnn.MathFidelity.HiFi3)
         p = f"{PREFIX}layers.{layer}.mlp."
         w = lambda n: loader.weight(p + n).float()  # noqa: E731
 
