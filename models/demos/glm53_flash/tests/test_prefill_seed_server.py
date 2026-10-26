@@ -432,9 +432,24 @@ def test_prefill_seed_server(mesh_device):
                 c, h2, addr = _accept_one()
                 if c is not None and h2["op"] == "register":
                     ranks[int(h2["layer"])] = c
+            # tt-blaze G53F-0198: a test driver may A/B prefill knobs read per call (GLM53_INDEXER_POOL_BUCKET,
+            # GLM53_MHC_PREFILL_HMIX, GLM53_PREFILL_ABLOCK, ...) with "opts": {"env": {name: value}}, set for this
+            # request only; the ring's driver sends none
+            env_opts = {str(k): str(v) for k, v in ((hdr.get("opts") or {}).get("env") or {}).items()}
+            env_old = {k: os.environ.get(k) for k in env_opts}
+            os.environ.update(env_opts)
+            if env_opts:
+                rep["env"] = env_opts
             ttnn.synchronize_device(mesh_device)
             t1 = time.perf_counter()
-            st, lg, owner = _prefill(model, ids[:sp])
+            try:
+                st, lg, owner = _prefill(model, ids[:sp])
+            finally:
+                for k, v in env_old.items():
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
             nxt = model.first_token(lg, owner)
             ttnn.synchronize_device(mesh_device)
             t2 = time.perf_counter()
