@@ -62,6 +62,8 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
+      # pytest-split durations of the fused directory on the simulator: one line per test id, ~5k of them.
+      exclude: ^tests/ttnn/unit_tests/operations/fused/sim_test_durations\.json$
     - id: validate-metalium-api
       name: validate-metalium-api
       entry: python3 scripts/validate_api/validate_api.py tt_metal/api
