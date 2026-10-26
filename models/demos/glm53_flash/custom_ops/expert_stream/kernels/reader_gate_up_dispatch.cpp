@@ -8,6 +8,8 @@
 // 32-row passes it takes (the compute keeps them resident); with more pairs they are streamed once per pass.
 //
 // runtime args: [w_addr, counts_addr (EP: idx_addr), bank_id, vc, group, (EP) base_addr, (EP = 2) t_valid, idx_page]
+// compile-time 12: pair slots of the weight ring (2 = one pair in flight ahead of the compute, today's default;
+// deeper when L1 allows: custom_ops/expert_stream/plan.py), 13: unused here (the units kernels' pairs per unit).
 
 #include <stdint.h>
 
@@ -34,7 +36,9 @@ void kernel_main() {
                                                            // 2: from the packed UINT16 id rows (dispatch_common.hpp)
     constexpr uint32_t T = get_compile_time_arg_val(10);
     constexpr uint32_t K = get_compile_time_arg_val(11);
-    constexpr auto counts_args = TensorAccessorArgs<12>();  // EP: the index tiles
+    constexpr uint32_t num_buffers = get_compile_time_arg_val(12);  // pair slots in the weight ring (prefetch + 1)
+    constexpr uint32_t unit_pairs_unused = get_compile_time_arg_val(13);  // the units kernels' pairs per unit
+    constexpr auto counts_args = TensorAccessorArgs<14>();                // EP: the index tiles
     constexpr auto base_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
@@ -88,8 +92,8 @@ void kernel_main() {
     // never straddles the CB end, unlike single-column slots).
     constexpr uint32_t pair_bytes = 2 * col_bytes;
     constexpr uint32_t pages_per_pair = pair_bytes / page_bytes;
-    constexpr uint32_t num_buffers = 2;
-    constexpr uint32_t extra_in_flight = 1;
+    static_assert(num_buffers >= 2, "at least one pair ahead of the compute");
+    constexpr uint32_t extra_in_flight = num_buffers - 1;
     cb_reserve_back(cb_w, 2 * kt * (extra_in_flight + 1));
     uint32_t l1_write = get_write_ptr(cb_w);
     const uint32_t cb_base = l1_write;
@@ -136,4 +140,5 @@ void kernel_main() {
         ++pushed;
         trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
     }
+    noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
 }

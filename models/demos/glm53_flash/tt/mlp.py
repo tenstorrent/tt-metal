@@ -13,12 +13,25 @@ sublayer activation ``[1, 1, T, hidden]`` (prefill, T tokens) or ``[1, 1, B, hid
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.glm53_flash.custom_ops.glu_split.op import GluSplit
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
 from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
+
+TILE = 32
+
+
+def shared_glu_mode() -> str:
+    """``GLM53_SHARED_GLU``: ``composite`` (default: slice, slice, ``ttnn.clamped_silu_glu``), ``fused`` (the
+    ``custom_ops/glu_split`` generic op on decode shapes, T <= 32; decode ledger C11), ``fused_all`` (every T)."""
+    mode = os.environ.get("GLM53_SHARED_GLU", "composite")
+    assert mode in ("composite", "fused", "fused_all"), mode
+    return mode
 
 
 def _compute_config(device, fidelity=ttnn.MathFidelity.HiFi2):
@@ -61,12 +74,18 @@ class TtClampedSwiGLU(LightweightModule):
         self.compute = _compute_config(device)
         self.lin13 = DecodeLinear(device, self.w13)
         self.lin2 = DecodeLinear(device, self.w2)
+        # C11: the two slices + the activation as one generic op (``custom_ops/glu_split``); the SFPU op's limit is
+        # compile-time 10, which is this model's swiglu_limit (the op asserts it)
+        self.glu_mode = shared_glu_mode()
+        self.glu_op = GluSplit(device, self.limit) if self.glu_mode != "composite" else None
 
-    def forward(self, x: ttnn.Tensor, *, reduce: bool = True) -> ttnn.Tensor:
-        """x: [1, 1, T, H] (replicated over the TP group) -> [1, 1, T, H] (TP partial if not ``reduce``)."""
-        T = x.shape[-2]
-        I = self.intermediate_local
-        gu = self.lin13(x, dtype=self.activation_dtype, compute_kernel_config=self.compute)
+    def _activation(self, gu: ttnn.Tensor, T: int, I: int) -> ttnn.Tensor:
+        """[1,1,T,2I] gate|up -> [1,1,T,I]: silu(min(gate, limit)) * clamp(up, -limit, limit)."""
+        if self.glu_op is not None and (self.glu_mode == "fused_all" or T <= TILE) and gu.dtype == ttnn.bfloat16:
+            h = self.glu_op.allocate_output(gu)
+            self.glu_op(gu, h)
+            ttnn.deallocate(gu)
+            return h
         gate = ttnn.slice(gu, [0, 0, 0, 0], [1, 1, T, I])
         up = ttnn.slice(gu, [0, 0, 0, I], [1, 1, T, 2 * I])
         ttnn.deallocate(gu)
@@ -74,6 +93,14 @@ class TtClampedSwiGLU(LightweightModule):
         h = ttnn.clamped_silu_glu(gate, up, self.limit)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)
+        return h
+
+    def forward(self, x: ttnn.Tensor, *, reduce: bool = True) -> ttnn.Tensor:
+        """x: [1, 1, T, H] (replicated over the TP group) -> [1, 1, T, H] (TP partial if not ``reduce``)."""
+        T = x.shape[-2]
+        I = self.intermediate_local
+        gu = self.lin13(x, dtype=self.activation_dtype, compute_kernel_config=self.compute)
+        h = self._activation(gu, T, I)
         y = self.lin2(h, dtype=self.activation_dtype, compute_kernel_config=self.compute)
         ttnn.deallocate(h)
         if reduce:

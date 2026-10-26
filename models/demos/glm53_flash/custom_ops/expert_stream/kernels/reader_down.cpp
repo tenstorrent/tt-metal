@@ -97,4 +97,5 @@ void kernel_main() {
         ++pushed;
         trid_to_wait = trid_to_wait == num_buffers ? 1 : trid_to_wait + 1;
     }
+    noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
 }

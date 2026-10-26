@@ -15,6 +15,8 @@
 //
 // runtime args: [x_addr, routing_addr (EP: weights), counts_addr (EP: idx), act_addr, table_addr, bank_id, group,
 //                (EP) base_addr, (EP = 2) t_valid, idx_page, x_page]
+// compile-time 16: GATHER_ROTATE (1 = rotate every core's row-gather start: dispatch_common.hpp rotated_row),
+// 17: unused here (the units kernels' pairs per unit).
 // EP = 2 (the mesh path): the ids are the all_to_all_dispatch metadata rows [t_valid, K] UINT16 and the weights the
 // K BF16 tail of every dispatched token row ([x | w], x_page bytes per row); both packed in L1 at K per token.
 
@@ -50,7 +52,9 @@ void kernel_main() {
     constexpr uint32_t ppb = get_compile_time_arg_val(13);  // column pairs per bank = output tiles per pass
     constexpr uint32_t EP = get_compile_time_arg_val(14);   // 1: routing from the top-k index list + weights + base
     constexpr uint32_t K = get_compile_time_arg_val(15);
-    constexpr auto x_args = TensorAccessorArgs<16>();
+    constexpr uint32_t GATHER_ROTATE = get_compile_time_arg_val(16);      // 1: per-core rotated row-gather order (H1)
+    constexpr uint32_t unit_pairs_unused = get_compile_time_arg_val(17);  // the units kernels' pairs per unit
+    constexpr auto x_args = TensorAccessorArgs<18>();
     constexpr auto routing_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();       // EP: weights
     constexpr auto counts_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();  // EP: idx
     constexpr auto act_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
@@ -116,6 +120,7 @@ void kernel_main() {
     uint16_t rows[T];
     uint16_t wbits[T];
     bool first_pass = true;
+    const uint32_t gather_rot = bank_id * groups + group;  // unique per core
     for (uint32_t i = 0; i < n_mine; ++i) {
         const uint32_t e = mine[i];
         // the tokens routed to e, ascending, and their routing weights
@@ -154,10 +159,12 @@ void kernel_main() {
                 noc_async_write(t_l1, s_tab.get_noc_addr(k), table_bytes);
                 noc_async_write_barrier();
             }
-            // the pass's rows of x -> the row-major block (row j at j * row_bytes)
+            // the pass's rows of x -> the row-major block (row j at j * row_bytes); the issue order rotated per
+            // core under GATHER_ROTATE (the rows land in their slots whatever the order)
             cb_reserve_back(cb_xrm, kt);
             const uint32_t xrm = get_write_ptr(cb_xrm);
-            for (uint32_t j = 0; j < nr_p; ++j) {
+            for (uint32_t jj = 0; jj < nr_p; ++jj) {
+                const uint32_t j = GATHER_ROTATE ? rotated_row(jj, nr_p, gather_rot) : jj;
                 noc_async_read(s_x.get_noc_addr(rows[i0 + j]), xrm + j * row_bytes, row_bytes);
             }
             if (first_pass) {
@@ -192,4 +199,5 @@ void kernel_main() {
     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, 0);
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, 0);
     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, 0);
+    noc_async_full_barrier();  // exit contract: every NOC read / write / atomic acknowledged before the next kernel
 }

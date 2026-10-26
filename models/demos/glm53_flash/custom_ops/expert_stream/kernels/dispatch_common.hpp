@@ -210,5 +210,56 @@ inline void for_each_unit(const uint16_t* passes, uint32_t groups, uint32_t grou
     }
 }
 
+// Chunked work units of the gate|up dispatch (decode ledger item (d), 2026-10-26): (expert, chunk) with U = PPB /
+// CHUNKS pairs per unit, LPT-assigned like for_each_unit (units ordered by passes descending, expert ascending, chunk
+// ascending). U = 1 is exactly for_each_unit (one pair per unit, 8 cores per bank per expert at PPB = 8); U = PPB is
+// one unit per expert (the per-expert assignment, 1 core per bank per expert). Calls f(e, c) for this group's units.
+template <uint32_t E, uint32_t PPB, uint32_t U, uint32_t MAX_GROUPS, typename F>
+inline void for_each_unit_chunk(const uint16_t* passes, uint32_t groups, uint32_t group, F&& f) {
+    static_assert(U >= 1 && PPB % U == 0, "the pairs per unit must divide the pairs per bank");
+    constexpr uint32_t CHUNKS = PPB / U;
+    uint16_t order[E];
+    uint32_t na = 0;
+    for (uint32_t e = 0; e < E; ++e) {
+        if (passes[e] == 0) {
+            continue;
+        }
+        uint32_t i = na;
+        while (i > 0 && passes[order[i - 1]] < passes[e]) {
+            order[i] = order[i - 1];
+            --i;
+        }
+        order[i] = static_cast<uint16_t>(e);
+        ++na;
+    }
+    uint32_t load[MAX_GROUPS];
+    for (uint32_t g = 0; g < MAX_GROUPS; ++g) {
+        load[g] = 0;
+    }
+    for (uint32_t i = 0; i < na; ++i) {
+        const uint32_t e = order[i];
+        for (uint32_t c = 0; c < CHUNKS; ++c) {
+            uint32_t g = 0;
+            for (uint32_t j = 1; j < groups; ++j) {
+                if (load[j] < load[g]) {
+                    g = j;
+                }
+            }
+            load[g] += passes[e];
+            if (g == group) {
+                f(e, c);
+            }
+        }
+    }
+}
+
+// Rotated row-gather order (GATHER_ROTATE, hypothesis H1 of custom_ops/expert_stream/plan.py): when many cores
+// gather the same pass rows in the same order their reads convoy on one source L1 bank at a time; starting every
+// core at a different row spreads the reads over the rows' banks. Returns the j-th row index to issue.
+inline uint32_t rotated_row(uint32_t j, uint32_t n, uint32_t rot) {
+    const uint32_t r = j + (n ? rot % n : 0);
+    return r >= n ? r - n : r;
+}
+
 // Byte offset of row `row` (its first 16 columns) inside a BF16 32x32 tile; the next 16 columns are 512 B further.
 inline uint32_t tile_row_bytes(uint32_t row) { return ((row >> 4) * 2) * 512 + (row & 15) * 32; }
