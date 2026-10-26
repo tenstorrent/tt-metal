@@ -10,7 +10,10 @@ from helpers.chip_architecture import (
     get_chip_architecture,
     is_4row_arch,
 )
-from helpers.constraints import get_valid_math_fidelities
+from helpers.constraints import (
+    get_valid_dest_accumulation_modes,
+    get_valid_math_fidelities,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -35,6 +38,7 @@ from helpers.param_config import (
     select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
+from helpers.reduce_perf_matrix import reduce_to_one_modes
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
@@ -45,6 +49,7 @@ from helpers.test_variant_parameters import (
     NUM_FACES,
     NUM_FACES_C_DIM,
     NUM_FACES_R_DIM,
+    REDUCE_TO_ONE,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
@@ -64,20 +69,23 @@ mathop_mapping = {
 POOL_TYPES = [ReducePool.Max, ReducePool.Sum, ReducePool.Average]
 
 
-REDUCE_FORMATS = input_output_formats(
-    [
-        DataFormat.Float16_b,
-        DataFormat.Float16,
-    ],
-) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+# Float32 joins only through the two pairs the shared perf matrix uses.
+REDUCE_FORMATS = (
+    input_output_formats([DataFormat.Float16_b, DataFormat.Float16])
+    + [
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+    ]
+    + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
+)
 
 
 def reduce_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def reduce_dest_acc_modes():
-    return [DestAccumulation.No, DestAccumulation.Yes]
+def reduce_dest_acc_modes(formats):
+    return get_valid_dest_accumulation_modes(formats)
 
 
 def reduce_tile_dimensions(formats, *, is_perf=False):
@@ -95,23 +103,23 @@ def reduce_tile_dimensions(formats, *, is_perf=False):
     )
 
 
+def reduce_is_reduce_to_one_modes(formats, reduce_dim, pool_type):
+    if formats.input_format.is_mx_format():
+        return [False]
+    return reduce_to_one_modes(reduce_dim, pool_type)
+
+
 def reduce_input_dimensions():
     return [64, 64]
 
 
-PERF_MATH_FIDELITIES = [MathFidelity.LoFi, MathFidelity.HiFi4]
-
-
-def reduce_math_fidelities(formats, pool_type, *, is_perf=False):
+def reduce_math_fidelities(formats, pool_type):
     # GMPOOL (Max) ignores fidelity, so only LoFi is meaningful.
     if pool_type == ReducePool.Max:
         return [MathFidelity.LoFi]
     # MX inputs decode to Float16_b in the src registers, so LoFi is already full
     # precision for them; get_valid_math_fidelities applies that cap.
-    valid = get_valid_math_fidelities(formats)
-    if is_perf:
-        return [f for f in PERF_MATH_FIDELITIES if f in valid]
-    return valid
+    return get_valid_math_fidelities(formats)
 
 
 @pytest.mark.quasar
@@ -123,9 +131,8 @@ def reduce_math_fidelities(formats, pool_type, *, is_perf=False):
     dest_acc=reduce_dest_acc_modes,
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=POOL_TYPES,
-    math_fidelity=lambda formats, pool_type: reduce_math_fidelities(
-        formats, pool_type, is_perf=False
-    ),
+    math_fidelity=reduce_math_fidelities,
+    is_reduce_to_one=reduce_is_reduce_to_one_modes,
     dest_sync_mode=lambda: reduce_dest_sync_modes(is_perf=False),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
@@ -137,20 +144,19 @@ def test_reduce_quasar(
     reduce_dim,
     pool_type,
     math_fidelity,
+    is_reduce_to_one,
     dest_sync_mode,
     run_types,
     loop_factor,
     *,
     is_perf=False,
     perf_report=None,
+    input_dimensions=None,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    input_dimensions = (
-        reduce_input_dimensions()
-        if is_perf
-        else [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
-    )
+    if input_dimensions is None:
+        input_dimensions = [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
 
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -177,6 +183,8 @@ def test_reduce_quasar(
                 1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
             )
 
+    output_tile_cnt = 1 if is_reduce_to_one else tile_cnt
+
     if not is_perf:
         if pool_type == ReducePool.Max:
             generate_golden = get_golden_generator(ReduceGolden)
@@ -186,6 +194,7 @@ def test_reduce_quasar(
                 pool_type,
                 formats.output_format,
                 tile_cnt,
+                reduce_to_one=is_reduce_to_one,
                 tile_shape=tile_shape,
                 input_format=formats.input_format,
             )
@@ -202,6 +211,14 @@ def test_reduce_quasar(
                 input_format=formats.input_format,
                 dest_acc=dest_acc,
             )
+            if is_reduce_to_one:
+                # Sum the fidelity-masked per-tile results so the golden still tracks fidelity.
+                golden_tensor = (
+                    golden_tensor.to(torch.float32)
+                    .view(tile_cnt, -1)
+                    .sum(dim=0)
+                    .to(format_dict[formats.output_format])
+                )
 
     mathop = mathop_mapping[reduce_dim]
 
@@ -224,6 +241,7 @@ def test_reduce_quasar(
                 tile_dimensions=tile_dimensions,
             ),
             TILE_COUNT(tile_cnt),
+            REDUCE_TO_ONE(is_reduce_to_one),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
@@ -238,15 +256,14 @@ def test_reduce_quasar(
             formats.output_format,
             tile_count_A=tile_cnt,
             tile_count_B=1,
-            tile_count_res=tile_cnt,
+            tile_count_res=output_tile_cnt,
             num_faces=tile_shape.total_num_faces(),
             face_r_dim=tile_shape.face_r_dim,
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        # Reduce needs its operands in SrcA/SrcB; it never unpacks to Dest.
+        "unpack_to_dest": False,
         "dest_acc": dest_acc,
     }
 
@@ -379,6 +396,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         "runtimes": [
             generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt),
+            REDUCE_TO_ONE(False),
             TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),

@@ -11,7 +11,7 @@
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
@@ -364,10 +364,8 @@ inline void calculate_gelu_tanh() {
 
         // reload due to register pressure
         x = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
-
         sfpi::vFloat half_x = 0.5f * x;
-        result = half_x * t + half_x;
+        sfpi::vFloat result = half_x * t + half_x;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);

@@ -67,6 +67,7 @@ def main():
                 )
                 for lab, a, b in zip(labels, outs["single"], outs["split"])
             }
+            assert all(same.values()), f"T={T}: planner outputs differ: {same}"
             ms = {}
             for name, plan in plans.items():
                 for _ in range(3):

@@ -184,9 +184,8 @@ class Row:
                 self.swa[mode] = None
                 self.tables[mode], num_blocks = kv_lib.page_tables(n, MAX_BATCH, logical, TP, attn.rep, seed=r)
                 self.scratch = num_blocks - 1  # the chip pair's scratch block (kv.page_tables)
-        v_dim = attn.v_head_dim if attn.split_users else attn.head_dim
         self.kv = {
-            mode: garbage_cache(plan, num_blocks, (attn.head_dim, v_dim), seed=100 * r + i)
+            mode: garbage_cache(plan, num_blocks, (attn.head_dim, attn.v_head_dim), seed=100 * r + i)
             for i, mode in enumerate(MODES)
         }
         self.tables_tt = {mode: self._device_table(mode) for mode in MODES}

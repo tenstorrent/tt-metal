@@ -71,7 +71,7 @@ WH, BH = "wormhole", "blackhole"
         (["tt_metal/tt-llk/tests/sources/eltwise_unary_sfpu_test.cpp"], [WH, BH]),
         (["tt_metal/tt-llk/tt_llk_wormhole_b0/a.h", "tt_metal/tt-llk/common/b.h"], [WH, BH]),
         # Quasar is not measured, even under a shared directory.
-        (["tt_metal/tt-llk/tt_llk_quasar/common/inc/sfpu/ckernel_sfpu_sqrt.h"], []),
+        (["tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ckernel_sfpu_sqrt.h"], []),
         (["tt_metal/tt-llk/tests/sources/quasar/sfpu_test.cpp"], []),
         (["tt_metal/hw/inc/internal/tt-2xx/quasar/cfg_defines.h"], []),
         (["tt_metal/tt-llk/tt_llk_quasar/a.h", "tt_metal/tt-llk/tt_llk_blackhole/b.h"], [BH]),

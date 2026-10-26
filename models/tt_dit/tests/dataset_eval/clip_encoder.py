@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
+from models.tt_dit.utils.torch_threads import cap_torch_threads_to_half_the_cpus
+
 
 class CLIPEncoder(nn.Module):
     """
@@ -28,6 +30,7 @@ class CLIPEncoder(nn.Module):
         The device to which the model is moved.
     """
 
+    @cap_torch_threads_to_half_the_cpus()
     def __init__(
         self,
         clip_version: str = "ViT-B/32",
@@ -64,6 +67,7 @@ class CLIPEncoder(nn.Module):
         return "openai"
 
     @torch.no_grad()
+    @cap_torch_threads_to_half_the_cpus()
     def get_clip_score(self, text: Union[str, List[str]], image: Union[Image.Image, torch.Tensor]) -> torch.Tensor:
         """
         Computes the similarity score between the given text(s) and image using the CLIP model.

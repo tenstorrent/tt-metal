@@ -66,7 +66,7 @@ What changed:
   `max_device_top_k` 1, no device penalties or logprobs): the vLLM-mode trace takes its greedy token from GreedyHead
   (the lowest id on ties, like the host's argmax) and writes it into the next step's token input, so a steady step is
   one trace replay per lane with no copies (the RoPE cos / sin come from device tables at the trace's own positions,
-  `setup_decode_rope_tables`, up to 128K context) and a non-blocking token read. Any non-greedy row, penalties,
+  `setup_decode_rope_tables`; see "Device RoPE tables") and a non-blocking token read. Any non-greedy row, penalties,
   logprobs (plugin capability `supports_device_logprobs`, new) or structured output send that step to host sampling,
   which reloads the inputs.
 - **Prefill batches**: a lane's first chunks of one padded length (<= 512) run as one pass
@@ -138,6 +138,27 @@ between the pair by slot parity): a prefix-cached block can be reused by a reque
 Decode still splits the attention by slot. The cost is 1M x 4 users no longer fitting at once; the 6 GB pool
 holds about 1.27M tokens per lane.
 
+## Device RoPE tables
+
+Decode, the verify and the MTP draft read their RoPE cos / sin as rows of device tables at their own position inputs
+(`TtMiMoModel.setup_decode_rope_tables` / `rope_table_rows`, `ttnn.embedding` over a uint32 position row), so no step
+uploads cos / sin, at any context length. MiMo needs four tables: cos and sin for the SWA theta (the 39 SWA layers and
+the MTP layer) and for the global theta (9 global layers), RoPE on 64 of the 192 head dims. Each row is the host's
+`decode_host_inputs` value of that position (`rope.partial_rope_table`, the same fp32 products and cos / sin, the same
+bf16 conversion), so device and host cos / sin are bitwise equal and greedy output does not change.
+
+Until this change the tables were made only up to 128K context: whole 192-wide rows, which at 1M cost
+1M x 4 x 192 x 2 bytes = 1.61 GB per chip, against ~34.0 GB per chip of which the weights take 23.7-24.2 GB, the KV
+pool 6 GB (`MIMO_KV_GB_PER_CHIP`; one 1M request is 3.2 GB of it) and the trace region 1 GB. Nothing else limits the
+row count (`ttnn.embedding` reads one 128 / 384-byte row-major page per position). Past 128K the tables now keep only
+the 64 rotated dims (`compact`, `ROPE_TABLE_FULL_WIDTH_MAX_LEN` in generator_vllm.py) and each read appends the
+constant 1 / 0 tail of the other 128 dims with one `ttnn.concat` (a persistent tile per value): 537 MB per chip at 1M
+(67 MB at 128K, where the whole-row tables of 201 MB are kept). The tables run `ROPE_TABLE_MARGIN` (32) rows past
+`max_seq_len - 1`, so a position derived on device a few steps ahead of the host never indexes past them.
+`MIMO_DEVICE_ROPE=0` uploads the cos / sin every step instead. `tests/test_rope_tables_host.py` checks the rows
+against the host cos / sin bit for bit (every position to 1M, both thetas, whole and compact);
+`tests/test_spec_inputs_tp8.py` checks the device rows against the host-uploaded cos / sin.
+
 ## Trace safety
 
 Prefill runs between decode replays, so anything it leaves allocated after a decode trace capture can be
@@ -183,10 +204,248 @@ A global layer's prefill chunk after the first (`_prefill_owner_chunk`) zeroes t
 `all_reduce` in the same way, so prompts longer than one chunk likely still prefill slightly differently per parity
 (not measured).
 
+## Speculative decoding (MTP)
+
+Not yet run on hardware. The 3 MTP layers (`model.mtp.layers.{0,1,2}`) draft 3 tokens through the plugin's
+model-owned drafter contract (`docs/SPEC_DECODE_CONTRACT.md`), draft i + 1 from layer i (below; `MIMO_MTP_LAYERS=1`
+drafts all 3 with layer `MIMO_MTP_LAYER`, default 0, as upstream vLLM does for MiMo); lane DP serves it with the plugin
+branch `mimo-v2.6-flash/vllm-plugin-dev-lane-spec-decode`. Launch as above with:
+
+```bash
+export MIMO_SPEC_DECODE=mtp   # MIMO_MTP_LAYERS=3 (default; needs MIMO_DEVICE_ROPE=1) or 1
+vllm serve ... \
+  --speculative-config '{"method": "custom_class", "model": "vllm_tt_plugin.model_owned_drafter", "num_speculative_tokens": 3}'
+```
+
+- **Who speculates.** A lane drafts after a step that ran one request in it; a lane with several requests declines
+  (`num_valid` 0) and decodes as before. A verify answers in the accept mode the plugin asks for: `argmax_ids` when
+  every request of the step is greedy; `fused_sample` when a request samples with only temperature / top_k / top_p
+  inside the device sampler's bounds (acceptance on device, below); `logits` otherwise (the plugin's host walk, for
+  penalties, logprobs, grammar, token filters).
+- **Verify** (`reference/spec_decode.py`, `TtMiMoModel.capture_verify_trace`): the decode step with the request in
+  every decode slot of its replica, column j of the candidate block in slot j at position p + j, each slot with the
+  request's page tables. It stays on the 4-user fast path (streaming MoE, SwaDecodeQkv, GreedyHead). The slots share
+  cache tiles that the per-slot cache writers read, patch and write back concurrently, so the verify step writes K / V
+  one slot at a time (`serial` positions in `TtMiMoAttention.forward_decode`); the query of the fused SWA kernel does
+  not depend on the positions, so it is repeated with one slot's position each. A block that carries drafts beside
+  another request (one joined after the proposal) is packed into passes of 4 slots.
+- **Draft** (`tt/mtp.py`): one traced program per replica, each MTP layer with its own KV cache, a ring of 256
+  positions addressed at 256 + t % 256 with RoPE at t. With every layer (the default, below) pass i runs layer i over
+  the draft's rows. With one layer the fill pass runs the MTP layer over the committed tokens, each slot taking the
+  target's final normed hidden there (the persistent buffer of the last layer's fused norm) and the embedding of the
+  committed token; two steps on the last slot feed the layer its own output (vLLM's MTP proposer with one layer).
+- **Inputs** (`reference/spec_inputs.py`, `tt/spec_inputs.py`): a verify and a draft each copy one packed int32
+  tensor (tokens and positions, the verify's chain row; the draft's ring cache positions and RoPE indices) instead of
+  13-14 tiny tensors; a short program at the start of each trace writes the trace's input buffers from it (owned
+  positions, owner and token masks, serial positions, RoPE index). With `MIMO_DEVICE_ROPE=0` (no device RoPE tables)
+  the verify also copies its 4 cos / sin and the draft its 6.
+- **Acceptance on device** (`fused_sample`, `tt/verify_sampler.py`, `kernels/sample_verify.cpp`, host mirror
+  `reference/sample_verify.py`): after each verify pass a small trace runs DeviceSampler's SampleScan and
+  SampleChipMerge over the pass's slots (each with its request's temperature / top_k / top_p), the row all_gather,
+  and SampleVerify on one core: per request, the plugin's point-mass accept walk with the uniforms the plugin drew
+  from the request's generator (`spec_sampling`), greedy requests on the verify's argmax ids. The host reads each
+  request's committed tokens and count instead of 4 x 152k fp32 logits, and walks nothing. Exact where the slot's 256
+  candidates hold the nucleus (the decode sampler's condition); otherwise the request is accepted on its candidates
+  and counted (`MiMo vLLM fused accept` log line, every 1024 fused verifies). The sampled slots' parameters are copied
+  only when they change (`VerifySampler.stage`), so a greedy pass copies its 256-byte control page alone.
+- **Draft chained behind the verify** (`tt/spec_chain.py`, `kernels/spec_chain.cpp`, host mirror
+  `reference/spec_chain.py`). An `argmax_ids` verify runs the same accept trace, every request greedy: its committed
+  tokens are exactly the plugin's greedy walk over the ids. The accept trace ends with the chain step (one core):
+  from SampleVerify's page and the verify upload's chain row (the source's slots and the position limit, packed by
+  the host with the verify's tokens and positions) it writes the MTP draft's packed upload as `pack_mtp(plan_mtp(...))`
+  would from the plugin's commit (the fill over the committed tokens, the anchor at the last one, the ring cache
+  positions and RoPE indices), and the header of the pass's result page (the accept page, the argmax ids, the
+  anchor). On a lane that speculates the host enqueues, without waiting, verify, accept and the MTP draft trace, which
+  ends with the drafts step (the anchor's three drafts into the result page), then reads that page: 320 bytes per
+  pass, one read, where the step used to read the verify, walk, plan and upload the draft, and read the drafts.
+  `propose_draft_tokens` returns the drafts already read when the plugin's commit (count, tokens, positions) is the
+  device's; it drafts from the host plan as before after a plain decode step, a `logits` verify, without the decode
+  RoPE tables (contexts past 128K: the draft's cos / sin are host uploads), at the context end (the chain declines when
+  the bonus reaches max_seq_len - K; a narrower propose that still fits drafts from the host plan), or on a differing
+  commit. The anchor needs no gather: the fill pass runs the MTP layer on every committed slot's own hidden row (the
+  verify's final-norm buffer), and the anchor is the one slot the chain gives step positions. `MIMO_SPEC_CHAIN=0`
+  restores the unchained flow (an `argmax_ids` verify then runs no accept step); `MIMO_SPEC_CHAIN_CHECK=1` drafts every
+  chained draft again from the host plan and logs differences (a deferred verify, below, waits for its pages and checks
+  its drafts before it returns). `MIMO_VLLM_TIMING=1` splits the verify's wait at the accept trace's end (the
+  verify's device share, then the chained draft's) and counts chained and host-planned drafts.
+  Every buffer the chain reads or writes is persistent (accept page, `mtp_packed`, the MTP heads' token rows, the
+  result page), so the relay step of a chained verify (below) reads them.
+- **Async scheduling** (`supports_async_spec_decode`; `MIMO_ASYNC_SPEC=0` declares none, and the launch then needs
+  `--no-async-scheduling`). Ordinary steps of a speculating launch overlap the step in flight as without
+  speculation (at concurrency 16 every step is one: every lane holds several requests, none drafts, and a propose
+  touches no device). The plugin proposes for an ordinary step when it commits it, a step after its submission; when
+  the lane's next step is already enqueued, the resident hidden the MTP would read is that step's, so the propose
+  enqueues nothing and offers placeholder drafts, which make the plugin drain the newer step and propose for it (that
+  propose drafts on device). A fused_sample verify asked to defer its read (`defer_read`, every fused verify of a
+  launch that chains; `MIMO_SPEC_DEFER=0` answers host tensors instead) returns a handle (`VerifyHandle`, with a
+  `tip_id`): each pass's result page travels to the host behind it without blocking (`SpecChain.read_async`), the
+  plugin reads the handle a step later, possibly on another thread (`read_decode_output(handle)`: the committed
+  tokens, counts and p0), and its propose returns the drafts the pages carry, enqueueing nothing. Every verify now
+  enqueues all its passes, each followed by its page copy, before the host waits.
+- **Chained verifies** (the plugin's section 4j: `chain_rows`, `chain_tip`). A verify built over the deferred one in
+  flight names the rows whose block only the device knows: the last committed token at the pending step's p0 plus
+  its count, then the drafts chained behind it. The host lays out the row's pass at the plugin's provisional
+  positions (an upper bound: they only pick the page tables, which vLLM indexes by absolute position) with
+  placeholder tokens and the chain row's relay word; the verify trace now starts with the relay step
+  (`kernels/spec_chain.cpp` mode 2, mirror `reference.spec_chain.relay_step`), which writes the row's tokens and
+  positions into `verify_packed` and its drafts into the accept step's control page (staged before the verify now)
+  from the result page the lane's last pass left; `derive_verify`, the decode step, the accept trace and the chained
+  draft then run as for a block the host built. The chain step writes the slots' positions into the page, and the
+  readout reports them as p0. So a speculating lane runs relay, verify, accept, draft, relay, ... with the host one
+  step behind, copying one packed upload and one 256-byte control page and reading one 320-byte page per step. The
+  adapter checks the contract (the tip, a chain row is a lane source whose draft chained, placeholder tokens, count
+  -1, 1..3 drafts, a provisional position at or above the highest the device can have reached, nothing else in its
+  lane); a chain onto a step whose draft the device declined (the context limit, which the plugin's 2 (1 + K) margin
+  keeps away) idles the pass and raises at the read. A chain row whose page tables hold vLLM's null block inside the
+  window of its lowest possible position is counted (`chain_stats["uncovered"]`) and logged: vLLM frees
+  sliding-window blocks by the scheduler's optimistic length.
+- **A prefill over a verify in flight** (`supports_prefill_over_pending_spec`, with `MIMO_ASYNC_SPEC`). A request the
+  plugin leaves out because the step in flight reaches its `max_tokens` needs nothing from the model: a verify sends
+  its slot as a gap, and a steady decode's resident inputs decode it once more into its own blocks until the next
+  reload. A prefill may run while a
+  deferred verify is in flight: it writes only its slots' page-table rows and K / V, behind the verify on the device
+  queue, and the verify's pages are already on their way to the host, so its read and propose follow as usual;
+  nothing chains onto it afterwards, and the lane's MTP ring restarts.
+- **Tests.** `tests/test_spec_decode_host.py` (no device): the planning, the ring addressing, and speculative greedy
+  equal to plain greedy on a small fp32 MiMo with an MTP, an oracle and a partially wrong drafter.
+  `tests/test_spec_inputs_host.py` (no device): the packed inputs' torch mirrors against the host-built inputs;
+  `tests/test_spec_inputs_tp8.py` (one Galaxy row): the device programs against the same values, eager and traced,
+  and the chain and drafts steps bit for bit against their mirror. `tests/test_spec_chain_host.py` (no device): the
+  chain's mirror against the host plan (every accepted count, the ring's wrap, the context limit) and after the accept
+  kernel's greedy mirror; `tests/test_spec_chain_adapter_host.py` (no device, needs vllm-tt-plugin): the adapter's
+  verify / propose on fake lanes made of the mirrors (chained and host-planned drafts, the fallbacks);
+  `tests/test_spec_async_adapter_host.py` (no device, needs vllm-tt-plugin): the same lanes driven through the
+  plugin's async calls (overlapped ordinary steps and their proposes, deferred verifies read on another thread,
+  chained verifies equal to the synchronous path token for token, the contract's refusals).
+  `tests/test_sample_verify_host.py` (no device): the accept kernel's integer mirror against the plugin's accept-walk
+  semantics (accept boundaries, the residual without the draft, the bonus, greedy ties, top_k and top_p, truncation),
+  and against `vllm_tt_plugin.spec_accept` itself when the plugin is installed.
+  `tests/test_spec_decode_tp8_dp4.py` (Galaxy, needs vllm-tt-plugin): the adapter's speculative tokens equal its
+  greedy tokens, and its first verifies agree across modes (logits argmax, greedy and sampled fused_sample against the
+  plugin's walk); every propose after a verify returns the chained drafts, the first ones equal to the host plan's;
+  logs the mean accepted length and ms per token. `tests/test_verify_sampler_tp8.py` (Galaxy): the
+  kernel bit for bit against the mirror on the device's own candidate pages, eager and traced.
+- **Open.** The chained verifies on hardware with every MTP layer and the backfill (the relay, deferred reads and
+  chained verifies ran on BH Galaxy with one layer); the accept step's SampleScan on all-greedy passes (only
+  SampleVerify's argmax walk is needed there); more than one speculating request per lane (16 / 32
+  verify rows exceed the 4-user kernels); the trace region size with both extra traces.
+
+### One MTP layer per draft
+
+The checkpoint has 3 MTP layers (`num_nextn_predict_layers`). Upstream vLLM drafts all 3 tokens with layer 0; the GPU
+references come from vLLM 0.31.0 patched to expose all 3 layers, which selects `MultiModuleMTPSpeculator`: draft i + 1
+from layer i. The layers are not chained: each takes the target's hidden (SGLang's multi-layer EAGLE runs MiMoV2 the
+same way, `chain_mtp_hidden_states` off). The device drafts that way by default (`MIMO_MTP_LAYERS=3`); `1` restores the
+one-layer drafter unchanged (same programs and uploads), for A/B. The host reference (`reference/spec_decode.py`
+`plan_mtp_layers`, `reference/mtp.py` `ReferenceMTPDrafter`) is checked against a recomputation of every layer over the
+whole sequence after steps of every accepted count (`tests/test_spec_decode_host.py`).
+
+- **Equations.** Committed tokens x (the last at B), drafts d, x~ = x then d_1, d_2. Layer i at position q takes the
+  target's final normed hidden h_q and the embedding of x~[q + i + 1], RoPE at q, K / V at q in its own cache; draft
+  i + 1 is its greedy token at row B - 1. Every layer's cache holds, at each q <= B - 1, the entry of
+  (h_q, x~[q + i + 1]).
+- **Rows.** Each draft runs the 3 layers over the same rows: the committed rows A .. B - 1 (A the verify's column-0
+  position) and, before them, up to max(0, 3 - m) re-prefill rows: layer i's rows A - i .. A - 1 took the last
+  draft's d_1 .. d_i, stale once rejected. 3 rows, 4 when all 3 drafts were accepted: one 4-slot pass per layer,
+  right-aligned, the anchor (the row at B - 1) in slot 3. Layer i's tokens are the layer-0 tokens shifted by i, the
+  drafts so far appended. The re-prefill rows come from the stash: every row of the last draft's pass (target
+  hidden, layer-0 token, position), found by position, consecutively from A - 1 down. Keeping all 4 rows (not only
+  the last 2) makes re-planning a commit idempotent: a draft planned again from the commit it ran on (the chain
+  check, or a host plan after the device chained a different commit) finds the same rows.
+- **Device program** (`tt/mtp.py` `_body_layers`, kernel modes 3 and 4 of `kernels/spec_chain.cpp`, integer mirror
+  `reference/spec_chain.py` `plan_step`, `tokens_step`, whole-program mirror `reference/mtp.py` `MtpProgramMirror`).
+  Which rows a draft runs depends on the stash, which only the device keeps, so the packed upload describes the commit
+  instead of the passes (`pack_mtp_layers`: drafting, m, A, the source's slots, the committed tokens), written by the
+  chain step behind a verify or by the host after a plain step, a logits verify or a differing commit. The draft trace
+  then runs:
+  1. the plan step (one core, ~10 us): plan_mtp_layers from the description and the stash page; writes the passes'
+     persistent inputs (`LayerInputs`: ring cache positions, 4 serial positions, RoPE indices, the hidden table's
+     rows, the layer-0 tokens) and the new stash page;
+  2. one RoPE gather (the SWA tables at the RoPE indices), shared by the 3 passes;
+  3. the hidden gather: the table [final norm buffer rows, stash rows] (row-major, 64 x 4096) indexed by the plan's
+     rows (`ttnn.embedding`, an exact copy); the gathered rows become the stash's hidden rows;
+  4. pass i on layer i over the 4 slots (eh_proj, the SWA block writing K / V slot by slot, final norm, LM head,
+     GreedyHead), before passes 1 and 2 the tokens step (one core) writing that pass's tokens from the layer-0
+     tokens and the anchor's greedy token of the passes before;
+  5. the drafts step (the anchor is slot 3).
+  An idle description (warm-up, capture, a declined chain) writes no K / V and leaves the stash as it was: idle slots
+  gather their own stash row. A prompt resets the rings and the stash page. Every buffer the kernel steps touch is
+  persistent and made in `TtMiMoMTP.setup_cache`, so they compile in `SpecChain.warm` before the decode capture.
+- **Cost.** One layer: a fill pass (<= 4 slots) and 2 one-slot passes, all on layer 0, ~2.7 ms on device. Every layer:
+  3 passes of <= 4 slots on layers 0, 1, 2: the same op graph and weight bytes per pass (each layer ~46 MB per chip
+  at bfloat8_b), plus the serial K / V writes of up to 4 slots in passes 2 and 3, the plan, tokens and gather ops
+  (~0.1 ms), minus the one-layer derive program's ~16 small ops: about 2.8-3.0 ms (to measure; `MIMO_VLLM_TIMING=1`
+  reports it as the chained draft wait). Memory per replica: 2 more layers, ~0.74 GB (92 MB per chip; eh_proj 8192 x 4096, SWA
+  q / k / v / o, dense MLP 4096 -> 16384 -> 4096), 2 more ring caches (~0.2 MB per chip each), the stash (256 KB of
+  hidden rows per chip, one 128-byte page) and the inputs (9 pages of 128 bytes).
+- **Tests.** `tests/test_spec_chain_host.py`: the chain step's description against propose's, the plan step against
+  plan_mtp_layers for every commit count, a plain step's slot, stash hits, misses and holes, the ring's wrap and the
+  context end, the tokens step against mtp_layer_tokens, and the whole program's mirror against the reference
+  drafter (exactly equal drafts and outputs, equal to the recomputation) over every pair of accepted counts and plain
+  steps. `tests/test_spec_chain_adapter_host.py`: the adapter on fake lanes running the program's mirror: every
+  chained draft equals the host reference drafter's for the plugin's commit, the chain check finds no difference, a
+  differing commit drafts the reference's tokens from the host description. `tests/test_spec_inputs_tp8.py`
+  `test_spec_chain_layers_tp8` (Galaxy row): the chain, drafts, plan and tokens modes bit for bit against the mirror,
+  eager and traced.
+  `tests/test_spec_decode_tp8_dp4.py` (Galaxy): speculative greedy == plain greedy, and chained == host-planned
+  drafts, with 3 layers and with 1.
+- **Plugin.** No change: still 3 drafts per step.
+
+### MTP ring backfill (target-hidden history)
+
+The MTP rings only hold what the lane's drafts wrote, while vLLM's MTP layers see every position. Two gaps: a new
+request's rings start empty (the prompt's rows are never drafted), and a lane serving several requests decodes
+without drafting, so when it drops back to one request the rings miss the positions in between; in both cases the
+first ~128 drafts attend a window with missing or stale entries. `MIMO_MTP_BACKFILL=1` (default, with the decode
+RoPE tables; `tt/mtp_backfill.py`, `kernels/mtp_history.cpp`, host mirror `reference/mtp_backfill.py`) closes both
+with one mechanism, for 1 and 3 MTP layers:
+
+- **History.** Each decode slot that may speculate (4 per lane) keeps a ring of 132 rows (the MTP window and a
+  verify pass: a backfill right after a verify at A reads A - 127 .. A - 1 while the pass's rows A .. A + 3 are in
+  the ring), indexed by position % 132: the target's final normed hidden (bf16, from the final norm's persistent
+  buffer), the position and the token the step took there. Every plain decode step writes its slots' rows (in the
+  decode trace: a copy of the step's input tokens at its start, an untilize of the final norm tile and one one-core
+  kernel at its end); every verify pass writes its slots' rows into their requests' rings (in the verify trace; the
+  chain row carries each slot's request slot), rows past the committed ones being rewritten by the next step, which
+  starts there; every prefill chunk writes the final norm of its last 132 rows (eager chunks, and the traced
+  first-chunk batches through a persistent write list) and invalidates the slot's other entries unless it continues
+  its request.
+- **Backfill.** Before a host-planned draft whose request's rows the rings do not continue (`mtp_ring`: the lane's
+  rings hold that slot's rows up to A - 1; after a prompt, after steps without drafts) the adapter replays the
+  backfill trace: a plan step (the rows of the whole ring, 256 positions from the block holding A - 127, real where
+  the history holds h_q, layer i taking the token the history holds at q + i + 1), one gather of the history rows and
+  their cos / sin, then per MTP layer its input over the 256 rows (enorm / hnorm, eh_proj, the block's input norm)
+  and its K / V written into the whole ring by one `paged_fill_cache` (`TtMiMoAttention.fill_kv_rows`: no attention,
+  MLP or LM head). The other rows write garbage where no query reads before a draft rewrites them (below the window,
+  at A and past it). With 3 layers the draft right after commits m tokens x[A + 1 .. A + m] and re-runs the
+  max(0, 3 - m) rows before A in every layer, from the stash, where the plan puts rows A - 2, A - 1 (hidden, layer-0
+  token, position); every other row takes tokens at positions <= A + m - 1, which the history holds committed (after
+  a verify at A, its rows A .. A + m - 1), so the plan needs nothing of the commit. A draft chained behind a verify
+  the host built checks the rings the same way (the backfill then runs between the accept trace and the draft: a
+  prompt over a deferred verify resets the rings while the request goes on); one chained behind a relayed verify
+  continues the draft before it. Under async scheduling the ring a chained draft left is known once its page is read
+  (`mtp_ring` holds the verify's handle until then), and a propose the plugin made stale drafts nothing, so the
+  backfill comes with the propose that does.
+- **Exactness** (host, `tests/test_mtp_backfill_host.py`): a lane serving request X (its prompt in chunks, a plain
+  step, speculative steps with every accepted count), then X beside a second request for 3, 12 or 40 plain steps
+  (its prompt resets the rings), then X alone again: every draft equals the drafts of an MTP that saw every position
+  (a recomputation over X's whole sequence), for 1 and 3 layers; without the backfill the first drafts differ. A
+  backfill right after a verify (a prompt reset the rings while X speculates) leaves every layer's K / V over the
+  window the draft reads equal to that recomputation's, for m = 1 .. 4 and 1 and 3 layers, with the history sized as
+  production sizes it (`history_rows`: the window and a verify pass).
+  `tests/test_spec_inputs_tp8.py` `test_mtp_history_tp8` checks the kernel's four modes bit for bit on a Galaxy row;
+  `tests/test_spec_decode_tp8_dp4.py` runs with and without it.
+- **Cost.** Per decode step ~10-20 us (one copy, one untilize of [32, 4096], one kernel moving 4 rows of 8 KB and a
+  4 KB page) against a ~13 ms step; per verify pass one kernel; per prefill chunk a final norm and untilize of its
+  rows and one kernel; per backfill (once per transition: a new request's first draft, a lane back to one request)
+  up to 127 real rows x 1 or 3 layers, as 256-row passes: about 1 ms on device (to measure). Memory per chip: 4.3 MB
+  of history rows (4 slots x 132 x 4096 bf16), a 4 KB page, ~6 KB of backfill inputs (and 2 x 256 x 128 bf16 cos /
+  sin tails with compact RoPE tables).
+
 ## Not done
 
 - Slot parity of chunked prefill (above).
 - Device sampling beyond greedy (top-k / top-p / temperature, penalties, logprobs run on the host, synchronously).
-- A 1M-token prompt, and the 1M server on the c16 branch (decode RoPE tables are off past 128K context).
+- A 1M-token prompt, and the 1M server with the compact device RoPE tables (not yet run on hardware).
 - Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode).
-- Speculative decoding (lane DP refuses it); tracing later prefill chunks and chunks longer than 512 tokens.
+- Tracing later prefill chunks and chunks longer than 512 tokens.

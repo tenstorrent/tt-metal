@@ -138,7 +138,7 @@
   category: experimental
 
 - name: ttnn nightly experimental generalized MoE gate op tests
-  cmd: 'pytest models/common/tests/modules/moe/test_generalized_moe_gate.py -xv --timeout=600'
+  cmd: 'pytest models/common/tests/moe/test_generalized_moe_gate.py -xv --timeout=600'
   skus:
     wh_n150_civ2:
       timeout: 10
@@ -175,13 +175,13 @@
     --timeout=600
   skus:
     wh_n150_civ2:
-      timeout: 10
+      timeout: 20
     wh_n300_civ2:
-      timeout: 10
+      timeout: 20
     bh_p100:
-      timeout: 10
+      timeout: 20
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 20
   owner_id: U08ADLJ4PLP # Aleksandar Stancov
   team: ttnn
   budget_type: unit

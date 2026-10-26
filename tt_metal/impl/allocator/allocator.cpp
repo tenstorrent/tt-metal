@@ -456,6 +456,18 @@ DeviceAddr AllocatorImpl::get_bank_size(const BufferType& buffer_type) const {
     return 0;
 }
 
+// Reject reserved, misaligned and out-of-range SRAM before constructing addressed buffers.
+void AllocatorImpl::validate_l1_range(DeviceAddr address, DeviceAddr size, BufferType buffer_type) const {
+    TT_FATAL(
+        buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL,
+        "SRAM range validation requires an L1 buffer type");
+    const DeviceAddr base =
+        buffer_type == BufferType::L1 ? config_->l1_unreserved_base : config_->worker_l1_size - config_->l1_small_size;
+    const DeviceAddr end = base + get_bank_size(buffer_type);
+    TT_FATAL(address % config_->l1_alignment == 0, "SRAM address must be aligned");
+    TT_FATAL(address >= base && address <= end && size <= end - address, "SRAM range is outside allocatable L1");
+}
+
 uint32_t AllocatorImpl::get_dram_channel_from_bank_id(uint32_t bank_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
     TT_ASSERT(bank_id_to_dram_channel_.contains(bank_id));

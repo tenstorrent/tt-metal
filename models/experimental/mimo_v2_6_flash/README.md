@@ -24,6 +24,11 @@ in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md).
 | `tt/kernels/` | `generic_op` kernels: `moe_*` / `fabric_*` (decode MoE and reductions), `attn/`, `proj/`, `prefill/` (MoE prefill) |
 | `tt/decoder.py`, `tt/model.py` | Decoder layer and full model for one 1x8 replica |
 | `tt/generator.py` | `MiMoGalaxyGenerator`: four replicas on the Galaxy rows (DP=4), traced decode with a device-resident greedy loop |
+| `reference/mtp.py`, `reference/spec_decode.py` | fp32 MTP layer (vLLM's `MiMoV2MTP`), the drafters (one layer, or one layer per draft) and the device program's mirror; host bookkeeping of MTP speculative decoding (verify passes, draft rows, the stash, the MTP ring) |
+| `tt/mtp.py` | `TtMiMoMTP`: the MTP layers as a traced 3-token drafter on one replica (draft i + 1 from layer i, or one layer) |
+| `tt/mtp_backfill.py`, `reference/mtp_backfill.py` | The target-hidden history (decode, verify and prefill write it) and the MTP ring backfill from it (`kernels/mtp_history.cpp`); their host mirror |
+| `tt/verify_sampler.py`, `reference/sample_verify.py` | Speculative acceptance on device (the plugin's `fused_sample`): the verify's accept walk on the device sampler's candidates (`kernels/sample_verify.cpp`), and its host layouts and integer mirror |
+| `tt/spec_inputs.py`, `tt/spec_chain.py`, `reference/spec_inputs.py`, `reference/spec_chain.py` | A verify's and a draft's packed inputs, derived on device; the MTP draft chained behind the verify and its acceptance (`kernels/spec_chain.cpp`), with one result page per pass; their torch / integer mirrors |
 | `tt/generator_vllm.py` | `MiMoV2ForCausalLM`, the vllm-tt-plugin model class: DP=4 as in-process lanes, vLLM-owned hybrid KV (1 global + 5 SWA KV cache groups). Launch and results in [doc/vllm_integration/README.md](doc/vllm_integration/README.md) |
 | `tests/` | TP=8 x DP=4 tests on the 4x8 mesh; `tests/perf/` perf scripts and tt-kernel-agent check / bench commands. Results in [doc/tp8_dp4_plan.md](doc/tp8_dp4_plan.md) |
 
@@ -37,6 +42,7 @@ export MIMO_GOLDEN=golden_48l.pt
 
 pytest models/experimental/mimo_v2_6_flash/tests/test_kv_tables.py               # page tables, host only
 pytest models/experimental/mimo_v2_6_flash/tests/test_prefill_helpers.py          # prefill padding, host only
+pytest models/experimental/mimo_v2_6_flash/tests/test_sample_verify_host.py       # device acceptance's mirror, host only
 pytest models/experimental/mimo_v2_6_flash/tests/test_decoder_tp8_dp4.py          # one layer per type, prefill + decode
 pytest models/experimental/mimo_v2_6_flash/tests/test_chunked_prefill_tp8_dp4.py  # chunked prefill, one layer per type
 pytest models/experimental/mimo_v2_6_flash/tests/test_moe_decode_tp8.py           # streaming MoE decode vs prefill
@@ -61,4 +67,5 @@ some Ethernet links can stay untrained, and opening the mesh then fails in
 - Non-greedy sampling on device (the device loop is greedy; the host loop reads per-chip top-k candidates).
 - Serving gaps (doc/vllm_integration/README.md): device sampling is greedy only (other sampling runs on the host);
   chunked prefill's slot parity is not measured.
-- Speculative decoding.
+- Speculative decoding: MTP drafting through vLLM is implemented but not yet run on hardware
+  (doc/vllm_integration/README.md, Speculative decoding); DFlash is not started.

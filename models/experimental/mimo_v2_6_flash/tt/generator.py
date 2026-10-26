@@ -49,10 +49,14 @@ class MiMoGalaxyGenerator:
         max_batch=32,
         block_size=64,
         setup_kv=True,
+        mtp_layers=None,
+        mtp_backfill=False,
         **model_kwargs,
     ):
         """``setup_kv``: allocate each replica's own paged KV cache (False when vLLM owns the KV blocks: the vLLM
-        adapter, generator_vllm.py, hands each replica its caches and page tables)."""
+        adapter, generator_vllm.py, hands each replica its caches and page tables). ``mtp_layers``: also load these MTP
+        layers (one, or one per draft) on every replica as the speculative drafter (TtMiMoModel.setup_mtp);
+        ``mtp_backfill``: with its target-hidden history and ring backfill (tt/mtp_backfill.py)."""
         self.cfg = cfg
         self.dp = dp
         self.users_per_replica = users_per_replica
@@ -73,6 +77,8 @@ class MiMoGalaxyGenerator:
                 block_size=block_size,
                 **model_kwargs,
             )
+            if mtp_layers is not None:
+                model.setup_mtp(ckpt if r == 0 else None, cache_dir, mtp_layers, backfill=mtp_backfill)
             if setup_kv:
                 model.setup_kv_cache(users_per_replica)
             self.models.append(model)

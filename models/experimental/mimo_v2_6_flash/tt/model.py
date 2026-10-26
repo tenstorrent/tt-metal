@@ -27,15 +27,25 @@ from loguru import logger
 import ttnn
 
 from ..reference.model import load_layer_weights
+from ..reference.mtp_backfill import HISTORY_ROWS
+from ..reference.spec_decode import SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
 from .attention import TtMiMoAttention, page_table_width
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
+from .device_sampler import DeviceSampler
 from .greedy_head import GreedyHead
 from .moe import expert_quant
 from .moe_stream import zero_output
+from .mtp import TtMiMoMTP
 from .profiling import zone
-from .rope import MiMoRotarySetup, partial_rope_cos_sin
+from .rope import MiMoRotarySetup, partial_rope_table
+from .spec_inputs import SpecInputs
+from .verify_sampler import VerifySampler
+
+# Rows of the decode RoPE tables past max_seq_len - 1: a position derived on device before the host checks it (a
+# verify or draft chained on device, a few positions ahead) still reads a row of the table, not another buffer.
+ROPE_TABLE_MARGIN = 32  # one tile
 
 
 def prefill_padded_len(seq_len):
@@ -215,9 +225,16 @@ class TtMiMoModel:
         self.page_table_host = None
         self.table_scratch = None
         self.decode_trace = None
+        self.verify_trace = None  # speculative verify step (capture_verify_trace)
+        self.mtp = None  # the MTP drafter (setup_mtp)
+        self.spec_inputs = None  # the packed verify / draft uploads (setup_mtp, tt/spec_inputs.py)
         self.greedy_head = None
+        self.sampler = None  # vLLM mode: temperature / top-k / top-p decode sampling (setup_vllm_kv_cache)
+        self.verify_sampler = None  # vLLM mode with MTP: a verify's acceptance on device (setup_vllm_kv_cache)
+        self.spec_chain = None  # the draft chained behind a verify, and its result page (TtMiMoMTP.setup_cache)
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
         self.rope_tables = None  # decode cos / sin of every position (setup_decode_rope_tables)
+        self.rope_table_tails = None  # with compact tables: the 1 / 0 the rows' rotated dims are followed by
         self.decode_users = None
         self.norm_buffers = None
         self.swa_table = None
@@ -331,8 +348,16 @@ class TtMiMoModel:
         self._keep_global_kv_on_both_chips()
         empty = torch.zeros(self.max_batch, table_width, dtype=torch.int32)
         self.vllm_tables = {g: empty.clone() for g in sorted(set(self.layer_groups))}
-        # Decode's device-sampled greedy token (decode_forward_device); persistent buffers, made before any capture.
+        # Per (group, slot): how far the host row was last written; entries past it are zero (set_vllm_page_tables).
+        self.vllm_table_lengths = {(g, s): 0 for g in self.vllm_tables for s in range(self.max_batch)}
+        # Decode's device-sampled greedy token and sampled tokens (decode_forward_device); persistent buffers, made
+        # before any capture.
         self.greedy_head = GreedyHead(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        self.sampler = DeviceSampler(self.plan, self.vocab_local, self.decode_users, self.max_batch)
+        if self.mtp is not None:
+            # A verify's acceptance on device (the plugin's fused_sample, capture_verify_trace): its persistent
+            # inputs and output, like the samplers' buffers, before any capture.
+            self.verify_sampler = VerifySampler(self.sampler, self.cfg.vocab_size)
         self.page_table_tt = {
             g: ttnn.from_torch(
                 empty,
@@ -349,15 +374,21 @@ class TtMiMoModel:
         """rows: {slot: {group: int32 [<= table_width] block ids}} (vLLM's table row of the user in that slot).
         Copies every group table that changed to the device, in queue order with the work already enqueued."""
         changed = set()
+        lengths = self.vllm_table_lengths
         for slot, tables in rows.items():
             for g, row in tables.items():
                 host = self.vllm_tables[g]
-                assert row.numel() <= host.shape[1], f"group {g}: table row of {row.numel()} > {host.shape[1]}"
-                new = torch.zeros(host.shape[1], dtype=torch.int32)
-                new[: row.numel()] = row.to(torch.int32)
-                if not torch.equal(new, host[slot]):
-                    host[slot] = new
-                    changed.add(g)
+                n = row.numel()
+                assert n <= host.shape[1], f"group {g}: table row of {n} > {host.shape[1]}"
+                row = row.to(torch.int32)
+                # Compare in place, without a full-width padded copy of every row on every step.
+                written = lengths[(g, slot)]
+                if written <= n and torch.equal(host[slot, :n], row):
+                    continue
+                host[slot, :n] = row
+                host[slot, n:written] = 0
+                lengths[(g, slot)] = n
+                changed.add(g)
         for g in sorted(changed):
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(
@@ -574,17 +605,28 @@ class TtMiMoModel:
             start.deallocate(True)
         return x, padded
 
-    def prefill_enqueue(self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, layers=None):
+    def prefill_enqueue(
+        self, tokens, slot, return_hidden=False, start_pos=0, chunk_size=None, layers=None, history_continues=False
+    ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
         ``start_pos > 0`` continues a user whose first start_pos tokens are in the cache. ``layers``: run only these
-        layers (indices; warmup). Nothing is read back; returns a pending handle for ``prefill_read``."""
+        layers (indices; warmup). Nothing is read back; returns a pending handle for ``prefill_read``. With the MTP
+        history each chunk also writes its last rows' final normed hidden into the slot's history
+        (tt/mtp_backfill.py); ``history_continues``: the first chunk continues the request's earlier chunks (their
+        entries stay), else it is the request's first and the slot's other entries are invalidated."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         assert n > 0 and chunk % self.block_size == 0 and start_pos % self.block_size == 0
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
+        hist = self._history()
         for s in range(0, n, chunk):
             x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers)
+            if hist is not None and slot < SPEC_SLOTS:
+                writes = hist.chunk_writes(slot, start_pos + s, tokens[s : s + chunk], 0, history_continues or s > 0)
+                write_list = hist.prefill_list(writes)
+                hist.prefill(x, self.final_norm, write_list, len(writes))
+                write_list.deallocate(True)
             if s + chunk < n:
                 x.deallocate(True)
         seq_len = n - s
@@ -629,6 +671,9 @@ class TtMiMoModel:
         layers = range(len(self.layers)) if layers is None else layers
         keys = list(dict.fromkeys(self._table_key(i) for i in layers))
         tokens, fills, starts, picks = self._prefill_batch_host(chunks, padded, keys)
+        hist, history_list = self._history(), None
+        if hist is not None:
+            history_list = hist.prefill_list(self._prefill_batch_writes(chunks, padded))
         rows = kv_lib.replicated(self.plan, torch.arange(num, dtype=torch.int32), ttnn.uint32)
         tables = {
             k: kv_lib.BatchFillTables(kv_lib.per_chip(self.plan, fills[k], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT), rows)
@@ -639,15 +684,24 @@ class TtMiMoModel:
         tokens_tt = self._to_device_tokens(tokens)
         for setup in self.rope_setups.values():
             setup.begin_prefill_chunk()
-        logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers)
+        logits = self._prefill_batch_device(tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list)
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
         # Enqueued: freeing them now is ordered with the work that reads them.
         for t in [*tables.values()]:
             t.release()
-        for t in [rows, tokens_tt, picks_tt, *ats]:
+        for t in [rows, tokens_tt, picks_tt, *ats, *([history_list] if history_list is not None else [])]:
             t.deallocate(True)
         return {"logits": logits, "row": list(range(num)), "hidden": None}
+
+    def _prefill_batch_writes(self, chunks, padded):
+        """The MTP history's write list of a prefill batch: each user's first chunk (a request's first: the slot's
+        other entries invalidated), its rows at r * padded of the pass. Slots past the history's write nothing."""
+        hist, writes = self._history(), []
+        for r, c in enumerate(chunks):
+            if c[1] < SPEC_SLOTS:
+                writes += hist.chunk_writes(c[1], 0, c[0], r * padded, False)
+        return writes
 
     def _prefill_batch_host(self, chunks, padded, keys):
         """Host inputs of a prefill batch: tokens int32 [R * S]; per page table key its fill rows [tp, R, blocks];
@@ -667,11 +721,12 @@ class TtMiMoModel:
         picks = [r * TILE + (c[0].numel() - 1) % TILE for r, c in enumerate(chunks)]
         return tokens, fills, starts, picks
 
-    def _prefill_batch_device(self, tokens_tt, tables, ats, picks_tt, num, padded, layers):
+    def _prefill_batch_device(self, tokens_tt, tables, ats, picks_tt, num, padded, layers, history_list=None):
         """A prefill batch from device inputs only (trace-capturable when the RoPE mats are pinned): tokens [1, R * S]
         uint32, {page table key: kv.BatchFillTables}, each user's last-token tile start (uint32 [4] slice starts), and
         each user's last-token row among those tiles (uint32 [1, R]). Returns the users' last-token logits, row-major
-        [1, 1, R, vocab / tp]: the LM head and the readback see only those rows."""
+        [1, 1, R, vocab / tp]: the LM head and the readback see only those rows. ``history_list``: the MTP history's
+        write list over the pass's rows (int32 [4 * R * HISTORY_ROWS], ``_prefill_batch_writes``)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, num * padded, self.cfg.hidden_size))
         with self._prefill_reduce(padded, num):
@@ -687,6 +742,8 @@ class TtMiMoModel:
                 )
                 x.deallocate(True)
                 x = y
+        if history_list is not None:
+            self._history().prefill(x, self.final_norm, history_list, history_list.shape[-1] // 4)
         if num * padded == TILE:
             tiles = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
@@ -734,6 +791,9 @@ class TtMiMoModel:
             "ats": [kv_lib.replicated(self.plan, torch.zeros(4, dtype=torch.int32), ttnn.uint32) for _ in range(num)],
             "picks": kv_lib.replicated(self.plan, torch.zeros(1, num, dtype=torch.int32), ttnn.uint32),
             "rope": {name: setup.get_prefill_rot_mats(0, padded) for name, setup in self.rope_setups.items()},
+            # The MTP history's write list (tt/mtp_backfill.py): every user's HISTORY_ROWS entries, rewritten per
+            # replay.
+            "history": (self._history().prefill_list([], num * HISTORY_ROWS) if self._history() is not None else None),
             "logits": ttnn.allocate_tensor_on_device(
                 ttnn.Shape([1, 1, num, self.vocab_local]),
                 self.logits_dtype,
@@ -748,7 +808,14 @@ class TtMiMoModel:
         for name, setup in self.rope_setups.items():
             setup.begin_prefill_chunk(pinned={(0, padded): trace["rope"][name]})
         logits = self._prefill_batch_device(
-            trace["tokens"], trace["tables"], trace["ats"], trace["picks"], num, padded, range(len(self.layers))
+            trace["tokens"],
+            trace["tables"],
+            trace["ats"],
+            trace["picks"],
+            num,
+            padded,
+            range(len(self.layers)),
+            trace["history"],
         )
         for setup in self.rope_setups.values():
             setup.end_prefill_chunk()
@@ -791,6 +858,10 @@ class TtMiMoModel:
         ttnn.copy_host_to_device_tensor(
             kv_lib.replicated(self.plan, picks_host, ttnn.uint32, device=False), trace["picks"]
         )
+        if trace["history"] is not None:
+            writes = self._prefill_batch_writes(chunks, padded)
+            host = self._history().prefill_list(writes, num * HISTORY_ROWS, device=False)
+            ttnn.copy_host_to_device_tensor(host, trace["history"])
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return {"logits": trace["logits"], "row": list(range(num)), "hidden": None, "persistent": True}
 
@@ -814,10 +885,12 @@ class TtMiMoModel:
         return self.prefill_read(self.prefill_enqueue(tokens, slot, return_hidden, start_pos, chunk_size))
 
     # ------------------------------------------------------------------ decode
-    def prepare_decode_inputs_host(self, tokens, positions):
+    def prepare_decode_inputs_host(self, tokens, positions, serial=False):
         """Host tensors for one step: tokens [1, B] u32, cur_pos [B] i32, cos/sin [1, 1, B, 192] for the SWA and
         the global theta, MoE token mask,
-        and the global layers' per-chip view: owned positions [B] i32 and owner mask [1, 1, B, 1]."""
+        and the global layers' per-chip view: owned positions [B] i32 and owner mask [1, 1, B, 1].
+        ``serial``: also SPEC_SLOTS position tensors [B] i32, each keeping one slot's position (a verify step writes
+        K / V slot by slot, reference/spec_decode.py)."""
         assert tokens.numel() == self.max_batch and positions.numel() == self.max_batch
         rep = self.plan.replicate()
         tp, kv_rep = self.plan.tp, kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
@@ -825,6 +898,10 @@ class TtMiMoModel:
         def host(t, dtype, layout):
             return ttnn.from_torch(t, dtype=dtype, layout=layout, mesh_mapper=rep)
 
+        serial_inputs = []
+        if serial:
+            for one in serial_positions(positions.to(torch.int32).tolist(), SPEC_SLOTS):
+                serial_inputs.append(host(torch.tensor(one, dtype=torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT))
         return (
             host(tokens.reshape(1, -1).to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             host(positions.to(torch.int32), ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
@@ -842,36 +919,82 @@ class TtMiMoModel:
                 if self.rope_tables is not None
                 else []
             ),
+            *serial_inputs,
         )
 
-    def setup_decode_rope_tables(self):
-        """Device cos / sin tables of every position (both thetas), for decode steps that read the trace's own
-        positions (``rope_pos`` input, advanced by every replay) instead of uploading their cos / sin: a steady step
-        then copies nothing. Each table row is the host's ``decode_host_inputs`` value of that position, so the
-        values are bitwise the same. max_seq_len x 192 x 2 bytes x 4 tables per chip (50 MB at 32K)."""
-        assert self.decode_trace is None, "the tables must exist before the decode capture"
-        positions = torch.arange(self.max_seq_len)
+    def decode_rope_tables_host(self, compact=False):
+        """The torch tables setup_decode_rope_tables uploads: cos / sin of the SWA theta, then of the global theta, over
+        max_seq_len + ROPE_TABLE_MARGIN positions, 192 (``compact``: 64) dims, each row computed in the host's
+        per-step call (rope.partial_rope_table over max_batch positions). The same for every replica of a mesh."""
+        rows = self.max_seq_len + ROPE_TABLE_MARGIN
         tables = []
         for name in ("swa", "full"):
             setup = self.rope_setups[name]
-            cos, sin = partial_rope_cos_sin(positions, setup.head_dim, setup.rope_dim, setup.theta)
-            for t in (cos, sin):
-                tables.append(
-                    ttnn.from_torch(
-                        t,
-                        device=self.mesh_device,
-                        dtype=setup.datatype,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        mesh_mapper=self.plan.replicate(),
-                    )
-                )
-        self.rope_tables = tables
+            width = setup.rope_dim if compact else setup.head_dim
+            tables += partial_rope_table(rows, setup.head_dim, setup.rope_dim, setup.theta, width, self.max_batch)
+        return tables
 
-    def _decode_inputs(self, inputs, greedy_only=False):
-        """decode_forward_device's arguments from the trace's input list (with a ``rope_pos`` input last when the
-        decode RoPE tables are set up)."""
-        rope = {"rope_pos_tt": inputs[9]} if len(inputs) > 9 else {}
-        return self.decode_forward_device(*inputs[:9], greedy_only=greedy_only, **rope)
+    def setup_decode_rope_tables(self, compact=False, host=None):
+        """Device cos / sin tables of every position (both thetas: cos / sin of the SWA theta, then of the global one),
+        for the decode, verify and MTP draft steps, which read the rows of their own position inputs
+        (``rope_table_rows``) instead of uploading their cos / sin: a steady step then copies nothing. Each row is the
+        host's ``decode_host_inputs`` value of that position (``decode_rope_tables_host``, or ``host`` when the caller
+        made them once for several replicas), so the values are bitwise the same.
+        ``compact``: the tables keep only the rope_dim (64) rotated dims of a row, and each read appends the constant
+        1 / 0 of the other head_dim - rope_dim dims (one concat per table read). Per chip, max_seq_len x 4 tables x
+        192 (64 compact) x 2 bytes: 50 MB at 32K, 201 MB (67 MB) at 128K, 1.61 GB (537 MB) at 1M. The tables run
+        ROPE_TABLE_MARGIN rows past max_seq_len - 1."""
+        assert self.decode_trace is None, "the tables must exist before the decode capture"
+        # Through the class: the device tests call this on a stub of the model's attributes.
+        host = host if host is not None else TtMiMoModel.decode_rope_tables_host(self, compact)
+        setup = self.rope_setups["swa"]
+        assert all((s.head_dim, s.rope_dim) == (setup.head_dim, setup.rope_dim) for s in self.rope_setups.values())
+        width = setup.rope_dim if compact else setup.head_dim
+        assert [tuple(t.shape) for t in host] == [(self.max_seq_len + ROPE_TABLE_MARGIN, width)] * 4
+        rep = self.plan.replicate()
+        self.rope_tables = [
+            ttnn.from_torch(
+                t, device=self.mesh_device, dtype=setup.datatype, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+            )
+            for t in host
+        ]
+        self.rope_table_tails = None
+        if compact:
+            shape = (1, 1, self.max_batch, setup.head_dim - setup.rope_dim)
+            self.rope_table_tails = [
+                ttnn.from_torch(
+                    torch.full(shape, value),
+                    device=self.mesh_device,
+                    dtype=setup.datatype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=rep,
+                )
+                for value in (1.0, 0.0)
+            ]
+
+    def rope_table_rows(self, idx_tt, tables):
+        """The rows of ``tables`` (cos / sin pairs of ``rope_tables``) at the positions ``idx_tt`` (uint32 [1, B]):
+        [1, 1, B, head_dim] tiles, what ``decode_host_inputs`` makes of those positions. The caller frees them.
+        Trace-capturable; with compact tables each row is the table's 64 dims followed by the cos / sin tail."""
+        out = []
+        for k, t in enumerate(tables):
+            row = ttnn.embedding(idx_tt, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+            row = ttnn.reshape(row, (1, 1, self.max_batch, t.shape[-1]))
+            if self.rope_table_tails is not None:
+                whole = ttnn.concat([row, self.rope_table_tails[k % 2]], dim=-1)
+                row.deallocate(True)
+                row = whole
+            out.append(row)
+        return out
+
+    def _decode_inputs(self, inputs, greedy_only=False, sample=False, serial=0):
+        """decode_forward_device's arguments from the trace's input list (with a ``rope_pos`` input after the nine
+        when the decode RoPE tables are set up, then ``serial`` per-slot position inputs)."""
+        base, slots = inputs[: len(inputs) - serial], list(inputs[len(inputs) - serial :])
+        rope = {"rope_pos_tt": base[9]} if len(base) > 9 else {}
+        return self.decode_forward_device(
+            *base[:9], greedy_only=greedy_only, sample=sample, serial_pos=slots or None, **rope
+        )
 
     def decode_forward_device(
         self,
@@ -886,19 +1009,22 @@ class TtMiMoModel:
         owner_mask_tt,
         rope_pos_tt=None,
         greedy_only=False,
+        sample=False,
+        serial_pos=None,
     ):
         """One decode step from device-resident inputs only (trace-capturable). Returns [1, 1, B, vocab / tp].
 
         ``greedy_only``: skip the per-chip top-k candidates; GreedyHead computes the greedy tokens and also writes
         them into ``tokens_tt`` (the next step's input). ``rope_pos_tt`` (with ``rope_tables``): the cos / sin come
-        from the device tables at these positions, not from the cos / sin inputs."""
+        from the device tables at these positions, not from the cos / sin inputs. ``sample`` (vLLM mode): the
+        DeviceSampler draws each row's token with its temperature / top-k / top-p (greedy rows take the argmax, as
+        GreedyHead). ``serial_pos``: per-slot position tensors; every layer writes K / V one slot at a time (a
+        speculative verify, reference/spec_decode.py)."""
         x = ttnn.embedding(tokens_tt, self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         x = ttnn.reshape(x, (1, 1, self.max_batch, self.cfg.hidden_size))
         made = []
         if rope_pos_tt is not None:
-            for t in self.rope_tables:
-                row = ttnn.embedding(rope_pos_tt, t, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-                made.append(ttnn.reshape(row, (1, 1, self.max_batch, t.shape[-1])))
+            made = self.rope_table_rows(rope_pos_tt, self.rope_tables)
             cos_swa, sin_swa, cos_full, sin_full = made
         rot_mats = {
             # SWA: the sharded mats plus the raw cos / sin rows (SwaDecodeQkv reads those).
@@ -908,30 +1034,58 @@ class TtMiMoModel:
         positions = {"pos": cur_pos_tt, "pos_owned": pos_owned_tt, "owner_mask": owner_mask_tt}
         if self.global_kv_both:
             positions["pos_update"] = cur_pos_tt  # both chips of a pair keep every slot's K / V
+        if serial_pos:
+            positions["serial"] = serial_pos
+        # Global layers' SDPA over the decode users' rows only (see attention._forward_decode_split): with fewer
+        # users than table rows the kernel would spread its cores over 32 rows of mostly idle slots.
+        compact_sdpa = self.decode_users < self.max_batch and os.environ.get("MIMO_COMPACT_SDPA", "1") == "1"
+        sdpa_tables = {}
+        if compact_sdpa:
+            positions["pos_sdpa"] = ttnn.slice(pos_owned_tt, (0,), (self.decode_users,))
         h = None
         for i, layer in enumerate(self.layers):
+            layer_positions = positions
+            if compact_sdpa and not layer.is_swa:
+                key = self._table_key(i)
+                if key not in sdpa_tables:
+                    table = self.page_table_tt[key]
+                    sdpa_tables[key] = ttnn.slice(table, (0, 0), (self.decode_users, table.shape[-1]))
+                layer_positions = dict(positions, page_table_sdpa=sdpa_tables[key])
             y, h = layer.forward_decode(
-                x, rot_mats, positions, self._layer_page_table(i), self.kv_caches[i], mask_tt, h=h, return_norm=True
+                x,
+                rot_mats,
+                layer_positions,
+                self._layer_page_table(i),
+                self.kv_caches[i],
+                mask_tt,
+                h=h,
+                return_norm=True,
             )
             x.deallocate(True)
             x = y
         logits = self._logits(x, h)
         x.deallocate(True)
-        for t in (*rot_mats[True][:2], *rot_mats[False], *made):
+        for t in (*rot_mats[True][:2], *rot_mats[False], *made, *sdpa_tables.values()):
             t.deallocate(True)
+        if compact_sdpa:
+            positions["pos_sdpa"].deallocate(True)
         if greedy_only:
             next_tokens = self.greedy_head(logits, token_input=tokens_tt)
             return {"logits": logits, "next_tokens": next_tokens}
         rows = None
         if self.layer_groups is not None:
             # vLLM: host sampling reads the users' rows (row-major) instead of 32 rows of tiles; device sampling is
-            # GreedyHead's greedy token (the lowest id on ties, like the host's argmax), written into the next step's
-            # token input. Nothing reads per-chip top-k candidates.
+            # GreedyHead's greedy token (the lowest id on ties, like the host's argmax), or with ``sample`` the
+            # DeviceSampler's draw, written into the next step's token input.
             rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
             rows = ttnn.slice(rm, (0, 0, 0, 0), (1, 1, self.decode_users, self.vocab_local))
             rm.deallocate(True)
-            next_tokens = self.greedy_head(logits, token_input=tokens_tt)
-            return {"logits": logits, "next_tokens": next_tokens, "logits_rows": rows}
+            head = self.sampler if sample else self.greedy_head
+            next_tokens = head(logits, token_input=tokens_tt)
+            out = {"logits": logits, "next_tokens": next_tokens, "logits_rows": rows}
+            if h is not None:
+                out["hidden"] = h  # the final norm's persistent buffer: the MTP drafter's input (mtp.py)
+            return out
         # Each chip's top-k over its vocab shard: the host can merge 8 x k candidates per user instead of
         # reading 32 x 152576 logits every step.
         values, indices = ttnn.topk(logits, k=self.DECODE_TOPK, dim=-1, largest=True, sorted=True)
@@ -970,7 +1124,11 @@ class TtMiMoModel:
 
         Warm-up and capture run with every slot empty (position -1), so they write no KV-cache entries
         and are safe to run after users have been prefilled. ``greedy_only`` captures the device-greedy step
-        (GreedyHead, no top-k candidates): ``decode_steps_*`` work, ``decode_read_topk`` does not."""
+        (GreedyHead, no top-k candidates): ``decode_steps_*`` work, ``decode_read_topk`` does not.
+
+        With a DeviceSampler (vLLM mode) a second trace on the same inputs, ``sampled``, also draws the sampled rows'
+        tokens; a step replays it only when a row samples, so greedy batches skip the sampler. Both steps compile
+        before either capture: a program compiled after a capture may keep buffers the replays overwrite."""
         assert self.decode_trace is None
         if greedy_only and self.greedy_head is None:
             # Persistent buffers, allocated before any capture.
@@ -991,35 +1149,209 @@ class TtMiMoModel:
         empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
         host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        warm = self._decode_inputs(inputs, greedy_only=greedy_only)
-        self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
-        for name, t in warm.items():
-            if not (written and name == "next_tokens"):  # GreedyHead's buffer is persistent
-                t.deallocate(True)
+        variants = [False] + ([True] if self.sampler is not None and not greedy_only else [])
+        for sample in variants:
+            warm = self._decode_step(inputs, greedy_only, sample)
+            self._feed_back(inputs, warm, tokens_written=written)  # every slot is empty: positions stay -1
+            if sample and self.verify_sampler is not None:
+                # Compiles SampleVerify before any capture (its steps 1-2 are the sampled step's own programs, which
+                # key on nothing the verify changes), so the accept trace (capture_verify_trace) compiles nothing
+                # after the decode trace. It writes only its own output page.
+                self.verify_sampler(warm["logits"], warm["next_tokens"])
+            # Keeps the persistent buffers: GreedyHead's and the sampler's tokens and the final norm's "hidden" (the
+            # MTP drafter's input).
+            self._release(warm)
+        if self.spec_chain is not None:
+            # The chain and drafts steps (tt/spec_chain.py) of the accept and MTP traces, and the verify trace's relay
+            # step, compile here too, on the persistent buffers their captures use; so do the history's kernel steps
+            # (tt/mtp_backfill.py).
+            self.spec_chain.warm(self.verify_sampler.ctrl)
+        if self._history() is not None:
+            self._history().warm(self.mtp.inputs)
         ttnn.synchronize_device(self.mesh_device)
-        fabric = getattr(self.plan, "fabric_gather", None)
-        phase = fabric.phase if fabric is not None else None
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        output = self._decode_inputs(inputs, greedy_only=greedy_only)
-        self._feed_back(inputs, output, tokens_written=written)
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
-        # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
-        # gather buffers if the step made an even number of fabric reductions (FabricRowGather.advance).
-        fabric = getattr(self.plan, "fabric_gather", None)
-        assert fabric is None or fabric.phase == (phase if phase is not None else 0), "odd fabric reductions per step"
+        captured = []
+        for sample in variants:
+            fabric = getattr(self.plan, "fabric_gather", None)
+            phase = fabric.phase if fabric is not None else None
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            output = self._decode_step(inputs, greedy_only, sample)
+            self._feed_back(inputs, output, tokens_written=written)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            # Every replay reuses the gather phases baked in at capture: back to back, replays only alternate the
+            # gather buffers if the step made an even number of fabric reductions (FabricRowGather.advance).
+            fabric = getattr(self.plan, "fabric_gather", None)
+            assert fabric is None or fabric.phase == (
+                phase if phase is not None else 0
+            ), "odd fabric reductions per step"
+            captured.append({"id": trace_id, "output": output})
         ttnn.synchronize_device(self.mesh_device)
         self.decode_trace = {
-            "id": trace_id,
+            **captured[0],
             "inputs": inputs,
-            "output": output,
             "history": history,
             "greedy_only": greedy_only,
+            "sampled": captured[1] if len(captured) > 1 else None,
         }
+
+    def _history(self):
+        """The MTP drafter's target-hidden history (tt/mtp_backfill.py), or None."""
+        return self.mtp.history if self.mtp is not None else None
+
+    def _decode_step(self, inputs, greedy_only, sample):
+        """The decode trace's step: with the MTP history, its input tokens kept at the start and its slots' final
+        norm rows written into the history at the end (before the positions advance)."""
+        hist = self._history()
+        if hist is not None:
+            hist.stage(inputs[0])
+        output = self._decode_inputs(inputs, greedy_only=greedy_only, sample=sample)
+        if hist is not None:
+            assert output.get("hidden") is self.norm_buffers[0], "the history reads the final norm's buffer"
+            hist.decode(inputs[1], output["hidden"])
+        return output
 
     def release_decode_trace(self):
         if self.decode_trace is not None:
             ttnn.release_trace(self.mesh_device, self.decode_trace["id"])
+            if self.decode_trace["sampled"] is not None:
+                ttnn.release_trace(self.mesh_device, self.decode_trace["sampled"]["id"])
             self.decode_trace = None
+
+    def _decode_replay(self, sample):
+        """Replays the decode trace (``sample``: the sampled one); returns its output."""
+        trace = self.decode_trace["sampled"] if sample else self.decode_trace
+        assert trace is not None, "a sampled decode step needs the DeviceSampler's trace (vLLM mode)"
+        ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
+        return trace["output"]
+
+    # ------------------------------------------------------------------ speculative decoding (reference/spec_decode.py)
+    def setup_mtp(self, ckpt, cache_dir, layers=(0,), backfill=False):
+        """Load the MTP layers ``layers`` (one, or one per draft: TtMiMoMTP) as the speculative drafter (its caches
+        and trace: TtMiMoMTP.setup_cache, capture_spec_traces), and make the packed uploads of the verify and draft
+        traces (persistent: before any capture). ``backfill``: the target-hidden history and the ring backfill."""
+        assert self.mtp is None and self.decode_trace is None
+        self.mtp = TtMiMoMTP(self, ckpt, cache_dir, layers, backfill=backfill)
+        kv_rep = kv_lib.kv_replication(self.plan.tp, self.cfg.num_key_value_heads)
+        self.spec_inputs = SpecInputs(self.plan, self.max_batch, kv_rep)
+
+    def capture_verify_trace(self):
+        """Compile, then capture the verify step: the decode step with every layer's K / V written one slot at a time
+        and no feed-back (a verify always reloads its inputs). Every slot idle while capturing: no K / V written.
+
+        The trace starts with the relay step (tt/spec_chain.py: a chained verify's tokens and positions from the
+        lane's last result page; a no-op on an upload the host built) and SpecInputs.derive_verify, which writes every
+        input but the cos / sin from the packed upload (``verify_enqueue``); the decode step after them is the one
+        captured before, followed by the MTP history's verify write (``_verify_step``), which reads the tokens and
+        positions the relay left."""
+        assert self.verify_trace is None and self.layer_groups is not None, "a verify serves vLLM's KV blocks"
+        empty = torch.full((self.max_batch,), -1, dtype=torch.int32)
+        host = self.prepare_decode_inputs_host(torch.zeros(self.max_batch, dtype=torch.int32), empty, serial=True)
+        inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
+        rope = self.rope_tables is not None
+        # The packed uploads still hold the last served step (a recapture): idle them, so the runs below write no K / V.
+        self.spec_inputs.reset()
+        self._relay()
+        self.spec_inputs.derive_verify(inputs, rope)
+        self._release(self._verify_step(inputs))
+        ttnn.synchronize_device(self.mesh_device)
+        fabric = getattr(self.plan, "fabric_gather", None)
+        phase = fabric.phase if fabric is not None else None
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._relay()
+        self.spec_inputs.derive_verify(inputs, rope)
+        output = self._verify_step(inputs)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        # As the decode traces (capture_decode_trace): an even number of fabric reductions, so verify and decode
+        # replays interleave on the gather phases they were captured with.
+        fabric = getattr(self.plan, "fabric_gather", None)
+        assert fabric is None or fabric.phase == (phase if phase is not None else 0), "odd fabric reductions per step"
+        ttnn.synchronize_device(self.mesh_device)
+        # The MTP draft program reads the step's final hidden from the norm buffer it was captured on.
+        assert output.get("hidden") is self.norm_buffers[0], "the final norm is not the persistent fused-norm buffer"
+        self.verify_trace = {"id": trace_id, "inputs": inputs, "output": output, "accept": None}
+        if self.verify_sampler is not None:
+            # The accept step (VerifySampler) in its own trace on the verify trace's output logits and greedy tokens,
+            # then the chain step (tt/spec_chain.py: the result page, and the MTP draft's inputs when a draft chains
+            # behind the pass), replayed after an argmax_ids or fused_sample verify; a logits verify replays the
+            # verify trace alone. Their programs compiled in capture_decode_trace; this eager run hits the cache.
+            assert self.spec_chain is not None and output["next_tokens"] is self.greedy_head.next_tokens
+            self.verify_sampler(output["logits"], output["next_tokens"])
+            self.spec_chain.chain()
+            ttnn.synchronize_device(self.mesh_device)
+            fabric = getattr(self.plan, "fabric_gather", None)
+            phase = fabric.phase if fabric is not None else None
+            accept_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            self.verify_sampler(output["logits"], output["next_tokens"])
+            self.spec_chain.chain()
+            ttnn.end_trace_capture(self.mesh_device, accept_id, cq_id=0)
+            # No fabric reduction in the accept step: replays leave the gather phases where the verify left them.
+            fabric = getattr(self.plan, "fabric_gather", None)
+            assert fabric is None or fabric.phase == (phase if phase is not None else 0), "fabric phase moved"
+            ttnn.synchronize_device(self.mesh_device)
+            self.verify_trace["accept"] = accept_id
+
+    def _relay(self):
+        """The verify trace's relay step (tt/spec_chain.py), when the replica accepts on device (VerifySampler)."""
+        if self.spec_chain is not None and self.verify_sampler is not None:
+            self.spec_chain.relay(self.verify_sampler.ctrl)
+
+    def _verify_step(self, inputs):
+        """The verify trace's step: with the MTP history, its slots' final norm rows written into their requests'
+        rings (the verify upload's chain row names them) at the end."""
+        output = self._decode_inputs(inputs, serial=SPEC_SLOTS)
+        hist = self._history()
+        if hist is not None:
+            hist.verify(self.spec_inputs.verify_packed, output["hidden"])
+        return output
+
+    def capture_spec_traces(self):
+        """The verify step and the MTP draft program, after the decode trace (persistent buffers already exist)."""
+        self.capture_verify_trace()
+        self.mtp.capture_trace()
+
+    def release_spec_traces(self):
+        if self.verify_trace is not None:
+            ttnn.release_trace(self.mesh_device, self.verify_trace["id"])
+            if self.verify_trace["accept"] is not None:
+                ttnn.release_trace(self.mesh_device, self.verify_trace["accept"])
+            self.verify_trace = None
+        if self.mtp is not None:
+            self.mtp.release_trace()
+
+    def verify_enqueue(self, tokens, positions, chain=None, accept=None):
+        """A verify step (tokens, positions: torch [max_batch], -1 an idle slot). Non-blocking; returns the verify
+        trace's output (its ``next_tokens`` are the slots' greedy tokens). Copies the packed tokens and positions
+        (the trace derives its other inputs from them) with the chain row ``chain`` (reference.spec_chain.chain_row;
+        None: no draft chains behind the pass), and the RoPE cos / sin unless the trace reads them from the device
+        tables. ``accept``: the pass's (slots, groups) for the accept trace (``verify_accept_enqueue``), staged first:
+        the verify trace's relay step writes a chained pass's drafts into the control page."""
+        assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
+        if accept is not None:
+            self.verify_sampler.stage(*accept)
+        spec = self.spec_inputs
+        ttnn.copy_host_to_device_tensor(spec.verify_host(tokens, positions, chain), spec.verify_packed)
+        if self.rope_tables is None:
+            host = (
+                *self.rope_setups["swa"].decode_host_inputs(positions),
+                *self.rope_setups["full"].decode_host_inputs(positions),
+            )
+            for h, d in zip(host, self.verify_trace["inputs"][2:6]):
+                ttnn.copy_host_to_device_tensor(h, d)
+        ttnn.execute_trace(self.mesh_device, self.verify_trace["id"], cq_id=0, blocking=False)
+        return self.verify_trace["output"]
+
+    def verify_accept_enqueue(self, slots=None, groups=None):
+        """After ``verify_enqueue``: the pass's acceptance on device (VerifySampler) with its sampled slots' parameters
+        and its requests (reference.sample_verify.pass_inputs; staged here unless ``verify_enqueue`` staged them),
+        then the chain step. Non-blocking; ``spec_chain.read`` returns the pass's result page (after
+        ``mtp.enqueue_chained``, with the drafts chained behind it)."""
+        assert self.verify_trace is not None and self.verify_trace["accept"] is not None, "no accept trace captured"
+        if groups is not None:
+            self.verify_sampler.stage(slots, groups)
+        ttnn.execute_trace(self.mesh_device, self.verify_trace["accept"], cq_id=0, blocking=False)
+
+    def read_next_tokens(self, handle):
+        """The greedy token of every slot of a decode or verify step, int64 [max_batch] (blocks)."""
+        return self.plan.to_torch_replicated(handle["next_tokens"]).reshape(-1).to(torch.int64)
 
     def release_prefill_traces(self):
         """Release the captured prefill traces (their buffers stay, for a later capture)."""
@@ -1028,27 +1360,27 @@ class TtMiMoModel:
                 ttnn.release_trace(self.mesh_device, trace["id"])
                 trace["id"] = None
 
-    def decode_enqueue(self, tokens, positions):
+    def decode_enqueue(self, tokens, positions, sample=False):
         """tokens, positions: torch [max_batch]; position -1 marks an empty slot. Non-blocking.
-        Returns a handle for ``decode_read`` (full logits) or ``decode_read_topk`` (per-chip candidates)."""
+        Returns a handle for ``decode_read`` (full logits) or ``decode_read_topk`` (per-chip candidates).
+        ``sample`` (vLLM mode): the DeviceSampler draws the tokens (its parameters and uniforms set beforehand)."""
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         host = self.prepare_decode_inputs_host(tokens, positions)
         self._advance_swa(positions)
         if self.decode_trace is not None:
             for h, d in zip(host, self.decode_trace["inputs"]):
                 ttnn.copy_host_to_device_tensor(h, d)
-            ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
-            return self.decode_trace["output"]
+            return self._decode_replay(sample)
         inputs = [ttnn.to_device(t, self.mesh_device, memory_config=ttnn.DRAM_MEMORY_CONFIG) for t in host]
-        out = self._decode_inputs(inputs)
+        out = self._decode_inputs(inputs, sample=sample)
         for t in inputs:
             t.deallocate(True)
         return out
 
-    def decode_enqueue_resident(self, positions):
+    def decode_enqueue_resident(self, positions, sample=False):
         """A decode step on the tokens and positions the last replay fed back (``_feed_back``): copies only the
         RoPE inputs of ``positions`` (torch [max_batch], what the trace's own positions now hold), then replays the
-        trace. Non-blocking; returns the trace's output."""
+        trace (``sample``: the sampled one). Non-blocking; returns the trace's output."""
         assert self.decode_trace is not None, "a resident decode step replays the decode trace"
         assert int(positions.max()) < self.max_seq_len, f"position {int(positions.max())} >= {self.max_seq_len}"
         self._advance_swa(positions)
@@ -1059,14 +1391,16 @@ class TtMiMoModel:
             )
             for h, d in zip(host, self.decode_trace["inputs"][2:6]):
                 ttnn.copy_host_to_device_tensor(h, d)
-        ttnn.execute_trace(self.mesh_device, self.decode_trace["id"], cq_id=0, blocking=False)
-        return self.decode_trace["output"]
+        return self._decode_replay(sample)
 
     def _release(self, handle):
-        if self.decode_trace is None or handle is not self.decode_trace["output"]:
-            persistent = self.greedy_head.next_tokens if self.greedy_head is not None else None
+        trace = self.decode_trace
+        traced = (trace, trace["sampled"] if trace is not None else None, self.verify_trace)
+        if not any(t is not None and handle is t["output"] for t in traced):
+            persistent = [h.next_tokens for h in (self.greedy_head, self.sampler) if h is not None]
+            persistent += list(self.norm_buffers or ())
             for t in handle.values():
-                if t is not persistent:
+                if not any(t is p for p in persistent):
                     t.deallocate(True)
 
     def decode_read(self, handle):

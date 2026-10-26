@@ -405,6 +405,128 @@ Fixes that came out of these runs:
   width to 16 blocks, for the standalone tables and for vLLM's. A `max_seq_len` or `--max-model-len` that was not a
   multiple of 1024 tokens failed on the first decode step.
 
+## Long context: 8 users x 1M (branch `mimo-v2.6/long-ctx`, 2026-10-20)
+
+Goal: 8 users (2 per lane) with 1M context each under vLLM, prefix caching (APC) correct, and the per-user decode
+speed. Two changes on top of `mimo-v2.6/c16-top1`:
+
+1. **Global decode SDPA over the decode users' rows only.** `paged_flash_multi_latent_attention_decode` takes its
+   batch from the page table's rows and splits its cores evenly over them. With the 32-row table each of 2 users got
+   2 of 64 cores: 21 ms per global layer at 1M context (17 GB/s). The model now slices the page table and the owned
+   positions to the decode users (2 rows: 32 cores per user, 256-token K chunks); ConcatHeads zero-fills the rows
+   past them. One chip, 1M context, one global layer: 21.0 -> 1.15 ms (311 GB/s; 1.07 ms with the 12 x 10 grid).
+2. **128-wide SWA V cache.** vLLM sizes each KV buffer to the lane's whole block pool and shares it between one
+   layer of each KV cache group, so the SWA layers' 192-wide (zero-padded) V buffers cost 8 x 192 of the 4692 bytes
+   per token per chip. The SWA V cache now keeps V's 128 real dims and shares the global layers' V buffers (9 K + 9
+   V buffers): 3060 bytes per token per chip, so 2 x 1M per lane fits in 6.55 GB per chip (33472 blocks per lane).
+   SWA decode reads it with `paged_flash_multi_latent_attention_decode` (`head_dim_v` 128, sinks, sliding window);
+   SwaDecodeQkv writes 4 V tile columns; a later SWA prefill chunk pads the cached window back to 192. vLLM's block
+   tables, prefix caching and eviction are unchanged.
+
+Accuracy (unchanged): `test_decoder_tp8_dp4` 3 passed, `test_chunked_prefill_tp8_dp4` 5 passed,
+`test_model_tp8_dp4` top-1 0.900 with 34/34 clear rows, PCC min 0.9372 / mean 0.9941.
+
+Traced decode step, 2 users per row (`tests/perf/long_decode.py`, device-resident greedy loop; only the prompt's
+KV is real, the step attends over the whole context):
+
+| Position | Before, 4 rows | After, 1 row | After, 4 rows | 4 rows, `MIMO_SDPA_FULL_GRID=1` |
+|---|---|---|---|---|
+| 4K | 13.95 ms | 11.57 ms | 13.55 ms (73.8 tok/s per user) | 13.25 ms |
+| 128K | 36.99 ms | 12.36 ms | 14.61 ms (68.4) | 14.96 ms |
+| 512K | 107.94 ms | 16.63 ms | 18.33 ms (54.6) | 17.96 ms |
+| ~1M | 201.11 ms | 21.38 ms | 23.29 ms (42.9) | 22.61 ms |
+
+vLLM, DP=4 x 2 seqs, `--max-model-len 1048576`, `MIMO_KV_GB_PER_CHIP=6.6` (`runs/swa1/exp1m.sh`):
+
+| Check | Result |
+|---|---|
+| c=8, 64 x 128 / 128 | TPOT 12.28-12.34 ms (81 tok/s per user), median ITL 11.06-11.27 ms, 556-560 tok/s |
+| c=1 | TPOT 10.24 ms (98 tok/s), TTFT 184 ms |
+| c=8, 8 x 128K / 256 | median ITL 12.22 ms (82 tok/s per user once both users of a lane decode); prefill ~68 s per 128K prompt, so the mean TPOT (190 ms) is the other user's prefill chunks interleaved with decode |
+| APC (`runs/swa1/apc_check.py`, 13.7K-token shared document, 8 questions) | answers 24/24 correct; greedy text with prefix hits == without 16/16; 8/8 requests of the second warm round reused 13632-13696 of 13701 prompt tokens, in 2.16 s instead of 3.0 s |
+| HTTP suite (`tests/tt`, max_num_seqs 8) | 78 passed, 1 skipped |
+
+Decode at 1M is bandwidth-bound: each chip reads its own user's global KV, 9 layers x 1M x 340 bytes = 3.2 GB per
+step, which takes 7.1 ms at this Galaxy's 448 GB/s (GDDR6 at 14 Gbps). The SDPA reads it at ~330 GB/s (9.7 ms).
+With the 12.2 ms rest of the step, 70 tok/s per user (14.3 ms) holds up to ~350K context; at 1M the ceiling is
+~1000 / (12.2 + 7.1) = 52 tok/s, and the step is ~21-23 ms (43-48 tok/s) today. Prefill of a 1M prompt is the other
+limit: the chunked MLA prefill makes a 2048-token chunk at context C cost roughly 0.25 s + 12.5 ms x C / 1K, ~1 hour
+per 1M prompt.
+
+## Device sampling, 2026-10-21 (branch `mimo-v2.6/device-sampling`, MOPD)
+
+With greedy rows only, vLLM samples on device (GreedyHead in the decode trace, async steps). Any row with
+temperature > 0 sent the whole batch to host sampling: each step reloaded its inputs, read the users' fp32 logit rows
+(2.4 MB per lane) and sampled on the CPU, synchronously. Sampled c=16 decode was 7.5x slower than greedy.
+
+`tt/device_sampler.py` draws temperature / top-k / top-p tokens inside a second decode trace, which a lane replays
+while it holds a sampled row (greedy batches keep the GreedyHead trace and its speed):
+
+| Step | Cores per chip | What |
+|---|---|---|
+| SampleScan | 32 | Each core loads its range of the chip's vocab shard (fp32 tiles). The compute kernel sums exp((logit - the range's largest) / T) on the SFPU (fp32 unpacked straight to DST). The reader and the writer keep two users' 32 largest logits each (exact values, integer keys), and the writer adds up the sums |
+| SampleChipMerge | 1 per user | The chip's sorted top 32 and its normalizer, written to one page |
+| all_gather | | The row's 8 pages |
+| SampleMerge | 1 | Walks the merged candidates in descending order and draws, as vLLM's `apply_top_k_top_p`: softmax over the vocabulary (or over the top_k), the nucleus keeps a token while the mass ranked above it is below top_p, inverse CDF with a splitmix64 uniform whose state lives on device |
+
+The data movement cores have no FPU, so steps 2 and 3 run in fixed point: logits in Q24, probabilities relative to
+the largest in Q30, `exp2` from a 64-entry table and a cubic. The draw equals vLLM's whenever the nucleus has at
+most 32 tokens, or more but inside the row's 256 candidates (the 32 largest of every chip). Measured on GPQA reasoning
+at temperature 1 and top_p 0.95 (8848 decode rows, host sampler instrumented): the nucleus is 1 token at p50, 5 at p90,
+20 at p99; 99.7% of rows have at most 32, and 99.9% fit in 256.
+
+Routing (vllm-tt-plugin): the model declares `max_device_top_k` 256 and `supports_device_top_p_without_top_k` (a row
+with no top_k and top_p < 1 stays on device). Pure temperature sampling (no top_k, top_p 1), penalties, logprobs and
+structured output still sample on host. Seeded rows sample on device: a row's stream state at decode position p is
+mix(seed) + p * GAMMA (`stream_states`), so its draws depend only on (seed, position), whichever steps reload it.
+
+`tests/test_device_sampler_tp8.py`: 312 rows over 4 parameter sets, 3 logit shapes, eager and traced draws. All 168
+rows whose nucleus lies in the 32 most likely tokens match the exact full-vocabulary draw (same uniform, replayed
+from the seeds); greedy rows take the lowest id among tied maxima. Traced head: 0.164 ms per step (GreedyHead 0.08 ms).
+
+vLLM, DP=4 x 4, 64 x 128 / 128 (`--temperature 1.0 --top-p 0.95` for the sampled rows), one server per column:
+
+| | Before (host sampling) | ttnn-op sampler (first version) | Fused head (this branch) |
+|---|---|---|---|
+| Greedy c=16 | 993.9 tok/s, TPOT 13.3 ms | 1018.5 tok/s, TPOT 13.2 ms | 994.9 tok/s, TPOT 13.3 ms |
+| Sampled c=16 | 133.1 tok/s, TPOT 117.6 ms | 940.8 tok/s, TPOT 13.8 ms | **956.8 tok/s, TPOT 13.5 ms** |
+| Sampled c=1 | 25.6 tok/s, TPOT 37.7 ms | 66.8 tok/s, TPOT 13.3 ms | **68.3 tok/s, TPOT 13.1 ms** |
+
+The sampled rows' first token still samples on host after prefill (`sample_on_device_mode="decode_only"`); their TTFT
+is ~90 ms above greedy's at c=16 (423 vs 324 ms median), not yet explained by the host sampler (~3 ms for 16 rows).
+
+Validation in serving:
+- `MIMO_SAMPLER_CHECK=1` (debug: each sampled step blocks, reads the logit rows and the rows' stream states, and
+  recomputes vLLM's draw on the host): 5 minutes of GPQA reasoning at c=16, 14333 sampled rows on the model's own
+  logits, 14278 with the nucleus in the candidates, 0 mismatches.
+- GPQA Diamond, first 64 questions, c=16, temperature 1.0 / top_p 0.95, 64K context (`runs/speed/gpqa_device.sh`):
+  50/64 (53/64 counting 3 answers that end in the template's literal "Answer: $LETTER" after reasoning to the right
+  letter); 6 truncated at 64K; 0 failed requests, 0 decode-trace recaptures; 1046 tok/s while all 16 requests decode
+  (host sampling: ~133). On the 62 questions both runs answered, host sampling 56 and device sampling 52 (with the
+  reasoning fallback), within T=1 run-to-run spread.
+
+## Speculative acceptance on device, 2026-10-22 (branch `mimo-v2.6/dev-mtp-spec-decode-sampled-device-accept`)
+
+Not yet run on hardware. Sampled MTP speculation in the plugin's `logits` mode, BH Galaxy, c=1 SPEED-Bench coding at
+temperature 1.0 / top_p 0.95: 2.60 accepted tokens per step and a 40 ms step (TPOT 14.7 ms): verify on device 16.2 ms
+(2.4 ms of it reading back 16 x 4 x 152k fp32 logits), verify host 6.0, the plugin's host accept walk 6.1, MTP draft
+5.6 + 2.6, gap 3.2. A greedy MTP step is ~28 ms; plain decode with the device sampler 13.1 ms TPOT.
+
+`fused_sample` (`tt/verify_sampler.py`) accepts on device instead: after each verify pass a small trace runs
+SampleScan and SampleChipMerge over the pass's slots with each slot's request parameters, the row all_gather, and
+SampleVerify (`kernels/sample_verify.cpp`, one core), which walks each request of the pass as the plugin's host walk
+does (point-mass drafts: accept draft j when p_j(d_j) > 0 and p_j(d_j) >= u_j; at the first rejection draw from p_j
+without d_j; else the bonus from p_n) with uniforms the plugin draws from the request's own generator, in fixed point
+as the decode sampler (Q30 probabilities, Q24 uniforms). Inverse-CDF draws walk the candidates in the plugin's table
+order (logit then id for a top_k row, id for a nucleus row), so the same uniform draws the same token as the host.
+Greedy requests compare with the verify's GreedyHead tokens, exactly the argmax_ids walk. A request whose nucleus
+runs past the candidates is accepted on them and counted.
+
+Expected per step: the 2.4 ms logits readback and the 6.1 ms host walk go, and the part of the verify host time that
+fills the plugin's [16, 4, 152k] logits buffer; the accept trace adds the sampler head per pass (the decode head takes
+0.164 ms) and a 128-byte read. Roughly 40 -> 30-32 ms per step, TPOT ~11.5-12 ms at 2.6 accepted tokens: about a
+greedy MTP step plus the accept head. The MTP draft (8.2 ms) and the gap (3.2 ms) are unchanged.
+
 ## Prefill profile, 2026-10-21 (#61418, on `mimo-v2.6/dev`, MOPD)
 
 `tests/perf/profile_prefill.py` under `python -m tracy` profiles the last 4096-token chunk of a prompt on one row,

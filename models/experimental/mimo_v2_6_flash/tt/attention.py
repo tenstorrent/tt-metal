@@ -4,11 +4,13 @@
 """MiMo attention (SWA and global layers), tensor-parallel over one Galaxy row.
 
 SWA layers (8 KV heads): each chip has 8 Q heads and one KV head, in prefill and decode. V has
-128 dims; it is zero-padded to 192 (and so are the matching ``o_proj`` rows) so the SDPA kernels see
-one head dim. The SWA cache keeps only the in-window blocks per user (kv.SwaBlockTable), so the padding costs
-~nothing. Decode drops the
-padding columns after SDPA and uses an unpadded copy of ``o_proj`` (the dropped rows only ever multiplied
-zeros).
+128 dims; prefill zero-pads it to 192 (and so are the matching ``o_proj`` rows) so the prefill SDPA sees one
+head dim. Every V cache is 128 wide (as on the global layers): vLLM sizes each KV buffer to its whole block pool
+and shares it between one layer of each KV cache group, so a 192-wide SWA V cache would cost 1632 of 4692 bytes
+per token per chip, and with 128 the SWA V caches share the global layers' V buffers. Decode reads it with
+``paged_flash_multi_latent_attention_decode`` (``head_dim_v=128``, sinks, sliding window), whose output has no
+padding columns, and uses an unpadded copy of ``o_proj``; a later prefill chunk pads the cached window back to
+192.
 
 Global layers (4 KV heads over 8 chips): chips 2g and 2g+1 serve KV head g and split its users
 (see ``kv.py``). Decode gives each chip all 16 Q heads of its group for the slots it owns, with an
@@ -192,16 +194,18 @@ class SwaDecodeQkv:
         pt_page = page_table.shape[-1] * 4
         assert pt_page % self.TABLE_READ == 0, "the reader fetches the 64 B of the page table row that holds the entry"
         n = self.d_tiles
+        assert k_cache.shape[-1] == self.d and v_cache.shape[-1] % TILE == 0 and v_cache.shape[-1] <= self.d
         kernels = []
+        # (role, cores, first qkv tile column, cache, tile columns): V cores move only the V cache's real columns.
         roles = (
-            (self.ROLE_Q, self.q_cores, lambda i: i * n, None),
-            (self.ROLE_K, self.k_cores, lambda i: self.nh * n, k_cache),
-            (self.ROLE_V, self.v_cores, lambda i: (self.nh + 1) * n, v_cache),
+            (self.ROLE_Q, self.q_cores, lambda i: i * n, None, n),
+            (self.ROLE_K, self.k_cores, lambda i: self.nh * n, k_cache, n),
+            (self.ROLE_V, self.v_cores, lambda i: (self.nh + 1) * n, v_cache, v_cache.shape[-1] // TILE),
         )
         user_noc = []
         for c in self.user_noc:
             user_noc += [c.x, c.y]
-        for role, cores, first, cache in roles:
+        for role, cores, first, cache, role_tiles in roles:
             ranges = ttnn.CoreRangeSet([ttnn.CoreRange(cores[0], cores[-1])])
             reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
             for i, c in enumerate(cores):
@@ -230,7 +234,7 @@ class SwaDecodeQkv:
                 self.CB_TRANS,
                 self.CB_CACHE,
                 self.CB_META,
-                n,
+                role_tiles,
                 self.block_size,
                 pos_page,
                 pt_page,
@@ -244,7 +248,7 @@ class SwaDecodeQkv:
                 self.CB_C16,
                 self.CB_SIG,
                 self.CB_OUT8,
-                n,
+                role_tiles,
                 self.users,
                 cache_tile,
             ]
@@ -260,7 +264,7 @@ class SwaDecodeQkv:
                 self.CB_C16,
                 self.CB_SIG,
                 self.CB_OUT8,
-                n,
+                role_tiles,
             ]
             for name, ct, rt, config in (
                 ("swa_qkv_reader.cpp", reader_ct, reader_rt, ttnn.ReaderConfigDescriptor()),
@@ -325,7 +329,8 @@ class ConcatHeads:
         mc = attn.memory_config()
         assert attn.layout == ttnn.TILE_LAYOUT and attn.dtype == ttnn.bfloat16
         assert mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
-        assert len(shape) == 4 and shape[0] == 1 and shape[1] == TILE and shape[2] >= self.num_heads
+        # shape[1]: the SDPA's batch, 32 or a compact batch of the first users (the other output rows are zeros)
+        assert len(shape) == 4 and shape[0] == 1 and shape[1] <= TILE and shape[2] >= self.num_heads
         assert shape[3] % TILE == 0
         d_tiles = shape[3] // TILE
         assert self.v_tiles <= d_tiles
@@ -363,6 +368,7 @@ class ConcatHeads:
                 in_dram,
                 1 if has_mask else 0,
                 mask_dram,
+                shape[1],
             ],
             runtime_args=rt,
             config=ttnn.DataMovementConfigDescriptor(
@@ -573,6 +579,26 @@ class TtMiMoAttention:
             k_chunk_size=128,
             exp_approx_mode=False,
         )
+        self._split_sdpa_programs = {}
+
+    def _split_sdpa_program(self, batch, table_tokens):
+        """Global decode SDPA program for a batch of ``batch`` page-table rows: every core of the 8 x 8 grid works
+        (64 / batch per user; the tree reduction allows up to 64) and 256-token K chunks where the table allows."""
+        if batch >= TILE:
+            return self.decode_sdpa_program
+        key = (batch, table_tokens)
+        if key not in self._split_sdpa_programs:
+            grid = ttnn.CoreCoord(8, 8)
+            if os.environ.get("MIMO_SDPA_FULL_GRID", "0") == "1":
+                grid = self.plan.mesh_device.compute_with_storage_grid_size()
+            self._split_sdpa_programs[key] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=grid,
+                q_chunk_size=0,
+                k_chunk_size=256 if table_tokens % 256 == 0 else 128,
+                exp_approx_mode=False,
+                max_cores_per_head_batch=max(16, min(64, grid.x * grid.y // batch)),
+            )
+        return self._split_sdpa_programs[key]
 
     def _interleaved_qkv(self, w, width):
         """DRAM-sharded fused qkv [K, n_pad] per chip -> DRAM-interleaved [K, width], padding columns dropped.
@@ -620,10 +646,9 @@ class TtMiMoAttention:
         return max_seq_len
 
     def allocate_kv_cache(self, num_blocks, block_size, dtype=ttnn.bfloat8_b):
-        """[K, V] caches ``[num_blocks, kv_heads, block_size, dim]`` per chip; V is 128 wide when users are split."""
-        v_dim = self.v_head_dim if self.split_users else self.head_dim
+        """[K, V] caches ``[num_blocks, kv_heads, block_size, dim]`` per chip; V keeps its 128 real dims."""
         caches = []
-        for dim in (self.head_dim, v_dim):
+        for dim in (self.head_dim, self.v_head_dim):
             # Allocate and zero on device: at 1M context a host torch.zeros + conversion would move ~GBs per layer.
             cache = ttnn.allocate_tensor_on_device(
                 ttnn.Shape((num_blocks, self.nkv_local, block_size, dim)),
@@ -740,6 +765,29 @@ class TtMiMoAttention:
         k_fill.deallocate(True)
         v_fill.deallocate(True)
 
+    def fill_kv_rows(self, x, cos, sin, page_table, kv_cache):
+        """The K / V of S rows (x [1, 1, S, hidden], input-normed; S a multiple of the block size) at the positions
+        whose RoPE cos / sin [1, 1, S, head_dim] are given, written by paged_fill_cache into the blocks of row 0 of
+        ``page_table`` from its first position: the entries a decode step would write for each row, computed in the
+        prefill layout and without the attention (the MTP ring backfill, tt/mtp_backfill.py)."""
+        assert not self.split_users and self.sliding_window is not None
+        xqkv = self._prefill_qkv(x)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.nh_local,
+            num_kv_heads=self.nkv_local,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        xqkv.deallocate(True)
+        q.deallocate(True)
+        trans = self.rope.transformation_mat_prefill
+        k_rot = ttnn.experimental.rotary_embedding_llama(k, cos, sin, trans, is_decode_mode=False)
+        k.deallocate(True)
+        self._fill(kv_cache, k_rot, v, page_table, 0, None)
+        k_rot.deallocate(True)
+        v.deallocate(True)
+
     def _cached_window(self, cache, blocks):
         """The cache blocks ``blocks`` (int32 [4] slice starts (block, 0, 0, 0) on device, in position order) as one
         bf16 [1, kv_heads, n * block, dim]. A tensor-args slice keys on the cache's shape, not on the block id."""
@@ -801,6 +849,10 @@ class TtMiMoAttention:
             lead = len(tables.window) * k_cache.shape[-2]
             k_win = self._cached_window(k_cache, tables.window)
             v_win = self._cached_window(v_cache, tables.window)
+            if v_win.shape[-1] < v.shape[-1]:  # the cache keeps V's real dims; the SDPA sees the padded head dim
+                padded = ttnn.pad(v_win, [(0, 0), (0, 0), (0, 0), (0, v.shape[-1] - v_win.shape[-1])], 0.0)
+                v_win.deallocate(True)
+                v_win = padded
         self._fill(kv_cache, k_rot, v, page_table, user_id, tables)
         step("sdpa")
         if lead:
@@ -968,6 +1020,19 @@ class TtMiMoAttention:
         return self.plan.all_reduce(out)
 
     # ---------------------------------------------------------------- decode
+    def _cache_width_v(self, v, batch, width):
+        """Decode V heads [1, B, 1, D] (height-sharded) -> the cache's ``width`` real dims, height-sharded for
+        paged_update_cache (the input is deallocated)."""
+        if v.shape[-1] == width:
+            return v
+        v_inter = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
+        v.deallocate(True)
+        v_real = ttnn.slice(v_inter, (0, 0, 0, 0), (1, batch, 1, width))
+        v_inter.deallocate(True)
+        v_shard = ttnn.to_memory_config(v_real, self._height_sharded(batch, TILE, width))
+        v_real.deallocate(True)
+        return v_shard
+
     def _height_sharded(self, batch, rows, width):
         grid = ttnn.num_cores_to_corerangeset(batch, ttnn.CoreCoord(8, 8), row_wise=True)
         return ttnn.create_sharded_memory_config(
@@ -1003,9 +1068,14 @@ class TtMiMoAttention:
         """x [1, 1, B, hidden] (B users padded to a tile).
 
         cur_pos: int32 [B] on device (-1 skips a slot), or a dict {"pos", "pos_owned", "owner_mask"} and optionally
-        "pos_update"; global layers with split users read the per-chip owned view (see kv.py).
+        "pos_update" and "serial"; global layers with split users read the per-chip owned view (see kv.py).
+        "serial": per-slot position tensors, each keeping one slot's position, to write K / V slot by slot: the
+        slots of a speculative verify are one request at consecutive positions, whose rows share cache tiles that
+        the per-slot cache writers read, patch and write back concurrently (reference/spec_decode.py).
         ``compact``: users only in rows 0-3; returns the gathered compact rows (see ``_decode_o``)."""
+        serial = None
         if isinstance(cur_pos, dict):
+            serial = cur_pos.get("serial")
             if self.split_users:
                 return self._forward_decode_split(
                     x,
@@ -1016,15 +1086,21 @@ class TtMiMoAttention:
                     kv_cache,
                     compact,
                     pos_update=cur_pos.get("pos_update"),
+                    pos_sdpa=cur_pos.get("pos_sdpa"),
+                    page_table_sdpa=cur_pos.get("page_table_sdpa"),
+                    serial=serial,
                 )
             cur_pos = cur_pos["pos"]
         assert not self.split_users, "global layers on TP=8 need the per-chip owned positions"
+        writes = serial or [cur_pos]
         xqkv = self._decode_qkv(x, self.wqkv, self.decode_qkv_program, compact)
         k_cache, v_cache = kv_cache
         fused_qkv = compact and self.swa_qkv is not None and len(rot_mats) >= 4
         if fused_qkv:
-            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows).
-            q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], cur_pos, page_table, k_cache, v_cache)
+            # Head split, RoPE and both cache updates in one launch (rot_mats[2:4]: the raw cos / sin rows). Its query
+            # does not depend on the positions, so serial writes repeat it with one slot's position each.
+            for pos in writes:
+                q_rot = self.swa_qkv(xqkv, rot_mats[2], rot_mats[3], pos, page_table, k_cache, v_cache)
             xqkv.deallocate(True)
         else:
             q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -1040,18 +1116,21 @@ class TtMiMoAttention:
             q.deallocate(True)
             k.deallocate(True)
 
-            update = dict(update_idxs_tensor=cur_pos, page_table=page_table)
-            ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
-            ttnn.experimental.paged_update_cache(v_cache, v, **update)
+            v_cached = self._cache_width_v(v, x.shape[-2], v_cache.shape[-1])
+            for pos in writes:
+                update = dict(update_idxs_tensor=pos, page_table=page_table)
+                ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
+                ttnn.experimental.paged_update_cache(v_cache, v_cached, **update)
             k_rot.deallocate(True)
-            v.deallocate(True)
+            v_cached.deallocate(True)
 
-        attn = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+        attn = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_rot,
             k_cache,
             v_cache,
-            cur_pos_tensor=cur_pos,
+            head_dim_v=v_cache.shape[-1],
             page_table_tensor=page_table,
+            cur_pos_tensor=cur_pos,
             scale=self.scale,
             sliding_window_size=self.sliding_window,
             attention_sink=self.decode_sinks,
@@ -1061,18 +1140,35 @@ class TtMiMoAttention:
         )
         if not fused_qkv:
             q_rot.deallocate(True)
-        # Heads concatenated with only V's 128 real dims (the padding columns are zeros), in L1 for the o matmul.
+        # Heads concatenated (V's 128 real dims), in L1 for the o matmul.
         attn_cat = self.concat_heads(attn)
         attn.deallocate(True)
         return self._decode_o(attn_cat, compact)
 
     def _forward_decode_split(
-        self, x, rot_mats, pos_owned, owner_mask, page_table, kv_cache, compact=False, pos_update=None
+        self,
+        x,
+        rot_mats,
+        pos_owned,
+        owner_mask,
+        page_table,
+        kv_cache,
+        compact=False,
+        pos_update=None,
+        pos_sdpa=None,
+        page_table_sdpa=None,
+        serial=None,
     ):
         """Global-layer decode: all 16 Q heads of this chip's KV group, for the slots this chip owns.
 
         ``pos_update``: the positions whose K / V this chip writes (default ``pos_owned``). With vLLM's page tables
-        both chips of the pair keep every slot's K / V, so the caller passes every slot's position."""
+        both chips of the pair keep every slot's K / V, so the caller passes every slot's position.
+        ``pos_sdpa`` / ``page_table_sdpa``: ``pos_owned`` and the page table cut to the first n decode slots (n < 32).
+        The SDPA takes its batch from the page table's rows and splits its cores evenly over that batch, so with the
+        32-row table each user gets 2 of 64 cores (21 ms per layer at 1M context); with n = 2 rows it gets 32 (1.15
+        ms). ``serial``: the K / V write positions one slot per tensor, written one after another (forward_decode);
+        vLLM's tables only."""
+        assert serial is None or pos_update is not None, "serial K / V writes need vLLM's tables (pos_update)"
         batch = x.shape[-2]
         xqkv = self._decode_qkv(x, self.wqkv_decode, self.decode_qkv_program)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
@@ -1088,21 +1184,18 @@ class TtMiMoAttention:
         q.deallocate(True)
         k.deallocate(True)
 
-        # The cache keeps only V's 128 real dims.
-        v_inter = ttnn.to_memory_config(v, ttnn.L1_MEMORY_CONFIG)
-        v.deallocate(True)
-        v_real = ttnn.slice(v_inter, (0, 0, 0, 0), (1, batch, 1, self.v_head_dim))
-        v_inter.deallocate(True)
-        v_shard = ttnn.to_memory_config(v_real, self._height_sharded(batch, TILE, self.v_head_dim))
-        v_real.deallocate(True)
+        v_shard = self._cache_width_v(v, batch, self.v_head_dim)
 
         k_cache, v_cache = kv_cache
-        update = dict(update_idxs_tensor=pos_owned if pos_update is None else pos_update, page_table=page_table)
-        ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
-        ttnn.experimental.paged_update_cache(v_cache, v_shard, **update)
+        for pos in serial or [pos_owned if pos_update is None else pos_update]:
+            update = dict(update_idxs_tensor=pos, page_table=page_table)
+            ttnn.experimental.paged_update_cache(k_cache, k_rot, **update)
+            ttnn.experimental.paged_update_cache(v_cache, v_shard, **update)
         k_rot.deallocate(True)
         v_shard.deallocate(True)
 
+        if page_table_sdpa is not None:
+            page_table, pos_owned = page_table_sdpa, pos_sdpa
         attn = ttnn.transformer.paged_flash_multi_latent_attention_decode(
             q_rot,
             k_cache,
@@ -1111,10 +1204,10 @@ class TtMiMoAttention:
             page_table_tensor=page_table,
             cur_pos_tensor=pos_owned,
             scale=self.scale,
-            program_config=self.decode_sdpa_program,
+            program_config=self._split_sdpa_program(page_table.shape[0], page_table.shape[-1] * k_cache.shape[-2]),
             compute_kernel_config=self.decode_sdpa_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
-        )  # [1, B, 16, 128]
+        )  # [1, B or n, 16, 128]
         q_rot.deallocate(True)
         # Heads concatenated in L1; slots owned by the other chip of the pair were skipped here, so the owner mask
         # zeroes their rows before the row all-reduce.

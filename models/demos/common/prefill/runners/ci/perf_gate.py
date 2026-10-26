@@ -14,6 +14,14 @@ METRICS = {
 }
 
 
+def fail(msg):
+    """Print a gate failure; under GitHub Actions also annotate it so log summaries see it."""
+    print(msg, file=sys.stderr)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        escaped = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print(f"::error title=Prefill perf gate::{escaped}")
+
+
 def power_class():
     from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
 
@@ -38,30 +46,22 @@ def lookup(table, model, config, cls):
     return entry["probe"], {metric: (value, table["margin"][metric]) for metric, value in entry[cls].items()}
 
 
-def check(rec, path, label, metric, expected, margin, fast_fails):
+def check(rec, path, label, metric, expected, margin):
     name, unit, fmt, higher_is_better = METRICS[metric]
     value = (rec.get(metric) or {}).get(label)
     if not isinstance(value, (int, float)) or not math.isfinite(value):
-        print(f"{name} GATE FAIL: {path} has no finite {metric} at {label}: {value!r}", file=sys.stderr)
+        fail(f"{name} GATE FAIL: {path} has no finite {metric} at {label}: {value!r}")
         return False
     lo, hi = expected * (1 - margin), expected * (1 + margin)
     print(
         f"{name} GATE {label}: {value:{fmt}} {unit} vs {expected:{fmt}} +/- {margin * 100:.0f}% "
         f"[{lo:{fmt}}, {hi:{fmt}}]"
     )
-    slow = value < lo if higher_is_better else value > hi
-    fast = value > hi if higher_is_better else value < lo
-    if fast_fails:
-        if slow or fast:
-            print(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]", file=sys.stderr)
-            return False
-    elif slow:
-        side, bound = ("below", lo) if higher_is_better else ("above", hi)
-        print(f"{name} GATE FAIL: {value:{fmt}} {side} {bound:{fmt}}", file=sys.stderr)
+    if value < lo or value > hi:
+        faster = (value > hi) == higher_is_better
+        hint = "; faster than the baseline, update the configured baseline in this change" if faster else ""
+        fail(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]{hint}")
         return False
-    elif fast:
-        side, bound = ("above", hi) if higher_is_better else ("below", lo)
-        print(f"{name} GATE WARN: {value:{fmt}} {side} {bound:{fmt}}; update the baseline if this holds")
     print(f"{name} GATE PASS")
     return True
 
@@ -84,9 +84,9 @@ def main():
         print(power_class())
         return 0
 
-    probe, baseline, fast_fails = None, None, False
+    probe, baseline = None, None
     if args.expected_tps:
-        baseline, fast_fails = {"throughput_tok_s": (float(args.expected_tps), float(args.margin or 0.15))}, True
+        baseline = {"throughput_tok_s": (float(args.expected_tps), float(args.margin or 0.15))}
     elif args.table and os.path.isfile(args.table):
         with open(args.table) as f:
             found = lookup(json.load(f), args.model, args.config, args.power)
@@ -99,13 +99,13 @@ def main():
         with open(args.perf_json) as f:
             rec = json.load(f)
     except Exception as e:
-        print(f"TPS GATE FAIL: no perf metrics at {args.perf_json}: {type(e).__name__}: {e}", file=sys.stderr)
+        fail(f"TPS GATE FAIL: no perf metrics at {args.perf_json}: {type(e).__name__}: {e}")
         return 1
 
     probes, index = rec.get("throughput_tok_s") or {}, rec.get("chunk_index") or {}
     label = max(probes, key=lambda k: index.get(k, -1), default=None)
     if label is None:
-        print(f"TPS GATE FAIL: {args.perf_json} has no throughput probes; the run measured nothing", file=sys.stderr)
+        fail(f"TPS GATE FAIL: {args.perf_json} has no throughput probes; the run measured nothing")
         return 1
 
     if baseline is None:
@@ -113,16 +113,14 @@ def main():
         return 0
 
     if probe and label != probe:
-        print(
+        fail(
             f"TPS GATE FAIL: baseline is for {probe} but the deepest probe is {label}; "
-            f"the context length changed, so re-measure and update perf_baselines.json",
-            file=sys.stderr,
+            f"the context length changed, so re-measure and update perf_baselines.json"
         )
         return 1
 
     results = [
-        check(rec, args.perf_json, label, metric, expected, margin, fast_fails)
-        for metric, (expected, margin) in baseline.items()
+        check(rec, args.perf_json, label, metric, expected, margin) for metric, (expected, margin) in baseline.items()
     ]
     return 0 if all(results) else 1
 

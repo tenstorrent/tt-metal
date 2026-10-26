@@ -21,18 +21,19 @@ void kernel_main() {
     constexpr uint32_t groups = get_compile_time_arg_val(6);
     constexpr uint32_t block_tiles = kt * ct;
 
-    custom_mm_block_init<false, true, false>(cb_h, cb_w, cb_out, ct);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<false, dest_layout>(cb_h, cb_w, cb_out, ct);
     cb_wait_front(cb_h, num_pairs * kt);
 
     for (uint32_t g = 0; g < groups; g++) {
         tile_regs_acquire();
         for (uint32_t p = 0; p < num_pairs - 1; p++) {
             cb_wait_front(cb_w, block_tiles);
-            custom_mm_block<false>(cb_h, cb_w, p * kt, 0, 0, kt, ct);
+            custom_mm_block<dest_layout, false>(cb_h, cb_w, p * kt, 0, 0, kt, ct);
             cb_pop_front(cb_w, block_tiles);
         }
         cb_wait_front(cb_w, block_tiles);
-        custom_mm_block<true>(cb_h, cb_w, (num_pairs - 1) * kt, 0, 0, kt, ct);
+        custom_mm_block<dest_layout>(cb_h, cb_w, (num_pairs - 1) * kt, 0, 0, kt, ct);
         cb_pop_front(cb_w, block_tiles);
         tile_regs_commit();
 

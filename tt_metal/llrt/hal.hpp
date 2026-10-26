@@ -16,12 +16,14 @@
 #include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <string_view>
-#include <umd/device/types/xy_pair.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/utils/semver.hpp>
+#include <tt-umd/types/xy_pair.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/utils/semver.hpp>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -34,8 +36,8 @@
 #include "hal/generated/realtime_profiler_msgs.hpp"  // IWYU pragma: export
 
 #include <tt_stl/overloaded.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
@@ -223,6 +225,8 @@ private:
     std::vector<uint32_t> mem_map_sizes_;
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     std::vector<uint32_t> eth_debug_regs_;
+    // The physical RISCs the core has.
+    std::optional<uint32_t> num_physical_riscs_;
     bool supports_cbs_ = false;
     bool supports_dfbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
@@ -389,6 +393,8 @@ public:
 };
 
 class Hal {
+    friend class HalJitBuildQueryQuasar;
+
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
     using IramRelocateFunc = std::function<uint64_t(uint64_t)>;
@@ -405,6 +411,7 @@ public:
 
 private:
     tt::ARCH arch_;
+    IpVariant quasar_arch_variant_{IpVariant::GRENDEL};
     std::vector<HalCoreInfoType> core_info_;
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
@@ -428,7 +435,14 @@ private:
     uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
     uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
+    uint32_t noc_stream_remote_dest_words_free_width_{};
+    uint32_t noc_stream_remote_src_reg_index_{};
     uint32_t operand_start_stream_{};
+    uint32_t risc_soft_reset_addr_{};
+    uint32_t wall_clock_low_addr_{};
+    uint32_t wall_clock_high_addr_{};
+    // Indexed by active Ethernet processor id.
+    std::vector<uint32_t> active_eth_physical_eriscs_;
     bool has_stream_registers_{};
     bool supports_fds_{};
     NoCTopologyType noc_topology_{};
@@ -436,6 +450,8 @@ private:
     std::vector<uint32_t> noc_y_id_translate_table_;
     bool coordinate_virtualization_enabled_{};
     bool supports_64_bit_pcie_addressing_{};
+    // Lowest NoC address the PCIe tile serves itself instead of forwarding to the host.
+    uint64_t pcie_tile_local_noc_addr_base_ = std::numeric_limits<uint64_t>::max();
     uint32_t virtual_worker_start_x_{};
     uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
@@ -480,7 +496,8 @@ private:
         bool is_simulator,
         bool enable_blackhole_dram_programmable_cores,
         bool enable_aerisc_ptp_trace);
-    void initialize_qa(uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq);
+    void initialize_qa(
+        uint32_t profiler_dram_bank_size_per_risc_bytes, bool enable_dram_backed_cq, IpVariant quasar_arch_variant);
 
     // Functions where implementation varies by architecture
     RelocateFunc relocate_func_;
@@ -509,7 +526,8 @@ public:
         bool enable_dram_backed_cq,
         bool is_simulator = false,
         bool enable_blackhole_dram_programmable_cores = false,
-        bool enable_aerisc_ptp_trace = false);
+        bool enable_aerisc_ptp_trace = false,
+        IpVariant quasar_arch_variant = IpVariant::GRENDEL);
 
     tt::ARCH get_arch() const { return arch_; }
 
@@ -545,7 +563,22 @@ public:
     uint32_t get_noc_stream_remote_dest_buf_space_available_update_reg_index() const {
         return noc_stream_remote_dest_buf_space_available_update_reg_index_;
     }
+    uint32_t get_noc_stream_remote_dest_words_free_width() const { return noc_stream_remote_dest_words_free_width_; }
+    uint32_t get_noc_stream_remote_src_reg_index() const { return noc_stream_remote_src_reg_index_; }
     uint32_t get_operand_start_stream() const { return operand_start_stream_; }
+    uint32_t get_risc_soft_reset_addr() const { return risc_soft_reset_addr_; }
+    // Reading the low word latches the high word, so read the low word first.
+    uint32_t get_wall_clock_low_addr() const { return wall_clock_low_addr_; }
+    uint32_t get_wall_clock_high_addr() const { return wall_clock_high_addr_; }
+    // The physical ERISC that active Ethernet processor `processor_id` runs on.
+    uint32_t get_active_eth_physical_erisc(uint32_t processor_id) const {
+        TT_FATAL(
+            processor_id < active_eth_physical_eriscs_.size(),
+            "Active Ethernet processor {} is not one of the HAL's {}",
+            processor_id,
+            active_eth_physical_eriscs_.size());
+        return active_eth_physical_eriscs_[processor_id];
+    }
     bool supports_fds() const { return supports_fds_; }
     bool has_stream_registers() const { return has_stream_registers_; }
     bool has_tile_counter_registers() const { return has_tile_counter_registers_; }
@@ -657,7 +690,11 @@ public:
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
+    // The processors metal runs on a core of this type.
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // The physical RISCs a core of this type has.
+    // NOTE: This includes the RISCs that metal runs processors on and the ones it doesn't.
+    uint32_t get_num_physical_risc_processors(HalProgrammableCoreType programmable_core_type) const;
     // Returns the processor index within a core.  There is a 1-1 mapping between
     // (processor_class, processor_type) and processor_index.  This is useful
     // For indexing data structures on devices (only 1-d arrays are needed).
@@ -745,6 +782,10 @@ public:
     // Inclusive upper bound
     uint64_t get_pcie_addr_upper_bound() const;
     bool get_supports_64_bit_pcie_addressing() const { return supports_64_bit_pcie_addressing_; }
+    // NoC addresses from this one up reach the PCIe tile's own configuration space, never the host. It bounds only
+    // that range: below it the tile's other windows apply their own PCIe attributes or targets, and only [0, 2^58)
+    // forwards an IOVA (see get_supports_64_bit_pcie_addressing) to the host unchanged.
+    uint64_t get_pcie_tile_local_noc_addr_base() const { return pcie_tile_local_noc_addr_base_; }
 
     size_t get_max_pinned_memory_count() const { return max_pinned_memory_count_; }
     size_t get_total_pinned_memory_size() const { return total_pinned_memory_size_; }
