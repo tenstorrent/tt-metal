@@ -31,3 +31,14 @@ R1-3 notes (D4 conditions 4 and 3):
 - Table fixes (D4 defect 5): the round-0 "paper/performance (P1) 8108 ms" is job 684's number; job 715 measured 8096.3 ms. The X gate's single_sparse performance drift list also missed pcc_row_p01_active. single_sparse accuracy device time 55.2 -> 60.6 ms (+9.9 %) while performance went 58.5 -> 37.8 ms: one row (96 tokens) per forward is launch- and weight-read-bound and not a guard; not investigated further.
 - Job 721 (policy variants) started at 14:44:01 on 29625d703fa, 62 s before aeebce5ef19 was committed: it ran the unfused FFN. Superseded by the D4 condition 2 jobs.
 - P6 on paper_313m: spread_ratio_inactive_p01 0.419 against the 0.4 floor (P1: 0.576), the closest margin of the P6 records in job 721.
+
+R1-3 notes (D5):
+- Defect 1, row-relative size of the 313m missing_16 accuracy miss (series 4, q0, patch 1 step 31; 0.0777 vs round 0 <= 0.0218): 0.78 of the row std (0.100), 2.3x the row's mean band half-width (0.034), 57 % of the golden q0-q1 gap (0.136); row err_p99 0.053, so not a single element. Real units at horizon step 64: 149.56 vs 146.49, the 10-90 band about 35 % wider, about 2 % of the level. No quantile crossing.
+- Defect 2 correction: the X table's round-0 accuracy row PCC 0.99999 and spread 1.041 belong to series 1, not series 4; series 4's round-0 PCC and spread were not measured, only its error (<= 0.0218).
+- Ruling 1: R1-3 stays accepted. Disclosed weakness: the fp32 SiLU*mul epilogue widened one row's q0 tail 3.5x in abs error, and no band floor sees it.
+- Ruling 2 (in code at ca10312c5a2, `ABS_ERR_CEILING` in goldens.py, check_gates.py): abs_err_max <= 1.5x the fixed record on every non-degenerate 313m / 2.5B-FT case, suite and bench, both precisions (accuracy 683/684, performance 768/767); 313m missing_16x2048 accuracy re-based on job 768 (0.0777, ceiling 0.117). A gross single-element check, not a band check.
+
+Round 1 disclosures (D5 defect 3):
+- Ran before their code was committed: 769 (diag, an uncommitted earlier diag_abs_err.py), 778 (diag, 62 s before abddc485825), 770 (matmul sweep), 773 / 781 (R1-4 / R1-6 screens), 786 (suite) and 787 (bench) on the uncommitted R1-4/R1-6 diff, which also dropped `rm -f` on their append-mode JSONs. All are screening only; 787 could not be cancelled from this session (permission denied) and ran on. The untracked `iter_01/{bench,pcc}_r14.json`, `screen_mm*.json`, `matmul_sweep_down_*.json` are those screening outputs.
+- 23a678f5025 and ba9a01720b9 are empty duplicate commits (of abddc485825 and 2c0f616238b).
+- The R1-4/R1-6 diff was committed in ca10312c5a2 as black reformatted it (formatting only). Evidence: suite + diag 796, bench 797 on ca10312c5a2, with `rm -f` and `git_head` / `git_dirty` in every record (PLAN v1.16); check_gates fails a dirty or unrecorded record.
