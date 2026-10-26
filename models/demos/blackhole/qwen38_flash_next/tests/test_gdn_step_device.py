@@ -30,7 +30,7 @@ pytestmark = pytest.mark.skipif(os.environ.get("QWEN38_FUSED_DEVICE_TEST") != "1
 DIES = MESH_SHAPE[1]
 HIDDEN = 2560
 # COMPONENT: the program keeps tt/gdn.py's rounding points except the q scale (applied to the read-out in fp32), so it
-# is held to the oracle's arithmetic, at about twice the recorded 64-step component proof (state 0.0048, gated 0.0098).
+# is held to the oracle's arithmetic, at about twice a measured 64-step component bound.
 STATE_RELATIVE, GATED_RELATIVE, GATED_PCC = 0.01, 0.02, 0.999
 
 

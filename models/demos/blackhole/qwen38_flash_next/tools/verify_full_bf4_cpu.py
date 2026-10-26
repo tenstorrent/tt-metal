@@ -3,11 +3,9 @@
 
 """Boundedly verify the already-staged Qwen3.8 BF4 corpus without devices.
 
-This diagnostic, non-promoting consumer checks every recorded artifact path,
-regular-file identity, byte count, shape, dtype, and layer evidence record.  It
-hashes four deterministic boundary samples rather than rereading the complete
-69 GB corpus (49 slots in moe_compute's compact expert layout).  It never imports Torch or TTNN and never writes beneath the
-artifact root.
+Checks every recorded artifact path, regular-file identity, byte count, shape, dtype and layer evidence record, and
+hashes four deterministic boundary samples instead of rereading the whole corpus. It never imports Torch or TTNN and
+never writes beneath the artifact root.
 """
 
 from __future__ import annotations

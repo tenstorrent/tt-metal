@@ -275,8 +275,8 @@ def test_clocks_summary_reports_period_and_host_segment() -> None:
 
 
 def test_no_sampling_field_is_greedy_and_absent_temperature_maps_to_the_card_profile_keyed_on_thinking() -> None:
-    # Decision B (2026-09-06): the launchers serve with --sampling, so a request naming no sampling field must stay
-    # the bitwise greedy loop; a sampling field without a temperature (seed alone included) takes the card profile.
+    # The launchers serve with --sampling, so a request naming no sampling field must stay the bitwise greedy loop;
+    # a sampling field without a temperature (seed alone included) takes the card profile.
     assert step.parameters_from_request({"messages": []}, enable_thinking=True, seed=11) is None
     assert step.parameters_from_request({}, enable_thinking=False, seed=12) is None
     thinking = step.parameters_from_request({"seed": 11}, enable_thinking=True, seed=99)

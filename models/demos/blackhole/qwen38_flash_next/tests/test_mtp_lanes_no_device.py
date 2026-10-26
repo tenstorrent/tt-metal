@@ -1,25 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTP lanes stage 1: the lane forms on the torch-backed ttnn of steps 4 and 5 (no device).
+"""MTP lanes: the lane forms on the torch-backed ttnn of steps 4 and 5 (no device).
 
-The step-5 fake is extended with the batched forms the lanes add (the multi-user ``paged_update_cache`` and the
-``(shape, padded_shape)`` view of row 0 of every lane's tile).  What is pinned:
-
-* the accept / alignment constants are block-diagonal per lane and zero on the pad columns; the GDN and QSA lane
-  selects expand, fold, indicate and pick exactly the rows they name and never a pad row;
-* the per-pass QSA lane verify inputs against their torch reference for lanes at distinct positions (every residue,
-  both KV-block cases) with inactive lanes redirected to the scratch rows;
-* the per-lane rollback invariant: after a lane pass, a per-lane commit (a_u in 0..k, some lanes inactive) and the
-  next pass, every active lane's KV rows, compressed blocks and raw history equal its own sequential 1-row stream
-  and the B=1 verify path bitwise, and an inactive lane's region is untouched;
-* the GDN lane rows are the rows path per lane bitwise (its recurrence called once per lane), and the lane commit
-  lands each lane's own prefix state and FIR history (an inactive or seeded lane keeps both bitwise);
-* the PLE lane rows are the rows path per lane bitwise, and the lane commit selects each lane's own history;
-* the device accept per lane is exact for every match pattern and large ids, the residual row select exact, the
-  position advance exact per lane, and the readback parses per lane;
-* source pins: no host tensor in the lane bodies, no Python loop over the lanes (except the GDN recurrence's
-  per-lane calls), every layer commits before its new rows, the position advance last.
+The central invariant: after a lane pass, a per-lane commit and the next pass, every active lane's state equals its
+own sequential 1-row stream and the B=1 verify path bitwise, and an inactive lane's region is untouched.
 """
 
 from __future__ import annotations
@@ -410,9 +395,8 @@ def _seed_lane_caches(module, ttnn_fake, streams, state, verify_state, positions
 def _run_lane_pass(
     module, fake, streams, state, verify_state, positions, active, rows, constants, lane_constants, lane_verify
 ):
-    """The two lane verify cache writers on every lane's rows P_u .. P_u + R - 1 (pad rows and an inactive lane's rows
-    zero: whatever an inactive lane's rows hold, its KV writes land in the scratch rows and its pooled rows in blocks
-    at or past P_u // 4 that its next real pass rewrites before any row can name them)."""
+    """The two lane verify cache writers on every lane's rows P_u .. P_u + R - 1. An inactive lane's KV writes land in
+    the scratch rows and its pooled rows in blocks its next real pass rewrites before any row names them."""
 
     lanes = len(streams)
     inputs, row_positions = _derive_lane_inputs(fake, positions, active, constants, lane_constants, lane_verify)
@@ -459,10 +443,8 @@ def _run_lane_pass(
     ),
 )
 def test_lane_kv_and_compressed_writes_commit_each_lanes_own_prefix(fake, positions, accepted, active, rows) -> None:
-    """Pass N with every lane active, a per-lane commit (a_u drafts; inactive lanes commit nothing), pass N + 1 with
-    the active mask: every active lane's visible KV rows and compressed blocks equal its own sequential stream and
-    the B=1 verify path on that stream bitwise, its raw history holds P'_u - 3 .. P'_u - 1; an inactive lane's region
-    and history are untouched (its writes landed in the scratch rows)."""
+    """Pass, per-lane commit, pass: every active lane's KV rows, compressed blocks and raw history equal its own
+    sequential stream and the B=1 verify path bitwise; an inactive lane's region is untouched."""
 
     accepted = tuple(min(a, rows - 1) for a in accepted)
     lanes = len(positions)
@@ -1073,10 +1055,8 @@ def test_every_lane_layer_commits_the_previous_pass_before_its_new_rows() -> Non
 
 
 def _install_admission_ops(fake) -> None:
-    """The ops the lane import adds to the fake: ``fill_cache`` (batch ``batch_idx`` of the cache <- the input), the
-    two argument forms of ``update_padded_kv_cache`` (the pager's ints: the start row is ``kv_actual_global``; the
-    verify writer's tensors), and a ``view`` that ALIASES its source whenever the tile-page reinterpretation is a plain
-    reshape (a fill through the view then lands in the owner, as on device)."""
+    """The ops the lane import adds to the fake: ``fill_cache``, both argument forms of ``update_padded_kv_cache``,
+    and a ``view`` that aliases its source when the tile-page reinterpretation is a plain reshape, as on device."""
 
     from models.demos.blackhole.qwen38_flash_next.tests.test_mtp_v2_step4_rows_no_device import (
         _from_tile_pages,
@@ -1152,9 +1132,8 @@ def test_kv_slab_lands_in_the_lane_in_chunks_the_cache_rows_divide(fake, lane, c
     (("compressed", 0, (1, 1, 96, 128)), ("staging", 1, (1, 1, 32, 512)), ("recurrent", 0, (1, 12, 128, 128))),
 )
 def test_pager_lane_slice_of_a_one_lane_layout_is_a_packed_copy_not_a_view_of_the_state(fake, family, axis, shape):
-    """The pager's pack body slices lane u of every state tensor and releases the parts after the concat; at one lane
-    (the generic-state pager of the lane server and of the lanes sweep) the slice spans the whole tensor, which the
-    device op returns as its input.  The part must be an owned copy: releasing it leaves the state allocated."""
+    """At one lane the pack body's lane slice spans the whole tensor, which the device op returns as its input: the
+    part must be an owned copy, so releasing it leaves the state allocated."""
 
     dtype = FP32 if family == "recurrent" else BF16
     state = FakeTensor([torch.full(shape, 2.5, dtype=dtype.torch) for _ in range(TP)], dtype, TILE)
@@ -1326,9 +1305,8 @@ def test_lane_position_write_lane_moves_one_lane(expect_error, fake) -> None:
 
 
 def test_batched_ple_lane_lookup_is_the_per_lane_lookup_in_one_read(expect_error, monkeypatch) -> None:
-    """``lookup_tokens_lanes`` chains every lane from its own context and reads every row in ONE batch: the payload is
-    the per-lane ``lookup_tokens`` payloads back to back and the contexts are theirs (the hash and the row read are
-    stand-ins: the chaining and batching are what is pinned)."""
+    """``lookup_tokens_lanes`` chains every lane from its own context and reads every row in one batch, equal to the
+    per-lane ``lookup_tokens`` payloads back to back."""
 
     lookup = object.__new__(ple_module.Qwen38ResidentPLELookup)
     lookup.vocab_size, lookup.eos_token_id = 1000, 2
@@ -1598,7 +1576,7 @@ def _draft_world(fake, monkeypatch, *, drafts: int, positions, accepted):
         (3, (0, 3, 61, 127), (1, 1, 0, 0)),
         (4, (0, 3, 61, 127), (1, 1, 0, 0)),
         # eight lanes at k = 3 fill the verify tile (8 x 4 = 32 rows): the constants carry no sentinel tail and the
-        # assembly concatenates the lane blocks alone (the 2026-09-26 64K B=8 k=3 row poisoned the model here)
+        # assembly concatenates the lane blocks alone
         (3, (5, 31, 32, 100, 29, 63, 60, 127), (0, 2, 1, 3, 3, 0, 2, 1)),
     ),
 )

@@ -458,11 +458,9 @@ def _with_margin(remainder: int) -> int:
 
 
 def test_admission_carries_the_long_chunk_terms(expect_error, monkeypatch) -> None:
-    """A --long-chunks chain's admission takes the measured 128-row chunk state and trace off the free side (the
-    table, and the live after-build read where they are still to come; not the after-captures read) and adds the MTP
-    layer's 128-row extension remainder to the states estimate (25,600 bytes per bank, measured 2026-09-26 as the
-    states term of the --mtp --long-chunks chain's growth record less the plain --mtp chain's); the default record is
-    unchanged.  (The pair bytes are stubbed: the packer's layout tables need the runtime.)"""
+    """A --long-chunks admission takes the 128-row chunk state and trace off the free side (not off an
+    after-captures read) and adds the MTP layer's 128-row extension to the states estimate; the default record is
+    unchanged. The pair bytes are stubbed: the packer's layout tables need the runtime."""
 
     monkeypatch.setattr(session_module, "packed_bf4_bytes_per_device", lambda *, ring_size: (80 << 20, 40 << 20))
     assert session_module.LONG_CHUNKS_BYTES_PER_BANK_AFTER_CAPTURES == 1_603_483_392 - 1_569_890_816 == 33_592_576

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """The resident decode chain's fixed points, shared by the chat session and the timing tool.
 
 The traced HEAD/TAIL chain replays one graph per GDN ring phase (position mod 4); the constants here pin that
@@ -44,11 +47,9 @@ GDN_TRACE_FORBIDDEN_BODY_CALLS = (
 )
 
 
-# The replay loops of the two chain modes are guarded once, around the whole
-# loop.  The loop's own host I/O (the PLE row write: from_torch and
-# copy_host_to_device_tensor; the blocking token-row readback: to_torch through
-# from_device) stays callable; every other forbidden call, synchronize_device
-# above all, fails at its call site anywhere inside the loop.
+# The replay loops are guarded once, around the whole loop.  The loop's own host I/O (the PLE row write and the
+# blocking token-row readback) stays callable; every other forbidden call, synchronize_device above all, fails at its
+# call site.
 REPLAY_LOOP_HOST_IO_CALLS = ("copy_host_to_device_tensor", "from_device", "from_torch", "to_torch")
 
 
@@ -67,8 +68,7 @@ SEQUENTIAL_TRACE_WARM_EMBEDDING_TOKEN_IDS = tuple(
 SINGLE_TRACE_RESIDUE_CLASS_TRACES = 4
 
 
-# Trace index (part, residue, regime): the QSA indexer regime is a key field
-# with one value until the indexer regime split adds a second TAIL regime.
+# Trace index (part, residue, regime); the QSA indexer regime has one value.
 SINGLE_TRACE_TRACE_PARTS = ("head", "tail")
 
 
@@ -203,11 +203,9 @@ def download_trace_tensor(tensor: Any, *, label: str) -> tuple[torch.Tensor, ...
 def ple_host_row(row_mapper: Any, payload: bytearray) -> tuple[Any, torch.Tensor]:
     """The 5,120 B of one PLE row as a ROW_MAJOR bf16 host mesh tensor, width-sharded four ways.
 
-    The persistent PLE input is interleaved DRAM ROW_MAJOR bf16 [1,1,1,640] per
-    device; copy_host_to_device_tensor writes these four 1,280 B shards straight
-    into it (same shape, dtype and layout, so the captured address is kept and
-    no device allocation, eager copy or host tilize happens per token) and the
-    captured body tilizes the row.  Returns the host tensor and its torch view.
+    copy_host_to_device_tensor writes the four 1,280 B shards straight into the persistent [1,1,1,640] DRAM input
+    (same shape, dtype and layout, so the captured address is kept and nothing is allocated per token); the captured
+    body tilizes the row.  Returns the host tensor and its torch view.
     """
 
     if len(payload) != PLE_EMBEDDING_UPLOAD_BYTES:

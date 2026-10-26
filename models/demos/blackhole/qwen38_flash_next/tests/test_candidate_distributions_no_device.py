@@ -3,13 +3,8 @@
 
 """The batched candidate distributions of one MTP pass, without a device.
 
-``candidate_distributions`` builds the k + 1 verify rows' distributions in one batched pass; here every row is the
-per-row ``candidate_distribution`` bitwise (positions and probabilities, fp32 and float64 rows) for every processor the
-server admits and every history shape a pass produces, falls back on exactly the rows the per-row function falls back
-on (the shard-floor guard, ``top_k`` 0, a boosting penalty) with its messages, and refuses what it refuses.  On those
-rows ``accept_pass`` is today's per-row acceptance to the draw: the same accepted count, tokens, draws, fallbacks and
-acceptance probabilities for every seed, the generator left in the same state, the verify logits read for the same
-passes.
+Every batched row equals the per-row ``candidate_distribution`` bitwise and falls back or refuses where it does;
+``accept_pass`` on the batched rows equals the per-row acceptance to the draw.
 """
 
 from __future__ import annotations
@@ -382,7 +377,7 @@ def _head(rows_logits: list[torch.Tensor], drafts: list[int]) -> mtp_v2.Qwen38TT
 
 
 def _accept_pass_per_row(session, request, prompt_tokens, tokens, head) -> mtp_v2.Qwen38TTNNVerifyDecision:
-    """The per-row ``accept_pass`` this commit replaced, verbatim: the reference law of the pass decision."""
+    """The per-row ``accept_pass``: the reference law of the pass decision."""
 
     rows = len(tokens)
     if tuple(head.candidate_rows.shape) != (rows, SAMPLING_CANDIDATE_ROW_SHAPE[3]):

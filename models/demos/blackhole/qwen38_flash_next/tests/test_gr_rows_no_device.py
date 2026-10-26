@@ -3,10 +3,8 @@
 
 """Prefill chunk: the GR read/write over 32 rows against the 1-row read/write, row for row, on a torch-backed ttnn.
 
-No device.  The step-4 fake (``test_mtp_v2_step4_rows_no_device``) is extended with the GR ops the 1-row path
-uses (the async gather + fast reduce of the partial, the zero-copy views, the fused sigmoid multiply, the FP32
-linear output).  Every op is per row or per element, so ``read_rows``/``write_rows`` must equal 32 ``read``/``write``
-calls bitwise.  The source pins hold the 1-row bodies untouched and the rows bodies free of views and host I/O.
+The step-4 fake is extended with the GR ops the 1-row path uses. Every op is per row or per element, so
+``read_rows``/``write_rows`` must equal 32 ``read``/``write`` calls bitwise.
 """
 
 from __future__ import annotations

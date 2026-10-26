@@ -1,23 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The device's sparse-attention KV cache formats, applied to the CPU oracle's K and V at cache-write time (outside
-``tt/``, which is never edited).
+"""The device's sparse-attention KV cache formats, applied to the CPU oracle's K and V at cache-write time.
 
 ``ttnn.transformer.sparse_sdpa`` stores one ``[V | K]`` row of 512 values per token per device.  ``bf16`` is what the
-oracle already does.  ``scaled_fp8`` is the format the device builds today (``per_token_cast_to_fp8`` with power-of-two
-scales + ``pack_scaled_fp8_kv_cache``, the whole row as the 512-wide latent field): per 128-element block one fp32
-scale ``2 ** ceil(log2(clamp(max|x|, 1e-4) * fp32(1/448)))`` and E4M3FN codes of ``x / scale`` as the Blackhole packer
-writes them, measured bitwise by the device half on 134M real elements: the mantissa TRUNCATED toward zero to three
-bits, a value exactly on a code falling one code toward zero (the SFPU reciprocal sits a little below 1 / scale), one
-subnormal binade (a magnitude in [2^-7, 2^-6) keeps its three truncated mantissa bits under a zero exponent, a code
-``m * 2^-9``) and a signed zero below 2^-7.  The kernel then tilizes the codes into bfp8_b tiles (16 consecutive
-elements share the block's largest exponent, 7 mantissa bits), multiplies by the scale and packs the product to bfp8_b
-again before the two matmuls.  ``scaled_fp8_rne`` is the same layout with a hypothetical nearest-even packer
-(tt-metal's host conversion ``float8.cpp``: round to nearest even, saturate to +-448, flush below 2^-6).  ``fp8_e4m3``
-is the plain 512-byte e4m3 row the kernel also reads (nearest-even storage, then the bfp8_b tilize) and
-``fp8_e4m3_storage`` its storage rounding alone; no in-tree Blackhole op writes that row today, so both are what-ifs.
-The bfp8_b rounding follows the host packer (round to nearest even, clamp at 127) unless ``truncate`` is asked for.
+oracle already does.  ``scaled_fp8`` is the device's format: per 128-element block one power-of-two fp32 scale and
+E4M3FN codes of ``x / scale`` as the Blackhole packer writes them (:func:`fp8_e4m3_codes_device`), then the bfp8_b
+tilize and the scale multiply before the two matmuls.  ``scaled_fp8_rne`` is the same layout with a nearest-even
+packer; ``fp8_e4m3`` and ``fp8_e4m3_storage`` model the plain 512-byte e4m3 row, which no in-tree Blackhole op writes.
 Every emulated value has at most seven significant bits, so it is exact in the oracle's bf16 cache.
 """
 
@@ -117,13 +107,10 @@ def fp8_e4m3_values(codes: torch.Tensor, *, subnormals: bool = False) -> torch.T
 
 
 def fp8_e4m3_codes_device(scaled: torch.Tensor) -> torch.Tensor:
-    """The e4m3 byte the Blackhole packer writes for the fp32 product ``x * recip(scale)``, as measured bitwise by the
-    device half (every bf16 mantissa of 39 binades at two scales, 262,144 real rows): the mantissa is TRUNCATED toward
-    zero to three bits, a value exactly on a code falls one code toward zero (the SFPU reciprocal of the power-of-two
-    scale is a little below 1 / scale), a magnitude then in [2^-7, 2^-6) keeps its three truncated mantissa bits under
-    a zero exponent field (a subnormal code ``m * 2^-9``), a magnitude below 2^-7 is a signed zero, zero stays a signed
-    zero, magnitudes above 448 saturate to 448.  The arithmetic is ``ttnn/qsa.py::e4m3_codes_device`` of the device
-    branch, kept in lockstep."""
+    """The e4m3 byte the Blackhole packer writes for the fp32 product ``x * recip(scale)``: the mantissa TRUNCATED
+    toward zero to three bits, a value exactly on a code one code toward zero (the SFPU reciprocal of the scale is a
+    little below 1 / scale), a magnitude in [2^-7, 2^-6) a subnormal code ``m * 2^-9``, below 2^-7 a signed zero,
+    above 448 saturated to 448."""
     value = scaled.detach().to(torch.float32)
     sign = torch.signbit(value).to(torch.uint8) << 7
     magnitude = value.abs()
@@ -187,9 +174,8 @@ def scaled_fp8_scales(values: torch.Tensor, *, power_of_two: bool) -> torch.Tens
 
 
 def scaled_fp8_quantize_device(values: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """The device's quantisation of K/V rows (``emulate_scaled_fp8_rows`` of the device branch, bitwise the packed
-    bytes): power-of-two scales and :func:`fp8_e4m3_codes_device` of ``x / scale`` (exact: the scale is a power of
-    two).  Returns ``(codes uint8 [..., H], scales fp32 [..., H/128])``."""
+    """The device's quantisation of K/V rows: power-of-two scales and :func:`fp8_e4m3_codes_device` of ``x / scale``
+    (exact: the scale is a power of two).  Returns ``(codes uint8 [..., H], scales fp32 [..., H/128])``."""
     x = values.detach().to(torch.float32)
     scale = scaled_fp8_scales(x, power_of_two=True)
     blocks = x.reshape(*x.shape[:-1], x.shape[-1] // SCALE_BLOCK, SCALE_BLOCK)
@@ -197,10 +183,9 @@ def scaled_fp8_quantize_device(values: torch.Tensor) -> tuple[torch.Tensor, torc
 
 
 def scaled_fp8_quantize(values: torch.Tensor, *, power_of_two_scale: bool = True) -> tuple[torch.Tensor, torch.Tensor]:
-    """The hypothetical nearest-even packer on the same layout: ``codes = e4m3_rne(x * (1/scale))`` with the packer's
-    10-bit mantissa rounding of the fp32 product first (``float8.cpp`` semantics: saturate, flush below 2^-6).  The
-    device does not round this way (see :func:`fp8_e4m3_codes_device`); this is the "what a nearest-rounding packer
-    would give" row.  Returns ``(codes uint8 [..., H], scales fp32 [..., H/128])``."""
+    """A hypothetical nearest-even packer on the same layout: ``codes = e4m3_rne(x * (1/scale))`` with the packer's
+    10-bit mantissa rounding of the fp32 product first (``float8.cpp`` semantics: saturate, flush below 2^-6).
+    Returns ``(codes uint8 [..., H], scales fp32 [..., H/128])``."""
     x = values.detach().to(torch.float32)
     scale = scaled_fp8_scales(x, power_of_two=power_of_two_scale)
     blocks = x.reshape(*x.shape[:-1], x.shape[-1] // SCALE_BLOCK, SCALE_BLOCK)
@@ -209,8 +194,8 @@ def scaled_fp8_quantize(values: torch.Tensor, *, power_of_two_scale: bool = True
 
 
 def scaled_fp8_dequantize(codes: torch.Tensor, scales: torch.Tensor, *, subnormals: bool = True) -> torch.Tensor:
-    """``per_token_cast_back`` / the device branch's ``unpack_scaled_fp8_rows``: decode(codes) * scale, fp32 (subnormal
-    codes as their float8_e4m3fn values unless ``subnormals=False``)."""
+    """``per_token_cast_back``: decode(codes) * scale, fp32 (subnormal codes as their float8_e4m3fn values unless
+    ``subnormals=False``)."""
     decoded = fp8_e4m3_values(codes, subnormals=subnormals)
     blocks = decoded.reshape(*codes.shape[:-1], codes.shape[-1] // SCALE_BLOCK, SCALE_BLOCK)
     return (blocks * scales.unsqueeze(-1).to(torch.float32)).reshape(codes.shape)

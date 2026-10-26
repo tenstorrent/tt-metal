@@ -3,11 +3,8 @@
 
 """Every module attribute the chain's construction path names exists (no device).
 
-The served chain is built by ``Qwen38TracedChain.open`` / ``construct_chain`` and driven by the server's ``main``; a
-name they reach through an imported module (``sampling_step.x``, ``mtp_v2.y``, ``resident_decode.z``) resolves only at
-that call, on a device.  A re-export pruned from a module (an import cleaner's doing) then dies at chain open, past
-every static pin.  This test walks those functions' ASTs and asserts that each attribute reached through a module
-bound in their globals exists on that module, and that each bare global name is bound."""
+A name reached through an imported module resolves only at the call, on a device, so a pruned re-export would fail at
+chain open. This walks the construction functions' ASTs and checks every such attribute and bare global name."""
 
 from __future__ import annotations
 

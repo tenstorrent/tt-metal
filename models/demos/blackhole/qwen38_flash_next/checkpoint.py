@@ -220,9 +220,7 @@ class Qwen38Checkpoint:
         return names
 
     def vision_state_dict(self) -> dict[str, torch.Tensor]:
-        """Host BF16 ``{name without the model.visual. prefix: tensor}`` of the whole tower from one open of shard 1.
-
-        Nothing of the tower is read unless this is called: the text-only paths keep the domain omitted."""
+        """Host BF16 ``{name without the model.visual. prefix: tensor}`` of the whole tower from one open of shard 1."""
 
         names = self.vision_tensor_names()
         path = self.root / VISION_SHARD
@@ -266,10 +264,7 @@ class Qwen38Checkpoint:
     def tensor_rows(self, name: str, indices: torch.Tensor) -> torch.Tensor:
         """Read sparse rows directly from one safetensors payload with ``pread``.
 
-        This is the synchronous correctness path for the 51.2B-parameter PLE
-        table.  It reads only requested rows and never maps or materializes a
-        complete 800-MB table part.  Async/coalesced prefetch is a later
-        optimization over this value/order contract.
+        Reads only the requested rows of the PLE table; never maps or materializes a whole table part.
         """
 
         metadata = self.metadata(name)
@@ -290,10 +285,8 @@ class Qwen38Checkpoint:
         path = self.root / metadata.shard
         stable_path = self._guard(path, f"before-tensor-rows:{name}")
         flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-        # A component-gate guard returns /proc/self/fd/N intentionally: that
-        # kernel-owned link duplicates the already admitted descriptor.  For
-        # ordinary paths, retain O_NOFOLLOW so the standalone loader cannot
-        # traverse a mutable symlink.
+        # A component-gate guard returns /proc/self/fd/N, which duplicates the admitted descriptor. Ordinary paths
+        # keep O_NOFOLLOW so the loader cannot traverse a mutable symlink.
         if stable_path.parent != Path("/proc/self/fd"):
             flags |= getattr(os, "O_NOFOLLOW", 0)
         descriptor: int | None = None
@@ -373,15 +366,9 @@ class Qwen38Checkpoint:
 class Qwen38CheckpointRowReader:
     """Persistent-descriptor sparse row reads with the ``tensor_rows`` value/order contract.
 
-    The file guard brackets exactly one open per part.  Bytes read through an
-    open descriptor can only change if the inode itself changes, so every later
-    batch re-proves the identity captured at that open with ``fstat`` before
-    and after its ``pread`` calls instead of re-resolving the path.  The
-    identity is the shard FILE's (``shard``): a caller reading several parts
-    of one file in a batch proves it once per touched file around the batch
-    (:meth:`prove_identity`) and reads the parts with :meth:`advise_proven` /
-    :meth:`read_rows_proven`; :meth:`advise` and :meth:`read_rows` prove it
-    themselves.
+    One open per part; every batch re-proves the shard file's inode identity with ``fstat`` around its ``pread``
+    calls. :meth:`advise` and :meth:`read_rows` prove it themselves; the ``_proven`` variants leave it to a caller
+    that called :meth:`prove_identity` around a batch over several parts of one file.
     """
 
     def __init__(self, checkpoint: Qwen38Checkpoint, name: str) -> None:
@@ -425,8 +412,7 @@ class Qwen38CheckpointRowReader:
         return descriptor
 
     def prove_identity(self, when: str) -> None:
-        """One ``fstat`` re-proof of the admitted inode (the identity of the whole shard file): a batch over several
-        parts of one file proves it before and after the batch through any one of their readers."""
+        """One ``fstat`` re-proof of the admitted shard file's inode."""
 
         self._checked_descriptor(when)
 
@@ -462,8 +448,7 @@ class Qwen38CheckpointRowReader:
         return payloads
 
     def read_rows_proven(self, row_indices: Sequence[int]) -> list[bytes]:
-        """:meth:`read_rows` for a caller that proved the file's identity around its batch: one ``pread`` per
-        distinct row, no ``fstat``."""
+        """:meth:`read_rows` for a caller that proved the file's identity around its batch: no ``fstat``."""
 
         descriptor = self._open_descriptor()
         payloads: dict[int, bytes] = {}

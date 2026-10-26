@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """The vision tower's terms in the MTP chain's DRAM admission (no device): the resident tower comes off the free side
 where the reading predates its load, the largest image's transient activation is a required-side part with the growth
 margin, and the default record is unchanged."""
@@ -8,7 +11,7 @@ import pytest
 
 from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session_module
 
-RESIDENT = 125_231_104  # the tower's BF16 weights per bank, measured on the line 2026-09-29
+RESIDENT = 125_231_104  # the tower's BF16 weights per bank; from a device measurement
 PEAK = 150_994_944  # 65,536 patches (the stock maximum image) x 18,432 bytes per padded patch over 8 banks
 
 

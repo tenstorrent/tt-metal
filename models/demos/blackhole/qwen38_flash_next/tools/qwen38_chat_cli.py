@@ -3,14 +3,10 @@
 
 """Terminal client for the Qwen3.8 chat server (standard library only).
 
-Keeps the whole conversation and sends it with every turn, so the server
-reuses the device state when the rendered prefix matches; the status line
-after each reply shows ``prefix_reused`` and the decode rate.  Reasoning
-deltas print between ``<think>`` and ``</think>`` markers.  With ``--tools``
-the ``add_integers`` tool is offered and executed locally (the OpenAI shape
-Hermes uses: string ``arguments``, a ``tool`` message per call), then the
-turn continues until the model answers.  Commands: ``/reset`` clears the
-history, ``/quit`` exits.
+Sends the whole conversation every turn, so the server reuses the device state
+when the rendered prefix matches. Reasoning prints between ``<think>`` and
+``</think>`` markers. With ``--tools`` the ``add_integers`` tool is offered
+and run locally. Commands: ``/reset`` clears the history, ``/quit`` exits.
 """
 
 from __future__ import annotations

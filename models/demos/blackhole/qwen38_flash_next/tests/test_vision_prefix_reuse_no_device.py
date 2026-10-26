@@ -84,7 +84,7 @@ def test_the_prompt_end_snapshot_of_an_image_prompt_is_keyed_on_its_images_too()
     # the record carries the spans; a restore brings them back as the committed images
     session._restore_prompt_snapshot()
     assert session.committed == list(first[:-1]) and session.committed_vision == spans_a
-    # a text prompt's snapshot keeps an empty record and a text request that extends it restores as before
+    # a text prompt's snapshot keeps an empty record and a text request that extends it restores
     session.snapshot = Qwen38PromptSnapshot(tuple(TEXT[:6]), None, "chunked")
     session.committed = TEXT[:8]
     assert session.reusable_prefix(TEXT[:6] + TEXT[9:12]) == (6, "snapshot")

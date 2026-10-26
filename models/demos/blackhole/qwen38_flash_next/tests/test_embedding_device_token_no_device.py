@@ -210,13 +210,10 @@ EMBEDDING_CPP = REPO_ROOT / "ttnn/cpp/ttnn/operations/embedding/embedding.cpp"
 def _ttnn_embedding_output_shape(indices_shape: tuple[int, ...], weight_shape: tuple[int, ...]) -> tuple[int, ...]:
     """Logical output shape of ``ttnn.embedding`` as the C++ wrapper builds it.
 
-    ttnn/cpp/ttnn/operations/embedding/embedding.cpp:38-39 take ``batch_size``
-    (1 for rank-1 indices, else ``indices[0]``) and ``sentence_size``
-    (``indices[-1]``); lines 70-74 reshape the device op's
-    ``[batch, 1, sentence, hidden]`` result to ``[sentence, hidden]`` for rank-1
-    indices and ``[batch, sentence, hidden]`` otherwise.  The pinned
-    runtime carries the same lines; 4x p150 micro-test measured [1, 32, 2560]
-    for [1, 1, 32] indices.
+    ``ttnn/cpp/ttnn/operations/embedding/embedding.cpp`` takes ``batch_size`` (1 for rank-1 indices, else
+    ``indices[0]``) and ``sentence_size`` (``indices[-1]``) and reshapes the device op's
+    ``[batch, 1, sentence, hidden]`` result to ``[sentence, hidden]`` for rank-1 indices and
+    ``[batch, sentence, hidden]`` otherwise.
     """
 
     hidden = weight_shape[-1]
@@ -506,6 +503,6 @@ def test_model_embeds_residual_rows_from_the_device_token_rows() -> None:
     from models.demos.blackhole.qwen38_flash_next.ttnn.layer import BLOCK_ROWS_LOCAL_SHAPE, RESIDUAL_ROWS_LOCAL_SHAPE
 
     assert RESIDUAL_ROWS_LOCAL_SHAPE == (1, 4, 32, 640) and BLOCK_ROWS_LOCAL_SHAPE == (1, 1, 32, 640)
-    # The 1-row builder is not edited.
+    # The 1-row builder keeps the single-row embed.
     one_row = inspect.getsource(model_module.Qwen38TTNNTextModel._embed_residual_from_device_token)
     assert "embed_device_token(token_row)" in one_row and "rows" not in one_row.replace("_owners", "")

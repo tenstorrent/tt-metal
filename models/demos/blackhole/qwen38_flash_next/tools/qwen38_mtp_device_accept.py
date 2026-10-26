@@ -1,18 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """The MTP pass's on-device point-mass acceptance as the sampling chain serves it.
 
-``QWEN38_MTP_DEVICE_ACCEPT=1`` lets an ``--mtp --sampling`` server decide its passes on the device: the pass loop's
-third verify form runs ``fused/mtp_accept`` between the verify head and its tail, under the device sampler's law
-(the temperature table's integer weights, exact prefix sums, one fp32 multiply per decision, no division: row ``j``
-accepts ``d_{j+1}`` iff ``fl32(u_j * S_j) < w_j(d_{j+1})``, a tie rejects; the first rejection and the bonus row draw
-with a second uniform).  The host-decided split form (``accept_pass``: the host sampler's fp32 law) stays the form
-for every request this admission refuses and for servers without the switch.  A response names its arithmetic
-(``mtp_acceptance_arithmetic``: ``device-theta`` or ``host-fp32``) and the server fingerprint carries
-``-device-accept``: a seed reproduces one stream per arithmetic, never across them.
-
-This module holds the switch, the per-request admission, the constants (the sampler tail's, ``rows = k + 1``: the
-policy row, the uniforms row ``[u_0 .. u_{k-1}, v]``, the temperature table), the per-pass uniforms hook the pass
-loop calls before the verify launch, and the re-derivation of a recorded pass with :func:`mtp_accept.accept_reference`
-(the wired-loop gate: 0 mismatches expected, the same arithmetic on both sides).
+``QWEN38_MTP_DEVICE_ACCEPT=1`` lets an ``--mtp --sampling`` server decide its passes on the device: the third verify
+form runs ``fused/mtp_accept`` between the verify head and its tail under the device sampler's law (row ``j`` accepts
+``d_{j+1}`` iff ``fl32(u_j * S_j) < w_j(d_{j+1})``, a tie rejects; the first rejection and the bonus row draw with a
+second uniform).  Requests this admission refuses keep the host-decided split form (``accept_pass``).  A response
+names its arithmetic (``mtp_acceptance_arithmetic``) and the fingerprint carries ``-device-accept``: a seed reproduces
+one stream per arithmetic, never across them.
 """
 
 from __future__ import annotations
@@ -32,7 +28,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.sampling import UniformStream
 SWITCH = "QWEN38_MTP_DEVICE_ACCEPT"
 ARITHMETIC_DEVICE = "device-theta"
 ARITHMETIC_HOST = "host-fp32"
-# The constants are the sampler tail's (rows <= its MAX_ROWS) and the kernel holds k + 1 rows: k <= 4 today.
+# The constants are the sampler tail's (rows <= its MAX_ROWS) and the kernel holds k + 1 rows.
 ADMITTED_DRAFTS = min(mtp_accept.MAX_DRAFTS, sampler_tail.MAX_ROWS - 1)
 
 

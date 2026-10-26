@@ -1,11 +1,11 @@
-"""On an ``--mtp`` server sampled requests take the host pass loop (no device):
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 
-the server's sampler default is the host sampler when ``--mtp`` is given (the MTP chain's tail resolves the greedy
-token for the draft row and the pass loop's point-mass decision is the host's), ``--device-sampler`` with ``--mtp`` is
-refused with that reason, the session binds no device policy without a sampler, and the drafting admission admits a
-sampled request that arrives without the device loop.  The 2026-09-25 regression: the device sampler had become the
-``--sampling`` default on every server, so an ``--mtp`` server's first sampled request bypassed the pass loop into the
-device loop and read the greedy token as its draw."""
+"""On an ``--mtp`` server sampled requests take the host pass loop (no device).
+
+The sampler default is the host sampler under ``--mtp`` (the MTP chain's tail resolves the greedy token for the draft
+row), ``--device-sampler`` with ``--mtp`` is refused, the session binds no device policy without a sampler, and the
+drafting admission admits a sampled request that arrives without the device loop."""
 
 from __future__ import annotations
 

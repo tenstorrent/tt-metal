@@ -1,16 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTP v2 step 4: the GDN and PLE multi-row device paths against their 1-row paths, on a torch-backed ttnn.
+"""MTP v2 step 4: the GDN and PLE multi-row paths against their 1-row paths, on a torch-backed ttnn (no device).
 
-No device.  ``ttnn`` is replaced in ``ttnn/gdn.py``, ``ttnn/ple.py`` and ``ttnn/layer.py`` by a mesh-of-four
-torch model of the op surface the modules use (elementwise ops in the operand dtype, row-serial matmuls,
-norms and transcendental ops so a row's result does not depend on how many rows share its tensor, collectives
-over the four locals).  The chunk kernel is pluggable: the step form (the 1-row path's fp32 arithmetic) shows
-that everything around the recurrence is bitwise the 1-row path at R = 1; the torch chunk reference (fp32 WY
-form, bf16 q scaling as the composite does it) shows R = 5 rows against five sequential steps and every
-commit(a) against the a + 1 committed steps.  The source pins hold the trace contract of the new methods
-(one full chunk, device-resident constants, no host upload, no per-pass host ints, the 1-row bodies untouched).
+Rows computed in the fake do not depend on how many rows share a tensor, so the multi-row paths can be compared
+with sequential 1-row steps; the chunk kernel model is pluggable.
 """
 
 from __future__ import annotations
@@ -146,8 +140,7 @@ def _unary(fn, dtype_keep=True):
 
 
 def _softplus(tensor, *, beta, threshold, memory_config=None):
-    """``ttnn.softplus`` as fp32 torch softplus; the device op's SFPU error (4.7e-4 relative, never a flush to 0 on
-    4x p150) is below the 1e-3 envelope the gate probe asserts, so the fake stands in for it honestly."""
+    """``ttnn.softplus`` as fp32 torch softplus; the device op's error is below the gate probe's 1e-3 envelope."""
 
     assert tensor.dtype is FP32 and (beta, threshold) == (1.0, 20.0), (tensor.dtype, beta, threshold)
     return FakeTensor(
@@ -181,7 +174,7 @@ def _binary(torch_op):
                     y = torch.exp(y)
                 x, y = x.to(compute.torch), y.to(compute.torch)
             result = torch_op(x, y).to(out_dtype.torch)
-            # No fused output activation is modeled: the device's fused SOFTPLUS flushed to 0 below about -5.
+            # No fused output activation is modeled.
             assert not activations, activations
             results.append(result)
         if output_tensor is not None:
@@ -300,9 +293,8 @@ def _from_tile_pages(pages: torch.Tensor, shape: tuple[int, ...]) -> torch.Tenso
 
 
 def _view(tensor, shape, *, memory_config=None):
-    """``ttnn.experimental.view``: the same device pages read back under a new shape (a metadata change), i.e.
-    the tile pages of the input reinterpreted in the output's tile grid.  Modelled faithfully so a view whose
-    logical (row-major) meaning differs from a torch reshape is caught."""
+    """``ttnn.experimental.view``: the input's tile pages reinterpreted in the output's tile grid, so a view whose
+    logical meaning differs from a torch reshape is caught."""
 
     return FakeTensor(
         [_from_tile_pages(_tile_pages(x), tuple(shape)) for x in tensor.torch_shards()], tensor.dtype, tensor.layout
@@ -456,9 +448,8 @@ class FakeChunk:
 
 
 def torch_chunk_kernel(q, k, v, g, beta, scale, state):
-    """The kernel's algorithm in torch: bf16 q scaled in bf16 (the composite's ``multiply(q, scale)``), GQA
-    expand of the 4 key heads to the 12 value heads, fp32 WY chunk of 32 rows from ``state``; fp32 output
-    (the kernel's output dtype on the pinned runtime, measured on 4x p150)."""
+    """The kernel's algorithm in torch: q scaled in bf16, GQA expand of the 4 key heads to the 12 value heads, fp32
+    WY chunk of 32 rows from ``state``; fp32 output."""
 
     q_scaled = (q.float() * scale).to(torch.bfloat16).float().repeat_interleave(HEADS // q.shape[2], dim=2)
     k_full = k.float().repeat_interleave(HEADS // k.shape[2], dim=2)
@@ -671,8 +662,7 @@ def fake(monkeypatch):
 
 
 def test_softplus_gate_never_flushes_to_zero_and_tracks_torch_softplus(fake) -> None:
-    """The decay gate over a + dt_bias in [-8, 0] (the served range; layer-0 heads reach -5.5): no exact 0,
-    within 1e-3 of torch softplus, FP32 out.  The fused SOFTPLUS activation it replaced returned 0 below -5.02."""
+    """The decay gate over a + dt_bias in [-8, 0]: no exact 0, within 1e-3 of torch softplus, FP32 out."""
 
     xs = torch.linspace(-8.0, 0.0, 4 * 32, dtype=torch.float32).reshape(1, 1, 4, 32)
     a_fp32 = FakeTensor([xs.clone() for _ in range(TP)], FP32)
@@ -946,11 +936,8 @@ def test_commit_rows_lands_the_committed_prefix_state_and_history(fake, gdn_weig
 
 
 def test_step_anchor_keeps_the_committed_state_on_the_one_row_path_over_many_passes(fake, gdn_weights) -> None:
-    """Twenty-four R = 5 passes with random accept counts (about 70 committed rows; 60 passes ran past the 300 s
-    per-test timeout on a loaded host): with ``step_committed_rows`` the committed state stays bitwise the 1-row
-    path's after every pass, and the FIR history the ring's; the chunk form's state is reported beside it (the fake
-    kernel is the fp32 torch WY form, so its drift here is the algorithm's, not the device's TF32 drift that motivated
-    the re-anchor)."""
+    """R = 5 passes with random accept counts: with ``step_committed_rows`` the committed state stays bitwise the
+    1-row path's after every pass and the FIR history the ring's; the chunk form's state is reported beside it."""
 
     _, weights = gdn_weights
     module = _gdn_module(weights)
@@ -1085,10 +1072,8 @@ def _bits_equal(left: torch.Tensor, right: torch.Tensor) -> bool:
 
 
 def test_rows_selection_matmuls_reproduce_torch_indexing_bitwise() -> None:
-    """The 0/1 selection matrices pick exactly the rows torch indexing picks, under the device's arithmetic
-    model (HiFi4: exact bf16 x bf16 products; fp32 accumulation; one rounding to bf16).  Each output element
-    has a single nonzero term (x * 1.0, the other products exact zeros), so the fp32 sum is x and the bf16
-    result is the selected bf16 value, whatever the accumulation order."""
+    """The 0/1 selection matrices pick exactly the rows torch indexing picks under HiFi4 with fp32 accumulation:
+    each output element has a single nonzero term, so the result is exact whatever the accumulation order."""
 
     tiles = gdn_module.rows_window_select_tiles(ROWS)
     taps, stack, expand = tiles["conv_taps"], tiles["history_select_stack"], tiles["qk_expand"]
@@ -1130,9 +1115,8 @@ def test_rows_selection_matmuls_reproduce_torch_indexing_bitwise() -> None:
 
 
 def test_fake_view_is_the_device_tile_order_and_folds_head_major_rows_for_free() -> None:
-    """``ttnn.experimental.view`` reinterprets the tile pages: the fake models that, and on it the head-major
-    ``[1, 12, 32, 128]`` -> token-major ``[1, 1, 32, 1536]`` fold the gate path uses is a permute + reshape in
-    logical terms, at zero data movement on device (tile (h, c) sits at page 4h + c in both shapes)."""
+    """The gate path's head-major ``[1, 12, 32, 128]`` -> token-major ``[1, 1, 32, 1536]`` view is a permute +
+    reshape in logical terms: tile (h, c) sits at page 4h + c in both shapes."""
 
     torch.manual_seed(30)
     head_major = torch.randn(1, HEADS, 32, HEAD_DIM).to(torch.bfloat16)
@@ -1168,8 +1152,7 @@ def test_rows_bodies_are_the_pinned_walk() -> None:
             if ast.unparse(node.func).startswith("self._")
         ]
 
-    # forward_rows gathers and hands the body to the resolved rows form; the chain's own order moved verbatim into
-    # the registry's composed body (ttnn/fused/gdn_rows_wrap.rows_body_composed), which is walked right below.
+    # forward_rows gathers and hands the body to the resolved rows form; the composed body is walked below.
     assert walk("forward_rows") == [
         "_validate_state",
         "_validate_rows_state",
@@ -1424,10 +1407,8 @@ def test_layer_rows_entry_points_are_thin_and_typed() -> None:
 
 
 # --------------------------------------------------------------------------- prefill chunk: R = 32
-# The chunk step of the C = 32 prefill is forward_rows at the full tile plus commit_rows with every row
-# accepted (a = 31; a = r - 1 for the padded last chunk).  These pins hold the same properties as the
-# R = 5 tests above at the chunk's row count, under the tolerance model (output <= 2e-4 + 4 bf16
-# ulp of the output scale, state <= 3e-3 + 2^-7 of the state scale).
+# The prefill chunk step is forward_rows at the full tile plus commit_rows with every row accepted (a = 31; r - 1
+# for a padded last chunk): the R = 5 properties at the chunk's row count.
 
 CHUNK_ROWS = 32
 CHUNK_COMMITS = (31, 0, 1, 2, 8)
@@ -1529,11 +1510,8 @@ def test_commit_rows_at_the_chunk_size_lands_the_prefix_state_and_the_history(fa
 
 @pytest.mark.parametrize("accepted", (CHUNK_ROWS - 1, 4))
 def test_chunk_path_commit_with_the_step_anchor_is_bitwise_the_one_row_path(fake, gdn_weights, accepted: int) -> None:
-    """The prefill chunk's GDN commit (rows = 32 = CHUNK_ROWS: the accept scalar 31 for a full chunk, r - 1 for the
-    padded tail of r real rows) with ``step_committed_rows`` (the layer's ``gdn_step_anchor``): the committed state
-    is bitwise the 1-row path's after the committed rows and the FIR history is the ring's; the chunk-kernel form is
-    reported beside it (the fake kernel is the fp32 torch WY form, so its drift is the algorithm's, not the device's
-    TF32 drift that grows with the prompt length and motivated the re-anchor)."""
+    """The prefill chunk's GDN commit with ``step_committed_rows``: the committed state is bitwise the 1-row path's
+    and the FIR history the ring's, for a full and a padded chunk."""
 
     _, weights = gdn_weights
     module = _gdn_module(weights)

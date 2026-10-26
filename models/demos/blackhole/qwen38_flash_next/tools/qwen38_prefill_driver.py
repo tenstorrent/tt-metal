@@ -4,41 +4,17 @@
 """Chunked prefill of one prompt on the generic chain: alignment steps, traced chunks (the slab rows, then 128, then
 32), the padded tail, the hand-off.
 
-The chain owner (the chat session, a runner) hands over the model, its generic and chunk states, the captured chunk
-traces and ``forced_step``, which teacher-forces one token through the decode traces at the current position and
-returns the next n-gram context.  :meth:`Qwen38ChunkPrefill.run` then prefills ``token_ids`` from ``start_position``:
-``(32 - P % 32) % 32`` forced steps so the first chunk starts at ``P % 32 == 0``; the chunk carry seeded from the
-decode buffers (``reset_chunk_state_inplace``, the 32-row state first: the 128-row and slab states share its
-histories); ``N // S`` slabs of ``S`` rows when the chain captured a slab trace (``--prefill-slab``), then
-``M // 128`` long chunks of the remainder when the chain captured the 128-row trace; then ``M // 32`` full 32-row
-chunks (accept scalar 31) over the remainder ``M``; if ``M % 32 = r > 0`` one padded chunk whose rows ``r .. 31`` are
-:data:`CHUNK_PAD_TOKEN_ID` with accept scalar ``r - 1``; ``finish_prefill`` from the 32-row state.  The host work of
-chunk i + 1 (``prepare_chunk_inputs``: the n-gram lookups from the running context and the row packing; then
-``upload_chunk_inputs``: the token-row and PLE-row copies) runs under chunk i's replay: the host half is prepared as
-soon as chunk i is queued and the copies are queued behind it, so only the first chunk's preparation is exposed
-whatever the event cadence.  An event every ``event_interval`` chunks (or, with ``event_rows``, once the chunk rows
-since the last event reach that count: the lanes' admission form, one event per 128 prompt rows) bounds the run-ahead
-(a slab: the previous slab's event, waited for once the next replay is queued); ``run``'s ``between_chunks`` hook is
-called after every such event, with the prompt rows consumed so far, so a caller may run other device work between
-two chunk groups (the lanes server runs the decoding lanes' passes there); the eager seed and hand-off run only after
-a device synchronize (their transients must not land in a running trace's addresses).
+:meth:`Qwen38ChunkPrefill.run` prefills ``token_ids`` from ``start_position``: forced steps up to ``P % 32 == 0``,
+the chunk carry seeded from the decode buffers, slabs and 128-row chunks where the chain captured them, full 32-row
+chunks (accept scalar 31), one padded tail chunk (accept scalar ``r - 1``), then ``finish_prefill`` from the 32-row
+state.  Each chunk's host inputs are prepared while the previous chunk replays.  An event every ``event_interval``
+chunks (or ``event_rows`` rows) bounds the run-ahead, and ``between_chunks`` runs after each such event.  The eager
+seed and hand-off run only after a device synchronize: their transients must not land in a running trace's addresses.
+Per-chunk replay times are blocking replays, recorded only with ``time_each_chunk``.
 
-Timing (the rule every measurement here follows): ``verify_before_replay`` once per trace, outside the window; the raw
-``ttnn._ttnn_execute_trace`` per chunk is timed only with ``time_each_chunk`` (blocking replays, no host overlap); the
-end-to-end wall (forced steps, host writes, replays, hand-off) is reported separately.
-
-``gdn_step_anchor`` (default off) is the GDN state re-anchor of every 32-row chunk (``forward_prefill_chunk_generic``'s
-keyword: the committed GDN state through the 1-row FP32 step arithmetic instead of the chunk kernel's).  With a
-captured trace the driver replays what the capture baked in, so the chain owner passes the flag its capture carried;
-without one (``chunk_trace_id=None``, the eager form of the micro-tests) the driver runs the chunk body itself and
-passes the flag per chunk.  The 128-row form has no anchor: a chain with the anchor on runs 32-row chunks only.
-
-``mtp`` / ``long_mtp`` are the MTP-drafting chain's chunk extensions (``mtp_v2.Qwen38TTNNMTPChunkExtension``, the
-32-row and the 128-row twin): the chunk traces were captured with them, so every chunk also takes its MTP tokens (the
-chunk's rows one position ahead, ``following_token`` after the last) through the extension of its form, and the
-hand-off includes the MTP layer (the 32-row twin's ``finish_chunk``).  A chain with the 128-row chunk state and MTP
-drafting needs both twins; a slab runs the 128-row twin's slab form (``forward_slab_rows``: the slab as 128-row slices
-inside the slab body), so a slab chain with drafting needs the twin allocated with ``slab_rows``.
+``gdn_step_anchor`` must match what the chunk trace was captured with; the 128-row form has no anchor, so a chain with
+the anchor on runs 32-row chunks only.  ``mtp`` / ``long_mtp`` are the MTP-drafting chain's chunk extensions (the
+32-row and the 128-row twin) the chunk traces were captured with; a slab runs the 128-row twin's slab form.
 """
 
 from __future__ import annotations
@@ -192,9 +168,8 @@ class Qwen38ChunkPrefill:
         self.event_rows = event_rows
         self.verify_allocations = verify_allocations
         self.gdn_step_anchor = gdn_step_anchor
-        # The MTP-drafting chain's chunk extensions (mtp_v2.Qwen38TTNNMTPChunkExtension): the 32-row chunk trace was
-        # captured with ``mtp`` and the 128-row one with ``long_mtp``, so every chunk also takes its MTP tokens (the
-        # tokens one position ahead) through the extension of its form, and the hand-off includes the MTP layer.
+        # The extensions the 32-row (``mtp``) and 128-row (``long_mtp``) chunk traces were captured with: every chunk
+        # also takes its MTP tokens through its form's extension, and the hand-off includes the MTP layer.
         self.mtp = mtp
         self.long_mtp = long_mtp
 
@@ -287,22 +262,14 @@ class Qwen38ChunkPrefill:
         positions: mrope.Qwen38MRoPEPositions | None = None,
         features: torch.Tensor | None = None,
     ) -> Qwen38PrefillResult:
-        """Prefill ``token_ids`` at positions ``start_position ..``; the caller's first decode replay consumes the
-        token after them (``following_token``, the MTP token of the last prefilled position when the chain drafts).
-        Returns the position after the prefill and the committed stream's n-gram context.  ``should_stop`` is
-        polled at every event sync: a reason ends the prefill after the chunks already replayed (the hand-off runs
-        at that position; ``stopped`` carries the reason, ``position`` what was consumed).  ``between_chunks(done,
-        total)`` runs after every chunk event sync that did not stop (the chunk rows consumed so far, the chunk rows
-        of the whole prefill): the device is idle at that point and the next chunk's inputs are prepared but not yet
-        uploaded, so the caller may run other device work there (never after a slab's event: that waits for the slab
-        before it while the slab itself still replays).
+        """Prefill ``token_ids`` at positions ``start_position ..``; the caller's first decode replay consumes
+        ``following_token``.  Returns the position after the prefill and the committed stream's n-gram context.
 
-        An image prompt passes ``positions`` (the whole sequence's (t, h, w) rotary positions, ``mrope``; the rows of
-        ``start_position ..`` are this prefill's) and ``features`` (the tower's rows, one per ``<|image_pad|>`` of
-        ``token_ids`` in order): every chunk writes its rows' RoPE rows and its pads' feature rows, and the hand-off
-        sets the rotary shift the decode subtracts.  Image pads never take the alignment steps (the 1-row body has
-        no feature input): a prefill whose alignment window holds one is refused, so the caller prefills from a
-        32-aligned position (a reset).  Without ``positions`` the rows are plain text positions."""
+        ``should_stop`` is polled at every event sync and ends the prefill after the chunks already replayed.
+        ``between_chunks(done, total)`` runs after every such sync with the device idle and the next chunk's inputs
+        prepared but not uploaded (never after a slab's event: the slab may still replay).  An image prompt passes
+        ``positions`` (the sequence's rotary positions) and ``features`` (one row per ``<|image_pad|>``); image pads
+        never take the alignment steps, so such a prefill must start 32-aligned."""
 
         tokens = [int(token) for token in token_ids]
         if isinstance(start_position, bool) or type(start_position) is not int or start_position < 0:

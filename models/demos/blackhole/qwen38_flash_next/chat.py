@@ -3,15 +3,8 @@
 
 """Pinned text-only chat formatting and safe local tools for Qwen3.8.
 
-This module deliberately owns no model or device state.  It renders the exact
-released ``chat_template.jinja``, separates generated reasoning from visible
-content, parses the checkpoint's XML-like function-call syntax, and executes a
-small allowlisted local tool.  The TTNN demo supplies token IDs to and from this
-boundary; there is no alternate hand-written prompt template.
-
-Vision items are rejected even though the multimodal checkpoint template can
-render them.  The required bring-up is text-only and must not accidentally
-claim support for a vision encoder which is not resident on the four-card mesh.
+Owns no model or device state: renders the released ``chat_template.jinja``, splits reasoning from visible content,
+parses the checkpoint's function-call syntax and runs a small allowlisted local tool. Vision items are rejected.
 """
 
 from __future__ import annotations
@@ -199,8 +192,7 @@ class Qwen38OfficialChatTemplate:
                     f"pinned tokenizer artifact {name} has SHA-256 {actual}, expected {expected}"
                 )
 
-        # Loading a tokenizer is a host formatting operation, not model
-        # inference.  Network and remote-code execution are both disabled.
+        # Network and remote-code execution are both disabled.
         from transformers import AutoTokenizer
 
         tokenizer = AutoTokenizer.from_pretrained(
@@ -208,9 +200,7 @@ class Qwen38OfficialChatTemplate:
             local_files_only=True,
             trust_remote_code=False,
         )
-        # The model reserves 243 padded output rows above the released text
-        # tokenizer.  Those rows are valid LM-head indices but are never prompt
-        # tokens; do not conflate the two sizes.
+        # The LM head has padded rows above the tokenizer size: valid output indices, never prompt tokens.
         if len(tokenizer) != TOKENIZER_SIZE or tokenizer.vocab_size != END_OF_TEXT_ID:
             raise Qwen38ChatFormatError(
                 f"tokenizer sizes {(tokenizer.vocab_size, len(tokenizer))} differ from "
@@ -323,9 +313,9 @@ def _reject_constant(name: str) -> Any:
 
 
 def _parse_argument(value: str, declared: Any = None) -> Any:
-    """A ``<parameter>`` body typed by its schema: the template renders a string argument raw and every other type
-    with ``tojson``, so a parameter declared ``string`` stays verbatim and any other (or an undeclared one) is parsed
-    when it is JSON, else kept as text.  NaN and Infinity are not JSON and stay text."""
+    """A ``<parameter>`` body typed by its schema: declared ``string`` stays verbatim, any other is parsed when JSON.
+
+    The template renders strings raw and every other type with ``tojson``; NaN and Infinity stay text."""
 
     stripped = value.strip()
     types = {declared} if isinstance(declared, str) else set(declared) if isinstance(declared, list) else set()
@@ -358,9 +348,7 @@ def _parameter_types(tools: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, 
 
 
 def parse_tool_calls(text: str, tools: Sequence[Mapping[str, Any]] = ()) -> tuple[str, tuple[Qwen38ToolCall, ...]]:
-    """The visible text before the first ``<tool_call>`` and the calls after it, their arguments typed by ``tools``
-    (``parse_assistant_completion`` on the content part; the server's assembler on one block, whose parameter
-    text may quote any tag)."""
+    """The visible text before the first ``<tool_call>`` and the calls after it, arguments typed by ``tools``."""
 
     marker = text.find("<tool_call>")
     if marker < 0:
@@ -410,12 +398,8 @@ def parse_assistant_completion(
 ) -> Qwen38AssistantCompletion:
     """Parse only the newly generated assistant suffix.
 
-    For thinking mode the rendered prompt already ends in ``<think>\n``; the
-    generated suffix therefore begins with reasoning and must close that tag.
-    For non-thinking mode the prompt already contains the complete empty think
-    block and the generated suffix begins directly with visible content.
-    ``tools`` (the request's schemas) type the tool-call arguments; without
-    them every argument that is JSON is parsed.
+    With thinking the prompt ends in ``<think>\n``, so the suffix starts with reasoning and must close the tag;
+    without it the suffix starts with visible content. ``tools`` types the tool-call arguments.
     """
 
     if not isinstance(text, str):

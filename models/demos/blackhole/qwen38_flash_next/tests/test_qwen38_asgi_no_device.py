@@ -1,13 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The chat server behind uvicorn (``tools/qwen38_asgi.py``) without a device: the container settings from an
-environment (the device nodes, the profile, the context, the server flags, the refusals), the composed argv parses
-with the server's own parser and a flag the server does not know is refused there, the runtime identity of a tree
-without git history, the lifespan (the server runs as a child process: ``READY`` gates the startup, SIGTERM + wait on the shutdown with
-the exit status logged, a child that ends before ``READY`` fails the startup, a child that ends on its own ends the
-process with its status) and the forwarding (a request's bytes reach the server unchanged, a streamed reply
-arrives as it is written, 503 before ``READY``, a client's hang-up closes the server's connection)."""
+"""The chat server behind uvicorn (``tools/qwen38_asgi.py``) without a device: the container settings, the composed
+argv against the server's own parser, the runtime identity of a tree without git history, the child-process lifespan
+(``READY`` gates the startup, SIGTERM on shutdown) and the request forwarding."""
 
 from __future__ import annotations
 
@@ -67,8 +63,8 @@ def test_settings_on_four_other_nodes_move_the_line_profile_and_parse_with_the_s
     assert server.environment["TT_METAL_TRACE_ALLOC_TRACKING"] == "1"
     assert "TT_MESH_GRAPH_DESC_PATH" not in server.environment  # the line profile has no descriptor
     assert server.profile.device_nodes == (4, 5, 6, 7) and server.profile.host == "p150-line"
-    # the server derives the same visible set when it takes --device-nodes on a host that presents exactly these nodes,
-    # and the node numbers on a host that presents more (the historical hosts, nodes 0..7)
+    # the server derives the same visible set from --device-nodes on a host that presents exactly these nodes,
+    # and the node numbers on a host that presents more
     moved = hardware_profiles.P150_LINE.with_device_nodes((4, 5, 6, 7), present=(4, 5, 6, 7))
     assert (moved.device_nodes, moved.visible_devices) == ((4, 5, 6, 7), "0,1,2,3")
     host = hardware_profiles.P150_LINE.with_device_nodes((4, 5, 6, 7), present=range(8))
@@ -116,9 +112,7 @@ def test_a_flag_the_server_does_not_know_is_refused_by_its_parser_not_dropped(tm
     with pytest.raises(SystemExit) as refused:  # allow-pytest.raises: inspect the captured exception object
         chat_server._parser().parse_args(list(server.argv))  # ... and refused where the server parses
     assert refused.value.code == 2 and "--no-such-flag" in capsys.readouterr().err
-    # the server's own admission rules stay at the parser: the slab and --mtp combine (the 128-row MTP chunk
-    # extension's slab form runs the slab's MTP rows inside the slab body; the chain admits the pair when it opens), so
-    # the pair parses with both values set and nothing dropped
+    # the slab and --mtp combine (the chain admits the pair when it opens): both values parse, nothing dropped
     server = _settings(tmp_path, QWEN38_SERVER_ARGS="--mtp 4 --sampling --prefill-slab 2048")
     args = chat_server._parser().parse_args(list(server.argv))
     assert args.mtp == 4 and args.prefill_slab == 2048 and args.sampling

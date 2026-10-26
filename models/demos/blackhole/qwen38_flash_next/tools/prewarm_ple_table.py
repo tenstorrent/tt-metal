@@ -3,16 +3,11 @@
 
 """Read the PLE n-gram table files through the page cache and report their residency.
 
-The 128 table parts of checkpoint layer 1 live in 33 safetensors files
-(104,298,732,704 B).  A decode token reads sixteen 320 B rows from them; on a
-cold cache each row is an NVMe page-in that the runner's WILLNEED batch only
-overlaps.  One sequential pass over the files makes every later row a
-page-cache hit, and the residency report labels a run cold or warm.
-
-Measured on a host with 755 GB RAM (707 GB available, ext4 on LVM over two Samsung
-PM9A3 NVMe drives): about 35-60 s for the 104 GB at 2-3 GB/s on a cold cache, a
-few seconds when the files are already resident; the table stays resident and
-evictable.  Nothing is written; no model tensor is decoded.  Diagnostic only.
+The 128 table parts of checkpoint layer 1 live in 33 safetensors files.  A decode
+token reads sixteen 320 B rows from them; on a cold cache each row is an NVMe
+page-in.  One sequential pass over the files makes every later row a page-cache
+hit, and the residency report labels a run cold or warm.  Nothing is written; no
+model tensor is decoded.  Diagnostic only.
 """
 
 from __future__ import annotations

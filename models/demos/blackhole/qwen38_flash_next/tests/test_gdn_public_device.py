@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Qualification of public GDN after merged owner prerequisite 96cc4a7937.
+"""Public GDN dispatch against an independent recurrence.
 
 Forced phased, forced fused, and automatic public dispatch must agree with
-the independent recurrence and retain trace/address reuse. Saved old-arithmetic
+the independent recurrence and retain trace/address reuse. Saved baseline
 outputs are optional comparison evidence and do not change the numeric gate.
 """
 

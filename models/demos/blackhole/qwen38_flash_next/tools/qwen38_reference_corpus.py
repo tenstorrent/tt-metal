@@ -5,26 +5,23 @@
 
 The corpus (``tools/reference/corpus-q38-ref-v1.json`` + ``.jsonl``, frozen with sha256s) holds 36 items in five
 parts: the twelve shipped acceptance prompts as their records render them (``acceptance``), the same twelve rendered
-as the server renders a request today (thinking on, medium) plus four requests with tools (``served``), the first
-1024 tokens of two books (``book``), four evaluation items rendered as the evaluation harness sends them (``eval``)
-and two long natural-text prompts scored in 32-position windows (``long``).  Every column runs the same token
-stream: for a text item the text itself is the teacher; for a prompt item the prompt is followed by
-CONTINUATION_TOKENS teacher tokens, the HF argmax chain, which the HF column produces and the other columns read back
-from the HF reference file (``--teacher``).  Position p is the output after consuming tokens 0..p; it predicts
-token p+1.
+as the server renders a request plus four requests with tools (``served``), the first 1024 tokens of two books
+(``book``), four evaluation items as the evaluation harness sends them (``eval``) and two long natural-text prompts
+scored in 32-position windows (``long``).  A text item is its own teacher; a prompt item is followed by
+CONTINUATION_TOKENS teacher tokens, the HF argmax chain, which the other columns read back from the HF reference file
+(``--teacher``).  Position p is the output after consuming tokens 0..p; it predicts token p+1.
 
 Modes (``python -m ...tools.qwen38_reference_corpus MODE``):
 
     freeze   build the corpus files from the checkpoint tokenizer, the acceptance records, the two book texts and
-             the frozen evaluation items (the committed corpus was made this way; ``verify`` re-checks it)
+             the frozen evaluation items (``verify`` re-checks them)
     hf       the Transformers ``qwen4_exp`` model on the CPU: bf16 weights, the final hidden state through an fp32
              LM head, fp32 log-softmax; per scored position the top-32 ids and log-probs and the teacher's log-prob
-    oracle   the same through the CPU oracle ``tt/`` (never edited), with bf16 experts or BF4-emulated experts
-             (``--experts bf4``: the host packer's shared-exponent rounding applied to every routed expert) and with
-             the QSA K/V cache in bf16 or in one of the device's fp8 formats (``--kv``, ``qwen38_kv_cache_emulation``)
+    oracle   the same through the CPU oracle ``tt/``, with bf16 or BF4-emulated experts (``--experts bf4``) and the
+             QSA K/V cache in bf16 or one of the device's fp8 formats (``--kv``, ``qwen38_kv_cache_emulation``)
     device   a served chain's agreement records (the chat server's ``--agreement-reference`` run: argmax + the
-             32-candidate row per position, one file per item) as a column; its log-probs are normalised over the
-             row, so only the shared-support metrics apply (the server writes this column and its score itself)
+             32-candidate row per position) as a column; its log-probs are normalised over the row, so only the
+             shared-support metrics apply
     score    two columns: top-1 / top-5 / top-32 agreement, clear-margin top-1 (the reference's top-2 margin above
              ``--clear-margin`` logits), truncated KL over the shared top-32 support, first divergence per item,
              per-100-token segments of the text items
@@ -79,7 +76,7 @@ BOOK_TOKENS = 1024
 LONG_TOKENS = (8_192, 32_704)  # the second is the 32k build's context limit less the 64-token headroom
 LONG_WINDOW = 32
 LONG_DEPTHS = (2_048, 8_192)  # plus the item's end; a window is the 32 positions before depth - 32
-CLEAR_MARGIN = 0.125  # one bf16 ulp at logit magnitude 16..32: both observed near-tie flips were inside it
+CLEAR_MARGIN = 0.125  # one bf16 ulp at logit magnitude 16..32
 SEGMENT_TOKENS = 100
 # The acceptance records' rendering (the session's constants) and the server's request defaults.
 RECORD_FLAGS = {"enable_thinking": False, "reasoning_effort": "low"}
@@ -685,8 +682,8 @@ HF_EXPERTS_INDEXED = "eager-indexed"
 
 def indexed_eager_experts_forward(self, hidden_states, top_k_index, top_k_weights):
     """transformers' eager experts loop with its per-expert ``index_add_`` written as an indexed add: a token is
-    routed to an expert once, so the rows are unique and the two are bitwise equal, and the bf16 ``index_add_`` CPU
-    kernel (milliseconds per call at one row) is avoided."""
+    routed to an expert once, so the rows are unique and the two are bitwise equal, without the slow bf16
+    ``index_add_`` CPU kernel."""
 
     import torch
     import torch.nn.functional as F
@@ -767,9 +764,8 @@ class OracleRunner(_Runner):
         self.rss_limit_gib = rss_limit_gib
         self.experts = experts
         self.quantised: dict[tuple[int, int], Any] = {}
-        # The checkpoint's expert slices alias their shard's mmap: a cache of them holds one 3.5 GB mapping per
-        # slice, and the address space runs out near 16k experts (ENOMEM from mmap, 45k mappings).  The cache
-        # holds copies: BF4-rounded, or the bf16 values cloned off the mapping.
+        # The checkpoint's expert slices alias their shard's mmap, and a cache of them runs out of address space
+        # (ENOMEM from mmap).  The cache holds copies: BF4-rounded, or the bf16 values cloned off the mapping.
         original_layer = self.oracle.layer
         rounding = bfp4_round if experts == "bf4" else (lambda weight: weight.clone())
 

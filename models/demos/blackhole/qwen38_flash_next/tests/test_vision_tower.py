@@ -1,23 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The vision tower on the device against ``vision_reference.py`` (the CPU oracle proven against Transformers).
+"""The vision tower on the device against ``vision_reference.py``.
 
-Per pinned synthetic grid (``tests/fixtures/vision_fixture.py``): the op pins at head_dim 96 (block 0's and block 26's
-attention alone and MLP alone, the MLP with the fused GELU-tanh), every block alone on the reference's input, the whole
-tower block by block (the accumulated BF16 residual stream) and at the merger output (PCC, max abs error, NMSE), the
-MEASURED resident DRAM bytes, the allocator peak during a forward (sampled after every transient buffer), the cold
-(first call) and warm wall times, the steady state of the allocator over repeated forwards.  Grids too large for the
-CPU reference (16,384 and 65,536 patches, the stock maximum) run the time / memory part only.
-
-Thresholds are measured floors, not tuned targets.  The one-die records of 2026-09-29 (bitwise reproducible, the
-same values on the four-die line) read: attention or MLP alone PCC 0.999973 .. 1.000000; every block alone 0.999897 ..
-1.000000 (the minimum is block 0 on the padded 396-patch grid); the accumulated stream through block 8 >= 0.99958;
-merger features 0.998154 (1024 patches), 0.997557 (4096), 0.996807 (960, non-square), 0.997176 (396, padded).  The
-floors sit one decade of the observed spread under those minima: 0.9998 for anything alone, 0.999 for the early stream,
-0.995 for the features.  (The Wormhole port of the same tower gates a block alone at 0.99 and the whole model at
-0.91-class.)  Every measured value is printed as a table and written to ``$QWEN38_VISION_RECORD_DIR/<grid>-<mesh>.json``
-when that directory is set.
+Per pinned synthetic grid (``tests/fixtures/vision_fixture.py``): op pins, every block alone, the whole tower block by
+block and at the merger output, the resident DRAM bytes, the allocator peak, and cold and warm wall times. Grids too
+large for the CPU reference run the time / memory part only. The PCC floors sit one decade of the observed spread
+under the measured minima. Measured values are written to ``$QWEN38_VISION_RECORD_DIR/<grid>-<mesh>.json`` when set.
 
 Run (a held die or line; the no-device sets are masked):
   QWEN38_FUSED_DEVICE_TEST=1 QWEN38_VISION_MESH=1x1 pytest tests/test_vision_tower.py -s
@@ -57,9 +46,9 @@ GRIDS = tuple(
 SINGLE_DEVICE_PARAMS = {"l1_small_size": DEVICE_PARAMS["l1_small_size"], "trace_region_size": 0}
 PARAMS = DEVICE_PARAMS if MESH == (1, 4) else SINGLE_DEVICE_PARAMS
 
-ALONE_PCC = 0.9998  # a block, an attention or an MLP alone on the reference's input (measured minimum 0.999897)
-EARLY_STREAM_PCC = 0.999  # the accumulated stream through block 8 (measured minimum 0.99958)
-FEATURES_PCC = 0.995  # the merger features (measured minimum 0.996807, the non-square grid)
+ALONE_PCC = 0.9998  # a block, an attention or an MLP alone on the reference's input
+EARLY_STREAM_PCC = 0.999  # the accumulated stream through block 8
+FEATURES_PCC = 0.995  # the merger features
 PIN_BLOCKS = (0, 26)  # op pins: the first block and the one with the largest residual values
 
 

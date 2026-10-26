@@ -1,14 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Host-only BFLOAT4_B tile packer for the Qwen3.8 routed-weight staging tool.
-//
-// The TTNN host conversion reaches MetalContext::instance() to obtain the L1
-// alignment even when no device is requested.  That is inappropriate for the
-// CPU-only staging lane.  This small program implements the exact 32x32,
-// Bfp4_b, exponent-b encoding used by blockfloat_common.cpp without linking
-// TT-Metal or performing device discovery.  Input is row-major BF16 on stdin;
-// output is the packed tile payload on stdout.
+// Host-only BFLOAT4_B tile packer for the routed-weight staging tool: the exact 32x32 Bfp4_b, exponent-b encoding of
+// blockfloat_common.cpp without linking TT-Metal (the TTNN host conversion reaches MetalContext::instance() for the
+// L1 alignment even without a device). Input is row-major BF16 on stdin; output is the packed tile payload on stdout.
 
 #include <algorithm>
 #include <array>

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Hardware profiles: which four Blackhole chips make the model's 1x4 mesh, and how the host wires them.
 
 A profile pins the KMD device nodes, the route derivation (``physical_route``), the derived route to expect and the
@@ -29,16 +32,12 @@ class HardwareProfileError(RuntimeError):
 class ResidentHardwareProfile:
     """One four-chip mesh.
 
-    ``partition`` names the lane on the host (``"qb"``: the whole box; ``"a"``/``"b"``: four chips of a larger
-    host, ``"0"``/``"1"`` the same on a QuietBox 2 class host).  ``ethernet_graph`` selects the route derivation:
-    ``"line"`` is ``physical_route.derive_canonical_line_route``, ``"ring"`` is ``derive_fabric_line_route`` (chips in
-    an ethernet ring, opened as a 1x4 LINE through a mesh graph descriptor).  ``route`` / ``route_nodes`` pin the
-    derived order; ``None`` means the route is derived at start (``qwen38_chat_session.resolve_route``) and
-    recorded, not pinned.  ``boards`` (serial per node), ``bdfs`` and ``numa_node`` are
-    optional identity checks (empty: not checked).  ``required_locks`` are exclusive flocks the launcher must hold
-    (fd -> path; empty: none).  ``lan_serving`` lets the chat server bind a non-loopback address without
-    ``--allow-lan``.  ``mesh_graph_descriptor`` names the descriptor file next to this module the launcher exports as
-    ``TT_MESH_GRAPH_DESC_PATH`` (``None``: ttnn's auto-discovery).
+    ``partition`` names the lane on the host (``"qb"``: the whole box; ``"a"``/``"b"`` or ``"0"``/``"1"``: four
+    chips of a larger host).  ``ethernet_graph`` selects the route derivation (``"line"`` or ``"ring"``).  ``route`` /
+    ``route_nodes`` pin the derived order; ``None`` derives it at start and records it.  ``boards``, ``bdfs`` and
+    ``numa_node`` are optional identity checks; ``required_locks`` are exclusive flocks the launcher must hold (fd ->
+    path).  ``lan_serving`` allows a non-loopback bind without ``--allow-lan``.  ``mesh_graph_descriptor`` names the
+    descriptor next to this module the launcher exports as ``TT_MESH_GRAPH_DESC_PATH`` (``None``: auto-discovery).
     """
 
     host: str
@@ -68,10 +67,9 @@ class ResidentHardwareProfile:
 
         if len(nodes) != 4 or len(set(nodes)) != 4 or any(type(node) is not int or node < 0 for node in nodes):
             raise HardwareProfileError(f"device nodes must be four distinct non-negative ints, got {nodes!r}")
-        # ``TT_VISIBLE_DEVICES`` takes UMD's device indices, 0..N-1 over the nodes present under /dev/tenstorrent (the cluster
-        # descriptor keeps naming the chips by their node numbers).  Four nodes that are all the host presents (a container
-        # holding four nodes of a larger host) are the indices 0, 1, 2, 3 whatever their names; on a host that presents more,
-        # the node numbers (the hosts these profiles run on number their nodes 0..N-1 without gaps, so the two agree there).
+        # ``TT_VISIBLE_DEVICES`` takes UMD's indices 0..N-1 over the nodes present under /dev/tenstorrent.  When the
+        # host presents exactly four nodes (a container) they are 0..3 whatever their names; otherwise the node
+        # numbers, which these hosts number without gaps.
         present_nodes = tuple(sorted(present)) if present is not None else present_device_nodes()
         visible = tuple(range(len(nodes))) if present_nodes == tuple(sorted(nodes)) else nodes
         return replace(self, device_nodes=nodes, visible_devices=",".join(str(value) for value in visible))
@@ -134,13 +132,10 @@ P150_LINE = ResidentHardwareProfile(
 
 
 def _quietbox_2_instance(instance: int) -> ResidentHardwareProfile:
-    """UNTESTED: a p300-based box.  Each p300 card is two Blackhole dies (two KMD nodes) joined on the card; the
-    QuietBox 2 (2x p300c = nodes 0-3) has one ring over the on-card links and the two Warp400 links, so it is one
-    instance.  A four-card host (8 dies) is two instances of four consecutive nodes.  ttnn classifies a p300
-    cluster that is not exactly 2 or 4 dies as CUSTOM and refuses to open without a mesh graph descriptor, so the
-    launcher always exports the descriptor.  The route is unpinned: derived at start from the order in which the
-    fabric embedded the LINE descriptor onto the ring (``physical_route.derive_fabric_line_route``; a QuietBox 2 on
-    2026-09-18: (1, 0, 3, 2), not the ring walk (0, 1, 2, 3)) and recorded."""
+    """UNTESTED: a p300-based box.  Each p300 card is two Blackhole dies (two KMD nodes); the QuietBox 2 (2x p300c,
+    nodes 0-3) is one ring and one instance, a four-card host two instances of four consecutive nodes.  ttnn refuses
+    a p300 cluster that is not exactly 2 or 4 dies without a mesh graph descriptor, so the launcher always exports
+    one.  The route is derived at start from the fabric's embedding of the LINE descriptor and recorded."""
 
     first = 4 * instance
     nodes = (first, first + 1, first + 2, first + 3)
@@ -183,11 +178,9 @@ def resolve_hardware_profile(
 ) -> ResidentHardwareProfile:
     """By name, or (``None``) the profile of this host whose visible devices are ``TT_VISIBLE_DEVICES``.
 
-    A host with several profiles (two lanes) takes the one ``TT_VISIBLE_DEVICES`` names, its default lane when
-    unset.  A named public profile is a box type, not a host, and resolves anywhere (a QuietBox 2 shipped with the
-    hostname ``tt-quietbox``).  A private table's entry is one host's lane: on a host the table knows, a name from
-    another host refuses, so a launcher cannot open another host's lane by mistake; a host the table does not know
-    takes any named profile.
+    A host with several profiles takes the one ``TT_VISIBLE_DEVICES`` names, its default lane when unset.  A named
+    public profile is a box type and resolves anywhere.  A private table's entry is one host's lane: on a host the
+    table knows, a name from another host refuses; a host the table does not know takes any named profile.
     """
 
     profiles = hardware_profile_table() if table is None else table

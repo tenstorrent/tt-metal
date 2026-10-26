@@ -3,11 +3,8 @@
 
 """Exact Qwen Sparse Attention checkpoint contract and TP4 placement.
 
-This module supplies the CPU value oracle and the host-side weight packing for
-the TTNN port.  The dense matrix used by :class:`Qwen38QSA` is intentionally a
-short-context oracle only; token selection is still the exact QSA indexer.  The
-final device path must execute only selected complete blocks plus the causal
-tail at long context.
+The CPU value oracle and host-side weight packing for the TTNN port. :class:`Qwen38QSA`'s dense matrix is a
+short-context oracle only; token selection is the exact QSA indexer.
 """
 
 from __future__ import annotations
@@ -192,8 +189,7 @@ class Qwen38QSAWeights:
         qg_start = device_index * qg_rows
         query_start = device_index * dims.query_width_per_device
         query_end = query_start + dims.query_width_per_device
-        # KV head 0 serves query devices 0/1; KV head 1 serves 2/3.  This is
-        # deliberate pair-local replication, never a four-way KV replica.
+        # KV head 0 serves query devices 0/1, KV head 1 serves 2/3: pair-local replication, never four-way.
         kv_head_index = device_index // 2
         kv_start = kv_head_index * dims.head_dim
         kv_end = kv_start + dims.head_dim

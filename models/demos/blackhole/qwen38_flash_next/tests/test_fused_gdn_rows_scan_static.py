@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""No-device contract of ``gdn_rows_scan`` (the verify rows' fold): the CB table shared by the kernels and the Python
-side, the kernel argument layouts, the registry entry (opt-in, COMPONENT, never a default without a proof), the
-shape-only admission, what ``attach`` gives a rows state and when, the layer's dispatch and commit wiring in
-ttnn/gdn.py, the pick's accept-count read, and ``reference_rows`` as rows sequential ``gdn_step.reference_step`` calls.
-"""
+"""No-device contract of ``gdn_rows_scan`` (the verify rows' fold): CB table, kernel arguments, registry entry,
+admission, attach, the gdn.py wiring and ``reference_rows``."""
 
 from __future__ import annotations
 
@@ -133,7 +130,6 @@ def test_the_builder_passes_the_rows_and_the_split_as_compile_time_args():
     assert "fp32_dest=True" in source and 'fp.program_meta(\n        NAME,\n        "verify_rows",' in source
     assert module.SPLIT in (1, 4) and module.HT % module.SPLIT == 0
     assert module.MAX_ROWS == 8 and module.PROGRAMS_PER_LAYER == 7 and module.COMMIT_PROGRAMS_PER_LAYER == 3
-    # the wrap's six become one (+ the landing slice)
     pick = inspect.getsource(module.run_pick)
     assert 'fp.program_meta(\n        NAME,\n        "commit_pick",' in pick and "fp.reader_kernel(PICK" in pick
 
@@ -204,7 +200,7 @@ def test_qualifies_is_the_verify_form_with_up_to_max_rows():
     assert not module.qualifies(_RowsState(rows=9))  # the prefix states are rows x 786 KB per layer
     assert not module.qualifies(_RowsState(rows=32)) and not module.qualifies(_RowsState(rows=128, tile_rows=128))
     assert not module.qualifies(_RowsState(owns_body=False))
-    assert not module.qualifies(_RowsState(host=True))  # a host fake keeps today's stream
+    assert not module.qualifies(_RowsState(host=True))  # a host fake keeps the unfused stream
     assert not module.qualifies(SimpleNamespace())
 
 
@@ -244,7 +240,7 @@ def test_commit_needs_the_selectors_accept_count(expect_error):
     with expect_error(RuntimeError):
         module.commit(None, None, SimpleNamespace(prefix=None), _state(), SimpleNamespace(accepted=None))
     selectors = gdn_module.Qwen38TTNNRowsSelectors(5, None, (), None)
-    assert selectors.accepted is None  # defaulted: older constructions and the wrap's selectors carry none
+    assert selectors.accepted is None  # defaulted: the wrap's selectors carry none
 
 
 # ------------------------------------------------------------------------------------------ the gdn.py wiring
@@ -345,9 +341,7 @@ def test_reference_rows_is_rows_sequential_reference_steps():
 
 
 def test_the_served_admission_charges_the_prefix_states_when_the_fold_is_on():
-    """The MTP DRAM admission (tools/qwen38_chat_session.py) carries the fold's persistent prefix states, derived from
-    k + 1 and the GDN layer count, when QWEN38_FUSED names the kernel: the 4x p150 line measured 87,394,112 bytes per
-    bank at k = 4 with the fold (states 31,093,824) where the estimate without the term was 77,095,515."""
+    """The MTP DRAM admission charges the fold's prefix states; the asserted bounds are from a device measurement."""
 
     from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_session as session
 
@@ -363,9 +357,8 @@ def test_the_served_admission_charges_the_prefix_states_when_the_fold_is_on():
 
 
 def test_lanes_form_shares_the_compute_kernel_and_leaves_the_single_form_untouched():
-    """The lanes form (B lanes x R rows lane-major, one (value head, lane) item per core) is the single form's
-    compute kernel with ROWS = R plus its own reader / writer / pick; the single form's three kernels and ``run`` do
-    not know the lanes exist (byte-identical served fold)."""
+    """The lanes form reuses the single form's compute kernel with its own reader / writer / pick; the single form's
+    kernels and ``run`` do not know the lanes exist."""
 
     for source in ("reader.cpp", "writer.cpp", "pick.cpp", "compute.cpp"):
         text = (KERNELS / source).read_text()
@@ -513,7 +506,7 @@ def test_commit_lanes_needs_the_selectors_committed_counts(expect_error):
     with expect_error(RuntimeError):
         module.commit_lanes(None, None, buffers, _lane_state(), SimpleNamespace(committed_counts=None))
     selectors = gdn_module.Qwen38TTNNRowsSelectorsLanes(4, 5, None, None, None, None, ())
-    assert selectors.committed_counts is None  # defaulted: older constructions carry none
+    assert selectors.committed_counts is None  # defaulted
     assert "committed_counts=committed" in inspect.getsource(gdn_module.build_rows_selectors_lanes)
     assert "self.committed_counts," in inspect.getsource(gdn_module.Qwen38TTNNRowsSelectorsLanes.deallocate)
 

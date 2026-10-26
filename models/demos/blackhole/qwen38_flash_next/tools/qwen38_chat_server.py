@@ -1,33 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""OpenAI-compatible chat server over the single-trace decode chain (one device, requests queued in arrival order).
+"""OpenAI-compatible chat server over the traced decode chain (one device, requests served in arrival order).
 
-``POST /v1/chat/completions`` (streaming SSE or one JSON document; tools,
-``reasoning_content``, stop strings, a per-request thinking budget; with
-``--sampling`` also sampling with the OpenAI fields plus ``top_k``, ``min_p``,
-``repetition_penalty`` and ``greedy``, ``seed`` echoed, ``logprobs`` from the
-candidate row), ``GET /v1/models`` and ``GET /v1/models/<id>``, ``GET /health``.  On a sampling server a
-request naming no sampling field, ``temperature 0`` or ``greedy`` is the bitwise
-greedy loop (the argmax the TAIL resolves; the candidate row is never read); a
-request with ``temperature > 0`` samples with it and one naming another sampling
-field without a temperature takes the model card's profile for its thinking
-mode; the draw runs on the device unless ``--host-sampler``.  Without ``--sampling`` (``--no-sampling``, the argparse default) TAIL
-captures no candidate row, the loop is the greedy one at its measured period and
-explicit sampling fields are refused; the launchers pass ``--sampling``.  The
-device prompt of every request is the reference render of the client's
-messages: no system prompt is added, and a follow-up turn holds the served reply
-as the template re-renders it, never the recorded reasoning.  Runs under
-``tools/run_qwen38_chat_server.sh`` (or a development launcher): the server admits the runtime it
-imports (the ttnn built from this checkout, ``runtime_admission``), prepares the
-model inputs on the CPU, opens the mesh, converts the routed experts on the
-first start, replays the CPU acceptance records after the captures
-(``--sampling-discriminator`` then runs the sampling chain arms and stops;
-``--agreement-reference`` teacher-forces the reference corpus and writes the
-agreement records, the device column and its score against the HF reference),
-writes READY, serves until SIGTERM, then releases the chain and the mesh in the
-timing runner's order.  ``--host`` is loopback unless the profile serves the
-LAN (the QuietBox, the p150 line) or ``--allow-lan`` is given.
+Serves ``POST /v1/chat/completions`` (SSE or one JSON document), ``GET /v1/models``, ``GET /v1/models/<id>`` and
+``GET /health``. With ``--sampling``, a request without sampling fields, with ``temperature 0`` or with ``greedy``
+runs the greedy loop and ``temperature > 0`` samples; without it, sampling fields are refused. The device prompt is
+the reference render of the client's messages. Start it with ``tools/run_qwen38_chat_server.sh``: it replays the
+CPU acceptance records, writes READY and serves until SIGTERM. ``--host`` is loopback unless the profile serves the
+LAN or ``--allow-lan`` is given.
 """
 
 from __future__ import annotations
@@ -127,11 +108,10 @@ ACCEPTANCE_GATE_PROMPT = "json"
 ACCEPTANCE_HANDOFF_SPLIT = 40  # MTP chains: the gate record replayed as 40 tokens in one mode then 56 in the other
 DISCRIMINATOR_PROMPT = "story"
 MAX_REQUEST_BYTES = 16 << 20
-# Decision 6 (2026-09-03): thinking ON for Hermes, medium when the client sends no effort.
 ENABLE_THINKING_DEFAULT = True
 REASONING_EFFORT_DEFAULT = "medium"
-# A request without max_tokens gets the remaining context (context limit less the prompt) and an explicit one is
-# bounded by it: the session's require_budget, once the prompt is rendered.  /health and /v1/models say so.
+# max_tokens defaults to and is bounded by the remaining context (the session's require_budget); /health and
+# /v1/models report the rule.
 MAX_TOKENS_RULE = {"default_max_tokens": "remaining context", "max_tokens_limit": "remaining context"}
 QUEUE_LIMIT = 4
 QUEUE_POLL_SECONDS = 0.5  # a queued request looks at its client's socket this often: a hang-up gives up its place
@@ -190,10 +170,7 @@ def _log(event: str, **fields: Any) -> None:
 
 
 def effective_device_sampler(args: Any) -> bool:
-    """The server's sampler: the on-device sampler is the ``--sampling`` default on a one-stream server; an ``--mtp``
-    server samples on the host (its TAIL resolves the greedy token for the MTP row and the pass loop's point-mass
-    decision is the host's: ``ttnn/speculative_sampling.py``), so ``--device-sampler`` with ``--mtp`` is refused and
-    ``--host-sampler`` is its default.  Without ``--sampling`` there is no sampler at all."""
+    """Whether the server samples on the device: the ``--sampling`` default, except under ``--mtp`` (host only)."""
 
     requested = args.device_sampler  # None: the default; True / False: --device-sampler / --host-sampler
     if requested and not args.sampling:
@@ -208,11 +185,7 @@ def effective_device_sampler(args: Any) -> bool:
     return bool(requested)
 
 
-# The device acceptance (qwen38_mtp_device_accept.SWITCH, QWEN38_MTP_DEVICE_ACCEPT, default off): with it on beside the
-# split verify the chain warms and captures the device-decided sampled form too (the head, fused.mtp_accept and the
-# tail in one trace); which sampled requests run it is the acceptance's admission.  An explicit 1 without the split
-# verify is refused at start.  QWEN38_MTP_DEVICE_ACCEPT_DUMP=<dir> (dev) makes the session record every device-decided
-# pass's candidate rows and write one JSON per request for the acceptance's gate tool (dev).
+# Development: the session writes every device-decided pass's candidate rows here, one JSON per request.
 DEVICE_ACCEPT_DUMP_VARIABLE = "QWEN38_MTP_DEVICE_ACCEPT_DUMP"
 
 # MTP switches the server does not read, by what it runs instead: a set one refuses the start in every mode
@@ -240,10 +213,7 @@ def refuse_unread_switches(environment: Mapping[str, str]) -> None:
 
 
 def lanes_switches(args: Any) -> dict[str, Any] | None:
-    """``--lanes B``'s admission at start (None without it): B in 2..8 with B x (k + 1) <= 32 rows, ``--mtp``
-    required, greedy only (``--sampling``, ``--sampling-discriminator`` and ``--agreement-reference`` refused).  The
-    verify-rows fold serves the lanes through its lanes form (``ttnn/fused/gdn_rows_scan``), so a ``--lanes`` process
-    runs the same fused set as the single-stream server.  Returns the geometry."""
+    """The ``--lanes B`` geometry, or None without it: B x (k + 1) <= 32 rows, ``--mtp`` required, greedy only."""
 
     lanes = int(args.lanes)
     if lanes == 0:
@@ -265,12 +235,11 @@ def lanes_switches(args: Any) -> dict[str, Any] | None:
 
 
 def parse_chat_request(document: Any, *, seed: int | None = None, sampling_available: bool = True) -> dict[str, Any]:
-    """The fields the server honours, validated with actual-vs-expected messages (one completion; the sampling
-    fields per ``qwen38_sampling_step``, ``extra_body`` merged under the top level, JSON null an absent field,
-    ``chat_template_kwargs`` the thinking flags' other spelling).  ``seed`` is the server's draw for a request that
-    sends none.  A greedy-only server (``sampling_available`` false) refuses explicit sampling fields and runs a
-    request without them greedily.  A field the server cannot honour (structured output, logit_bias, serial tool
-    calls) is refused, never dropped.  Raises ``ValueError`` subclasses carrying ``param`` and ``code``."""
+    """The fields the server honours, validated with actual-vs-expected messages.
+
+    ``seed`` is the server's draw for a request that sends none. A field the server cannot honour is refused, never
+    dropped; without ``sampling_available`` explicit sampling fields are refused. Raises ``ValueError`` subclasses
+    carrying ``param`` and ``code``."""
 
     if not isinstance(document, Mapping):
         raise Qwen38ChatRequestRejected(f"request body must be a JSON object, got {type(document).__name__}")
@@ -305,8 +274,7 @@ def parse_chat_request(document: Any, *, seed: int | None = None, sampling_avail
                 param=f"chat_template_kwargs.{key}",
             )
     document = {**{key: template_kwargs[key] for key in TEMPLATE_KWARGS[:2] if key in template_kwargs}, **document}
-    # The user messages' image_url parts (data: URLs; video refused by the protocol), decoded here so a bad image
-    # is a 400 naming its part; the tower runs on the device thread later, the grid decides the prompt's pads.
+    # Decoded here so a bad image is a 400 naming its part; the tower runs later on the device thread.
     image_parts: list[protocol.Qwen38ImagePart] = []
     messages = protocol.normalize_messages(document.get("messages"), images=image_parts)
     images: list[vision_inputs.Qwen38DecodedImage] = []
@@ -446,11 +414,9 @@ def _extension(
     think_budget: int | None,
     sampling: sampling_step.Qwen38SamplingRequest | None,
 ) -> dict[str, Any]:
-    """The ``qwen38`` object of a response (and the ledger's per-request fields).  ``decode_loop`` records which
-    loop produced the tokens: ``greedy`` (the TAIL's argmax, bitwise the reference; a request without sampling
-    fields on any server) or ``sampled`` (the candidate-row sampler).  ``served_reasoning_tokens`` is the reasoning
-    of earlier turns held in the device prompt beyond the client's history: always 0, the prompt is the reference
-    render; kept as a field."""
+    """The ``qwen38`` object of a response and the ledger's per-request fields.
+
+    ``served_reasoning_tokens`` is always 0: the device prompt is the reference render."""
 
     return {
         **completion.as_dict(),
@@ -540,9 +506,8 @@ class Qwen38ChatHTTPServer(http.server.ThreadingHTTPServer):
         listen: bool = True,
         lanes: Qwen38LaneScheduler | None = None,
     ) -> None:
-        # The address is bound here, so a taken port or a host the address family cannot carry fails at once (main
-        # constructs the server before the mesh opens, with the session attached after the captures); connections
-        # are accepted only from server_activate (``listen`` false: main's, right before serve_forever).
+        # Bound here so a taken port fails before the mesh opens; with ``listen`` false, connections are accepted only
+        # once main calls server_activate.
         self.address_family = socket.AF_INET6 if ":" in address[0] else socket.AF_INET
         super().__init__(address, Qwen38ChatHandler, bind_and_activate=False)
         try:
@@ -564,8 +529,7 @@ class Qwen38ChatHTTPServer(http.server.ThreadingHTTPServer):
         self.stall_seconds = stall_seconds
         self.progress: dict[str, Any] | None = None  # the request holding the device: start, last poll, polls
         self.system_fingerprint = system_fingerprint  # source head + runtime .so: what a seed reproduces against
-        # The mesh allocator read after the traces were captured (hardware_profiles.symmetric_mesh_dram_memory: one observation
-        # that applies to every card): free_bytes_per_bank is the build's headroom, reported as read, never updated.
+        # The mesh allocator's DRAM view after the captures (the build's headroom), reported as read, never updated.
         self.dram_after_captures = dram_after_captures
         self.created = int(time.time())  # /v1/models created: when this server came up
         # ``--lanes B``: the scheduler over the lane chain replaces the turnstile (its driver thread owns the device;
@@ -581,9 +545,8 @@ class Qwen38ChatHTTPServer(http.server.ThreadingHTTPServer):
         self.fatal: BaseException | None = None
 
     def vision_refusal(self, images: Sequence[Any]) -> str | None:
-        """Why an image request cannot be served now (None = it can): a process whose tower is not resident (the
-        admission's shortfall), or an image above the largest prewarmed row bucket.  The HTTP 400 text.  The lanes
-        server serves images like the single stream (the tower runs inside the lane admission)."""
+        """The HTTP 400 text when an image request cannot be served (no resident tower, or an image above the largest
+        prewarmed row bucket); None when it can."""
 
         if self.vision is None:
             return "the vision tower is not resident in this process"
@@ -786,9 +749,7 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
         super().setup()
 
     def log_message(self, format: str, *args: Any) -> None:
-        # The stdlib's request line and status; a refusal's body (its message, code and param) beside them, so the
-        # log says WHY a 400 or 503 was answered, not only that it was (an operator reading a client's failure
-        # otherwise has the status alone: the client keeps the body).
+        # The stdlib's request line and status, plus a refusal's body so the log says why a 400 or 503 was answered.
         fields = {} if self.error_body is None else {"error": self.error_body}
         _log("http", client=self.address_string(), line=format % args, **fields)
 
@@ -1076,10 +1037,9 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
                 **extra,
             }
 
-        # Every heartbeat_seconds: a progress log line, and on an open stream an SSE comment so a proxy or client
-        # idle timeout does not cut a long queue wait or prefill (nothing else is written before the first token).
-        # With --stall-seconds, a device turn whose last poll is older than that ends the server (fatal): a wedged
-        # device call never returns to the poll, and a long prefill polls every few chunks.
+        # Every heartbeat_seconds: a progress log line and, on an open stream, an SSE comment so an idle timeout does
+        # not cut a long queue wait or prefill. With --stall-seconds, a device turn whose last poll is older than that
+        # ends the server: a wedged device call never returns to the poll, a long prefill polls every few chunks.
         def heartbeat() -> None:
             while not heartbeat_stop.wait(self.server.heartbeat_seconds):
                 heartbeats[0] += 1
@@ -1170,10 +1130,8 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
         }
         self.server.progress = progress
 
-        # Polled between steps and at the prefill's event syncs (so each poll is a device step completed: the
-        # progress record, /health current_request and the stall watchdog read it): the stop string, the stop
-        # signal, the deadline, and the client's socket (a hang-up ends the request as "disconnected" whether or not
-        # anything was being streamed to it).
+        # Polled between steps and at the prefill's event syncs, so each poll marks a completed device step (the stall
+        # watchdog and /health read it). A client hang-up ends the request as "disconnected", streaming or not.
         def should_stop() -> str | None:
             progress["last_progress"] = time.perf_counter()
             progress["polls"] += 1
@@ -1209,10 +1167,9 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
                 logprob_items.append(logprobs_of(token_id))
             assembler.push(token_id)
 
-        # Streaming: one chunk per assembled piece (reasoning_content, content, or a completed tool call), flushed
-        # per token; with logprobs every token's item rides on its first chunk (an empty delta when the assembler
-        # held the text back).  A write that fails (the client went away, or stopped reading: TimeoutError) raises
-        # OSError out of on_token and the session ends the request as "disconnected".
+        # One chunk per assembled piece, flushed per token; a token's logprobs item rides on its first chunk (an empty
+        # delta when the text is held back). A failed write raises OSError and the session ends the request as
+        # "disconnected".
         def on_token_streaming(token_id: int) -> None:
             deltas = assembler.push(token_id)
             if request["logprobs"]:
@@ -1370,10 +1327,9 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
         created: int,
         wire: _ClientWire,
     ) -> None:
-        """The request on the lanes server: a ticket in the scheduler's FIFO (503 with Retry-After beyond its limit),
-        the stream head and keepalives while it waits and while its prompt prefills, then its tokens from the ticket's
-        queue as the driver thread delivers them pass by pass; a stop string, the deadline or a hang-up end it at the
-        next pass boundary (the ticket's cancel).  No device call on this thread."""
+        """The request on the lanes server: a ticket in the scheduler's FIFO, then its tokens as the driver thread
+        delivers them pass by pass. A stop, deadline or hang-up cancels it at the next pass boundary; this thread makes
+        no device call."""
 
         scheduler = self.server.lanes
         ticket = Qwen38LaneTicket(
@@ -1665,8 +1621,7 @@ class Qwen38ChatHandler(http.server.BaseHTTPRequestHandler):
 
 
 def load_acceptance_records(path: Path) -> list[dict[str, Any]]:
-    """The CPU study's greedy records, one JSON object per line; ``sha256`` is the hex digest of the study's record
-    file."""
+    """The CPU greedy acceptance records, one JSON object per line; ``sha256`` is the hex digest of the record file."""
 
     path = path.resolve(strict=True)
     records = []
@@ -1714,9 +1669,7 @@ def load_acceptance_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-# A record of ACCEPTANCE_SLAB_RECORD_TOKENS or more prompt tokens exists to run a prefill slab (the twelve records under
-# 2048 tokens never reach one); a server without --prefill-slab skips it, logged by name, so the chunked forms' start-up
-# stays the twelve records' replay.
+# Records of at least this many prompt tokens exist to run a prefill slab; a server without --prefill-slab skips them.
 ACCEPTANCE_SLAB_RECORD_TOKENS = 2048
 
 
@@ -1861,18 +1814,12 @@ def record_agreement(
     full_logits_dir: Path | None = None,
     item_ids: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """A1's device column: every corpus item teacher-forced through the session (a prompt followed by the HF
-    reference's argmax chain), the resolved argmax and the candidate row (every shard's top-32) per scored position as
-    agreement records (``agreement-records/<item>.json``), then the column (``agreement-device.json``) and its score against
-    the HF reference (``agreement-score.json``), the files the corpus tool's ``device`` and ``score`` modes write.
+    """Teacher-force every corpus item through the session and write the agreement records, the device column and
+    its score against the HF reference (the files the corpus tool's ``device`` and ``score`` modes write).
 
-    The chunked mode scores what its path produces rows for: a prompt item's continuation (the prompt goes through
-    the chunk trace), a long item's windows, and for a text item without windows the 32 positions at its end.
-
-    ``full_logits_dir`` also keeps every recorded position's full-vocabulary logits per item there, in the reference
-    tool's ``--full-logits`` format (``<item>.pt``: ``positions`` and ``logits_fp16`` [n, V]): the LM head's bf16 row,
-    gathered eagerly after each recorded TAIL; fp16 holds every bf16 logit exactly except values below 2^-17 in
-    magnitude (rounded to 2^-24 steps; the record counts them).
+    The chunked mode scores only positions its path produces rows for. ``full_logits_dir`` also keeps every recorded
+    position's full-vocabulary logits in the reference tool's ``--full-logits`` format (fp16, exact for bf16 logits
+    of magnitude 2^-17 and above).
     """
 
     manifest, items = reference_corpus.load_corpus(corpus_dir)
@@ -1995,11 +1942,10 @@ def replay_acceptance_lanes(
     continuation: int = ACCEPTANCE_CONTINUATION,
     stall_budget_seconds: float | None = DEFAULT_STALL_BUDGET_SECONDS,
 ) -> dict[str, Any]:
-    """The acceptance records through the lane scheduler (every record submitted at once, ``lanes`` admitted, the
-    rest in the FIFO and admitted as lanes free, their admissions interleaved with the decoding lanes' passes under
-    the served ``stall_budget_seconds``), each stream compared with the single-stream replay of the same process
-    (``single_stream``: ``replay_acceptance``'s record on the same chain form) and with the CPU record.  The pin is
-    exactness against the single stream on every record and the ``json`` gate; ``require_gate`` refuses a miss."""
+    """Replay the acceptance records through the lane scheduler, every record submitted at once.
+
+    Each stream must equal ``single_stream`` (``replay_acceptance``'s record on the same chain form) and the ``json``
+    gate must pass; ``require_gate`` refuses a miss."""
 
     scheduler = Qwen38LaneScheduler(
         lanes=lanes, drafts=drafts, queue_limit=max(len(records), 1), stall_budget_seconds=stall_budget_seconds
@@ -2379,9 +2325,7 @@ def main() -> int:
     lanes_switch = lanes_switches(args)  # the lanes' geometry and refusals
     if lanes_switch is None and args.lanes_stall_budget != DEFAULT_STALL_BUDGET_SECONDS:
         raise SystemExit("--lanes-stall-budget needs --lanes (the budget is the lane scheduler's)")
-    # The 128-row chunks are the served default of the chunked prefill (the 560-token chat prompt prefills in 0.81 s
-    # against 1.19 s in 32-row chunks alone, docs/PREFILL.md): the flag is accepted, the teacher-forced mode has no
-    # chunk trace to extend.
+    # Chunked prefill always runs the 128-row chunks (the flag is accepted); teacher forcing has no chunk trace.
     args.long_chunks = args.prefill_mode == "chunked"
     if args.agreement_reference is not None and not args.sampling:
         raise SystemExit("--agreement-reference needs --sampling (the records read the candidate row)")
@@ -2412,9 +2356,8 @@ def main() -> int:
     ):
         if os.environ.get(name) != expected:
             raise SystemExit(f"{name} is {os.environ.get(name)!r}, expected {expected!r}")
-    # MTP drafting for sampled requests on an --mtp --sampling server: the split verify is captured beside the fused
-    # one (greedy requests run the fused verify, the pass loop drafts for sampled requests through the split form by
-    # exact speculative sampling).
+    # --mtp --sampling captures the split verify beside the fused one: sampled requests draft through it by exact
+    # speculative sampling, greedy requests keep the fused verify.
     mtp_sampled = args.mtp is not None and bool(args.sampling)
     profiler = tuple(name for name in PROFILER_VARIABLES if os.environ.get(name) is not None)
     if profiler:
@@ -2437,20 +2380,14 @@ def main() -> int:
     records = load_acceptance_records(args.acceptance_prompts) if args.acceptance_prompts is not None else []
     records = slab_records_admitted(records, slab_rows=args.prefill_slab)
     resident_context = Qwen38ResidentContext(args.allocated_context)
-    # The MTP admission decides on the live allocator once the resident weights are built (the chain's open,
-    # Qwen38TracedChain.open); the 2026-09-04 table is the no-device fallback, logged here for the record, never a
-    # refusal before the mesh opens.  The table row counts the verify forms the open will capture (one table, the
-    # switch), so its record and the live decision's agree on them.
-    # The device acceptance (QWEN38_MTP_DEVICE_ACCEPT, default off): with it on beside the split verify the chain warms
-    # and captures the device-decided sampled form too (the head, fused.mtp_accept and the tail in one trace); which
-    # sampled requests run it is the acceptance's admission.  The extension builds from the switch at open.
+    # The MTP admission decides on the live allocator at the chain's open; the table estimate below is the no-device
+    # fallback, logged for the record and never a refusal before the mesh opens.
+    # The device acceptance (default off) also captures the device-decided sampled form beside the split verify.
     mtp_device_accept = device_accept_switch()
     if mtp_device_accept and not mtp_sampled:
         raise SystemExit(f"{DEVICE_ACCEPT_SWITCH}=1 needs the split verify (--mtp and --sampling)")
-    # The MTP pass's early PLE rows (with --mtp): the mesh opens with a second command queue and the fused /
-    # device-decided pass loops read the verify lanes there while the draft runs, looking the next pass's PLE rows 0-1
-    # up under the draft (mtp_v2.Qwen38TTNNEarlyRowsReader); the second queue carries nothing but that buffer read.  The
-    # host-decided split form keeps its order.
+    # With --mtp the mesh opens a second command queue: the fused and device-decided pass loops read the verify lanes
+    # there while the draft runs, so the next pass's PLE rows 0-1 are looked up under the draft.
     mtp_ple_early = args.mtp is not None
     if lanes_switch is not None:
         mtp_ple_early = False  # the lanes run the one-queue form: the second queue's early read has no lanes form
@@ -2466,7 +2403,7 @@ def main() -> int:
             long_chunks=bool(args.long_chunks) or args.prefill_slab is not None,
             gdn_rows_scan=fused_module.enabled(gdn_rows_scan_module.NAME),
             slab_rows=args.prefill_slab,
-            # the tower's MODELED terms (the image path is the default path; the live decision is the warm hook's)
+            # the tower's modeled terms; the live decision is the warm hook's
             vision_resident_bytes_per_bank=-(-vision_resident_layout(mesh_size=4)["device_total"] // 8),
             vision_peak_activation_bytes_per_bank=-(
                 -VISION_ROW_BUCKETS[-1] * PEAK_ACTIVATION_BYTES_PER_ROW_PER_DIE // 8
@@ -2689,10 +2626,9 @@ def main() -> int:
         vision_state: dict[str, Any] = {"residency": None}
 
         def vision_warm_hook(opened_chain) -> None:
-            # The image path is the default path: the tower's residency is decided on the live allocator here (after
-            # the resident build, the MTP states, the warm pass and the lanes' allocations; before any capture) and
-            # made here (the weights resident, one forward per row bucket compiled).  A shortfall leaves the process
-            # text-only with the reason on READY / health and on every image refusal.
+            # The tower's residency is decided on the live allocator here, after every resident allocation and before
+            # any capture. A shortfall leaves the process text-only, with the reason on READY, /health and every image
+            # refusal.
             reserved = RESIDENT_POST_BUILD_BYTES_PER_BANK_UPPER_BOUND
             if opened_chain.mtp is not None:
                 reserved += int(opened_chain.mtp.admission["mtp_growth_estimate_bytes_per_bank"]["traces"])

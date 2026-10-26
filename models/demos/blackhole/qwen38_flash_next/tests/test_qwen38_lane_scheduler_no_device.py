@@ -1,13 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The lanes server's scheduler without a device (``tools/qwen38_lane_scheduler.py``): the lane geometry, the
-per-lane stream rules against a single-stream reference on a deterministic model (every event: EOS, ``max_tokens``,
-the forced ``</think>`` at every budget both inside a pass and on its last emitted token, a zero budget, an oversize
-id, ``ignore_eos``), and the driver loop over a fake device (FIFO order, one admission per boundary while a lane
-decodes and every waiting request while none does, the B+1th request waits, the FIFO's limit, a request ending
-while the others continue, the accept-count vector the commits take, the rewound position of an override, cancels,
-the stop, a device failure)."""
+"""No-device tests of the lane scheduler: geometry, per-lane stream rules against a single-stream reference on a
+deterministic model, and the driver loop over a fake device."""
 
 from __future__ import annotations
 
@@ -60,10 +55,9 @@ def draft_token(sequence: list[int], index: int) -> int:
 def reference_stream(
     prompt: list[int], *, max_tokens: int, stop_ids, think_budget: int | None
 ) -> tuple[list[int], str]:
-    """``Qwen38ChatSession._generate_mtp``'s greedy rules on the model: the token stream a request gets and its
-    finish.  The first token (the model's next token after the prompt, read from the row) takes no budget check
-    (the single stream yields it and runs its pass; the check follows that pass's first emitted token); a zero budget
-    drops it for the forced ``</think>``."""
+    """``Qwen38ChatSession._generate_mtp``'s greedy rules on the model: a request's token stream and finish.
+
+    The first token takes no budget check; a zero budget drops it for the forced ``</think>``."""
 
     sequence = list(prompt)
     tokens: list[int] = []
@@ -119,10 +113,10 @@ class FakePassRecord:
 
 
 class FakeLanesDevice:
-    """The lane chain on the deterministic model with the device's commit semantics: a pass runs every active lane's
-    block from its committed sequence; the previous pass's rows commit at the START of the next pass, ``counts[u] + 1``
-    of them (the host-written or landed count) for the lanes whose commit mask is set (the mask of the pass being
-    committed); an inactive lane's rows are junk and its position holds; an admission imports a fresh state."""
+    """The lane chain on the deterministic model with the device's commit semantics.
+
+    The previous pass's rows commit at the start of the next pass, ``counts[u] + 1`` of them, for the lanes whose
+    commit mask is set; an inactive lane's rows are junk and its position holds."""
 
     def __init__(
         self, lanes: int, *, fail_on_pass: int | None = None, admit_seconds: float = 0.0, segments: int = 3, clock=None
@@ -305,9 +299,7 @@ PROMPTS = {
 @pytest.mark.parametrize("think_budget", [None, 0, 1, 2, 3, 5, 8, 13])
 @pytest.mark.parametrize("max_tokens", [1, 2, 3, 7, 40, 200])
 def test_lane_streams_equal_the_single_stream_reference_for_every_budget_and_length(think_budget, max_tokens) -> None:
-    """Four lanes over six prompts (the fifth and sixth wait): every delivered stream equals the reference's, with
-    its finish; the forced </think> at every budget falls inside passes (j < a) and on last emitted tokens (j == a)
-    across these prompts (both counted below)."""
+    """Four lanes over six prompts: every delivered stream and finish equals the reference's."""
 
     device = FakeLanesDevice(4)
     tickets = [
@@ -325,9 +317,7 @@ def test_lane_streams_equal_the_single_stream_reference_for_every_budget_and_len
 
 
 def test_forced_think_end_covers_both_pass_positions_and_the_zero_budget() -> None:
-    """Across the reference sweep the budget fires on an emitted token inside a pass (rows 0 .. j + 1 commit, the
-    next pass opens on </think>) and on a pass's last emitted token (the forced pass [t', </think>, placeholders]
-    follows): both forms occur and both hand the device a count override or a forced block."""
+    """The budget fires both inside a pass and on a pass's last emitted token, each handing the device an override."""
 
     inside = last = 0
     for budget in range(1, 14):
@@ -460,9 +450,8 @@ def test_the_queue_limit_refuses_beyond_the_lanes_and_stop_refuses_everything(ex
 
 
 def test_counts_vector_carries_admissions_and_overrides_and_positions_rewind() -> None:
-    """After an admission the coming commit takes -1 on that lane (nothing) and the device-landed counts on the
-    others; after a forced </think> the overridden lane's count is its committed rows - 1 and its position is
-    rewound to the pass's start plus those rows; the next block is written for the lanes the boundary changed."""
+    """An admitted lane commits -1 (nothing); a forced </think> overrides its lane's count to committed rows - 1 and
+    rewinds its position."""
 
     device = FakeLanesDevice(3)
     alpha = _ticket("alpha", PROMPTS["alpha"], max_tokens=40, think_budget=4)
@@ -519,8 +508,7 @@ def test_a_cancel_parks_the_lane_at_the_next_boundary_and_the_others_continue() 
 
 
 def test_stalls_are_charged_to_the_lanes_that_were_decoding() -> None:
-    """A decoding lane is charged the admission's device segments (the device's record of them), never the wall
-    the admission took on the host; the admitted request records both."""
+    """A decoding lane is charged the admission's device segments, never its host wall time."""
 
     device = FakeLanesDevice(2, admit_seconds=0.6)
     clock = [0.0]
@@ -548,11 +536,8 @@ def test_stalls_are_charged_to_the_lanes_that_were_decoding() -> None:
 
 @pytest.mark.parametrize("stall_budget_seconds", [0.0, 0.5, 2.0, None])
 def test_admissions_interleave_the_decoding_lanes_passes_under_the_budget(stall_budget_seconds) -> None:
-    """Three requests on two lanes: the first admission runs whole (no lane decodes), the second and the third
-    interleave the decoding lane's passes between their segments once the admission work since the last pass reached
-    the budget (0: every segment; 2.0 with 1.2 s admissions: never; None: never); every stream equals the reference
-    whatever the budget; the stall a decoding lane carries is the admission's segments, never the passes it got;
-    the admitted request's wall carries the passes."""
+    """Admissions interleave the decoding lane's passes once the admission work reaches the budget; streams are
+    unchanged whatever the budget."""
 
     clock = FakeClock()
     device = FakeLanesDevice(2, admit_seconds=1.2, segments=3, clock=clock)
@@ -588,8 +573,7 @@ def test_admissions_interleave_the_decoding_lanes_passes_under_the_budget(stall_
 
 
 def test_the_budget_counts_admission_work_since_the_decoding_lanes_last_pass() -> None:
-    """A boundary with several short admissions: none reaches the budget alone, together they do, so the decoding
-    lane gets its pass inside the second or third admission instead of waiting for the whole boundary."""
+    """The budget sums the admission work since the decoding lane's last pass, across admissions."""
 
     clock = FakeClock()
     device = FakeLanesDevice(4, admit_seconds=0.3, segments=3, clock=clock)
@@ -599,18 +583,14 @@ def test_the_budget_counts_admission_work_since_the_decoding_lanes_last_pass() -
     for ticket in tickets:
         expected, finish = reference_stream(ticket.prompt_ids, max_tokens=12, stop_ids=(), think_budget=None)
         assert _delivered(ticket) == expected and ticket.finish == finish
-    # the first admission runs whole (no lane decodes) and the first lane's wait starts at its activation; the second
-    # admission's segments reach 0.1 and 0.2 s of wait, the third's 0.4 then 0.5 >= 0.45: the pass lands inside the
-    # third admission (a per-admission clock would never have run it: every admission is 0.3 s); the fake pass takes
-    # no clock time, so the fourth admission's segments reach 0.2 only
+    # the waits reach 0.1, 0.2 (second admission), 0.4, 0.5 >= 0.45 (third): the pass lands inside the third; the
+    # fake pass takes no clock time, so the fourth reaches 0.2 only
     assert [t.interleaved_passes for t in tickets] == [0, 0, 1, 0]
     assert scheduler.interleaved_passes == 1
 
 
 def test_a_lane_ending_inside_an_interleaved_pass_is_charged_the_segments_it_waited_for() -> None:
-    """The stall charge is per segment: a decoding lane whose request ends in the pass run between two segments of
-    another request's admission carries the segments before that pass and none after (the whole-admission charge at
-    the end credited it nothing, an under-count of one admission's segments on that request's record)."""
+    """A lane ending in a pass between two admission segments is charged the segments before that pass only."""
 
     clock = FakeClock()
     device = FakeLanesDevice(2, admit_seconds=1.2, segments=3, clock=clock)
@@ -631,9 +611,8 @@ def test_a_lane_ending_inside_an_interleaved_pass_is_charged_the_segments_it_wai
 
 
 def test_an_image_ticket_carries_its_images_to_the_admission_and_takes_the_tower_segment_and_record() -> None:
-    """An image request's ticket carries the decoded images and the prompt's rotary positions to the device's
-    admit (the driver thread runs the tower there); the admission's tower segment counts in the admission seconds
-    the decoding lanes wait for, and its vision record reaches the ticket; a text ticket carries none."""
+    """An image ticket carries its images and rotary positions to the admit; the tower segment counts as admission
+    time and its vision record reaches the ticket."""
 
     device = FakeLanesDevice(2, admit_seconds=0.3)
     text = _ticket("alpha", PROMPTS["alpha"], max_tokens=12, stop_ids=())

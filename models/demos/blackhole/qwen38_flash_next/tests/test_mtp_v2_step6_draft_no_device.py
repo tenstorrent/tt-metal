@@ -1,19 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTP v2 step 6: the draft body, the device token chain and the pass loop on the torch-backed ttnn of steps 4/5.
+"""MTP v2 step 6: the draft body, the device token chain and the pass loop on the torch-backed ttnn (no device).
 
-No device.  What is pinned:
-
-* the MTP layer's draft raw history is derived from the alignment window with the previous accept count without
-  touching the alignment state, and the a = 0 selectors advance it by exactly one row between draft rows;
-* the draft body's k - 1 ids equal k - 1 eager MTP rows fed the same tokens from the host (bitwise), the rows run
-  at MTP positions P .. P + k - 2, and the verify token row / draft lanes it assembles on device equal the host
-  images ``host_verify_token_rows`` would upload;
-* the pass loop's committed stream equals the greedy MTP's committed stream for every acceptance pattern at any
-  k, including the EOS cut, and its PLE lookups take the R tokens of every pass from the committed context;
-* source pins: no host tensor inside the draft / commit bodies, ids move by 32-bit slice / concat / copy only,
-  the history derivation precedes the rows, the step order draft -> readback -> commit -> PLE rows -> verify.
+The pass loop's committed stream must equal the greedy MTP's for every acceptance pattern at any k, including the
+EOS cut; the draft body's ids equal eager MTP rows fed the same tokens, bitwise.
 """
 
 from __future__ import annotations
@@ -874,10 +865,8 @@ class _FakeEarlyReader(mtp_v2.Qwen38TTNNEarlyRowsReader):
 def test_pass_loop_with_the_early_rows_reader_splits_the_lookup_and_keeps_the_stream(
     expect_error, fake, monkeypatch, enqueue
 ):
-    """The early rows reader: after the draft launch the verify lanes are read (the fake: right after the verify
-    replay's event), the next pass's rows 0-1 looked up from the context the pass commits to, and the next step looks
-    up rows 2..k from their chain and uploads once; the committed stream, the PLE tokens and the contexts are the plain
-    loop's, row for row."""
+    """The early rows reader: the next pass's rows 0-1 are looked up after the draft launch and rows 2..k by the next
+    step; the committed stream, the PLE tokens and the contexts are the plain loop's, row for row."""
 
     k = 4
     pattern = (2, 4, 0, 1, 3)
@@ -1078,7 +1067,7 @@ def test_draft_and_commit_bodies_create_no_host_tensors_and_move_ids_by_copy() -
     )
     for forbidden in ("forward_rows", "forward_verify_generic", "inject_rows", "state.position"):
         assert forbidden not in commit, forbidden
-    # commit_verify keeps its 1-row-of-history contract and only gained the keyword-only target.
+    # commit_verify keeps its 1-row-of-history contract, with a keyword-only target.
     qsa_functions = _functions(QSA_SOURCE)
     commit_verify = qsa_functions["commit_verify"]
     assert [arg.arg for arg in commit_verify.args.kwonlyargs] == ["target"] and commit_verify.args.kw_defaults[
@@ -1109,8 +1098,7 @@ def test_pass_loop_step_order_and_the_verify_body_are_pinned() -> None:
         < finish_source.index("commit_verify_host(")
     )
     assert "read_verify_output" not in finish_source and "read_verify_output" not in step_source
-    # The verify body did not change with this step: forward_verify still ends with the position update and the
-    # layer body's commit-then-forward order stands (the step-5 pins), and write_verify_inputs delegates the PLE rows.
+    # write_verify_inputs delegates the PLE rows; the token row and draft lanes are assembled on device.
     functions = _functions(MTP_V2_SOURCE)
     inputs = _segment(MTP_V2_SOURCE, functions["write_verify_inputs"])
     assert inputs.endswith("return write_verify_ple_rows(model, verify, tokens)")

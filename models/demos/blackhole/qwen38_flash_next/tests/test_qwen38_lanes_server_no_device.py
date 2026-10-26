@@ -1,12 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The lanes server (``--lanes B``) without a device: the start-up admission of the flag (the geometry, the greedy-only
-refusals, the fused set left as the single stream's), the lanes DRAM admission (its modeled terms pinned per (B, k, C)
-and judged against the measured 4 x 4 state), the lanes session's host-side override (the rewound position and n-gram
-context on a fake lane state), and the source pins: the lane body's GR read is the single stream's ``read_rows`` call,
-the lanes request path calls no device method of the session, the READY record names the lanes, and the driver thread
-is the only device thread."""
+"""The lanes server (``--lanes B``) without a device: the flag's start-up admission, the lanes DRAM admission, the
+lanes session's host-side override and source pins."""
 
 from __future__ import annotations
 
@@ -70,8 +66,7 @@ def test_lanes_switch_refuses_sampling(expect_error) -> None:
 
 
 def test_lanes_switch_leaves_the_fused_set_alone() -> None:
-    """The lanes run the fused set the single stream runs (the verify-rows fold through its lanes form): the switch
-    sets no environment and the READY record's fused_kernels is the registry's."""
+    """The lanes run the single stream's fused set: the switch sets no environment."""
 
     switch = server.lanes_switches(_args(lanes=4, mtp=4))
     assert "fused_off" not in switch
@@ -156,13 +151,12 @@ def test_lanes_admission_terms_are_pinned_per_point(point) -> None:
 
 def test_lanes_admission_estimate_covers_the_measured_state_and_decides_on_the_live_reading(expect_error) -> None:
     record = session_module.lanes_capacity_admission(32768, lanes=4, drafts=4)
-    # the estimate's states term covers the MEASURED 4 x 4 verify state at 32,768 (a 4x p150 hold, 2026-09-28) with
-    # room for the pagers and the draft state, and stays within a third of it (the model is not loose)
+    # the states term covers the measured 4 x 4 verify state with room for the pagers and the draft state, and stays
+    # within a third of it (the model is not loose)
     measured = session_module.LANES_MEASURED_VERIFY_STATE_BYTES_PER_BANK_4X4_32K
     assert measured < record["lanes_growth_estimate_bytes_per_bank"]["states"] < measured * 1.33
-    # the table's 2026-09-04 free side (478 MB per bank at 32,768) admits 4 x 4 there and refuses 4 x 4 at 131,072
-    # (313 MB); the live reading of a 4x p150 hold on the compact layout (1,449,576,320 B per bank free with the
-    # state resident, contiguous 1,434,522,432; 2026-09-28) admits 4 x 4 at 32,768 with room to spare
+    # the table's free side admits 4 x 4 at 32,768 and refuses it at 131,072; a live reading (from a device
+    # measurement) admits 4 x 4 at 32,768 with room to spare
     assert record["fits"] and record["decided_by"]["shortfalls"] == []
     at_128k = session_module.lanes_capacity_admission(131072, lanes=4, drafts=4)
     assert not at_128k["fits"] and at_128k["decided_by"]["shortfalls"] == ["free_bytes_below_estimate"]
@@ -194,10 +188,7 @@ def test_lanes_admission_estimate_covers_the_measured_state_and_decides_on_the_l
 
 
 def test_lanes_admission_terms_cover_the_measured_128k_readings() -> None:
-    """The MEASURED 4 x 4 readings at 131,072 (a 4x p150 hold, 2026-09-28): the modeled lane states cover the verify
-    state within +5 %, the pagers within +1 %, the traces by a margin (the 2026-09-20 upper bound), and the whole
-    estimate stays under the measured net cost plus the served extras' free margin: the admission at 128k decides on
-    a real margin, not a loose one."""
+    """The modeled terms cover the measured 4 x 4 readings at 131,072: states within +5 %, pagers within +1 %."""
 
     record = session_module.lanes_capacity_admission(131072, lanes=4, drafts=4)
     remainders = record["lanes_growth_remainders_bytes_per_bank"]
@@ -206,7 +197,7 @@ def test_lanes_admission_terms_cover_the_measured_128k_readings() -> None:
     pagers = session_module.LANES_MEASURED_PAGERS_BYTES_PER_BANK_128K
     assert pagers * 0.99 < remainders["pagers"] < pagers * 1.01
     assert remainders["traces"] > session_module.LANES_MEASURED_TRACES_BYTES_PER_BANK
-    # the per-lane slope from 32k to 128k, measured 1,771 B per bank per context row against the model's
+    # the per-lane slope from 32k to 128k, measured against the model's
     slope_measured = (
         (verify_state - session_module.LANES_MEASURED_VERIFY_STATE_BYTES_PER_BANK_4X4_32K) / 4 / (131072 - 32768)
     )
@@ -227,7 +218,7 @@ def test_lanes_admission_terms_cover_the_measured_128k_readings() -> None:
         131072, lanes=4, drafts=4, live=live, reserved_bytes_per_bank=session_module.LANES_SERVED_EXTRAS_BYTES_PER_BANK
     )
     assert admitted["fits"] and 0 < admitted["headroom_bytes_per_bank"] < 200_000_000
-    # 6 x 4 at 128k does not fit the same reading (the measured verdict of the 2026-09-28 hold)
+    # 6 x 4 at 128k does not fit the same reading (as measured)
     six = session_module.lanes_capacity_admission(
         131072, lanes=6, drafts=4, live=live, reserved_bytes_per_bank=session_module.LANES_SERVED_EXTRAS_BYTES_PER_BANK
     )
@@ -235,11 +226,10 @@ def test_lanes_admission_terms_cover_the_measured_128k_readings() -> None:
 
 
 def test_lanes_admission_adds_the_fold_prefix_states_when_the_fold_serves_the_lanes() -> None:
-    """The verify-rows fold's lanes form keeps B x R prefix states per GDN layer: 70,778,880 B per bank at 20 rows (the
-    B = 1 rule at the lanes' row count), inside the states term with the margin."""
+    """The fold's lanes form keeps B x R prefix states per GDN layer (the B = 1 rule at the lanes' row count)."""
 
     assert session_module.lanes_fold_prefix_states_bytes_per_bank(20) == 70_778_880
-    for rows in (10, 20, 30, 32):  # the fold module's own rule per device over the banks (measured +70,789,120 at 20)
+    for rows in (10, 20, 30, 32):  # the fold module's own rule per device over the banks
         assert (
             session_module.lanes_fold_prefix_states_bytes_per_bank(rows)
             == gdn_rows_scan.prefix_states_bytes(rows, 36) // 8
@@ -335,9 +325,8 @@ def test_set_blocks_keeps_the_device_assembled_blocks_and_set_active_writes_on_c
 
 
 def test_lane_body_gr_read_is_the_single_streams_read_rows_call() -> None:
-    """Both verify bodies read the residual through ``read_rows(residual, flat_views=True)``, which routes every
-    flat-views call to the one fused read the module resolved at construction (gr_recip_last when it serves): the
-    lane body follows ``fused.enabled`` exactly as the single-stream body does."""
+    """Both verify bodies read the residual through ``read_rows(residual, flat_views=True)``, the module's one fused
+    read."""
 
     lanes = MTP_LANES_SOURCE.read_text(encoding="utf-8")
     single = MTP_V2_SOURCE.read_text(encoding="utf-8")
@@ -353,7 +342,7 @@ def test_lane_body_gr_read_is_the_single_streams_read_rows_call() -> None:
     assert "return self._read_fused(self, residual_rows)" in read_rows
     init = gr[gr.index("        self._read_fused = None") : gr.index("        self._write_fused = None")]
     assert 'if fused_kernels.enabled("gr_recip_last"):' in init and 'name = "gr_recip_last"' in init
-    # the lane GDN rows dispatch through the fold's registry step as the single stream's forward_rows does (wave F)
+    # the lane GDN rows dispatch through the fold's registry step as the single stream's forward_rows does
     gdn = (ROOT / "ttnn" / "gdn.py").read_text(encoding="utf-8")
     lanes_body = gdn[gdn.index("    def forward_rows_lanes(") : gdn.index("    def commit_rows_lanes(")]
     assert (

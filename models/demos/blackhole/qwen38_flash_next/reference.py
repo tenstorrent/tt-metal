@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Small, deterministic CPU semantics for Qwen3.8-Flash-Next bring-up.
+"""Small, deterministic CPU semantics for Qwen3.8-Flash-Next (no TTNN).
 
-These routines intentionally contain no TTNN imports.  They are the executable
-contract used while porting individual kernels and state transitions.  The
-formulas are pinned against the Qwen4Exp Transformers implementation and the
-day-zero SGLang Qwen4Exp/MTP implementation recorded in ``RUN_MANIFEST.md``.
+The executable contract for the device kernels and state transitions, pinned against the Qwen4Exp Transformers and
+SGLang Qwen4Exp/MTP implementations.
 """
 
 from __future__ import annotations
@@ -95,9 +93,8 @@ def mtp_input_fusion(
 ) -> torch.Tensor:
     """Exact Qwen4Exp MTP input mixing for the four-branch GR state.
 
-    ``fc_hidden`` is shared across the four branch views.  The projected token
-    embedding is broadcast and added to each branch; there is no 2H->H concat
-    projection in the released Qwen3.8-Flash-Next checkpoint.
+    ``fc_hidden`` is shared across the four branch views and the projected token embedding is added to each branch;
+    the checkpoint has no 2H->H concat projection.
     """
 
     if input_embedding.shape[:-1] != hidden_state.shape[:-1]:
@@ -106,10 +103,8 @@ def mtp_input_fusion(
         raise ValueError("MTP input widths do not match hidden_size/hc_count")
     embedding = zero_centered_rms_norm(input_embedding, embedding_norm_weight, eps)
     embedding = F.linear(embedding, fc_embedding_weight)
-    # The released Qwen4Exp MTP module constructs pre_fc_norm_hidden at
-    # hc_count * hidden_size and applies it before viewing the result as
-    # [hc_count, hidden_size].  This is one global 4H normalization; only the
-    # following fc_hidden projection is shared independently by each branch.
+    # pre_fc_norm_hidden is one global 4H normalization applied before the [hc_count, hidden_size] view; only the
+    # following fc_hidden projection is shared per branch.
     hidden = zero_centered_rms_norm(hidden_state, hidden_norm_weight, eps)
     hidden = F.linear(hidden.unflatten(-1, (hc_count, hidden_size)), fc_hidden_weight)
     return (hidden + embedding.unsqueeze(-2)).flatten(-2)

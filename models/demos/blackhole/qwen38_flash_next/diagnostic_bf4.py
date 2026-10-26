@@ -3,11 +3,9 @@
 
 """Read-only binding of a CPU-staged BF4 expert corpus (``tools/stage_full_bf4_cpu.py`` + ``tools/verify_full_bf4_cpu.py``).
 
-The binder takes the corpus root and its verification record; the producer identity (the staging run's source
-head, runtime and checkpoint digests) is what the record claims, checked against every staging summary and
-per-layer evidence, and a caller may pin it (``producer``).  Every tensorbin is streamed through SHA-256 before a
-record is exposed.  The production ``Qwen38BF4Cache`` is not involved: a server without a corpus converts the
-experts itself on the first start.
+The producer identity the verification record claims is checked against every staging summary and per-layer
+evidence, and a caller may pin it (``producer``). Every tensorbin is streamed through SHA-256 before a record is
+exposed.
 """
 
 from __future__ import annotations
@@ -59,9 +57,8 @@ ARTIFACT_SPECS = MappingProxyType(
         ),
     }
 )
-# The corpus total follows the per-artifact pins: 49 slots x (w0_w1 + w2) = 69,363,424,704 bytes in the compact layout.
-# The verification record's corpus.bytes is the on-disk sum the producer saw (the Aug-27 record: 106,819,608,000, its
-# pre-compact layout); the binder compares the record to the disk and the pins to every artifact (2026-09-26).
+# The corpus total follows the per-artifact pins (49 slots x (w0_w1 + w2), compact layout). The record's corpus.bytes
+# is compared to the disk, the pins to every artifact.
 EXPECTED_TOTAL_BYTES = len(EXPECTED_SLOTS) * sum(spec.bytes for spec in ARTIFACT_SPECS.values())
 
 
@@ -338,9 +335,9 @@ def _validate_tree(root: Path, expected_files: set[Path]) -> None:
 
 
 def _disk_bytes(artifact_root: Path, contract: _BindingContract) -> int:
-    """The bytes the contract's artifacts occupy on disk (canonical regular files; a missing one refuses here). The
-    verification record's ``corpus.bytes`` is this sum as the producer saw it; the contract's own total (the compact
-    pins) is checked per artifact, not against the record."""
+    """The bytes the contract's artifacts occupy on disk; a missing one refuses here.
+
+    The record's ``corpus.bytes`` is this sum as the producer saw it; the contract's pins are checked per artifact."""
     total = 0
     for slot in contract.slots:
         namespace, layer_index = slot
@@ -507,8 +504,7 @@ def _bind(
             if type(raw) is not dict:
                 raise DiagnosticBF4BindingError(f"{slot} artifact {name} schema differs")
             path = artifact_root / namespace / f"layer-{layer_index:02d}" / spec.filename
-            # the on-disk size against the pin first: a corpus of another layout is named as such, before its staging
-            # evidence (which describes that other layout) is compared field by field
+            # size against the pin first, so a corpus of another layout is named as such before its evidence is compared
             on_disk = _canonical_file(path, label=f"{slot} artifact {name}").st_size
             if on_disk != spec.bytes:
                 raise DiagnosticBF4BindingError(

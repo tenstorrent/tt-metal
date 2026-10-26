@@ -1,14 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prefill stage 2: the padded tail chunk and the hand-off to the 1-row decode, on the step-4 torch-backed ttnn.
+"""The padded tail chunk and the hand-off to the 1-row decode on the torch-backed ttnn, no device.
 
-No device.  For r in {0, 1, 2, 8, 9, 31} and N in {r, 32 + r, 64 + r} a GDN layer and the PLE layer run the driver's
-sequence (the seed from the decode buffers, N // 32 full chunks at accept 31, the padded tail at accept r - 1, the
-hand-off) against N 1-row steps: the GDN recurrent state within the tolerance model, the ring slots and phase
-bitwise, the PLE slots and n-gram context bitwise, then one more 1-row step on both sides.  ``decoded`` steps before
-the prefill cover the reverse seed (decode -> chunk).  The QSA hand-off is checked on position-encoded kept rows:
-the staging rows and the ring rows are the positions the generic body expects.
+A GDN layer and the PLE layer run the driver's sequence against N 1-row steps: the GDN recurrent state within the
+tolerance model, the ring slots, phase, PLE slots and n-gram context bitwise. The QSA hand-off is checked on
+position-encoded kept rows.
 """
 
 from __future__ import annotations

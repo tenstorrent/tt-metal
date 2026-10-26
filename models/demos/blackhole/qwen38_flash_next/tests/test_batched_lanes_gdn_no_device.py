@@ -3,15 +3,8 @@
 
 """The batched-lanes GDN step, the lane resets, the final mixer rows and the lane bodies' source pins, no device.
 
-``Qwen38TTNNGDN.forward_decode_lanes`` on B lanes (the ``[B,12,128,128]`` state, the ``[1,1,B,2560]`` ring slots
-under one shared phase) runs on the step-4 fake with every matmul computed per (lane, head) tile in float64 and
-rounded once, so no result depends on the batch it sits in; B separate 1-row ``forward_decode`` chains on the same
-fake are the reference.  Twelve steps (three ring cycles) per lane count, lane u's recurrent state, its four ring
-rows and its output row bitwise the chain's after every step; a lane admitted mid-run at a step of its residue class
-(``reset_lane_inplace`` then a fresh chain) stays bitwise, the misaligned control differs and the position row
-refuses it.  The final mixer rows path runs against the 1-row mixer row for row on the GR fake.  The source pins hold
-the 1-row bodies untouched and the lane bodies free of host I/O, and the fused lane body (the ``gdn_step`` program on B
-rows, bound over the class body under ``QWEN38_FUSED``) the 1-row fused walk on B rows in the composed ring order.
+The fake computes every matmul per (lane, head) tile in float64 rounded once, so no result depends on the batch it
+sits in; B separate 1-row ``forward_decode`` chains are the reference.
 """
 
 from __future__ import annotations
@@ -111,8 +104,8 @@ def fake(monkeypatch):
         [torch.empty_like(x) for x in t.torch_shards()], dtype or t.dtype, layout or t.layout
     )
     base_reshape = fake_ttnn.reshape
-    # A same-shape reshape is a view of its input on the device (the PLE lanes B = 1 defect, 2026-09-04): the
-    # fake hands the input back, so releasing it after the reshape is a read of a deallocated tensor here too.
+    # A same-shape reshape is a view of its input on the device: the fake hands the input back, so releasing it
+    # after the reshape is a read of a deallocated tensor here too.
     fake_ttnn.reshape = lambda t, shape, **kwargs: t if tuple(shape) == t.shape else base_reshape(t, shape, **kwargs)
     for module in (gdn_module, ple_module):
         monkeypatch.setattr(module, "ttnn", fake_ttnn)
@@ -261,8 +254,7 @@ class _LaneLookup(step4._FakeResidentLookup):
 
 
 def test_ple_lanes_at_one_lane_equal_the_one_row_path(fake) -> None:
-    """B = 1: the value row keeps its shape through the rows projection (a same-shape reshape is a view; releasing
-    the input freed it on the device), so the lane is the 1-row path bitwise over three steps."""
+    """B = 1: the lane is the 1-row path bitwise over three steps (a same-shape reshape is a view)."""
 
     module = step4._ple_module()
     module._resident_lookup = _LaneLookup()
@@ -421,8 +413,8 @@ def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_ro
 
     one_row = [name for name in _self_walk(gdn_module.Qwen38TTNNGDN.forward_decode) if name.startswith("_")]
     lanes = [name for name in _self_walk(gdn_module.Qwen38TTNNGDN.forward_decode_lanes) if name.startswith("_")]
-    # The 1-row body resolves its projection -> gated-output step through the fused registry (ttnn/fused/gdn_step,
-    # opt-in): the composed chain it runs by default is the walk the lane stages mirror.
+    # The 1-row body resolves its projection -> gated-output step through the fused registry; the composed chain is
+    # the walk the lane stages mirror.
     assert one_row == ["_validate_state", "_all_gather_hidden", "_project", "_gdn_step", "_out_project"]
     chain = [name for name in _self_walk(gdn_step_module.gdn_step_composed, receiver="gdn") if name.startswith("_")]
     # source order: the gate wraps the recurrence on one line (``gdn._gate(gdn._recurrent_decode(...), z)``)
@@ -436,10 +428,8 @@ def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_ro
         "_recurrent_decode_lanes",
         "_gate_and_project_lanes",
     ]
-    # The same ttnn ops per stage (the lane stage is the 1-row stage on B rows, nothing added or removed): the 1-row
-    # projection and its z/a/b split are the lanes projection (its linear split out as ``_project_lanes_unsplit``, the
-    # fused program's input), its gate and out-projection the lanes gate (its tail split out as ``_out_project_lanes``,
-    # the fused program's successor); the z/a/b slices are one call site in a loop on the lanes side.
+    # The same ttnn ops per stage: the lane stage is the 1-row stage on B rows, nothing added or removed (the z/a/b
+    # slices are one call site in a loop on the lanes side).
     stages = (
         (("_all_gather_hidden",), ("_all_gather_hidden_lanes",)),
         (("_project", "_split_projection"), ("_project_lanes_unsplit", "_project_lanes")),
@@ -487,11 +477,8 @@ def test_gdn_lanes_body_is_the_one_row_walk_with_the_lanes_suffix_and_the_one_ro
 
 
 def test_gdn_fused_lanes_body_is_the_one_row_fused_walk_on_b_rows_and_binds_under_the_switch() -> None:
-    """The fused lane body (``QWEN38_FUSED=gdn_step``) is ``forward_decode``'s walk with the lanes suffix around the
-    fused ``gdn_step`` program at rows = B: the gather, the unsplit projection, the program, the out-projection.  Its
-    ring order is the composed lanes body's (the window read before the step, the token landing in the window's last
-    slot, the phase advanced once after the step); it is bound over the class body at construction only when the kernel
-    is on, and the class body, the fallback, still runs the lane chain."""
+    """The fused lane body is ``forward_decode``'s walk around the ``gdn_step`` program at rows = B, in the composed
+    lanes body's ring order; it is bound at construction only when the kernel is on."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn import fused
     from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_step as gdn_step_module
@@ -543,8 +530,7 @@ def test_gdn_fused_lanes_body_is_the_one_row_fused_walk_on_b_rows_and_binds_unde
     assert _calls(cls._out_project_lanes).count("ttnn.reduce_scatter") == 1
     assert "lanes" in fused.kernel("gdn_step").replaces and "_forward_decode_lanes_fused" in gdn_step_module.__doc__
     # The binding: the one ``if fused.enabled("gdn_step")`` of the constructor assigns the partial over the class
-    # attribute; the kernel serves by default (since 2026-09-25) and QWEN38_FUSED_OFF=gdn_step unbinds it; the class
-    # body still runs the lane chain.
+    # attribute; QWEN38_FUSED_OFF=gdn_step unbinds it and the class body runs the lane chain.
     init = ast.parse(textwrap.dedent(inspect.getsource(cls.__init__)))
     binds = [
         node

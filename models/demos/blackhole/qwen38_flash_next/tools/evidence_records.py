@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Evidence records a serving run leaves behind: phase markers (append-only JSONL) and the one result document."""
 from __future__ import annotations
 

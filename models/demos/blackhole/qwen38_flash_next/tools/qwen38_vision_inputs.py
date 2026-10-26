@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""The host side of an image request between the protocol and the model: the image bytes decoded, the checkpoint's
-processor geometry (``smart_resize``: each side a multiple of 32 px within the pixel bounds) applied per part with
-its ``detail``, the grid and merged-token count per image, the request's image digest, and the pixel patches for
-the tower (the tower lane's ``vision_reference.preprocess_image`` when the tree carries it).
+"""The host side of an image request: the image bytes decoded, the checkpoint's processor geometry applied per part
+with its ``detail``, the grid and merged-token count per image, the request's image digest, and the tower's pixel
+patches.
 
-The geometry is the checkpoint's ``preprocessor_config.json`` (``Qwen2VLImageProcessorFast``: patch 16, merge 2,
-``shortest_edge`` 65,536 and ``longest_edge`` 16,777,216 pixels); ``detail: low`` lowers the pixel cap to 512 x 512
-(the OpenAI convention), so a low-detail image is at most 256 tokens.
+The geometry is the checkpoint's ``preprocessor_config.json`` (patch 16, merge 2); ``detail: low`` lowers the pixel
+cap to 512 x 512 (the OpenAI convention), so a low-detail image is at most 256 tokens.
 """
 
 from __future__ import annotations
@@ -128,12 +126,11 @@ def request_digest(images: Sequence[Qwen38DecodedImage]) -> str:
 
 def pixel_patches(image: Qwen38DecodedImage):
     """The tower's input for one image: ``[N, 1536]`` fp32 pixel patches in the processor's order (channel, temporal
-    copy, 16 x 16), through the tower lane's ``vision_reference.preprocess_image`` (the processor's bicubic resize
-    and normalisation, matched to it on the pinned fixtures).  Raises when the tree has no tower module."""
+    copy, 16 x 16), through ``vision_reference.preprocess_image``.  Raises when the tree has no tower module."""
 
     try:
         from models.demos.blackhole.qwen38_flash_next import vision_reference
-    except ImportError as error:  # the tower lane's module lands beside this one
+    except ImportError as error:  # a tree without the tower module
         raise Qwen38ImageError("this build carries no vision tower preprocessing (vision_reference)") from error
     import dataclasses
 

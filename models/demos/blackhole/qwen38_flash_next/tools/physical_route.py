@@ -127,11 +127,7 @@ def derive_ring_walk_route(
     descriptor: Mapping[str, Any],
     chips_with_mmio: Mapping[int, int],
 ) -> tuple[int, int, int, int]:
-    """Return the four-chip ring walked from the lowest chip ID, taking the lowest unvisited neighbour.
-
-    A 1x4 LINE mesh graph descriptor over a ring uses three of its four links;
-    this walk is the order that descriptor opened on the QuietBox (0, 2, 1, 3).
-    """
+    """Return the four-chip ring walked from the lowest chip ID, taking the lowest unvisited neighbour."""
 
     adjacency = _ethernet_adjacency(descriptor, chips_with_mmio)
     if sorted(len(neighbors) for neighbors in adjacency.values()) != [2, 2, 2, 2]:
@@ -150,14 +146,9 @@ def derive_fabric_line_route(
     """Return the four chips in the order the fabric embedded the 1x4 LINE mesh graph descriptor: the local chip of
     fabric chip 0 of the host's mesh, then fabric chips 1, 2, 3.
 
-    A 1x4 LINE descriptor over a four-chip ring uses three of the four links, and the fabric's topology solver picks
-    which three: the QuietBox (4x p150) came out as chips (0, 2, 1, 3), a QuietBox 2 (2x p300c) as (1, 0, 3, 2)
-    (2026-09-18).  The collectives are Linear along the mesh row, so the mesh must be opened in exactly this order:
-    any other ethernet path through the ring puts a mesh neighbour pair on a link the fabric line does not carry
-    and the first all_gather fails ("Could not find any forwarding direction").  ``fabric_node_chip_id(k)`` returns
-    the local chip ID of fabric chip k of the host's mesh.  The result is checked to be a bijection over the four
-    local chips and an ethernet path (consecutive chips linked).  Deterministic: the fabric mapping is a function of
-    the cluster descriptor and the mesh graph descriptor, not of any open order.
+    The fabric picks which three of the ring's four links the line uses, and the Linear collectives need the mesh
+    opened in exactly this order: any other path puts a mesh neighbour pair on a link the line does not carry and the
+    first all_gather fails.  The result is checked to be a bijection over the four local chips and an ethernet path.
     """
 
     adjacency = _ethernet_adjacency(descriptor, chips_with_mmio)

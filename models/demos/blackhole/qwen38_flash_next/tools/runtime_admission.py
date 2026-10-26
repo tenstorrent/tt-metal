@@ -1,9 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Runtime admission: the server runs on the ttnn built from this checkout.
 
-The interpreter's ``ttnn`` must import from this repository (the ``ttnn`` package and its compiled extension under
-the checkout); the checkout's git head and tree and the extension's SHA-256 are the runtime identity the run
-records (the result document, ``READY``, ``/health``).  ``prepare_cpu`` then binds the checkpoint, the caches and
-the optional CPU-staged BF4 corpus through ``live_decode_diagnostic``.
+The interpreter's ``ttnn`` package and compiled extension must come from this repository; the checkout's git head and
+tree and the extension's SHA-256 are the runtime identity the run records.  ``prepare_cpu`` then binds the checkpoint,
+the caches and the optional CPU-staged BF4 corpus.
 """
 from __future__ import annotations
 
@@ -61,10 +63,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def git_identity(root: Path = REPO_ROOT) -> dict[str, Any]:
-    """Head, tree and cleanliness of the checkout.  A tree without git history (a container image ships the tree
-    without ``.git``) is admitted only when ``QWEN38_TT_METAL_SHA`` names its head, the 40-hex commit the image was
-    built from (recorded as ``source`` ``declared``, no tree, not dirty); a checkout with history is its own identity,
-    and the variable, if set there, must agree with the head (a disagreement is refused, never overridden)."""
+    """Head, tree and cleanliness of the checkout.  A tree without git history is admitted only when
+    ``QWEN38_TT_METAL_SHA`` names its 40-hex head; with history, the variable, if set, must agree with the head."""
 
     declared = os.environ.get(DECLARED_HEAD_VARIABLE)
     if declared is not None and (len(declared) != 40 or any(c not in "0123456789abcdef" for c in declared)):
@@ -194,9 +194,9 @@ def prepare_cpu(
     hardware_profile: ResidentHardwareProfile,
     identity: dict[str, Any] | None = None,
 ) -> tuple[Any, Qwen38RetainedCPUTokenOracle]:
-    """Bind the checkpoint, the cache roots, the optional CPU-staged BF4 corpus and the CPU oracle; the resident
-    build follows ``--allocated-context`` (the default when the caller has no such option); the mesh contract takes
-    the profile's route, which must be resolved by now."""
+    """Bind the checkpoint, the cache roots, the optional CPU-staged BF4 corpus and the CPU oracle.  The resident
+    build follows ``--allocated-context`` (its default when the caller has none); the profile's route must be resolved
+    by now."""
 
     if hardware_profile.route is None:
         raise RuntimeAdmissionError(f"profile {hardware_profile.lane} has no route yet; resolve it before preparing")

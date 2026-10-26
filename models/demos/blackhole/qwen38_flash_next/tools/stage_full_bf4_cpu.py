@@ -3,16 +3,11 @@
 
 """Stage Qwen3.8 routed BF4 artifacts one host shard at a time, without devices.
 
-This is an explicitly diagnostic, non-promoting staging path.  It reuses the
-pinned checkpoint slicer, ``Qwen38MoEWeights`` placement, and the existing
-``moe_compute`` host layout preparation functions.  A standalone packer writes
-the BFLOAT4_B payload without invoking TTNN tensor construction (which lazily
-initializes Metal even for host tensors).  The already-sealed layer-0
-distributed tensorbins supply the exact topology/memory-config headers.
-
-No production validator is changed or bypassed here.  Consumers must continue
-to treat these files as explicit hash-pinned diagnostic artifacts until a
-device load verifies their copied topology and coordinate-local shape.
+Diagnostic and non-promoting: reuses the checkpoint slicer, ``Qwen38MoEWeights`` placement and the ``moe_compute``
+host layout preparation. A standalone packer writes the BFLOAT4_B payload because TTNN tensor construction
+initializes Metal even for host tensors. The sealed layer-0 distributed tensorbins supply the topology and
+memory-config headers. Consumers treat the output as hash-pinned diagnostic artifacts until a device load verifies
+their topology and coordinate-local shape.
 """
 
 from __future__ import annotations

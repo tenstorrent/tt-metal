@@ -1,11 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """The TAIL epilogue's warm pass and its trace capture ask for the same programs (no device).
 
-A program cache miss inside a trace capture is fatal, and a fused program's cache key is its compile-time form (its
-kernels' compile-time arguments such as greedy_tail's ``copy_into`` and each io tensor's accessor placement), not the
-buffer addresses of a call.  So the epilogue's "program key" here is the form of each call: which resolve form the
-greedy row takes and which tensors, by role, the sampler reads and writes.  The session's warm pass and its capture
-must agree for every fused epilogue the registry can serve: the device sampler (driven here with fakes through the
-extension's own ``warm`` and ``capture_epilogue``) and the MTP chain's tail epilogue (one function for both).
+A program cache miss inside a trace capture is fatal, and a fused program's cache key is its compile-time form, not
+the buffer addresses of a call. So the "program key" here is the form of each call: the greedy row's resolve form and
+the tensors, by role, the sampler reads and writes.
 """
 
 from __future__ import annotations

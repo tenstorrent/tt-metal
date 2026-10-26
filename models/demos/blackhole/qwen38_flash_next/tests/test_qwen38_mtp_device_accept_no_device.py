@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """The MTP pass's device acceptance without a device: the switch, the admission table, the per-request protocol on
 fake constants (the policy at request start, ``k + 1`` uniforms from the request's stream before every verify
 launch), the ledger's counters from the statistics lanes, the gate's re-derivation of a recorded pass, the

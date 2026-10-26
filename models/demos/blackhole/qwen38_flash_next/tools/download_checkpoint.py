@@ -1,14 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """Download the Qwen3.8-Flash-Next checkpoint from ModelScope at a pinned revision, verified by SHA-256.
 
     python -m models.demos.blackhole.qwen38_flash_next.tools.download_checkpoint --out /data/Qwen3.8-Flash-Next
 
-The file listing of the revision (path, size, SHA-256 per file) comes from the ModelScope API and is saved next to
-the download (``<out>/.download/files.json``; ``tools/verify_checkpoint_files.py`` takes it).  Every file is fetched
-as 128 MiB range segments by a pool of threads, written in place into a pre-sized file; a marker per finished
-segment makes a restart skip what is done.  A complete file is hashed and compared with the listing; a mismatch
-discards its markers so it is fetched again.  Resumable, parallel, 360 GB.  ``--verify-only`` hashes a copy
-that is already in place (fetching nothing) and writes the markers, so the next plain run fetches only what is
-absent or differs.
+The revision's file listing (path, size, SHA-256 per file) is saved as ``<out>/.download/files.json``
+(``tools/verify_checkpoint_files.py`` takes it).  Files are fetched as parallel 128 MiB range segments with a marker
+per finished segment, so a restart skips what is done; a complete file is hashed against the listing and fetched
+again on a mismatch.  ``--verify-only`` hashes a copy already in place (fetching nothing) and writes the markers, so
+the next plain run fetches only what is absent or differs.
 """
 
 from __future__ import annotations
@@ -27,9 +28,8 @@ from pathlib import Path
 from models.demos.blackhole.qwen38_flash_next.checkpoint import PINNED_CHECKPOINT_REVISION
 
 MODEL = "Qwen/Qwen3.8-Flash-Next"
-# The ModelScope commit of the release (2026-09-04): 145 files, 360,023,351,829 bytes; its safetensors, config,
-# tokenizer and chat template are byte-identical to the revision the port pins (checkpoint.PINNED_CHECKPOINT_REVISION,
-# which ModelScope no longer lists).  The server checks the files by digest, not by revision label.
+# The release's ModelScope commit. Its files are byte-identical to checkpoint.PINNED_CHECKPOINT_REVISION, which
+# ModelScope no longer lists; the server checks the files by digest, not by revision label.
 RELEASE_REVISION = "2741eec155d03a8ce151b993ccce1a7b1e398d6b"
 SEGMENT_BYTES = 128 << 20
 LISTING_URL = "https://modelscope.cn/api/v1/models/{model}/repo/files?Revision={revision}&Recursive=true"
@@ -139,11 +139,7 @@ class Download:
         return False
 
     def verify_only(self) -> int:
-        """Hash the files already in place against the listing and write their markers; fetch nothing.
-
-        For a copy that was not made by this tool: a following run without
-        ``--verify-only`` then fetches only the files that are absent or differ.
-        """
+        """Hash the files already in place against the listing and write their markers; fetch nothing."""
         started = time.time()
         present = [name for name in self.files if not self.verified(name).exists() and (self.out / name).is_file()]
         absent = sorted(name for name in self.files if not (self.out / name).is_file())

@@ -3,12 +3,9 @@
 
 """Exact Qwen4Exp Gated DeltaNet contract and TP4 checkpoint packing.
 
-The CPU forward is the numerical oracle for the TTNN vertical slice.  The
-packing contract matches the reusable Qwen3.6 TP GDN implementation: Q/K/V
-heads are made contiguous per device, recurrence remains local to each value
-head, and only the row-parallel output projection requires a four-device
-reduction.  No tensor is replicated here except the 128-wide per-value-head
-gated RMSNorm weight, which is semantically shared across all value heads.
+The CPU forward is the numerical oracle for the TTNN GDN. Q/K/V heads are contiguous per device, the recurrence is
+local to each value head, and only the row-parallel output projection needs a four-device reduction. Only the
+128-wide gated RMSNorm weight, shared by all value heads, is replicated.
 """
 
 from __future__ import annotations

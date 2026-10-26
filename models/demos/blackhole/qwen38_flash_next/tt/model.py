@@ -3,9 +3,7 @@
 
 """Lazy exact-checkpoint text-model integration oracle and TP4 I/O placement.
 
-This module intentionally executes on CPU. It proves the complete 48-layer
-state and tensor-name contract without loading the 360-GB checkpoint twice.
-It is not a substitute for the required four-P150 TT implementation.
+CPU only: checks the complete 48-layer state and tensor-name contract without loading the checkpoint twice.
 """
 
 from __future__ import annotations
@@ -185,8 +183,7 @@ class Qwen38FinalMixer:
         for device_index, local in enumerate(local_residuals):
             shard = self.weights.device_shard(device_index)
             normalized.append((local.float() * inverse_rms * (1.0 + shard.norm.float())).to(local.dtype))
-        # Preserve the full dot product's FP32 accumulation across TP partials,
-        # then round once to the BF16 activation contract after the all-reduce.
+        # FP32 accumulation across TP partials, rounded once to BF16 after the all-reduce.
         down = sum(
             F.linear(local.flatten(-2).float(), self.weights.device_shard(device_index).down.flatten(1).float())
             for device_index, local in enumerate(normalized)

@@ -1029,7 +1029,7 @@ def test_committed_pins_load_and_cover_the_four_metric_families():
     assert pins["default_tolerance"] == 0.15 and pins["idle_loadavg_1min"] == 16 and pins["seed_runs"] == 3
     assert list(pins["pins"]) == sorted(pins["pins"]) and list(pins["configurations"]) == sorted(pins["configurations"])
     active = {pin_id for pin_id, pin in pins["pins"].items() if pin["status"] == "active"}
-    # the hard rules of today gate from the start; every number stays todo until seeded
+    # the hard rules gate from the start; every number stays todo until seeded
     assert active == {
         pin_id
         for pin_id in pins["pins"]
@@ -1092,7 +1092,7 @@ def test_committed_baselines_belong_to_baseline_pins_and_carry_their_source():
     assert chunked["json"] is None and forced["json"] is None
     assert (
         chunked
-        == {  # the 2026-09-27 replay: gr_recip_last (the GR read's front with the rsqrt applied last) by default
+        == {  # the startup replay with gr_recip_last (the GR read's front with the rsqrt applied last) by default
             "json": None,
             "chat": 56,
             "code": None,
@@ -1112,17 +1112,11 @@ def test_committed_baselines_belong_to_baseline_pins_and_carry_their_source():
     }
     mtp4 = mtp4_table["divergence_index"]
     assert set(mtp4) == set(chunked) and mtp4["json"] is None
-    # the same replay through the MTP pass loop with the verify rows' GDN body on the fold (gdn_rows_scan, bitwise
-    # the 1-row step) beside the MoE rows on two rings and gr_recip_last (2026-09-28): the stream leaves the reference
-    # where plain decode does on 11 of 12 and LATER on math (61 against plain decode's 56: the re-associated norm moved
-    # plain decode's near-tie at 56 while the MTP path's own logits held the reference's token there); before
-    # gr_recip_last the fold read plain decode's index on all 12 (chat 2, math 61, summary 75 on 2026-09-26)
+    # the same replay through the MTP pass loop: it leaves the reference where plain decode does except on math, where
+    # the MTP path's logits hold the reference's token past plain decode's near-tie
     assert mtp4 == {**chunked, "math": 61}
-    # the slab tables (--prefill-slab 2048 with and without --mtp 4) carry a thirteenth row, the slab record: the one
-    # acceptance record long enough to run a 2048-row slab (`document` in tools/acceptance/greedy-prompts.jsonl,
-    # replayed only under --prefill-slab).  The twelve study records stay under 2048 tokens (no slab fires), so on them
-    # the drafting slab table is the --mtp 4 table by construction, streams included; the slab record's row is the only
-    # pin exercising a slab body under MTP, tolerance-class against the chunked forms (docs/NUMERICS.md)
+    # the slab tables carry a thirteenth row, the slab record (`document`, the one acceptance record long enough for a
+    # 2048-row slab); no slab fires on the twelve study records, so there the drafting slab table is the --mtp 4 table
     for metric in ("divergence_index", "device_token_ids_sha256"):
         slab_mtp4 = ci.load_baseline(f"A3/slab2048-mtp4-32k/{metric}")
         slab = ci.load_baseline(f"A3/slab2048-32k/{metric}")

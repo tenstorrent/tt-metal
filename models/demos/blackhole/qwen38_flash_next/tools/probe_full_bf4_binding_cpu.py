@@ -3,12 +3,9 @@
 
 """Probe real Qwen3.8 BF4 cache binding without opening a device.
 
-This diagnostic is intentionally read-only.  It constructs the exact
-``Qwen38BF4Cache`` identity which owns the already-staged 49-slot corpus and
-calls its public ``verify_layer`` interface for every backbone and MTP slot.
-It records an exact interface blocker when the diagnostic tensorbins cannot
-be enumerated by the manifest-backed cache; it never publishes a manifest or
-loads tensor payloads.
+Read-only: constructs the ``Qwen38BF4Cache`` identity that owns the staged corpus and calls its public
+``verify_layer`` for every backbone and MTP slot. Records an interface blocker when the manifest-backed cache cannot
+enumerate the diagnostic tensorbins; never publishes a manifest or loads tensor payloads.
 """
 
 from __future__ import annotations

@@ -1,3 +1,9 @@
-These synthetic FP32 input/output fixtures were measured on immutable Samuel Jett (sjettTT, sjett@tenstorrent.com) source cd9a11771107ea2c27da3303a0556ff7343e4af5 with source SFPI 7.74 on four Blackhole p150b devices. The manifest records source runtime/helper/run and tensor hashes. Each seed was run at a fresh input address; all four replicas matched.
+Synthetic FP32 input/output fixtures for `tests/test_ttnn_source_sfpu_rounding.py`, recorded on the source commit
+`cd9a11771107ea2c27da3303a0556ff7343e4af5` with its SFPI 7.74 toolchain ([PROVENANCE.md](../../../PROVENANCE.md)).
+`manifest.json` holds each fixture's file, input and output hashes.
 
-The first reciprocal input is the real GDN9 norm sqrt 0x3a834422, whose source output is 0x4479a001. The first softplus input is the real GDN30 gate sum -5.17578125, whose source output is 0x3bb8ad42. Wide reciprocal fixtures test exact source words. The inherited three-step inverse fails a uniform-mantissa ideal 1/x limit of 1e-4 (131 and149 of1024 elements); that failed proposal is preserved, not waived. The separate real-norm mantissa test retains 1e-4 over signed power-of-two translations. Softplus independently passes FP64 rtol1e-3/atol1e-5 on all2048 fixture inputs.
+The first reciprocal input is a real GDN norm sqrt, `0x3a834422` (source output `0x4479a001`); the first softplus
+input is a real GDN gate sum, `-5.17578125` (source output `0x3bb8ad42`). The reciprocal fixtures check exact source
+words. The source's three-step inverse does not meet a 1e-4 relative bound over every mantissa; the test measures
+and reports that instead of passing it, and the real-norm mantissa keeps the 1e-4 gate. Softplus is checked against
+FP64 at rtol 1e-3 / atol 1e-5.

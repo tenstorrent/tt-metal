@@ -3,11 +3,7 @@
 
 """The 128-row prefill chunk form against four consecutive 32-row chunks on the same rows, without a device.
 
-The C = 32 chunk body is the pinned reference: on the torch-backed fakes of the step-4 / GR / QSA tests the GDN,
-PLE and GR 128-row forms must reproduce four 32-row chunks row for row (the fakes are row-serial, so any drift is a
-row-mixing bug, not arithmetic), the committed state after 128 rows must be the four chunks' state, the QSA chunk
-inputs at 128 rows must be the four 32-row derivations stacked, and the driver must schedule the 128-row chunks ahead
-of the 32-row chunks and the padded tail.
+The fakes are row-serial, so any drift from the four 32-row chunks is a row-mixing bug, not arithmetic.
 """
 
 from __future__ import annotations
@@ -172,9 +168,8 @@ def test_gdn_long_chunk_matches_four_chunks_and_commits_every_row(fake) -> None:
         f"GDN 128 rows vs four 32-row chunks (fake): output bitwise={_bits_equal(long_output, four_output)} max abs "
         f"{output_error:.2e}; committed state bitwise={torch.equal(committed, expected)} max abs {state_error:.2e}"
     )
-    # Everything around the recurrence is row-serial on the fake: bitwise.  The kernel's NC = 4 carry is the torch
-    # chunk reference's sequential fp32 carry, the same arithmetic as four calls: bitwise on the fake, pinned on the
-    # device by the admission micro-test (tolerance-class fallback = the stage-1 state tolerance).
+    # Everything around the recurrence is row-serial on the fake: bitwise. The kernel's NC = 4 carry is the same
+    # sequential fp32 carry as four calls.
     assert _bits_equal(long_output, four_output)
     assert torch.equal(committed, expected)
     # The FIR history after 128 rows is the last three new rows (rows 125..127), bitwise the four chunks'.

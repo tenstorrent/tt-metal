@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Correctness-first Qwen4Exp decoder-layer composition.
+"""CPU Qwen4Exp decoder-layer composition of the checkpoint-backed component oracles.
 
-This combines the exact checkpoint-backed component oracles.  It is deliberately
-CPU-only: the QSA value path is dense for short contexts, and the partition-A
-fabric blocker currently prevents validating TTNN collectives.  The class is an
-integration oracle and must not be reported as a device layer.
+An integration oracle, not a device layer; the QSA value path is dense for short contexts.
 """
 
 from __future__ import annotations

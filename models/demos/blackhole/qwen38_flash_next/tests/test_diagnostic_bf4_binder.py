@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """The CPU-staged BF4 corpus binder on a synthetic 49-slot corpus: the producer identity is read from the verification
 record (and pinned when the caller passes one), the physical order is adopted from the evidence, every tensorbin is
 hashed, and a missing file, a digest, a shape or a slot that differs refuses."""
@@ -237,11 +240,8 @@ def test_summary_reports_disk_bytes_and_the_contract_total_apart(tmp_path):
 
 
 def test_record_is_compared_to_the_disk_and_a_pre_compact_corpus_is_named(expect_error, tmp_path):
-    """2026-09-26: the retained Aug-27 corpus (its record's bytes = its on-disk sum, 106,819,608,000) against the compact
-    pins (ddd4e99e2f, 49 x 1,415,580,096) read "verification corpus differs: {... 'bytes': 106819608000} != {... 'bytes':
-    69363424704}" -- the record was compared to the contract total instead of the disk. The record now compares to the
-    disk and the first artifact names the layout; a record that disagrees with the disk still differs, before any
-    artifact is read."""
+    """The record is compared to the disk and the first artifact names a pre-compact layout; a record that disagrees
+    with the disk differs before any artifact is read."""
     contract, results, summary_paths = _fixture(tmp_path)
     compact = dataclasses.replace(
         contract,

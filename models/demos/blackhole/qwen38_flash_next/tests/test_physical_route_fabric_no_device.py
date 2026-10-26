@@ -3,11 +3,10 @@
 
 """``derive_fabric_line_route``: a ring under the 1x4 LINE descriptor opens in the order the fabric embedded the line.
 
-The fixtures are two real boxes' cluster descriptors and fabric mappings (``tools/qb_mesh_smoke.py`` results of
-2026-09-18): the QuietBox (4x p150, where the fabric's order equals the ring walk from chip 0) and a QuietBox 2
-(2x p300c, where it does not: the ring walk (0, 1, 2, 3) put the mesh pair 1-2 on the ring link the fabric line
-does not carry and the first all_gather failed with "Could not find any forwarding direction").  The route is read
-before the fabric is enabled, so the opened mesh is checked to hold fabric chip k at coordinate k (``live_mapping``).
+The fixtures are real cluster descriptors and fabric mappings (``tools/qb_mesh_smoke.py`` results): a QuietBox (4x p150,
+where the fabric's order equals the ring walk from chip 0) and a QuietBox 2 (2x p300c, where it does not). The route
+is read before the fabric is enabled, so the opened mesh is checked to hold fabric chip k at coordinate k
+(``live_mapping``).
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ def _links(pairs):
     return [[{"chip": a, "chan": ca}, {"chip": b, "chan": cb}] for (a, ca), (b, cb) in pairs]
 
 
-# QuietBox (tt-quietbox), 2026-09-18 20:31Z: chips 0-2, 0-3, 1-3, 1-2 (four channels each), chip -> node {0:1, 1:2, 2:3, 3:0};
+# QuietBox (4x p150): chips 0-2, 0-3, 1-3, 1-2 (four channels each), chip -> node {0:1, 1:2, 2:3, 3:0};
 # fabric (M0, D0..D3) -> physical 0, 2, 1, 3.
 QUIETBOX_DESCRIPTOR = {
     "chips_with_mmio": [{0: 1}, {1: 2}, {2: 3}, {3: 0}],
@@ -48,7 +47,7 @@ QUIETBOX_DESCRIPTOR = {
 }
 QUIETBOX_FABRIC = {0: 0, 1: 2, 2: 1, 3: 3}
 
-# QuietBox 2 (2x p300c), 2026-09-18 20:44Z: ring 0-1 (on-card), 1-2 (cable), 2-3 (on-card), 3-0 (cable), two channels each,
+# QuietBox 2 (2x p300c): ring 0-1 (on-card), 1-2 (cable), 2-3 (on-card), 3-0 (cable), two channels each,
 # chip -> node identity; fabric (M0, D0..D3) -> physical 1, 0, 3, 2.
 QUIETBOX_2_DESCRIPTOR = {
     "chips_with_mmio": [{0: 0}, {1: 1}, {2: 2}, {3: 3}],

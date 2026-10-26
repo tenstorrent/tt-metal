@@ -3,14 +3,8 @@
 
 """The batched-lanes QSA layer without a device: B lanes at their own positions bitwise the B 1-row steps.
 
-The whole decode QSA layer (``forward_decode_lanes``) and the 1-row generic body (``forward_decode_generic``) run on
-a torch-backed ttnn whose every op is deterministic per row (float64 arithmetic rounded once to the op's dtype, so no
-result depends on the tensor shape it sits in).  For B in 1, 2, 4, 8 lanes at positions spread over 2k..32k (one
-residue class) the lane body's row u of every kept intermediate, its output row, lane u's KV block, compressed cache,
-staging tile and ring are compared bit for bit with the 1-row body run at P_u on the same warm caches, over two
-consecutive steps (the second after the in-trace advance), for both indexer forms.  The lane state contract, the
-residue rule at the position row and the source pins (the 1-row and chunk bodies untouched, the lane body free of
-host I/O and per-call ints) are checked alongside.
+Both bodies run on a torch-backed ttnn whose ops are deterministic per row (float64 rounded once to the op's dtype),
+so no result depends on the tensor shape it sits in.
 """
 
 from __future__ import annotations
@@ -61,7 +55,7 @@ TP = 4
 ALLOCATED_CONTEXT = 32768
 BLOCKS = ALLOCATED_CONTEXT // COMPRESS_RATIO
 # One lane per 4k span of the 32k cache, all in residue class 3 (the block-closing compressed write is real), each in
-# its own 32-row block (the QSA lane micro-test's positions).
+# its own 32-row block.
 LANE_POSITIONS = (2051, 6147, 10243, 14339, 18435, 22531, 26627, 30723)
 LANE_COUNTS = (1, 2, 4, 8)
 STEPS = 2
@@ -94,9 +88,8 @@ def _padded_shape(self) -> tuple[int, ...]:
 
 
 FakeTensor.padded_shape = property(_padded_shape)
-# The QSA constructor validates the DRAM bank layout of its query-gate and output weights against the layout its
-# decode linears run on (decode_matmul.validate_dram_sharded_weight, two readers per bank on the served head): a fake
-# weight carries the memory config it was uploaded with and its device members report it.
+# The QSA constructor validates its decode weights' DRAM bank layout: a fake weight carries the memory config it was
+# uploaded with and its device members report it.
 FakeTensor.memory_config = lambda self: getattr(self, "memory_config_value", "DRAM_MEMORY_CONFIG")
 
 
@@ -501,8 +494,7 @@ class FakeMesh:
 
 @pytest.fixture
 def fake(monkeypatch):
-    # The six QSA programs serve by default and bind the fused lane body at construction; the fake ttnn runs the
-    # chains only, so this fixture switches them off (the 1-row helpers under test are the chain's regardless).
+    # The fake ttnn runs the op chains only, so the six QSA programs (on by default) are switched off.
     monkeypatch.setenv(
         "QWEN38_FUSED_OFF",
         "qsa_index_tail,qsa_main_tail,qsa_post_attention,qsa_widen_partial,qsa_selection_row,qsa_score_merge",
@@ -795,9 +787,7 @@ def test_lane_body_rows_and_regions_are_bitwise_the_one_row_steps(fake, lanes: i
 
 
 def test_the_fused_lane_body_takes_its_score_windows_from_qsa_score_merge(expect_error, fake, monkeypatch) -> None:
-    """The lanes' score-row windows are qsa_block's program exactly when qsa_score_merge is on, and the fused lane body
-    is bound only with them, under every subset of the six QSA lane switches the constructor admits (it refuses
-    qsa_post_attention without qsa_main_tail)."""
+    """The fused lane body is bound only with qsa_score_merge's score windows, under every admitted switch subset."""
 
     names = model_module.QSA_LANE_FUSED_KERNELS
     weights = _weights(torch.Generator().manual_seed(7))
@@ -978,9 +968,7 @@ def test_lane_body_is_the_decode_walk_on_the_lane_layout_and_the_other_bodies_ar
     )
     assert compressed.count("view") == 2 and compressed.count("to_layout") == 4
     # The KV write: one selection matmul, the in-place staging add, one untilize, then per lane one slab slice and
-    # one update_padded_kv_cache read from the lane's metadata scalar.
-    # (the untilize, the per-lane slices and the slab writes moved into ``_write_kv_slabs_lanes``, shared with the
-    # MTP lane verify's block writes; the walk covers both.)
+    # one update_padded_kv_cache read from the lane's metadata scalar (the last three in ``_write_kv_slabs_lanes``).
     kv = _ttnn_op_walk("_write_packed_kv_lanes") + _ttnn_op_walk("_write_kv_slabs_lanes")
     assert kv.count("matmul") == 1 and kv.count("update_padded_kv_cache") == 1 and kv.count("to_layout") == 1
     kv_source = inspect.getsource(Qwen38TTNNQSA._write_packed_kv_lanes) + inspect.getsource(

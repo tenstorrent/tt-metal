@@ -1,12 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The vision tower's residency rules without a device: the two ladders and the pad-up rule, the refusal above the
-stock maximum, the padding's work bound, the DRAM admission against the measured line readings (the tower fits beside
-the 32k chain; a synthetic lanes/128k reading decides on the numbers), the prewarm plan and its READY cost model
-against the measured buckets, the ladder comparison's rule, the residency object's warm hook on a fake mesh (admit
-before load; a shortfall leaves the process text-only with the reason every image refusal carries; a fit loads then
-prewarms every bucket ascending; release), and the served parser's image parts."""
+"""The vision tower's residency rules without a device: the bucket ladders and pad-up rule, the DRAM admission, the
+prewarm plan and its READY cost model, the residency's warm hook on a fake mesh (a shortfall leaves the process
+text-only) and the served parser's image parts."""
 
 from __future__ import annotations
 
@@ -17,7 +14,7 @@ import pytest
 from models.demos.blackhole.qwen38_flash_next.ttnn import vision_residency as residency
 from models.demos.blackhole.qwen38_flash_next.ttnn.vision_layout import padded_rows
 
-# The line, beside the 32k chunked chain, 2026-09-29 (stage-1 note): the warm hook's reading before the tower.
+# Device readings on the line beside the 32k chunked chain: the warm hook's reading before the tower.
 LINE_32K_BEFORE_TOWER = {
     "free_bytes_per_bank": 1_733_694_464,
     "largest_contiguous_bytes_free_per_bank": 1_733_608_960,
@@ -25,7 +22,7 @@ LINE_32K_BEFORE_TOWER = {
 }
 LINE_32K_MEASURED_TOWER_BYTES_PER_BANK = 125_231_104
 LINE_32K_MEASURED_PEAK_65536_PER_BANK = 141_557_760
-# The lanes B=4 / 128k server's headroom of record (WAVE-F): 305 MB per bank after its captures.
+# The lanes B=4 / 128k server's measured headroom per bank after its captures.
 LANES_128K_AFTER_CAPTURES = {
     "free_bytes_per_bank": 305_000_000,
     "largest_contiguous_bytes_free_per_bank": 290_000_000,
@@ -42,7 +39,7 @@ def test_both_ladders_are_powers_of_two_to_the_stock_maximum_and_the_eight_is_th
     assert set(four) < set(eight)
     assert (
         residency.VISION_ROW_BUCKETS == eight
-    )  # the measured READY costs picked eight (43.7 vs 33.5 s, under 30 s apart)
+    )  # the measured READY costs pick eight: within the ladder rule's 30 s of the four-bucket ladder
 
 
 @pytest.mark.parametrize(

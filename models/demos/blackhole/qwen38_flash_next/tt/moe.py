@@ -3,18 +3,11 @@
 
 """Exact Qwen4Exp MoE semantics and non-replicated four-device placement.
 
-The CPU implementation is the numerical oracle for both candidate device
-paths.  ``moe_compute`` produces unweighted expert outputs; its scores become
-arithmetic only in ``deepseek_moe_fast_reduce_nc_fused``.  The alternative
-decode design keeps 128 routed experts per P150, localizes the global top-10 on
-each device, and reduce-scatters the four partial outputs.  It never stores all
-512 experts on a device.
+The CPU implementation is the numerical oracle for the device paths. Each device holds 128 of the 512 routed
+experts, localizes the global top-10 and reduce-scatters the four partial outputs.
 
-The current all-to-all dispatch operation defines global batch as
-``tokens_per_device * dispatch_devices``.  It therefore cannot represent true
-global-B=1 with four dispatch devices.  ``admit_moe_compute_global_batch``
-records that limitation and fails closed; the shard-aware path is the required
-B=1 decode route until that kernel contract changes and is device-proven.
+All-to-all dispatch defines global batch as ``tokens_per_device * dispatch_devices``, so it cannot represent a
+global B=1 over four devices; ``admit_moe_compute_global_batch`` fails closed on that.
 """
 
 from __future__ import annotations
@@ -82,9 +75,7 @@ class Qwen38EP4MoEResult:
 def admit_moe_compute_global_batch(*, global_batch: int, dispatch_devices: int) -> int:
     """Return tokens/device only when all-to-all dispatch represents the batch.
 
-    Current TTNN source computes the operation's global batch by multiplying the
-    local input row count by the number of dispatch devices.  Padding a B=1
-    interactive request into B=4 would change the workload and is forbidden.
+    Padding a B=1 request into B=4 would change the workload and is refused.
     """
 
     if global_batch <= 0 or dispatch_devices <= 0:
@@ -252,8 +243,7 @@ class Qwen38MoEWeights:
     def routed_device_shard(self, device_index: int) -> Qwen38RoutedDeviceShard:
         """Load one 128-expert host shard in ``sparse_matmul`` orientation.
 
-        This allocates roughly 1.17 GiB of BF16 staging memory and is intended for
-        sequential conversion into BF4_B cache tensors, not unit-test setup.
+        Allocates the whole shard as BF16 staging memory: for sequential BF4_B conversion, not unit-test setup.
         """
 
         start, end = self._device_expert_range(device_index)
@@ -304,11 +294,10 @@ class Qwen38MoE:
         return output.reshape(original_shape), routing
 
     def expert_parallel_forward(self, hidden_states: torch.Tensor) -> Qwen38EP4MoEResult:
-        """Simulate the true EP4/TP4 B=1 device path without weight replication.
+        """Simulate the EP4/TP4 B=1 device path without weight replication.
 
-        Device execution all-gathers the hidden input, computes router/expert and
-        shared-intermediate shards locally, then reduce-scatters the summed full-H
-        partials.  This CPU form preserves those ownership boundaries.
+        All-gather the hidden input, compute router/expert and shared-intermediate shards locally, then
+        reduce-scatter the summed full-H partials, keeping the device ownership boundaries.
         """
 
         original_shape = hidden_states.shape

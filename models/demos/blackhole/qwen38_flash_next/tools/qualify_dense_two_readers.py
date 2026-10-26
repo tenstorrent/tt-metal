@@ -1,13 +1,11 @@
 #!/usr/bin/env python
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Qualify the two-reader DRAM-sharded decode matmul for bf8 / bf4 weights on one Blackhole chip (under a hold).
+"""Qualify the two-reader DRAM-sharded decode matmul for bf8 / bf4 weights on one Blackhole chip.
 
-For every (K, N) of ``decode_matmul.TWO_WORKER_PROJECTIONS`` and every dense dtype, the same host weight (bf16, then
-packed to the dtype on the host) is uploaded in the one-reader and the two-reader bank layouts and multiplied by the
-same 32-row bf16 activation with the dtype's compute config (HiFi4 / HiFi2 / LoFi, fp32 accumulation); the two
-outputs must be bitwise equal.  A host fp32 reference on the packed weight (``ttnn.to_torch`` of the upload) bounds
-the absolute error so a wrong-format read cannot pass as "equal garbage".  Writes a JSON record.
+For every (K, N) of ``decode_matmul.TWO_WORKER_PROJECTIONS`` and dense dtype, the same packed weight is uploaded in the
+one-reader and the two-reader bank layouts and multiplied by the same 32-row activation; the two outputs must be
+bitwise equal, and a host fp32 reference on the packed weight bounds the absolute error. Writes a JSON record.
 
     python tools/qualify_dense_two_readers.py --out qualification.json [--device-id 0]
 """

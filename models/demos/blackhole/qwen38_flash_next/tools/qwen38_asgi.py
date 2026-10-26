@@ -5,22 +5,12 @@
 
     python -m uvicorn --lifespan on models.demos.blackhole.qwen38_flash_next.tools.qwen38_asgi:app
 
-starts ``tools/qwen38_chat_server.py`` as a child process (``python -m`` the server module with the composed
-arguments and environment: the server keeps its own main thread, its signal handlers and its device teardown exactly
-as the shell launcher runs it, and this process never touches a device) and forwards every request to it over the
-loopback.  The lifespan startup composes the server's arguments from the environment, starts it, and returns only
-once the server has written its ``READY`` record (the mesh opened, the chain captured, the acceptance records
-replayed and the ``json`` record matched), so uvicorn's ``Application startup complete`` line means what ``READY``
-means; a server that ends before the record fails the startup with its status.  The lifespan shutdown sends the
-server SIGTERM (its drain, then the chain's release and the mesh close in the server's own order) and waits for its
-exit, logged with its status; a server that ends on its own (the stall watchdog's exit 1) ends this process with the
-same status, so the container exits as the server did.  Requests are forwarded byte for byte: this module parses nothing of a request or a reply,
-so the server's rules apply unchanged (what the server cannot honour it refuses with HTTP 400; nothing is dropped
-here), a streaming reply reaches the client as the server writes it, and a client that hangs up closes the
-server's connection too, so the device never runs a request for nobody.  Before ``READY`` and after the stop every
-request is answered HTTP 503 in the server's error shape.
+starts ``tools/qwen38_chat_server.py`` as a child process (this process never touches a device) and forwards every
+request to it byte for byte over the loopback. Startup returns once the server has written its ``READY`` record;
+shutdown sends it SIGTERM and waits for its exit. A server that ends on its own ends this process with the same
+status. Before ``READY`` and after the stop every request is answered HTTP 503 in the server's error shape.
 
-The environment (a tt-model serve profile sets it; every value is checked before the server starts):
+The environment (every value is checked before the server starts):
 
     QWEN38_HARDWARE_PROFILE   the server's hardware profile (default ``p150-line``; ``tt-quietbox``, ``tt-quietbox-2``)
     QWEN38_ALLOCATED_CONTEXT  the resident context, 32768 (default), 65536, 131072 or 262144
@@ -34,11 +24,8 @@ The environment (a tt-model serve profile sets it; every value is checked before
     QWEN38_STOP_SECONDS       how long the shutdown waits for the server's exit after SIGTERM (default 300)
     QWEN38_TT_METAL_SHA       the runtime identity of a tree without git history (``tools/runtime_admission.py``)
 
-The device nodes are the ``/dev/tenstorrent`` entries the container was given: exactly four, the profile's own or
-another four (``--device-nodes``; ``TT_VISIBLE_DEVICES`` is then UMD's indices 0..3 over them, the cluster descriptor
-keeps their node numbers).  The server's environment (``TT_VISIBLE_DEVICES``, the mesh graph
-descriptor, ``TT_METAL_TRACE_ALLOC_TRACKING``, ``QWEN38_HARDWARE_MODE``) is given to the child, as the shell launcher
-sets it; this process's own environment is not changed.
+The device nodes are the four ``/dev/tenstorrent`` entries the container was given. The child gets the server's
+environment as the shell launcher sets it; this process's own environment is not changed.
 """
 
 from __future__ import annotations
@@ -73,7 +60,7 @@ DEFAULT_INNER_PORT = 18000
 DEFAULT_STOP_SECONDS = 300.0
 DEVICE_ROOT = Path("/dev/tenstorrent")
 READY_POLL_SECONDS = 0.5
-STARTUP_LOG_SECONDS = 60.0  # a progress line while the server starts (the first start converts for half an hour)
+STARTUP_LOG_SECONDS = 60.0  # a progress line while the server starts
 # The forwarded connection has no read timeout: a long prompt's prefill answers nothing for minutes, and a wedge is
 # the server's stall watchdog's to end (it exits; this process then answers 503 and stops).
 HOP_BY_HOP = frozenset(
@@ -166,8 +153,8 @@ class Qwen38ContainerServer:
                 f"{device_root} holds {len(nodes)} device node(s) {list(nodes)}: the server needs exactly four chips"
             )
         if nodes != tuple(profile.device_nodes):
-            # the four nodes are all this container presents: TT_VISIBLE_DEVICES takes UMD's indices 0..3 (the server derives
-            # the same from /dev/tenstorrent when it takes --device-nodes; the cluster descriptor keeps the node numbers)
+            # another four nodes: TT_VISIBLE_DEVICES takes UMD's indices 0..3 over them; the cluster descriptor keeps
+            # the node numbers
             try:
                 profile = profile.with_device_nodes(nodes, present=nodes)
             except hardware_profiles.HardwareProfileError as error:
@@ -282,8 +269,7 @@ def spawn_server(server: Qwen38ContainerServer) -> ServerProcess:
 
 
 def _exit_with(status: int) -> None:
-    """The server ended on its own: this process ends with its status so the container exits as the server did (the
-    stall watchdog's exit 1 asks a supervisor for a restart).  No device state lives in this process."""
+    """The server ended on its own: this process ends with its status so the container exits as the server did."""
 
     os._exit(status if status else 1)
 

@@ -1,14 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Batched decode lanes without a device: the rows contract at 1..32, the per-lane position row, the per-lane
-QSA derive, RoPE rows and greedy resolve, the PLE lanes and the GDN/GR lane validators.
+"""Batched decode lanes without a device: every lane result bitwise against the 1-row path on that lane's stream.
 
-The integer ops (position row, QSA lane derive, RoPE lookup, greedy resolve) run on a small torch-backed ttnn
-that models the exact UINT32/FP32 op surface they use; the PLE lanes and the GDN state run on the step-4 fake
-(``test_mtp_v2_step4_rows_no_device``), the GR rows on the GR fake (``test_gr_rows_no_device``).  Every lane
-result is compared bitwise to the 1-row path on that lane's stream.  The source pins hold the 1-row bodies
-untouched and the lane derive free of host I/O.
+The integer ops run on a small torch-backed ttnn modeling their exact UINT32/FP32 op surface; the PLE lanes and the
+GDN state run on the step-4 fake, the GR rows on the GR fake.
 """
 
 from __future__ import annotations
@@ -856,7 +852,7 @@ def test_one_row_paths_are_untouched_and_the_lane_paths_touch_no_host() -> None:
     assert (
         resolve.count("ttnn.gather") == 1 and resolve.count("ttnn.argmax") == 1 and resolve.count("ttnn.to_layout") == 6
     )
-    assert "ttnn.repeat" not in resolve  # repeat of a 16-byte ROW_MAJOR row crashed the pinned runtime (2026-09-03)
+    assert "ttnn.repeat" not in resolve  # repeat of a 16-byte ROW_MAJOR row crashes the runtime
     assert "ttnn.pad" in resolve and "ttnn.multiply" not in resolve  # lane u only, no unit-column splat
     # The lanes PLE convolution shifts the per-lane slots exactly as the 1-row ring.
     convolve_lanes = inspect.getsource(ple_module.Qwen38TTNNPLE._convolve_lanes)

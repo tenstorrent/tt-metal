@@ -3,31 +3,17 @@
 
 """Sampled decode steps for the 1-row chain: the request mapping, the chain additions, the step order, the discriminator.
 
-The greedy loop of ``tools/qwen38_chat_session.py`` (``_generate``) stays as it is: ``temperature 0``
-never reads the candidate row and is bitwise today's chain.  A sampled step is a forced step whose
-token the host chooses after reading the candidate row that TAIL(t-1) wrote (the ordering F2 of
-``REFRESH-B5B-TRACE-SPLIT-SPEC-20260902.md`` section 4.4 with the forced-step write in the middle)::
+A sampled step is a forced step whose token the host chooses after reading the candidate row TAIL(t-1) wrote::
 
     D   row = sampling.read_candidate_row()                    # blocking: completes TAIL(t-1); the device idles
         x_t = sample(row)
     A'  chain.write_token_row(x_t)                             # overwrites the device's greedy id
     C   chain.execute_head(residue)
-    F   ple_context = chain.refresh_ple_row(x_t, ple_context)  # hidden under HEAD(t) as today
+    F   ple_context = chain.refresh_ple_row(x_t, ple_context)  # hidden under HEAD(t)
     G   chain.execute_tail(residue)
 
-The read is blocking on purpose: nothing could overlap it (HEAD(t) needs x_t), and the blocking read is
-the cheaper wake-up (61-70 us vs the evented 71-79 us in the epilogue micro-test).  The price is the
-lost HEAD overlap of the token read (the exposed segment the discriminator measures: read wake-up, parse
-and sample, token write, HEAD launch); the PLE refresh still hides under HEAD.  Finish semantics are the greedy loop's: EOS is consumed, ``max_tokens``
-leaves the last token unconsumed (written into the token row, so the row holds the token the client saw),
-a token at or above the tokenizer size ends with ``error``, the ``should_stop`` hook ends the request
-between steps, and a thinking budget forces ``</think>`` through the session's forced step.  A pure
-continuation of a sampled request (nothing to prefill, the row unconsumed) samples that position again.
-
-What the chain gains (``Qwen38SamplingChainExtension``): the epilogue constants and readback row, the
-epilogue that runs the greedy resolve unchanged and then ``Qwen38TTNNLMHead.sampling_candidates``, the
-warm-pass check of the row against the eager full gather, and two primitives (the blocking row read, the
-fallback's eager full-vocabulary gather of the residue's trace logits).
+The read blocks on purpose: HEAD(t) needs x_t. ``temperature 0`` never reads the candidate row and takes the greedy
+loop. Finish semantics are the greedy loop's; a pure continuation of a sampled request samples that position again.
 
 Request fields (``parameters_from_request``; ``extra_body`` keys are merged by the server first):
 
@@ -48,14 +34,8 @@ Request fields (``parameters_from_request``; ``extra_body`` keys are merged by t
                                                                                           sampled requests only
     n                                        1                                            n != 1 refused (one traced chain)
 
-MTP drafting for sampled requests (an ``--mtp --sampling`` server): the pass loop of ``tools/qwen38_chat_session.py``
-runs the split verify and asks :func:`accept_pass` for the verdict on every pass, the point-mass acceptance
-(``ttnn/speculative_sampling.py``) over the k + 1 rows' candidate distributions (the same processors as
-:func:`choose_token`, the row's history the committed stream plus the pass's earlier rows; built for every row at once
-by ``sampling.candidate_distributions``, bitwise the per-row function); a row the candidate guard cannot bound is
-sampled over the eagerly gathered verify logits.  :func:`drafting_admission` names the requests the pass loop does not
-serve (a chain without the split verify, ``top_k`` 0, a boosting penalty, logprobs, the device-sampler loop): they
-take the 1-row loop above with the reason in ``qwen38.sampling.mtp_drafting``.
+On an ``--mtp --sampling`` server the MTP pass loop asks :func:`accept_pass` for each split pass's verdict;
+:func:`drafting_admission` names the sampled requests it does not serve.
 """
 
 from __future__ import annotations
@@ -159,9 +139,8 @@ def parameters_from_request(
 ) -> Qwen38SamplingParameters | None:
     """The request's sampling fields as one validated policy (the table in the module docstring); ``None`` = greedy.
 
-    A request naming no sampling field, ``temperature 0`` and ``greedy: true`` take the greedy
-    loop (``None``), so the default request is the bitwise greedy stream on a sampling server
-    too; ``greedy`` with a positive temperature is a contradiction and refused.
+    A request naming no sampling field, ``temperature 0`` or ``greedy: true`` takes the greedy loop; ``greedy`` with a
+    positive temperature is refused.
     """
 
     def number(name: str, default: Real, *, integer: bool = False) -> Real:
@@ -258,11 +237,10 @@ WARM_UNIFORM = 0.37500011920928955  # 6291458 * 2**-24
 
 
 class Qwen38SamplingChainExtension:
-    """What a sampling chain adds to the traced chain: the epilogue, its warm-pass check and three per-step primitives.
+    """What a sampling chain adds to the traced chain: the epilogue, its warm-pass check and the per-step primitives.
 
-    ``device_sampler`` adds the on-device sampler (``ttnn/device_sampler.py``) after the candidate row: TAIL then
-    writes the sampled token (or the greedy one, by the request's flag) into the token row itself, and a sampled
-    request runs the greedy loop plus one draw write per step (:func:`generate_sampled_on_device`).
+    ``device_sampler`` adds the on-device sampler after the candidate row: TAIL then writes the sampled (or greedy)
+    token into the token row itself (:func:`generate_sampled_on_device`).
     """
 
     def __init__(
@@ -274,15 +252,14 @@ class Qwen38SamplingChainExtension:
         device_accept: Qwen38DeviceAcceptance | None = None,
     ) -> None:
         self.lm_head = lm_head
-        # QWEN38_MTP_DEVICE_ACCEPT: the MTP pass loop's on-device acceptance (its constants, admission and per-pass
-        # uniforms live in tools/qwen38_mtp_device_accept.py); None keeps the host-decided pass.
+        # The MTP pass loop's on-device acceptance (tools/qwen38_mtp_device_accept.py); None decides on the host.
         self.device_accept = device_accept
         self.mesh = mesh
         self.constants = Qwen38TTNNSamplingCandidateConstants.build(mesh, lm_head.mesh_contract)
         # The sampler: the one-program fused kernel when the registry serves it (its constants carry the presence
         # history), else the composite on its constants; both take (row, greedy row, constants).
         self.sample = fused.resolve(fused.sampler_tail.NAME)
-        # QWEN38_FUSED=candidate_row: the scan's shard row feeds the candidate row's gather (greedy_tail on)
+        # candidate_row: the scan's shard row feeds the candidate row's gather (greedy_tail on)
         self.candidate_row = fused.enabled("candidate_row")
         fused_sampler = self.sample is fused.kernel(fused.sampler_tail.NAME).fused
         if not device_sampler:
@@ -296,13 +273,9 @@ class Qwen38SamplingChainExtension:
         self.trace_rows: list[Any] = []
 
     def _epilogue(self, logits: Qwen38ShardedLogits, token_row_io: Any) -> tuple[Any, Any, Any, Any]:
-        """TAIL's last ops, eager in the warm pass and captured in the trace, one function so the capture asks only for
-        programs the warm compiled (a cache miss inside a trace capture is fatal, and a program's cache key is its
-        compile-time form, not its buffer addresses): the greedy path exactly as today (its resolve into the resident
-        row, greedy_tail's ``copy_into`` is a compile-time argument), the candidate row into the readback buffer, and
-        with the device sampler the sampler on the row and the resolve's own row, its token row (greedy or sampled, by
-        the flag) copied into the resident row.  Returns ``(candidates, row, greedy_row, token_row)``; without the
-        sampler the token row is the greedy row."""
+        """TAIL's last ops, shared by the warm pass and the capture so the capture needs only programs the warm compiled
+        (a program cache miss inside a capture is fatal). Returns ``(candidates, row, greedy_row, token_row)``; without
+        the sampler the token row is the greedy row."""
 
         if self.candidate_row:
             candidates = self.lm_head.greedy_candidates(logits, candidate_row=self.constants)
@@ -348,9 +321,8 @@ class Qwen38SamplingChainExtension:
         """The capture's epilogue run eagerly (its programs compile here) and the fallback gather; the row must equal
         torch.topk of the gather.
 
-        With the device sampler the epilogue runs under the warm policy and then under the greedy flag: each token must
-        equal the host reference on the read row, the greedy one the resolve's own row's id, and the resident row
-        (``token_row_io``, holding the warm step's resolved token on entry) holds it again on exit.
+        With the device sampler each token must equal the host reference on the read row, and the resident row holds
+        the warm step's resolved token again on exit.
         """
 
         full = self._gather(logits)
@@ -755,11 +727,9 @@ def sample_tail_logits(
 
 
 def drafting_admission(mtp: Any, request: Qwen38SamplingRequest | None, *, device_loop: bool = False) -> str | None:
-    """Why the MTP pass loop does not serve a sampled request, or ``None`` when it drafts for it: a chain opened
-    without the split verify (``mtp.sampled`` False: ``decide`` has no head to read), ``top_k`` 0 and a boosting
-    penalty (the candidate rows cannot bound them: the 1-row loop's full-vocabulary fallback every step), logprobs
-    (the row normaliser is not carried per verify row), the device-sampler loop.  A greedy request (``None``) is
-    always admitted."""
+    """Why the MTP pass loop does not serve a sampled request, or ``None`` when it drafts for it (always for a greedy
+    request): no split verify on the chain, ``top_k`` 0 or a boosting penalty (the candidate rows cannot bound them),
+    logprobs, or the device-sampler loop."""
 
     if request is None:
         return None
@@ -785,16 +755,12 @@ def accept_pass(
     tokens: Sequence[int],
     head: mtp_v2.Qwen38TTNNVerifyHeadReadback,
 ) -> mtp_v2.Qwen38TTNNVerifyDecision:
-    """The sampled request's verdict on one split pass (the chain's ``decide``): row j of ``tokens`` ``[t_P, d_1 ..
-    d_k]`` gives ``p_j`` from its candidate row under the request's processors with the history
-    ``session.committed + tokens[:j + 1]`` (the drafts accepted earlier in the pass count, as plain decode's output
-    would; ``prompt_tokens`` exempts the prompt from the additive penalties), or over the eagerly gathered verify
-    logits when the guard fails (``session.chain.mtp_read_full_logits_rows``); the point-mass acceptance draws
-    from ``request.draw``.  The alignment tokens are ``[d_1 .. d_a*, x*]`` then the zero-embedding sentinel.
+    """The sampled request's verdict on one split pass (the chain's ``decide``).
 
-    The k + 1 candidate distributions come from one batched pass (``candidate_distributions``, bitwise the per-row
-    ``candidate_distribution``); the acceptance still asks for them row by row, so a fallback is counted, and the
-    verify logits read, only for a row the acceptance reaches."""
+    Row j of ``tokens`` ``[t_P, d_1 .. d_k]`` gives ``p_j`` from its candidate row with the history
+    ``session.committed + tokens[:j + 1]``, or from the eagerly gathered verify logits when the guard fails; the
+    point-mass acceptance draws from ``request.draw``. The alignment tokens are ``[d_1 .. d_a*, x*]`` then the
+    zero-embedding sentinel."""
 
     rows = len(tokens)
     if tuple(head.candidate_rows.shape) != (rows, SAMPLING_CANDIDATE_ROW_SHAPE[3]):
@@ -872,14 +838,9 @@ def generate_sampled(
 ) -> Iterator[tuple[int | None, str | None]]:
     """The sampled A-G loop over ``session.chain`` and ``session.sampling``; yields ``(x_t, finish)`` like ``_generate``.
 
-    ``session`` carries ``chain`` (the traced chain's primitives), ``sampling`` (the extension),
-    ``committed`` (the host list of every input token: the prompt when the loop starts, then this
-    request's output; the penalties' history, presence and frequency over the output only) and
-    ``ple_context``.  ``prompt_tokens`` is the request's prompt length, the committed length when
-    the loop starts unless the caller already emitted output (the pass loop's hand-off).  Every
-    sampled token appends its sample to ``request.samples`` before it is yielded.  A hook stop
-    yields ``(None, reason)``; the thinking budget forces ``</think>`` through ``forced_step`` (the
-    session's) and appends ``None`` for it.
+    ``session.committed`` holds every input token (the prompt, then this request's output) and is the penalties'
+    history; ``prompt_tokens`` is the prompt length. A hook stop yields ``(None, reason)``; the thinking budget forces
+    ``</think>`` through ``forced_step`` and appends ``None`` to ``request.samples`` for it.
     """
 
     if not isinstance(request, Qwen38SamplingRequest):
@@ -960,19 +921,10 @@ def generate_sampled_on_device(
     """The device-sampled loop: the greedy A-G loop plus one draw write per step; yields ``(x_t, finish)`` like
     :func:`generate_sampled`.
 
-    Entry: the request's policy and first draw were written by ``begin_request`` before the prompt's steps, so the
-    last prompt TAIL chose the first token on the device.  The row is read once here (blocking, completing that
-    TAIL) and the host reference recomputes the token from it and the first draw: equal when ``prefilled`` (a
-    mismatch is a device error), rewritten into the row when the request continues an unconsumed row the previous
-    request's policy chose (``first_token_rewrites``).  Every step then writes the next draw behind HEAD(t) (ordered
-    before TAIL(t), which consumes it); a forced ``</think>`` step reuses the resident draw.  ``verify_each_step``
-    (the discriminator's arm) also reads the row every step and checks the device token against the reference
-    (``verified_steps``); the production loop reads nothing but the token.
-
-    A presence penalty can push read candidates below tokens the row never read: the sampler's guard bit flags such a
-    row and its token is the host sampler's fallback over TAIL's full logits instead (:func:`sample_tail_logits`, the
-    request's generator), written into the token row and the history before HEAD consumes it.  So a penalised request
-    reads the token and its guard before HEAD(t) is enqueued; a request without the penalty keeps the order above.
+    ``begin_request`` wrote the policy and first draw before the prompt, so the last prompt TAIL chose the first
+    token; it is checked here against the host reference (rewritten when the request continues a row the previous
+    request chose). Each step writes the next draw behind HEAD(t), before TAIL(t) consumes it. A row whose guard bit
+    is set takes the host fallback over TAIL's full logits before HEAD consumes its token.
     """
 
     if not isinstance(request, Qwen38SamplingRequest):
@@ -1140,7 +1092,7 @@ def run_discriminator(
     """The chain discriminator on one prompt: rows vs truth (a), the greedy period (d), two seeded card-profile streams
     (c: identical), the sampled period against the target (d) and every sampled token inside its candidate row (e).
 
-    Arm b (``temperature 0`` = the CPU greedy record, 96/96) is the server's acceptance replay, run before this.
+    Arm b (``temperature 0`` against the CPU greedy record) is the server's acceptance replay, run before this.
     """
 
     prompt_ids = list(prompt_ids)

@@ -3,17 +3,12 @@
 
 """Pure-torch FP32 reference of the Qwen3.8-Flash-Next vision tower (``model.visual.*``).
 
-The tower turns one image's pixel patches into the merged visual features the language model splices in place of
-its ``<|image_pad|>`` tokens: patch embedding (a Conv3d whose kernel equals its stride, i.e. one matmul over the
-unfolded patches) plus a learned position table resampled to the image grid, 27 pre-LayerNorm blocks (full
-non-causal attention with a two-axis rotary embedding, GELU-tanh MLP), and a merger (LayerNorm, 2x2 spatial group,
-linear, GELU, linear) to ``out_hidden_size`` features, one per four patches.
-
-Everything here is FP32 torch with no TTNN import; a development-only check tool (``vision_reference_check.py``) proves it
-equal to the pinned Transformers ``Qwen4ExpVisionModel`` (and this module's preprocessing equal to its image processor)
-on the same pixel input.  The device tower (``ttnn/vision.py``) is measured against this module block by block.  The functions
-that fix the device side's contracts are the preprocessing (patch order), :func:`vision_position_ids`,
-:func:`rotary_cos_sin`, :func:`interpolated_pos_embed` and :func:`attention_segments`.
+Patch embedding (a Conv3d with kernel == stride, one matmul) plus a learned position table resampled to the grid,
+27 pre-LayerNorm blocks (non-causal attention with a two-axis rotary embedding, GELU-tanh MLP) and a merger
+(LayerNorm, 2x2 group, linear, GELU, linear) to one ``out_hidden_size`` feature per four patches. Matches the pinned
+Transformers ``Qwen4ExpVisionModel``; the device tower (``ttnn/vision.py``) is compared against it block by block.
+The preprocessing (patch order), :func:`vision_position_ids`, :func:`rotary_cos_sin`, :func:`interpolated_pos_embed`
+and :func:`attention_segments` fix the device side's contracts.
 """
 
 from __future__ import annotations
@@ -265,8 +260,7 @@ def patchify(image: torch.Tensor, config: VisionTowerConfig) -> tuple[torch.Tens
 def preprocess_image(image_uint8: torch.Tensor, config: VisionTowerConfig) -> tuple[torch.Tensor, torch.Tensor]:
     """uint8 ``[3, H, W]`` -> (pixel patches ``[N, patch_dim]`` FP32, ``grid_thw`` ``[1, 3]`` int64).
 
-    Images whose sides are already multiples of the resize factor inside the pixel bounds are patchified as they are
-    (the test fixtures); other sizes are resized with bicubic antialiased interpolation as the processor does.
+    Sizes the resize rule leaves unchanged are patchified as they are; others are resized bicubic, antialiased.
     """
 
     height, width = int(image_uint8.shape[-2]), int(image_uint8.shape[-1])

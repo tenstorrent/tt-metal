@@ -89,8 +89,8 @@ def test_validate_only_runs_the_interpreter_from_the_repository_root_wherever_it
 
 
 def test_long_chunks_and_a_slab_combine_with_mtp(tmp_path) -> None:
-    """The MTP chain prefills in 128-row chunks too (the extension's 128-row twin) and, since 2026-09-26, in slabs
-    (the twin's slab form): both flag pairs reach the server.  A slab above the 2048-row cap is refused."""
+    """The MTP chain prefills in 128-row chunks and in slabs: both flag pairs reach the server. A slab above the
+    2048-row cap is refused."""
 
     if subprocess.run(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], stdout=subprocess.DEVNULL).returncode:
         pytest.skip("the launcher records the checkout's head: not a git checkout")

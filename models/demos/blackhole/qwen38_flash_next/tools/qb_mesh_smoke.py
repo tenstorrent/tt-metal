@@ -8,19 +8,13 @@ flashed or reset; the mesh is opened once and closed):
 
   1. runtime proof: the loaded ``ttnn._ttnn`` is the pinned extension (path + sha256);
   2. device discovery: (GetNumAvailableDevices, get_num_pcie_devices, get_num_devices) == (4, 4, 4);
-  3. cluster descriptor: copied into the log directory; chips_with_mmio over the
-     expected device nodes; the ethernet graph classified as line or ring; the
-     route derived with ``physical_route.derive_canonical_line_route`` when the
-     graph is a line, else the fabric's line order (``derive_fabric_line_route``,
-     the ring walk from the lowest chip ID recorded next to it);
+  3. cluster descriptor: the ethernet graph classified as line or ring and the route derived
+     (``physical_route``);
   4. SystemMeshDescriptor local shape (one local 4x1 line, all_local);
-  5. fabric FABRIC_1D / STRICT_INIT, ``open_mesh_device`` with the server's
-     arguments (l1_small_size 24576, trace_region_size 0), reshape to 1x4,
-     per-coordinate mapping (ttnn id, device node, BDF, board link, fabric ids);
+  5. fabric FABRIC_1D / STRICT_INIT, ``open_mesh_device`` with the server's arguments, reshape to 1x4;
   6. one eager op (add) on a dim-0 sharded tensor, exact compare;
-  7. one traced op (add captured with begin/end_trace_capture, executed once), exact compare;
-  8. one four-device all_gather in the production call form (dim 3, cluster_axis 1, DRAM; Linear
-     under FABRIC_1D), exact compare;
+  7. one traced op (add, captured and executed once), exact compare;
+  8. one four-device all_gather in the production call form, exact compare;
   9. synchronize, close, fabric DISABLED.
 
 ``--no-device`` stops after step 1 (import and argument proof on the CPU).

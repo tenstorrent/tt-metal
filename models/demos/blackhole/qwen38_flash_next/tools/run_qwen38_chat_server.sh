@@ -46,6 +46,9 @@
 # imported from it and records the checkout's commit, tree and extension digest as the runtime identity.  No locks, no
 # archives, no seals.  Start it from any directory, the model directory included: relative path arguments are the
 # caller's, and the interpreter runs from the repository root so the model's own ttnn/ package never shadows ttnn.
+#
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 set -euo pipefail
 
 readonly HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"

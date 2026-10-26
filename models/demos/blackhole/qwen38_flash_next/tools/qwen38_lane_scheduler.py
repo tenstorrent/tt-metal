@@ -3,52 +3,31 @@
 
 """The lanes server's scheduler (``--lanes B``): ``B`` lane slots over one MTP lane chain, a FIFO of waiting
 requests, and the per-lane stream rules of the single-stream pass loop, driven from ONE device thread at pass
-boundaries.  No device import: the device is an object with the methods below, so the statics drive the scheduler
-with a fake and the server with :class:`Qwen38LanesSession`.
+boundaries.  No device import: the device is an object with the methods below.
 
-The driver loop (:meth:`Qwen38LaneScheduler.run`): at every pass boundary (1) the lanes whose request ended are
-parked and freed, (2) a waiting request is admitted into a free lane -- ONE per boundary while another lane decodes,
-back to back while none does -- (3) the host writes the boundary needs (the accept counts of admitted or overridden
-lanes, a rewound position, the next token blocks, the active mask) and (4) one pass runs; its committed ids reach
-every active lane's request through its ticket queue, token by token, under the request's own rules (EOS,
-``max_tokens``, the thinking budget, an oversize id), the handler thread's rules (a stop string, the deadline, a
-hang-up) arriving as a cancel the driver reads at the boundary.
+At every pass boundary (:meth:`Qwen38LaneScheduler.run`) ended lanes are freed, a waiting request is admitted into a
+free lane (one per boundary while another lane decodes), the host writes the boundary's counts, blocks and active
+mask, and one pass runs; its committed ids reach each request through its ticket queue under the request's rules.
 
-The stall policy: an admission's device work (its prefill, eviction and import) is what the decoding lanes wait for,
-so the device runs it in segments (the chunk groups of the prefill, one per 128 prompt rows; the forced last step;
-the eviction; the import) and between two segments the driver runs one pass for the decoding lanes whenever the
-admission work since their last pass reached ``stall_budget_seconds`` (the admission's ``between`` yield point; the
-clock is the decoding lanes' last pass, or the moment the first of them became active, so a boundary of several short
-admissions counts them together): every other lane pauses at most the budget plus one segment instead of the whole
-admission, and the admitted request's first token waits one pass per interleaved pass.  The total device work is unchanged, so this
-moves latency, not throughput: ``stalled_seconds`` counts the admission segments a decoding lane waited for (never
-the passes it got), charged PER SEGMENT to the lanes active while it ran -- the admission's seconds are split over
-its yield-point intervals by their wall time, so a request that ends inside an interleaved pass carries the segments
-before its end and none after -- ``admission_seconds`` those segments, ``admission_wall_seconds`` the admission from
-its start to its end with the interleaved passes inside, ``interleaved_passes`` their count.  ``stall_budget_seconds``
-None runs every admission whole (the first form of the mode).
+An admission runs on the device in segments; between two segments the driver runs one pass for the decoding lanes
+once the admission work since their last pass reached ``stall_budget_seconds`` (None: admissions run whole).  This
+moves latency, not throughput; ``stalled_seconds`` charges each admission segment to the lanes active while it ran.
 
-A lane's request ends at a boundary; the lane is then free and the next admission overwrites every family of its
-state (readmission into any lane is exact: the stage-4 lifecycle gate), so an event that ends a request costs the
-lane nothing beyond the normal commit of its last pass.  The one event that continues a lane's stream is the forced
-``</think>`` of the thinking budget (the single stream forces it through the 1-row chain, which the lanes do not
-have): the host rewrites the count the coming commit takes, the lane's position and its next block between the
-readback and the next pass -- the admission's own mechanism (a count of -1 commits nothing) generalised -- with the
-device's ``k_eff`` mask untouched (:class:`Qwen38LaneStream`).  Greedy only: acceptance is exact, so the committed
-stream is the argmax stream whatever the drafts, and the forced token costs one pass of placeholder drafts, as the
-single stream's re-entry after its forced step does.
+Greedy only: acceptance is exact, so the committed stream is the argmax stream whatever the drafts.  The thinking
+budget's forced ``</think>`` is a host count override between the readback and the next pass
+(:class:`Qwen38LaneStream`).
 
 Device protocol (every call from the driver thread):
 
 * ``admit(lane, ticket, between=None) -> Qwen38LaneAdmitted``: prefill the request's prompt on the single-lane
   chain (an image prompt's images through the resident tower first: the ``"tower"`` segment), evict its state into
-  the lane's host slot, import it into ``lane`` (the lane's position, rotary shift and n-gram context follow);
-  ``between(segment, done, total) -> seconds`` is called between the admission's device segments and runs
-  the decoding lanes' pass when the stall budget says so (its segment records exclude the seconds it returns);
+  the lane's host slot, import it into ``lane``; ``between(segment, done, total) -> seconds`` is called between the
+  admission's device segments and runs the decoding lanes' pass when the stall budget says so (its segment records
+  exclude the seconds it returns);
 * ``write_counts(counts)``: the per-lane accept counts the coming commit takes (-1 commits nothing);
 * ``override_commit(lane, record, committed_rows)``: lane ``lane`` commits ``committed_rows`` of the pass ``record``
-  (fewer than the device accepted): its position mirror and device row rewound to ``start + committed_rows``, its
-  n-gram context that of the rows kept;
+  (fewer than the device accepted): its position and device row rewound to ``start + committed_rows``, its n-gram
+  context that of the rows kept;
 * ``set_blocks(blocks)``: the next pass's token block per lane (``None`` keeps the device-assembled block);
 * ``set_active(mask)``: the coming pass's active mask (the commit mask stays the pass being committed's);
 * ``step() -> record``: one pass (commit, PLE rows, verify, draft, one readback) with ``positions``, ``committed``,
@@ -74,10 +53,8 @@ ONE_TILE_ROWS = 32
 # Placeholder drafts of a host-written block (the bootstrap's form; any exact ids would do: acceptance is a filter).
 PLACEHOLDER_DRAFT_TOKEN = 0
 IDLE_WAIT_SECONDS = 0.25  # the driver's wait on the condition between submits when no lane is active
-# The stall budget: the admission work (seconds) the decoding lanes wait for, since their last pass, before the driver
-# runs their pass between two admission segments; None runs every admission whole.  The default is the measured
-# setting of the 2026-09-29 sweep (docs/NUMERICS.md "Served lanes": half the interleave cost of 0.25 s on a four-burst
-# for a pause bounded near 0.7 s; docs/SERVER.md states the trade-off).
+# Admission work (seconds) the decoding lanes wait for before the driver runs their pass between two admission
+# segments; None runs every admission whole.  The default is from a device sweep.
 DEFAULT_STALL_BUDGET_SECONDS = 0.5
 # Finish reasons the driver assigns; the handler's cancels arrive with their own ("stop", "deadline", "disconnected").
 FINISH_SHUTDOWN = "shutdown"
@@ -114,9 +91,8 @@ def stall_budget_seconds_admitted(value: Any) -> float | None:
 
 
 class _Boundary:
-    """The host writes one pass boundary owes the device: the accept counts the coming commit takes (as the host last
-    wrote or the device last landed them, -1 on the inactive lanes: an admission or an override rewrites the vector,
-    so it persists across boundaries), the next token blocks (None: the device-assembled block), the active mask, and
+    """The host writes one pass boundary owes the device: the accept counts the coming commit takes (they persist
+    across boundaries; -1 on inactive lanes), the next token blocks (None: device-assembled), the active mask, and
     whether anything is to write."""
 
     def __init__(self, lanes: int) -> None:
@@ -153,17 +129,13 @@ class Qwen38LaneStreamStep:
 
 
 class Qwen38LaneStream:
-    """One request's stream rules over the lane's passes: ``Qwen38ChatSession._generate_mtp``'s greedy loop with the
-    forced ``</think>`` as a host count override instead of a 1-row forced step.
+    """One request's stream rules over the lane's passes: the single stream's greedy MTP loop, with the forced
+    ``</think>`` as a host count override instead of a 1-row forced step.
 
-    Row 0 of a pass is a token the client already saw; a pass emits ``[d_1 .. d_a, t']`` (the device's committed ids),
-    every one counted and checked in order: an EOS or an oversize id ends the request (``stop`` / ``error``),
-    ``max_tokens`` ends it with ``length``, and the thinking budget forces ``</think>`` right after the token that
-    reached it.  The forced token at emitted index ``j < a`` commits rows ``0 .. j + 1`` (the token that reached the
-    budget is row ``j + 1``) and opens the next pass on ``[</think>, placeholders]``; at ``j == a`` (the budget reached
-    on ``t'``, which is not a row of the pass) the next pass is the FORCED pass ``[t', </think>, placeholders]`` whose
-    two rows commit whatever the argmax said and whose row-1 argmax is the model's token after ``</think>`` -- the
-    single stream's ``next_pending`` after its forced steps -- delivered by the following boundary's checks.
+    A pass emits ``[d_1 .. d_a, t']``, each checked in order (EOS or an oversize id, ``max_tokens``, the thinking
+    budget).  A budget reached at emitted index ``j < a`` commits rows ``0 .. j + 1`` and opens the next pass on
+    ``[</think>, placeholders]``; reached on ``t'`` it makes the next pass the forced pass ``[t', </think>,
+    placeholders]``, whose row-1 argmax is the model's token after ``</think>``.
     """
 
     def __init__(
@@ -242,8 +214,8 @@ class Qwen38LaneStream:
             tokens.append((pending, "error" if pending >= TOKENIZER_SIZE else "stop"))
             return self._end(tokens, "error" if pending >= TOKENIZER_SIZE else "stop")
         if not self.room(position):
-            # The single stream hands the rest of the request to its 1-row loop here; a lane has none.  Unreachable
-            # under require_budget (the context limit keeps 64 rows of headroom: every position fits a pass).
+            # Unreachable under require_budget (the context headroom keeps every position fitting a pass); a lane has
+            # no 1-row loop to hand the request to.
             self._count(pending)
             tokens.append((pending, "length"))
             return self._end(tokens, "length", detail="no_room")
@@ -339,7 +311,7 @@ class Qwen38LaneTicket:
     stop_ids: tuple[int, ...]
     think_budget: int | None
     submitted: float = field(default_factory=time.perf_counter)
-    sampling: Any = None  # wave D: a sampled request's parameters; None = greedy (the only served form today)
+    sampling: Any = None  # a sampled request's parameters; None = greedy (the only served form)
     # An image prompt: the decoded images in prompt order and the prompt's (t, h, w) rotary positions (the handler
     # thread decodes and renders; the driver thread runs the tower inside the admission); the admission's record.
     images: list = field(default_factory=list)

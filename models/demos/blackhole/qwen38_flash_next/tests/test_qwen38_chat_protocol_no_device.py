@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The chat protocol module without a device: request normalisation, reply assembly (fake tokenizer), and, with the
-pinned checkpoint (4x p150), the template-equality matrix: the server's prompt ids must equal
-``tokenizer.apply_chat_template`` on the raw request bitwise for every message shape x tools x thinking case, and the
-prefix a follow-up turn's reference render shares with the served turn."""
+"""The chat protocol without a device: request normalisation, reply assembly and, with the checkpoint, the
+template-equality matrix: the server's prompt ids must equal ``tokenizer.apply_chat_template`` bitwise for every
+message shape x tools x thinking case."""
 
 from __future__ import annotations
 
@@ -505,7 +504,7 @@ def test_assembler_types_tool_arguments_by_the_schema() -> None:
     assert json.loads(_arguments(47)) == {"note": None} and json.loads(_arguments(51)) == {"note": "true"}
     # NaN is not JSON: it stays text (the wire stays valid JSON); a non-JSON body for a typed parameter stays text.
     assert _arguments(49) == '{"lines": "NaN"}' and json.loads(_arguments(50)) == {"lines": "seven"}
-    # Without the schema (a tool the request did not offer) every JSON-looking value is parsed, as before.
+    # Without the schema (a tool the request did not offer) every JSON-looking value is parsed.
     assert json.loads(_arguments(41, tools=())) == {"path": 123}
     assert json.loads(_arguments(41, tools=(ADD_TOOL,))) == {"path": 123}
 
@@ -554,7 +553,7 @@ def test_assembler_flush_scans_the_held_and_pending_text_for_stop_strings() -> N
     assert "".join(assembler.content) == "The"
 
 
-# -- checkpoint: template equality against transformers (4x p150) --------------------------------------
+# -- checkpoint: template equality against transformers ---------------------------------------------------
 
 MATRIX_TOOLS = {
     "none": [],
@@ -756,12 +755,10 @@ def test_server_rejects_what_the_reference_raises(expect_error, template, messag
 def test_a_thinking_turns_reference_render_never_extends_the_committed_ids_on_the_real_tokenizer(
     template: Qwen38OfficialChatTemplate,
 ) -> None:
-    """Turn N with tools and thinking on, the model's reasoning and tool-call text as generated, the tool result
-    appended for turn N+1.  The device prompt is the reference render of that history (decision A: the reasoning is
-    not carried forward), and on the real tokenizer it never extends the committed ids: the template renders the
-    past turn's think block empty and the "\\n" after <think> merges into "\\n\\n", so the common prefix stops one
-    token before the served prompt's end and the next turn is a full prefill.  With the reasoning echoed the render
-    agrees for string and integer arguments and misses for nested ones (a tojson re-serialisation)."""
+    """Turn N with tools and thinking on, then the tool result for turn N+1: the reference render of that history
+    (the reasoning not carried forward) stops one token short of the committed ids, since the past think block
+    renders empty, so the next turn is a full prefill. With the reasoning echoed the render agrees for string and
+    integer arguments and misses for nested ones (a tojson re-serialisation)."""
 
     tokenizer = template.tokenizer
     flags = {"enable_thinking": True, "reasoning_effort": "medium"}

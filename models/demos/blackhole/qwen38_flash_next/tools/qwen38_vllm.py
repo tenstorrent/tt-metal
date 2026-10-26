@@ -3,35 +3,23 @@
 
 """vLLM adapter over the traced chain: one resident slot, host sampling from full-vocabulary logits, no MTP.
 
-vllm-tt-plugin constructs ``Qwen38ForCausalLM`` through ``initialize_vllm_model`` on the mesh it opened.  The chain
-is built as the chat server builds it (``sampling=True``, so the full-vocabulary gather compiles in the warm pass)
-and is complete when ``Qwen38TracedChain.open`` returns: both warmups are checks plus one smoke pass.
-``prefill_forward`` resets the state, runs the chunk driver over all prompt tokens but the last, teacher-forces the
-last one and reads its full logits; ``decode_forward`` teacher-forces the token vLLM sampled and reads the next row.
-Both return CPU fp32 ``[1, 1, VOCAB_SIZE]`` with the LM head's padding rows at ``-inf``.  vLLM's page table and KV
-cache are accepted and ignored: the QSA caches are the chain's resident ones, masked by position.  Every
-configuration the adapter cannot serve is refused before the device is touched.
+vllm-tt-plugin constructs ``Qwen38ForCausalLM`` through ``initialize_vllm_model`` on the mesh it opened; the chain is
+built as the chat server builds it and is complete when ``Qwen38TracedChain.open`` returns.  ``prefill_forward``
+resets the state, chunk-prefills all prompt tokens but the last and teacher-forces the last; ``decode_forward``
+teacher-forces the token vLLM sampled.  Both return CPU fp32 ``[1, 1, VOCAB_SIZE]`` logits with the LM head's padding
+rows at ``-inf``.  vLLM's page table and KV cache are ignored: the QSA caches are the chain's resident ones.
 
-Under the plugin's device-sampling contract (``--additional-config '{"tt": {"sample_on_device_mode": "decode_only"}}'``)
-a decode step arrives with ``sampling_params`` (the plugin's ``TTSamplingParams`` as per-row lists) and must return the
-token instead of the row.  The adapter reads the same full row and samples on the host with vLLM's sampler semantics
-(``vllm/v1/sample/sampler.py``: penalties, temperature, top-k, top-p, exponential-noise draw) computed over the row's
-top candidates wherever that is exact, and over the full row otherwise. vLLM's own ``Sampler`` sorts the full
-248,320-wide row. The reduced route preserves its distribution; the token stream for a given seed differs because
-the noise is drawn over the candidates. Historical fork sampling timings are not measurements of this port.
-The plugin decides host or device per step before the call (min_p, logit_bias, bad_words, allowed_token_ids,
-min_tokens, structured output and logprobs stay on its host sampler) and a step without ``sampling_params`` returns
-the row as before.  Prefill sampling (mode ``"all"``) is refused at warmup: prefill returns the row.
+Under the plugin's ``decode_only`` device-sampling contract a decode step with ``sampling_params`` returns the token:
+the adapter samples the same row on the host with vLLM's sampler semantics, over the row's top candidates where that
+is exact and over the full row otherwise.  The distribution is vLLM's; the token stream for a given seed differs.  The
+plugin keeps min_p, logit_bias, bad_words, allowed_token_ids, min_tokens, structured output and logprobs on its own
+host sampler.  Prefill sampling (mode ``"all"``) is refused at warmup.
 
-The prefill form is the environment's (``prefill_form``): ``QWEN38_PREFILL_SLAB`` opens the chain with a prefill
-slab of that many rows ahead of the 128-row and 32-row chunks; unset, ``0`` or ``off`` serves without the slab: the
-128-row chunks, then the 32-row chunks, as the chat server serves (``QWEN38_LONG_CHUNKS=0``: the 32-row chunks
-alone).  When the chain opens, the slab's resident dense weights are admitted against the free DRAM and the model
-asks moe_compute whether it takes the slab's rows in one call; a refusal of either ends the start-up naming the knob,
-never a silent fallback.  One log line after the open states the form the chain opened in.
+The prefill form comes from the environment (:func:`prefill_form`); a slab the DRAM admission or ``moe_compute``
+refuses ends the start-up naming the knob, never a silent fallback.
 
-vLLM imports this module in its registry inspection, frontend, engine and worker processes: no device is opened
-here and ``sys.argv`` is not read.
+vLLM imports this module in its registry inspection, frontend, engine and worker processes: no device is opened here
+and ``sys.argv`` is not read.
 """
 
 from __future__ import annotations
@@ -194,12 +182,9 @@ def sample_from_row(
     candidates: int = REDUCED_CANDIDATES,
 ) -> int:
     """vLLM's sampler over one fp32 row (``Sampler.sample`` + ``apply_top_k_top_p_pytorch`` + ``random_sample``):
-    greedy below the temperature epsilon; else temperature, the top-k set (every value equal to the k-th kept), the
-    nucleus (a token is kept while the probability mass ranked above it is below top_p; the first always), then the
-    exponential-noise argmax over the kept set.  Computed on the row's top candidates when that is exact: the top-k
-    set fits in them, or top-k is off and the candidates hold the nucleus (their mass, taken over the full row's
-    softmax, reaches top_p).  Otherwise the full row, vLLM's own way.  Same distribution as vLLM's sampler; the noise
-    is drawn over the kept set, so a seed does not reproduce vLLM's token stream."""
+    greedy below the temperature epsilon, else temperature, top-k, the nucleus and the exponential-noise argmax.
+    Computed on the row's top candidates when that is exact (the top-k set fits in them, or their mass reaches top_p),
+    else over the full row; the noise is drawn over the kept set, so a seed does not reproduce vLLM's token stream."""
 
     if policy.greedy:
         return int(row.argmax())
@@ -290,11 +275,9 @@ def describe_prefill_form(long_chunks: bool, slab_rows: int | None) -> str:
 
 
 def prefill_dense_refusal(error: BaseException) -> ValueError | None:
-    """The DRAM admission's refusal of the slab's resident prefill weights carried by ``error``: the error itself, or
-    one level down as its ``__cause__`` (a resident build failure whose owner cleanup also failed arrives wrapped, with
-    the primary error as the cause: ttnn/builder.py); None when ``error`` is something else.  The admission raises
-    inside the target build when the weights, the context-scaled state, the slab's working set and the margin exceed
-    the free DRAM."""
+    """The DRAM admission's refusal of the slab's resident prefill weights carried by ``error`` (itself or its
+    ``__cause__``: a build failure whose owner cleanup also failed arrives wrapped); None when ``error`` is something
+    else."""
 
     for candidate in (error, error.__cause__):
         if isinstance(candidate, ValueError) and PREFILL_DENSE_REFUSAL_MARK in str(candidate):
@@ -383,12 +366,10 @@ class Qwen38ForCausalLM:
         """The chain on the mesh vLLM opened, constructed as the chat server constructs it.
 
         The cache identity is the extension digest and a 40-hex sha: ``QWEN38_TT_METAL_SHA``, else the imported ttnn's
-        checkout head, else the digest's prefix (an image without ``.git`` or ``git``); the chat server's runtime
-        admission (a ttnn built from this checkout) is not applied, vLLM's python environment is trusted as given.
-        The checkpoint is ``MODEL_WEIGHTS_DIR``, else the ``--model`` path, else the pinned revision of the repo id
+        checkout head, else the digest's prefix; the chat server's runtime admission is not applied.  The checkpoint
+        is ``MODEL_WEIGHTS_DIR``, else the ``--model`` path, else the pinned revision of the repo id
         (``QWEN38_HF_REPO``, else ``--model``, else ``Qwen/Qwen3.8-Flash-Next``) in the local Hugging Face hub cache.
-        The prefill form is ``prefill_form()``'s (the slab rows and the 128-row chunks); the slab's DRAM admission
-        refusal and the model's ``Qwen38SlabRefused`` are re-raised naming ``QWEN38_PREFILL_SLAB``."""
+        Slab refusals are re-raised naming ``QWEN38_PREFILL_SLAB``."""
 
         if not TRACE_ALLOC_TRACKING:
             raise ValueError("the trace chain needs TT_METAL_TRACE_ALLOC_TRACKING=1 exported before ttnn is imported")

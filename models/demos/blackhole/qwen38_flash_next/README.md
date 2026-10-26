@@ -1,27 +1,26 @@
 # Qwen3.8-Flash-Next on Blackhole
 
-This model port originates from **Samuel Jett** ([sjettTT](https://github.com/sjettTT), sjett@tenstorrent.com),
-source commit `cd9a11771107ea2c27da3303a0556ff7343e4af5`. See [PROVENANCE.md](PROVENANCE.md) for
-source attribution and integration revisions. The port runs on tt-metal main: its MoE prerequisites
-[#57448](https://github.com/tenstorrent/tt-metal/pull/57448) and
-[#57564](https://github.com/tenstorrent/tt-metal/pull/57564) are merged, and its `moe_compute` calls use the public
-extent-one local-output API.
+Qwen3.8-Flash-Next (hybrid GDN / QSA attention, 512 routed experts, MTP layer, vision tower) on four Blackhole
+devices as one 1x4 mesh. Routed experts run in BF4, dense weights in BF8, and the PLE n-gram table stays in the
+checkpoint and is read by the host. The port is by Samuel Jett ([sjettTT](https://github.com/sjettTT)); see
+[PROVENANCE.md](PROVENANCE.md). It runs on tt-metal main and calls only public operations.
 
-The implementation uses four Blackhole devices as a 1x4 mesh, BF4 routed experts, BF8 dense weights, and a host
-PLE table mapped from the checkpoint. The publication validation targets one request at a time and a 32,768-token
-allocation (32,704 usable tokens). The standalone server also contains source MTP, vision and lane paths; coverage
-for each must be read separately. The vLLM adapter has one resident slot and no MTP.
+Validated configuration: one request at a time with a 32,768-token allocation (32,704 usable tokens). The
+standalone server also has MTP drafting, image input and concurrent lanes; their coverage is separate. The vLLM
+adapter has one resident slot and no MTP.
 
-The historical measurements in `docs/` and proposal baselines under `tools/ci/` belong to the pinned source fork.
-They are not performance or validation claims for this port. Ordinary greedy outputs can diverge from the CPU
-reference after a near-tie; the JSON acceptance record, independent numerical controls and task accuracy are
-separate gates. Never substitute a standalone MTP rate for vLLM throughput.
+## Hardware
+
+| profile | hardware | status |
+|---|---|---|
+| `tt-quietbox` | QuietBox, 4x p150b, opened as a 1x4 line through `tools/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto` | validated |
+| `p150-line` | 4x p150 in one host on an ethernet line; the route is derived at start | supported |
+| `qb2` | QuietBox 2 (2x p300c), or a 4x p300 host with `--instance 0\|1` | untested |
 
 ## Build and checkpoint
 
-Build this tt-metal checkout using the standard [build instructions](../../../../README.md); a Python import alone
-does not validate that build. Use clang-20 and the supported default SFPI toolchain. Install the repository Python
-environment, then Transformers 5.16.1 for this checkpoint's `qwen4_exp` configuration.
+Build this checkout with the standard [build instructions](../../../../README.md) using clang-20 and the default
+SFPI toolchain, then install Transformers 5.16.1 (the checkpoint's `qwen4_exp` configuration).
 
 ```bash
 ./build_metal.sh --build-ttnn-tests
@@ -30,22 +29,18 @@ python_env/bin/python -m models.demos.blackhole.qwen38_flash_next.tools.download
 python_env/bin/python -m models.demos.blackhole.qwen38_flash_next.tools.prewarm_ple_table --checkpoint "$CHECKPOINT"
 ```
 
-The downloader pins ModelScope revision `2741eec155d03a8ce151b993ccce1a7b1e398d6b`, verifies each file's SHA256,
-and resumes incomplete downloads. The checkpoint occupies 360 GB. Allow approximately 69 GB for the BF4 cache,
-23 GB for 32k component/model caches, and additional space for the build and JIT cache. The 104 GB PLE table should
-remain in the host page cache for timing; the original source's smaller host-memory guidance does not guarantee
-this residency.
+The downloader pins ModelScope revision `2741eec155d03a8ce151b993ccce1a7b1e398d6b`, verifies each file's SHA256
+and resumes partial downloads. Disk: 360 GB for the checkpoint, about 69 GB for the BF4 expert cache, about 23 GB
+for the 32k component and model I/O caches, plus the build and the JIT cache. Keep the 104 GB PLE table in the
+host page cache when timing.
 
-Keep the entire cache namespace and artifact contents immutable during loading and through loaded host
-tensor/view lifetimes and pending device transfers. Publish new files with the converter's temporary-file and
-atomic-replace transaction before readers start. Concurrent replacement, in-place writes and truncation are
-unsupported. The model passes canonical `.tensorbin` paths to the existing public `ttnn.load_tensor`; those
-loads open files separately from the retained verification descriptors, so same-inode loading across concurrent
-replacement is not guaranteed. Hash verification and stat checks do not create an immutable snapshot or detect
-every writable-mmap modification. Cache identity, checksum, header, metadata and topology checks remain in the
-model, and loaded tensors are released on validation failure. No shared descriptor-loader extension is required.
+Keep `CACHE_ROOT` dedicated to this model and unchanged while a server loads or runs: new cache files are published
+by the converter's temporary-file and atomic-rename step before readers start; concurrent replacement, in-place
+writes and truncation are unsupported. The model checks cache identity, checksums, headers, metadata and topology,
+and releases loaded tensors when a check fails.
 
-For a shared read-only checkpoint, verify every file without network or cache writes:
+To verify a shared read-only checkpoint without network access or cache writes (the manifest's SHA256 is
+`2618cf53db8e04d539d96bb03d3f5c6e08f8ad3dddd0a54252d5d1b739d84ded`; write the report outside the checkpoint):
 
 ```bash
 python -m models.demos.blackhole.qwen38_flash_next.tools.verify_release \
@@ -53,13 +48,9 @@ python -m models.demos.blackhole.qwen38_flash_next.tools.verify_release \
   --output "$RESULTS/checkpoint-verification.json" --workers 2
 ```
 
-The manifest must have SHA256 `2618cf53db8e04d539d96bb03d3f5c6e08f8ad3dddd0a54252d5d1b739d84ded`;
-write the report outside the checkpoint. Include this verification cost in the complete weekly recipe timing.
+## Standalone server
 
-## Standalone validation and serving
-
-Run only on an allocated four-device mesh. Keep `CACHE_ROOT` dedicated to this model. The QuietBox profile derives
-and validates the current fabric order; physical device IDs are not shared across hosts.
+Run on an allocated four-device mesh:
 
 ```bash
 export TT_METAL_TRACE_ALLOC_TRACKING=1
@@ -71,37 +62,37 @@ bash "$MODEL/tools/run_qwen38_chat_server.sh" --profile tt-quietbox \
   --acceptance --require-json-96 --acceptance-only
 ```
 
-The first command stages missing BF4 layers. The second writes acceptance tokens and runtime identity under
-`$CACHE_ROOT/runs/` and closes the mesh. Chunk mode admits 12 short records. `--prefill-slab 2048` adds the 13th,
-2,228-token document record on a tt-metal whose `moe_compute` takes the slab's 2,048 tokens in one call; the server
-refuses the flag at startup on one that does not, after tt-metal logs the op's refusal as a critical `TT_FATAL` line.
-MTP4 uses `--mtp 4` and its own source baseline. Remove `--acceptance-only` to serve; set `--host 127.0.0.1` for a
-local endpoint. The source server's `--serve-seconds` limit includes startup.
+The first command converts the missing BF4 expert layers and stops. The second replays the acceptance records,
+writes the tokens and the runtime identity under `$CACHE_ROOT/runs/` and closes the mesh; drop `--acceptance-only`
+to serve. The server speaks the OpenAI chat API (`/v1/chat/completions`, `/v1/models`, `/health`).
 
-The tiered component tests compare real checkpoint values with independent Torch references that are separately
-checked against Transformers. `tests/test_model_reuse_tp.py` records fixed 128/50 generations and A/B/A requests at
-prefill boundaries, including exact token IDs and program-cache counts. Both require the complete checkpoint and
-prepared cache; skipped tests are not device coverage.
+Main flags (`run_qwen38_chat_server.sh --help` lists all of them):
+
+| flag | meaning |
+|---|---|
+| `--allocated-context N` | 32768 (default), 65536, 131072 or 262144 |
+| `--acceptance`, `--require-json-96` | replay the CPU greedy records at start; refuse to serve unless `json` matches 96/96 |
+| `--prepare-only [--bf4-stage-limit N]` | build the BF4 expert cache, at most N layers per run |
+| `--mtp K` | MTP drafting with K = 3, 4 or 5 drafts (off by default) |
+| `--prefill-slab ROWS` | prefill in slabs ahead of the 128-row chunks; refused at start when `moe_compute` cannot take the slab's rows in one call (the case on main) |
+| `--no-sampling` | greedy requests only (the default server samples when a request asks for it) |
+| `--stall-seconds N` | exit 1 after N seconds without device progress (default 300; 0 disables) |
+| `--host ADDR --port N` | listen address; use `--host 127.0.0.1` for a local endpoint |
+
+[docs/SERVER.md](docs/SERVER.md) covers the request rules, `/health`, follow-up turns, lanes, MTP and the container
+form; [docs/PREFILL.md](docs/PREFILL.md) the prefill forms.
 
 ## vLLM
 
-Use plugin commit `1d87a00e7d91ec246582d07865ec4f8b0a8fb25c` with vLLM 0.26.0's empty target. No shared plugin
-registration change is needed: point `EXTRA_MODELS_DIR` at `tools/vllm_bundle`. The adapter declares its required
-fabric configuration before mesh creation; explicit launch overrides retain the plugin's normal precedence.
-
-Set `MODEL_WEIGHTS_DIR`, `QWEN38_CACHE_ROOT`, `QWEN38_CACHE_LABEL=c32768-tt-quietbox`,
-`TT_METAL_TRACE_ALLOC_TRACKING=1`, `TT_VISIBLE_DEVICES=0,1,2,3`, and `MESH_DEVICE='(1, 4)'`.
-On QuietBox also set `TT_MESH_GRAPH_DESC_PATH` to `tools/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto`.
-Launch with `max_num_seqs=1`, `max_model_len=32704`, architecture override
-`TTQwen4ExpForConditionalGeneration`, and TT configuration
-`{"l1_small_size":24576,"trace_region_size":0,"sample_on_device_mode":"decode_only"}`.
+Use vllm-tt-plugin commit `1d87a00e7d91ec246582d07865ec4f8b0a8fb25c` with vLLM 0.26.0's empty target and point
+`EXTRA_MODELS_DIR` at `tools/vllm_bundle`; the adapter declares its fabric configuration before the mesh opens.
 
 ```bash
 export MODEL_WEIGHTS_DIR="$CHECKPOINT" QWEN38_CACHE_ROOT="$CACHE_ROOT"
 export QWEN38_CACHE_LABEL=c32768-tt-quietbox TT_METAL_TRACE_ALLOC_TRACKING=1
 export TT_VISIBLE_DEVICES=0,1,2,3 MESH_DEVICE='(1, 4)'
 export EXTRA_MODELS_DIR="$PWD/$MODEL/tools/vllm_bundle"
-export TT_MESH_GRAPH_DESC_PATH="$PWD/$MODEL/tools/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto"
+export TT_MESH_GRAPH_DESC_PATH="$PWD/$MODEL/tools/qb_p150_x4_1x4_line_mesh_graph_descriptor.textproto"  # QuietBox
 python "$PLUGIN_ROOT/examples/server_example_tt.py" \
   --model "$CHECKPOINT" --served-model-name Qwen/Qwen3.8-Flash-Next \
   --host 127.0.0.1 --port 8000 --shutdown-timeout 30 --max_num_seqs 1 --block_size 64 --max-model-len 32704 \
@@ -110,27 +101,32 @@ python "$PLUGIN_ROOT/examples/server_example_tt.py" \
   --additional-config '{"tt":{"l1_small_size":24576,"trace_region_size":0,"sample_on_device_mode":"decode_only"}}'
 ```
 
-The adapter serves the chat server's prefill form: 128-row chunks, then 32-row chunks (`QWEN38_LONG_CHUNKS=0`: the
-32-row chunks alone). `QWEN38_PREFILL_SLAB=<rows>`, a multiple of 512 up to 2048, adds a prefill slab ahead of them.
-When the chain opens, the model checks the slab's resident weights against free DRAM and asks `moe_compute` whether
-it takes the slab's rows in one call; a refusal ends start-up and names the knob. The adapter logs the form it opened.
-The two chunk forms are not bitwise alike on every tt-metal: on `44af409050` their greedy streams (32-88 tokens, 32k
-context) parted on 4 of the 6 prompts of 128 tokens or more.
+The adapter prefills in 128-row chunks, then 32-row chunks (`QWEN38_LONG_CHUNKS=0`: 32-row chunks only).
+`QWEN38_PREFILL_SLAB=<rows>` (a multiple of 512 up to 2048) adds a prefill slab ahead of them; start-up is refused,
+naming the variable, when the slab's resident weights do not fit or `moe_compute` cannot take its rows in one call.
+`decode_only` samples on the CPU and returns the selected token; requests that need logprobs or host-only
+processors return the full logits row to the plugin's sampler. Scheduler chunked prefill, prefix caching and
+asynchronous decode are disabled. `tools/validate_vllm.py --output "$LIVE_RESULTS"` checks request isolation,
+sampling, penalties, logprobs and rejections against a running server.
 
-Despite the plugin parameter's name, this adapter samples on the CPU: `decode_only` returns a selected token ID;
-requests requiring logprobs or host-only processors return full logits to the plugin sampler. Run
-`python -m models.demos.blackhole.qwen38_flash_next.tools.validate_vllm --output "$LIVE_RESULTS"` against the local
-server to retain request isolation, sampling, penalties, logprobs and rejection checks. Penalties follow
-vLLM's prompt/output history rules. Scheduler chunked prefill, prefix caching and asynchronous decode are disabled.
-The model's internal chunk/slab traces are independent of scheduler chunking.
+## Testing
 
-## Task quality and timing
+```bash
+QWEN38_CHECKPOINT="$CHECKPOINT" python_env/bin/python -m pytest models/demos/blackhole/qwen38_flash_next/tests
+pytest models/demos/blackhole/qwen38_flash_next/demo/text_demo.py -v -s -k traced_128
+```
 
-`tools/benchmark.py` scores and times the same natural-EOS GSM8K responses through a live OpenAI endpoint. It
-requires the exact official 1,319-item test file at revision `3101c7d5072418e28b9008a6636bde82a006892c`; its hash
-is checked before requests. The default runs all items. `--limit 64` means the fixed first-64 smoke subset, not a
-full benchmark. Responses, input token IDs, strict final-answer scoring, usage, TTFT and client timing are retained.
-Use `tools/report.py` with `CI=true` to emit the standard tt-metal benchmark artifact from those measured results:
+`tests/` holds the no-device tests, the checkpoint-reading component tests (skipped without `QWEN38_CHECKPOINT`)
+and the device tests (`*_device.py`, `*_tp.py`). `tests/test_gdn_public_device.py` checks the public GDN dispatch
+against an independent recurrence; set `QWEN38_FUSED_DEVICE_TEST=1` on the held mesh. `tests/test_model_reuse_tp.py`
+checks fixed generations, prefill-boundary A/B/A requests and program-cache counts. `demo/text_demo.py` is the CI
+end-to-end test ([demo/README.md](demo/README.md)). [docs/TESTING.md](docs/TESTING.md) covers the acceptance gate,
+the reference corpus and the regression harness.
+
+`tools/benchmark.py` scores and times GSM8K through a live OpenAI endpoint (the official 1,319-item test file at
+revision `3101c7d5072418e28b9008a6636bde82a006892c`, hash-checked; `--limit 64` is the fixed smoke subset).
+`tools/report.py` with `CI=true` writes the standard tt-metal benchmark artifact; `--device-name` (`P150x4` or `QB2`)
+must come from the allocation's topology record.
 
 ```bash
 python -m models.demos.blackhole.qwen38_flash_next.tools.benchmark \
@@ -139,24 +135,12 @@ CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULT
   --device-name "$QUALIFIED_DEVICE_NAME"
 ```
 
-Set `QUALIFIED_DEVICE_NAME` to `P150x4` or `QB2` from the physical allocation and topology qualification record;
-four logical devices alone do not identify a QB2. The reporter requires this explicit identity.
+## Validation
 
-The reporter emits `gsm8k_accuracy` in percent, `time_to_token` in seconds, and separate `tokens/s/user` and
-aggregate `tokens/s` measurements. The shared target validator needs the corresponding GSM8K mapping before
-weekly registration. Its legacy `save_partial_run_json` API writes a benchmark pickle under
-`generated/benchmark_data`; this is the standard collector input.
-
-## Qualification records
-
-Attach measured qualification records to the publication review with the exact model commit, native library
-identity, compiler, hardware topology, checkpoint revision, command, and saved responses. Keep source regression,
-independent reference accuracy, task quality, and runtime reuse verdicts separate. Preserve failures and first
-stderr alongside corrected runs. The public GDN prerequisite changes phase arithmetic; measurements made on the
-older private-binding implementation do not qualify the new implementation automatically.
-
-`tests/test_gdn_public_device.py` checks forced phased, forced fused and automatic public dispatch against an
-independent recurrence, including masked MTP commits, replicas, input-state ownership, fresh input addresses,
-program-cache reuse and trace replay. Set `QWEN38_FUSED_DEVICE_TEST=1` on the held mesh. Optional
-`QWEN38_GDN_BASELINE_OUTPUT` points to saved old-arithmetic tensors for an additional exact/PCC diagnostic;
-it does not replace the recurrence gate or establish full-model equivalence.
+- The acceptance gate: the `json` record matches the CPU reference 96/96 (`--require-json-96`). Other greedy
+  records leave the CPU stream after a near-tie; their first divergence index is recorded per run
+  ([docs/NUMERICS.md](docs/NUMERICS.md)).
+- Reference agreement, task quality (GSM8K) and runtime reuse are separate gates; record each with the model
+  commit, tt-metal identity, compiler, topology, checkpoint revision, command and saved responses.
+- The baselines under `tools/ci/baselines/` are proposals from the source fork, not results for this port. A
+  standalone MTP rate is not vLLM throughput.

@@ -168,10 +168,7 @@ def _slab_reduce_fakes(monkeypatch, rows: int):
 
 @pytest.mark.parametrize("rows", [512, 1024, 2048])
 def test_slab_reduce_never_frees_what_it_did_not_create(monkeypatch, rows: int) -> None:
-    """A 512-row slab is one 512-row block: ttnn.slice over the whole [10, 512, 2560] page returns the page itself
-    and ttnn.concat of one partial returns that partial, so the reduce must not free the combine page, the routing's
-    scores / indices or the partial it returns (it did before this fix: the persistent combine buffer was released
-    under the next layer). Larger slabs slice proper sub-ranges and free every block's slices and partials."""
+    """The slab reduce frees only what it created: a full-extent slice and a one-tensor concat return their input."""
     result = _slab_reduce_fakes(monkeypatch, rows)
     blocks = rows // moe_module.SLAB_REDUCE_BLOCK_ROWS
     assert len(result.reduced) == blocks
@@ -241,13 +238,10 @@ def test_block_slab_routes_each_128_row_block_through_the_128_row_worker(monkeyp
 
 @pytest.mark.parametrize("case", ["admitted", "refused", "inside a capture", "model error", "128-row blocks"])
 def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect_error, case: str) -> None:
-    """Before any slab work the slab's one moe_compute call is put to the op under a NO_DISPATCH graph capture: the
-    call's own arguments on stand-in inputs of the slab's shapes (stamped replicated, as the slab's are), the capture
-    ended either way, and nothing freed that the admission did not create. The op's combine output is the slab's
-    buffer under a new tensor id, as ttnn returns outputs during a capture. The answer is True when the op takes the
-    call and False on an op refusal, each logged with the slab form it selects (the refusal with the op's reason);
-    an error that is not the op's (no TT_FATAL / TT_THROW) stays that error; inside another graph capture, or on an
-    instance that routes 128-row blocks, the admission does not run."""
+    """The slab's one moe_compute call is put to the op under a NO_DISPATCH graph capture before any slab work.
+
+    True when the op takes the call, False on an op refusal (TT_FATAL / TT_THROW), each logged with the slab form it
+    selects; any other error stays itself; inside another capture, or on a 128-row-block instance, it does not run."""
     capture, freed, calls, stamped, logged = [], [], [], [], []
     combine = _AliasingTensor((moe_module.TOP_K, SLAB, moe_module.HIDDEN_SIZE), "combine")
     combine.tensor_id, combine.buffer_address = 0, lambda: 4096
@@ -334,9 +328,8 @@ def test_slab_call_admission_asks_the_op_without_dispatching(monkeypatch, expect
 
 
 def test_same_buffer_compares_buffer_addresses_and_every_freeing_module_shares_it() -> None:
-    """``ttnn.reshape`` can return a view (a new tensor id over the same buffer), so a free of a reshape's source is
-    decided by ``same_buffer`` (the buffer address), never by tensor id; a host stand-in without a buffer compares by
-    tensor id; every module that frees a reshape's source uses the one ``contracts.same_buffer``."""
+    """``ttnn.reshape`` can return a view (new tensor id, same buffer), so freeing its source is decided by
+    ``contracts.same_buffer``, never by tensor id."""
     from models.demos.blackhole.qwen38_flash_next.ttnn import contracts, final_mixer, gr, mtp, mtp_v2
 
     class _Tensor:
@@ -416,7 +409,7 @@ def test_qsa_slab_constants_pool_every_block_and_carry_no_row_templates() -> Non
     assert tuple(host["arange_blocks_row"].shape) == (1, 1, 1, BLOCKS)
     assert host["row_index_col"].reshape(-1).tolist() == list(range(SLAB))
     assert tuple(host["row_keep_bits" if "row_keep_bits" in host else "row_index_slots"].shape) == (1, 1, SLAB, 2080)
-    # The chunk forms are as before.
+    # The chunk forms are unchanged.
     short = qsa_module.qsa_chunk_constant_rows(BLOCKS, CHUNK_ROWS)
     assert tuple(short["row_index_blocks"].shape) == (1, 1, 32, BLOCKS) and len(short["row_selects"]) == 8
     assert tuple(short["block_start_lanes"].shape) == (1, 1, 1, 32)
@@ -438,9 +431,7 @@ def test_qsa_slab_emulation_is_the_one_row_rule_per_row(position: int) -> None:
 
 
 def _qsa_fake_ttnn(monkeypatch, blocks: int):
-    """A fake ttnn for the QSA slab selection whose slice/concat alias like the real ones (a full-extent slice and a
-    one-tensor concat return their input) and whose ops refuse a freed input, as a device op does; returns the freed
-    tensors and the top-k block-id parts in creation order."""
+    """A fake ttnn for the QSA slab selection: slice/concat alias like the real ones and ops refuse a freed input."""
     freed, parts = [], []
     u32, rm = "uint32", "row_major"
 
@@ -505,8 +496,7 @@ def _qsa_fake_ttnn(monkeypatch, blocks: int):
 
 @pytest.mark.parametrize("rows", [512, 1024, 2048])
 def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, rows: int) -> None:
-    """Each top-k block-id part is freed exactly once, after the expansion reads it (a 512-row slab's one part is
-    its block ids: ttnn.concat of one tensor returns that tensor). Nothing the method did not create is freed."""
+    """Each top-k block-id part is freed exactly once, after the expansion reads it; nothing else is freed."""
     blocks, block_rows = 64, qsa_module.SLAB_SCORE_BLOCK_ROWS
     fake = _qsa_fake_ttnn(monkeypatch, blocks)
     owner = SimpleNamespace(
@@ -549,9 +539,8 @@ def test_qsa_slab_selection_never_frees_its_block_ids_before_use(monkeypatch, ro
 
 @pytest.mark.parametrize("rows", [512, 1024])
 def test_slab_block_mask_never_frees_the_complete_block_column(monkeypatch, rows: int) -> None:
-    """The mask of a one-block (512-row) slab reads the whole complete-block column: ttnn.slice over that full extent
-    returns the column itself, which the mask must not free (the next QSA layer reads it again when the masks are
-    not hoisted). Larger slabs slice each block's rows and free those slices."""
+    """A one-block slab's mask must not free the complete-block column its full-extent slice returns: the next QSA
+    layer reads it again."""
     blocks, block_rows = 64, qsa_module.SLAB_SCORE_BLOCK_ROWS
     fake = _qsa_fake_ttnn(monkeypatch, blocks)
     column = _AliasingTensor((1, 1, rows, 1), "complete_blocks_col")
@@ -655,9 +644,8 @@ def test_driver_runs_slabs_then_long_then_short_chunks(driver, start: int, count
 
 
 def test_driver_prepares_the_next_slab_while_the_current_one_replays(monkeypatch) -> None:
-    """The slab cadence: with slab k's replay queued the host waits for slab k - 1's event and records slab k's, so
-    slab k + 1's inputs are prepared and their copies queued while slab k runs; the first slab waits for nothing;
-    the chunks after the slabs keep the every-``event_interval`` sync; the hand-off synchronizes everything."""
+    """With slab k queued the host waits for slab k - 1's event, so slab k + 1's inputs are prepared while slab k
+    runs; the chunks after keep the every-``event_interval`` sync."""
 
     log: list[tuple] = []
     events = itertools.count()
@@ -765,8 +753,7 @@ def test_driver_rejects_a_slab_without_the_long_chunks_or_with_mtp(expect_error,
             slab_state=states[SLAB],
             mtp=object(),
         )
-    # a slab with drafting needs the 128-row twin allocated with the slab form: the twin of another slab row count
-    # is refused, the matching one admitted (2026-09-26)
+    # a slab with drafting needs the 128-row twin allocated with the same slab form
     with expect_error(ValueError):  # allow-pytest.raises: pure contract test
         driver_module.Qwen38ChunkPrefill(
             _FakeModel(),
@@ -836,18 +823,16 @@ def test_slab_combine_buffer_admits_the_slab_rows(expect_error, monkeypatch) -> 
         assert buffer.shape == (moe_module.TOP_K, rows, moe_module.HIDDEN_SIZE)
     validated_rows = [shape[1] for shape, _ in fakes.validated]
     assert validated_rows == [CHUNK_ROWS, LONG_CHUNK_ROWS, MIN_SLAB_ROWS, MAX_SLAB_ROWS], validated_rows
-    # counts no form admits: not a lane count (the lanes lineage admits 1..MAX_LANES), not a chunk, not a slab
+    # counts no form admits: not a lane count (1..MAX_LANES), not a chunk, not a slab
     for rows in (100, LONG_CHUNK_ROWS + 1, 2050, 4096):
         with expect_error(ValueError):  # allow-pytest.raises: pure contract test
             moe_module.allocate_local_combine_output("mesh", fakes.contract, rows)
 
 
 def _fake_text_model_for_chunk_state(monkeypatch, fakes, *, takes_one_call: bool = True):
-    """A stand-in for Qwen38TTNNTextModel with the collaborators allocate_chunk_state touches (two layers: a GDN and
-    a QSA, the PLE checkpoint layer at index 1), so the REAL Qwen38TTNNTextModel.allocate_chunk_state runs its own
-    body, including the shared combine buffer allocation through moe.allocate_local_combine_output, and the REAL
-    Qwen38TTNNDecoderLayer.admit_slab_call its probe: each probe MoE records its construction, the slab call
-    admissions it is asked for (answering ``takes_one_call``) and its release in ``admitted``."""
+    """A stand-in model (a GDN and a QSA layer) on which the real ``Qwen38TTNNTextModel.allocate_chunk_state`` and
+    ``Qwen38TTNNDecoderLayer.admit_slab_call`` run; each probe MoE answers ``takes_one_call`` and records its
+    construction, admissions and release in ``admitted``."""
 
     releasable = lambda: SimpleNamespace(deallocate=lambda: None, release=lambda: None, active=True)
     monkeypatch.setattr(
@@ -928,12 +913,8 @@ def _fake_text_model_for_chunk_state(monkeypatch, fakes, *, takes_one_call: bool
 
 @pytest.mark.parametrize("takes_one_call", [True, False], ids=["one call", "128-row blocks"])
 def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, takes_one_call: bool) -> None:
-    """The chain opens a slab state through Qwen38TTNNTextModel.allocate_chunk_state(state, rows=slab, base=chunk).
-    Before any slab state, moe_compute is asked once whether it takes the slab's rows in one call: a one-call probe
-    instance of layer 0 (its own combine buffer, the default routed tokens) on layer 0's experts, released after.
-    Where the op takes the call, the shared combine buffer is the slab's whole page and every layer's MoE routes
-    the slab's rows in one call; where it refuses, the buffer holds one 128-row block and every layer's MoE routes
-    128 tokens per call. The row contract admits the buffer either way."""
+    """moe_compute is asked once, through a layer-0 probe, whether it takes the slab in one call; the shared combine
+    buffer and every layer's MoE follow the answer: the whole slab per call, or 128-row blocks."""
     fakes = _moe_buffer_fakes(monkeypatch)
     model, base, admitted = _fake_text_model_for_chunk_state(monkeypatch, fakes, takes_one_call=takes_one_call)
     generic_state = SimpleNamespace(position=SimpleNamespace(read=lambda: 0))
@@ -953,8 +934,7 @@ def test_slab_chunk_state_routes_in_the_form_moe_compute_takes(monkeypatch, take
 
 
 def test_a_slab_record_replays_only_on_a_server_with_a_prefill_slab() -> None:
-    """An acceptance record of 2048 or more prompt tokens (the slab record) exists to run a slab: a server without
-    --prefill-slab skips it by name and keeps every other record in order; a server with a slab replays them all."""
+    """A server without --prefill-slab skips the slab acceptance record by name; one with a slab replays them all."""
 
     from models.demos.blackhole.qwen38_flash_next.tools import qwen38_chat_server as chat_server
 
@@ -988,7 +968,7 @@ def test_the_resident_plan_is_the_fused_siblings_of_the_qsa_and_the_moe(expect_e
         ), gate_up
         for module in ("gr", "gdn"):
             assert prefill_dense.resident_plan(module, dtype) == (), (module, dtype)
-    # the bf8 siblings of the 12 QSA and 48 MoE layers: the "about 58 MB per device as bf8" of docs/PREFILL.md
+    # the bf8 siblings of the 12 QSA and 48 MoE layers
     bf8 = prefill_dense.plan_bytes_per_device({"qsa": "bf8", "moe": "bf8"})
     (kv,), (gate_up,) = prefill_dense.resident_plan("qsa", "bf8"), prefill_dense.resident_plan("moe", "bf8")
     assert bf8 == 12 * kv.bytes + 48 * gate_up.bytes == 58_490_880, f"{bf8} bytes"

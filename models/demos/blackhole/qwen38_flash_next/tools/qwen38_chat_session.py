@@ -1,63 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Chat session over the single-trace HEAD/TAIL chain of the B=1 timing runner.
+"""Chat session over the traced HEAD/TAIL decode chain.
 
-The served decode path is the runner's chain unchanged: 4 HEAD + 4 TAIL traces
-of the position-generic body, replayed as ``HEAD[t mod 4]``, host PLE row
-refresh, ``TAIL[t mod 4]``.  Prefill has two modes.  ``teacher_forced`` writes
-each prompt token into the persistent token row before its HEAD, so the
-device's own greedy resolve (the last op of every TAIL) is overwritten before
-the embedding reads the row.  ``chunked`` (the default when the chain captured
-the chunk trace) runs all prompt tokens but the last through the 32-row chunk
-trace with ``Qwen38ChunkPrefill``: teacher-forced steps up to the next multiple
-of 32, the chunk carry seeded from the decode buffers, full chunks, a padded
-tail chunk, the eager hand-off (``finish_prefill``), then the last prompt token
-is teacher-forced as the first decode replay.  Suffixes shorter than
-``CHUNK_PREFILL_MIN_ROWS`` after the alignment steps are teacher-forced.
-Generation is the runner's evented loop (non-blocking row read, event, HEAD,
-event wait, PLE refresh, TAIL).  Multi-turn requests reuse the device state when
-the new prompt extends the committed input sequence (the suffix is prefilled
-from the committed position); otherwise the generic state is reset in place.
-
-The prompt-end snapshot (``REPLY-TAIL-SPLICE-DESIGN-20260906.md``): before the last prompt token's forced step
-the chain copies the generic state's recurrent buffers (GDN recurrent states and ring slots, PLE slots, QSA staging
-and raw-key rings; the caches are positional) into a resident snapshot and the session records the ids consumed so
-far.  A later request whose render extends those ids but not the committed ones (a thinking conversation: the
-template renders the past turn's think block as ``<think>\n\n</think>``, one token off the device's ``<think>\n``)
-restores the snapshot and prefills only the rendered tail instead of resetting.
-
-Sampling is an optional tail of the same chain (``tools/qwen38_sampling_step.py``):
-TAIL's epilogue also writes a candidate row, and a request with ``temperature > 0``
-runs the sampled loop (read the row after TAIL, sample on the host, write the token
-into the row before HEAD).  Greedy requests take the loop above untouched.
-
-MTP drafting is opt-in (``mtp=K``, K in 3, 4 or 5; ``ttnn/mtp_v2.py``): the chain also
-holds the verify / draft / commit traces and, in every TAIL and in the chunk body, the
-MTP layer's rows, so the MTP layer follows the target through prefill.  A greedy
-request on such a chain runs its prefill as above, reads the first token, switches
-the device state into verify mode (``mtp_enter``) and generates with the pass loop:
-draft replay, readback, PLE rows, commit, verify replay, readback, ``a + 1`` tokens
-per pass streamed as they commit.  At the end of the request (or before a forced
-token) the last pass's rows are committed as far as the request consumed them and
-the 1-row buffers are rebuilt (``mtp_leave``), so 1-row, sampled and MTP requests
-alternate on one server.  Sampled requests and ``prefill_mode`` ``teacher_forced``
-requests take the loops above, unless the chain captured the split verify beside
-the fused one (``mtp_sampled``: an ``--mtp --sampling`` server): then a sampled
-request the pass loop can bound (``sampling_step.drafting_admission``) drafts too,
-through the split form, the host deciding every pass by exact speculative sampling
-(``ttnn/speculative_sampling.py``) on the rows' candidate distributions, while a
-greedy request keeps the fused verify (the pinned greedy stream: the traces an
-``--mtp --no-sampling`` server runs; ``mtp_enter`` routes by ``decide``).  With
-``QWEN38_MTP_DEVICE_ACCEPT=1`` beside it (default off) a third form is captured,
-the head, the device's point-mass acceptance (``fused.mtp_accept``) and the tail
-in one trace, for the sampled requests the device acceptance admits
-(``mtp_enter``'s ``before_verify_sampled``, the pass's uniforms; the acceptance
-is ``tools/qwen38_mtp_device_accept.py``'s).
-
-``Qwen38ChatSession`` speaks to the device only through a chain object with the
-per-step primitives; ``Qwen38TracedChain`` is the hardware one, the no-device
-test drives the session with a scripted chain.
+Decode replays ``HEAD[t mod 4]``, the host PLE row refresh and ``TAIL[t mod 4]``. Prefill is ``chunked`` (the chunk
+traces, then the last prompt token teacher-forced as the first decode step) or ``teacher_forced``. Sampling and MTP
+drafting are optional extensions of the same chain. ``Qwen38ChatSession`` reaches the device only through a chain
+object; ``Qwen38TracedChain`` is the hardware one.
 """
 
 from __future__ import annotations
@@ -126,21 +75,17 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.fused import gdn_rows_scan as
 from models.demos.blackhole.qwen38_flash_next.ttnn.fused import mtp_accept as mtp_accept_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.model import GENERIC_HEAD_LAYERS, Qwen38TTNNGenericTraceKey
 
-# The device position P must stay below allocated_context (RoPE table lookup, KV write); the consumed EOS step and a
-# little slack are the headroom.  CONTEXT_LIMIT is the default (32k) build's; a session derives its own from the
-# chain's allocated context.
+# Device positions must stay below allocated_context (RoPE lookup, KV write). CONTEXT_LIMIT is the default build's;
+# a session derives its own from the chain's allocated context.
 CONTEXT_HEADROOM = RESIDENT_CONTEXT_HEADROOM
 CONTEXT_LIMIT = Qwen38ResidentContext().context_limit
 PREFILL_EVENT_INTERVAL = 16
-# A request's completion budget is bounded by the remaining context, context_limit - prompt tokens, and defaults to
-# it (require_budget).  MAX_TOKENS_BOUND only types an explicit max_tokens before the prompt is known: the largest
-# admitted context.
+# Bounds an explicit max_tokens before the prompt is known; the request budget is the remaining context.
 MAX_TOKENS_BOUND = max(RESIDENT_QSA_CACHE_CAPACITIES)
 PREFILL_MODES = ("chunked", "teacher_forced")
 DEFAULT_PREFILL_MODE = "chunked"
-# Rows left for the chunk trace after the alignment steps below which the chunk path costs more than teacher forcing
-# them at about 50 ms per token: the serving hand-off measured 240-340 ms (4x p150b, 2026-09-03) on top of the seed and
-# the padded chunk replay, so the break-even is about 10-12 rows.
+# Fewer rows than this after the alignment steps are teacher-forced: cheaper than the chunk hand-off. From a device
+# measurement.
 CHUNK_PREFILL_MIN_ROWS = 16
 # The chunk warm pass embeds one token per vocabulary owner in every lane group (the decode warm pass's ids).
 WARM_CHUNK_TOKEN_IDS = tuple(
@@ -149,45 +94,37 @@ WARM_CHUNK_TOKEN_IDS = tuple(
 WARM_LONG_CHUNK_TOKEN_IDS = tuple(
     resident_decode.SEQUENTIAL_TRACE_WARM_EMBEDDING_TOKEN_IDS[index % TP_SIZE] for index in range(LONG_CHUNK_ROWS)
 )
-# The CPU acceptance study's template flags (mtp_acceptance_cpu_v2 at a97cb9e6b0): the 12 prompt records render
-# identically only with these.  The records carry their own system turn inside their prompt ids; the session adds no
-# system prompt of its own.
+# Template flags of the acceptance records: they render identically only with these. The records carry their own
+# system turn; the session adds none.
 ENABLE_THINKING = False
 PRESERVE_THINKING = True
 REASONING_EFFORT = "low"
 RESIDUE_CLASSES = resident_decode.SINGLE_TRACE_RESIDUE_CLASS_TRACES
 SEED_TOKEN_ID = IM_START_ID
 THINK_END_ID = protocol.THINK_END_ID
-# MTP drafting: the draft counts a server may be opened with (the chain timing tool's measured arms; k = 3 and 4
-# run the 5-row verify MoE form, k = 5 the 32-row form, and the QSA verify path admits no more than k + 1 = 6 rows),
-# the GDN state re-anchor settings (off = every GDN layer commits through the chunk kernel; layer0 = layer 0's
-# commits run the 1-row fp32 step recurrence over the committed rows), the bootstrap pass's placeholder drafts, the
-# resident expert pairs with the MTP layer's.
+# MTP: the draft counts a server may open with (the QSA verify path admits at most k + 1 = 6 rows), the GDN state
+# re-anchor settings (layer0: layer 0 commits through the 1-row fp32 step recurrence) and the bootstrap placeholder.
 MTP_DRAFTS = (3, 4, 5)
 MTP_GDN_ANCHORS = ("off", "layer0")
 MTP_GDN_ANCHOR_LAYERS = {"off": (), "layer0": (0,)}
 MTP_BOOTSTRAP_DRAFT_TOKEN = 0
 MTP_EXPECTED_CACHE_LOADS = resident_decode.EXPECTED_CACHE_LOADS + 1
-# The verify forms a chain captures per switch pair (mtp_sampled, mtp_device_accept) (Qwen38TracedChain.open): the
-# fused verify alone; the fused verify and the split head + tail beside it (--mtp --sampling); with the device
-# acceptance (QWEN38_MTP_DEVICE_ACCEPT, default off) also the device-decided sampled form, the head, the accept program
-# and the tail in one trace.  The admission's traces term counts them; the server's pre-mesh refusal and the open's
-# gate both read this one table, so the two records cannot drift.
+# Verify forms a chain captures per (mtp_sampled, mtp_device_accept). The server's pre-mesh refusal and the open's
+# gate both read this table.
 MTP_VERIFY_FORMS_BY_SWITCH = {
     (False, False): ("fused",),
     (True, False): ("fused", "split"),
     (True, True): ("fused", "split", "sampled"),
 }
-# The device-decided form's warm: k + 1 uniforms (multiples of 2**-24, exact in fp32), distinct per row, under the
-# sampling extension's warm policy; the eager pass's statistics row must equal the host reference bitwise.
+# Warm uniforms for the device-decided form: distinct multiples of 2**-24 (exact in fp32), so the eager pass's
+# statistics row must equal the host reference bitwise.
 MTP_WARM_ACCEPT_UNIFORMS = tuple(
     n * 2**-24 for n in (1_000_003, 5_000_011, 9_000_017, 13_000_019, 16_000_023, 7_000_027)
 )
 
 
 def mtp_verify_forms(mtp_sampled: bool, mtp_device_accept: bool = False) -> tuple[str, ...]:
-    """The verify forms an MTP chain captures with the switches (``MTP_VERIFY_FORMS_BY_SWITCH``); the device
-    acceptance needs the split verify."""
+    """Verify forms an MTP chain captures for the switches; the device acceptance needs the split verify."""
 
     if type(mtp_sampled) is not bool or type(mtp_device_accept) is not bool:
         raise ValueError(
@@ -198,38 +135,14 @@ def mtp_verify_forms(mtp_sampled: bool, mtp_device_accept: bool = False) -> tupl
     return MTP_VERIFY_FORMS_BY_SWITCH[(mtp_sampled, mtp_device_accept)]
 
 
-# The MTP chain's DRAM growth per bank beyond the resident build, by the part the open measures it in.  `components`
-# is the MTP layer's weights: its 49th BF4 pair (interleaved over the banks) and its non-expert weights beyond the pair
-# (k-independent).  `states` is the layer's QSA state at the allocated context, then the verify / draft / split states,
-# the step inputs and the chunk extension, sized by the verify MoE form ``moe_rows_for(k + 1)`` (5 rows for k = 3 and
-# 4, 6 rows for k = 5).  `traces` is the captured MTP traces, sized by the number of verify forms captured: one (the
-# fused verify or the split head + tail, with the draft and the commit: three or four traces), each further form adding
-# its verify trace and its draft trace (two forms: six traces; up to three: the fused greedy verify, a fused sampled
-# verify and the split head + tail).  Measured on the 4x p150
-# line (ring 8, allocated context 32,768) 2026-09-25: k = 4 with both verify forms {'components': 50468032, 'states':
-# 12938112, 'traces': 11107904}; k = 5 with the split verify alone {'components': 50468032, 'states': 20920192,
-# 'traces': 6390144}; the ring-8 pair per bank is 44,236,800 and the QSA state per bank 4,462,592 at 32,768.  The
-# admission's estimate (its required side) is the exact pair and QSA state plus these measured remainders, each with
-# the margin (the 24 MiB flat bound before it admitted k = 4 with one form only: 73,865,216 against the 74,514,048
-# and 77,778,368 measured); the open checks the measured growth against the estimate.  Its free side decides on the
-# live allocator (mtp_capacity_admission with ``live``: the mesh's DRAM view read after the resident weights are
-# built, the chain's open), from which the resident build's own remaining allocations are taken: the context state
-# (Qwen38ResidentContext.context_state_bytes_per_device) and RESIDENT_POST_BUILD_BYTES_PER_BANK_UPPER_BOUND, the
-# context-independent rest (the GDN states, the decode and chunk traces, the sampling chain: 47.5 MB per bank at
-# 32,768 and 49.9 MB at 262,144, measured 2026-09-25 on the compact expert layout with bf8 dense weights).  Without a
-# device (the no-device tests) the table RESIDENT_FREE_BYTES_PER_BANK_AFTER_CAPTURES stands in: the free bytes per
-# bank a resident build left after its captures without MTP, measured 2026-09-04 (head 4149197252, 8 banks of
-# 4,272,341,376 bytes; free and largest contiguous) on the layout of that date -- today's build leaves about 1.24 GB
-# more per bank, so the table refuses 262,144 where the live read admits it.  A resident BF4 payload is interleaved
-# over the banks one 576-byte tile page at a time, and the resident loader needs 128 MB contiguous per bank.
-# components 50,468,032 - the pair 44,236,800; states 12,938,112 (5 rows) - the QSA state 4,462,592; traces 6,390,144
-# with one verify form and 11,107,904 with two, so 4,717,760 per further form (its verify trace and its draft trace;
-# the third form's figure is that line continued, not a measurement).
+# MTP chain DRAM growth per bank beyond the resident build, by the part the open measures: components (the MTP
+# layer's weights beyond its BF4 pair), states (beyond its QSA state, by verify MoE rows) and traces (one verify form,
+# plus a verify and a draft trace per further form). From device measurements; the admission adds the margin and the
+# open checks the measured growth against the estimate.
 MTP_COMPONENTS_BEYOND_PAIR_BYTES_PER_BANK = 6_231_232
 MTP_STATES_BEYOND_QSA_STATE_BYTES_PER_BANK_BY_MOE_ROWS = {
     5: 8_475_520,
-    # the 6-row verify MoE form: the 5-row term plus the measured growth of a 6-row open over a 5-row one at k = 5
-    # (+744,064 B per bank after the captures; +252,928 at k = 4, measured 2026-09-26 on the 4x p150 line at 32,768)
+    # the 5-row term plus a 6-row open's measured growth over a 5-row one
     6: 8_475_520 + 744_064,
 }
 MTP_TRACES_BYTES_PER_BANK_ONE_VERIFY_FORM = 6_390_144
@@ -237,19 +150,12 @@ MTP_TRACES_BYTES_PER_BANK_PER_ADDITIONAL_VERIFY_FORM = 4_717_760
 MTP_VERIFY_FORMS_MAX = 3
 MTP_GROWTH_ESTIMATE_MARGIN_PERCENT = 10
 RESIDENT_POST_BUILD_BYTES_PER_BANK_UPPER_BOUND = 64 << 20
-# A --long-chunks build's 128-row chunk state and trace beyond the build the table and the post-build bound describe
-# (measured 2026-09-25 on the QuietBox at 32,768 with the compact expert layout: 1,603,483,392 bytes free per bank
-# without, 1,569,890,816 with --long-chunks): taken off the free side when the admission is for a --long-chunks chain
-# (the table's build had none; the live after-build read precedes their allocation).  And the MTP layer's own 128-row
-# chunk extension (its QSA chunk state, its rows-128 MoE instance without a combine buffer of its own, a [1,1,4,32]
-# token row) beyond the states remainder, a remainder of the states term with the same margin, measured 2026-09-26 on
-# the 4-chip p150 line at 32,768 with k = 4 and two verify forms as the states term of the --mtp --long-chunks chain's
-# DRAM growth record less the plain --mtp chain's (15,339,392 - 15,313,792 bytes per bank; components and traces
-# identical, 50,468,032 and 7,118,400 in both records).
+# A --long-chunks build's 128-row chunk state and trace (off the free side) and the MTP layer's own 128-row chunk
+# extension (added to the states remainder); from device measurements.
 LONG_CHUNKS_BYTES_PER_BANK_AFTER_CAPTURES = 1_603_483_392 - 1_569_890_816
 MTP_LONG_CHUNK_EXTENSION_BYTES_PER_BANK = 15_339_392 - 15_313_792
-# The 128-row twin's slab form (2026-09-26): per 128-row slice one FP32 TILE token tile ``[1,1,4,32]`` (one 32 x 32 tile
-# page of 4,096 bytes) and, after the first slice, one UINT32 ``[1,1,1,1]`` position offset (one 32-byte DRAM page).
+# Slab form of the 128-row twin: per 128-row slice one FP32 token tile page ``[1,1,4,32]`` and, after the first
+# slice, one 32-byte UINT32 position-offset page.
 MTP_SLAB_TOKEN_TILE_BYTES = 32 * 32 * 4
 MTP_SLAB_OFFSET_PAGE_BYTES = 32
 
@@ -265,33 +171,22 @@ def mtp_slab_form_bytes_per_bank(slab_rows: int) -> int:
 
 RESIDENT_DRAM_BANKS = 8
 RESIDENT_MIN_CONTIGUOUS_BYTES_PER_BANK = 128 << 20
+# (free, largest contiguous) bytes per bank after a non-MTP build's captures; the no-device stand-in for the live read.
 RESIDENT_FREE_BYTES_PER_BANK_AFTER_CAPTURES = {
     32768: (478_238_784, 477_584_640),
     65536: (423_336_000, 422_681_856),
     131072: (313_694_272, 313_040_128),
     262144: (94_378_048, 93_723_904),
 }
-# The verify-rows fold (``gdn_rows_scan``, the default; ``QWEN38_FUSED_OFF`` restores the wrap) keeps every GDN layer's k + 1
-# prefix states in DRAM for the pass: ``[k + 1, 12, 128, 128]`` fp32 per layer = (k + 1) x 786,432 bytes per layer per
-# device (3,932,160 at k = 4; 141,557,760 over the 36 GDN layers), interleaved one 4 KiB tile page at a time over the
-# banks, so the states term grows by GDN layers x ceil((k + 1) x 192 pages / banks) x 4,096 bytes per bank (17,694,720 at
-# k = 4).  Measured on the 4x p150 line 2026-09-26 (k = 4, two verify forms, 32,768, head e31a751e483, run
-# q38-chat-server-p150-line-20260926T130417Z-3556384): {'components': 50468032, 'states': 31093824, 'traces': 5832256}
-# = 87,394,112 bytes per bank, refused by the estimate without this term (77,095,515, of which states 13,785,664:
-# +17,308,160 measured over the estimate; the 2026-09-25 record without the fold measured states 12,938,112, so the
-# growth beyond the prefix states themselves is 461,000 bytes per bank, inside the margin).  The traces fell 11,107,904
-# -> 5,832,256 (one program per GDN layer where the wrap runs six, one pick where the commit re-ran the two prims); the
-# estimate keeps the wrap's traces figure as an over-estimate.  The fold attaches only where its admission holds (rows
-# k + 1 <= gdn_rows_scan.MAX_ROWS), so beyond that the term is zero.
+# The verify-rows fold (gdn_rows_scan) keeps every GDN layer's k + 1 fp32 prefix states ``[k + 1, 12, 128, 128]`` in
+# DRAM for the pass, interleaved one 4 KiB tile page at a time over the banks.
 GDN_LAYERS = LAYER_PATTERN.count("linear_attention")
 GDN_STATE_TILE_PAGES = gdn_rows_scan_module.HEADS * (gdn_rows_scan_module.HEAD_DIM // gdn_rows_scan_module.TILE) ** 2
 GDN_STATE_PAGE_BYTES = gdn_rows_scan_module.TILE * gdn_rows_scan_module.TILE * 4  # one fp32 tile
 
 
 def fold_prefix_states_bytes_per_bank(drafts: int, banks: int = RESIDENT_DRAM_BANKS) -> int:
-    """The verify-rows fold's prefix states per bank at ``drafts`` drafts: every GDN layer's ``[drafts + 1, 12, 128, 128]``
-    fp32 tensor, its 4 KiB tile pages spread over the ``banks``; 0 where the fold does not attach (rows past its
-    admission, :data:`ttnn.fused.gdn_rows_scan.MAX_ROWS`)."""
+    """The verify-rows fold's prefix states per bank at ``drafts`` drafts; 0 where the fold does not attach."""
 
     rows = drafts + 1
     if rows > gdn_rows_scan_module.MAX_ROWS:
@@ -300,9 +195,8 @@ def fold_prefix_states_bytes_per_bank(drafts: int, banks: int = RESIDENT_DRAM_BA
 
 
 def resident_post_build_bytes_per_bank(allocated_context: int) -> int:
-    """What the resident build allocates per bank after its weights, before the MTP chain can be measured: the
-    context-scaled state (the QSA caches and the RoPE tables) and the context-independent rest under
-    :data:`RESIDENT_POST_BUILD_BYTES_PER_BANK_UPPER_BOUND`."""
+    """Resident build allocations per bank after its weights: the context-scaled state plus the context-independent
+    upper bound."""
 
     context_state = Qwen38ResidentContext(allocated_context).context_state_bytes_per_device
     return -(-context_state // RESIDENT_DRAM_BANKS) + RESIDENT_POST_BUILD_BYTES_PER_BANK_UPPER_BOUND
@@ -322,41 +216,14 @@ def mtp_capacity_admission(
     vision_resident_bytes_per_bank: int = 0,
     vision_peak_activation_bytes_per_bank: int = 0,
 ) -> dict[str, Any]:
-    """Whether the MTP chain fits beside the resident build at ``allocated_context`` with ``drafts`` drafts per pass
-    and ``verify_forms`` captured verify forms (1..:data:`MTP_VERIFY_FORMS_MAX`).  The required side is the estimate
-    of the growth the open measures per bank: the components with the 49th BF4 pair (its two payloads interleaved
-    over the banks and needing their contiguous room), the states of the verify MoE form ``moe_rows_for(drafts + 1)``
-    with the MTP layer's QSA state at that context, the traces of one form plus one verify and one draft trace per
-    further form, :data:`MTP_GROWTH_ESTIMATE_MARGIN_PERCENT` over every remainder.  The free side is the free bytes
-    per bank the build leaves after its captures, live or from the table.
-    ``drafts`` is one of ``mtp_v2.SUPPORTED_DRAFTS``, which a server may open with :data:`MTP_DRAFTS`.
+    """Whether the MTP chain fits beside the resident build at ``allocated_context``; ``fits`` decides.
 
-    ``live`` is the mesh allocator's DRAM view (``free_bytes_per_bank``, ``largest_contiguous_bytes_free_per_bank``:
-    the record ``hardware_profiles.symmetric_mesh_dram_memory`` returns) read at ``live_point``: ``after_build``
-    (the chain's open, once the resident weights are built and before the MTP layer's) takes the resident build's
-    remaining allocations (:func:`resident_post_build_bytes_per_bank`) off both readings; ``after_captures`` reads
-    them as they are.  Without ``live`` the 2026-09-04 table :data:`RESIDENT_FREE_BYTES_PER_BANK_AFTER_CAPTURES`
-    stands in (no device: the no-device tests).  Every byte count is in the record, the estimate by part beside the
-    measured remainders it adds and ``decided_by`` naming the free side read and the required side's parts, with
-    the shortfalls of a refusal; ``fits`` decides.
-
-    ``long_chunks`` (an ``--mtp --long-chunks`` chain) takes the 128-row chunk state and trace
-    (:data:`LONG_CHUNKS_BYTES_PER_BANK_AFTER_CAPTURES`) off the free side where they are not yet in the reading (the
-    table, the live ``after_build`` read) and adds the MTP layer's 128-row extension
-    (:data:`MTP_LONG_CHUNK_EXTENSION_BYTES_PER_BANK`) to the states remainder.
-
-    ``gdn_rows_scan`` (the verify-rows fold serving: the registry's default less ``QWEN38_FUSED_OFF``) adds the fold's
-    persistent prefix states to the states remainder, derived from ``drafts`` and the GDN layer count
-    (:func:`fold_prefix_states_bytes_per_bank`),
-    with the same margin; the traces remainder stays the wrap's (an over-estimate under the fold).
-
-    ``vision_resident_bytes_per_bank`` (a server with the vision tower resident: the tower's BF16 weights, replicated
-    per die, loaded in the chain's warm hook after the resident build and before any capture; the tower's
-    ``resident_bytes_per_bank()``, 125.2 MB measured on the line at 2026-09-29) comes off the free side where the
-    reading predates the load (the table, the live ``after_build`` read), not off an ``after_captures`` read that
-    holds it.  ``vision_peak_activation_bytes_per_bank`` (the tower's transient DRAM per bank for the largest image
-    the server admits, ``peak_activation_bytes_per_bank(patches)``) is a required-side part with the growth margin:
-    an image request allocates it after every resident allocation, so it must stay free beside the MTP chain."""
+    The required side estimates the per-bank growth the open measures, with the margin over every measured remainder;
+    the free side is the build's free bytes per bank after its captures. ``live`` is the mesh allocator's DRAM view
+    read at ``live_point``: ``after_build`` takes the build's remaining allocations, the 128-row chunk state and the
+    vision tower off it, ``after_captures`` reads it as is. Without ``live`` the measured table stands in.
+    ``vision_peak_activation_bytes_per_bank`` is a required-side part: an image request allocates it after every
+    resident allocation."""
 
     if isinstance(drafts, bool) or type(drafts) is not int or drafts not in mtp_v2.SUPPORTED_DRAFTS:
         raise ValueError(f"MTP drafts must be one of {mtp_v2.SUPPORTED_DRAFTS}, got {drafts!r}")
@@ -384,14 +251,13 @@ def mtp_capacity_admission(
     # The tower loads in the warm hook: after the build's read, before the captures (so in an after-captures read).
     pre_capture_bytes = long_chunks_bytes + vision_resident_bytes_per_bank
     if live is None:
-        # A context below the smallest measured one (8,192: the batched lanes' small context) is admitted against the
-        # smallest measured context's readings: its resident build leaves more room, so the admission is conservative.
+        # A context below the smallest measured one uses that one's readings: conservative, a smaller build leaves more.
         measured_at = [c for c in sorted(RESIDENT_FREE_BYTES_PER_BANK_AFTER_CAPTURES) if c >= context]
         if not measured_at:
             raise ValueError(f"no free-bytes-after-captures measurement at or above {context} tokens")
         free, largest = RESIDENT_FREE_BYTES_PER_BANK_AFTER_CAPTURES[measured_at[0]]
-        # The table's build had no 128-row chunk state or trace (nor a tower): they come off its free bytes and, as
-        # an upper bound on what they take from the largest contiguous block, off that block too.
+        # The table's build had no 128-row chunk state or tower: off its free bytes and, as an upper bound, off the
+        # largest contiguous block.
         free, largest = free - pre_capture_bytes, max(largest - pre_capture_bytes, 0)
         source: dict[str, Any] = {
             "free_bytes_source": "table_2026-09-04",
@@ -407,8 +273,7 @@ def mtp_capacity_admission(
         live_largest = int(live["largest_contiguous_bytes_free_per_bank"])
         if live_free < 0 or live_largest < 0 or live_largest > live_free:
             raise ValueError(f"inconsistent live DRAM view: free {live_free}, largest contiguous {live_largest}")
-        # After the build the 128-row chunk state and trace are still to come (they are allocated with the chunk
-        # states and captured after the chunk trace): with the resident's own remaining allocations, off both readings.
+        # After the build, the resident's remaining allocations and the 128-row chunk state are still to come.
         remaining = (
             resident_post_build_bytes_per_bank(context) + pre_capture_bytes if live_point == "after_build" else 0
         )
@@ -424,9 +289,6 @@ def mtp_capacity_admission(
     w01_per_bank = -(-(w01_bytes // BF4_TILE_BYTES) // RESIDENT_DRAM_BANKS) * BF4_TILE_BYTES
     w2_per_bank = -(-(w2_bytes // BF4_TILE_BYTES) // RESIDENT_DRAM_BANKS) * BF4_TILE_BYTES
     qsa_state = -(-Qwen38ResidentContext(allocated_context).qsa_generic_state_bytes // RESIDENT_DRAM_BANKS)
-    # ``slab_rows`` (a ``--prefill-slab`` chain under ``--mtp``): the 128-row twin's slab form adds one 128-lane FP32
-    # token tile (one 32x32 tile page) per 128-row slice and one UINT32 position-offset page per slice after the first,
-    # charged whole to one bank (an upper bound: the pages are interleaved over the banks).
     slab_form = mtp_slab_form_bytes_per_bank(slab_rows) if slab_rows is not None else 0
     extension = (MTP_LONG_CHUNK_EXTENSION_BYTES_PER_BANK if long_chunks else 0) + slab_form
     prefix_states = fold_prefix_states_bytes_per_bank(drafts) if gdn_rows_scan else 0
@@ -491,8 +353,7 @@ def mtp_capacity_admission(
         "required_free_bytes_per_bank": required,
         "required_largest_contiguous_bytes_per_bank": contiguous,
         "headroom_bytes_per_bank": free - required,
-        # which side decided: the free side as read (live after build / after captures, or the table) against the
-        # required side's estimate by part for this k and these forms; the shortfalls name a refusal's reason(s)
+        # the free side as read against the required side's estimate; the shortfalls name a refusal's reasons
         "decided_by": {
             "free_side": source["free_bytes_source"],
             "required_side": f"estimate k={drafts} moe_rows={moe_rows} verify_forms={verify_forms}"
@@ -504,26 +365,18 @@ def mtp_capacity_admission(
     }
 
 
-# The lanes' DRAM per bank (``--lanes B``), MODELED from the lane families' shapes (ttnn/lanes.py ``_lane_shapes``, the
-# MTP-lane extras of ttnn/mtp_lanes.py) with the slope correction of the one measurement past B = 1 (the stage-1
-# B = 1 / 2 / 4 lane verify states at 32,768: 71.0 MB per bank per lane against the model's 66.0, +7 %) and the growth
-# margin on every modeled term; the required side of ``lanes_capacity_admission``.  MEASURED reference (a 4x p150 hold,
-# head 1ce94766f7b1, 2026-09-28): the 4 x 4 lane verify state at 32,768 is 297.3 MB per bank
-# (LANES_MEASURED_VERIFY_STATE_BYTES_PER_BANK_4X4_32K), the model's estimate with its margins 27 % above it.
+# The lanes' DRAM per bank (``--lanes B``), modeled from the lane families' shapes (ttnn/lanes.py, ttnn/mtp_lanes.py)
+# with a measured per-lane slope correction and the growth margin on every term; the required side of
+# ``lanes_capacity_admission``.
 LANES_IMAGE_BYTES_PER_DEVICE_SLOPE = 13_056  # per context row: the 12 KV slabs and the 12 compressed caches
 LANES_IMAGE_BYTES_PER_DEVICE_FIXED = 29_684_736  # the recurrent states, ring slots, stagings, rings, PLE slots
 LANES_FIXED_BYTES_PER_DEVICE = 60_424_192  # the KV import scratch (13 layers x 4,096 rows) and the GDN lane rows qkv
 LANES_MOE_ROWS_SLOPE_BYTES_PER_BANK = 295_632  # the states remainder per verify MoE row (the 5- and 32-row terms' line)
-LANES_PER_LANE_SLOPE_CORRECTION_PERCENT = 7  # the measured per-lane increment over the modeled one at 32,768
-LANES_TRACES_BYTES_PER_BANK = (51_000_000 + 47_000_000) // 8 + 7_400_000  # the three lane traces, measured 2026-09-20
+LANES_PER_LANE_SLOPE_CORRECTION_PERCENT = 7  # the measured per-lane increment over the modeled one
+LANES_TRACES_BYTES_PER_BANK = (51_000_000 + 47_000_000) // 8 + 7_400_000  # the three lane traces; an upper bound
 LANE_KV_STAGINGS = 2  # ttnn/lanes.py KV_STAGINGS: the pagers' whole-lane KV slab pair
-# MEASURED per bank on a 4x p150 hold at head 1ce94766f7b1, 2026-09-28 (the allocator's view, 4 x 4 lanes, k = 4, the
-# B = 1 chain kept beside them): the lane verify state 297,300,000 at 32,768 and 993,686,336 at 131,072 (a per-lane
-# slope of 1,771 B per bank per context row, the model's 1,768), the two pagers 85.0 MB per bank at 131,072 (the
-# model's 84.5), the three lane traces 7.3 MB per bank (the 2026-09-20 figure above is the upper bound the estimate
-# keeps).  The lanes' net cost at 131,072 was 917,362,880 B per bank with 456,988,928 free after the captures
-# (largest contiguous 373,234,752); a served process carries about 100,444,352 B per bank more than the tool's chain
-# (the long-chunks state and trace, the slab buffers, the sampled state), leaving about 356 MB per bank at 4 x 128k.
+# Per-bank device measurements of a 4 x 4 lane chain (k = 4) the model is checked against; the served extras are what a
+# served process carries beyond the timing tool's chain.
 LANES_MEASURED_VERIFY_STATE_BYTES_PER_BANK_4X4_32K = 297_300_000
 LANES_MEASURED_VERIFY_STATE_BYTES_PER_BANK_4X4_128K = 993_686_336
 LANES_MEASURED_PAGERS_BYTES_PER_BANK_128K = 85_000_000
@@ -577,9 +430,7 @@ def lanes_pager_bytes_per_device(allocated_context: int) -> int:
 
 
 def lanes_fold_prefix_states_bytes_per_bank(total_rows: int, banks: int = RESIDENT_DRAM_BANKS) -> int:
-    """The verify-rows fold's prefix states for a lane tile of ``total_rows`` real rows (B x R): ``[total_rows, 12, 128,
-    128]`` fp32 per GDN layer, interleaved one 4 KiB tile page at a time over the banks (the B = 1 form's rule,
-    :func:`fold_prefix_states_bytes_per_bank`, at the lanes' row count); 70,778,880 B per bank at 20 rows."""
+    """The verify-rows fold's prefix states per bank for a lane tile of ``total_rows`` (B x R) rows."""
 
     pages = int(total_rows) * GDN_STATE_TILE_PAGES
     return GDN_LAYERS * -(-pages // banks) * GDN_STATE_PAGE_BYTES
@@ -594,19 +445,11 @@ def lanes_capacity_admission(
     reserved_bytes_per_bank: int = 0,
     gdn_rows_scan: bool = False,
 ) -> dict[str, Any]:
-    """Whether ``lanes`` MTP lanes at ``drafts`` drafts fit beside the resident build and its single-lane MTP chain
-    at ``allocated_context``: the one-tile rule (``B x (k + 1) <= 32``), then the DRAM per bank.
+    """Whether ``lanes`` MTP lanes at ``drafts`` drafts fit beside the resident build and its single-lane MTP chain.
 
-    The required side is MODELED: the lane states (``lanes`` x (the lane image + the MTP-lane extra) x the slope
-    correction + the fixed part) over the banks, the verify MoE instances at ``B x R`` rows (the states remainder's
-    line), the two pagers, and the three lane traces (measured 2026-09-20), each with the growth margin; the free side
-    is the live allocator's reading (``free_bytes_per_bank``, ``largest_contiguous_bytes_free_per_bank``) less
-    ``reserved_bytes_per_bank`` (what the chain still allocates after the reading: its traces), or the 2026-09-04 table
-    without a device.  ``gdn_rows_scan`` (the verify-rows fold serving the lanes) adds the fold's prefix states at the
-    lanes' row count (:func:`lanes_fold_prefix_states_bytes_per_bank`) to the states remainder.  The largest single
-    lane tensor, the flat KV ``[1, 1, B x C + scratch, 512]`` of one QSA layer,
-    must fit the largest contiguous block.  The open measures the growth (states, traces) and refuses READY when it
-    exceeds the required side: the estimate's margins are what the measurement is judged against."""
+    The one-tile rule (``B x (k + 1) <= 32``) first, then DRAM per bank: the modeled required side against the live
+    reading less ``reserved_bytes_per_bank`` (or the table without a device); one QSA layer's flat lane KV must fit
+    the largest contiguous block. The open refuses READY when its measured growth exceeds the required side."""
 
     if isinstance(lanes, bool) or type(lanes) is not int or not 2 <= lanes <= 8:
         raise ValueError(f"lanes must be an int in [2, 8], got {lanes!r}")
@@ -731,13 +574,8 @@ class Qwen38ChatRequestError(ValueError):
 
 
 def mtp_tail_epilogue(model, lm_head, chain_mtp, output, token_row_io, sampling=None):
-    """The MTP chain's TAIL epilogue, one function for the warm pass (eager) and the TAIL capture (recorded), so the
-    capture asks only for programs the warm compiled: the greedy candidates (with a sampling chain, the form its
-    extension uses: the folded candidate row when ``candidate_row`` is on), the device resolve into a fresh row (the
-    MTP row reads it before the copy), the MTP layer's row on the retained residual / RoPE rows / QSA position inputs,
-    the copy into the persistent token row, and with a sampling chain its candidate row from those candidates (the
-    2026-09-25 miss: the row built without them took the chain's form, whose typecasts no warm had compiled).
-    Returns ``(candidates, token_row, row)`` (``row`` None without a sampling chain); the caller checks or releases."""
+    """The MTP chain's TAIL epilogue, shared by the warm pass and the TAIL capture so the capture only uses programs
+    the warm compiled. Returns ``(candidates, token_row, row)``; ``row`` is None without a sampling chain."""
 
     if output.logits is None or output.residual is None:
         raise Qwen38ChatChainError("the MTP tail epilogue needs the step's logits and its retained MTP inputs")
@@ -779,9 +617,7 @@ class Qwen38ChatCompletion:
     decode_seconds: float
     tokens_per_second: float | None
     position: int
-    # The prefill path this request took ("chunked" or "teacher_forced") and its shape: teacher-forced steps
-    # (alignment steps plus the last prompt token, or every token), chunk replays, real rows of the padded tail,
-    # the eager hand-off time and the wall per prompt token.
+    # The prefill path this request took ("chunked" or "teacher_forced") and its shape.
     prefill_mode: str = "teacher_forced"
     prefill_forced_tokens: int = 0
     prefill_chunks: int = 0  # the 32-row chunk replays (full and the padded tail)
@@ -789,21 +625,15 @@ class Qwen38ChatCompletion:
     prefill_slabs: int = 0  # the slab replays ahead of those (--prefill-slab)
     prefill_tail_rows: int = 0
     prefill_handoff_ms: float = 0.0
-    # The slabs' host work, summed over the request's slabs: the input preparation (the n-gram lookup and the row
-    # packing), the input copies' enqueue, the wait at the slab event syncs.
+    # The slabs' host work summed over the request's slabs: input preparation, input copy enqueue, event waits.
     prefill_slab_prepare_ms: float = 0.0
     prefill_slab_upload_ms: float = 0.0
     prefill_slab_wait_ms: float = 0.0
-    # MTP drafting when the request generated through the pass loop: {k, anchor, sampled, passes, accepted_drafts,
-    # tokens_per_pass} and, on the split verify, accept_checks and the sampled_* counters, every field the counts this
-    # request added (the chain's cumulative counters are /health.mtp); None for the 1-row loops.
+    # This request's MTP pass-loop counters (the chain's cumulative ones are /health.mtp); None for the 1-row loops.
     mtp: dict[str, Any] | None = None
     # The prompt-end snapshot was restored: prefix_reused is the snapshot's length, the rest of the prompt the tail.
     restored: bool = False
-    # The schedule of the snapshot this request restored (SNAPSHOT_SCHEDULES; None when it did not restore one): a
-    # restored row is classified against a fresh prefill of the same prompt without its history -- "chunked" = the
-    # fresh state bitwise, "forced-tail" = the fresh state to rounding.  ``snapshot_captured`` is the schedule of the
-    # snapshot this request left for the next one (None when its prefill did not reach the last prompt token).
+    # Schedules (SNAPSHOT_SCHEDULES) of the snapshot this request restored and of the one it left; None when absent.
     snapshot_schedule: str | None = None
     snapshot_captured: str | None = None
 
@@ -837,23 +667,17 @@ class Qwen38ChatCompletion:
         }
 
 
-# The schedule that produced a snapshot's state (``Qwen38PromptSnapshot.schedule``, the ledger's
-# ``qwen38.snapshot_schedule``): ``chunked`` = every position came from a prefill of exactly these ids from position 0
-# (the chunk driver, or its own teacher-forced form for a prompt below CHUNK_PREFILL_MIN_ROWS), the schedule a fresh
-# prefill of the ids takes, so an exact repeat restores the fresh state bitwise; ``forced-tail`` = a restored or
-# extended request captured it: positions a fresh prefill would compute inside the chunk driver came from 1-row steps
-# (a teacher-forced tail, a decoded reply) or from the tail's own alignment steps and chunk boundaries, so the state
-# agrees with a fresh prefill's to rounding only (docs/NUMERICS.md).  A restore whose tail is the last prompt token
-# alone recaptures the restored state and inherits its value.
+# The schedule that produced a snapshot's state: ``chunked`` = a fresh prefill of exactly these ids from position 0,
+# so an exact repeat restores the fresh state bitwise; ``forced-tail`` = a restored or extended request captured it,
+# so the state matches a fresh prefill's to rounding only. A restore whose tail is the last prompt token alone
+# recaptures the restored state and inherits its schedule.
 SNAPSHOT_SCHEDULES = ("chunked", "forced-tail")
 
 
 @dataclass(frozen=True)
 class Qwen38PromptSnapshot:
-    """The host record of the chain's prompt-end snapshot: the ids consumed when it was taken (the prompt without
-    its last token), the n-gram context after them, the schedule that produced the state (SNAPSHOT_SCHEDULES) and
-    the images' pad spans with their digests (``vision_splice.Qwen38VisionPrompt.spans``; empty for a text prompt):
-    the ids alone do not identify an image prompt's pixels."""
+    """Host record of the chain's prompt-end snapshot. ``vision`` holds the image pad spans with their digests: the
+    ids alone do not identify an image prompt's pixels."""
 
     ids: tuple[int, ...]
     ple_context: tuple[int, int] | None
@@ -864,10 +688,8 @@ class Qwen38PromptSnapshot:
 def vision_spans_compatible(
     committed: Sequence[tuple[int, int, str]], wanted: Sequence[tuple[int, int, str]], common: int
 ) -> bool:
-    """Whether a committed prefix of ``common`` ids whose images are ``committed`` (spans with digests) may serve a
-    prompt whose images are ``wanted``: every image span that starts below ``common`` must be the same span with the
-    same digest on both sides (two images of one grid render the same pad ids; a span the prefix cuts through is not
-    reused)."""
+    """Whether a committed prefix of ``common`` ids may serve a prompt with images ``wanted``: every image span below
+    ``common`` must match in span and digest (images of one grid render the same pad ids) and lie wholly inside it."""
 
     below = lambda spans: {span for span in spans if span[0] < common}  # noqa: E731
     return below(committed) == below(wanted) and all(stop <= common for _, stop, _ in below(wanted))
@@ -875,10 +697,8 @@ def vision_spans_compatible(
 
 @dataclass(frozen=True)
 class Qwen38TeacherForcedRows:
-    """:meth:`Qwen38ChatSession.teacher_force`'s result: per wanted position p the resolved argmax and the candidate
-    row of the TAIL that consumed tokens 0..p, and the path the replay took.  ``full_logits`` holds, when asked, that
-    TAIL's full-vocabulary logits per wanted position (the LM head's bf16 row gathered eagerly, fp32 on the host) and
-    ``full_logits_seconds`` the time those gathers and readbacks took."""
+    """:meth:`Qwen38ChatSession.teacher_force`'s result: per wanted position p the argmax and candidate row of the
+    TAIL that consumed tokens 0..p; ``full_logits`` holds that TAIL's full-vocabulary logits when asked."""
 
     rows: dict[int, tuple[int, Any]]
     prefill_mode: str
@@ -891,9 +711,8 @@ class Qwen38TeacherForcedRows:
 
 @dataclass
 class Qwen38MTPPassRun:
-    """The pass loop's last pass until :meth:`Qwen38ChatSession._mtp_settle` commits it: the position it started at,
-    the rows it fed (``[t_P, d_1 .. d_a]``), the tokens it emitted (``[d_1 .. d_a, t']``) and how many of them the
-    request took."""
+    """The pass loop's last pass until :meth:`Qwen38ChatSession._mtp_settle` commits it: rows fed
+    ``[t_P, d_1 .. d_a]``, tokens emitted ``[d_1 .. d_a, t']`` and how many the request took."""
 
     position: int
     rows: list[int]
@@ -905,9 +724,8 @@ class Qwen38MTPPassRun:
 class Qwen38ChatSession:
     """One conversation owner: the committed input sequence, the PLE n-gram context, the traced chain.
 
-    ``template`` is the pinned ``Qwen38OfficialChatTemplate`` (``render`` and
-    ``tokenizer.decode`` are all it uses).  ``chain`` offers the per-step
-    primitives of ``Qwen38TracedChain``.
+    ``template`` is the pinned ``Qwen38OfficialChatTemplate``; ``chain`` offers ``Qwen38TracedChain``'s per-step
+    primitives.
     """
 
     def __init__(
@@ -920,8 +738,7 @@ class Qwen38ChatSession:
         prefill_mode: str = DEFAULT_PREFILL_MODE,
         allocated_context: int | None = None,
     ) -> None:
-        # The chain's allocated context (a scripted test chain without one is the default build's; a renderer
-        # without a chain names it); the limit defaults to that context less the headroom.
+        # The limit defaults to the chain's allocated context less the headroom.
         if allocated_context is None:
             allocated_context = getattr(chain, "allocated_context", RESIDENT_MAX_QSA_CACHE_CAPACITY)
         if context_limit is None:
@@ -940,7 +757,7 @@ class Qwen38ChatSession:
         self.prefill_mode = prefill_mode if self.chunk_trace_available else "teacher_forced"
         self.sampling = getattr(chain, "sampling", None)  # the candidate-row extension, or None: greedy only
         self.mtp = getattr(chain, "mtp", None)  # the MTP drafting extension (verify / draft / commit traces), or None
-        # A chain without the snapshot primitives (an older scripted chain) resets where a restore would apply.
+        # A chain without the snapshot primitives resets where a restore would apply.
         self.snapshot_available = callable(getattr(chain, "capture_prompt_snapshot", None))
         self.snapshot: Qwen38PromptSnapshot | None = None
         self.committed: list[int] = []
@@ -948,13 +765,10 @@ class Qwen38ChatSession:
         self.last_finish: str | None = None
         self.row_unconsumed = False  # the next token sits in the row (after length, disconnected, a hook stop)
         self.row_token: int | None = None  # a length finish's last token: read, delivered to the client, not committed
-        # The committed prompt's images: their pad spans with digests (empty for a text prompt); the reuse key
-        # beside the ids (``vision_spans_compatible``).
+        # The committed prompt's image pad spans with digests: the reuse key beside the ids.
         self.committed_vision: tuple[tuple[int, int, str], ...] = ()
         self.requests_served = 0
-        # The device acceptance's diagnostics (QWEN38_MTP_DEVICE_ACCEPT_DUMP, dev): with a dump directory every
-        # device-decided pass records the rows it decided on and complete() writes one JSON per request for
-        # the acceptance's gate tool (dev), which re-derives every pass on the host.
+        # QWEN38_MTP_DEVICE_ACCEPT_DUMP: complete() writes the device-decided passes' rows, one JSON per request.
         self.device_accept_dump: Path | None = None
         self.device_accept_records: list[dict[str, Any]] = []
         self.last_tokens_per_second: float | None = None
@@ -971,9 +785,7 @@ class Qwen38ChatSession:
         reasoning_effort: str = REASONING_EFFORT,
         tools: Sequence[Mapping[str, Any]] = (),
     ) -> list[int]:
-        """Prompt token ids of exactly ``messages`` (and the client's ``tools``) under the acceptance study's flags;
-        no system turn is added when the client sends none.  The protocol module renders: bitwise the reference
-        template."""
+        """Prompt token ids of exactly ``messages`` and ``tools``; the session adds no system turn."""
 
         if isinstance(messages, (str, bytes)) or not isinstance(messages, Sequence) or not messages:
             raise Qwen38ChatRequestError("messages must be a nonempty list")
@@ -995,9 +807,8 @@ class Qwen38ChatSession:
             raise Qwen38ChatRequestError(str(error)) from error
 
     def require_budget(self, prompt_tokens: int, max_tokens: int | None) -> int:
-        """The request's completion budget, refused before touching the device when the prompt and the budget do
-        not fit the context limit (which already holds the consumed EOS step).  ``None`` (the client sent no
-        max_tokens) is the remaining context, ``context_limit - prompt_tokens``."""
+        """The request's completion budget, refused before touching the device when it does not fit the context
+        limit; ``None`` means the remaining context."""
 
         remaining = self.context_limit - prompt_tokens
         if max_tokens is None:
@@ -1022,10 +833,10 @@ class Qwen38ChatSession:
     # -- the steps ---------------------------------------------------------------------------
 
     def _forced_step(self, token_id: int, next_token_id: int | None = None) -> None:
-        """A' write x_t into the token row (behind TAIL(t-1)), C HEAD(t), F PLE row for x_t, G TAIL(t).
+        """Write x_t into the token row (behind TAIL(t-1)), HEAD(t), the PLE row for x_t, TAIL(t).
 
-        On an MTP chain the TAIL also runs the MTP layer's row at t, which consumes the token at t + 1:
-        ``next_token_id`` when the host knows it (the next prompt token), else the step's own resolved argmax.
+        On an MTP chain the TAIL's MTP row consumes the token at t + 1: ``next_token_id`` when the host knows it,
+        else the step's own resolved argmax.
         """
 
         residue = len(self.committed) % RESIDUE_CLASSES
@@ -1084,13 +895,11 @@ class Qwen38ChatSession:
         between_chunks: Callable[[int, int], None] | None = None,
         event_rows: int | None = None,
     ) -> Qwen38PrefillResult:
-        """The chunk driver over ``token_ids`` from the committed position; its alignment steps are this session's
-        forced steps (with the prefill event cadence).  Runs outside the loop guard: the seed and the hand-off
-        synchronize and allocate.  The committed sequence and the n-gram context follow the device: a stop at one
-        of the driver's event syncs (``result.stopped``) leaves the prompt committed up to the hand-off.
-        ``following_token`` (the last prompt token, teacher-forced afterwards) is the MTP layer's token at the last
-        prefilled position.  ``between_chunks`` and ``event_rows`` are the lanes admission's hooks (the driver's:
-        other device work between chunk groups, and the event cadence in rows); the single stream passes neither."""
+        """The chunk driver over ``token_ids`` from the committed position; its alignment steps are forced steps.
+
+        Runs outside the loop guard: the seed and the hand-off synchronize and allocate. A stop at an event sync
+        leaves the prompt committed up to the hand-off. ``following_token`` is the MTP layer's token at the last
+        prefilled position; ``between_chunks`` and ``event_rows`` are the lanes admission's hooks."""
 
         forced = 0
         start = len(self.committed)
@@ -1106,8 +915,7 @@ class Qwen38ChatSession:
                 self.chain.event_synchronize(self.chain.record_event())
             return self.ple_context
 
-        # An image prompt's rotary positions and feature rows ride along, and so do the lanes admission's hooks; a
-        # text prompt's plain call is the one it always was.
+        # An image prompt's rotary positions and feature rows, and the lanes admission's hooks, only when present.
         hooks: dict[str, Any] = {} if vision is None else {"positions": vision.positions, "features": vision.features}
         if between_chunks is not None:
             hooks["between_chunks"] = between_chunks
@@ -1142,17 +950,11 @@ class Qwen38ChatSession:
         think_budget: int | None,
         should_stop: Callable[[], str | None] | None,
     ) -> Iterator[tuple[int | None, str | None]]:
-        """The runner's evented A-G loop; yields (x_t, finish) with finish set on the last item (x_t None: a hook stop).
+        """The evented decode loop; yields (x_t, finish) with finish set on the last item (x_t None: a hook stop).
 
-        EOS is consumed (its HEAD is already queued when the host learns it), so
-        every layer and the counter end at the same position and the next turn
-        continues from ``<|im_end|>``.  On ``max_tokens`` the last token is read
-        by the blocking read and not consumed.  A token at or above the tokenizer
-        size is an LM-head padding row: the step is finished and the request
-        ends with ``error``.  Before a step the hook may end the request with its
-        own reason (the row keeps the unconsumed token), and a thinking budget
-        forces ``</think>`` as a teacher-forced step once that many reasoning
-        tokens were produced without the model closing the block.
+        EOS is consumed (its HEAD is already queued when the host learns it), so the next turn continues from
+        ``<|im_end|>``. On ``max_tokens`` the last token is read but not consumed. A token at or above the tokenizer
+        size is an LM-head padding row and ends the request with ``error``. A thinking budget forces ``</think>``.
         """
 
         produced = 0
@@ -1214,27 +1016,17 @@ class Qwen38ChatSession:
     ) -> Iterator[tuple[int | None, str | None]]:
         """The pass loop; yields (x_t, finish) like :meth:`_generate`, ``a + 1`` tokens per pass.
 
-        Entry: the last prompt token's TAIL is enqueued (or the row holds an unconsumed token); the blocking
-        read gives the model's next token, which the first pass consumes as its row 0.  Each pass feeds the rows
-        ``[t_P, d_1 .. d_k]`` and commits ``a + 1`` of them on the device; the host learns ``[d_1 .. d_a, t']``,
-        streams them and keeps the last one (``t'``, not yet fed) as the next pass's row 0.  The pass's device
-        commit is deferred to the next pass (or to :meth:`_mtp_settle`, which commits as many rows as the request
-        consumed and rebuilds the 1-row buffers).  A forced ``</think>`` needs the 1-row chain: the pass loop
-        settles, forces the token, reads the model's next token and re-enters.  When the cache has no room for a
-        pass the 1-row loop finishes the request.
-
-        A sampled request (``sampling``, admitted by ``sampling_step.drafting_admission``) runs the same loop with the
-        host deciding every pass (``sampling_step.accept_pass`` on the split verify): where the greedy loop reads the
-        model's next token from the row (the entry, after a forced ``</think>``) the sampled loop samples it from the
-        candidate row the last TAIL wrote, and every hand-off to the 1-row chain feeds the pending token by a forced
-        step (``generate_sampled`` samples from a fresh row; a sampled token left in the row would be sampled twice),
-        streaming it first when the client has not seen it yet.
+        Each pass feeds ``[t_P, d_1 .. d_k]`` and commits ``a + 1`` rows; the host streams ``[d_1 .. d_a, t']`` and
+        keeps ``t'`` as the next pass's row 0. A pass's device commit is deferred to the next pass or to
+        :meth:`_mtp_settle`. A forced ``</think>`` or a full cache hands off to the 1-row chain. A sampled request
+        samples the pending token from the candidate row and feeds it by a forced step on every hand-off, so it is
+        never sampled twice.
         """
 
         prompt_tokens = len(self.committed)
         decide = None if sampling is None else partial(sampling_step.accept_pass, self, sampling, prompt_tokens)
-        # The device acceptance (the sampling extension's, admitted per request): its hook writes each pass's uniforms
-        # and the pass loop runs the device-decided form; a refused request keeps the host-decided split form.
+        # Device acceptance, admitted per request: its hook writes each pass's uniforms; a refused request keeps the
+        # host-decided split form.
         before_verify_sampled = None
         if sampling is not None and getattr(self.mtp, "device_accept", False):
             _refusal, before_verify_sampled = self.chain.sampling.device_acceptance_for(sampling)
@@ -1259,9 +1051,7 @@ class Qwen38ChatSession:
         entered = False
 
         def force_think_end(settle_finish: str) -> None:
-            # The 1-row loop's forced </think>: the pass loop settles first ("budget": the tokens streamed so far
-            # consumed; "length": a pending token the client saw is fed, one it never saw is dropped for the forced
-            # one, as _generate drops the row's token).
+            # Settle the pass loop first; on "length" a pending token the client saw is fed, an unseen one dropped.
             nonlocal entered
             if entered:
                 self._mtp_settle(settle_finish)
@@ -1275,9 +1065,8 @@ class Qwen38ChatSession:
                 sampling.samples.append(None)
 
         def finish_on_one_row_loop():
-            # The 1-row loop takes the rest of the request; the pass loop settles and leaves the pending token
-            # where that loop expects it: in the row when it was not streamed yet, consumed by a forced step when it
-            # was (a sampled request: always fed, streamed first when the client has not seen it).
+            # Leave the pending token where the 1-row loop expects it: in the row if unstreamed, else forced (a
+            # sampled request always forces it, streaming it first if unseen).
             nonlocal entered, produced, thinking_open, reasoning_tokens
             if entered:
                 self._mtp_settle("length")
@@ -1350,8 +1139,7 @@ class Qwen38ChatSession:
                 pending_yielded = True
                 reason = None if should_stop is None else should_stop()
                 if reason is not None:
-                    # The hit token is consumed as the 1-row loop consumes it: the previous pass settles whole, the
-                    # token is fed by a forced step (the row then holds the model's next token).
+                    # Consume the token as the 1-row loop does: settle the previous pass, then a forced step.
                     if entered:
                         self._mtp_settle("length")
                         entered = False
@@ -1366,8 +1154,7 @@ class Qwen38ChatSession:
                 with self.chain.loop_guard():
                     record = self.chain.mtp_step()
             else:
-                # The eager seed, then the bootstrap pass; a sampled request's decision rides on the chain (a greedy
-                # request keeps the call form every chain knows; the device acceptance's hook the device form).
+                # The eager seed, then the bootstrap pass.
                 if before_verify_sampled is not None:
                     record = self.chain.mtp_enter(
                         pending,
@@ -1381,8 +1168,7 @@ class Qwen38ChatSession:
                     record = self.chain.mtp_enter(pending, self.ple_context, decide=decide)
                 entered = True
             if getattr(record, "arithmetic", None) == mtp_v2.DEVICE_ACCEPT_ARITHMETIC:
-                # The device-decided pass's ledger (the extension's statistics reader) and, with the dump on, its
-                # record (the pass's own uniforms beside the request's ledger: the gate's slicing has both).
+                # The device-decided pass's ledger and, with the dump on, its record.
                 sampling.mtp.record_device(record.statistics, self.mtp.drafts)
                 if record.candidate_rows is not None:
                     self.device_accept_records.append(
@@ -1435,22 +1221,18 @@ class Qwen38ChatSession:
                 pending = next_pending()
                 pending_yielded = False
                 continue
-            # The whole pass was consumed: its rows are the device's; its device commit is the next pass's first
-            # job or the settle's, so the run stays until then.
+            # The whole pass was consumed; its device commit is the next pass's or the settle's, so the run stays.
             self.committed.extend(run.rows)
             run.host_committed = True
             pending = emitted[accepted]
             pending_yielded = True
 
     def _mtp_settle(self, finish: str) -> None:
-        """Leave the pass loop after its last pass (``self._mtp_run``): commit the rows the request consumed and
-        rebuild the 1-row buffers, then leave the row as :meth:`_generate` would.
+        """Leave the pass loop: commit the rows the request consumed, rebuild the 1-row buffers and leave the row as
+        :meth:`_generate` would.
 
-        Of the pass's ``[t_P, d_1 .. d_a]`` rows and ``[d_1 .. d_a, t']`` emitted tokens, the request took the
-        first ``yielded`` tokens; the last one is consumed (fed to the device) unless the request ended on
-        ``length``, where the 1-row loop leaves the last token in the row unconsumed.  A consumed ``t'`` (not a row
-        of the pass) is fed by a forced step after the hand-off.  The rows past the consumed prefix (drafts the
-        device already ran) are rolled back by committing fewer rows.
+        The last yielded token is consumed unless the request ended on ``length``; a consumed ``t'`` is fed by a
+        forced step. Drafts past the consumed prefix are rolled back by committing fewer rows.
         """
 
         run = self._mtp_run
@@ -1475,11 +1257,7 @@ class Qwen38ChatSession:
     # -- one request -------------------------------------------------------------------------
 
     def _write_device_accept_dump(self, sampling: sampling_step.Qwen38SamplingRequest) -> Path:
-        """One JSON per request for the device acceptance's gate tool (dev): k, the request's sampling parameters,
-        its uniform ledger and the device-decided passes' records (``index`` in the order the passes ran,
-        ``candidate_rows`` the rows the device decided on as (k + 1) * 256 floats, ``tokens`` the pass's verify tokens
-        ``[t, d_1 .. d_k]``, ``statistics`` the 16 lanes, ``uniforms`` the k + 1 draws that pass consumed, and
-        ``committed_tokens`` the length of the committed stream at the pass, its rows' history)."""
+        """One JSON per request of the device-decided passes: k, sampling parameters, uniforms and per-pass records."""
 
         parameters = sampling.parameters
         run = {
@@ -1498,10 +1276,8 @@ class Qwen38ChatSession:
         return path
 
     def reset(self) -> None:
-        """Position 0 and position-zero state at the captured addresses; the committed sequence is dropped, and so
-        is the prompt-end snapshot's record: the prefill that follows writes the KV and compressed caches from row 0,
-        so the snapshot's positional half (the caches below its position, which the snapshot does not copy) is gone
-        the moment that prefill starts, whether or not it reaches its last token."""
+        """Position 0 and position-zero state at the captured addresses. The snapshot record is dropped too: the next
+        prefill rewrites the caches below its position, which the snapshot does not copy."""
 
         self.chain.reset_and_seed(SEED_TOKEN_ID)
         self.committed = []
@@ -1513,12 +1289,9 @@ class Qwen38ChatSession:
         self.committed_vision = ()
 
     def reusable_prefix(self, token_ids: Sequence[int], vision: Sequence[tuple[int, int, str]] = ()) -> tuple[int, str]:
-        """How the device meets ``token_ids`` whose images are ``vision`` (their pad spans with digests, empty for
-        text): ``(n, "extends")`` when they extend the committed ``n`` ids (or repeat them exactly while the
-        unconsumed next token is still in the row; a partial match cannot be rewound) and the images inside those
-        ids are the committed ones, ``(n, "snapshot")`` when they extend the ``n`` ids of the prompt-end snapshot
-        instead (its images alike), else ``(0, "reset")``.  Two images of one grid render identical ids, so the
-        spans' digests are part of the key."""
+        """How the device meets ``token_ids``: ``(n, "extends")`` when they extend the committed ``n`` ids,
+        ``(n, "snapshot")`` when they extend the prompt-end snapshot's, else ``(0, "reset")``. The image spans'
+        digests are part of the key; a partial match cannot be rewound."""
 
         common = 0
         while common < len(self.committed) and common < len(token_ids) and self.committed[common] == token_ids[common]:
@@ -1540,8 +1313,7 @@ class Qwen38ChatSession:
         return 0, "reset"
 
     def _restore_prompt_snapshot(self) -> None:
-        """The chain's snapshot back on device (position, phases and rotary shift included); the host follows its
-        record."""
+        """Restore the chain's snapshot on device; the host follows its record."""
 
         self.chain.restore_prompt_snapshot()
         self.committed = list(self.snapshot.ids)
@@ -1551,9 +1323,7 @@ class Qwen38ChatSession:
         self.row_unconsumed = False
 
     def _capture_prompt_snapshot(self, schedule: str = "chunked") -> None:
-        """The device state after the committed ids (every prompt token but the last), copied on the chain; the
-        record makes a later render that extends these ids a restore instead of a reset.  ``schedule`` names what
-        produced the state (SNAPSHOT_SCHEDULES)."""
+        """Copy the device state after the committed ids (every prompt token but the last) on the chain."""
 
         if schedule not in SNAPSHOT_SCHEDULES:
             raise ValueError(f"snapshot schedule must be one of {SNAPSHOT_SCHEDULES}, got {schedule!r}")
@@ -1577,37 +1347,13 @@ class Qwen38ChatSession:
         verify_each_step: bool = False,
         vision: vision_splice.Qwen38VisionPrompt | None = None,
     ) -> Qwen38ChatCompletion:
-        """Prefill what the device does not already hold, then generate up to ``max_tokens`` tokens (the remaining
-        context when ``None``; ``require_budget``).
+        """Prefill what the device does not already hold, then generate up to ``max_tokens`` tokens.
 
-        ``vision`` carries an image prompt's rotary positions and feature rows (``token_ids`` are the expanded ids:
-        one ``<|image_pad|>`` per merged image token) and its images' digests; the committed prefix and the
-        prompt-end snapshot are keyed on the ids AND the images' pad spans with their digests, so a follow-up turn on
-        the same image prefills only the new turn while a prompt with another image of the same grid (the same ids)
-        resets.  The pads of the extension never take 1-row steps: an extension whose alignment steps or forced tail
-        would hold a pad resets instead.
-
-        Any failure inside the device section leaves the chain's queue and the
-        model owner in an unknown state: the session is poisoned and must not
-        serve again.  ``on_token`` raising ``OSError`` (the client went away) is
-        not such a failure: it is called between steps, so generation stops with
-        ``disconnected`` and, as after ``length``, the next token stays in the row.
-        ``prefill_mode`` overrides the session's mode for this request.
-        ``should_stop`` is polled between steps and at the prefill's event syncs
-        (the teacher-forced cadence, the chunk driver's per-chunk events) and
-        ends the request with the reason it returns, the row unconsumed (a stop
-        inside the chunk driver hands off at the chunks replayed so far; the row
-        then holds no prediction and an exact repeat of the committed prefix
-        resets);
-        ``think_budget`` forces ``</think>`` after that many reasoning tokens
-        (the caller passes it only when the prompt left the think block open).
-        ``sampling`` (a request with ``temperature > 0``) runs the sampled loop over
-        the chain's candidate row instead of the greedy loop; ``None`` is greedy.  On
-        a device-sampler chain a request the device policy admits runs the device loop
-        (the greedy loop plus a draw write per step; ``verify_each_step`` adds the
-        per-step host check of the discriminator); the others keep the host loop.
-        On an MTP chain a greedy chunked-mode request generates through the pass
-        loop unless ``speculative`` is False (the 1-row loop, for the hand-off gate).
+        Any failure inside the device section poisons the session: it must not serve again. ``on_token`` raising
+        ``OSError`` (client gone) is not such a failure: generation stops with ``disconnected`` and the next token
+        stays in the row. ``should_stop`` is polled between steps and at the prefill's event syncs. Image pads
+        (``vision``) never take 1-row steps: an extension whose 1-row steps would hold a pad resets instead.
+        ``speculative=False`` keeps an MTP chain's greedy request on the 1-row loop.
         """
 
         token_ids = list(token_ids)
@@ -1625,8 +1371,7 @@ class Qwen38ChatSession:
                 raise Qwen38ChatRequestError(
                     "image prompts need the chunked prefill mode (their pads never take 1-row steps)"
                 )
-            # An image prompt prefills from position 0 (below): all but its last token must fill the chunk trace's
-            # minimum (a real image prompt is at least 66 tokens: 64 pads and the two markers).
+            # All but the last token of an image prompt must fill the chunk trace's minimum.
             if len(token_ids) - 1 < CHUNK_PREFILL_MIN_ROWS:
                 raise Qwen38ChatRequestError("image prompt too short for the chunked prefill")
         elif has_image_pads:
@@ -1635,30 +1380,26 @@ class Qwen38ChatSession:
             raise Qwen38ChatRequestError("sampling is unavailable: this chain captured no candidate row (greedy only)")
         if self.poisoned:
             raise Qwen38ChatChainError("session is poisoned by an earlier device failure")
-        # MTP drafting serves the greedy requests of the chunked mode and, with the split verify captured, the sampled
-        # requests the pass loop can bound (drafting_admission); the rest take the 1-row loops (speculative=False is
-        # the diagnostic form: a greedy request on the 1-row loop of an MTP chain).
+        # MTP drafting serves chunked-mode greedy requests and the sampled ones drafting_admission admits.
         drafting = self.mtp is not None and speculative and mode == "chunked"
         started_ns = self.clock_ns()
         spans = () if vision is None else vision.spans(token_ids)
         common, reuse = self.reusable_prefix(token_ids, spans)
         if common and vision is not None:
-            # The extension's tokens that the 1-row body would take (the alignment steps of a chunked extension, or
-            # the whole forced tail of a short one) must be text: image pads never take 1-row steps.
+            # The extension's 1-row steps (alignment steps, or a short forced tail) must be text.
             head = list(token_ids[common:-1])
             aligned = alignment_steps(common, len(head))
             chunkable = mode == "chunked" and len(head) - aligned >= CHUNK_PREFILL_MIN_ROWS
             if vision_splice.image_lanes(head[:aligned] if chunkable else head):
                 common, reuse = 0, "reset"
-        # The device sampler's per-request writes (the policy, the greedy flag, the first draw) precede every
-        # prompt step: the last prompt TAIL chooses the first token under this request's policy.
+        # The device sampler's per-request writes precede every prompt step: the last prompt TAIL chooses the first
+        # token under this request's policy.
         device_loop = False
         if (
             getattr(self.sampling, "sampler", None) is not None
             or getattr(self.sampling, "device_accept", None) is not None
         ):
-            # The device sampler's writes, or the device acceptance's request start (its policy row, its uniform
-            # stream restarted: an --mtp server samples on the host, so the sampler alone would never reach it).
+            # The device acceptance needs its request start too: an --mtp server samples on the host.
             self.sampling.begin_request(sampling)
             device_loop = sampling is not None and bool(sampling.uniforms)
         if sampling is not None:
@@ -1676,15 +1417,10 @@ class Qwen38ChatSession:
                 self._restore_prompt_snapshot()
             elif reuse == "reset":
                 self.reset()  # drops the snapshot record too: the caches below its position are rewritten from row 0
-            # The snapshot stays valid until a prefill reaching its last token replaces it or a reset drops it (its
-            # recurrent buffers change on no other path; a stopped prefill that extends the committed ids leaves the
-            # caches below the snapshot's position untouched), so a stopped extension leaves the earlier one restorable.
+            # The snapshot stays valid until a prefill reaching its last token replaces it or a reset drops it, so a
+            # stopped extension leaves the earlier one restorable.
             suffix = token_ids[common:]
             chunked: Qwen38PrefillResult | None = None
-            # The schedule the capture records (SNAPSHOT_SCHEDULES): a prefill from position 0 is the schedule a fresh
-            # prefill of these ids takes; a restore whose tail is the last token alone recaptures the restored state
-            # itself; every other restore or extension leaves positions a fresh prefill would chunk to the 1-row steps
-            # or to the tail's own schedule.
             if reuse == "reset" or common == 0:
                 schedule = "chunked"  # a prefill from position 0 (a reset, or a new session's first request)
             elif reuse == "snapshot" and len(suffix) == 1:
@@ -1692,12 +1428,9 @@ class Qwen38ChatSession:
             else:
                 schedule = "forced-tail"
             capture = partial(self._capture_prompt_snapshot, schedule)
-            # All but the last prompt token through the chunk trace when enough rows remain after the alignment
-            # steps; the last one is the first decode replay and is always teacher-forced inside the guard.  The
-            # prompt-end snapshot is taken before that last token: after the hand-off, or inside the forced prefill.
+            # The last prompt token is always teacher-forced inside the guard as the first decode replay; the
+            # prompt-end snapshot is taken just before it.
             before_last: Callable[[], None] | None = capture
-            # The prompt's images are the committed ones from here (the snapshot records them with the ids): the
-            # spans below ``common`` are the committed prefix's own, the rest this prefill's.
             self.committed_vision = spans
             prefill_vision = vision
             if vision is not None and common:
@@ -1857,13 +1590,9 @@ class Qwen38ChatSession:
         prefill_mode: str | None = None,
         full_logits: bool = False,
     ) -> Qwen38TeacherForcedRows:
-        """From position 0 through ``token_ids``: at every wanted position p the resolved argmax and the candidate
-        row of the TAIL that consumed tokens 0..p, so p's row must be a forced step.  In the chunked mode a stretch of
-        unwanted positions goes through the chunk driver when enough rows remain after its alignment steps (the
-        chunk rows yield no logits row); the forced mode forces every token.  Feeds up to the last wanted position
-        and leaves the row unconsumed, like a ``length`` finish.  Needs the candidate row (``--sampling``).
-        ``full_logits`` also gathers that TAIL's full-vocabulary logits (the sampler's fallback read) at every wanted
-        position."""
+        """From position 0 through ``token_ids``: at every wanted position p the argmax and candidate row of the TAIL
+        that consumed tokens 0..p, so wanted positions are forced steps; in chunked mode unwanted stretches may go
+        through the chunk driver. Leaves the row unconsumed like a ``length`` finish. Needs the candidate row."""
 
         if self.sampling is None:
             raise Qwen38ChatRequestError("teacher forcing with rows needs the candidate row: this chain captured none")
@@ -1964,9 +1693,8 @@ def template_decoder(template: Any) -> Callable[[list[int]], str]:
 
 
 def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHardwareProfile, dict]:
-    """The profile with its route: derived from the cluster descriptor (no device is opened; a ring also reads the
-    fabric's line order from the system mesh) and adopted when the profile leaves it ``None`` (the p150 line and the
-    QuietBox 2: recorded, not pinned), checked against the pinned one otherwise."""
+    """The profile with its route derived from the cluster descriptor (no device is opened): adopted when the
+    profile leaves it ``None``, checked against the pinned one otherwise."""
 
     import yaml
 
@@ -1982,9 +1710,8 @@ def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHa
         derivation["route_derivation"] = physical_route.derive_canonical_line_route.__name__
     else:
         # A ring under the 1x4 LINE descriptor: the fabric's topology solver chose which three of the four links
-        # carry the line, and the mesh must open in that order (QuietBox (0, 2, 1, 3) = its ring walk; QuietBox 2
-        # (1, 0, 3, 2), 2026-09-18, where the ring walk (0, 1, 2, 3) put a mesh neighbour pair on the unused link
-        # and the first all_gather failed).  The walk is recorded next to the route for comparison.
+        # carry the line, and the mesh must open in that order (the ring walk can put a neighbour pair on the unused
+        # link). The walk is recorded next to the route for comparison.
         route = physical_route.derive_fabric_line_route(
             document, chips_with_mmio, hardware_profiles.system_mesh_chip_id
         )
@@ -2006,17 +1733,10 @@ def resolve_route(hardware_profile: ResidentHardwareProfile) -> tuple[ResidentHa
 def open_partition_b_mesh(
     marker: Marker, hardware_profile: ResidentHardwareProfile, *, command_queues: int = 1
 ) -> tuple[Any, dict]:
-    """The runner's mesh open for one lane: the profile's route derivation, FABRIC_1D, one 1D four-device mesh as
-    the logical 1x4.  ``command_queues`` (1 by default: the open call as it always was) opens a second queue for the
-    MTP pass's early rows read (an ``--mtp`` server); nothing but buffer reads may ever run on it.
+    """Open the profile's four devices as the logical 1x4 mesh on FABRIC_1D, in the profile's route order.
 
-    Same calls and checks as ``run()`` of the timing runner on a larger
-    host (its partition-B values are the profile's defaults, hence the
-    name; a partition-A profile brings its own nodes, route and locks; both
-    are a 4x1 line reshaped to 1x4, ``derive_canonical_line_route``).  A ring
-    profile (the QuietBox, the QuietBox 2) opens the 1x4 in the order the fabric
-    embedded its LINE descriptor, ``derive_fabric_line_route``.  Every check before the fabric enable
-    raises with the fabric untouched; a failure after it disables the fabric
+    ``command_queues=2`` opens a second queue for the MTP pass's early rows read; nothing but buffer reads may run on
+    it. A check before the fabric enable raises with the fabric untouched; a failure after it disables the fabric
     before re-raising, so the caller owns the fabric only once this returns.
     """
 
@@ -2080,14 +1800,10 @@ def open_partition_b_mesh(
 
 @dataclass
 class Qwen38ChainMTP:
-    """What an MTP-drafting chain adds (``mtp_v2``): the MTP components, the verify / draft states and their traces
-    (``traces``: the fused verify, the commit and the draft; with ``sampled`` also ``split_traces``: the verify head
-    and tail with a draft of their own, the commit shared), the TAIL rows' step inputs, the chunk extension (and, on
-    a ``--long-chunks`` chain, its 128-row twin ``long_chunk_extension``), the live pass loop and the cumulative
-    counters.
+    """What an MTP-drafting chain adds (``mtp_v2``): components, verify / draft states and traces, step inputs, chunk
+    extensions, the live pass loop and the cumulative counters.
 
-    ``step_written`` tracks the TAIL contract: every TAIL reads the step inputs written for its step (a forced step
-    writes the next prompt token; a device-token step selects the resolved argmax).
+    ``step_written`` tracks the TAIL contract: every TAIL reads the step inputs written for its step.
     """
 
     drafts: int
@@ -2108,27 +1824,21 @@ class Qwen38ChainMTP:
     trace_dram_bytes_per_bank: dict[str, int] = field(default_factory=dict)
     admission: dict[str, Any] = field(default_factory=dict)  # mtp_capacity_admission at the build's context and k
     dram_bytes_per_bank: dict[str, int] = field(default_factory=dict)  # measured growth: components, states, traces
-    # The split verify (an --mtp --sampling server), captured beside the fused one: sampled requests draft through it,
-    # the host deciding every pass; greedy requests keep the fused traces (``Qwen38TracedChain.mtp_enter`` routes by
-    # ``decide``).
+    # The split verify (--mtp --sampling): sampled requests draft through it, the host deciding every pass; greedy
+    # requests keep the fused traces.
     sampled: bool = False
     split_traces: mtp_v2.Qwen38TTNNMTPTraces | None = None  # verify_head, verify_tail, their draft; commit = traces'
     split_verify_output: mtp_v2.Qwen38TTNNVerifyOutput | None = None  # the tail's readback row (the split draft's)
     head_output: mtp_v2.Qwen38TTNNVerifyHeadOutput | None = None
-    # The device-decided sampled form (QWEN38_MTP_DEVICE_ACCEPT=1 beside the split verify, default off): the head, the
-    # accept program and the tail in one trace with a draft of its own; the pass loop of a sampled request the device
-    # acceptance admits (the tool side's decision) runs it, the others keep the host-decided split form.
+    # The device-decided sampled form (QWEN38_MTP_DEVICE_ACCEPT=1): head, accept program and tail in one trace, for
+    # the sampled requests the device acceptance admits.
     device_accept: bool = False
     sampled_traces: mtp_v2.Qwen38TTNNMTPTraces | None = None  # verify_sampled, its draft; commit = traces'
     sampled_verify_output: mtp_v2.Qwen38TTNNVerifyOutput | None = None
-    # The early rows read (an --mtp server without --lanes; the mesh opened with two command queues): the fused and the
-    # device-decided pass loops read the verify lanes on the second queue and look the next pass's PLE rows 0-1 up
-    # under the draft (mtp_v2.Qwen38TTNNEarlyRowsReader); the host-decided split keeps its order.  False here = the
-    # one-queue form (a caller that did not ask).
+    # Early rows read (needs the second command queue): the fused and device-decided pass loops read the verify lanes
+    # on queue 1 and look up the next pass's PLE rows under the draft.
     ple_early: bool = False
-    # Greedy split passes whose host decision (decide_greedy) was checked against the device lanes.  The served path
-    # routes greedy requests to the fused traces, so it stays 0 there; a caller running the split form with
-    # decide_greedy (a diagnostic) counts here.
+    # Greedy split passes whose host decision was checked against the device lanes (0 on the served path).
     accept_checks: int = 0
     sampled_passes: int = 0
     sampled_accepted_drafts: int = 0
@@ -2161,9 +1871,8 @@ class Qwen38ChainMTP:
             self.sampled_draws += int(statistics["draws"])
             self.sampled_fallbacks += int(statistics["fallbacks"])
         if getattr(pass_record, "arithmetic", None) == mtp_v2.DEVICE_ACCEPT_ARITHMETIC:
-            # The device-decided sampled pass: a sampled pass whose draws are the uniforms the program consumed
-            # (u_0 .. u_a* and v: a* + 2, or k + 1 with every draft accepted); the device never falls back, the rows
-            # whose guard failed are counted instead.
+            # Draws are the uniforms the program consumed (a* + 2, or k + 1 with every draft accepted); the device
+            # never falls back, it counts the rows whose guard failed instead.
             self.sampled_passes += 1
             self.sampled_accepted_drafts += pass_record.accepted
             self.sampled_draws += min(pass_record.accepted + 2, self.drafts + 1)
@@ -2171,8 +1880,7 @@ class Qwen38ChainMTP:
             self.device_accept_guard_deviations += int(pass_record.guard_deviations or 0)
         return pass_record
 
-    # The counters: cumulative on the chain (``/health.mtp``); a request snapshots them (``counters()``) before it
-    # runs and reports what it added (``summary(since=)``), so every field of its ``qwen38.mtp`` is its own.
+    # Cumulative on the chain (/health.mtp); a request reports what it added via ``summary(since=counters())``.
     COUNTERS = (
         "passes",
         "accepted_drafts",
@@ -2189,12 +1897,8 @@ class Qwen38ChainMTP:
         return {name: getattr(self, name) for name in self.COUNTERS}
 
     def summary(self, *, since: Mapping[str, int] | None = None) -> dict[str, Any]:
-        """The ``qwen38.mtp`` object: k, anchor, ``sampled``, passes, accepted drafts and tokens per pass (``a + 1``
-        per pass); with ``sampled`` also the split form's counters (``accept_checks``, the greedy split passes
-        decided on the host: 0 on the served path, which runs greedy requests through the fused verify; the sampled
-        passes with their accepted drafts, tokens per pass, draws and fallbacks).  Cumulative since the chain opened,
-        or, with ``since`` a ``counters()`` snapshot, the counts added after it: a request's response reports every
-        field over that request alone."""
+        """The ``qwen38.mtp`` object: cumulative since the chain opened, or the counts added since a ``counters()``
+        snapshot ``since``."""
 
         counts = self.counters()
         if since is not None:
@@ -2228,9 +1932,8 @@ class Qwen38ChainMTP:
 
 @dataclass
 class Qwen38TracedChain:
-    """The runner's single-trace chain kept open for serving: 8 decode traces, the persistent token row, the PLE
-    row, (``chunked_prefill``) the chunk state with its one chunk trace captured after the decode traces,
-    (``sampling``) the candidate-row epilogue with its readback row, and (``mtp``) the MTP drafting extension."""
+    """The traced decode chain kept open for serving: 8 decode traces, the persistent token and PLE rows, and the
+    optional chunk prefill, sampling and MTP extensions."""
 
     construction: Qwen38LiveDecodeConstruction
     built_target: Any
@@ -2250,25 +1953,20 @@ class Qwen38TracedChain:
     chunk_state: Any = None
     chunk_trace_id: int | None = None
     chunk_capture_ms: float = 0.0
-    # (``long_chunks``) the 128-row chunk state beside the 32-row one and its trace, captured after the chunk trace;
-    # the driver runs the 128-row chunks first, then the 32-row chunks and the padded tail.
+    # The driver runs slabs first, then 128-row chunks, then 32-row chunks and the padded tail.
     long_chunk_state: Any = None
     long_chunk_trace_id: int | None = None
     long_chunk_capture_ms: float = 0.0
-    # (``slab_rows``) the slab chunk state beside the 32-row one and its trace, captured after the long chunk trace;
-    # the driver runs the slabs first, then the 128-row chunks, then the 32-row chunks and the padded tail.
     slab_state: Any = None
     slab_trace_id: int | None = None
     slab_capture_ms: float = 0.0
     # The GDN state re-anchor the chunk trace was captured with (every chunk replay commits through it).
     chunk_gdn_step_anchor: bool = False
-    # The allocation tracker verified every trace once after the captures; per-prefill re-verification (140-290 ms
-    # in the full-model gate) is a diagnostic switch.
+    # Re-verify the traces' allocations before every prefill (diagnostic; they are verified once after capture).
     verify_each_prefill: bool = False
     sampling: sampling_step.Qwen38SamplingChainExtension | None = None
     mtp: Qwen38ChainMTP | None = None
-    # The prompt-end snapshot buffers (model.allocate_generic_snapshot over the generic state and the MTP alignment
-    # layer's), allocated before the warm pass; the session captures and restores through the two methods below.
+    # The prompt-end snapshot buffers, allocated before the warm pass.
     snapshot: Any = None
     closed: bool = field(default=False, repr=False)
 
@@ -2282,7 +1980,7 @@ class Qwen38TracedChain:
 
         return self.built_target.model.allocated_context
 
-    # -- the per-step primitives the session calls (the runner's loop, one call each) --------
+    # -- the per-step primitives the session calls --------------------------------------------
 
     def write_token_row(self, token_id: int) -> None:
         ttnn.copy_host_to_device_tensor(resident_decode.device_token_row(self.mesh, token_id), self.token_row_io)
@@ -2333,14 +2031,14 @@ class Qwen38TracedChain:
         return self.state.position.read()
 
     def loop_guard(self):
-        """The runner's replay-loop guard: only the loop's own host I/O stays callable, a synchronize fails."""
+        """Replay-loop guard: only the loop's own host I/O stays callable, a synchronize fails."""
 
         return resident_decode.forbid_trace_body_host_io_and_sync(
             phase="chat request device loop", allowed=resident_decode.REPLAY_LOOP_HOST_IO_CALLS
         )
 
     def reset_and_seed(self, token_id: int) -> None:
-        """In-place state reset to position 0 and the seed token in the persistent row (the runner's prologue)."""
+        """In-place state reset to position 0 and the seed token in the persistent row."""
 
         self.built_target.model.reset_generic_state_inplace(self.state)
         if self.mtp is not None:
@@ -2362,8 +2060,7 @@ class Qwen38TracedChain:
         self.built_target.model.capture_generic_snapshot(self.state, self.snapshot, position=position)
 
     def restore_prompt_snapshot(self) -> None:
-        """The snapshot back into the generic state (its position and GDN phases included), then the device
-        position read back against it."""
+        """The snapshot back into the generic state, then the device position checked against it."""
 
         self.built_target.model.restore_generic_snapshot(self.snapshot, self.state)
         if self.mtp is not None:
@@ -2389,12 +2086,8 @@ class Qwen38TracedChain:
         positions=None,
         features=None,
     ) -> Qwen38PrefillResult:
-        """The chunk driver on this chain (the full-model gate's prefill path): alignment steps through
-        ``forced_step``, the seed, chunk replays (``should_stop`` polled at their event syncs), the padded tail,
-        the hand-off.  Not under the loop guard.  ``following_token`` is the MTP layer's token at the last
-        prefilled position (MTP chains).  ``between_chunks`` / ``event_rows``: the driver's hooks (the lanes
-        admission runs the decoding lanes' passes between chunk groups, one event per 128 rows).  ``positions`` /
-        ``features`` are an image prompt's rotary positions and feature rows (``Qwen38ChunkPrefill.run``)."""
+        """Run the chunk driver on this chain (not under the loop guard): alignment steps through ``forced_step``,
+        the seed, chunk replays, the padded tail and the hand-off."""
 
         if self.chunk_trace_id is None:
             raise Qwen38ChatChainError("the chain was opened without the chunk trace")
@@ -2445,14 +2138,11 @@ class Qwen38TracedChain:
         before_verify_sampled: Callable[[list[int]], Any] | None = None,
         record_candidate_rows: bool = False,
     ) -> mtp_v2.Qwen38TTNNMTPPassRecord:
-        """Eager switch into verify mode at the device position (the host's committed count), then the bootstrap
-        pass whose row 0 is ``first_token`` (placeholder drafts).  Returns the pass record.  The pass loop's form:
-        neither hook (a greedy request) runs the fused verify traces, the device's verdict inside the body (no head
-        readback, no host decision: the pinned greedy stream); ``decide`` (a sampled request's acceptance) runs the
-        split traces, the host deciding between the head and the tail (``mtp_sampled`` chains only);
-        ``before_verify_sampled`` (a sampled request the device acceptance admits: the callable writes the pass's
-        uniforms to the accept program's constants) runs the device-decided traces (``mtp_device_accept`` chains
-        only), ``record_candidate_rows`` putting the rows the device decided on into every pass record."""
+        """Eager switch into verify mode, then the bootstrap pass with row 0 ``first_token``; returns its record.
+
+        Neither hook runs the fused verify traces (greedy); ``decide`` runs the split traces, the host deciding
+        between head and tail; ``before_verify_sampled`` writes each pass's uniforms and runs the device-decided
+        traces."""
 
         mtp = self.mtp
         model = self.built_target.model
@@ -2482,8 +2172,8 @@ class Qwen38TracedChain:
             head_output, decision = mtp.head_output, decide
         early_reader = None
         if mtp.ple_early and decide is None:
-            # The fused and the device-decided forms: the verify lanes read on the second queue under the draft.
-            # The host-decided split keeps today's order (its head readback blocks the host before the tail).
+            # The verify lanes read on the second queue under the draft. Not for the host-decided split: its head
+            # readback blocks the host before the tail.
             early_reader = mtp_v2.Qwen38TTNNEarlyRowsReader(self.mesh, verify_output.readback, cq_id=1, main_cq_id=0)
         mtp.chain = mtp_v2.Qwen38TTNNMTPChain(
             model,
@@ -2503,8 +2193,8 @@ class Qwen38TracedChain:
         return mtp.record(mtp.chain.bootstrap([first_token] + [MTP_BOOTSTRAP_DRAFT_TOKEN] * mtp.drafts))
 
     def mtp_read_full_logits_rows(self) -> torch.Tensor:
-        """The split verify's fallback: the eager gather of the head's retained verify logits, fp32 ``[rows, VOCAB]``
-        (a row whose candidate guard failed is sampled over it)."""
+        """Eager fp32 ``[rows, VOCAB]`` gather of the head's verify logits: the split verify's fallback for a row
+        whose candidate guard failed."""
 
         if self.mtp is None or self.mtp.head_output is None or self.sampling is None:
             raise Qwen38ChatChainError("the verify rows' full logits need the split verify and the candidate row")
@@ -2554,37 +2244,12 @@ class Qwen38TracedChain:
         mtp_device_accept: bool = False,
         mtp_ple_early: bool = False,
     ) -> Qwen38TracedChain:
-        """Target build, generic state (+ chunk state), warm pass (+ one eager chunk and both hand-off forms), miss
-        guard, 8 decode captures (+ the chunk capture): the runner's chain prologue and the full-model gate's order.
+        """Build the target, allocate the states, run the warm pass under the miss guard and capture the traces.
 
-        The chunk state is allocated before any capture (the decode traces bake every address in) and the chunk
-        trace is captured after the decode traces on the same generic state, with ``chunk_gdn_step_anchor`` (the
-        GDN state re-anchor) baked into the warm chunk and the capture.  ``sampling`` (off by default: the
-        greedy loop keeps its measured period) adds the candidate-row epilogue to every TAIL (its constants are
-        allocated before the warm pass, its programs compile in the warm pass, its row is checked there against
-        torch.topk of the eager full gather); ``device_sampler`` (needs ``sampling``) adds the on-device sampler
-        after the row, so TAIL writes the sampled token itself (``ttnn/device_sampler.py``; its constants are
-        allocated with the row's, its programs compile in the warm pass, checked there against the host reference
-        and the greedy row).  ``warm_hook`` runs after the warm pass, misses still allowed, on
-        the open chain: a caller with an eager path of its own (the long-context chain's hidden windows) compiles
-        its programs there.  ``mtp`` (off by default) builds the MTP components and allocates the verify / draft
-        states, the TAIL step inputs and the chunk extension (with ``long_chunks`` its 128-row twin too) before the
-        warm pass, adds the MTP layer's row to every TAIL and its rows to the chunk bodies, warms the pass loop and
-        both mode switches at every position residue, and captures the verify, commit and draft traces after the
-        chunk traces.  ``mtp_sampled`` (needs
-        ``mtp`` and ``sampling``) allocates the split verify's buffers beside the verify state, warms the split
-        form in every round (the head, the greedy decision checked against the device lanes, the rows candidates
-        against the eager rows gather, the tail; every op of the fused body runs in the head or the tail on tensors
-        of the same specs, so the fused capture needs no round of its own) and captures the verify head and tail,
-        with a draft of their own, after the fused verify, commit and draft (the commit is shared): greedy requests
-        run the fused traces, sampled requests the split ones (``mtp_enter``).  ``mtp_device_accept`` (needs
-        ``mtp_sampled``; the sampling extension's ``device_accept.constants``, the sampler tail's built with rows k + 1
-        from ``QWEN38_MTP_DEVICE_ACCEPT``) warms and captures the device-decided sampled form beside them (the head,
-        the accept program and the tail in one trace, with a draft of its own): the warm round runs that very
-        sequence under the extension's warm policy and checks the program's statistics row against the host reference.
-        ``mtp_ple_early`` (the mesh opened with two command queues) makes the fused and the
-        device-decided pass loops read the verify lanes on the second queue and look the next pass's PLE rows 0-1 up
-        under the draft (``mtp_enter`` builds the reader; the host-decided split keeps its order).
+        Every state is allocated before any capture: the traces bake their addresses in. Chunk, sampling and MTP
+        programs compile in the warm pass and are checked there against host references; ``warm_hook`` runs after
+        the warm pass, misses still allowed, for a caller's own eager programs. ``mtp_ple_early`` needs the mesh
+        opened with two command queues.
         """
 
         if type(chunk_gdn_step_anchor) is not bool:
@@ -2603,8 +2268,7 @@ class Qwen38TracedChain:
             raise ValueError(f"mtp_gdn_anchor must be one of {MTP_GDN_ANCHORS}, got {mtp_gdn_anchor!r}")
         if slab_rows is not None and (not is_slab_rows(slab_rows) or not long_chunks):
             raise ValueError(f"a prefill slab needs a slab row count and the long chunks, got {slab_rows!r}")
-        # A prefill slab with MTP drafting runs the MTP layer's rows through the 128-row twin's slab form (2026-09-26:
-        # the slab as 128-row slices inside the slab body); the slab already requires the long chunks, so the twin exists.
+        # A slab under MTP runs the MTP rows through the 128-row twin's slab form; the slab requires the long chunks.
         if type(mtp_sampled) is not bool:
             raise ValueError(f"mtp_sampled must be a bool, got {mtp_sampled!r}")
         if mtp_sampled and (mtp is None or not sampling):
@@ -2642,7 +2306,7 @@ class Qwen38TracedChain:
             return int(ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM).total_bytes_allocated_per_bank)
 
         def dram_free_view() -> dict[str, int]:
-            # the mesh allocator's DRAM view (one virtual allocator, every card alike): what the admission reads
+            # the mesh allocator's DRAM view (one virtual allocator, every card alike)
             view = ttnn.get_memory_view(mesh, ttnn.BufferType.DRAM)
             return {
                 "num_banks": int(view.num_banks),
@@ -2669,11 +2333,8 @@ class Qwen38TracedChain:
         mtp_components = None
         mtp_dram_bytes_per_bank: dict[str, int] = {}
         if mtp is not None:
-            # The admission on the live allocator: the free bytes per bank after the resident weights, less what the
-            # resident build still allocates (its context state, its traces), against the MTP pair, state and the
-            # growth estimate for this k and the verify forms; the measured growth of the MTP build, its states and
-            # its traces is checked against that estimate.  The verify forms the open captures (one table) are counted
-            # in the estimate and named in the record.
+            # Admission on the live allocator; the measured growth of the MTP build, states and traces is checked
+            # against its estimate below.
             forms = mtp_verify_forms(mtp_sampled, mtp_device_accept)
             mtp_admission = mtp_capacity_admission(
                 model.allocated_context,
@@ -2686,8 +2347,7 @@ class Qwen38TracedChain:
                 gdn_rows_scan=fused_module.enabled(gdn_rows_scan_module.NAME),
             )
             mtp_admission["verify_forms_captured"] = list(forms)
-            # the record at the decision, admitted or not (READY carries it again; a refused or crashed open has only
-            # this line): the live view, what the resident build still takes, what the MTP chain needs, the verdict
+            # printed admitted or not: a refused or crashed open has only this record
             print(
                 json.dumps({"utc": utc_now(), "event": "mtp_admission_live", **mtp_admission}, sort_keys=True),
                 flush=True,
@@ -2721,10 +2381,8 @@ class Qwen38TracedChain:
         if slab_rows is not None:
             slab_state = model.allocate_chunk_state(state, rows=slab_rows, base=chunk_state)
             model.reset_chunk_state_inplace(state, slab_state)
-        # The MTP states sit beside the generic and chunk states, before any capture: every trace bakes their
-        # addresses in (the verify / draft states, the TAIL step inputs, the chunk extension).  The split verify's
-        # candidates epilogue rebases by the sampling chain's constants, so with ``mtp_sampled`` the extension is
-        # built first (the order is unchanged otherwise).
+        # The MTP states are allocated before any capture: every trace bakes their addresses in. With ``mtp_sampled``
+        # the sampling extension is built first: the split verify's candidates epilogue uses its constants.
         chain_mtp = None
         sampling_extension = None
         if mtp_sampled:
@@ -2763,16 +2421,14 @@ class Qwen38TracedChain:
                 ple_early=mtp_ple_early,
             )
             if long_chunk_state is not None:
-                # The 128-row twin runs the MTP layer's rows inside the 128-row chunk body (base= the 32-row extension,
-                # the 128-row chunk state's shared combine buffer); it is part of the states term measured below.
+                # The 128-row twin runs the MTP rows inside the 128-row chunk body; part of the states term below.
                 chain_mtp.long_chunk_extension = mtp_v2.Qwen38TTNNMTPChunkExtension.allocate(
                     model, verify, long_chunk_state, base=chain_mtp.chunk_extension, slab_rows=slab_rows
                 )
             synchronize()
             mtp_dram_bytes_per_bank["states"] = dram_allocated_per_bank() - allocated_before_mtp_states
-        # The device acceptance is the sampling extension's (built from QWEN38_MTP_DEVICE_ACCEPT at its construction,
-        # tools/qwen38_mtp_device_accept.py): its constants are the accept program's (the sampler tail's, rows = k + 1);
-        # the switch the caller resolved and the extension's build must agree, one switch name.
+        # The sampling extension builds the device acceptance from QWEN38_MTP_DEVICE_ACCEPT; the caller's switch must
+        # agree with it.
         device_acceptance = None if sampling_extension is None else getattr(sampling_extension, "device_accept", None)
         if (device_acceptance is not None) != mtp_device_accept:
             raise Qwen38ChatChainError(
@@ -2781,8 +2437,8 @@ class Qwen38TracedChain:
                 "(QWEN38_MTP_DEVICE_ACCEPT decides both)"
             )
         accept_constants = None if device_acceptance is None else device_acceptance.constants
-        # The prompt-end snapshot buffers beside the states, before any capture (the tracker's post-capture check
-        # then sees no later allocation); with MTP the alignment layer's generic state is a 49th layer of it.
+        # The snapshot buffers before any capture (the tracker's post-capture check sees no later allocation); with
+        # MTP the alignment layer's generic state is a 49th layer of it.
         snapshot = model.allocate_generic_snapshot(
             state,
             extra_layers=() if chain_mtp is None else ((chain_mtp.alignment.layer, chain_mtp.alignment.generic_state),),
@@ -2855,11 +2511,10 @@ class Qwen38TracedChain:
                 raise Qwen38ChatChainError(f"warm position {position} returned no logits")
             if chain_mtp is None:
                 candidates = lm_head.greedy_candidates(output.logits)
-                # The plain greedy body's last op is the copy into the persistent token row, done by the resolve (its
-                # ``into``).  The warm run compiles the traced programs.
+                # The greedy body's last op: the resolve copies into the persistent token row (``into``).
                 resolved_row = lm_head.resolve_greedy_on_device(candidates, into=token_row_io)
             else:
-                # The MTP body: the capture's own epilogue (candidates, resolve, the MTP row, the copy), eager here.
+                # The MTP body: the capture's own epilogue, eager here.
                 candidates, resolved_row, warm_row = mtp_tail_epilogue(
                     model, lm_head, chain_mtp, output, token_row_io, chain.sampling
                 )
@@ -2884,10 +2539,7 @@ class Qwen38TracedChain:
             output.release_tensors()
             return resolved, ple_context
 
-        # Warm pass, eager, misses allowed: every kernel of the generic body
-        # compiles here.  Kept gates (actual vs expected): position counter,
-        # resident PLE lookup vs the host oracle, device greedy resolve vs CPU,
-        # the candidate row vs torch.topk of the full gather.
+        # Warm pass, eager, misses allowed: every kernel of the generic body compiles here.
         marker("before-chat-warm-pass")
         ple_context: tuple[int, int] | None = None
         warm_tokens = [resident_decode.SEQUENTIAL_TRACE_WARM_EMBEDDING_TOKEN_IDS[p % TP_SIZE] for p in range(TP_SIZE)]
@@ -2904,24 +2556,14 @@ class Qwen38TracedChain:
             marker("after-chat-warm-hook")
 
         if chain_mtp is not None:
-            # The pass loop's programs and both eager mode switches at every position residue: the seed's ring
-            # slot slices are position-dependent programs and the server switches at any P.  Each round: the
-            # switch in, one verify pass (its MoE rows / alignment / accept programs), the draft rows, the switch
-            # out through the commit (the request's settle form), then 1-row steps to the next residue.  With the
-            # split verify captured beside the fused one the rounds run the head / tail form: every op of the fused
-            # body (the prologue, the embed, the 48 layers, the final mixer, the rows resolve and the accept in the
-            # head; the alignment, the readback concat, the accept-tile copy and the position adds in the tail) runs
-            # there on tensors of the same dtype, layout and memory config (the split's host-written scalars and
-            # lanes are allocated as the fused body's), so the fused capture's programs are all compiled here.  With
-            # the device acceptance every residue runs a second round, the device-decided form's: the capture's eager
-            # sequence (the head, the accept program, the tail), so the accept program compiles before its capture.
+            # The pass loop's programs and both mode switches at every position residue: the seed's ring slot slices
+            # are position-dependent and the server switches at any P. The split head / tail rounds run every op of
+            # the fused body on tensors of the same specs, so they also compile the fused capture's programs.
             marker("before-chat-mtp-warm-pass")
             warm_fed = resident_decode.SINGLE_TRACE_WARM_POSITIONS  # positions the warm pass consumed so far
 
             def warm_mtp_chain(target: Qwen38ChainMTP) -> None:
-                """The rounds for the drafting chain (its verify MoE rows / alignment / accept / draft / commit programs
-                in every captured form at every position residue), so no capture meets a program its warm never
-                compiled."""
+                """Warm every captured form at every position residue, so no capture meets an uncompiled program."""
 
                 nonlocal warm_fed, resolved, ple_context
                 warm_forms = (
@@ -2945,9 +2587,8 @@ class Qwen38TracedChain:
                     if warm_form == "fused":
                         output = mtp_v2.forward_verify(model, target.verify, state, catch_up=False)
                     elif warm_form == "sampled":
-                        # The device-decided form, the capture's eager sequence under the extension's warm policy and
-                        # k + 1 distinct uniforms; the program's statistics row must equal the host reference on the rows
-                        # the head landed, bitwise (the fusion gate's check, here in the warm).
+                        # The device-decided form under the warm policy; its statistics row must equal the host
+                        # reference bitwise.
                         accept_constants.write_policy(sampling_step.WARM_POLICY)
                         warm_uniforms = list(MTP_WARM_ACCEPT_UNIFORMS[: target.drafts + 1])
                         accept_constants.write_uniforms(warm_uniforms)
@@ -2971,8 +2612,7 @@ class Qwen38TracedChain:
                                 f"host reference {expected.tolist()}"
                             )
                     else:
-                        # The split form: the head, its row, the greedy decision checked against the device lanes, the rows
-                        # candidates against torch.topk of the eager rows gather (the fallback's program), the tail.
+                        # The split form: head, rows candidates checked against the eager rows gather, decision, tail.
                         head = mtp_v2.forward_verify_head(model, target.verify, state, catch_up=False)
                         synchronize()
                         head_readback = mtp_v2.read_verify_head(head, rows=target.verify.rows)
@@ -2987,7 +2627,7 @@ class Qwen38TracedChain:
                     synchronize()
                     if head is not None:
                         head.release_tensors()
-                    # The pass row: the verify's accept row and the draft's token chain (checked to start at its t', d_1').
+                    # The pass row: the verify's accept row and the draft's token chain.
                     readback, _ = mtp_v2.read_pass_row(target.verify, target.draft)
                     mtp_v2.commit_verify_host(target.verify, readback.accepted)
                     output.release_tensors()
@@ -3023,7 +2663,7 @@ class Qwen38TracedChain:
             warm_slab_tokens = list(WARM_LONG_CHUNK_TOKEN_IDS) * (slab_rows // LONG_CHUNK_ROWS)
             model.write_chunk_inputs(slab_state, warm_slab_tokens, ple_context=None)
             if slab_extension is not None:
-                # With MTP the 128-row twin's slab form compiles here too (its slices' programs are the 128-row body's).
+                # With MTP the 128-row twin's slab form compiles here too.
                 chain_mtp.alignment.layer.reset_generic_state_inplace(chain_mtp.alignment.generic_state)
                 chain_mtp.chunk_extension.reset_chunk()
                 slab_extension.reset_chunk()
@@ -3036,9 +2676,8 @@ class Qwen38TracedChain:
                 raise Qwen38ChatChainError(f"warm slab position counter {actual} vs expected {slab_rows}")
             marker("after-chat-slab-warm-pass")
         if long_chunks:
-            # One eager 128-row chunk from the reset state: its programs compile here, before the miss guard (with
-            # MTP the 128-row twin's too: the MTP layer's 128-row body, the mixer's 128-row form, the 128-row token
-            # rows' embedding; a program the capture asks for that no warm compiled is a miss under the guard).
+            # One eager 128-row chunk from the reset state (with MTP the 128-row twin's too): its programs compile
+            # here, before the miss guard.
             marker("before-chat-long-chunk-warm-pass")
             long_chunk_extension = None if chain_mtp is None else chain_mtp.long_chunk_extension
             model.reset_generic_state_inplace(state)
@@ -3088,9 +2727,8 @@ class Qwen38TracedChain:
                 raise Qwen38ChatChainError(f"warm hand-off position counter {actual} vs expected {CHUNK_ROWS - 1}")
             marker("after-chat-chunk-warm-pass")
 
-        # The snapshot round trip (its copy programs compile here; the raw-key ring copy has no other warm form):
-        # capture at the warm position, read every recurrent buffer, reset the state, restore, read again: the
-        # restored buffers must be the captured ones bitwise and the position the captured one.
+        # The snapshot round trip compiles its copy programs; the restored buffers must equal the captured ones
+        # bitwise.
         marker("before-chat-snapshot-warm-pass")
 
         def snapshot_rows() -> dict[str, list[torch.Tensor]]:
@@ -3116,9 +2754,8 @@ class Qwen38TracedChain:
                     )
         marker("after-chat-snapshot-warm-pass")
 
-        # Pre-capture reset (the in-place reset programs compile here), the
-        # allocation tracker's acknowledgements of every host- or trace-written
-        # buffer, then the miss guard closes.
+        # Pre-capture reset, the tracker's acknowledgements of every host- or trace-written buffer, then the miss
+        # guard closes.
         chain.reset_and_seed(SEED_TOKEN_ID)
         for tensor in (prepared.ple.embedding_sharded, token_row_io, state.position.scalar):
             acknowledge_corruptible(tensor)
@@ -3177,10 +2814,8 @@ class Qwen38TracedChain:
                 )
 
         def capture_epilogue(trace_output: Any) -> tuple[Any, Any]:
-            """TAIL's last ops: local candidates, device greedy resolve, copy into the persistent token row; a
-            sampling chain's epilogue runs the same three and then the candidate row.  An MTP chain's epilogue
-            runs the MTP layer's row (the retained residual, RoPE rows and position inputs, the resolved argmax
-            as the fallback token) between the resolve and the row copy, then releases what the TAIL retained."""
+            """TAIL's last ops: local candidates, device greedy resolve, copy into the persistent token row, plus the
+            sampling chain's candidate row and the MTP layer's row when present."""
 
             if chain_mtp is not None:
                 candidates, trace_token_row, trace_row = mtp_tail_epilogue(
@@ -3296,20 +2931,14 @@ class Qwen38TracedChain:
             chain.slab_capture_ms = (clock_ns() - slab_capture_started_ns) / 1e6
             synchronize()
             marker("after-chat-slab-capture")
-        # Every prefill chunk trace is booked before the MTP captures: the MTP traces term of the growth record is what
-        # the verify / commit / draft captures add after the last prefill capture (the 128-row trace, MTP rows
-        # included, is its own term, as the 32-row chunk trace with the extension's rows always was).
+        # The MTP traces term is what the MTP captures add after the last prefill capture.
         dram_after_prefill_captures = dram_allocated_per_bank()
 
         def capture_mtp_chain(target: Qwen38ChainMTP, dram_baseline: int) -> None:
-            """The drafting chain's traces: the verify (first pass), commit and draft traces after the prefill traces,
-            the fused form always (a greedy request's traces); the draft body reads the verify output's readback
-            address, so the verify capture comes first.  With the split verify the head, the tail and a second draft
-            follow (each verify body allocates its readback row inside its own capture, so the tail lands a row of its
-            own and the split form needs a draft captured on that row; the commit reads neither row and is shared), and
-            with the device acceptance its one trace and draft.  Capture records without executing: the device state
-            is unchanged.  ``dram_baseline`` is the allocation the chain's traces grow from (the last prefill
-            capture's)."""
+            """Capture the drafting chain's traces; ``dram_baseline`` is the allocation they grow from.
+
+            Each verify body allocates its readback row inside its own capture and the draft reads that row, so every
+            verify form is captured before its own draft; the commit reads neither row and is shared."""
 
             def guard(label: str):
                 return resident_decode.forbid_trace_body_host_io_and_sync(phase=f"chat k={target.drafts} {label}")
@@ -3366,8 +2995,7 @@ class Qwen38TracedChain:
                 synchronize()
             dram_after_split = dram_allocated_per_bank()
             if target.device_accept:
-                # The device-decided sampled form: one trace (the head, the accept program, the tail), the draft on its
-                # row; the statistics row it writes and the accept constants were marked with the split's buffers.
+                # The device-decided sampled form: one trace (head, accept program, tail) and the draft on its row.
                 capture_started_ns = clock_ns()
                 verify_sampled, sampled_verify_output = mtp_v2.capture_verify_sampled(
                     model, target.verify, state, accept_constants, catch_up=False, guard=guard, cq_id=0
@@ -3452,7 +3080,7 @@ class Qwen38TracedChain:
         )
 
     def close(self) -> None:
-        """The runner's release order; skipped by the caller when a request failed mid-loop."""
+        """Release everything in dependency order; skipped by the caller when a request failed mid-loop."""
 
         if self.closed:
             return
@@ -3540,9 +3168,7 @@ def construct_chain(
     mtp_ple_early: bool = False,
     warm_hook: Callable[[Qwen38TracedChain], None] | None = None,
 ) -> Qwen38TracedChain:
-    """Live construction on the open mesh (missing BF4 layers converted first), then the chain prologue.
-    ``warm_hook`` is the open's (after the warm pass, before any capture: the lanes server allocates its lane states
-    and compiles their programs there)."""
+    """Live construction on the open mesh (missing BF4 layers converted first), then the chain open."""
 
     construction = construct_live_decode_diagnostic(
         prepared,

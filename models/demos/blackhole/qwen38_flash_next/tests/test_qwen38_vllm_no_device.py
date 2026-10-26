@@ -1,22 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The vLLM adapter's contract on a fake chain (no device).
-
-The op order of both forward calls on a chain that logs every primitive (the reset, the chunk driver over all prompt
-tokens but the last, the last token forced under the loop guard, the full-vocabulary gather, decode steps at the
-runner's position); every refusal, made before any chain call; the LM-head padding mask; the real chunk driver over
-the driver test's fake model; construction with the library's construction functions replaced by recorders (the
-context table, the cache layout, the corpus pair, the switches, the checkpoint and cache-identity resolution orders,
-the refusals; the prefill-form knobs: the slab rows and the 128-row chunks the chain is opened with, the values
-refused by name, the slab's DRAM and model refusals re-raised naming the knob); the class surface the plugin
-reads; the device-sampling contract (``sampling_params`` present): the int32 token drawn on the host from the same
-row, greedy = the host path's argmax, seeded draws deterministic and inside the nucleus, vLLM's penalties from the
-contract's history, and the reduced sampler's draws against vLLM's sampler algorithm transcribed (chi-square over
-20k draws, every reduced / full-row path).
-Two tests need the serving venv and skip elsewhere: the real plugin runner's prefill and decode call shape over a
-namespace runner (host steps and device-sampled steps), and vLLM's config resolution against the pinned checkpoint
-(``QWEN38_CHECKPOINT``).
+"""The vLLM adapter's contract on a fake chain (no device): forward-call op order, refusals, construction, the class
+surface and the device-sampling contract. The serving-venv tests skip without vLLM.
 """
 
 from __future__ import annotations

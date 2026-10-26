@@ -311,11 +311,9 @@ def test_forward_phase_observer_brackets_exact_moe_mechanics_without_tensors(mon
 
 
 def test_forward_with_the_dense_composite_brackets_one_program_and_releases_its_rows(monkeypatch) -> None:
-    """With the MoE dense composite on (moe_dense_fused), forward takes _dense_composite instead of _route and
-    _shared_partial (the router linear, the shared linear and ONE program for the top-k, the shared eltwise + down
-    linear and the routed dispatch untilize), hands the composite's rows to the fused local sum and releases them
-    right after it, before the combine collective; the phase observer sees the shared-partial pair bracketing the
-    top-k pair (the shared work runs under the top-k), the six fences stay six."""
+    """With moe_dense_fused on, forward takes _dense_composite instead of _route and _shared_partial, hands its rows
+    to the fused local sum and releases them before the combine collective; the shared-partial pair brackets the top-k
+    pair and the six fences stay six."""
 
     module = _bare_moe()
     tensors, routing = _forward_fixture(module)

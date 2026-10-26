@@ -1,10 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Torch models of the MTP v2 verify-pass arithmetic shared by the step-2 no-device tests.
+"""Torch models of the MTP v2 verify-pass arithmetic shared by the no-device tests.
 
-The accept/select model follows the design's section 2.6 op for op; ``fpu_rounding`` is the
-precision model of the FPU reduce stages (TF32 source registers, as in the greedy-resolve tests).
+``fpu_rounding`` is the precision model of the FPU reduce stages (TF32 source registers).
 ``row_serial_torch`` makes torch's row-blocked kernels row-serial so R-row and per-row oracle
 calls can be compared bitwise.
 """
@@ -26,11 +25,9 @@ TF32_SIGNIFICANT_BITS = 11
 def row_serial_torch():
     """Run F.linear, F.conv1d, F.softplus and the GDN q/k L2 norm one row at a time.
 
-    torch's bf16 GEMM and reductions block differently for M = 1 and M = 5 rows (and its fp32 softplus takes
-    a different vector/tail path), so a batched call is not bitwise the per-row call although each output
-    row depends only on its own input row (a 1-ULP flip in a normalized k moves the GDN state by 4e-3).  The
-    row-serial forms take that artifact out, so the tests compare the math, which is what the device does
-    with per_core_M = 1 tiles.
+    torch's bf16 GEMM and reductions block differently for M = 1 and M = 5 rows, so a batched call is not bitwise
+    the per-row call although each output row depends only on its own input row.  The row-serial forms compare the
+    math, which is what the device does with per_core_M = 1 tiles.
     """
 
     linear, conv1d, softplus, l2_norm = F.linear, F.conv1d, F.softplus, reference._l2_norm
@@ -88,11 +85,11 @@ def accept_select(
     *,
     fpu_rounding=tf32,
 ) -> dict[str, int]:
-    """Design 2.6 on fp32 token ids: eq, k-1 multiplies, sum, one-hot, and both select forms.
+    """The accept/select arithmetic on fp32 token ids: eq, k-1 multiplies, sum, one-hot, and both select forms.
 
     ``target_rows`` are the k+1 verify-row argmaxes, ``drafts`` the k draft ids (row j of the
     targets is compared with draft j), ``alignment_rows`` the k+1 MTP alignment argmaxes.
-    The ``*_sum`` selects are the design's ``sum(one_hot * rows)`` through an FPU reduce; the
+    The ``*_sum`` selects are ``sum(one_hot * rows)`` through an FPU reduce; the
     ``*_gather`` selects are a 32-bit copy at row ``a``.
     """
 

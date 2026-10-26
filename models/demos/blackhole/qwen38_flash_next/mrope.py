@@ -2,24 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Multi-axis rotary positions (MRoPE) for prompts with images: the host side of the Qwen4Exp position rule.
 
-Pure torch; no TTNN, no Transformers.  The formulas follow ``Qwen4ExpModel.get_rope_index`` /
-``get_vision_position_ids`` and ``Qwen4ExpTextRotaryEmbedding.apply_interleaved_mrope`` of the pinned Transformers
-implementation.
+Pure torch; follows ``Qwen4ExpModel.get_rope_index`` / ``get_vision_position_ids`` and
+``Qwen4ExpTextRotaryEmbedding.apply_interleaved_mrope`` of the pinned Transformers.
 
-Positions.  Every token has three positions (t, h, w).  A run of text tokens advances all three together.  An image
-whose grid is (t, h, w) patches contributes ``t * (h // 2) * (w // 2)`` merged tokens (one per ``<|image_pad|>``) in
-row-major order over (t, h // 2, w // 2); merged token (ti, hi, wi) sits at (p0 + ti, p0 + hi, p0 + wi), p0 being
-the position the run started at, and the next text token continues at ``p0 + max(h, w) // 2``.  A text-only prompt
-is the plain arange on every axis.  The rope delta is ``max(position) + 1 - length`` (0 for text, negative with
-images): a generated token at index i sits at ``i + delta`` on every axis, so the device's rotary index is the token
-index minus the shift ``-delta``.
+Every token has positions (t, h, w); text advances all three together. An image of grid (t, h, w) contributes
+``t * (h // 2) * (w // 2)`` merged tokens, row-major, token (ti, hi, wi) at (p0 + ti, p0 + hi, p0 + wi); text then
+continues at ``p0 + max(h, w) // 2``. The rope delta is ``max(position) + 1 - length``; a generated token at index i
+sits at ``i + delta`` on every axis.
 
-Rows.  With head_dim 256 and partial_rotary_factor 0.25 the rotary width is 64 = 32 frequency pairs; pair i takes the
-t axis when ``i % 3 == 0`` (11 pairs), h when ``i % 3 == 1`` (11 pairs) and w when ``i % 3 == 2`` (10 pairs)
-(``mrope_section`` [11, 11, 10], interleaved), and the row is ``cat(freqs, freqs)`` in the HF split-halves layout.
-A token whose three positions agree reads the plain row of that position, so the rows of text tokens are exactly
-the rows of the resident device table (row p = :func:`rope_row` at p) and an image token's row is a column select
-over three table rows.
+The rotary width is 64 = 32 frequency pairs; pair i reads axis ``i % 3`` (``mrope_section`` [11, 11, 10],
+interleaved) and the row is ``cat(freqs, freqs)``. A token whose three positions agree reads the plain row of that
+position, so text rows are exactly the resident device table's rows.
 """
 
 from __future__ import annotations
@@ -51,8 +44,9 @@ def rope_inverse_frequency(theta: float = ROPE_THETA, dim: int = ROPE_DIM) -> to
 
 
 def rope_row(position: int, inverse_frequency: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """The plain RoPE row of one position: BF16 ``[1,1,1,64]`` cos and sin (the per-position scalar path the
-    resident device table is built from; the batched ``torch.outer(arange, ...)`` path may differ in the last bit)."""
+    """The plain RoPE row of one position: BF16 ``[1,1,1,64]`` cos and sin.
+
+    The device table is built from this per-position path; a batched ``torch.outer`` may differ in the last bit."""
 
     if isinstance(position, bool) or type(position) is not int or position < 0:
         raise ValueError(f"RoPE position must be a non-negative int, got {position!r}")
@@ -62,8 +56,7 @@ def rope_row(position: int, inverse_frequency: torch.Tensor) -> tuple[torch.Tens
 
 
 def rope_table(length: int, inverse_frequency: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Rows 0 .. length - 1 of :func:`rope_row` as two BF16 ``[length, 64]`` tables (the host image of the device
-    table; row p is bitwise :func:`rope_row` at p)."""
+    """Rows 0 .. length - 1 of :func:`rope_row` as two BF16 ``[length, 64]`` tables (the device table's host image)."""
 
     if isinstance(length, bool) or type(length) is not int or length <= 0:
         raise ValueError(f"RoPE table length must be a positive int, got {length!r}")
@@ -102,8 +95,7 @@ class Qwen38ImageGrid:
         return max(self.h, self.w) // SPATIAL_MERGE_SIZE
 
     def token_positions(self, start: int) -> torch.Tensor:
-        """The ``[3, merged_tokens]`` (t, h, w) positions of the image's merged tokens from ``start``, row-major over
-        (t, h // 2, w // 2) (``get_vision_position_ids`` with temporal merge 1 and time interval 1)."""
+        """The ``[3, merged_tokens]`` (t, h, w) positions of the image's merged tokens from ``start``, row-major."""
 
         t_axis = torch.arange(self.t, dtype=torch.int64) + start
         h_axis = torch.arange(self.h // SPATIAL_MERGE_SIZE, dtype=torch.int64) + start
@@ -161,10 +153,8 @@ class Qwen38MRoPEPositions:
         return index + self.delta
 
     def shift_at(self, length: int) -> int:
-        """The rotary shift after ``length`` consumed tokens: ``length - (max position among them + 1)``, what a
-        token at index ``length`` subtracts from its index when it is a text token continuing the sequence (0 for
-        text; ``shift_at(self.length) == self.shift``).  Never negative: inside an image the positions stay below
-        the index."""
+        """The rotary shift after ``length`` consumed tokens: ``length - (max position among them + 1)``, never
+        negative; ``shift_at(self.length) == self.shift``."""
 
         if isinstance(length, bool) or type(length) is not int or not 0 <= length <= self.length:
             raise ValueError(f"length must be an int in [0, {self.length}], got {length!r}")
@@ -173,12 +163,11 @@ class Qwen38MRoPEPositions:
         return length - (int(self.axes[:, :length].max().item()) + 1)
 
     def tail_is_plain(self, length: int) -> bool:
-        """Whether every token from the index block start of token ``length - 1`` (``(length - 1) & ~3``) through
-        ``length - 1`` is a plain text token of the final shift, i.e. sits at ``index - shift_at(length)`` on every
-        axis.  The device's 1-row bodies rotate a block's pooled index key at the block's FIRST token's row, which
-        they derive as ``(P & ~3) - S``: exact only when that token is such a text token (the reference reads the
-        token's own three-axis row).  The chat template ends a prompt with at least four text tokens after the last
-        image, so this holds for every rendered prompt; a caller checks it before the decode."""
+        """Whether tokens ``(length - 1) & ~3`` through ``length - 1`` all sit at ``index - shift_at(length)`` on every
+        axis.
+
+        The device's 1-row bodies rotate a block's pooled key at row ``(P & ~3) - S``, exact only then; a caller
+        checks it before the decode."""
 
         if isinstance(length, bool) or type(length) is not int or not 1 <= length <= self.length:
             raise ValueError(f"length must be an int in [1, {self.length}], got {length!r}")
@@ -270,9 +259,8 @@ def expand_image_pads(
 def mrope_rows(
     axes: torch.Tensor, table_cos: torch.Tensor, table_sin: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """The cos/sin rows ``[R, 64]`` of tokens with (t, h, w) positions ``axes`` ``[3, R]`` from the plain tables
-    (:func:`rope_table`): column c reads axis ``(c % 32) % 3``.  Rows whose three positions agree are bitwise the
-    table rows."""
+    """The cos/sin rows ``[R, 64]`` of positions ``axes`` ``[3, R]`` from the plain tables: column c reads axis
+    ``(c % 32) % 3``."""
 
     if axes.dtype != torch.int64 or axes.ndim != 2 or axes.shape[0] != 3:
         raise ValueError(f"MRoPE axes must be int64 [3, R], got {axes.dtype} {tuple(axes.shape)}")

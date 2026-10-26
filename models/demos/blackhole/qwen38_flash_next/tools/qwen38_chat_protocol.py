@@ -3,16 +3,10 @@
 
 """OpenAI chat protocol for the Qwen3.8 server: request normalisation, tool-aware rendering, reply assembly.
 
-Request side: the client's messages and tools are changed only where the
-reference (``tokenizer.apply_chat_template`` on the raw request) needs help,
-``arguments`` sent as a JSON string and ``content: null``; the tools render in
-the client's key order, which ``tojson`` follows.  The device prompt of every
-request is that reference render: a follow-up turn holds the served reply as
-the template re-renders it (its content and tool calls, an empty think block),
-never the recorded reasoning ids.  Reply side: generated token ids become
-``reasoning_content``, ``content`` and ``tool_calls`` pieces in the order the
-model emitted them, with the whitespace the template trims held back, so the
-streamed and the non-streamed message agree.
+The device prompt of every request is the reference render (``tokenizer.apply_chat_template`` on the request, with
+JSON-string ``arguments`` and ``content: null`` normalised; tools keep the client's key order). Generated ids become
+``reasoning_content``, ``content`` and ``tool_calls`` pieces in emission order, so the streamed and the non-streamed
+message agree.
 """
 
 from __future__ import annotations
@@ -47,13 +41,11 @@ FUNCTION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
 
 # The client's reasoning_effort (OpenAI values plus the template's own) -> the template's level.
 EFFORT_LEVELS = {"minimal": "low", "low": "low", "medium": "medium", "high": "xhigh", "xhigh": "xhigh"}
-# Reasoning tokens before </think> is forced, per level; None = only the answer reserve bounds it (xhigh is unbounded
-# within the request's max_tokens, which defaults to the remaining context; the model card wants 32k of output room).
+# Reasoning tokens before </think> is forced, per level; None: only the answer reserve within max_tokens bounds it.
 THINKING_TOKEN_CAPS = {"low": 4096, "medium": 16_384, "xhigh": None}
 ANSWER_RESERVE_TOKENS = 256
-# Image parts (OpenAI content-part shape): ``data:`` URLs only in this release (the server fetches nothing); the
-# ``detail`` field is honoured (``low`` caps the pixel count, ``auto`` / ``high`` run the stock processor).  Video
-# parts are refused in every spelling; so are images outside user messages and unknown part types.
+# Image parts: ``data:`` URLs only (the server fetches nothing); ``detail`` ``low`` caps the pixel count. Video parts,
+# images outside user messages and unknown part types are refused.
 IMAGE_DETAILS = ("auto", "low", "high")
 IMAGE_MEDIA_TYPES = ("image/jpeg", "image/png", "image/webp", "image/gif", "image/bmp")
 MAX_IMAGE_BYTES = 16 << 20  # decoded bytes of one image (the request body cap bounds the base64 form)
@@ -140,9 +132,8 @@ def _image_part(item: Mapping[str, Any], where: str, *, message_index: int, part
 def _content(
     value: Any, where: str, *, role: str, message_index: int, images: list[Qwen38ImagePart] | None
 ) -> str | list[dict[str, str]]:
-    """A message's content for the template: a string, or a list of ``text`` items and (user messages, when the
-    caller collects ``images``) ``image`` items, one per accepted ``image_url`` part, in order.  Video parts and
-    unknown part types are refused, never dropped."""
+    """A message's content for the template: a string, or ``text`` and ``image`` items in order. Video and unknown
+    parts are refused, never dropped."""
 
     if value is None:
         return ""
@@ -215,11 +206,9 @@ def _tool_call(call: Any, where: str) -> dict[str, Any]:
 
 
 def normalize_messages(messages: Any, *, images: list[Qwen38ImagePart] | None = None) -> list[dict[str, Any]]:
-    """The template's message schema from the client's: roles and order checked, ``content: null`` -> "",
-    string ``arguments`` -> dict; ``id``, ``name`` and ``tool_call_id`` dropped (the template ignores them).
-    ``images`` (a list the caller owns) collects the user messages' ``image_url`` parts as :class:`Qwen38ImagePart`
-    in prompt order, each rendered as one ``image`` item (the template's one ``<|image_pad|>``); without it an image
-    part is refused."""
+    """The template's message schema from the client's: roles and order checked, ``content: null`` -> "", string
+    ``arguments`` -> dict. ``images`` (owned by the caller) collects the user messages' image parts in prompt order;
+    without it an image part is refused."""
 
     if not isinstance(messages, list) or not messages:
         raise Qwen38ChatRequestRejected(
@@ -381,9 +370,8 @@ def render_prompt(
     images: list[Qwen38ImagePart] | None = None,
     image_grids: Sequence[Any] = (),
 ) -> list[int]:
-    """Prompt ids of a client request: normalise, validate, render with the generation prompt, encode; with images,
-    the template's one ``<|image_pad|>`` per image is expanded to the grid's merged-token count
-    (``mrope.expand_image_pads``; ``image_grids`` are the images' grids in prompt order, one per collected part)."""
+    """Prompt ids of a client request: normalise, validate, render with the generation prompt, encode. Each image's
+    ``<|image_pad|>`` expands to its grid's merged-token count (``image_grids`` in prompt order)."""
 
     text = render_chat(
         tokenizer,
@@ -414,15 +402,9 @@ def render_prompt(
 class Qwen38ReplyAssembler:
     """Generated ids -> OpenAI message pieces, one ``push`` per token, ``finish`` at the end.
 
-    Phases: reasoning (until 248069), content, tool (between 248058 and 248059,
-    parsed as one block at its end, its arguments typed by ``tools``).  A tag id
-    acts only in the phase that expects it and is text anywhere else: a tool
-    block drafted inside the reasoning is reasoning, think tags quoted in the
-    answer or inside a tool block are their text.  Held back: a split UTF-8
-    sequence, the whitespace at each phase's edges (the template trims it), the
-    tail that could start a stop string.  A block the parser rejects, or one cut
-    by the token budget, is emitted as raw content; the caller logs
-    ``parse_errors``.
+    Phases: reasoning, content, tool (parsed as one block at its end). A tag id acts only in the phase that expects
+    it and is text anywhere else. Held back: a split UTF-8 sequence, the whitespace the template trims at phase edges,
+    and a tail that could start a stop string. A rejected or truncated tool block is emitted as raw content.
     """
 
     def __init__(

@@ -154,10 +154,9 @@ def _tile_matrix_bytes(rows: int, columns: int) -> int:
 def vision_resident_layout(*, mesh_size: int = 4) -> dict[str, int]:
     """Per-device BF16 bytes of the device tower's resident weights (``ttnn/vision.py``'s layout, MODELED from shapes).
 
-    Everything is replicated on every device except the merger's second linear, whose output columns are sharded
-    over the mesh (each device produces its 640 hidden columns).  Head dim 72 is zero-padded to 96 in the fused
-    q/k/v projection (its output columns) and the attention output projection (its input rows); the MLP width 4304
-    is padded to 4320.  The position table stays on the host (its per-grid resampling is host work).
+    Everything is replicated except the merger's second linear, sharded by output columns.  Head dim 72 is padded to
+    96 in the fused q/k/v and the attention output projections; the MLP width 4304 to 4320.  The position table stays
+    on the host.
     """
 
     if mesh_size <= 0 or VISION_OUT_HIDDEN % mesh_size:
@@ -209,14 +208,10 @@ def plan_a_per_device_weight_bytes(
 ) -> dict[str, int]:
     """Account for the conservative baseline weight placement on each device.
 
-    Routed experts use BF4_B and shard the 512-expert axis. Other matrix
-    payloads remain BF16 in this admission bound even when the eventual loader
-    uses BF8_B. QSA's two KV heads use two head groups, with each head replicated
-    on two devices. The one-head indexer key is replicated while its four query
-    heads are sharded. One-dimensional parameters are conservatively replicated.
-    The vision tower is omitted unless ``vision_resident``: then its device layout
-    (``vision_resident_layout``) is added as ``vision_bf16_resident`` and joins the
-    device total, with its position table under ``host_only``.
+    Routed experts use BF4_B and shard the 512-expert axis; other matrices count as BF16 even where the loader uses
+    BF8_B.  QSA's two KV heads are each replicated on two devices; the one-head indexer key is replicated and its four
+    query heads are sharded; one-dimensional parameters are replicated.  The vision tower counts only with
+    ``vision_resident`` (as ``vision_bf16_resident``, its position table under ``host_only``).
     """
 
     if mesh_size != 4:

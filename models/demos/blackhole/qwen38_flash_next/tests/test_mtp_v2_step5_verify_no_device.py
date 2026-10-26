@@ -1,20 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""MTP v2 step 5: the verify pass's new device paths on the torch-backed ttnn of step 4.
+"""MTP v2 step 5: the verify pass's device paths on the step-4 torch-backed ttnn (no device).
 
-No device.  The step-4 fake (``test_mtp_v2_step4_rows_no_device``) is extended with the integer, cache-write,
-lookup and select ops the verify path adds (exact UINT32 ops on int64, ``embedding`` as a row gather, the two
-cache writers as slab/row stores, ``gather`` / ``argmax`` / ``transpose`` as data movement).  What is pinned:
-
-* the per-pass QSA verify inputs against their torch reference at straddling and non-straddling positions;
-* the state rule after a partial accept, for every accept count a in 0..k and both KV-block cases: after the
-  next pass the packed KV rows and the compressed blocks every sparse row / indexer mask of that pass can name
-  equal the sequential 1-row stream, and the raw history holds the three raw keys before the new position;
-* the device accept logic exact for every match pattern and for ids 2048 / 95859 / 62086 / 248044 / 248319;
-* the rows forms of the greedy resolve, the final mixer and the MTP input mixer bitwise their 1-row forms;
-* source pins: commit before forward in every layer, no host tensor creation inside the traced body, the
-  position update last, selects by gather, the hardware-proven flags untouched.
+The state rule: after a partial accept and the next pass, every KV row and compressed block that pass can name
+equals the sequential 1-row stream, and the raw history holds the three raw keys before the new position.
 """
 
 from __future__ import annotations
@@ -886,11 +876,10 @@ def test_moe_row_admission_and_flags_are_untouched(expect_error) -> None:
         5,
         5,
         6,
-    ]  # k = 5 runs the 6-row form since its silicon proof (ROWS6_HARDWARE_PROVEN)
+    ]  # k = 5 runs the 6-row form (ROWS6_HARDWARE_PROVEN)
     assert mtp_v2.SUPPORTED_DRAFTS == (3, 4, 5) and mtp_v2.DEFAULT_DRAFTS == 4
-    # The 32-row form holds every k up to 31 (the DRAM admission's estimate keys k = 5..8 by it); the QSA verify path
-    # caps a pass at VERIFY_MAX_ROWS = 6 rows, so k = 5 is the largest draft count the verify runs.
-    # k = 5 runs the 6-row form since its silicon proof (ROWS6_HARDWARE_PROVEN); 6..8 the 32-row form
+    # The 32-row form holds every k up to 31; the QSA verify path caps a pass at VERIFY_MAX_ROWS = 6 rows, so k = 5 is
+    # the largest draft count the verify runs.
     assert [mtp_v2.moe_rows_for(k + 1) for k in range(5, 9)] == [6, 32, 32, 32] and mtp_v2.moe_rows_for(32) == 32
     assert max(mtp_v2.SUPPORTED_DRAFTS) + 1 == qsa_module.VERIFY_MAX_ROWS
     with expect_error(ValueError):  # allow-pytest.raises: the row bound is a contract
@@ -900,7 +889,7 @@ def test_moe_row_admission_and_flags_are_untouched(expect_error) -> None:
         5,
         5,
         6,
-    ]  # k = 5 runs the 6-row form since its silicon proof (ROWS6_HARDWARE_PROVEN)
+    ]  # k = 5 runs the 6-row form (ROWS6_HARDWARE_PROVEN)
     assert mtp_v2.resolve_moe_rows(6, 6) == 6 and mtp_v2.resolve_moe_rows(4, 5) == 5
     source = inspect.getsource(mtp_v2._allocate_layer_verify_state)
     assert "admitted_rows=SUPPORTED_ROWS if moe_rows in SUPPORTED_ROWS else (moe_rows,)," in source
@@ -1039,8 +1028,8 @@ def test_qsa_verify_methods_are_the_chunk_ops_plus_two_block_writes_without_host
         "_write_compressed_index_verify",
         "_score_blocks_chunk",
         "_materialize_rows_chunk",
-        # the qsa_rows family (on by default since 2026-09-26): the fused main tail of the verify rows, then the
-        # attention on its query; the chain's projection + KV write + attention stay as the fallback branch
+        # the qsa_rows family: the fused main tail of the verify rows, then the attention on its query; the chain's
+        # projection + KV write + attention stay as the fallback branch
         "_main_tail_rows_step",
         "_sparse_value_attention_rows",
         "_main_projection_rows",
@@ -1121,9 +1110,7 @@ def test_rows_resolve_and_host_row_images_keep_the_one_row_paths() -> None:
 def test_alignment_rows_consume_the_target_predictions_so_row_a_sees_the_committed_token() -> None:
     """Alignment row j takes argmax_j, the token at P + j + 1 (the accepted draft d_{j+1} for j < a, t' for j = a).
 
-    The shifted verify tokens ``[d_1 .. d_k, t']`` hand row a the rejected draft ``d_{a+1}`` whenever a < k, so
-    ``d_1'`` predicts the successor of a token the pass never committed and every later draft grows from it (the
-    0.17 to 0.45 accepted drafts per pass of the first chain run against a CPU alpha_1 of 0.72 to 1.0).
+    The shifted verify tokens ``[d_1 .. d_k, t']`` would hand row a the rejected draft ``d_{a+1}`` whenever a < k.
     """
 
     for k in mtp_v2.SUPPORTED_DRAFTS:

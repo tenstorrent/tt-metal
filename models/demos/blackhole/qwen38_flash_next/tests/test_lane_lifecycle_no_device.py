@@ -189,7 +189,7 @@ def test_layout_constants_and_families_follow_the_storage_plan():
         and families["kv"].layout is lanes_module.ttnn.ROW_MAJOR_LAYOUT
     )
     assert families["recurrent"].dtype is lanes_module.ttnn.float32
-    # 13,056 bytes per context row + the fixed per-lane bytes (the lane-state fork micro-test's 83,162,112 at 4k).
+    # 13,056 bytes per context row + the fixed per-lane bytes (4k: the measured lane-state image).
     for context in (4096, 8192, 32768):
         assert _fake_layout(8, context).image_bytes_per_device() == 13_056 * context + 29_684_736
     assert _fake_layout(8, 4096).image_bytes_per_device() == 83_162_112
@@ -316,7 +316,7 @@ def test_model_lane_layout_glue_collects_every_family_and_leaves_the_position_ro
         assert field in glue, field
     assert "layout.validate(self.mesh_contract)" in glue
     assert "state.position" not in glue.split('"""')[2]  # the row stays with the model (the docstring names it)
-    # The 1-row production bodies and the lane bodies of B3 are not touched by the glue.
+    # The glue leaves the 1-row production bodies and the lane bodies alone.
     for name in (
         "forward_decode",
         "capture_decode_generic",

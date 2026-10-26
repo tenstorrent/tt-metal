@@ -9,20 +9,15 @@
     python -m ...tools.ci.q38_ci report --run RUN_DIR                       # the observed-vs-expected table
 
 ``pins.json`` (next to this file) holds every gated number: a pin is ``<job>/<configuration>/<metric>`` with a rule
-(``band`` = symmetric relative band, two-sided like tt-metal's model targets: too fast is a stale target; ``floor`` =
-target minus slack; ``ceiling`` = target times 1 + tolerance; ``not_earlier`` for divergence indices, null being the
-largest; ``exact``; ``at_most``; ``flips`` for per-item eval answers), a status (``todo`` warns only; ``active``
-gates) and its seeds.  A pin with ``baseline: true`` compares a per-key map (per prompt, item or task) against
-``baselines/<pin id with - for />.json``.  A job may name the pin family it belongs to (``pin_job``, default
-its id) so one run can carry a family's columns as separate jobs (A2 over two oracle columns).  ``todo`` pins are promoted by ``seed`` once three idle runs agree within
-the pin's tolerance: the target is the median (``band``, ``ceiling``), the minimum (``floor``) or the common value.
+(``band`` = symmetric relative band; ``floor`` = target minus slack; ``ceiling`` = target times 1 + tolerance;
+``not_earlier`` for divergence indices, null being the largest; ``exact``; ``at_most``; ``flips`` for per-item eval
+answers), a status (``todo`` warns only; ``active`` gates) and its seeds.  A pin with ``baseline: true`` compares a
+per-key map against ``baselines/<pin id with - for />.json``.  ``seed`` promotes ``todo`` pins once three idle runs
+agree within the pin's tolerance.
 
-A job result (``qwen38-ci-result/v1``) records the host, lane, head, runtime identity, the load average, the item
-ids, every observed value and one verdict per pin with observed and expected side by side.  Device-timed pins are
-``not_gated`` when the 1-minute load average is above the idle threshold (a ``loaded_tolerance`` on the pin widens
-the band instead).  The metric definitions read the artifacts the existing tools write: the corpus scorer's
-``score.json`` (A1), the server's ``acceptance.json`` plus the runner's probes (A3), the timing runner's result,
-the server's ledger and the probes (D1), lm-eval ``samples_*.jsonl`` files (C1/C2).
+A job result (``qwen38-ci-result/v1``) records the runtime identity, the load average, every observed value and one
+verdict per pin with observed and expected side by side.  Device-timed pins are ``not_gated`` when the 1-minute load
+average is above the idle threshold.
 """
 
 from __future__ import annotations

@@ -1,61 +1,40 @@
-# Source provenance
+# Provenance
 
-This implementation is ported from the source maintained and optimized by
-**Samuel Jett** ([sjettTT](https://github.com/sjettTT), sjett@tenstorrent.com), in
-[sjettTT/tt-qwen-3.8-flash-next](https://github.com/sjettTT/tt-qwen-3.8-flash-next)
-at immutable commit `cd9a11771107ea2c27da3303a0556ff7343e4af5`.
-That snapshot contains 452 tracked files in this model subtree. The original
-source checkout and its measurement records are preserved separately from the
-publication port and its newly measured results.
+## Source
 
-The initial source export, commit `2f6fcf1a6dccf91cf480c66dab31afe25f7729c3`,
-records both Author and Committer as `Codex <codex@openai.com>`. This export
-attribution is distinct from Samuel Jett's source maintenance, subsequent
-optimizations and original operation commits retained below.
+Ported from [sjettTT/tt-qwen-3.8-flash-next](https://github.com/sjettTT/tt-qwen-3.8-flash-next) at commit
+`cd9a11771107ea2c27da3303a0556ff7343e4af5`, written and maintained by **Samuel Jett**
+([sjettTT](https://github.com/sjettTT), sjett@tenstorrent.com). The source's initial export commit,
+`2f6fcf1a6dccf91cf480c66dab31afe25f7729c3`, records both Author and Committer as `Codex <codex@openai.com>`; the
+maintenance, optimizations and operation commits after it are Samuel Jett's.
 
-The current integration builds on tt-metal main and calls only operations main has.
-Samuel Jett's compact packing [#57564](https://github.com/tenstorrent/tt-metal/pull/57564)
-and extent-one local output [#57448](https://github.com/tenstorrent/tt-metal/pull/57448)
-are merged upstream. The retired pipeline [#58476](https://github.com/tenstorrent/tt-metal/pull/58476)
-is closed; its kernels and launch switches are not part of this integration.
+Not ported: the source's fused kernels `qsa_score_pages` (32-row verify tile), `moe_combine`, `gdn_prefill_rows` and
+`sparse_sdpa_tiled`. The op chains they replaced run instead, and their `QWEN38_FUSED` / `QWEN38_FUSED_OFF` names
+are not registered. Measurements and baselines carried over from the source (`tools/ci/baselines/`) are source
+results, not results for this port.
 
-The model selects the public local-output path with `cluster_axis=0` on its 1x4 mesh,
-which runs the ring program and writes owned expert rows into the caller's persistent
-output. The model's existing fill or owner-masked reduction controls unowned rows.
-Main's `moe_compute` caps one such call at 128 tokens for this model, so the model refuses
-`--prefill-slab` at start-up there and serves the chunked prefill; packed routing
-[#60469](https://github.com/tenstorrent/tt-metal/pull/60469) lifts that cap.
+## Upstream work used
 
-The port leaves out four of the source's fused kernels: `qsa_score_pages` on the
-32-row verify tile, and the slab's `moe_combine`, `gdn_prefill_rows` and
-`sparse_sdpa_tiled`. The op chains they replaced run instead; the first three
-matched their chains bitwise, `sparse_sdpa_tiled` to tolerance. The `QWEN38_FUSED`
-and `QWEN38_FUSED_OFF` names that `docs/` gives for them are not registered, so a
-run that sets one stops at start-up.
+- Samuel Jett's tt-metal changes [#57564](https://github.com/tenstorrent/tt-metal/pull/57564) (compact expert
+  packing) and [#57448](https://github.com/tenstorrent/tt-metal/pull/57448) (extent-one local output for
+  `moe_compute`), both merged.
+- Izajasz Wrosz's public GDN operation, [#57440](https://github.com/tenstorrent/tt-metal/pull/57440) (commit
+  `96cc4a7937f19ee205717577fcf4d10269d043b4`): `ttnn.transformer.chunk_gated_delta_rule` runs every GDN chunk
+  recurrence (the 32- and 128-row prefill chunks, the verify-rows wrap and the lanes with the fold off). Its
+  arithmetic differs from the source's in the last bits, so greedy streams are not the source's word for word.
+- vllm-tt-plugin commit `1d87a00e7d91ec246582d07865ec4f8b0a8fb25c`, through its `EXTRA_MODELS_DIR` route.
 
-Every GDN chunk recurrence (the 32- and 128-row prefill chunks, the verify-rows wrap
-and the lanes with the fold off) calls Izajasz Wrosz's merged upstream
-[PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440) operation,
-`ttnn.transformer.chunk_gated_delta_rule`, on the model's normalized rank-four q/k
-with the model's query scale. The port adds no prep/scan binding. That operation's
-arithmetic differs from the frozen source's in the last bits, so the model's greedy
-streams are not the source's word for word.
+## Derived code
 
-Port adaptations preserve the model's numerical policy while using current
-trace-allocation APIs and the current native build. The native operation selects its supported implementation; the model does not
-request private replay-ring or pipeline variants. The vLLM adapter declares its fabric settings
-through model capabilities before device creation, using the existing
-`EXTRA_MODELS_DIR` route in plugin commit
-`1d87a00e7d91ec246582d07865ec4f8b0a8fb25c`.
+- `ttnn/fused/kernels/source_reciprocal.h`: the source's
+  `tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_rsqrt_compat.h`, verbatim apart from names and
+  formatting.
+- `ttnn/fused/kernels/source_softplus.h`: the source's softplus arithmetic, adapted from tt-metal's
+  `ckernel_sfpu_gelu.h` tail.
+- `tests/data/source_sfpu_rounding/`: fixtures recorded on the source commit.
 
-The serving adapter has one resident slot and no MTP. Its `decode_only` sampling
-route samples the full-vocabulary row on the CPU and returns only the selected
-token ID to the plugin; requests needing full logits return that row to the
-plugin's host sampler. Standalone MTP measurements describe a separate
-execution mode and are not vLLM throughput.
+## Licensing
 
-Historical measurements and proposal pins shipped with the source are source
-evidence, not validation passes for this port. In particular, the plain slab
-baseline predates the source's default `gr_recip_last` policy, while the newer
-chunked and MTP baselines include it. Configuration, policy, sample count, EOS
-handling, and reference coverage must accompany comparisons.
+Apache-2.0, as the rest of tt-metal. The SPDX headers name Tenstorrent AI ULC or Tenstorrent USA, Inc.;
+`ttnn/fused/kernels/source_reciprocal.h` also names `© 2025 Jason Davies`. No model weights are included:
+`tools/download_checkpoint.py` fetches the pinned checkpoint revision.

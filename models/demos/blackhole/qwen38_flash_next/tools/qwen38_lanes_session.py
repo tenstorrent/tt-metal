@@ -5,29 +5,14 @@
 device protocol :class:`~models.demos.blackhole.qwen38_flash_next.tools.qwen38_lane_scheduler.Qwen38LaneScheduler`
 drives from its one device thread.
 
-The single-lane chain stays resident: it is the prefill engine (its chunk traces, the forced last step, the generic
-and alignment generic states -- ``Qwen38ChatSession``'s own prefill section) and the referee of the startup pin.  The
-lanes take the rest: ``B`` lanes verify ``R = k + 1`` rows each in one tile (``ttnn/mtp_lanes.py``), every request a
-lane whose state was imported from the single-lane state after its prompt's prefill (the stage-2 admission path),
-with the three lane traces (``verify_first``, ``commit``, ``draft``) replayed by the lane chain's pass loop.
-
-Allocation order (the tracker's rule: every buffer a trace bakes an address around exists before any capture): the
-pagers, their host slots and the lane verify / draft states are allocated in the traced chain's WARM HOOK (after its
-warm pass, before its captures), the lane import programs compile there (the generic state as it stands, imported at
-four consecutive positions into every lane: every GDN ring phase and QSA raw-history residue variant per lane index)
-and the lane bodies run two eager passes (their programs); the chain then captures its own traces; the three lane
-traces are captured after them, the allocation tracker verifies every trace, and the program cache must not have
-grown.  From then on the program-cache miss guard stays closed: an admission's prefill, eviction and import are
-replays and warmed eager programs, so a program the warm-up missed raises instead of compiling under live traces.
-An admission is a sequence of device segments (the chunk groups of the prefill, one event per 128 prompt rows; the
-forced last step; the eviction; the import), and between them the scheduler may run the decoding lanes' passes
-(:meth:`Qwen38LanesSession.admit`'s ``between``): the lane traces and the chunk traces share the one command queue
-in order, the lane states and the traced chain's state are disjoint buffers, and every eager move (the seed, the
-hand-off, the eviction, the import) follows a device synchronize or a blocking readback, as it did before.
-
-Greedy only (the lane body resolves by argmax; the sampled lanes form is a later wave).  The verify-rows fold
-(``gdn_rows_scan``) serves the lanes through its lanes form (its prefix states are allocated with the lane verify state,
-its dispatch is the registry's), so the referee chain and the lanes run the served default set, bitwise alike.
+The single-lane chain stays resident as the prefill engine and the startup pin's referee; each request runs in a lane
+whose state is imported from the single-lane state after its prompt's prefill.  Every buffer a trace bakes an address
+around is allocated in the traced chain's warm hook, before any capture, where the lane programs also compile; after
+the captures the program-cache miss guard stays closed, so an admission runs only replays and warmed eager programs.
+Between an admission's segments the scheduler may run the decoding lanes' passes: the lane and chunk traces share one
+command queue in order, the lane states and the chain's state are disjoint, and every eager move follows a device
+synchronize or a blocking readback.  Greedy only; the verify-rows fold serves the lanes through its lanes form, so the
+referee chain and the lanes stay bitwise alike.
 """
 
 from __future__ import annotations
@@ -59,7 +44,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn.layer import PLE_CHECKPOINT_L
 # The residue variants an import compiles: the GDN ring phase and the QSA raw-history slot rows are ``position % 4``.
 IMPORT_RESIDUES = gdn_module.CONV_KERNEL_SIZE
 # The eager passes before the captures: the bootstrap (host-written rows) and one split step (commit, PLE rows,
-# verify, draft), as the stage-3 tool ran them; every program of the three bodies compiles here.
+# verify, draft); every program of the three bodies compiles here.
 EAGER_PASSES = 2
 WARM_TOKEN_ID = 1  # any exact vocabulary id for the warm passes' rows
 # The admission prefill's event cadence in prompt rows: one event (and one ``between`` call, the scheduler's yield
@@ -341,20 +326,13 @@ class Qwen38LanesSession:
     def admit(
         self, lane: int, ticket: Qwen38LaneTicket, between: Callable[[str, int, int], float] | None = None
     ) -> Qwen38LaneAdmitted:
-        """The request's prompt prefilled on the traced chain (the session's own prefill section: the reset, the
-        chunked prefill of all but the last token when the prompt admits it, the last token forced, the model's next
-        token read from the row), the generic and alignment states evicted into the host slots, the image imported
-        into ``lane``.  An image prompt (``ticket.images``) runs its images through the resident tower first (the
-        ``"tower"`` segment) and prefills through the chunk driver with its rotary positions and feature rows, as
-        the single stream does; the lane takes the prompt's rotary shift at the import (the decode shift the
-        single stream sets at its hand-off), 0 for text.
+        """Prefill the request's prompt on the traced chain, evict its generic and alignment states into the host
+        slots and import them into ``lane``.  An image prompt runs its images through the resident tower first; the
+        lane takes the prompt's rotary shift at the import (0 for text).
 
-        ``between`` is the scheduler's yield point between the admission's device segments: called after the
-        tower (``"tower"``), after every 128 prompt rows of the chunked prefill (``"chunks"``, with the rows consumed
-        and the rows of the prefill), after the forced last step and its row read (``"prefilled"``) and after the
-        eviction (``"evicted"``), each time with the device idle and every chunk input for the next segment prepared
-        but not uploaded; it returns the seconds it spent (the decoding lanes' passes), which the segment records
-        below exclude.  None: the admission runs whole (the single-stream event cadence)."""
+        ``between`` is the scheduler's yield point, called between the admission's device segments
+        (:data:`ADMISSION_SEGMENTS`) with the device idle; it returns the seconds it spent (the decoding lanes'
+        passes), which the segment records exclude.  None runs the admission whole."""
 
         session, chain, model = self.session, self.chain, self.model
         if session is None or self.lane_chain is None:

@@ -39,7 +39,7 @@ REAL_SPEC = build_ngram_hash_spec(
     seed=1234,
     divisible_by=128,
 )
-# The 33-token chain the per-position sequential mode produced on 4x p150 at aef39cde.
+# A 33-token chain from a device run of the per-position sequential mode.
 CHAIN_33 = (
     17,
     15,
@@ -417,11 +417,9 @@ def _hashed_rows(host, tokens, context=None) -> list[int]:
 def test_resident_batch_proves_each_touched_file_once_and_reads_each_distinct_row_once(
     tmp_path, monkeypatch, parts_per_file
 ):
-    """One MTP pass's rows through ``_read_rows``: the file guard's identity is re-proved with one ``fstat`` per touched
-    shard FILE before and after the batch (the identity is the file's; the per-part ``advise`` / ``read_rows`` would
-    pay three per touched part), every distinct row gets one WILLNEED before any row is read (the page-ins of cold
-    rows overlap: the deterministic form of the cold-rows guarantee, its timing is not) and one ``pread``; the bytes
-    are the per-part checked reads' bytes in request order, duplicates included."""
+    """One MTP pass's rows through ``_read_rows``: one ``fstat`` per touched shard file before and after the batch,
+    one WILLNEED per distinct row before any row is read, then one ``pread`` each; the bytes are the per-part checked
+    reads' bytes in request order, duplicates included."""
 
     weight_map = _synthetic_corpus(tmp_path, parts_per_file=parts_per_file)
     checkpoint = _SyntheticCheckpoint(tmp_path, weight_map)

@@ -3,11 +3,7 @@
 
 """Exact speculative sampling on the MTP verify rows, without a device.
 
-The point-mass acceptance (``ttnn/speculative_sampling.py``): its output law, integrated exactly over the uniforms,
-is the target's per row and over a whole pass; the row distributions are the plain samplers' before their draw and
-fall back exactly where the candidate sampler does; the draws come from the request's generator in the fixed order;
-the greedy host decision equals the device accept model; the head readback parses; the split traces need the commit
-form; the verify forms table and the capacity admission's record at the default configuration.
+The point-mass acceptance's output law, integrated exactly over the uniforms, is the target's per row and per pass.
 """
 
 from __future__ import annotations
@@ -624,8 +620,7 @@ def test_verify_forms_table_and_the_default_records_capacity_admission(expect_er
     )
     with expect_error(ValueError, match="must be a bool"):
         session_module.mtp_verify_forms(1)
-    # The record at the default's configuration (k = 4, both forms): the six-trace row measured 2026-09-25
-    # (11,107,904 bytes per bank of traces, 74,514,048 in all) fits the estimate.
+    # The default configuration's record (k = 4, both forms) fits the estimate.
     record = session_module.mtp_capacity_admission(32768, drafts=4, verify_forms=2)
     assert record["verify_forms"] == 2 and record["mtp_growth_remainders_bytes_per_bank"]["traces"] == 11_107_904
     assert record["mtp_growth_remainders_bytes_per_bank"]["traces_per_additional_verify_form"] == 4_717_760

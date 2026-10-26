@@ -3,17 +3,8 @@
 
 """The sampled MTP pass loop of the chat session on a scripted chain (no device).
 
-A fake device model (deterministic logits per history) and a fake drafter (the model's argmax, wrong every third
-draft) stand behind the chain primitives the session calls; the chain runs both verify forms' contracts as the served
-chain routes them (``mtp_enter``): a greedy request's passes run the fused form (the device's verdict inside the body,
-no head readback, no host decision), a sampled request's the split form (the head's readback: argmaxes, the device's
-greedy verdict, the per-row candidate rows, goes to the host's ``decide``, whose verdict the tail lands); either way the
-decision's rows are committed at the next pass or at the leave.  What is pinned: the greedy pass loop still gives
-the greedy stream; the sampled pass loop gives the stream the design's algorithm produces from the same rows and
-draws (the host re-derivation), every emitted token has positive probability under the target's conditional at its
-position, the committed sequence and the row match the 1-row loops' finish semantics; the hand-offs (no room, EOS,
-the thinking budget, a hook stop) feed the pending token by a forced step and continue on ``generate_sampled``;
-the admission refuses what the rows cannot bound.
+Greedy requests run the fused verify form, sampled requests the split form with the host's ``decide``; the sampled
+stream must equal the host re-derivation from the same rows and draws.
 """
 
 from __future__ import annotations
@@ -255,9 +246,7 @@ def _greedy_stream(prompt: list[int], count: int) -> list[int]:
 
 
 def _expected_sampled_stream(prompt: list[int], parameters: Qwen38SamplingParameters, count: int) -> list[int]:
-    """The design's algorithm on the fake model from the request's seed: the entry token sampled from the row, then
-    passes (the bootstrap's placeholder drafts first) decided by the point-mass acceptance over the rows' candidate
-    distributions with the pass's histories; the first ``count`` emitted tokens."""
+    """The first ``count`` tokens the sampled pass loop must emit on the fake model from the request's seed."""
 
     generator = torch.Generator().manual_seed(parameters.seed)
     uniform = lambda: float(torch.rand((), generator=generator, dtype=torch.float32))  # noqa: E731
@@ -301,8 +290,7 @@ def test_greedy_request_on_the_sampled_capable_chain_runs_the_fused_verify_and_g
     completion = session.complete(PROMPT, 14, stop_ids=())
     assert completion.token_ids == _greedy_stream(PROMPT, 14)
     assert completion.finish_reason == "length" and completion.mtp["passes"] >= 2
-    # Every pass ran the fused form: no host decision, so no greedy split pass was checked (accept_checks 0; the
-    # field stays in the response of a sampled-capable chain).
+    # Every pass ran the fused form: no host decision, so accept_checks stays 0.
     assert _pass_forms(chain) == {"fused"} and chain.decide is None and chain.head_full_rows is None
     assert completion.mtp["sampled"] is True and completion.mtp["accept_checks"] == 0
     assert session.committed == PROMPT + completion.token_ids[:-1] and chain.inputs == session.committed
@@ -500,8 +488,7 @@ def test_chain_mtp_summary_carries_the_split_counters() -> None:
     )
     assert set(mtp.summary()) == {"k", "anchor", "sampled", "passes", "accepted_drafts", "tokens_per_pass"}
     mtp.sampled = True
-    # A greedy split pass decided on the host (decide_greedy's record): a diagnostic's, not the served path's, whose
-    # greedy requests run the fused traces; the counter still counts it.
+    # A greedy split pass decided on the host (a diagnostic path; served greedy requests run the fused traces).
     greedy = mtp_v2.Qwen38TTNNVerifyDecision(2, 9, (7, 8, 9, 1, 2), {"accept_checks": 1})
     sampled = mtp_v2.Qwen38TTNNVerifyDecision(
         1,
@@ -586,9 +573,7 @@ def test_chain_mtp_captured_trace_ids_cover_both_forms_and_the_shared_commit_onc
 def test_traced_chain_mtp_enter_routes_greedy_to_the_fused_traces_and_sampled_to_the_split_ones(
     expect_error, monkeypatch
 ) -> None:
-    """The routing point of the hardware chain (its device calls replaced): a greedy request's pass loop is built on
-    the fused traces with no head output and no host decision, a sampled request's on the split traces with the
-    head output and its ``decide``; the eager switch in happens either way."""
+    """The hardware chain routes greedy requests to the fused traces and sampled ones to the split traces."""
 
     built: list[dict] = []
     entered: list[dict] = []
@@ -709,9 +694,7 @@ MTP_RESPONSE_KEYS = {
 
 
 def test_consecutive_requests_report_their_own_counters_and_the_chain_summary_the_totals() -> None:
-    """Every field of a response's ``qwen38.mtp`` counts that request alone, the split counters included (they
-    were chain-cumulative once: a second request reported the first's accept_checks and sampled draws on top of
-    its own); the chain's summary (``/health.mtp``) carries the totals over the requests."""
+    """A response's ``qwen38.mtp`` counts that request alone; ``/health.mtp`` carries the totals."""
 
     session, chain = _session()
     greedy = session.complete(PROMPT, 14, stop_ids=())

@@ -3,9 +3,8 @@
 
 """Source FP32 words and real-norm numerical controls under trace/address reuse.
 
-The inherited three-iteration inverse does not meet 1e-4 over every mantissa.
-That earlier wide-domain failure remains recorded. Wide fixtures test exact
-source words; the independently accurate norm mantissa keeps the 1e-4 gate.
+The three-iteration inverse misses 1e-4 over the wide mantissa domain: wide
+fixtures test exact source words; the real-norm mantissa keeps the 1e-4 gate.
 """
 import hashlib
 import json

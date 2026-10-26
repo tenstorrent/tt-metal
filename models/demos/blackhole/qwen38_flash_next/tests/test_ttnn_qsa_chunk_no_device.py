@@ -166,10 +166,9 @@ def test_device_position_advance_by_refuses_a_count_that_is_not_a_positive_int(e
 
 
 # --- P > 0: the device derivation after k chunk advances, on an exact-integer fake ------------
-# The stage-1 4x p150 micro-test ran derive_qsa_chunk_inputs against the emulation at P0 in {0, 2016, 2048, 8160, 32736}
-# at the layer level.  Here the same chain runs on a torch model of the integer ops after k in-trace ``advance_by(32)``
-# calls on the device position, so every P % 32 == 0 the model reaches by replaying (block index crossing a tile at
-# P = 128, the top-k regime at 2048, the last chunk of the resident cache) is pinned field for field.
+# The chain runs on a torch model of the integer ops after k in-trace ``advance_by(32)`` calls, so every P % 32 == 0
+# the model reaches by replaying (a tile crossing at P = 128, the top-k regime at 2048, the cache's last chunk) is
+# pinned field for field.
 
 ADVANCED_CHUNKS = (1, 2, 4, 63, 64, 127, 254, 255, 1023)
 
@@ -284,10 +283,8 @@ def integer_fake(monkeypatch):
     return fake
 
 
-# The 64k/128k/256k options: the chunk derivation at the long-context micro-test's positions (4x p150 2026-09-03:
-# every op admitted at allocated_context 65536 at decode/chunk positions 32768 and 65504, and at 131072 and 262144)
-# against the emulation at each context's top chunk (position allocated_context - 32) and its 32k/64k/128k
-# boundaries, and the 32k default's top chunk unchanged.
+# The 64k/128k/256k options: the chunk derivation against the emulation at each context's top chunk (position
+# allocated_context - 32) and its 32k/64k/128k boundaries, and the 32k default's top chunk.
 CONTEXT_POSITIONS = (
     (32_768, 32_736),
     (65_536, 32_768),

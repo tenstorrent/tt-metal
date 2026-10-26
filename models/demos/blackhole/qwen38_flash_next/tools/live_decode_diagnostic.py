@@ -3,13 +3,11 @@
 
 """Live construction of the ordinary Qwen3.8 decode on an already-open mesh.
 
-The CPU preparation binds the checkpoint, the cache roots and the runtime identity (the tt-metal commit of the
-checkout that built the loaded ``ttnn`` and the extension's digest) into the builder provenance; the live
-construction creates the exact :class:`Qwen38TTNNBuilder` on the caller's ``(1, 4)`` mesh and requires all 48
-backbone BF4 records plus MTP layer 0.  Without a corpus the builder's production ``Qwen38BF4Cache`` converts the
-routed experts from the checkpoint on the first start and reads its own cache afterwards; with a CPU-staged corpus
-(``bf4_corpus_root`` + its verification record, ``diagnostic_bf4``) a read-only adapter serves the corpus's records
-instead.  This module never discovers, opens, closes or resets a device and never configures fabric.
+The CPU preparation binds the checkpoint, the cache roots and the runtime identity into the builder provenance; the
+live construction creates the exact :class:`Qwen38TTNNBuilder` on the caller's ``(1, 4)`` mesh and requires all 48
+backbone BF4 records plus MTP layer 0.  Without a corpus the production ``Qwen38BF4Cache`` converts the routed experts
+on the first start; with a CPU-staged corpus a read-only adapter serves its records.  This module never discovers,
+opens, closes or resets a device and never configures fabric.
 """
 
 from __future__ import annotations
@@ -331,8 +329,7 @@ def _snapshot_corpus(corpus: DiagnosticBF4Corpus) -> Mapping[Path, FileSignature
 class Qwen38BF4ConsumerCompatibility:
     """A CPU-staged corpus consumed by this checkout's runtime: the producer identity the corpus records, the
     consumer identity as prepared, and the topology both sides must share (mesh shape, ring size, expert ranges).
-    The corpus's bytes are position-keyed by mesh coordinate, so the consumer's physical order may differ from
-    the producer's (the QuietBox opens 0, 2, 1, 3; a four-chip host 1, 0, 2, 3)."""
+    The corpus's bytes are keyed by mesh coordinate, so the consumer's physical order may differ from the producer's."""
 
     producer_source_head: str
     producer_runtime: Mapping[str, Any]
