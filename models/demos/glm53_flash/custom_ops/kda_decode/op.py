@@ -23,6 +23,13 @@ column) so a process that imported an older ``op.py`` keeps compiling the unchan
 * ``placement="rect"``: a slot's parts are a 2-column rectangle (``2 x h`` cores, the part-0 core top-left,
   multicast as two single-column rectangles) when that gives more parts than the column layout (16 slots on a
   12x10 grid: 6 parts / 96 cores instead of 5 / 80, i.e. 6 users per part at B = 32 instead of 7).
+* ``gated=True`` (the speculative commit, ``tt/spec_decode.py`` under ``GLM53_SPEC_COMMIT=gated``): a per-user write
+  gate ``gate [Bt, 32]`` int32 ROW_MAJOR (page ``tb`` = the 32 users of tile row ``tb``, non-zero = write) read by the
+  kernels at run time: a user whose gate is 0 gets its recurrent state tiles and its conv-history rows left byte for
+  byte as they were (the writer skips the state write, the part-0 reader merges the history shift row-wise in a scratch
+  region of ``cb_onw``), a user whose gate is 1 gets exactly the plain update. Sources ``reader_kda_decode_gated.cpp``
+  / ``writer_kda_decode_gated.cpp`` + the ``_v2`` compute kernel (compile-time arg 11 ``GATES_ACT`` as v2, one more
+  accessor block for the gate, runtime arg 20 (reader) / 7 (writer) = the gate address).
 """
 
 from __future__ import annotations
@@ -39,6 +46,8 @@ KERNEL_DIR = Path(__file__).resolve().parent / "kernels"
 TILE = 32
 GATES_MODES = ("pre", "act")
 PLACEMENTS = ("col", "rect")
+GATE_WORDS = 32  # a gate page: one int32 per user row of a 32-row tile row ([Bt, 32] int32 ROW_MAJOR, page = tile row)
+GATE_BYTES = GATE_WORDS * 4
 
 
 def f32_bits(v: float) -> int:
@@ -103,12 +112,22 @@ class KdaDecode:
         item0=0, n_items=1, stride=2, qkv=3, hist=4, taps=5, gates=6, cc=7, onw=8, sel=9, st=10, p0_x=11, p0_y=12,
         pe_x=13, pe_y=14, rb_x0=15, rb_y0=16, rb_x1=17, rb_y1=18, n_b=19,
     )  # fmt: skip
-    READER_RT_LEN = {"v1": 15, "v2": 20}
+    READER_RT_LEN = {"v1": 15, "v2": 20, "gated": 21}
+    READER_RT_GATED = dict(READER_RT, gate=20)  # the gated reader: the v2 vector + the gate address
     # compile-time scalar counts before the accessor block (reader) / in total (compute) per variant
-    READER_CT_SCALARS = {"v1": 11, "v2": 12}
-    COMPUTE_CT_LEN = {"v1": 11, "v2": 12}
+    READER_CT_SCALARS = {"v1": 11, "v2": 12, "gated": 12}
+    COMPUTE_CT_LEN = {"v1": 11, "v2": 12, "gated": 12}
     WRITER_RT = dict(item0=0, n_items=1, stride=2, out=3, st=4, p0_x=5, p0_y=6)
+    WRITER_RT_GATED = dict(WRITER_RT, gate=7)  # the gated writer: today's vector + the gate address
+    WRITER_RT_LEN = {"v1": 7, "v2": 7, "gated": 8}
     COMPUTE_RT = dict(item0=0, n_items=1, stride=2)
+    # accessor blocks per kernel: (reader, writer); the gated kernels take one more (the gate tensor, appended)
+    READER_ACCESSORS = ("qkv", "conv_hist", "taps", "gates", "chan_consts", "o_norm_w", "selectors", "recurrent")
+    WRITER_ACCESSORS = ("out", "recurrent")
+    # the gated variant's scratch region: fp32 pages appended to cb_onw after its Vt weight tiles (the CB protocol never
+    # reserves them: one reserve / push of Vt pages per kernel run) = 1 page holding the gate page (the reader's copy at
+    # +0, the writer's at +2048) + the 9 Kt merged bf16 history tiles (3 branches x 3 destination taps x Kt)
+    GATED_SCRATCH_PAGES = 1 + (9 * (128 // TILE) * TILE * TILE * 2) // (TILE * TILE * 4)
 
     def __init__(
         self,
@@ -121,6 +140,7 @@ class KdaDecode:
         math_fidelity=ttnn.MathFidelity.HiFi4,
         gates: str = "pre",
         placement: str = "col",
+        gated: bool = False,
     ):
         self.H, self.K = num_heads, head_dim
         self.V = head_dim
@@ -129,6 +149,7 @@ class KdaDecode:
         self.lb, self.l2_eps, self.norm_eps = gate_lower_bound, l2_eps, norm_eps
         self.fidelity = math_fidelity
         self.gates, self.placement_mode = gates, placement
+        self.gated = bool(gated)
 
     @property
     def gates_activated(self) -> bool:
@@ -137,13 +158,33 @@ class KdaDecode:
     @property
     def variant(self) -> str:
         """``"v1"``: every option at its default -> today's kernel sources and argument layouts; ``"v2"``: the knob
-        variant sources (``*_v2.cpp``) with compile-time arg 11 ``GATES_ACT`` and the reader's runtime args 15..19."""
+        variant sources (``*_v2.cpp``) with compile-time arg 11 ``GATES_ACT`` and the reader's runtime args 15..19;
+        ``"gated"``: the per-user write-gate sources (``*_gated.cpp`` + the v2 compute) with the gate accessor / address.
+        """
+        if self.gated:
+            return "gated"
         return "v1" if (self.gates == "pre" and self.placement_mode == "col") else "v2"
 
     def kernel_sources(self) -> tuple[str, str, str]:
-        """``(reader, writer, compute)`` kernel file names of this variant (the writer is shared)."""
+        """``(reader, writer, compute)`` kernel file names of this variant (the writer is shared by v1 / v2)."""
+        if self.gated:
+            return "reader_kda_decode_gated.cpp", "writer_kda_decode_gated.cpp", "compute_kda_decode_v2.cpp"
         sfx = "" if self.variant == "v1" else "_v2"
         return f"reader_kda_decode{sfx}.cpp", "writer_kda_decode.cpp", f"compute_kda_decode{sfx}.cpp"
+
+    def gated_twin(self) -> "KdaDecode":
+        """The same program options with the per-user write gate (the speculative commit's launches)."""
+        return KdaDecode(
+            num_heads=self.H,
+            head_dim=self.K,
+            gate_lower_bound=self.lb,
+            l2_eps=self.l2_eps,
+            norm_eps=self.norm_eps,
+            math_fidelity=self.fidelity,
+            gates=self.gates,
+            placement=self.placement_mode,
+            gated=True,
+        )
 
     # ------------------------------------------------------------------ reference
     @staticmethod
@@ -193,6 +234,18 @@ class KdaDecode:
         o = o * torch.rsqrt((o * o).mean(-1, keepdim=True) + norm_eps) * onw * gate
         new_conv = torch.cat([conv[:, 1:], qkv[:, None, :]], dim=1)
         return o.reshape(B, H * V), Sn, new_conv
+
+    @staticmethod
+    def golden_gated(qkv, gates, conv, S, taps, dt_bias, a_exp, onw, gate, **kw):
+        """``golden`` with the per-user write gate ``gate [B]`` (non-zero = write): the returned state / conv history of a
+        user whose gate is 0 is its input, bit for bit; a user whose gate is 1 gets the plain update. The output rows of
+        gated-off users are the plain launch's (the kernel computes them too; the commit discards every output)."""
+        o, Sn, conv_n = KdaDecode.golden(qkv, gates, conv, S, taps, dt_bias, a_exp, onw, **kw)
+        on = torch.as_tensor(gate).reshape(-1).bool()
+        assert on.numel() == S.shape[0], (on.numel(), S.shape)
+        Sg = torch.where(on[:, None, None, None], Sn, S)
+        convg = torch.where(on[:, None, None], conv_n, conv)
+        return o, Sg, convg
 
     @staticmethod
     def activate_gates(gates: torch.Tensor, dt_bias: torch.Tensor, a_exp: torch.Tensor, hk: int) -> torch.Tensor:
@@ -288,7 +341,7 @@ class KdaDecode:
         compute = [Kt, Vt, Bt, B, parts, f32_bits(self.lb), f32_bits(self.l2_eps), f32_bits(self.norm_eps),
                    f32_bits(K**-0.5), f32_bits(1.0 / V), it_half]  # fmt: skip
         reader = [Kt, Vt, Bt, B, H, Wq_t, Wg_t, HK_t, HV_t, parts, ONES_PAGE]
-        if self.variant == "v2":  # the variant kernels read GATES_ACT at index 11 (reader accessors from 12)
+        if self.variant != "v1":  # the v2 / gated kernels read GATES_ACT at index 11 (reader accessors from 12)
             act = 1 if self.gates_activated else 0
             compute.append(act)
             reader.append(act)
@@ -299,7 +352,8 @@ class KdaDecode:
     def runtime_args_for_core(self, c: int, n_items: int, NC: int, addrs: dict, noc, core_of, parts: int, rect_h: int):
         """``(reader, writer, compute)`` runtime vectors of core ``c``; ``addrs`` = buffer addresses keyed as
         ``READER_RT`` / ``WRITER_RT`` name them, ``noc(core) -> (x, y)`` the NoC coordinates of a logical core.
-        The v1 reader vector is today's 15 entries; the v2 one appends the second multicast column (5 entries)."""
+        The v1 reader vector is today's 15 entries; the v2 one appends the second multicast column (5 entries); the
+        gated reader / writer append the gate page address (``addrs["gate"]``: reader index 20, writer index 7)."""
         s = c // parts
         p0, pe, rb0, rb1 = self.slot_geometry(core_of, parts, rect_h, s)
         p0x, p0y = noc(p0)
@@ -308,7 +362,7 @@ class KdaDecode:
             c, n_items, NC, addrs["qkv"], addrs["hist"], addrs["taps"], addrs["gates"], addrs["cc"], addrs["onw"],
             addrs["sel"], addrs["st"], p0x, p0y, pex, pey,
         ]  # fmt: skip
-        if self.variant == "v2":
+        if self.variant != "v1":
             if rb0 is not None:
                 bx0, by0 = noc(rb0)
                 bx1, by1 = noc(rb1)
@@ -318,6 +372,9 @@ class KdaDecode:
         else:
             assert rect_h == 0, "the v1 kernels know no second multicast column"
         writer = [c, n_items, NC, addrs["out"], addrs["st"], p0x, p0y]
+        if self.gated:
+            reader.append(addrs["gate"])
+            writer.append(addrs["gate"])
         compute = [c, n_items, NC]
         return reader, writer, compute
 
@@ -326,9 +383,10 @@ class KdaDecode:
         Kt, Vt = self.K // TILE, self.V // TILE
         kv = Kt * Vt
         f32, f16 = ttnn.float32, ttnn.bfloat16
+        onw_pages = Vt + (self.GATED_SCRATCH_PAGES if self.gated else 0)  # gated: + the gate page + merge scratch
         return [
             ("hist", f16, 12 * Kt), ("taps", f16, 3 * Kt), ("gf", f32, Kt), ("gog", f32, Vt), ("gb", f32, 1),
-            ("cc", f32, Kt), ("onw", f32, Vt), ("sel", f16, 2), ("selT", f16, 2), ("S", f32, 2 * kv),
+            ("cc", f32, Kt), ("onw", f32, onw_pages), ("sel", f16, 2), ("selT", f16, 2), ("S", f32, 2 * kv),
             ("out", f16, Vt), ("state_out", f32, 2 * kv), ("qn", f32, Kt), ("kn", f32, Kt), ("vc", f32, Vt),
             ("dec", f32, Kt), ("bcol", f32, 1), ("wg", f32, Vt), ("tmp", f32, 2 * Kt), ("col", f32, 2),
             ("kd", f32, Kt), ("qd", f32, Kt), ("kcol", f32, Kt), ("decT", f32, Kt),
@@ -348,15 +406,22 @@ class KdaDecode:
             format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=idx, data_format=dtype, page_size=page)],
         )
 
-    def __call__(self, qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out):
+    def __call__(self, qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out, gate=None):
         """qkv [1,1,B,3*H*K] bf16 TILE; gates [1,1,B,H*K+H*V+Hb] fp32 TILE; conv_hist [3,B,3*H*K] bf16 TILE
         (tap-major history, tap 0 the oldest; updated in place); recurrent [B,H,K,V] fp32 TILE (updated in place);
         taps [1,1,4,3*H*K] bf16 TILE; chan_consts [1,1,2,H*K] fp32 TILE (row 0 dt_bias, row 1 exp(A_log); not read
         with ``gates="act"``); o_norm_w [1,1,1,V] fp32 TILE; selectors [34*32,32] bf16 TILE (``kda_selector_tiles``);
-        out [1,1,B,H*V] bf16 TILE (pre-allocated). Returns ``out``."""
+        out [1,1,B,H*V] bf16 TILE (pre-allocated); ``gate`` (``gated=True`` only) [Bt, 32] int32 ROW_MAJOR, row ``tb``
+        = the write gates of tile row ``tb``'s users (non-zero = the state / history of that user is written).
+        Returns ``out``."""
         H = self.H
         B = recurrent.shape[0]
         Bt = -(-B // TILE)
+        if self.gated:
+            assert gate is not None, "the gated variant needs the per-user write gate tensor"
+            assert tuple(gate.shape)[-1] == GATE_WORDS and int(gate.shape[-2]) >= Bt, (tuple(gate.shape), Bt)
+        else:
+            assert gate is None, "a write gate needs KdaDecode(gated=True)"
         device = qkv.device()
         grid = device.compute_with_storage_grid_size()
         parts, core_of, rect_h = self.placement(grid, H * Bt, self.placement_mode)
@@ -372,9 +437,14 @@ class KdaDecode:
         ]
 
         reader_acc, writer_acc = [], []
-        for t in (qkv, conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent):
+        reader_tensors = [qkv, conv_hist, taps, gates, chan_consts, o_norm_w, selectors, recurrent]
+        writer_tensors = [out, recurrent]
+        if self.gated:  # the gate accessor is the last block of both kernels
+            reader_tensors.append(gate)
+            writer_tensors.append(gate)
+        for t in reader_tensors:
             reader_acc += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        for t in (out, recurrent):
+        for t in writer_tensors:
             writer_acc += ttnn.TensorAccessorArgs(t).get_compile_time_args()
         reader_ct, writer_ct, compute_ct = self.compile_time_args(B, parts, reader_acc, writer_acc)
 
@@ -383,6 +453,8 @@ class KdaDecode:
             gates=gates.buffer_address(), cc=chan_consts.buffer_address(), onw=o_norm_w.buffer_address(),
             sel=selectors.buffer_address(), st=recurrent.buffer_address(), out=out.buffer_address(),
         )  # fmt: skip
+        if self.gated:
+            addrs["gate"] = gate.buffer_address()
 
         def noc(core):
             p = device.worker_core_from_logical_core(core)
@@ -427,4 +499,7 @@ class KdaDecode:
             for sid, init in ((self.SEM_READY, 0), (self.SEM_VALID, 0), (self.SEM_ONE, 1), (self.SEM_GATHER, 0))
         ]
         program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
-        return ttnn.generic_op([qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out], program)
+        io = [qkv, gates, conv_hist, recurrent, taps, chan_consts, o_norm_w, selectors, out]
+        if self.gated:
+            io.append(gate)
+        return ttnn.generic_op(io, program)

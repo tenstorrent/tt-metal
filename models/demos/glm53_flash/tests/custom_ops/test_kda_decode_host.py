@@ -13,7 +13,11 @@
 * the ``gates="act"`` math: the pre-arranged g2 weights + bias reproduce ``a (f + dt)`` exactly in fp32 (the bf16
   rounding of the scaled columns bounded by half a bf16 ulp), and the golden in ``gates_activated`` mode is
   bit-identical to the ``pre`` golden on host-activated gates (the same fp32 ops in the same order);
-* the knob plumbing: ``kda_decode_options`` / ``kda_mm_override`` / ``mcast1d_config`` / ``decode_linear_for``.
+* the knob plumbing: ``kda_decode_options`` / ``kda_mm_override`` / ``mcast1d_config`` / ``decode_linear_for``;
+* the gated variant (``KdaDecode(gated=True)``, ``*_kda_decode_gated.cpp`` + the v2 compute; the speculative commit of
+  ``tt/spec_decode.py``): its kernel ABI (compile-time scalars as v2, one more accessor block, the gate address at
+  reader 20 / writer 7) against the vectors the builders pack, the vectors as extensions of the v2 / v1 ones, the CB
+  plan's scratch pages, the kernels' scratch constants, the gated golden, the call-site checks.
 
     pytest --noconftest models/demos/glm53_flash/tests/custom_ops/test_kda_decode_host.py -q
 """
@@ -452,3 +456,194 @@ def test_decode_linear_for_applies_override_and_bias():
     assert c.fused_activation.op_type == ttnn.UnaryOpType.SIGMOID
     qkv = decode_linear_for(dev, _FakeTensor(4096, 6144), "QKV", env={"GLM53_KDA_MM_QKV": "12,8,2,4"}).config()
     assert (qkv.per_core_N, qkv.in0_block_w) == (2, 4)
+
+
+# ---------------------------------------------------------------------------------------------- gated variant
+GATED_ACC = ACC_WORDS * 8 + [2, 128]  # the reader's 8 blocks + the gate page accessor (RM int32, 128 B pages)
+GATED_WACC = ACC_WORDS * 2 + [2, 128]
+
+
+def test_gated_variant_selection_and_twin():
+    g = KdaDecode(num_heads=16, gated=True)
+    assert g.variant == "gated" and g.gated
+    assert g.kernel_sources() == (
+        "reader_kda_decode_gated.cpp",
+        "writer_kda_decode_gated.cpp",
+        "compute_kda_decode_v2.cpp",
+    )
+    for base in (
+        _op(),
+        _op(gates="act", placement="rect"),
+        KdaDecode(num_heads=16, math_fidelity=ttnn.MathFidelity.HiFi2),
+    ):
+        tw = base.gated_twin()
+        assert tw.gated and tw.variant == "gated" and not base.gated
+        assert (tw.H, tw.K, tw.lb, tw.l2_eps, tw.norm_eps, tw.fidelity, tw.gates, tw.placement_mode) == (
+            base.H, base.K, base.lb, base.l2_eps, base.norm_eps, base.fidelity, base.gates, base.placement_mode,
+        )  # fmt: skip
+        assert tw.gates_activated == base.gates_activated
+    # the default and v2 sources know nothing of the gate
+    for name in (
+        "reader_kda_decode.cpp",
+        "writer_kda_decode.cpp",
+        "compute_kda_decode.cpp",
+        "reader_kda_decode_v2.cpp",
+    ):
+        s = _src(name)
+        assert "gate_a" not in s and "GATE_BYTES" not in s and "gate_addr" not in s, name
+    # the gated variant reuses the v2 compute kernel unchanged: no write-gate ABI in it (its "gates" are the KDA gates)
+    s = _src("compute_kda_decode_v2.cpp")
+    assert "gate_a" not in s and "GATE_BYTES" not in s and "gate_addr" not in s and "GATED" not in s
+
+
+def test_gated_reader_abi():
+    op = KdaDecode(num_heads=16, gated=True)
+    src = _src(op.kernel_sources()[0])
+    ct = _ct_indices(src)
+    expect = dict(Kt=0, Vt=1, Bt=2, B=3, H=4, Wq_t=5, Wg_t=6, HK_t=7, HV_t=8, parts=9, ONES_PAGE=10, GATES_ACT=11)
+    assert ct == expect, ct
+    assert _accessor_start(src) == 12 == KdaDecode.READER_CT_SCALARS["gated"]
+    # nine accessor blocks: the eight of v2 + the gate, each chained with next_compile_time_args_offset
+    assert (
+        src.count("TensorAccessorArgs<") == 9
+        and "gate_a = TensorAccessorArgs<st_a.next_compile_time_args_offset()>" in src
+    )
+    reader, _, comp = op.compile_time_args(32, 6, GATED_ACC, GATED_WACC)
+    v2 = _op(gates="pre", placement="rect").compile_time_args(32, 6, ACC_WORDS * 8, ACC_WORDS * 2)
+    assert reader[:12] == v2[0][:12] and reader == v2[0] + [2, 128], "the v2 vector + the gate block"
+    assert comp == v2[2] and len(comp) == KdaDecode.COMPUTE_CT_LEN["gated"] == 12
+    assert KdaDecode(num_heads=16, gates="act", gated=True).compile_time_args(4, 5, GATED_ACC, GATED_WACC)[0][11] == 1
+    rt = _rt_indices(src)
+    names = {k[: -len("_addr")] if k.endswith("_addr") else k: v for k, v in rt.items()}
+    assert names == KdaDecode.READER_RT_GATED and max(rt.values()) + 1 == KdaDecode.READER_RT_LEN["gated"] == 21
+    assert (
+        KdaDecode.READER_RT_GATED["gate"] == 20
+        and {k: v for k, v in KdaDecode.READER_RT_GATED.items() if v < 20} == KdaDecode.READER_RT
+    )
+
+
+def test_gated_writer_abi():
+    op = KdaDecode(num_heads=16, gated=True)
+    src = _src(op.kernel_sources()[1])
+    ct = _ct_indices(src)
+    expect = dict(Kt=0, Vt=1, Bt=2, B=3, H=4, parts=5, HV_t=6)
+    assert {k: ct[k] for k in expect} == expect and _accessor_start(src) == 7
+    assert (
+        src.count("TensorAccessorArgs<") == 3
+        and "gate_a = TensorAccessorArgs<st_a.next_compile_time_args_offset()>" in src
+    )
+    _, writer, _ = op.compile_time_args(40, 3, GATED_ACC, GATED_WACC)
+    assert writer == [4, 4, 2, 40, 16, 3, 64] + ACC_WORDS * 2 + [2, 128]
+    rt = _rt_indices(src)
+    names = {("out" if k == "o_addr" else k.replace("_addr", "")): v for k, v in rt.items()}
+    assert names == KdaDecode.WRITER_RT_GATED and max(rt.values()) + 1 == KdaDecode.WRITER_RT_LEN["gated"] == 8
+    assert (
+        KdaDecode.WRITER_RT_GATED["gate"] == 7
+        and {k: v for k, v in KdaDecode.WRITER_RT_GATED.items() if v < 7} == KdaDecode.WRITER_RT
+    )
+    for name in ("reader_kda_decode_gated.cpp", "writer_kda_decode_gated.cpp"):
+        s = _src(name)
+        for cb, idx in _cb_consts(s).items():
+            assert KdaDecode.CB[cb] == idx, (name, cb, idx)
+        assert (
+            "noc_async_full_barrier();" in s.rstrip().splitlines()[-2]
+        ), f"{name}: every DM kernel ends with the full barrier"
+
+
+def test_gated_runtime_vectors_extend_v2_and_v1():
+    addrs = dict(qkv=1, hist=2, taps=3, gates=4, cc=5, onw=6, sel=7, st=8, out=9, gate=77)
+    for base_opts in (dict(), dict(gates="act", placement="rect")):
+        base = _op(**base_opts)
+        gated = base.gated_twin()
+        mode = base.placement_mode
+        parts, core_of, rect_h = base.placement(Grid(12, 10), 16, mode)
+        for c in (0, 7, len(core_of) - 1):
+            r, w, k = gated.runtime_args_for_core(c, 1, len(core_of), addrs, _noc, core_of, parts, rect_h)
+            assert len(r) == 21 and len(w) == 8 and len(k) == 3
+            assert r[20] == 77 and w[7] == 77
+            rb, wb, kb = base.runtime_args_for_core(c, 1, len(core_of), addrs, _noc, core_of, parts, rect_h)
+            assert w[:7] == wb and k == kb
+            if base.variant == "v2":
+                assert r[:20] == rb
+            else:  # the v1 base: today's 15 entries, then the (zero) second column of the v2 layout
+                assert r[:15] == rb and r[15:20] == [0, 0, 0, 0, 0]
+    # a gated launch without the gate address cannot build its vectors
+    raised = False
+    try:
+        _op().gated_twin().runtime_args_for_core(
+            0, 1, 80, {k: v for k, v in addrs.items() if k != "gate"}, _noc, core_of, parts, rect_h
+        )
+    except KeyError:
+        raised = True
+    assert raised
+
+
+def test_gated_cb_plan_scratch_pages_and_kernel_constants():
+    base, gated = _op(), _op().gated_twin()
+    pb, pg = base.cb_plan(5), gated.cb_plan(5)
+    assert [n for n, _, _ in pg] == [n for n, _, _ in pb] == list(KdaDecode.CB)
+    for (n, dt, pages), (n2, dt2, pages2) in zip(pb, pg):
+        assert n == n2 and dt == dt2
+        if n == "onw":
+            assert pages2 == pages + KdaDecode.GATED_SCRATCH_PAGES and pages == 4
+        else:
+            assert pages2 == pages, n
+    assert KdaDecode.GATED_SCRATCH_PAGES == 19  # 1 gate page + 9 Kt bf16 tiles (72 KB) as 18 fp32 pages
+    assert gated.l1_bytes(5) - base.l1_bytes(5) == 19 * 4096 and gated.l1_bytes(6) <= 1_200_000
+    r, w = _src("reader_kda_decode_gated.cpp"), _src("writer_kda_decode_gated.cpp")
+    for s in (r, w):
+        assert "constexpr uint32_t GATE_BYTES = 32 * 4;" in s
+    assert "GATE_WRITER_OFFSET = 2048" in w and 2048 >= 128 and 2048 + 128 <= 4096, "the writer's copy inside page 0"
+    assert "scratch = CircularBuffer(cb_onw).get_write_ptr() + Vt * t32" in r
+    assert "CircularBuffer(cb_onw).get_write_ptr() + Vt * t32 + GATE_WRITER_OFFSET" in w
+    assert "merge_l1 = scratch + t32" in r, "the merged history tiles start at the second scratch page"
+    # the merged tiles: 3 branches x 3 destination taps x Kt tiles of t16 bytes fit the 18 fp32 pages after the gate page
+    assert 3 * 3 * 4 * 2048 == 18 * 4096
+    # the row copy: 2 x 8 words (two 16-value runs of a bf16 tile row, one per face of the row's face pair)
+    assert "FACE_BYTES = 16 * 16 * 2" in r and "d[FACE_BYTES / 4 + i] = s[FACE_BYTES / 4 + i]" in r
+    assert "noc_async_write_barrier();  // the copies landed before the row patches below" in r
+
+
+def test_gated_golden_selects_per_user():
+    B, H = 4, 16
+    x = _inputs(B, H, seed=21)
+    common = dict(num_heads=H, gate_lower_bound=-5.0, l2_eps=1e-6, norm_eps=1e-5)
+    args = (x["qkv"][0, 0], x["gates"][0, 0], x["conv"], x["S"], x["taps"], x["dt_bias"], x["a_exp"], x["onw"])
+    o, S, conv = KdaDecode.golden(*args, **common)
+    gate = torch.tensor([0, 1, 1, 0])
+    og, Sg, convg = KdaDecode.golden_gated(*args, gate, **common)
+    assert torch.equal(og, o)
+    for u in range(B):
+        if int(gate[u]):
+            assert torch.equal(Sg[u], S[u]) and torch.equal(convg[u], conv[u])
+        else:
+            assert torch.equal(Sg[u], x["S"][u]) and torch.equal(convg[u], x["conv"][u])
+    raised = False
+    try:
+        KdaDecode.golden_gated(*args, torch.ones(B + 1), **common)
+    except AssertionError:
+        raised = True
+    assert raised
+
+
+def test_gated_call_requires_gate_tensor():
+    fake = _FakeTensor(4, 16, 128, 128)
+    g = _op().gated_twin()
+    raised = False
+    try:
+        g(fake, fake, fake, fake, fake, fake, fake, fake, fake)  # no gate: refused before any device access
+    except AssertionError as e:
+        raised = "write gate" in str(e)
+    assert raised
+    raised = False
+    try:
+        g(fake, fake, fake, fake, fake, fake, fake, fake, fake, gate=_FakeTensor(1, 16))  # wrong page width
+    except AssertionError:
+        raised = True
+    assert raised
+    raised = False
+    try:
+        _op()(fake, fake, fake, fake, fake, fake, fake, fake, fake, gate=_FakeTensor(1, 32))  # a gate needs gated=True
+    except AssertionError as e:
+        raised = "gated=True" in str(e)
+    assert raised
