@@ -95,6 +95,7 @@ inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format,
     // (8 SrcA rows) regardless of unit_dim - natural gaps in SrcA for unit_dim < 4.
     // Matching init_unit_dim to the first chunk eliminates one reinit_xdim per row.
     TT_SETADCXX(p_setadc::UNP_A, init_unit_dim * TILE_C_DIM - 1, 0x0);
+    TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1000);
 
     // CH1 Z stride: controls SrcA dest address gap between reads.
     // Uses effective_dst_format because Float32/Tf32 are downgraded to bf16 above.
