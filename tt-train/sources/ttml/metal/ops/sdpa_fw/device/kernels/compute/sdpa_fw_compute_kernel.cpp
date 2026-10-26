@@ -48,7 +48,7 @@ constexpr uint32_t qk_block_h = get_compile_time_arg_val(10);       // Q rows pe
 constexpr uint32_t qk_block_w = get_compile_time_arg_val(11);       // K tiles per QK^T matmul_block call
 constexpr uint32_t pv_block_h = get_compile_time_arg_val(12);       // Q rows per PV matmul_block call
 constexpr uint32_t pv_block_w = get_compile_time_arg_val(13);       // V feature tiles per PV matmul_block call
-constexpr uint32_t sm_block_size = get_compile_time_arg_val(14);    // score tiles of one row per DST pass, exp step
+constexpr uint32_t sm_block_size = get_compile_time_arg_val(14);    // score tiles per DST pass, exp step
 constexpr uint32_t heads_per_item = get_compile_time_arg_val(15);   // Q heads stacked in one item
 
 constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
@@ -61,6 +61,12 @@ constexpr uint32_t k_tiles = Sk_chunk_t * qWt;            // K tiles of one step
 constexpr uint32_t v_tiles = Sk_chunk_t * vWt;            // V tiles of one step
 
 static_assert(rows % qk_block_h == 0U && Sk_chunk_t % qk_block_w == 0U, "QK^T block must tile the item rows");
+
+// Per-row state passes (max, alpha, sums, finalize) batch up to kRowsPerPass rows into one DST pass.
+constexpr uint32_t kRowsPerPass = 4U;
+constexpr uint32_t rows_in_pass(uint32_t row0, uint32_t per_pass) {
+    return (rows - row0 < per_pass) ? (rows - row0) : per_pass;
+}
 static_assert(rows % pv_block_h == 0U, "PV block must tile the item rows");
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -94,8 +100,8 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
     // The row sum so far is per 32-column tile column; reduce it to one value per row (in place).
     cb_pop_front(cb_sum_exp, rows);
     cb_reserve_back(cb_sum_exp, rows);
-    for (uint32_t r = 0; r < rows; ++r) {
-        row_reduce_tile_inplace<cb_reduction_scaler, cb_matmul_reduce>(cb_sum_exp, r);
+    for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass) {
+        row_reduce_tiles_inplace<cb_reduction_scaler, cb_matmul_reduce>(cb_sum_exp, r0, rows_in_pass(r0, kRowsPerPass));
     }
     cb_push_back(cb_sum_exp, rows);
     cb_wait_front(cb_sum_exp, rows);
@@ -112,8 +118,8 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
     // 1/sum_exp for normalization
     cb_pop_front(cb_sum_exp, rows);
     cb_reserve_back(cb_sum_exp, rows);
-    for (uint32_t r = 0; r < rows; ++r) {
-        recip_tile_inplace(cb_sum_exp, r);
+    for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass) {
+        recip_tiles_inplace(cb_sum_exp, r0, rows_in_pass(r0, kRowsPerPass));
     }
     cb_push_back(cb_sum_exp, rows);
     cb_wait_front(cb_sum_exp, rows);
@@ -319,21 +325,23 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
 
         cb_pop_front(cb_key, k_tiles);
 
-        // Online softmax, row by row.
+        // Online softmax. The per-row state helpers batch as many rows as fit in DST per pass.
         // (1) running max per row: max(previous max, max of this step's scores)
         cb_wait_front(cb_attention_weights, score_tiles);
         if (!first_step) {
             cb_wait_front(alias_cb_prev_max, rows);
         }
         cb_reserve_back(alias_cb_cur_max, rows);
-        for (uint32_t r = 0; r < rows; ++r) {
-            update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW, Sk_chunk_t>(
+        const uint32_t max_rows_per_pass = first_step ? kRowsPerPass : kRowsPerPass / 2U;
+        for (uint32_t r0 = 0; r0 < rows; r0 += max_rows_per_pass) {
+            update_row_max_values<PoolType::MAX, ReduceDim::REDUCE_ROW, Sk_chunk_t>(
                 cb_attention_weights,
                 cb_reduction_scaler,
                 alias_cb_cur_max,
                 alias_cb_prev_max,
                 /* do_eltwise_max */ !first_step,
-                r);
+                r0,
+                rows_in_pass(r0, max_rows_per_pass));
         }
         cb_push_back(alias_cb_cur_max, rows);
         cb_wait_front(alias_cb_cur_max, rows);
@@ -342,9 +350,9 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
         //     were computed against the old max, so they get scaled by alpha before this step's are added.
         if (!first_step) {
             cb_reserve_back(cb_exp_max_diff, rows);
-            for (uint32_t r = 0; r < rows; ++r) {
-                update_exp_max_diff<scaler_bits, scaler_bf16_bits>(
-                    alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, r);
+            for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass) {
+                update_exp_max_diffs<scaler_bits, scaler_bf16_bits>(
+                    alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff, r0, rows_in_pass(r0, kRowsPerPass));
             }
             cb_push_back(cb_exp_max_diff, rows);
             cb_pop_front(alias_cb_prev_max, rows);
@@ -355,10 +363,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
         cb_pop_front(cb_attention_weights, score_tiles);
         cb_reserve_back(cb_attention_weights, score_tiles);
         cb_reserve_back(alias_cb_cur_sum_exp, rows);
-        for (uint32_t r = 0; r < rows; ++r) {
-            apply_exp_inplace_and_find_exp_sum<scaler_bits, scaler_bf16_bits, Sk_chunk_t, sm_block_size>(
-                cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp, r);
-        }
+        apply_exp_inplace_and_find_exp_sum<scaler_bits, scaler_bf16_bits, rows, Sk_chunk_t, sm_block_size>(
+            cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
         cb_push_back(cb_attention_weights, score_tiles);
         cb_push_back(alias_cb_cur_sum_exp, rows);
 
@@ -384,8 +390,13 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
             cb_wait_front(alias_cb_cur_sum_exp, rows);
             cb_pop_front(alias_cb_cur_sum_exp, rows);
             cb_reserve_back(alias_cb_cur_sum_exp, rows);
-            for (uint32_t r = 0; r < rows; ++r) {
-                update_cur_exp_sum_inplace(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp, cb_exp_max_diff, r);
+            for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass / 2U) {
+                update_cur_exp_sums_inplace(
+                    alias_cb_prev_sum_exp,
+                    alias_cb_cur_sum_exp,
+                    cb_exp_max_diff,
+                    r0,
+                    rows_in_pass(r0, kRowsPerPass / 2U));
             }
             cb_push_back(alias_cb_cur_sum_exp, rows);
             cb_pop_front(alias_cb_prev_sum_exp, rows);
