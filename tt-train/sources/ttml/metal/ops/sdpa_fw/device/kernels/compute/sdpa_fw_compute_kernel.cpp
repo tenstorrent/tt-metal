@@ -66,7 +66,7 @@ constexpr uint32_t cb_value = tt::CBIndex::c_2;
 constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
 constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
 constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
-constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;  // isn't used right now, for debugging only
+constexpr uint32_t cb_matmul_reduce = tt::CBIndex::c_6;  // ones-column tile: row reduce of the sum, lse mask
 constexpr uint32_t cb_attention_weights = tt::CBIndex::c_7;
 
 constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;       // used to store previous max value
