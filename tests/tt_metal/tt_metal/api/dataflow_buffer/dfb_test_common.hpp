@@ -548,7 +548,8 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             << "Tensix consumer kernel must compile with num_entries_per_consumer";
         ASSERT_EQ(*cta_num_entries_per_consumer, num_entries_per_consumer)
             << "digest region must be sized from the same num_entries_per_consumer CTA the kernel compiles with";
-        digest_region_bytes = dfb_tensix_digest_region_bytes(p.num_consumers, *cta_num_entries_per_consumer);
+        digest_region_bytes =
+            dfb_tensix_digest_region_bytes(p.num_consumers, cta_num_entries_per_consumer->to_uint32());
     }
     const uint32_t digest_l1_addr =
         p.consumer_type == M2PorCType::TENSIX ? top_of_l1_scratch_addr(mesh_device, digest_region_bytes) : 0u;
