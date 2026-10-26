@@ -22,7 +22,7 @@ Cases and the paths they take:
     long2           2 x 8192 -> 1024             S = 288 (tile aligned, xPos centre 143), 32 read-out patches
     e2e             64 x 2048 -> 64              leading NaN -> PAD patches (explicit time mask), gaps
                                                  (MISSING), count rows; GIFT-Eval settings (x and -x)
-    paper16_performance                          bfp8 weights, LoFi
+Accuracy is the shipping precision; the performance precision is retired (D5) and has no suite cases.
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from models.experimental.t0_forecast.tests.helpers import (
     final_metrics,
     golden,
     misses,
-    pcc,
     quantile_metrics,
     weights,
 )
@@ -70,11 +69,14 @@ def _forward(tt: TtT0, context, horizon, **kwargs):
     return prepared, normalized, final
 
 
-def check(case: str, floors: dict, head_ref, normalized, raw_ref=None, final=None, strict: bool = True) -> dict:
+def check(
+    case: str, floors: dict, head_ref, normalized, raw_ref=None, final=None, strict: bool = True, exempt=()
+) -> dict:
     """Score, print (with the collapsed output's scores) and assert ``floors``; returns the metrics. ``strict``: every
     asinh-space gate metric alone must reject the collapsed output (the realistic bench inputs); otherwise the floors
     together must (smooth coverage inputs, where pcc_normalized alone cannot see a collapse). ``pcc_final`` is never
-    required to reject it alone (a collapsed forecast scores near 1 in data space; ``pcc_final_spread`` does)."""
+    required to reject it alone (a collapsed forecast scores near 1 in data space; ``pcc_final_spread`` does).
+    ``exempt``: floored metrics the case cannot compute (D5 item 5); any other missing one fails."""
     got = quantile_metrics(head_ref, normalized)
     bad = quantile_metrics(head_ref, collapsed(head_ref))
     if raw_ref is not None:
@@ -82,13 +84,13 @@ def check(case: str, floors: dict, head_ref, normalized, raw_ref=None, final=Non
         bad.update(final_metrics(raw_ref, collapsed(raw_ref)))
     show = lambda m: ", ".join(f"{k} {v:.6f}" if isinstance(v, float) else f"{k} {v}" for k, v in m.items())
     print(f"\n[pcc] {case}: {show(got)}\n[pcc] {case} collapsed: {show(bad)}")
-    missed = misses(got, floors)
+    missed = misses(got, floors, exempt)
     assert not missed, f"{case}: {'; '.join(missed)}"
     for key, floor in floors.items():
         if strict and key in bad and key.startswith("pcc_") and key != "pcc_final":
             assert below(bad[key], floor), f"{case}: the collapsed output passes {key} ({bad[key]:.6f})"
     if floors:
-        assert misses(bad, floors), f"{case}: the collapsed output passes the gate"
+        assert misses(bad, floors, exempt), f"{case}: the collapsed output passes the gate"
     return got
 
 
@@ -99,11 +101,9 @@ CASES = {
     "paper16": ("bench_paper.pt", 16, "accuracy", "accuracy", None),
     "multivariate": ("bench_multivariate.pt", 4, "accuracy", "accuracy", None),
     "long2": ("bench_long_context.pt", 2, "accuracy", "accuracy", None),
-    "paper16_performance": ("bench_paper.pt", 16, "performance", "performance", None),
-    # D4 floors.
-    "single_performance": ("single.pt", None, "performance", "single_performance", (63, 2)),
-    "single_long_performance": ("single_long.pt", None, "performance", "single_long_performance", (255, 32)),
 }
+# Floored metrics a case cannot compute (D5 item 5): the eviction case runs the device forward only, no raw21.
+NO_FINAL = ("pcc_final", "pcc_final_spread")
 
 
 @pytest.fixture(scope="module")
@@ -158,24 +158,22 @@ def test_rope_cache_eviction(device):
     out = tt.forward_device(inputs)
     normalized = tt.normalized(out, prepared)
     tt.deallocate_inputs(inputs)
-    check("rope_cache_eviction", FLOORS["single"], g["head"][:, 63:65], normalized, strict=False)
+    check("rope_cache_eviction", FLOORS["single"], g["head"][:, 63:65], normalized, strict=False, exempt=NO_FINAL)
 
 
-@pytest.mark.parametrize(
-    "precision,levels",
-    [("accuracy", "gift9"), ("accuracy", "gift21"), ("performance", "gift9"), ("performance", "gift21")],
-)
-def test_e2e_gift_settings(device, precision, levels):
+@pytest.mark.parametrize("levels", ["gift9", "gift21"])
+def test_e2e_gift_settings(device, levels):
     """GIFT-Eval settings: trim (PAD patches -> masked time attention), symmetric averaging (a second forward on
     the negated series), clip and snap, at the 9 GIFT levels and the 21 trained levels. Scored (D4) on both forwards'
     head read-outs against ``gift_head_readouts`` and on the final quantiles (``pcc_final``, ``pcc_final_spread``)
-    with the coverage floors; the collapsed output must fail them."""
+    with the coverage floors; the collapsed output must fail them, and so must the reference with only its inactive
+    rows collapsed (D5 item 4)."""
     import torch
 
     from models.experimental.t0_forecast.tt import host
 
     g = golden("e2e.pt")
-    tt = _tt(device, precision)
+    tt = _tt(device, "accuracy")
     trimmed = host.trim_leading(host.series_from_array(g["context"])[0], 2048)
     prepared = host.prepare_series(tt.config, trimmed, 64, 2048, range(64))
     assert prepared.time_mask is not None and not bool(prepared.real_tokens.all())
@@ -191,13 +189,25 @@ def test_e2e_gift_settings(device, precision, levels):
     got = host.predict(tt.config, network, g["context"], g["horizon"], q, **settings)
     ref_heads = g["gift_head_readouts"]
     assert len(heads) == len(ref_heads) and all(h.shape == r.shape for h, r in zip(heads, ref_heads))
-    floors = FLOORS["coverage" if precision == "accuracy" else "coverage_performance"]
-    check(f"e2e_{levels}_{precision}", floors, torch.cat(ref_heads), torch.cat(heads), g[levels], got, strict=False)
+    ref = torch.cat(ref_heads)
+    check(f"e2e_{levels}", FLOORS["coverage"], ref, torch.cat(heads), g[levels], got, strict=False)
+    flat = ref.double().reshape(ref.shape[0], -1)
+    inactive = flat.std(dim=1) < 0.05 * flat.std()
+    assert inactive.any(), "the GIFT-settings heads must have inactive rows"
+    broken = torch.where(inactive[:, None, None, None], collapsed(ref), ref)
+    missed = misses(quantile_metrics(ref, broken), FLOORS["coverage"], exempt=NO_FINAL)
+    print(f"\n[pcc] e2e_{levels} inactive rows collapsed ({int(inactive.sum())} of {ref.shape[0]}): misses {missed}")
+    assert missed, f"e2e_{levels}: collapsing the inactive rows passes the floors"
 
 
 def test_branch_paths(device):
     """Context 2000 (a partial PAD patch), horizon 40 (two patches, 40 steps kept); 4 series x 3 variates with an
-    explicit PAD row (group mask: real and all-PAD rows in one series) and trimmed series (time mask)."""
+    explicit PAD row (group mask: real and all-PAD rows in one series) and trimmed series (time mask); the same
+    series at the GIFT-Eval settings, scored like ``test_e2e_gift_settings`` (D5 item 3)."""
+    import torch
+
+    from models.experimental.t0_forecast.tt import host
+
     g = golden("paths.pt")
     tt = _tt(device, "accuracy")
     q = tt.config.quantile_levels
@@ -218,6 +228,22 @@ def test_branch_paths(device):
         strict=False,
     )
     settings = dict(trim_leading_missing=True, symmetric_averaging=True, clip_nonnegative=True, snap_integers=True)
-    p_gift = pcc(g["multi_gift21"], tt.predict(g["multi_context"], 64, q, **settings))
-    print(f"\n[pcc] paths gift21 (GIFT-Eval settings): pcc_final {p_gift:.6f}")
-    assert p_gift >= 0.99
+    heads = []
+
+    def network(p):
+        out = tt.network(p)
+        heads.append(out)
+        return out
+
+    got = host.predict(tt.config, network, g["multi_context"], 64, q, **settings)
+    ref_heads = g["multi_gift_head_readouts"]
+    assert len(heads) == len(ref_heads) and all(h.shape == r.shape for h, r in zip(heads, ref_heads))
+    check(
+        "paths_gift21",
+        FLOORS["coverage"],
+        torch.cat(ref_heads),
+        torch.cat(heads),
+        g["multi_gift21"],
+        got,
+        strict=False,
+    )

@@ -9,8 +9,9 @@
 Every candidate record must meet its precision class's floors (``tests/helpers.FLOORS``) and must not drift more than
 the margin from the matching baseline record (on the target, ``paper-accuracy``; twice that on every other record):
 ``tests/helpers.DRIFT`` below round 0, and ``DRIFT_BAND`` against the round-2 bench (job 614; D4), where
-``spread_ratio_p99`` drifts upwards. Metrics missing from either record are skipped and listed. ``compare_bench.py`` judges
-device time; this judges accuracy. Exit status 1 when any record fails.
+``spread_ratio_p99`` drifts upwards. A floored metric missing from the candidate fails (D5 item 5); one missing from a
+baseline skips that drift check. Records at a precision other than accuracy (the retired performance class, D5) are
+reported as INFO. ``compare_bench.py`` judges device time; this judges accuracy. Exit status 1 when any record fails.
 """
 
 from __future__ import annotations
@@ -43,13 +44,18 @@ def main(argv=None) -> int:
         if rec.get("test", "forward") != "forward":  # timing-only records (e2e_gift)
             print(f"INFO {rec['name']}-{rec['precision']}: timing only, steady {rec['steady_s'] * 1e3:.1f} ms")
             continue
+        if rec["precision"] != "accuracy":
+            print(
+                f"INFO {rec['name']}-{rec['precision']}: retired precision (D5), device {rec['device_s'] * 1e3:.1f} ms"
+            )
+            continue
         key = (rec["name"], rec["precision"])
         ref = base.get(key)
         scale = 1.0 if key == TARGET else 2.0
-        notes, skipped = [], []
+        notes = []
         for metric, floor in FLOORS[rec["precision"]].items():
             if metric not in rec:
-                skipped.append(metric)
+                notes.append(f"{metric} missing")
                 continue
             value = rec[metric]
             if below(value, floor):
@@ -68,9 +74,8 @@ def main(argv=None) -> int:
                     notes.append(f"{metric} {value:.6f} drifted from round 2 {r2[metric]:.6f} by more than {margin:g}")
         verdict = "FAIL" if notes else "PASS"
         failed |= bool(notes)
-        extra = f"; skipped {', '.join(skipped)}" if skipped else ""
         missing = "; no round-0 record" if ref is None else ""
-        print(f"{verdict} {key[0]}-{key[1]}{': ' + '; '.join(notes) if notes else ''}{extra}{missing}")
+        print(f"{verdict} {key[0]}-{key[1]}{': ' + '; '.join(notes) if notes else ''}{missing}")
     print("gates:", "FAIL" if failed else "PASS")
     return 1 if failed else 0
 

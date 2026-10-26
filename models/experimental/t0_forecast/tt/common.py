@@ -23,7 +23,9 @@ def pad_to_tile(n: int) -> int:
 
 @dataclass(frozen=True)
 class TtT0Precision:
-    """``accuracy`` (default): bf16 weights, HiFi2 matmuls; ``performance``: bfloat8_b weights, LoFi.
+    """``accuracy`` (default, the shipping precision): bf16 weights, HiFi2 matmuls; ``experimental_performance``:
+    bfloat8_b weights, LoFi. The performance class is retired (D5, fleet/t0-gamma/DECISIONS.md): it fails the D4
+    floors (single_long band ratio 1.45 at best, job 642) and is not clearly faster; it stays for timing only.
 
     Both accumulate matmuls in fp32 (fp32 dest) and run norm statistics at HiFi4 with fp32 dest:
     with bf16 accumulation one smooth series reached only pcc_normalized 0.990 (0.9995 with fp32), and fp32
@@ -73,7 +75,7 @@ class TtT0Precision:
         }
         if name in variants:
             return variants[name]
-        return {"accuracy": cls.accuracy, "performance": cls.performance}[name]()
+        return {"accuracy": cls.accuracy, "experimental_performance": cls.performance}[name]()
 
     def weight_dtype(self, role: str | None = None):
         import ttnn

@@ -8,7 +8,8 @@
 
 Each broken output is the reference with its quantile band (``h - mean_q``) rescaled per row, in asinh space and in
 data space alike: ``inactive_collapsed`` (every inactive row's band at 0), ``active_2pct_0.3x`` (2 % of the active rows
-at 0.3x), ``band_0.88x`` and ``band_1.12x`` (every row). Each must miss at least one floor in each precision.
+at 0.3x), ``band_0.88x`` and ``band_1.12x`` (every row). Each must miss at least one accuracy floor (the performance
+precision is retired, D5). ``e2e_gift`` is the GIFT-settings head read-outs of both forwards (x and -x) and gift21.
 """
 
 from __future__ import annotations
@@ -37,12 +38,13 @@ def main():
 
     results = []
     # The bench goldens (realistic inputs) have no inactive rows; e2e (coverage floors) does.
-    classes = {"accuracy": "accuracy", "performance": "performance"}
-    for name in ("paper", "long_context", "multivariate", "e2e"):
-        g = golden("e2e.pt" if name == "e2e" else f"bench_{name}.pt")
-        if name == "e2e":
-            classes = {"accuracy": "coverage", "performance": "coverage_performance"}
-        head, raw = g["head_readout"], g["raw21"]
+    for name in ("paper", "long_context", "multivariate", "e2e", "e2e_gift"):
+        g = golden("e2e.pt" if name.startswith("e2e") else f"bench_{name}.pt")
+        floors = FLOORS["coverage" if name.startswith("e2e") else "accuracy"]
+        if name == "e2e_gift":
+            head, raw = torch.cat(g["gift_head_readouts"]), g["gift21"]
+        else:
+            head, raw = g["head_readout"], g["raw21"]
         n = head.shape[0]
         flat = head.double().reshape(n, -1)
         active = flat.std(dim=1) >= 0.05 * flat.std()
@@ -65,13 +67,11 @@ def main():
         for kind, (rows, factor) in broken.items():
             m = {**quantile_metrics(head, scaled(head, rows, factor)), **final_metrics(raw, scaled(raw, rows, factor))}
             rec = {"golden": name, "broken": kind, "rows_changed": int(rows.sum()), "rows": n, "metrics": m}
-            for precision in ("accuracy", "performance"):
-                rec[f"misses_{precision}"] = misses(m, FLOORS[classes[precision]])
+            rec["misses_accuracy"] = misses(m, floors)
             results.append(rec)
             print(
                 f"[broken] {name:13s} {kind:19s} rows {rec['rows_changed']:5d}/{n}"
-                f" | acc {'FAIL' if rec['misses_accuracy'] else 'pass'} {rec['misses_accuracy'][:2]}"
-                f" | perf {'FAIL' if rec['misses_performance'] else 'pass'} {rec['misses_performance'][:2]}",
+                f" | acc {'FAIL' if rec['misses_accuracy'] else 'pass'} {rec['misses_accuracy'][:2]}",
                 flush=True,
             )
     args.out.write_text(json.dumps(results, indent=2) + "\n")

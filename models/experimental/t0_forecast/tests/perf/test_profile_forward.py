@@ -19,7 +19,7 @@ and weights. Signposts (``tt-perf-report --start-signpost / --end-signpost``):
 ``layer_counts.json`` goes to ``$MODEL_PROFILE_OUT``. Run under ``python -m tracy -r -p -m pytest`` (``perf_iteration.sh``).
 
     T0_PROFILE_SHAPE      paper (default) | long_context | multivariate
-    T0_PROFILE_PRECISION  accuracy (default) | performance
+    T0_PROFILE_PRECISION  accuracy (default) | experimental_performance (retired, D5)
 """
 
 from __future__ import annotations

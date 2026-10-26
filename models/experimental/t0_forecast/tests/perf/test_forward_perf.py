@@ -3,8 +3,8 @@
 
 """Benchmark: one TTNN t0-gamma forward (``_single_pass``) against the fp32 CPU reference, on one chip.
 
-Cases are ``<shape>-<precision>``; the contract's target is ``paper-accuracy``, its guards ``long_context-accuracy``,
-``multivariate-accuracy`` and ``paper-performance``:
+Cases are ``<shape>-<precision>``; the contract's target is ``paper-accuracy``, its guards ``long_context-accuracy``
+and ``multivariate-accuracy``. The ``experimental_performance`` records are timing only (the class is retired, D5):
     paper         1024 univariate series x 2048 -> 64      66 patches (64 context + 2 withheld), 2 read out
     long_context  32 x 8192 -> 1024                        288 patches, 32 read out
     multivariate  128 series x 8 variates x 2048 -> 64     group attention over 8 rows
@@ -51,9 +51,9 @@ CASES = [
     "paper-accuracy",
     "long_context-accuracy",
     "multivariate-accuracy",
-    "paper-performance",
-    "long_context-performance",
-    "multivariate-performance",
+    "paper-experimental_performance",
+    "long_context-experimental_performance",
+    "multivariate-experimental_performance",
 ]
 
 
@@ -151,7 +151,7 @@ def test_forward_perf(device, case):
     if kinds is not None:
         metrics["pcc_row_min_kind"] = kinds[metrics["pcc_row_min_row"] // variates]
     pcc_norm, pcc_final = metrics["pcc_normalized"], metrics["pcc_final"]
-    floors = GATE_FLOORS[precision_name]
+    floors = GATE_FLOORS["accuracy" if precision_name == "accuracy" else "performance"]
     rows = series * variates
     print(
         f"\n[PERF] forward {shape_name} / {precision_name}"
@@ -209,7 +209,7 @@ GIFT_LEVELS = (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9)
 
 
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("precision_name", ["accuracy", "performance"])
+@pytest.mark.parametrize("precision_name", ["accuracy", "experimental_performance"])
 def test_e2e_gift_perf(device, precision_name):
     """D4 item 1: end-to-end time of ``predict`` at the GIFT-Eval settings (trim, symmetric averaging = two forwards,
     clip, snap; the 9 GIFT levels) on the paper input. Timing only: the accuracy of these settings is gated by
