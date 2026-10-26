@@ -1,0 +1,48 @@
+paper_mix_1024x2048
+  accuracy                 accu: PASS  perf: PASS
+  performance              accu: spread_ratio_p99  perf: PASS
+  performance_P1           accu: PASS  perf: PASS
+  performance_P2           accu: PASS  perf: PASS
+  performance_P3           accu: PASS  perf: PASS
+  performance_P4           accu: PASS  perf: PASS
+  performance_P5           accu: spread_ratio_p99  perf: PASS
+  broken_a                 accu: PASS  perf: PASS
+  broken_b                 accu: pcc_row_min_active,pcc_spread,spread_ratio_p01  perf: pcc_row_min_active,spread_ratio_p01
+  broken_c                 accu: pcc_normalized,spread_ratio_p01  perf: PASS
+  broken_d                 accu: pcc_normalized  perf: PASS
+multivariate_mix_128x8x2048
+  accuracy                 accu: PASS  perf: PASS
+  performance              accu: spread_ratio_p99  perf: PASS
+  performance_P1           accu: PASS  perf: PASS
+  performance_P2           accu: PASS  perf: PASS
+  performance_P3           accu: PASS  perf: PASS
+  performance_P4           accu: PASS  perf: PASS
+  performance_P5           accu: spread_ratio_p99  perf: PASS
+  broken_a                 accu: PASS  perf: PASS
+  broken_b                 accu: pcc_row_min_active,pcc_row_p01_active,pcc_spread,spread_ratio_p01  perf: pcc_row_min_active,spread_ratio_p01
+  broken_c                 accu: pcc_normalized,spread_ratio_p01  perf: PASS
+  broken_d                 accu: pcc_normalized  perf: PASS
+long_context_mix_32x8192
+  accuracy                 accu: PASS  perf: PASS
+  performance              accu: spread_ratio_p99  perf: PASS
+  performance_P1           accu: PASS  perf: PASS
+  performance_P2           accu: spread_ratio_p99  perf: PASS
+  performance_P3           accu: PASS  perf: PASS
+  performance_P4           accu: spread_ratio_p99  perf: PASS
+  performance_P5           accu: spread_ratio_p99  perf: PASS
+  broken_a                 accu: PASS  perf: PASS
+  broken_b                 accu: pcc_normalized,pcc_row_min_active,pcc_row_p01_active,pcc_spread,spread_ratio_p01  perf: pcc_row_min_active,pcc_row_p01_active,spread_ratio_p01
+  broken_c                 accu: pcc_normalized,spread_ratio_p01  perf: PASS
+  broken_d                 accu: pcc_normalized  perf: PASS
+single_sparse_1x2048
+  accuracy                 accu: PASS  perf: PASS
+  performance              accu: PASS  perf: PASS
+  performance_P1           accu: PASS  perf: PASS
+  performance_P2           accu: PASS  perf: PASS
+  performance_P3           accu: PASS  perf: PASS
+  performance_P4           accu: PASS  perf: PASS
+  performance_P5           accu: PASS  perf: PASS
+  broken_a                 accu: PASS  perf: PASS
+  broken_b                 accu: PASS  perf: PASS
+  broken_c                 accu: PASS  perf: PASS
+  broken_d                 accu: PASS  perf: PASS

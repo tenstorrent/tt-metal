@@ -17,7 +17,9 @@ Per record: ``cold_s`` (first call, compile included), ``steady_s`` (median of 5
 the host / device split (medians of 5: ``prepare_s``, ``upload_s``, ``device_s`` after a 0.3 s idle,
 ``postprocess_s``), the gate metrics of ``goldens.gate_metrics`` (``pcc_normalized``: head output in asinh space vs
 the hook on ``m.output_head``; ``pcc_spread``; ``pcc_row_p01`` / ``pcc_row_min``; ``pcc_final``: quantiles;
-``pcc_final_spread``; ``abs_err_max``), ``chip`` ($TTQ_CHIP_SERIAL). ``MODEL_PERF_JSON=<path>`` appends the records.
+``pcc_final_spread``; ``abs_err_max``), ``chip`` ($TTQ_CHIP_SERIAL). ``MODEL_PERF_JSON=<path>`` appends the records; ``BENCH_SAVE_DIR=<dir>`` also saves
+each case's head output and quantiles (``<ckpt>-<golden>-<precision>.pt``) for host-side scoring. Precision
+``performance_P<n>`` picks a performance-policy variant (``Toto2Precision.VARIANTS``).
 
 Screening (skill section 5.2): ``BENCH_LAYERS=<L>`` keeps time layers 0 .. L-3, the last time layer and the variate
 layer (L layers). Device time then compares candidates at the same depth; the gate metrics are meaningless there
@@ -35,6 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import torch
 
 from models.experimental.toto2_forecast.tests.golden.goldens import (
     below_floors,
@@ -67,6 +70,7 @@ SHAPES = {
         Shape("long_context", "2.5B-FT", "long_context_mix_32x8192"),
         Shape("multivariate", "2.5B-FT", "multivariate_mix_128x8x2048"),
         Shape("paper_313m", "313m", "paper_mix_1024x2048"),
+        Shape("single_sparse", "2.5B-FT", "single_sparse_1x2048"),
     )
 }
 # One model per process at a time, so 2.5B holds one precision's weights.
@@ -208,8 +212,12 @@ def test_forward_perf(device, shape_name, precision_name):
     )
     record["below_floors"] = below_floors(metrics, floors_for(shape.checkpoint, precision_name))
     _record(record)
+    if os.environ.get("BENCH_SAVE_DIR"):
+        save = Path(os.environ["BENCH_SAVE_DIR"]) / f"{shape.checkpoint}-{shape.golden}-{precision_name}.pt"
+        save.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"head": head.float(), "q": q.float(), "record": record}, save)
     if BENCH_LAYERS:
         return
     # The bench records every metric and asserts only the contract floors; the suite asserts the others.
-    floor_n, floor_f = FLOORS[precision_name]
+    floor_n, floor_f = FLOORS[precision_name.split("_")[0]]
     assert pcc_normalized >= floor_n and pcc_final >= floor_f, (pcc_normalized, pcc_final)

@@ -26,7 +26,7 @@ from models.experimental.toto2_forecast.tt.weights import LayerWeights, Residual
 
 class TtSwiGLU:
     def __init__(self, device, lw: LayerWeights, config: Toto2Config, precision: Toto2Precision):
-        self.precision = precision
+        self.precision = precision.for_role("ffn")
         self.eps = config.norm_eps
         self.beta = lw.beta_mlp
         f = config.d_ff

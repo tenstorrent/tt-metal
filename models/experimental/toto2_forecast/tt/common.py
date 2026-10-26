@@ -56,6 +56,8 @@ class Toto2Precision:
     fp32_tokens: bool = False  # patch tokens uploaded in fp32 (the embedding's first matmuls read them)
     fp32_head_out: bool = False  # the head writes its output in fp32
     ffn_bf16_weights: bool = False  # bf16 fc1 / fc2 weights under bf8_weights (a per-role exception)
+    ffn_lofi: bool = False  # LoFi on the FFN matmuls (fc1 / fc2) only
+    head_bf16_hifi2: bool = False  # the quantile head with bf16 weights at HiFi2 under bf8_weights / lofi
 
     @classmethod
     def accuracy(cls) -> "Toto2Precision":
@@ -73,8 +75,24 @@ class Toto2Precision:
             fp32_head_out=True,
         )
 
+    # Performance-policy sweep variants (D1 item 3): P0 = performance; P1 HiFi2 everywhere; P2 LoFi on the FFN
+    # only; P3 = P1 with bf16 FFN weights; P4 = P0 with a bf16 / HiFi2 head; P5 = P2 with a LoFi head.
+    VARIANTS = {
+        "P1": dict(lofi=False),
+        "P2": dict(lofi=False, ffn_lofi=True),
+        "P3": dict(lofi=False, ffn_bf16_weights=True),
+        "P4": dict(head_bf16_hifi2=True),
+        "P5": dict(lofi=False, ffn_lofi=True, head_lofi=True),
+    }
+    head_lofi: bool = False  # LoFi on the head under lofi=False (P5)
+
     @classmethod
     def named(cls, name: str) -> "Toto2Precision":
+        """``accuracy``, ``performance`` or ``performance_P<n>`` (``VARIANTS``)."""
+        from dataclasses import replace
+
+        if name.startswith("performance_"):
+            return replace(cls.performance(), name=name, **cls.VARIANTS[name.split("_", 1)[1]])
         return {"accuracy": cls.accuracy, "performance": cls.performance}[name]()
 
     def weight_dtype(self, role: str = ""):
@@ -108,6 +126,10 @@ class Toto2Precision:
 
         if (role == "embed" and self.embed_hifi4) or (role == "head" and self.head_hifi4):
             return replace(self, bf8_weights=False, lofi=False, hifi4=True, fp32_acc=True)
+        if role == "head" and self.head_bf16_hifi2:
+            return replace(self, bf8_weights=False, lofi=False)
+        if (role == "ffn" and self.ffn_lofi) or (role == "head" and self.head_lofi):
+            return replace(self, lofi=True)
         return self
 
     def sdpa_config(self):

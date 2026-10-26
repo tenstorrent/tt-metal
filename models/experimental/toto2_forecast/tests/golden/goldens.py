@@ -95,6 +95,8 @@ def gate_metrics(head: torch.Tensor, q: torch.Tensor, golden_head: torch.Tensor,
         pcc_spread                 PCC of the head output minus its mean over the 9 quantiles
         pcc_row_p01 / _min         per-series PCC of the head output over every series: 1st percentile, minimum
         pcc_row_p01_active / _min_active   the same over the active series (``active_rows``)
+        spread_ratio_p50 / _min / _max   the median (catches a uniform band scale), extremes (floor-only, v1.9)
+        spread_ratio_inactive_p01 / _p50 / _p99   the same ratio over the inactive series (1.0 when there are none)
         spread_ratio_p01 / _p99    per active series, |h - mean_q h| / |h_ref - mean_q h_ref| (norms over the
                                    series' 9 x h x 32 values): 1st and 99th percentiles; a collapse scores 0
         pcc_final                  PCC of the final quantiles
@@ -109,9 +111,13 @@ def gate_metrics(head: torch.Tensor, q: torch.Tensor, golden_head: torch.Tensor,
     dev_spread = _rows(head - head.mean(0)).norm(dim=-1)
     ref_spread = _rows(golden_head - golden_head.mean(0)).norm(dim=-1)
     ratio = [(d / r).item() for d, r, a in zip(dev_spread, ref_spread, active) if a and r > 0]
+    # Inactive rows (flat forecasts) still carry a quantile band; a collapse of theirs must fail a floor (v1.9).
+    ratio_in = [(d / r).item() for d, r, a in zip(dev_spread, ref_spread, active) if not a and r > 0]
     row_p01, row_min = _quantiles(per_row, 0.01, 0.0)
     act_p01, act_min = _quantiles(per_active, 0.01, 0.0)
-    ratio_p01, ratio_p99 = _quantiles(ratio, 0.01, 0.99)
+    ratio_p01, ratio_p50, ratio_p99 = _quantiles(ratio, 0.01, 0.5, 0.99)
+    ratio_min, ratio_max = _quantiles(ratio, 0.0, 1.0)
+    in_p01, in_p50, in_p99 = _quantiles(ratio_in, 0.01, 0.5, 0.99) if ratio_in else (1.0, 1.0, 1.0)
     return {
         "pcc_normalized": _pcc_or_zero(head, golden_head),
         "pcc_spread": _pcc_or_zero(head - head.mean(0), golden_head - golden_head.mean(0)),
@@ -121,6 +127,12 @@ def gate_metrics(head: torch.Tensor, q: torch.Tensor, golden_head: torch.Tensor,
         "pcc_row_min_active": act_min,
         "spread_ratio_p01": ratio_p01,
         "spread_ratio_p99": ratio_p99,
+        "spread_ratio_p50": ratio_p50,
+        "spread_ratio_min": ratio_min,
+        "spread_ratio_max": ratio_max,
+        "spread_ratio_inactive_p01": in_p01,
+        "spread_ratio_inactive_p50": in_p50,
+        "spread_ratio_inactive_p99": in_p99,
         "pcc_final": _pcc_or_zero(q, golden_q),
         "pcc_final_spread": _pcc_or_zero(q - q.mean(0), golden_q - golden_q.mean(0)),
         "abs_err_max": (head.double() - golden_head.double()).abs().max().item(),
@@ -135,25 +147,35 @@ CEILINGS = {"spread_ratio_p99", "abs_err_max"}
 RECORDED = {"pcc_row_p01", "pcc_row_min", "rows", "rows_active", "rows_degenerate"}
 
 
+# Gated on an all-degenerate case (its PCCs measure bf16 noise; its band ratio and abs error do not).
+DEGENERATE_GATED = {"abs_err_max", "spread_ratio_p50"}
+
+
+def _misses(key: str, value: float, floor) -> bool:
+    """``floor``: a ``(low, high)`` range, a ceiling (``CEILINGS``) or a floor."""
+    if isinstance(floor, tuple):
+        return not floor[0] <= value <= floor[1]
+    return not value <= floor if key in CEILINGS else not value >= floor
+
+
 def below_floors(metrics: dict, floors: dict) -> dict:
-    """The gated metrics that miss their floor (``CEILINGS``: exceed it). ``pcc_row_min_active`` takes
-    ``pcc_row_min_active_many`` past ``MANY_ROWS`` series. A case whose series are all degenerate is judged by
-    ``abs_err_max`` alone; ``abs_err_max`` gates nothing else."""
+    """The gated metrics that miss their floor (``CEILINGS``: exceed it; tuples: leave the range); a gated metric
+    missing from ``metrics`` is a miss. ``pcc_row_min_active`` takes ``pcc_row_min_active_many`` past ``MANY_ROWS``
+    series. A case whose series are all degenerate is judged by ``DEGENERATE_GATED`` alone; ``abs_err_max`` gates
+    nothing else."""
     all_degenerate = metrics["rows_degenerate"] == metrics["rows"]
     out = {}
     for key, floor in floors.items():
-        if key in ("pcc_row_min_active_many", "abs_err_max"):
+        if key == "pcc_row_min_active_many":
+            continue
+        if all_degenerate != (key in DEGENERATE_GATED) and key != "spread_ratio_p50":
             continue
         if key == "pcc_row_min_active" and metrics["rows"] > MANY_ROWS:
             floor = floors["pcc_row_min_active_many"]
-        if all_degenerate:
-            continue
-        value = metrics[key]
-        bad = not value <= floor if key in CEILINGS else not value >= floor
-        if bad:
-            out[key] = (round(value, 6), floor)
-    if all_degenerate and not metrics["abs_err_max"] <= floors["abs_err_max"]:
-        out["abs_err_max"] = (round(metrics["abs_err_max"], 6), floors["abs_err_max"])
+        if key not in metrics:
+            out[key] = (None, floor)
+        elif _misses(key, metrics[key], floor):
+            out[key] = (round(metrics[key], 6), floor)
     return out
 
 
@@ -227,4 +249,34 @@ SMALL_CHECKPOINT_FLOORS = {
 
 
 def floors_for(ckpt: str, precision: str) -> dict:
-    return (SMALL_CHECKPOINT_FLOORS if ckpt in ("4m", "22m") else GATE_FLOORS)[precision]
+    return (SMALL_CHECKPOINT_FLOORS if ckpt in ("4m", "22m") else GATE_FLOORS)[precision.split("_")[0]]
+
+
+# Drift from round 0 of the same precision (tests/perf/check_gates.py): a candidate may lose at most this much
+# (CEILINGS: gain); twice that off the target. Proposed at G1 (D1 item 4); min / max / range metrics are floor-only
+# (PLAN section 9 v1.9).
+DRIFT = {
+    "pcc_normalized": 2e-4,
+    "pcc_spread": 5e-4,
+    "pcc_row_p01_active": 5e-3,
+    "spread_ratio_p01": 0.02,
+    "spread_ratio_p99": 0.05,
+    "pcc_final": 2e-4,
+    "pcc_final_spread": 2e-3,
+}
+
+
+def _proposed(base: dict, **changes) -> dict:
+    return {**base, **changes}
+
+
+# Proposed at G1 re-raise (D1 item 2), NOT in force: GATE_FLOORS stays as reviewed until the orchestrator rules.
+# Each of the v1.9 broken outputs (a: inactive bands collapsed, b: 1 % of active bands at 0.3x, c / d: every band
+# x0.88 / x1.12) misses at least one of these in each precision on paper_mix, multivariate_mix, long_context_mix
+# and single_sparse (doc/optimize/iter_00/policy_sweep/broken_metrics*.json).
+_BAND = dict(spread_ratio_p50=(0.9, 1.1), spread_ratio_min=0.6, spread_ratio_max=2.0, spread_ratio_inactive_p01=0.4)
+PROPOSED_FLOORS = {
+    "accuracy": _proposed(GATE_FLOORS["accuracy"], **_BAND),
+    "performance": _proposed(GATE_FLOORS["performance"], **_BAND, spread_ratio_p99=1.25),
+}
+CEILINGS.add("spread_ratio_max")
