@@ -367,7 +367,8 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// Non-finite behaviour of the guarded form (unsafe = false), measured on Blackhole silicon:
+// Non-finite behaviour of the guarded base-e form (unsafe = false, base_two = false), measured on
+// Blackhole silicon:
 //   +-NaN (either sign, quiet or signalling) -> NaN    +Inf -> +Inf    -Inf -> +0
 // unsafe = true drops both guards and preserves none of this.
 //
@@ -440,9 +441,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) {
     return _sfpu_exp_fp32_accurate_<true>(x);
 }
 
-// 2^x with the guards of the base-e form.
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN. The base-e
+// form multiplies by log2(e) before rounding, which canonicalizes NaN to +NaN; here x is rounded
+// directly, so -NaN saturates the rounding to -32767 and the underflow arm returns +0. The only
+// caller, logaddexp2, zeroes NaN gaps first. Other |x| >= 32768 saturate the same way and get the
+// guards' +Inf / +0, which is the exact result in either direction.
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<false, true>(x);
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
 }
 
 template <bool is_fp32_dest_acc_en>

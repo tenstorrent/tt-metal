@@ -286,9 +286,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_(sfpi::vFloat a) {
 
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_unsafe_(sfpi::vFloat x) { return _sfpu_exp_fp32_accurate_<true>(x); }
 
-// 2^x with the guards of the base-e form.
+// 2^x with the overflow/underflow guards of the base-e form, for x that is not NaN: unlike the
+// base-e form, no multiply precedes the rounding. The only caller, logaddexp2, zeroes NaN gaps
+// first. |x| >= 32768 saturates the rounding and gets the guards' +Inf / +0, the exact result.
 sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
-    return _sfpu_exp_fp32_accurate_<false, true>(x);
+    return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
 }
 
 /*
