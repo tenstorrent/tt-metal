@@ -176,7 +176,9 @@ class DevProf:
 
     def __init__(self, device, f):
         self.device, self.f = device, f
-        self.on = False
+        self.on = False  # reading in this chunk
+        self.want = False  # this pass is instr 4
+        self.lo, self.hi = 0, 1 << 30  # PROF_DEVPROF_CHUNKS
         self.run = -1
         self.chunk = 0
 
@@ -324,7 +326,13 @@ def test_prefill_profile(mesh_device):
         _set_dsa_timer(model, prof, marks)
         rows = []
         if dp is not None:
-            dp.on, dp.run, dp.chunk = spec[1] == "4", p, 0
+            dp.want = spec[1] == "4"
+            # PROF_DEVPROF_CHUNKS="lo-hi" (read per pass: a run's env knobs set it): read only chunks lo..hi, so a deep pass
+            # profiles its last chunks without ~46 reads per earlier chunk (the buffers overflow before lo; the drain
+            # at lo tolerates it); default every chunk
+            dp.lo, _, hi = (os.environ.get("PROF_DEVPROF_CHUNKS", "") or "0-").partition("-")
+            dp.lo, dp.hi = int(dp.lo or 0), int(hi) if hi else 1 << 30
+            dp.on, dp.run, dp.chunk = dp.want and dp.lo == 0, p, 0
             if dp.on:
                 dp.flush()  # drop what the build / earlier runs left in the buffers
 
@@ -342,9 +350,14 @@ def test_prefill_profile(mesh_device):
             )
             if instr:
                 row["parts"] = {k: round(v, 4) for k, v in prof.take().items()}
-            if dp is not None and dp.on:  # the chunk's programs after the last layer (head on the last chunk)
-                dp.read("tail")
+            if dp is not None and dp.want:
+                if dp.on:  # the chunk's programs after the last layer (head on the last chunk)
+                    dp.read("tail")
                 dp.chunk += 1
+                nxt = dp.lo <= dp.chunk <= dp.hi
+                if nxt and not dp.on:
+                    dp.flush()
+                dp.on = nxt
             _rows.append(row)
             f.write(json.dumps(row) + "\n")
             f.flush()
