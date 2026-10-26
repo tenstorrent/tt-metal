@@ -1206,9 +1206,10 @@ designing around it. The §6.4 no-regression run invokes the existing suites in 
 
 ### 6.1 Primary oracle — single-run, exact
 
-bf16 DRAM-interleaved `add` on the current fallback is **bit-exact against a torch bf16 golden** (measured
+On craq-sim, bf16 DRAM-interleaved `add` on the current fallback is **bit-exact against a torch bf16 golden** (measured
 twice: 0/65536 and 0/1310720 mismatching elements, `max_raw_bit_delta = 0`), because `fp32_dest_acc_en` is
-false for bf16 and `HiFi4` is fidelity-inert for FPU add. So:
+false for bf16 and `HiFi4` is fidelity-inert for FPU add. So, on craq-sim (the hardware rounds the add twice; see
+below):
 
 ```
 torch.equal(out.view(int16), (a_dev.float() + b_dev.float()).to(bfloat16).view(int16))
@@ -1232,6 +1233,14 @@ even there. `divide` runs the SFPU kernel too, rounds the quotient to nearest ev
 quotient (32768 of 32768 elements, also with RELU zeros and planted ±0.0 operands). The tests use each rule as
 the exact oracle.
 
+**The hardware rounds the FPU add twice, and craq-sim rounds it once** (measured 2026-10-23 on ttsim v1.13.0,
+whose FPU math is checked against the hardware design). The FPU aligns the operand with the smaller exponent to
+the other's with 7 bits below the bf16 ULP, rounds it half away from zero, and then rounds the sum to nearest
+even. About 1 element in 80,000 of a random `add` or `subtract` is then 1 ULP from torch's single rounding.
+`_fpu_add_bf16` in `binary_ng_quasar_test_utils.py` is this model: it matches ttsim on 21M elements, with no
+element different. Until craq-sim rounds twice, an element is right when it matches either rounding
+(`_FPU_ADD_ROUNDINGS`). After that, the oracle is the model alone.
+
 F7 measured the activations the same way: 32 cases, two ops by four activations by four placements, and 0 elements
 differ in each case. SQUARE runs on the SFPU wherever it is, and truncates its fp32 result to bf16, as the SFPU
 multiply does. The op keeps its own rounding. A lone RELU on the result runs in the packer, and clips the rounded
@@ -1242,9 +1251,10 @@ process, on both factories, so the tests use SQUARE and RELU. The native outputs
 with the Metal 2.0 factory's instead: bit for bit equal.
 
 F5 measured fp32 the same way, with the device's operands. `add`, `subtract` and `multiply` match torch's fp32
-result bit for bit, and `divide` is within one fp32 step of torch's fp32 quotient (on the Metal 2.0 factory, the
-largest relative error was 1.19e-7 at 1280 tiles). A zero product or quotient is +0.0. SQUARE on a or on b gives the
-fp32 product bit for bit. The tests use these rules as the oracle and compare in fp32 steps.
+result bit for bit, and `divide` is within one fp32 step of torch's fp32 quotient on craq-sim `b9d8e2f4` and two
+on ttsim (on the Metal 2.0 factory, the largest relative error was 1.19e-7 at 1280 tiles). A zero product or
+quotient is +0.0. SQUARE on a or on b gives the fp32 product bit for bit. The tests use these rules as the oracle
+and compare in fp32 steps.
 
 ### 6.2 Routing assertion — without it, a green run proves nothing
 
