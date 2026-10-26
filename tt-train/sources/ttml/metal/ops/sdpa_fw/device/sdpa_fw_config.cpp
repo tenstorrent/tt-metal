@@ -5,6 +5,9 @@
 #include "sdpa_fw_config.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <numeric>
+#include <queue>
 #include <tt-metalium/kernel_types.hpp>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -55,23 +58,30 @@ std::vector<CoreItemRuns> split_items_contiguous(uint32_t total_items, uint32_t 
     return per_core;
 }
 
-// Causal: Q chunk i of a sequence attends ~(i+1) K/V steps, so pairing chunk i with chunk
-// (q_num_chunks - 1 - i) gives every pair the same work. The pairs are handed out contiguously like
-// items above. The order of items within a core does not change its total work, so they are sorted,
-// which folds them into the fewest runs (a fully covered sequence is one run).
-std::vector<CoreItemRuns> split_items_paired(uint32_t num_seqs, uint32_t q_num_chunks, uint32_t num_cores) {
-    const uint32_t pairs_per_seq = q_num_chunks / 2U;
-    const auto pair_runs = split_items_contiguous(num_seqs * pairs_per_seq, num_cores);
-    std::vector<CoreItemRuns> per_core(num_cores);
-    std::vector<uint32_t> items;
+// Longest-first greedy assignment: items sorted by cost, descending, each to the least loaded core. Within
+// a core the order of items does not change its total work, so they are sorted, which folds consecutive
+// items into one run.
+std::vector<CoreItemRuns> split_items_longest_first(const std::vector<uint32_t>& item_costs, uint32_t num_cores) {
+    std::vector<uint32_t> order(item_costs.size());
+    std::iota(order.begin(), order.end(), 0U);
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return item_costs[a] > item_costs[b]; });
+
+    using Load = std::pair<uint64_t, uint32_t>;  // (load, core), min-heap
+    std::priority_queue<Load, std::vector<Load>, std::greater<>> loads;
     for (uint32_t core = 0; core < num_cores; ++core) {
-        const auto [first_pair, num_pairs] = pair_runs[core].front();
-        items.clear();
-        for (uint32_t p = first_pair; p < first_pair + num_pairs; ++p) {
-            const uint32_t seq_base = (p / pairs_per_seq) * q_num_chunks;
-            items.push_back(seq_base + p % pairs_per_seq);
-            items.push_back(seq_base + (q_num_chunks - 1U - p % pairs_per_seq));
-        }
+        loads.emplace(0U, core);
+    }
+    std::vector<std::vector<uint32_t>> per_core_items(num_cores);
+    for (const uint32_t item : order) {
+        auto [load, core] = loads.top();
+        loads.pop();
+        per_core_items[core].push_back(item);
+        loads.emplace(load + item_costs[item], core);
+    }
+
+    std::vector<CoreItemRuns> per_core(num_cores);
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        auto& items = per_core_items[core];
         std::sort(items.begin(), items.end());
         for (const uint32_t item : items) {
             append_item(per_core[core], item);
@@ -138,26 +148,6 @@ uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& 
     return num_stacks * (shape.St / chunks.Sq_chunk_t);
 }
 
-uint32_t num_causal_pairs(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
-    const bool pairs = shape.mask_type == AttentionMaskType::Causal && (shape.St / chunks.Sq_chunk_t) % 2U == 0U;
-    return pairs ? num_work_items(shape, chunks) / 2U : 0U;
-}
-
-namespace {
-
-// Main's rule: the balanced pairs only when every core gets one; fewer pairs than cores would idle cores.
-bool pairs_causal_chunks(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores) {
-    const uint32_t pairs = num_causal_pairs(shape, chunks);
-    return pairs > 0U && pairs >= num_available_cores;
-}
-
-}  // namespace
-
-uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores) {
-    return pairs_causal_chunks(shape, chunks, num_available_cores) ? num_causal_pairs(shape, chunks)
-                                                                   : num_work_items(shape, chunks);
-}
-
 SDPAForwardShape shape_of(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
@@ -178,15 +168,27 @@ SDPAForwardShape shape_of(
         .return_intermediates = return_intermediates};
 }
 
+uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item) {
+    const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
+    return sdpa_fw_items::num_kv_steps_of_chunk(
+        shape.mask_type == AttentionMaskType::Causal,
+        shape.St,
+        chunks.Sq_chunk_t,
+        chunks.Sk_chunk_t,
+        sdpa_fw_items::first_row_tile_of(item, q_num_chunks, chunks.Sq_chunk_t));
+}
+
 std::vector<CoreItemRuns> split_work(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t num_available_cores) {
-    const uint32_t total_units = num_work_units(shape, chunks, num_available_cores);
-    TT_FATAL(num_cores > 0 && num_cores <= total_units, "split_work: need 1..{} cores, got {}", total_units, num_cores);
+    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
+    const uint32_t total_items = num_work_items(shape, chunks);
+    TT_FATAL(num_cores > 0 && num_cores <= total_items, "split_work: need 1..{} cores, got {}", total_items, num_cores);
     std::vector<CoreItemRuns> per_core_runs;
-    if (pairs_causal_chunks(shape, chunks, num_available_cores)) {
-        const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
-        const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
-        per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
+    if (shape.mask_type == AttentionMaskType::Causal) {
+        std::vector<uint32_t> item_costs(total_items);
+        for (uint32_t item = 0; item < total_items; ++item) {
+            item_costs[item] = num_kv_steps(shape, chunks, item);
+        }
+        per_core_runs = split_items_longest_first(item_costs, num_cores);
     }
     if (per_core_runs.empty() || !fits_runtime_args(per_core_runs)) {
         per_core_runs = split_items_contiguous(num_work_items(shape, chunks), num_cores);
@@ -254,11 +256,7 @@ SDPAForwardChunks resolve_chunks(
     // four K/V tiles do better once the inner dim reaches 128 tiles-wide traffic or with a mask tensor
     // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
     // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
-    // while they do not fit L1 or would leave cores idle: causal work goes out as light/heavy chunk pairs
-    // once there is a pair per core (main's rule), so on a causal shape that can pair (an even tile count,
-    // which main always paired) a pair per core is the floor (main's one-row chunks on every core), an item
-    // per core otherwise. An odd chunk count has no pairs, so it shrinks too: three four-row chunks of a
-    // twelve-tile sequence would go out contiguously and unbalanced where main paired.
+    // while they do not fit L1 or would leave cores idle.
     constexpr uint32_t kDefaultSqChunkT = 4U;
     const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
     SDPAForwardChunks chunks{
@@ -267,12 +265,8 @@ SDPAForwardChunks resolve_chunks(
         .heads_per_item = std::max(user.heads_per_item, 1U)};
     if (chunks.Sq_chunk_t == 0U) {
         chunks.Sq_chunk_t = kDefaultSqChunkT;
-        const bool can_pair = shape.mask_type == AttentionMaskType::Causal && shape.St % 2U == 0U;
-        const auto units_for_balance = [&]() {
-            return can_pair ? num_causal_pairs(shape, chunks) : num_work_items(shape, chunks);
-        };
         while (chunks.Sq_chunk_t > 1U &&
-               (shape.St % chunks.Sq_chunk_t != 0U || units_for_balance() < num_available_cores)) {
+               (shape.St % chunks.Sq_chunk_t != 0U || num_work_items(shape, chunks) < num_available_cores)) {
             chunks.Sq_chunk_t /= 2U;
         }
     }

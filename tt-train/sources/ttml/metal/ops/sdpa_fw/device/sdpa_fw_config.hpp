@@ -85,26 +85,20 @@ struct ItemRun {
 using CoreItemRuns = std::vector<ItemRun>;
 
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
+// K/V steps item attends to: causal up to its diagonal, else all.
+uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item);
 
-// Light/heavy chunk pairs of a causal shape with an even chunk count (so every pair is the same work); 0
-// when the shape does not pair.
-uint32_t num_causal_pairs(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
-
-// What the split hands out whole, as on main: causal pairs when there are at least num_available_cores of
-// them (so no core idles for the balance), items otherwise. The program runs on min(available, units) cores.
-uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores);
-
-// Per-core item runs for num_cores <= num_work_units cores: causal pairs when num_work_units pairs, otherwise
-// contiguous blocks of items; falls back to contiguous blocks when the lists would not fit the runtime args.
+// Per-core item runs for num_cores cores: causal items longest first, otherwise contiguous blocks; falls
+// back to contiguous blocks when the lists would not fit the runtime args.
 std::vector<CoreItemRuns> split_work(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t num_available_cores);
+    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores);
 
 // Cheap knob checks for validate: each set knob must divide its axis, and the config must fit l1_budget_bytes
 // with every unset chunk size at its one-tile floor (the smallest chunking the pick can reach). Throws otherwise.
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes);
 
 // check_chunks, then picks the unset knobs by a shape rule, shrinking them until they fit l1_budget_bytes
-// and give num_available_cores a causal pair (or an item) each. Throws when even the smallest chunks do not fit.
+// and keep num_available_cores busy. Throws when even the smallest chunks do not fit.
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,
