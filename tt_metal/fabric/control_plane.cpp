@@ -690,7 +690,7 @@ ControlPlane::ControlPlane(
     const ::tt::llrt::RunTimeOptions& rtoptions,
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-    const tt_metal::ControlPlaneConfig& config) :
+    const tt_metal::FabricConfigDescriptor& config) :
     cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane_auto_discovery();
     initialize_fabric_context();
@@ -702,7 +702,7 @@ ControlPlane::ControlPlane(
     const ::tt::tt_metal::Hal& hal,
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
-    const tt_metal::ControlPlaneConfig& config) :
+    const tt_metal::FabricConfigDescriptor& config) :
     cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane(mesh_graph_desc_file, std::nullopt);
     initialize_fabric_context();
@@ -715,23 +715,24 @@ ControlPlane::ControlPlane(
     const tt_metal::distributed::multihost::DistributedContext& distributed_context,
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-    const tt_metal::ControlPlaneConfig& config) :
+    const tt_metal::FabricConfigDescriptor& config) :
     cluster_(cluster), rtoptions_(rtoptions), hal_(hal), distributed_context_(distributed_context), config_(config) {
     init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
     initialize_fabric_context();
 }
 
 void ControlPlane::validate_fabric_config_compatibility() {
-    // Gather every rank's ControlPlaneConfig (raw bytes; the sending rank is its index in the gather).
+    // Gather every rank's FabricConfigDescriptor (raw bytes; the sending rank is its index in the gather).
     const auto& distributed_context = this->distributed_context_.get();
     const auto world_size = static_cast<uint32_t>(*distributed_context.size());
 
-    std::vector<tt_metal::ControlPlaneConfig> configs(world_size);
+    std::vector<tt_metal::FabricConfigDescriptor> configs(world_size);
     distributed_context.all_gather(
-        ttsl::as_writable_bytes(ttsl::Span<tt_metal::ControlPlaneConfig>{&this->config_, 1}),
-        ttsl::as_writable_bytes(ttsl::Span<tt_metal::ControlPlaneConfig>{configs.data(), configs.size()}));
+        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{&this->config_, 1}),
+        ttsl::as_writable_bytes(ttsl::Span<tt_metal::FabricConfigDescriptor>{configs.data(), configs.size()}));
 
-    // vc2 / mesh pass-through come from rtoptions rather than ControlPlaneConfig; bit 0 = vc2, bit 1 = pass-through.
+    // vc2 / mesh pass-through come from rtoptions rather than FabricConfigDescriptor; bit 0 = vc2, bit 1 =
+    // pass-through.
     const auto& rtoptions = this->rtoptions_.get();
     uint8_t local_channel_flags =
         (rtoptions.get_enable_fabric_vc2() ? 1u : 0u) | (rtoptions.get_enable_fabric_mesh_pass_through() ? 2u : 0u);
@@ -771,15 +772,15 @@ void ControlPlane::validate_fabric_config_compatibility() {
             observed_values);
     }
 
-    // Every ControlPlaneConfig setting other than fabric_config (per mesh, checked above), mesh_id and host_rank must
-    // be identical on every rank. vc2 / mesh_pass_through / max_payload select the per-VC buffer-slot table and
+    // Every FabricConfigDescriptor setting other than fabric_config (per mesh, checked above), mesh_id and host_rank
+    // must be identical on every rank. vc2 / mesh_pass_through / max_payload select the per-VC buffer-slot table and
     // channel buffer size, so a disagreement across an inter-mesh link silently stalls the fabric.
-    auto payload_str = [](const tt_metal::ControlPlaneConfig& c) {
+    auto payload_str = [](const tt_metal::FabricConfigDescriptor& c) {
         return c.router_config.max_packet_payload_size_bytes.has_value()
                    ? std::to_string(*c.router_config.max_packet_payload_size_bytes)
                    : std::string("<default>");
     };
-    auto planes_str = [](const tt_metal::ControlPlaneConfig& c) {
+    auto planes_str = [](const tt_metal::FabricConfigDescriptor& c) {
         return c.num_routing_planes.has_value() ? std::to_string(*c.num_routing_planes) : std::string("<default>");
     };
     auto flag_str = [](uint8_t flags, uint8_t bit) { return std::string((flags & bit) != 0 ? "true" : "false"); };

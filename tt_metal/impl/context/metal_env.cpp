@@ -44,13 +44,13 @@ namespace {
 
 // The launcher (tt-run) assigns each process its mesh through TT_MESH_ID / TT_MESH_HOST_RANK. An explicit
 // non-default value in the descriptor must agree with the environment.
-void apply_local_mesh_binding_from_env(ControlPlaneConfig& fabric) {
-    const ControlPlaneConfig defaults{};
+void apply_local_mesh_binding_from_env(FabricConfigDescriptor& fabric) {
+    const FabricConfigDescriptor defaults{};
     if (const char* mesh_id_str = std::getenv("TT_MESH_ID")) {
         const tt_fabric::MeshId env_mesh_id{static_cast<uint32_t>(std::stoul(mesh_id_str))};
         TT_FATAL(
             fabric.mesh_id == defaults.mesh_id || fabric.mesh_id == env_mesh_id,
-            "ControlPlaneConfig.mesh_id {} conflicts with TT_MESH_ID={}",
+            "FabricConfigDescriptor.mesh_id {} conflicts with TT_MESH_ID={}",
             *fabric.mesh_id,
             mesh_id_str);
         fabric.mesh_id = env_mesh_id;
@@ -59,7 +59,7 @@ void apply_local_mesh_binding_from_env(ControlPlaneConfig& fabric) {
         const tt_fabric::MeshHostRankId env_host_rank{static_cast<uint32_t>(std::stoul(host_rank_str))};
         TT_FATAL(
             fabric.host_rank == defaults.host_rank || fabric.host_rank == env_host_rank,
-            "ControlPlaneConfig.host_rank {} conflicts with TT_MESH_HOST_RANK={}",
+            "FabricConfigDescriptor.host_rank {} conflicts with TT_MESH_HOST_RANK={}",
             *fabric.host_rank,
             host_rank_str);
         fabric.host_rank = env_host_rank;
@@ -89,6 +89,8 @@ MetalEnvImpl::MetalEnvImpl(MetalEnvDescriptor descriptor) : descriptor_(std::mov
     }
 
     apply_local_mesh_binding_from_env(fabric_desc_);
+    fabric_mesh_id_ = fabric_desc_.mesh_id;
+    fabric_host_rank_ = fabric_desc_.host_rank;
 
     // Initialize distributed context
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -258,34 +260,21 @@ void MetalEnvImpl::verify_fw_capabilities() {
 
 // ─── Fabric config ────────────────────────────────────────────────────────────
 
-tt_fabric::FabricConfig MetalEnvImpl::get_fabric_config() const { return fabric_desc_.fabric_config; }
+tt_fabric::FabricConfig MetalEnvImpl::get_fabric_config() const { return fabric_config_; }
 
-tt_fabric::FabricReliabilityMode MetalEnvImpl::get_fabric_reliability_mode() const {
-    return fabric_desc_.reliability_mode;
-}
+tt_fabric::FabricReliabilityMode MetalEnvImpl::get_fabric_reliability_mode() const { return fabric_reliability_mode_; }
 
-const tt_fabric::FabricRouterConfig& MetalEnvImpl::get_fabric_router_config() const {
-    return fabric_desc_.router_config;
-}
+const tt_fabric::FabricRouterConfig& MetalEnvImpl::get_fabric_router_config() const { return fabric_router_config_; }
 
-tt_fabric::FabricTensixConfig MetalEnvImpl::get_fabric_tensix_config() const {
-    return fabric_desc_.fabric_tensix_config;
-}
+tt_fabric::FabricTensixConfig MetalEnvImpl::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
-tt_fabric::FabricUDMMode MetalEnvImpl::get_fabric_udm_mode() const { return fabric_desc_.fabric_udm_mode; }
+tt_fabric::FabricUDMMode MetalEnvImpl::get_fabric_udm_mode() const { return fabric_udm_mode_; }
 
-tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return fabric_desc_.fabric_manager; }
+tt_fabric::FabricManagerMode MetalEnvImpl::get_fabric_manager() const { return fabric_manager_; }
 
-uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const {
-    // Unset means every available plane. Leaving this at 0 while fabric is enabled makes device open fatal in
-    // Cluster::configure_ethernet_cores_for_fabric_routers.
-    if (fabric_desc_.fabric_config == tt_fabric::FabricConfig::DISABLED) {
-        return 0;
-    }
-    return fabric_desc_.num_routing_planes.value_or(std::numeric_limits<uint8_t>::max());
-}
+uint8_t MetalEnvImpl::get_num_fabric_active_routing_planes() const { return num_fabric_active_routing_planes_; }
 
-void MetalEnvImpl::configure_fabric(const ControlPlaneConfig& fabric) {
+void MetalEnvImpl::configure_fabric(const FabricConfigDescriptor& fabric) {
     // The control plane is the first object built from the fabric configuration, so its existence marks the
     // configuration as committed.
     std::lock_guard<std::mutex> lock(control_plane_mutex_);
@@ -300,15 +289,29 @@ void MetalEnvImpl::configure_fabric(const ControlPlaneConfig& fabric) {
                 tt::LogMetal,
                 "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
         }
-    } else if (fabric.num_routing_planes.has_value()) {
-        TT_FATAL(
-            fabric.num_routing_planes.value() > 0,
-            "num_routing_planes must be greater than 0, got {}",
-            fabric.num_routing_planes.value());
+        num_fabric_active_routing_planes_ = 0;
+    } else {
+        if (fabric.num_routing_planes.has_value()) {
+            TT_FATAL(
+                fabric.num_routing_planes.value() > 0,
+                "num_routing_planes must be greater than 0, got {}",
+                fabric.num_routing_planes.value());
+        }
+        // Unset means every available plane, matching set_fabric_config. Leaving this at 0 makes device open fatal
+        // in Cluster::configure_ethernet_cores_for_fabric_routers.
+        num_fabric_active_routing_planes_ = fabric.num_routing_planes.value_or(std::numeric_limits<uint8_t>::max());
     }
 
     fabric_desc_ = fabric;
+    fabric_config_ = fabric.fabric_config;
+    fabric_reliability_mode_ = fabric.reliability_mode;
+    fabric_tensix_config_ = fabric.fabric_tensix_config;
+    fabric_udm_mode_ = fabric.fabric_udm_mode;
+    fabric_manager_ = fabric.fabric_manager;
+    fabric_router_config_ = fabric.router_config;
     apply_local_mesh_binding_from_env(fabric_desc_);
+    fabric_mesh_id_ = fabric_desc_.mesh_id;
+    fabric_host_rank_ = fabric_desc_.host_rank;
 }
 
 namespace {
@@ -335,13 +338,13 @@ void check_dispatch_fabric_preserves_system_mesh(
 
 void MetalEnvImpl::enable_fabric_for_dispatch() {
     TT_FATAL(
-        this->fabric_desc_.fabric_config == tt_fabric::FabricConfig::DISABLED,
+        this->fabric_config_ == tt_fabric::FabricConfig::DISABLED,
         "enable_fabric_for_dispatch() requires fabric to be disabled; fabric is {}",
-        enchantum::to_string(this->fabric_desc_.fabric_config));
+        enchantum::to_string(this->fabric_config_));
 
-    this->fabric_desc_.fabric_config = tt_fabric::FabricConfig::FABRIC_1D;
-    this->fabric_desc_.reliability_mode = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-    this->fabric_desc_.num_routing_planes = 1;
+    this->fabric_config_ = tt_fabric::FabricConfig::FABRIC_1D;
+    this->fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
+    this->num_fabric_active_routing_planes_ = 1;
 
     {
         std::lock_guard<std::mutex> lock(control_plane_mutex_);
@@ -382,58 +385,60 @@ bool MetalEnvImpl::set_fabric_config(
             enchantum::to_string(fabric_config));
     }
 
-    // Reject invalid requests before touching any state.
-    if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
-        TT_FATAL(
-            this->fabric_desc_.fabric_config == tt_fabric::FabricConfig::DISABLED ||
-                this->fabric_desc_.fabric_config == fabric_config,
-            "Tried to override previous value of fabric config: {}, with: {}",
-            enchantum::to_string(this->fabric_desc_.fabric_config),
-            enchantum::to_string(fabric_config));
-        TT_FATAL(
-            !num_routing_planes.has_value() || num_routing_planes.value() > 0,
-            "num_routing_planes must be greater than 0, got {}",
-            num_routing_planes.value_or(0));
-    }
-
     // On failure, restore the previous config; the next control plane access rebuilds from it.
-    auto rollback = ttsl::make_cleanup([this, prev_fabric_desc = this->fabric_desc_]() {
-        this->fabric_desc_ = prev_fabric_desc;
+    auto rollback = ttsl::make_cleanup([this,
+                                        prev_fabric_config = fabric_config_,
+                                        prev_reliability_mode = fabric_reliability_mode_,
+                                        prev_tensix_config = fabric_tensix_config_,
+                                        prev_udm_mode = fabric_udm_mode_,
+                                        prev_manager = fabric_manager_,
+                                        prev_router_config = fabric_router_config_,
+                                        prev_routing_planes = num_fabric_active_routing_planes_]() {
+        fabric_config_ = prev_fabric_config;
+        fabric_reliability_mode_ = prev_reliability_mode;
+        fabric_tensix_config_ = prev_tensix_config;
+        fabric_udm_mode_ = prev_udm_mode;
+        fabric_manager_ = prev_manager;
+        fabric_router_config_ = prev_router_config;
+        num_fabric_active_routing_planes_ = prev_routing_planes;
         control_plane_.reset();
     });
 
     force_reinit_ = true;
-    // Captured before fabric_config changes: the derived count is 0 while fabric is disabled.
-    const uint8_t prev_active_routing_planes = this->get_num_fabric_active_routing_planes();
 
     // Export channel trimming capture data before fabric config changes.
-    // Must happen while the current fabric config is still active and fabric context is alive.
-    bool is_tearing_down_fabric = fabric_config == tt_fabric::FabricConfig::DISABLED &&
-                                  this->fabric_desc_.fabric_config != tt_fabric::FabricConfig::DISABLED;
+    // Must happen while fabric_config_ is still active and fabric context is alive.
+    bool is_tearing_down_fabric =
+        fabric_config == tt_fabric::FabricConfig::DISABLED && this->fabric_config_ != tt_fabric::FabricConfig::DISABLED;
     if (is_tearing_down_fabric) {
         tt::tt_fabric::export_channel_trimming_capture(*this);
     }
 
-    if (this->fabric_desc_.fabric_config == tt_fabric::FabricConfig::DISABLED ||
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
         fabric_config == tt_fabric::FabricConfig::DISABLED) {
-        this->fabric_desc_.fabric_config = fabric_config;
-        this->fabric_desc_.reliability_mode = reliability_mode;
+        this->fabric_config_ = fabric_config;
+        this->fabric_reliability_mode_ = reliability_mode;
+    } else {
+        TT_FATAL(
+            this->fabric_config_ == fabric_config,
+            "Tried to override previous value of fabric config: {}, with: {}",
+            enchantum::to_string(this->fabric_config_),
+            enchantum::to_string(fabric_config));
     }
 
-    if (this->fabric_desc_.fabric_config == tt_fabric::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         if (num_routing_planes.has_value()) {
             log_warning(
                 tt::LogMetal,
                 "Got num_routing_planes while disabling fabric, ignoring it and disabling all active routing planes");
         }
 
-        // Teardown is not rolled back: once it starts, the hardware is already being disabled.
         std::move(rollback).cancel();
         this->teardown_fabric_config();
         return false;
     }
 
-    if (num_routing_planes.has_value() && num_routing_planes.value() < prev_active_routing_planes) {
+    if (num_routing_planes.has_value() && num_routing_planes.value() < this->num_fabric_active_routing_planes_) {
         // This is the expected, common case: DeviceManager's legacy dispatch-fallback path (see
         // DeviceManager::initialize) always requests num_routing_planes=1 to enable minimal fabric for dispatch,
         // regardless of how many routing planes the control plane already has active. Silently keeping the higher
@@ -442,53 +447,50 @@ bool MetalEnvImpl::set_fabric_config(
             tt::LogMetal,
             "Got num_routing_planes: {}, which is less than current value: {}, ignoring the override",
             num_routing_planes.value(),
-            prev_active_routing_planes);
+            this->num_fabric_active_routing_planes_);
         std::move(rollback).cancel();
         return false;
     }
 
-    const auto new_val =
-        std::max(prev_active_routing_planes, num_routing_planes.value_or(std::numeric_limits<uint8_t>::max()));
-    if (new_val != prev_active_routing_planes && prev_active_routing_planes > 0) {
+    const auto new_val = std::max(
+        this->num_fabric_active_routing_planes_, num_routing_planes.value_or(std::numeric_limits<uint8_t>::max()));
+    if (new_val != this->num_fabric_active_routing_planes_ && this->num_fabric_active_routing_planes_ > 0) {
         log_info(
             tt::LogMetal,
             "Overriding the number of routing planes to activate from {} to {}",
-            prev_active_routing_planes,
+            this->num_fabric_active_routing_planes_,
             new_val);
     }
-    this->fabric_desc_.num_routing_planes = new_val;
+    this->num_fabric_active_routing_planes_ = new_val;
 
-    this->fabric_desc_.fabric_tensix_config = fabric_tensix_config;
-    this->fabric_desc_.fabric_udm_mode = fabric_udm_mode;
-    this->fabric_desc_.fabric_manager = fabric_manager;
-    this->fabric_desc_.router_config = router_config;
+    this->fabric_tensix_config_ = fabric_tensix_config;
+    this->fabric_udm_mode_ = fabric_udm_mode;
+    this->fabric_manager_ = fabric_manager;
+    this->fabric_router_config_ = router_config;
 
     if (control_plane_ != nullptr) {
         const auto prev_fabric_config = this->get_control_plane().get_fabric_config();
         // Reinitialization is still required unconditionally here (other fields such as
-        // fabric_tensix_config/fabric_udm_mode/router_config may have changed even when
-        // fabric_config itself has not), but the log message should only claim a "change"
+        // fabric_tensix_config_/fabric_udm_mode_/fabric_router_config_ may have changed even when
+        // fabric_config_ itself has not), but the log message should only claim a "change"
         // occurred when the fabric config value actually differs; otherwise this fires on every
         // call (e.g. repeated no-op calls from callers that always pass the same config) and
         // floods logs with a misleading message.
-        if (prev_fabric_config != this->fabric_desc_.fabric_config) {
+        if (prev_fabric_config != this->fabric_config_) {
             log_info(
                 tt::LogMetal,
                 "Fabric config changed from {} to {}, reinitializing control plane",
                 prev_fabric_config,
-                this->fabric_desc_.fabric_config);
+                this->fabric_config_);
         } else {
-            log_debug(
-                tt::LogMetal,
-                "Fabric config unchanged ({}), reinitializing control plane",
-                this->fabric_desc_.fabric_config);
+            log_debug(tt::LogMetal, "Fabric config unchanged ({}), reinitializing control plane", this->fabric_config_);
         }
         system_mesh_.reset();
         this->initialize_control_plane_impl();
     }
 
     // Active tt-fabric: refresh routing tables (control plane rebuild is not enough).
-    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_desc_.fabric_config)) {
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         this->initialize_fabric_config();
     }
 
@@ -501,9 +503,9 @@ void MetalEnvImpl::teardown_fabric_config() {
     const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
                                     !MetalContext::instance().device_manager()->get_all_active_devices().empty();
 
-    this->fabric_desc_.fabric_config = tt_fabric::FabricConfig::DISABLED;
-    this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_desc_.fabric_config);
-    this->fabric_desc_.num_routing_planes = std::nullopt;
+    this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
+    this->num_fabric_active_routing_planes_ = 0;
     // When no control plane exists and no factory descriptor is configured, rebuild one eagerly here
     // (the pre-FSD behavior): leaving it null means the next consumer is the atexit firmware teardown,
     // which would lazily construct a control plane during static destruction — after function-local
@@ -520,24 +522,24 @@ void MetalEnvImpl::teardown_fabric_config() {
 }
 
 void MetalEnvImpl::initialize_fabric_config() {
-    if (this->fabric_desc_.fabric_config == tt_fabric::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
 
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(
-        this->fabric_desc_.fabric_config, this->get_num_fabric_active_routing_planes());
+        this->fabric_config_, this->num_fabric_active_routing_planes_);
     auto& cp = this->get_control_plane();
     cp.configure_routing_tables_for_fabric_ethernet_channels();
 }
 
 void MetalEnvImpl::initialize_fabric_tensix_datamover_config(const tt_fabric::FabricTensixSessionInputs& inputs) {
-    if (this->fabric_desc_.fabric_config == tt_fabric::FabricConfig::DISABLED) {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
         return;
     }
 
     // Mock is included: this is control-plane/soc-descriptor derived (no device I/O), and the mock
     // fabric compile fatals on a null tensix_config_ when FabricTensixConfig != DISABLED.
-    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_desc_.fabric_config)) {
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
         this->get_control_plane().get_fabric_context().get_builder_context().initialize_tensix_config(inputs);
     }
 }
@@ -596,8 +598,7 @@ void MetalEnvImpl::initialize_control_plane_impl() {
         this->construct_control_plane();
     } else {
         const auto cluster_type = get_cluster().get_cluster_type();
-        auto fabric_type =
-            tt::tt_fabric::get_fabric_type(this->fabric_desc_.fabric_config, get_cluster().is_ubb_galaxy());
+        auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, get_cluster().is_ubb_galaxy());
         std::filesystem::path mesh_graph_desc_path =
             tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(
                 cluster_type, rtoptions_->get_root_dir(), fabric_type);
@@ -623,7 +624,7 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             *distributed_context_,
             mesh_graph_desc_path.string(),
             logical_mesh_chip_id_to_physical_chip_id_mapping_,
-            this->fabric_desc_);
+            this->control_plane_config());
     } else {
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
             get_cluster(),
@@ -631,7 +632,7 @@ void MetalEnvImpl::construct_control_plane(const std::filesystem::path& mesh_gra
             get_hal(),
             *distributed_context_,
             mesh_graph_desc_path.string(),
-            this->fabric_desc_);
+            this->control_plane_config());
     }
 }
 
@@ -645,7 +646,20 @@ void MetalEnvImpl::construct_control_plane() {
     }
     log_info(tt::LogDistributed, "Constructing control plane using auto-discovery (no mesh graph descriptor).");
     control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(
-        get_cluster(), *rtoptions_, get_hal(), *distributed_context_, this->fabric_desc_);
+        get_cluster(), *rtoptions_, get_hal(), *distributed_context_, this->control_plane_config());
+}
+
+FabricConfigDescriptor MetalEnvImpl::control_plane_config() const {
+    return FabricConfigDescriptor{
+        .fabric_config = fabric_config_,
+        .reliability_mode = fabric_reliability_mode_,
+        .num_routing_planes = num_fabric_active_routing_planes_,
+        .fabric_tensix_config = fabric_tensix_config_,
+        .fabric_udm_mode = fabric_udm_mode_,
+        .fabric_manager = fabric_manager_,
+        .router_config = fabric_router_config_,
+        .mesh_id = fabric_mesh_id_,
+        .host_rank = fabric_host_rank_};
 }
 
 // ─── System mesh ──────────────────────────────────────────────────────────────
@@ -668,8 +682,7 @@ void MetalEnvImpl::set_custom_fabric_topology(
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_ = logical_mesh_chip_id_to_physical_chip_id_mapping;
     custom_mesh_graph_desc_path_ = mesh_graph_desc_file;
-    this->set_fabric_config(
-        fabric_desc_.fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 void MetalEnvImpl::set_default_fabric_topology() {
@@ -682,8 +695,7 @@ void MetalEnvImpl::set_default_fabric_topology() {
     } else {
         custom_mesh_graph_desc_path_ = std::nullopt;
     }
-    this->set_fabric_config(
-        fabric_desc_.fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    this->set_fabric_config(fabric_config_, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 }
 
 // ─── Distributed context ──────────────────────────────────────────────────────
@@ -773,9 +785,9 @@ MetalEnv::~MetalEnv() {
 
 const MetalEnvDescriptor& MetalEnv::get_descriptor() const { return impl_->get_descriptor(); }
 
-void MetalEnv::configure_fabric(const ControlPlaneConfig& fabric) { impl_->configure_fabric(fabric); }
+void MetalEnv::configure_fabric(const FabricConfigDescriptor& fabric) { impl_->configure_fabric(fabric); }
 
-const ControlPlaneConfig& MetalEnv::get_fabric_config_descriptor() const {
+const FabricConfigDescriptor& MetalEnv::get_fabric_config_descriptor() const {
     return impl_->get_fabric_config_descriptor();
 }
 

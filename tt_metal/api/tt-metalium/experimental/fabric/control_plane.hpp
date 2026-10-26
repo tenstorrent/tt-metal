@@ -101,7 +101,7 @@ public:
         const ::tt::llrt::RunTimeOptions& rtoptions,
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
-        const tt_metal::ControlPlaneConfig& config = {});
+        const tt_metal::FabricConfigDescriptor& config = {});
 
     // Create control plane with custom mesh graph descriptor
     explicit ControlPlane(
@@ -110,7 +110,7 @@ public:
         const ::tt::tt_metal::Hal& hal,
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
-        const tt_metal::ControlPlaneConfig& config = {});
+        const tt_metal::FabricConfigDescriptor& config = {});
 
     // Create control plane with custom mesh graph descriptor and logical mesh chip id to physical chip id mapping
     explicit ControlPlane(
@@ -120,7 +120,7 @@ public:
         const tt_metal::distributed::multihost::DistributedContext& distributed_context,
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping,
-        const tt_metal::ControlPlaneConfig& config = {});
+        const tt_metal::FabricConfigDescriptor& config = {});
 
     ~ControlPlane();
 
@@ -403,7 +403,7 @@ private:
 
     void init_control_plane_auto_discovery();
 
-    // Gathers the ControlPlaneConfig of every rank and enforces one FabricConfig per logical mesh and identical
+    // Gathers the FabricConfigDescriptor of every rank and enforces one FabricConfig per logical mesh and identical
     // other settings on every rank (only fabric_config, mesh_id and host_rank may differ). Must run after the local
     // mesh binding and distributed contexts are known, and before routing tables or FabricContext are built.
     void validate_fabric_config_compatibility();
@@ -420,7 +420,7 @@ private:
     // Fabric settings. Strict system health mode (reliability_mode) requires (expects) all links/devices to be
     // live: any downed devices/links result in an error. Otherwise the control plane is free to instantiate
     // fewer routing planes according to which links are available.
-    tt_metal::ControlPlaneConfig config_;
+    tt_metal::FabricConfigDescriptor config_;
 
     // FabricConfig that was agreed on by all ranks in validate_fabric_config_compatibility(). Fabric
     // initialization is only allowed to proceed with this value.

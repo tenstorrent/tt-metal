@@ -293,7 +293,7 @@ void DeviceManager::open_devices(const std::vector<ChipId>& device_ids) {
                 env_impl_.get_num_fabric_active_routing_planes() > 0,
                 "Fabric is enabled for dispatch but no routing planes are active");
         }
-        MetalEnvAccessor(descriptor_->env()).impl().fabric_desc_.reliability_mode =
+        MetalEnvAccessor(descriptor_->env()).impl().fabric_reliability_mode_ =
             tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         log_info(tt::LogMetal, "Dispatch on {} with {} Command Queues\n", fabric_config, num_hw_cqs_);
     }

@@ -176,7 +176,7 @@ TEST(MetalEnv, EmptyPathIsNotMock) {
 // --- Fabric configuration tests ---
 
 TEST(MetalEnv, FabricConfigDescriptorDefaults) {
-    ControlPlaneConfig desc;
+    FabricConfigDescriptor desc;
     EXPECT_EQ(desc.fabric_config, tt_fabric::FabricConfig::DISABLED);
     EXPECT_EQ(desc.reliability_mode, tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     EXPECT_FALSE(desc.num_routing_planes.has_value());
@@ -190,7 +190,7 @@ MetalEnvDescriptor wormhole_mock_descriptor() {
 }
 
 TEST(MetalEnv, ConfigureFabricStoresDescriptor) {
-    ControlPlaneConfig fc;
+    FabricConfigDescriptor fc;
     fc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D;
     fc.reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
     fc.num_routing_planes = 4;
