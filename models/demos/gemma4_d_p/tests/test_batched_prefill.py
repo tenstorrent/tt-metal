@@ -153,8 +153,11 @@ def _check(failures, label, expected, actual):
 
 # Chunks each request has before the batched steps: slot 0 (the GPU golden prompt) is deepest. G4B_DEEP=1 takes the
 # deep set (prefixes to 32k, capacity 64k, 4 steps).
-_PREFIX_CHUNKS = {2: (3, 0), 4: (3, 0, 1, 2)}
-_DEEP_PREFIX_CHUNKS = {2: (16, 4), 4: (16, 4, 8, 12)}
+_PREFIX_CHUNKS = {2: (3, 0), 4: (3, 0, 1, 2), 5: (3, 0, 1, 2, 1)}
+_DEEP_PREFIX_CHUNKS = {2: (16, 4), 4: (16, 4, 8, 12), 5: (16, 4, 8, 12, 6)}
+# Lane counts for the experiments in #59851 (5 lanes of 2K); the defaults are the PR's.
+_KV_LANES = [int(b) for b in os.environ.get("G4B_KV_LANES", "2,4").split(",")]
+_PERF_LANE_COUNTS = tuple(int(b) for b in os.environ.get("G4B_LANE_COUNTS", "1,2,4").split(","))
 
 
 def _poison(runner, slot, n_chunks, chunk, vocab_size):
@@ -171,7 +174,7 @@ def _prompts(num_lanes, n_tokens, vocab_size):
     golden = json.loads((GOLDEN_DIR / "metadata.json").read_text())["token_ids"]
     stream = _text_token_stream(_hf_model_id())[0]
     prompts = [torch.tensor(golden[:n_tokens], dtype=torch.int32)]
-    for offset in (60_000, 120_000)[: max(0, num_lanes - 2)]:
+    for offset in (60_000, 120_000, 30_000)[: max(0, num_lanes - 2)]:
         prompts.append(stream[offset : offset + n_tokens].clone())
     if num_lanes > 1:
         generator = torch.Generator().manual_seed(1234)
@@ -182,7 +185,7 @@ def _prompts(num_lanes, n_tokens, vocab_size):
 @torch.no_grad()
 @pytest.mark.timeout(900)
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
-@pytest.mark.parametrize("num_lanes", [2, 4], ids=lambda b: f"B{b}")
+@pytest.mark.parametrize("num_lanes", _KV_LANES, ids=lambda b: f"B{b}")
 def test_batched_kv_matches_unbatched(mesh_device, num_lanes, reset_seeds):
     """Every slot's KV after batched steps vs the same request prefilled alone, chunk 2048. One more slot, which no
     batched step names, must stay bit-identical."""
@@ -381,7 +384,7 @@ def test_same_request_lanes(mesh_device, reset_seeds):
 _MIXES = {
     "shallow": lambda b: [2048] * b,
     "u32k": lambda b: [32768] * b,
-    "mixed": lambda b: [2048, 16384, 65536, 131072][:b],
+    "mixed": lambda b: [2048, 16384, 65536, 131072, 32768, 98304][:b],
     "deep": lambda b: [131072] * b,
 }
 
@@ -391,7 +394,7 @@ _MIXES = {
 @parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 def test_batched_step_perf(mesh_device, reset_seeds):
     """Traced step time of B requests x 2048 tokens vs B unbatched steps at the same prefixes."""
-    chunk_size, lane_counts, capacity = 2048, (1, 2, 4), 262144
+    chunk_size, lane_counts, capacity = 2048, _PERF_LANE_COUNTS, 262144
     num_slots = max(lane_counts)
     mesh_config, model_args, model = build_batched_model(mesh_device, chunk_size, num_slots, capacity)
 
