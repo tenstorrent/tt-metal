@@ -2487,6 +2487,14 @@ void validate_matmul_mcast1d_config(
             config_name,
             input_tensor_b.memory_config().memory_layout());
     }
+    // With a sharded output, the in0 and in1 multicast programs (mcast_in0 true or false) use the core's output shard
+    // as the output buffer, which holds the output of one batch. gather_in0 uses different kernels, which this check
+    // does not cover.
+    if (!program_config.gather_in0) {
+        const uint32_t B = program_config.fuse_batch ? 1u : get_batch_size(a_shape_padded);
+        operations::matmul::utilities::validate_block_sharded_output_batch(
+            attributes.output_mem_config.is_sharded(), B, program_config.per_core_M, program_config.per_core_N);
+    }
 }
 
 // Shared Mcast2D/Mcast1D preamble — the fuse_batch gate. Fused batch requires B batch==1,
