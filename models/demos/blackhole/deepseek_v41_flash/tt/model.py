@@ -15,6 +15,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import DSV41Attention, DSV41CompressedAttention
+from models.demos.blackhole.deepseek_v41_flash.tt.ccl_lean import make_lean, make_lean_sems
 from models.demos.blackhole.deepseek_v41_flash.tt.layer import DSV41Layer
 from models.demos.blackhole.deepseek_v41_flash.tt.loader import load_layer
 from models.demos.blackhole.deepseek_v41_flash.tt.paged_attention import (
@@ -35,8 +36,11 @@ class DSV41DecodeChain:
         self.B = self.rows * users_per_row
         self.max_comp = max_comp
         self.log = log
-        self.mesh_config = mesh_4x8()
+        self.mesh_config = make_lean(mesh_4x8())
         self.ccl = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
+        make_lean_sems(
+            self.ccl
+        )  # the one-worker CCL semaphores are created here, next to the CCLManager's own (before any layer / moe warmup touches L1)
         self.sources = {}  # kv-source layer id -> its attention module
         self.moe_buffers = None  # persistent MoE scratch buffers, built by the first layer and shared by all later ones
         # ---- paged KV (DSV41_PAGED=1): shared row-major pool + per-user page tables, see tt/paged_ops.py

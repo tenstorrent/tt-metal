@@ -168,7 +168,9 @@ class DSV41Layer:
         h = ttnn.concat([t[0] for t in hh], dim=2)
         h_tok = ttnn.concat([t[1] for t in hh], dim=0)
         m = self.moe.forward(h, h_tok, None)
-        m = self.mesh_config.allgather(m, self.ccl, axis=1, dim=3)
+        m = self.mesh_config.allgather(
+            m, self.ccl, axis=1, dim=3, **({"lean_ag": True} if getattr(self.mesh_config, "_dsv41_lean", False) else {})
+        )
         outs = []
         for c in range(n):
             sh = self.shared.forward(hh[c][0])
@@ -255,7 +257,9 @@ class DSV41Layer:
         mark("mhc_ffn_collapse+norm")
         m = self.moe.forward(h, h_tok, forced_routing)  # [1,1,T,D/cols] per device
         mark("moe")
-        m = self.mesh_config.allgather(m, self.ccl, axis=1, dim=3)  # -> [1,1,T,D] replicated
+        m = self.mesh_config.allgather(
+            m, self.ccl, axis=1, dim=3, **({"lean_ag": True} if getattr(self.mesh_config, "_dsv41_lean", False) else {})
+        )  # -> [1,1,T,D] replicated
         mark("moe_allgather")
         sh = self.shared.forward(h)  # shared expert, replicated bfp8 (see shared_expert.py)
         mark("shared_expert")
