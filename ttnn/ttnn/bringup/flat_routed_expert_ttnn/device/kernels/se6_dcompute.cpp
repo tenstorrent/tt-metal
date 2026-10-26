@@ -42,6 +42,8 @@ constexpr uint32_t sub = get_compile_time_arg_val(6);
 constexpr uint32_t slot = get_compile_time_arg_val(7);
 constexpr uint32_t ring = get_compile_time_arg_val(8);
 constexpr uint32_t nblk = kt_d / kblk_d;
+// matmul_block's kt_dim: with rt_dim 1 the LLK never strides in0 by it (llk_unpack_AB_matmul: reuse_a, t = 0), so
+// KT_D need not be a multiple of it (a down K of 18 / 36 tiles: the DeepSeek-V4.1 shared expert's TP 4 / TP 2 slice)
 constexpr uint32_t hk = 8;
 constexpr uint32_t group_tiles = kt_d * mtg;
 constexpr uint32_t h_all_tiles = groups * group_tiles;
@@ -71,7 +73,7 @@ constexpr uint32_t cpw = largest_div(pcd, dst_cols);
 #else
 constexpr uint32_t cpw = pcd < dst_cols ? pcd : dst_cols;
 #endif
-static_assert(pcd <= 16 && kt_d % kblk_d == 0 && kt_d % hk == 0 && ring >= nblk);
+static_assert(pcd <= 16 && kt_d % kblk_d == 0 && ring >= nblk);
 #ifdef SE_Y_RM
 // Row-major y: each row tile is pack-untilized into PCD pages (32 rows x PCD * 32 bf16) and pushed on its own
 static_assert(pcd % cpw == 0);

@@ -10,8 +10,8 @@ The device does not emulate q (agent rule 17): x and h are the tiles the flat op
 2304 / TP intermediate columns (1152 on 2x2, 576 on 4x4 / 8x4 / 2x4), run by ONE ttnn.bringup.flat_routed_expert call
 (P.12, Marko Staletovic's K3_SE=flat, combine_rf/examples/tt_k3_token_split_moe.py _build_shared_flat; FIX.9 deleted
 the ttnn.linear chain): the slice cut into SE_PARTS always-on "experts" of I/TP / SE_PARTS columns that every own token
-goes to (counts [S/SP] each, regions p S/SP; each part zero-padded to a multiple of 256 columns, the op's
-down-projection K block, and at least 33 tile columns, the op's one-subgrid plan: 2x2 1152 -> 1280, TP 4 576 -> 1280); the weights (W1 | W3 | W2 of the chip's columns, as stored [N, K],
+goes to (counts [S/SP] each, regions p S/SP; each part at its real width, no padded lanes: the op plans 18 / 36 tile
+columns and a down K of any tile count since FIX.1, DS41-76 / DS41-115); the weights (W1 | W3 | W2 of the chip's columns, as stored [N, K],
 weights_nk) laid out once at load in the op's bank layout as bfloat8_b (the checkpoint's fp8 width, agent rule 7; bfp8
 rounds e4m3 values more than 3 binades below their 16-value group's largest, measured in tt/perf_shared_expert.py),
 the clamped SwiGLU in the op (limit 10), the routed experts' precision (EXPERTS_PRECISION: glm = LoFi + bfp8 x / h
@@ -50,15 +50,6 @@ TILE = 32
 # slice (2x2: 1152 columns, 36 tiles; 4x4 / 8x4 / 2x4: 576) as one expert: the op plans it (the gate/up split takes
 # the 2304-wide routed experts at H 5120 too), y is the partial itself (no parts' sum). Measured in tt/perf_shared_expert.py (P.12).
 SE_PARTS = 1
-# the op's down projection runs K in blocks of 8 tiles (se6_dcompute.cpp: static_assert kt_d % 8 == 0), so an expert's
-# intermediate is a multiple of 256: each part is zero-padded to it (2x2: 1152 -> 1280, +11 % work; 4x4 / 8x4 / 2x4:
-# 576 -> 1280 by ONE_SUBGRID_MIN below, 2.2x the work). Zero W1 / W3 rows give h = silu(min(0, 10)) * clamp(0) = 0 there, and zero W2 columns add nothing.
-DOWN_K = 256
-# the op plans an expert of <= 32 tile columns on 2 / 3 subgrids (flat_routed_expert_plan.cpp nsg, made for small H),
-# and at H 5120 those have no gate/up split (the weight ring of 2 pairs x 160 K tiles alone fills a core's L1): TT_FATAL
-# "no gate/up split for 24 tile columns" for the 4-column meshes' 576 -> 768 (W.1 port, DS41-115). The padded part is
-# at least 33 tile columns, the op's one-subgrid plan (the one the 2x2 seed's 1280 runs): 576 -> 1280 on TP 4.
-ONE_SUBGRID_MIN = 33 * TILE
 _DONE: dict = {}  # (mesh, down coordinators) -> the flat op's done words, shared by every layer's shared expert
 
 
@@ -104,8 +95,6 @@ class TtSharedExpert:
         P = SE_PARTS
         assert self.ip % (P * TILE) == 0, f"{self.ip} columns in {P} parts"
         self.S, self.P, self.ipart = chunk // R, P, self.ip // P
-        # the part's width in the op (zero-padded): a DOWN_K multiple in the op's one-subgrid range
-        self.ipad = -(-max(self.ipart, ONE_SUBGRID_MIN) // DOWN_K) * DOWN_K
         self.precision = settings.get("EXPERTS_PRECISION")
         assert self.precision in ("full", "glm"), self.precision
         full = self.precision == "full"
@@ -119,21 +108,14 @@ class TtSharedExpert:
         x_bf16, h_bf16 = opts.get("x_bf16", x_bf16), opts.get("h_bf16", h_bf16)
         self.fidelity = int(opts.get("fidelity", self.fidelity))
         self.stochastic = bool(opts.get("stochastic", False))
-        ip, q, qp = self.ip, self.ipart, self.ipad
+        ip, q = self.ip, self.ipart
 
-        def pad(t, dim):  # (zero columns / rows up to the op's width)
-            if qp == q:
-                return t.float().contiguous()
-            shape = list(t.shape)
-            shape[dim] = qp - q
-            return torch.cat([t.float(), torch.zeros(shape)], dim=dim).contiguous()
-
-        def chip(c):  # mesh column c's slice as P experts (W1 [qp, H], W3 [qp, H], W2 [H, qp]: the stored [N, K])
+        def chip(c):  # mesh column c's slice as P experts (W1 [q, H], W3 [q, H], W2 [H, q]: the stored [N, K])
             return [
                 (
-                    pad(w1[c * ip + p * q : c * ip + (p + 1) * q], 0),
-                    pad(w3[c * ip + p * q : c * ip + (p + 1) * q], 0),
-                    pad(w2[:, c * ip + p * q : c * ip + (p + 1) * q], 1),
+                    w1[c * ip + p * q : c * ip + (p + 1) * q].float().contiguous(),
+                    w3[c * ip + p * q : c * ip + (p + 1) * q].float().contiguous(),
+                    w2[:, c * ip + p * q : c * ip + (p + 1) * q].float().contiguous(),
                 )
                 for p in range(P)
             ]
@@ -144,7 +126,7 @@ class TtSharedExpert:
             [cols[d % C] for d in range(R * C)],  # (device r C + c holds column c's slice)
             m=max(256, self.S),
             H=self.H,
-            I=qp,
+            I=q,
             gids=[list(range(P)) for _ in range(R * C)],
             n_global=P,
             wdtype="bf8",
@@ -186,7 +168,7 @@ class TtSharedExpert:
         self.reads_rows = True
         logger.info(
             f"SHARED_FLAT plan nu={lay['nu']} np={lay['np']} mt={lay['mt']} gate/up={len(lay['gu'])} down={lay['nd']} "
-            f"parts={P} x {q} (padded to {qp}) rows={S} precision={self.precision} fidelity={self.fidelity}"
+            f"parts={P} x {q} rows={S} precision={self.precision} fidelity={self.fidelity}"
         )
 
     def _flat_partial(self, x: ttnn.Tensor, xq: ttnn.Tensor | None, rows: ttnn.Tensor | None) -> ttnn.Tensor:

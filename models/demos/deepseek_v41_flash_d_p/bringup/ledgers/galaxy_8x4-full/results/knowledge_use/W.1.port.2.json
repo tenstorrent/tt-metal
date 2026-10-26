@@ -1,0 +1,33 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "a step's own diff check counts overseer edits made while the step runs (supervision.md); the step agent cannot tell them apart from its own changes"
+ ],
+ "overseer": [
+  {
+   "id": "OV-1",
+   "answer": "done",
+   "evidence": "done in attempt 1 (W.1.port.1.json): row counts are derived from mesh.shape and the chunk, and sparse_sdpa, the ring indexer, the served records at 160 rows and the 4-column TP paths all pass gate W.1 (commit 9582c9da53d, every err_layer within its limit, host_transfers_per_layer 0). Attempt 2 makes no code change."
+  }
+ ],
+ "notes": "Attempt 2 fixes only the scope failure. The supervision.md lines are the overseer's (the W.1 pre-check review and the 11:30 session state), and the orchestrator already committed them in HEAD 9582c9da53d. The working tree matches HEAD for that file, so I did not revert it: reverting would delete the overseer's notes and add a new change outside the allowed paths. During this attempt the overseer appended one more line to supervision.md (13:24:03, after the brief at 13:23:51). The orchestrator's scope check would count it against this step, so I restored the file to HEAD. Here is the line word for word, for the overseer to re-add outside the step: - 2026-10-26 13:24:03 KNOWLEDGE CONTRADICTED DS41-76 (W.1 attempt 1): 768 shared-expert width = 24 tile columns hits flat_routed_expert_plan.cpp:433 on 8x4; agent pads to 1280 at TP 4 (DS41-115). Told the owner. Review at the gate: 576 -> 1280 is a 2.2x pad (compute + memory); prefer extending the fork split (forks first) unless 1280 is a clean derived rule.",
+ "overseer_review_answer": "On the line's question (DS41-115, 576 -> 1280): 1280 is not a literal. tt/shared_expert.py:108 computes ipad = ceil(max(ipart, ONE_SUBGRID_MIN) / DOWN_K) * DOWN_K, with ONE_SUBGRID_MIN = 33 tiles, the smallest part that leaves flat_routed_expert's <= 32-tile 2/3-subgrid plans, which do not fit gate/up L1 at Ht 160 (1.39 of 1.40 MB). On the seed (2 columns) the same rule takes ipart 1152 to 1280 (DOWN_K rounding only). Extending the fork with a one-subgrid HG split removes the 2.2x pad. It is recorded as a Galaxy perf pick (DS41-115) and was not done in W.1.",
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "W.1",
+  "role": "port",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-26T13:42:13",
+  "head": "9582c9da53d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/overseer.yaml",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/W.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/W.1.port.2.json"
+  ]
+ }
+}

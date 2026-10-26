@@ -267,6 +267,22 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
 
     // subgrids: 2 for It <= 16 (TP4-like), 3 for It <= 32 (TP2-like), else 1
     p.nsg = p.It <= 16 ? 2 : (p.It <= 32 ? 3 : 1);
+    // Subgrids only when they have a gate/up split: at large H (DeepSeek-V4.1 H 5120, Ht 160) a subgrid's 16-cell
+    // rectangle has none for small It (two pairs' weight ring alone is 1.39 MB of the 1.40 MB budget); such a width
+    // takes the one-subgrid plan, where the uneven pair split covers widths with no even one (It 18 / 36: the
+    // DeepSeek-V4.1 shared expert's TP 4 / TP 2 slice). Every It that planned before keeps its plan (this only
+    // replaces the "no gate/up split" TT_FATAL). The MIMO_FL_GU_SPLIT probe keeps the old choice.
+    if (p.nsg > 1 && !std::getenv("MIMO_FL_GU_SPLIT")) {
+        const bool sg_fp32 = p.nsg != 3 && !std::getenv("MIMO_FL_GU_BF16");
+        bool sg_split = false;
+        for (uint32_t xs : {24u, 16u, 12u}) {  // (the fixed subgrid rectangles: 16 cells each)
+            sg_split =
+                sg_split || gu_split(p.It, p.Ht, p.w_tile, xs, p.nsg == 2 ? 8 : 4, 16, sg_fp32, p.x_tile).has_value();
+        }
+        if (!sg_split) {
+            p.nsg = 1;
+        }
+    }
     p.n_rd_sg = p.nsg > 1 ? (p.nsg == 2 ? 8 : 4) : 16;
     // MIMO_FL_ROWS=y0,y1 (probe): plan on grid rows [y0, y1] only, leaving the rest of the chip to another op (e.g.
     // combine_fabric2d's senders / untilizers on rows 0-1, next to the eth cores). One subgrid only.
@@ -436,7 +452,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     p.ngrp = p.nu ? 2 * p.It / p.nu : p.It / p.np;
     // Full grid, one subgrid, a split of fewer gate/up cores than the fixed rectangles' 64 (K3: 48, 16 cells idle):
     // shape the rectangles to the split as with the rows capped (all rows), so those cells do down work; the down
-    // cores are then trimmed below. (The split above still saw the fixed 64 cells.) MIMO_FL_NO_SHAPE=1: fixed rectangles
+    // cores are then trimmed below. (The split above still saw the fixed 64 cells.) MIMO_FL_NO_SHAPE=1: fixed
+    // rectangles
     const bool auto_shape = !rows_cap && p.nsg == 1 &&
                             (p.ngrp * p.g < 64 || ((p.uneven || p.nu) && p.ngrp * p.g != 64)) &&
                             std::getenv("MIMO_FL_NO_SHAPE") == nullptr;
@@ -625,8 +642,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     // 12 x 10, one column less harvested: E = 7). The layout is written for E = 6 and moved east by E - 6: the east
     // gate/up rectangle, the east relays and the east reader set; a wider west block leaves its extra column to the
     // down cores (as are all columns east of the east rectangle).
-    const uint32_t east = rd_samecol ? (rcols.size() == 2 ? *rcols.rbegin() : 0)
-                                     : (rcols.size() == 4 ? *std::next(rcols.begin(), 2) : 0);
+    const uint32_t east =
+        rd_samecol ? (rcols.size() == 2 ? *rcols.rbegin() : 0) : (rcols.size() == 4 ? *std::next(rcols.begin(), 2) : 0);
     TT_FATAL(
         (rd_samecol ? rcols.size() == 2 && *rcols.begin() == 0 && east >= 6
                     : rcols.size() == 4 && *rcols.begin() == 0 && *std::next(rcols.begin()) == 1 && east >= 6 &&
@@ -773,8 +790,8 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
         }
         std::stable_partition(p.down.begin(), p.down.end(), [&](const Core& c) { return !rd.contains({c.x, c.y}); });
     }
-    // MIMO_FL_XDOWN="x,y;x,y;.." (probe, with the rows capped): extra down cores outside the rows, e.g. the grid row 0 cells
-    // combine leaves free when it runs on row-major y (flat_combine_overlap)
+    // MIMO_FL_XDOWN="x,y;x,y;.." (probe, with the rows capped): extra down cores outside the rows, e.g. the grid row 0
+    // cells combine leaves free when it runs on row-major y (flat_combine_overlap)
     if (const char* xd = std::getenv("MIMO_FL_XDOWN"); xd && rows_cap) {
         for (const char* q = xd; *q;) {
             uint32_t x = 0, y = 0;

@@ -3160,3 +3160,49 @@ given a longer timeout. The units log (runs/.../logs/W.1.units.log) appends acro
 Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate W.1 --spec
 models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; fork test:
 `scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/update_padded_kv_cache/tests/unit/test_row_stripes.py`.
+
+## W.1 port, attempt 2 (2026-10-26)
+Attempt 1 passed the gate but its diff included ledgers/galaxy_8x4-full/supervision.md. Those lines are the overseer's
+(the W.1 pre-check review and the session hand-off notes), not the step's, and the orchestrator already committed them in
+9582c9da53d. No code change in this attempt, and supervision.md was left as it is in HEAD: reverting it would delete the
+overseer's notes and add a new out-of-scope change. Gotcha: `timeout 600` around the ~20-min gate kills it; run the gate
+in the background with a timeout over 25 min. A SIGINT to the ladder's pytest during weight load takes effect only once
+the load returns to Python.
+The overseer appended another supervision.md line at 13:24:03 (after this brief). I restored the file to HEAD so the
+step's scope check passes; the line is kept word for word in results/knowledge_use/W.1.port.2.json for the overseer.
+
+## FIX.1 overseer, attempt 2 (2026-10-26): no padding around the flat op's limits (owner order, OV-3)
+What: tt/shared_expert.py runs the chip's real intermediate slice (576 on TP 4: 8x4 / 4x4 / 2x4; 1152 on TP 2: 2x2)
+as the one always-on expert: DOWN_K, ONE_SUBGRID_MIN and the zero-padding (576 -> 1280 = 2.2x, 1152 -> 1280) are
+gone. The fork was extended instead (ttnn/ttnn/bringup/flat_routed_expert_ttnn, CHANGELOG "Intermediate widths with no
+subgrid split"):
+- flat_routed_expert_plan.cpp: when the 2 / 3 subgrids picked for It <= 32 have no gate/up split (H 5120: DS41-115),
+  plan one subgrid; the uneven pair split there takes It 18 (np 1, 18 gate/up cores, 30 down, reader tails) and It 36
+  (np 1, 36 cores). Plans that worked before are unchanged (the check only replaces the old TT_FATAL).
+- se6_dcompute.cpp: the static_assert's `kt_d % 8` term removed. DS41-76 was wrong: hk = 8 is only matmul_block's
+  kt_dim with rt_dim 1, unused by the LLK (llk_unpack_AB_matmul.h, reuse_a), so a down K of 18 / 36 tiles is fine.
+- No option: both changes only reach inputs that failed before.
+Measured:
+- Fork tests/unit/test_flat_widths.py (new; one Galaxy card, H 5120, vs float64 within noise_limit, deterministic):
+  I 576 glm rel 0.0400 (limit 0.099), full 0.0104 (0.021), 3 experts 0.0398 / 0.0401; I 1152 glm 0.0400, full
+  0.0105. Corrupted h (MIMO_FL_NO_ACT=1) fails it: rel 1.475.
+- Shared expert on 8x4 after the change (tt/perf_shared_expert.py::test_shared_flat, layer 0, chunk 5120, 640 rows a
+  chip, EXPERTS_PRECISION=glm; one run, no device profiler, per OV-4): 0.153 ms a layer on the model's path (rows:
+  0.484 minus the test's 0.331 ms rows clone), 0.513 ms with its own x conversion; MoE block 4.662 ms (3.922 without
+  the shared expert and moe_add). vs float64: rel 0.0213, bias +1.43 % (P.12: 0.020-0.022); twice bit-identical. No
+  before number on 8x4: OV-4 allowed one timing run, after the change. The padded op ran 2.2x the weight columns.
+- Gate FIX.1 --check (W.1 unit, 17.5 min): passed, every layer's shared expert "parts=1 x 576 rows=640", np 1, 18
+  gate/up cores. err_layer_L00..L24 and every err_state equal to W.1's to the last digit (L24 0.031249 <= 0.033573;
+  host_transfers_per_layer 0): the padded lanes only added exact zeros at the end of the down's sequential fp32 K sum.
+Gotchas:
+- On a single Galaxy card (the `device` fixture) the flat op hangs on the first call for most shapes (the I 2304 / glm /
+  k3 / mimo unit cases); glm_e12 hangs on the code before FIX.1 too; 2x2-mesh tests on the same box pass (DS41-119).
+  test_flat_widths skips I 2304 on a 12-column grid.
+- The fork's model case tests/cases.py "deepseek_v41_flash_d_p-2x2-shared-expert-s1024-i1280" is the old padded call
+  (I 1280); the model now calls I 1152 on 2x2 and I 576 on 8x4. A later O.1 should add those cases (append only).
+- The fork regression on one Galaxy card is not comparable to the 2x2 QuietBox baseline (CHANGELOG lists each failure).
+Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --device auto
+ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_flat_widths.py`; timing `scripts/run_safe_pytest.sh --run-all
+--no-precompile models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py -k "test_shared_flat and time and L00"`;
+gate `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.1 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.

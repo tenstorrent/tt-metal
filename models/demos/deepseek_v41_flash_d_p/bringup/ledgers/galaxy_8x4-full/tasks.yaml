@@ -97,6 +97,34 @@ tasks:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
+- id: FIX.1
+  title: 'Owner order: no padding to get around a kernel limit'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'Owner order: no padding to get around a kernel limit. Remove the shared-expert zero-padding in tt/shared_expert.py
+      (ipad = max(ipart, 33 tiles) rounded to DOWN_K: TP 4 576 -> 1280 = 2.2x, TP 2 1152 -> 1280) and extend the ttnn.bringup
+      flat_routed_expert fork instead: its gate/up split plan (flat_routed_expert_plan.cpp:433, no gate/up split for N tile
+      columns) must handle the real per-chip widths (18 tile columns at TP 4, 36 at TP 2) and a down-projection K that is
+      not a multiple of its block, with no padded lanes. Add fork unit tests at 18 and 36 tile columns (and the routed experts
+      widths), keep both boxes working (derive from shapes), update the fork README/CHANGELOG and DS41-115/DS41-76. Measure
+      the shared expert section time before and after (plain profile, chunk 5120, layers of W.1).'
+    gate_tasks:
+    - W.1
 - id: M.1
   title: Every layer (40) on 8x4 at this run's size, from the ported blocks
   step: assemble

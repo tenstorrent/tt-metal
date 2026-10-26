@@ -207,3 +207,35 @@ shapes, mesh, row-major y).
 - Follow-up (O.1 attempt 4): the routed case's sig is the F179 stable one, 3fc158f72b (the capture now leaves out
   extra_key, an id()-derived program-cache key, DS41-110). Same call as the earlier 284a4a9ead / 31755c8401, which
   differ only in extra_key (checked by re-hashing the captured entry). No op change.
+
+### Intermediate widths with no subgrid split, and a down K of any tile count (2026-10-26, deepseek_v41_flash_d_p FIX.1)
+- What: (1) `device/flat_routed_expert_plan.cpp`: an It <= 32 that the 2 / 3 subgrids cannot split (no gate/up split
+  for any x ring size on their 16-cell rectangles: at H 5120, Ht 160, two pairs' weight ring alone fills the 1.40 MB
+  gate/up budget) now plans on one subgrid, where the uneven pair split covers it: It 18 -> np 1 on 18 gate/up cores,
+  It 36 -> np 1 on 36 (Galaxy chip, bfp8 / bf16 x). Before: TT_FATAL "no gate/up split for N tile columns". (2)
+  `device/kernels/se6_dcompute.cpp`: the `kt_d % hk == 0` term of the static_assert removed. hk (8) is only
+  matmul_block's kt_dim with rt_dim 1, which the LLK never reads (llk_unpack_AB_matmul.h: reuse_a, t = 0), so K 18 / 36
+  tiles compile and compute right. se3_compute's same assert stays (it compiles with KT_D 0 there; its in-core down
+  path uses hk as the h_all layout).
+- Why: owner order (OV-3): never zero-pad a weight around a kernel limit. deepseek_v41_flash_d_p padded its shared
+  expert's TP slice to the op's limits: TP 4 576 -> 1280 (2.2x the work), TP 2 1152 -> 1280 (DS41-76, DS41-115).
+- Option-off behaviour: no option. Both changes only reach inputs that failed before (the planner TT_FATAL, the kernel
+  static_assert); every input that planned / compiled before gets the same plan, kernels and args (the subgrid check
+  runs only when the old rule picks 2 / 3 subgrids and keeps them whenever they split; se6_dcompute.cpp changes its
+  source hash, not its code).
+- Tests: `tests/unit/test_flat_widths.py` (new): H 5120, I 576 / 1152 (one always-on expert, m 640 / 1024; 576 also
+  with 3 experts, one empty), bfp8 weights_nk, clamped SwiGLU, glm (LoFi, bfp8 x / h) and full (HiFi2, bf16 x / h),
+  vs float64 within noise_limit, plus determinism; the routed width I 2304 (4 experts, bfp4), skipped on a Galaxy
+  chip (DS41-119). Galaxy card: rel 0.0400 / 0.0398 / 0.0401 (glm, limits 0.099) and 0.0104 / 0.0105 (full, limits
+  0.021); a wrong h (probe MIMO_FL_NO_ACT=1) fails it (rel 1.475).
+- Regression (tests/unit/, once, after the build, one Galaxy card, --run-all): 11 passed / 26 failed / 4 skipped. Not
+  the 2x2 QuietBox baseline's box: 10 x TT_FATAL `p.nsg == 1` (the TP2 / TP4 subgrid cases of indexed_shapes / yrm:
+  as the baseline; their small-H subgrids split, so the plan is unchanged); 4 x test_flat_routed_expert_op's Python
+  builder asserting the p150's 11 x 10 grid (12-10 here); 11 first-call hangs on a single Galaxy card (mimo,
+  test_flat_uneven_split's six; It > 32, a plan this change never reaches; glm_e12 hangs the same way on the code
+  before this change, DS41-119); the k2 indexed perf band, 1573083 ns vs its upper bound 1572413 (+0.04 %, another
+  grid). Passed: k2 indexed determinism, test_flat_expert_mesh, test_weights_nk (V4.1 I 2304 shapes on a 2x2 mesh), the
+  five new 18 / 36-column cases. Model cases (tests/test_*.py) not run: they need the 2x2 mesh exactly.
+- Needed by: deepseek_v41_flash_d_p FIX.1 (tt/shared_expert.py: no padding)
+- Files: `device/flat_routed_expert_plan.cpp`, `device/kernels/se6_dcompute.cpp`, `tests/unit/test_flat_widths.py`,
+  `README.md`, `../INDEX.md`
