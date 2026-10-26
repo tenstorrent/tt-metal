@@ -108,6 +108,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
 #endif
 
     try {
+        program.impl().prepare_ephemeral_allocation(validation_device);
         program.impl().allocate_circular_buffers(validation_device);
         program.impl().validate_circular_buffer_core_ranges(validation_device);
         program.impl().validate_circular_buffer_region(validation_device);

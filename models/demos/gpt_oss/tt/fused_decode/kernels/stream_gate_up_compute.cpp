@@ -70,9 +70,8 @@ void kernel_main() {
     constexpr uint32_t one = get_compile_time_arg_val(11);        // float bits
 
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = false;
-    custom_mm_block_init<transpose, split_acc, dense_packing>(cb_x, cb_w, cb_act);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<transpose, dest_layout>(cb_x, cb_w, cb_act);
 
     uint32_t scores[num_sel];
     for (uint32_t e = 0; e < num_sel; ++e) {
@@ -85,10 +84,10 @@ void kernel_main() {
         for (uint32_t p = 0; p < pairs; ++p) {
             tile_regs_acquire();
             cb_wait_front(cb_w, kt);
-            custom_mm_block<true>(cb_x, cb_w, 0, 0, 0, kt);
+            custom_mm_block<dest_layout>(cb_x, cb_w, 0, 0, 0, kt);
             cb_pop_front(cb_w, kt);
             cb_wait_front(cb_w, kt);
-            custom_mm_block<true>(cb_x, cb_w, 0, 0, 1, kt);
+            custom_mm_block<dest_layout>(cb_x, cb_w, 0, 0, 1, kt);
             cb_pop_front(cb_w, kt);
 
             clamp_tile_init();
@@ -113,9 +112,9 @@ void kernel_main() {
             tile_regs_release();
             cb_push_back(cb_act, 1);
 
-            custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_x, cb_w, cb_act);
+            custom_mm_block_init_short<transpose, dest_layout>(cb_x, cb_w, cb_act);
         }
     }
     cb_pop_front(cb_x, kt);
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<dest_layout>(cb_act);
 }

@@ -181,6 +181,7 @@ from ttnn._ttnn.fabric import (
 from ttnn._ttnn import cluster
 
 from ttnn._ttnn.global_semaphore import (
+    experimental_create_global_semaphore_at_address,
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
@@ -391,6 +392,11 @@ from ttnn.core import (
 )
 
 tile_size = ttnn._ttnn.tensor.tile_size
+experimental_create_sram_tensor_view = ttnn._ttnn.tensor.experimental_create_sram_tensor_view
+NodeLocalSpan = ttnn._ttnn.tensor.NodeLocalSpan
+PerNodeDeviceLocalMemorySpan = ttnn._ttnn.tensor.PerNodeDeviceLocalMemorySpan
+PerNodeMeshDeviceMemorySpan = ttnn._ttnn.tensor.PerNodeMeshDeviceMemorySpan
+experimental_allocate_single_device_tensor = ttnn._ttnn.tensor.experimental_allocate_single_device_tensor
 element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
