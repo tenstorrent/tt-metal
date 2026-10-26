@@ -23,10 +23,12 @@ Asserted, for base in {+0, -0} and per IEEE-754 pow:
     pow(+-0, y > 0)   +-0     base sign kept only for odd integer y
     pow(+-0, y < 0)   +-inf   base sign kept only for odd integer y
 
-and, for a negative base in {-2, -1, -inf}:
+and, for a negative base in {-2, -1, -inf} on a float32 Dest:
 
-    pow(x < 0, +-NaN)   NaN    float32 Dest
-    pow(x < 0, +NaN)    NaN    bfloat16 Dest
+    pow(x < 0, NaN)   NaN
+
+and, for a base in {-1, -2} and integer exponents of magnitude 32768 and up, the torch result
+(odd exponents keep the base's sign).
 """
 
 import struct
@@ -88,11 +90,32 @@ _EXPONENTS = (
 
 _BASES = (0.0, -0.0)
 
-NAN_FORMATS = input_output_formats([DataFormat.Float32, DataFormat.Float16_b], same=True)
+LARGE_INTEGER_FORMATS = input_output_formats(
+    [DataFormat.Float32, DataFormat.Float16_b], same=True
+)
 
 _NEGATIVE_BASES = (-2.0, -1.0, -INF)
 
-_NAN_EXPONENTS = {DataFormat.Float32: (NAN, -NAN), DataFormat.Float16_b: (NAN,)}
+NAN_EXPONENT_FORMATS = input_output_formats([DataFormat.Float32], same=True)
+
+_NAN_EXPONENTS = (NAN, -NAN)
+
+_LARGE_INTEGER_BASES = (-1.0, -2.0)
+
+_LARGE_INTEGER_EXPONENTS = {
+    DataFormat.Float32: (
+        32768.0,
+        -32768.0,
+        32769.0,
+        -32769.0,
+        40000.0,
+        40001.0,
+        -40001.0,
+        16777215.0,
+        16777216.0,
+    ),
+    DataFormat.Float16_b: (32768.0, -32768.0, 33024.0, 65280.0),
+}
 
 
 def _bits(value: float) -> int:
@@ -204,14 +227,12 @@ def test_sfpu_binary_pow_zero_base(formats, base):
 
 
 @parametrize(
-    formats=NAN_FORMATS,
+    formats=NAN_EXPONENT_FORMATS,
     base=list(_NEGATIVE_BASES),
 )
 def test_sfpu_binary_pow_negative_base_nan_exponent(formats, base):
     """base**NaN is NaN for a negative base."""
-    configuration, exponents = _build_pow_zero_base(
-        formats, base, _NAN_EXPONENTS[formats.input_format]
-    )
+    configuration, exponents = _build_pow_zero_base(formats, base, _NAN_EXPONENTS)
     device, exponents = _finish_pow_zero_base(configuration, exponents, formats)
 
     bad = sorted(
@@ -223,4 +244,30 @@ def test_sfpu_binary_pow_negative_base_nan_exponent(formats, base):
     )
     assert not bad, "\n".join(
         f"  pow({_fmt(base)}, {exp}) = {got}, expected nan" for exp, got in bad
+    )
+
+
+@parametrize(
+    formats=LARGE_INTEGER_FORMATS,
+    base=list(_LARGE_INTEGER_BASES),
+)
+def test_sfpu_binary_pow_negative_base_large_integer_exponent(formats, base):
+    """A negative base with an integer exponent of magnitude 32768 and up matches torch."""
+    configuration, exponents = _build_pow_zero_base(
+        formats, base, _LARGE_INTEGER_EXPONENTS[formats.input_format]
+    )
+    device, exponents = _finish_pow_zero_base(configuration, exponents, formats)
+
+    golden = torch.pow(torch.tensor(base, dtype=torch.float32), exponents)
+    golden = golden.to(format_dict[formats.output_format]).to(torch.float32)
+
+    bad = sorted(
+        {
+            (_fmt(exponents[i].item()), _fmt(golden[i].item()), _fmt(device[i].item()))
+            for i in range(ELEMENTS_PER_TILE)
+            if _bits(device[i].item()) != _bits(golden[i].item())
+        }
+    )
+    assert not bad, "\n".join(
+        f"  pow({_fmt(base)}, {exp}) = {got}, expected {want}" for exp, want, got in bad
     )
