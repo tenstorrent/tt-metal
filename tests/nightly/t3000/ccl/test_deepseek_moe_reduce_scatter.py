@@ -36,6 +36,15 @@ def run_deepseek_moe_reduce_scatter_impl(
     tt_input_tensor_mesh_list = []
     torch_input_tensor_list = []
 
+    # The ring runs along `rs_cluster_axis`, or along the one non-trivial axis of a line mesh when the whole mesh is
+    # the ring; the inputs shard rs_dim along that axis and replicate on the other, in a label of the mesh's own shape.
+    mesh_shape = tuple(mesh_device.shape)
+    ring_axis = (
+        rs_cluster_axis if rs_cluster_axis is not None else max(range(len(mesh_shape)), key=mesh_shape.__getitem__)
+    )
+    input_placements = [ttnn.PlacementReplicate()] * len(mesh_shape)
+    input_placements[ring_axis] = ttnn.PlacementShard(rs_dim)
+
     for i in range(num_iters):
         pre_rs_reduction_global_input_shape = pre_rs_reduction_input_shape[:]
         pre_rs_reduction_global_input_shape[rs_dim] *= num_devices
@@ -50,10 +59,7 @@ def run_deepseek_moe_reduce_scatter_impl(
             dtype=dtype,
             memory_config=sum_input_memory_config,
             mesh_mapper=ttnn.create_mesh_mapper(
-                mesh_device,
-                ttnn.MeshMapperConfig(
-                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(rs_dim)], ttnn.MeshShape(1, num_devices)
-                ),
+                mesh_device, ttnn.MeshMapperConfig(input_placements, ttnn.MeshShape(*mesh_shape))
             ),
         )
 
@@ -85,6 +91,23 @@ def run_deepseek_moe_reduce_scatter_impl(
             num_links=rs_num_links,
             topology=rs_topology,
             cluster_axis=rs_cluster_axis,
+        )
+
+        # Output TensorTopology: the inputs carry Shard(rs_dim) on the ring axis of the mesh (Replicate on the other)
+        # through deepseek_moe_fast_reduce_nc; ring position d keeps the reduced slice d, so the output is the
+        # reduce_scatter label -- the collapsed {N}, [Shard(rs_dim)] for a whole-mesh ring, Shard(rs_dim) on the
+        # cluster axis otherwise -- which ConcatMeshToTensor(dim=rs_dim) composes below.
+        if rs_cluster_axis is None:
+            expected_placements = [f"PlacementShard({rs_dim})"]
+            expected_shape = (num_devices,)
+        else:
+            expected_placements = ["PlacementReplicate()", "PlacementReplicate()"]
+            expected_placements[rs_cluster_axis] = f"PlacementShard({rs_dim})"
+            expected_shape = tuple(mesh_device.shape)
+        assert [repr(p) for p in tt_reduce_scatter_output_tensor.tensor_topology().placements()] == expected_placements
+        assert (
+            tuple(int(d) for d in tt_reduce_scatter_output_tensor.tensor_topology().distribution_shape())
+            == expected_shape
         )
 
         return tt_reduce_scatter_output_tensor
@@ -145,7 +168,7 @@ def run_deepseek_moe_reduce_scatter_impl(
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize("dtype, layout", [(ttnn.bfloat16, ttnn.TILE_LAYOUT)])
-@pytest.mark.parametrize("pre_rs_reduction_dim", [(0)])
+@pytest.mark.parametrize("pre_rs_reduction_dim", [0])
 @pytest.mark.parametrize(
     "pre_rs_reduction_input_shape, sum_input_memory_config, rs_input_memory_config, rs_output_memory_config, rs_dim, rs_num_links",
     [

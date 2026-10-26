@@ -21,6 +21,7 @@
 #pragma once
 
 #include "chunk_gdn_compute_config.hpp"
+#include "kernels/dataflow/chunk_gdn_fused_rt_args.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -29,6 +30,9 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_config.hpp"
@@ -43,7 +47,9 @@ enum class ChunkGdnImpl : uint8_t { Mono, Fused };
 // geometry. Mono uses the shape block and the state flags only; it rejects the flat forms in validate.
 struct ChunkGdnParams {
     ChunkGdnImpl impl = ChunkGdnImpl::Fused;
-    uint32_t BH = 0;
+    uint32_t BH = 0;           // heads this program computes
+    uint32_t head_offset = 0;  // first of them in the [rows, ...] tensors (Fused only; Mono requires 0)
+    uint32_t rows = 0;         // heads in the inputs (and the preallocated outputs); head_offset + BH <= rows
     uint32_t num_chunks = 0;
     uint32_t chunk_size = 0;
     uint32_t key_dim = 0;
@@ -105,18 +111,25 @@ struct ChunkGdnParams {
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
+// rows = heads in the tensors (params.rows); the program computes BH of them from head_offset. On a flat path
+// rows = B * HV, T = NC * C.
 struct ChunkGdnInputs {
-    Tensor q;        // [BH, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
-    Tensor k;        // [BH, NC, C, K] bf16 (or FLAT, as q)
-    Tensor v;        // [BH, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
-    Tensor g;        // [B, T, HV] fp32 or bf16, token-major as the model produces it (B * HV == BH)
+    Tensor q;        // [rows, NC, C, K] bf16 (or FLAT [B, T, Hk*K] bf16 when params.qk_flat)
+    Tensor k;        // [rows, NC, C, K] bf16 (or FLAT, as q)
+    Tensor v;        // [rows, NC, C, V] bf16 (or FLAT [B, T, HV*V] bf16 when params.v_flat)
+    Tensor g;        // [B, T, HV] fp32 or bf16, token-major as the model produces it (B * HV == rows)
     Tensor beta;     // [B, T, HV] fp32 or bf16, as g
     Tensor eye_c;    // [1,1,C,C] fp32
     Tensor tril_c;   // [1,1,C,C] fp32
     Tensor ones_c;   // [1,1,C,C] fp32
     Tensor masks_c;  // [1,1,32,96] fp32 — three 32x32 WY-inverse quadrant masks (Qtl|Qbr|Q10); Fused only
-    Tensor
-        initial_state;  // [BH, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh sequence)
+    Tensor initial_state;  // [rows, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh
+                           // sequence)
+    // Fused only, both or neither: outputs o [rows, NC, C, V] fp32 and final_state [rows, K, V] fp32 that the
+    // program writes its head range into. Absent: [BH, ...] outputs are allocated and the program writes them
+    // at rows 0..BH-1 (the inputs are still read at rows head_offset..head_offset+BH-1).
+    std::optional<Tensor> o_out;
+    std::optional<Tensor> final_state_out;
 };
 
 // One core per head, all chunks in sequence (chunk_gdn_mono_program_factory.cpp).
@@ -131,6 +144,19 @@ struct ChunkGdnFusedProgramFactory {
         const ChunkGdnParams&, const ChunkGdnInputs&, std::vector<Tensor>&);
 };
 
+// The fused program's runtime args that carry head_offset, by kernel (the factory's push order) and
+// position; the factory emits them and get_dynamic_runtime_args re-applies them on cache hits.
+// The arg positions live in kernels/dataflow/chunk_gdn_fused_rt_args.hpp (global ::fused_rt), which the kernels
+// include too; they are pulled in here so the host addresses them by the same names.
+namespace fused_rt {
+constexpr uint32_t kPrepReaderKernel = 0;
+constexpr uint32_t kReceiverReaderKernel = 3;
+constexpr uint32_t kScanWriterKernel = 5;
+using ::fused_rt::kPrepReaderHeadOffsetArg;
+using ::fused_rt::kReceiverHeadOffsetArg;
+using ::fused_rt::kScanWriterHeadArg;
+}  // namespace fused_rt
+
 struct ChunkGdnDeviceOperation {
     using operation_attributes_t = ChunkGdnParams;
     using tensor_args_t = ChunkGdnInputs;
@@ -142,6 +168,14 @@ struct ChunkGdnDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    // Every attribute but head_offset, and the tensors' specs: the waves of one plan share a program.
+    static tt::tt_metal::operation::Hash compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    // The head_offset-carrying runtime args of the fused program (fused_rt), re-applied on every cache hit.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t&,
+        const tensor_args_t&,
+        tensor_return_value_t&,
+        const std::optional<ttnn::MeshCoordinate>&);
 };
 
 // ---------------------------------------------------------------------------------------------------
@@ -193,6 +227,35 @@ FusedGeometryChoice choose_fused_geometry(
     float fixed_share = -1.0f,
     int32_t fixed_placement = -1);
 
+// Heads per fused launch. A batch's BH heads run as a sequence of waves, one fused program each (its
+// placement, credit table and head table sized to the wave), writing into shared outputs. One program
+// up to kMaxSingleWaveHeads heads when a geometry fits; above that the fewest waves of at most max_wave
+// heads (0 = kMaxWaveHeads), sizes within one of each other, more waves only if a size does not fit. Both
+// limits are the measured per-head optimum of the fused program; the cost model prices the waves for
+// fused_pays and decides nothing else here. The pins (fixed_nv / fixed_np / fixed_nbuf / candidates /
+// fixed_share, as choose_fused_geometry takes them) are the program config's, so each wave is priced at the
+// geometry the prim re-derives for it.
+struct FusedWavePlan {
+    std::vector<uint32_t> waves;  // heads per launch, in order; empty = no fused geometry fits
+    float t_fused_us = 0.0f;      // modelled, summed over the waves
+    float t_phased_us = 0.0f;
+    bool fused_pays = false;
+};
+FusedWavePlan plan_fused_waves(
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t BH,
+    uint32_t NC,
+    uint32_t Vt,
+    uint32_t max_wave = 0,
+    uint32_t fixed_nv = 0,
+    uint32_t fixed_np = 0,
+    uint32_t fixed_nbuf = 0,
+    FusedCandidates candidates = FusedCandidates::Both,
+    float fixed_share = -1.0f);
+// BH heads in n waves, sizes within one of each other, the larger first.
+std::vector<uint32_t> fused_even_waves(uint32_t BH, uint32_t n);
+
 // Design D9: the fused program's core map, a pure function of its arguments (no device), shared by
 // the program factory and the nanobind geometry oracle. placement 0 = row-major 1xNV receiver
 // rectangles with the producers on the remaining cores row-major; 1 = row-local (a head's receivers
@@ -219,6 +282,9 @@ using ChunkGdnDeviceProgramConfig =
 // this path (choose_fused_geometry(...).nv == 0 means no geometry fits). Mono needs BH cores, does not
 // accept flat q/k/v, and computes the WY inverse with Horner only: wy_inverse=AUTO resolves to Horner there
 // and an explicit FORWARD_SUBSTITUTION TT_FATALs.
+// num_heads / head_offset (Fused only): compute heads [head_offset, head_offset + num_heads) of the inputs
+// (num_heads = 0: all of them) and, when o_out / final_state_out are given, write them into those full
+// tensors at the same rows instead of allocating [num_heads, ...] outputs.
 std::vector<Tensor> chunk_gdn(
     const Tensor& q,
     const Tensor& k,
@@ -241,6 +307,10 @@ std::vector<Tensor> chunk_gdn(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    uint32_t num_heads = 0,
+    uint32_t head_offset = 0,
+    const std::optional<Tensor>& o_out = std::nullopt,
+    const std::optional<Tensor>& final_state_out = std::nullopt);
 
 }  // namespace ttnn::prim

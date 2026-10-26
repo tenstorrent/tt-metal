@@ -564,6 +564,61 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(Kimi-K3-2.8T) DSpark drafter accuracy 5k + 55k vs GPU trace, and K3 taps L25"
+  # The DFlash drafter tests of the Kimi-K2.7 components suite, on RadixArk's Kimi-K3-DSpark checkpoint,
+  # plus the golden check that feeds the drafter the GPU taps, and the K3 side of those taps.
+  cmd: |
+    # Stops at the first failure, as the suites above.
+    k3_dspark_drafter() (
+      export MESH_DEVICE=TG
+      export TT_MESH_GRAPH_DESC_PATH=/home/user/tt-metal/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+      export PREFILL_TORUS_XY_CERTIFIED=1
+      export DFLASH_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-DSpark
+      export PREFILL_DFLASH_GOLDEN_KV_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/structured_kv
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_pcc -k "torus-xy-8x4 and pretrained and ctx5k-1chunk" -vvv --tb=short --timeout=1200
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_multiturn_pcc -k "torus-xy-8x4 and pretrained and (aligned_min or midchip_straddle or lastchip or rot_partial)" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_trace.py -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash.py::test_dflash_golden_pcc -vvv --tb=short
+      '
+    )
+
+    k3_dspark_taps() (
+      export LOGURU_LEVEL=INFO
+      export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+      export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+      export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+      export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+      export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
+      timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_dspark_taps.py -k "L25" -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/2] (Kimi-K3-2.8T) DSpark drafter accuracy 5k + 55k vs GPU trace ====="
+    k3_dspark_drafter || exit $?
+    echo "===== [2/2] (Kimi-K3-2.8T) DSpark taps L25 vs GPU trace ====="
+    k3_dspark_taps || exit $?
+    echo "===== both sections passed ====="
+  test_type: k3_dspark_suite
+  test_tags: [kimi_k3, dflash, dspark]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 20
+      tier: 2
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== GLM-5.3-744B ====================================================================================
 
 - name: "(GLM-5.3-744B) sparse MLA, prefill block, MTP and MoE accuracy 5k"
@@ -1951,8 +2006,6 @@
   sp_config: sc4
 
 
-# Separate launcher from the verifier legs above: the drafter path is not trace-captured, so this one runs
-# PREFILL_USE_TRACE=0 and its 250k timing is not comparable to theirs. PCC stops at 55k, where the golden does.
 - name: "(Kimi-K2.7-1T) DFlash drafter KV accuracy 55k@5k + perf 250k@5k, SC4"
   cmd: |
     set -euo pipefail
@@ -1961,7 +2014,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 --variant dflash
   test_type: prefill_runner_kv_pcc
   test_tags: [kimi_k2_7, runner, kv_cache, dflash]
   test_group: disagg_prefill
@@ -1978,10 +2031,10 @@
   sp_config: sc4
 
 
-# 4-galaxy (SC4) GLM-5.3 MTP KV share prefill KV accuracy and throughput: prefill computes MTP level 1 and
-# publishes its KV for all 4 of decode's MTP levels. Shares a launcher with the SC1 entry below. MTP is gated
-# against its own tail-trace golden, not the manifest golden the entries above use.
-- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, SC4"
+# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher. Eager at 1M with 34 slots, the ceiling the
+# drafter's K/V leaves on the last rank, as K3's own leg runs eager at its ceiling. Slot 0 is PCC'd on 55k,
+# where the drafter golden stops; the request is timed to 1M.
+- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, eager 34 users, 55k@5k + perf 1M@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1989,7 +2042,33 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 mtp_kv_share
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi_k3 sc4 --variant dspark
+  test_type: k3_dspark_runner
+  test_tags: [kimi_k3, runner, kv_cache, dflash, dspark]
+  test_group: disagg_prefill
+  skus:
+    bh_sc4:
+      timeout: 20
+      tier: 1
+      release_ready: false
+  owner_id: U0ACLAM77PS  # Kosta Grujcic
+  team: shield
+  budget_type: demo
+  sp_config: sc4
+
+
+# 4-galaxy (SC4) GLM-5.3 MTP KV share prefill KV accuracy and throughput: prefill computes MTP level 1 and
+# publishes its KV for all 4 of decode's MTP levels. Shares a launcher with the SC1 entry below. MTP is gated
+# against its own tail-trace golden, not the manifest golden the entries above use.
+- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc4 --variant mtp_kv_share
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
@@ -2055,7 +2134,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27 sc1
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1 --variant dflash
   test_type: prefill_runner_kv_pcc
   test_tags: [kimi_k2_7, runner, kv_cache, dflash]
   test_group: disagg_prefill
@@ -2081,7 +2160,7 @@
     fi
     cd "${TT_METAL_HOME}"
     echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, runner ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 mtp_kv_share || exit $?
+    bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1 --variant mtp_kv_share || exit $?
     echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
@@ -2236,6 +2315,10 @@
   # runtime arguments. Only it can catch a regression in that path -- a trace replay never re-runs the
   # host runtime-arg patch the scalar form depends on. It shares this job because the fabric bring-up
   # dominates the step, so a separate job would roughly double the cost of the same coverage.
+  #
+  # The fabric suite runs a smoke subset (32-rank snake ring: bf16 gathers, slot select, multi-packet
+  # pages; traced metadata and the GLM sub-device path) to stay inside this bucket's 20 min budget.
+  # The full matrix (~100 cases on this torus, 4+ min) is not run here.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -2249,6 +2332,8 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_perf

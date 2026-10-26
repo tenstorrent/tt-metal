@@ -13,6 +13,12 @@
 
 namespace ttnn::experimental::prim {
 
+// The op is hardcoded for a ring of 8: it takes one input slice per ring position, and create_output_tensors
+// allocates one intermediate slice buffer per ring position ahead of the output, each wired to its own circular
+// buffer by the program factory. validate_on_program_cache_miss, create_output_tensors, compute_output_topologies
+// and the factory all read this one constant so they cannot disagree on the count.
+inline constexpr size_t kNumIntermediateSlices = 8;
+
 struct DeepseekMoEReduceScatterParams {
     tt::tt_metal::MemoryConfig output_memory_config;
     uint32_t dim;

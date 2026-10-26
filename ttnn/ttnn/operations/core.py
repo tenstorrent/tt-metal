@@ -809,6 +809,31 @@ def dump_tensor(
     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor, mode)
 
 
+# The check writes nothing and returns None; there is no output value to compare.
+@ttnn.register_python_operation(name="ttnn.verify_shards_match_topology", golden_function=None)
+def verify_shards_match_topology(tensor: ttnn.Tensor, *, compare_replica_contents: bool = True) -> None:
+    """
+    Check that a host tensor's topology label describes its shards.
+
+    Every populated shard must sit at a coordinate the label lists and every labelled coordinate must hold a shard
+    (or be remote to this host); shards the label calls replicas of each other (mesh coordinates that differ only
+    along ``Replicate`` axes) must have the same size and, unless ``compare_replica_contents`` is ``False``, the same
+    values (tile padding is not compared). ``dump_tensor`` runs this check before it writes one copy per replica group; it is exposed so that any
+    other caller that keeps one copy per group, such as a checkpoint gather that composes a tensor by its label, can
+    run it for the same reason.
+
+    Args:
+        tensor (ttnn.Tensor): a host tensor (``tensor.cpu()``).
+
+    Keyword Args:
+        compare_replica_contents (bool, optional): byte-compare replicas, not only their sizes. Defaults to ``True``.
+
+    Raises:
+        RuntimeError: naming the mesh coordinates and the label when the label does not describe the shards.
+    """
+    ttnn._ttnn.tensor.verify_shards_match_topology(tensor, compare_replica_contents)
+
+
 def _golden_function_as_tensor(tensor, dtype=None, *, preprocess=None, **kwargs):
     # as_tensor applies the caller's preprocess callback to the Torch input before conversion.
     if preprocess is not None:
