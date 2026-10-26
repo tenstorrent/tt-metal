@@ -256,6 +256,18 @@ def test_stack_zero_volume_rejected(device, expect_error, dim):
         ttnn.stack(ttnn_tensors, dim=dim)
 
 
+def test_stack_trailing_axis_rejects_mixed_inputs_in_concat(device, expect_error):
+    # The gate reads dtype and volume from the first input only; concat's validate rejects a later input
+    # that differs, before the leading-axis route runs anything on device.
+    bf16 = ttnn.from_torch(torch.rand((1444,), dtype=torch.bfloat16), layout=RM, device=device)
+    f32 = ttnn.from_torch(torch.rand((1444,), dtype=torch.float32), layout=RM, device=device)
+    with expect_error(RuntimeError, "same dtypes"):
+        ttnn.stack([bf16, f32], dim=1)
+    longer = ttnn.from_torch(torch.rand((1500,), dtype=torch.bfloat16), layout=RM, device=device)
+    with expect_error(RuntimeError, "differ in shape"):
+        ttnn.stack([bf16, longer], dim=1)
+
+
 @pytest.mark.parametrize("memory_config", MEMORY_CONFIGS)
 def test_stack_trailing_axis_uint16_row_major(device, memory_config):
     # Row-major only: a rank-1 tile input keeps the unsqueeze-then-concat path, whose device reshape
