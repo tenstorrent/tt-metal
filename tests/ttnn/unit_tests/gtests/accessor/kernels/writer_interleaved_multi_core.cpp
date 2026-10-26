@@ -39,6 +39,17 @@ void kernel_main() {
             process_pages(*page);
         }
     }
+#elif defined(ITER_STRIDE)
+    // The reader's page order, each page written to the address get_noc_addr gives it (not the iterator's), so a
+    // wrong iterator address shows up in the output.
+    for (uint32_t start_offset = 0; start_offset < ITER_STRIDE; ++start_offset) {
+        for (uint32_t page_id = start_page_id + start_offset; page_id < end_page_id; page_id += ITER_STRIDE) {
+            cb_wait_front(cb_id, 1);
+            noc_async_write(get_read_ptr(cb_id), tensor_accessor_dst.get_noc_addr(page_id), page_size);
+            noc_async_write_barrier();
+            cb_pop_front(cb_id, 1);
+        }
+    }
 #else
     // Iterate over the assigned page range for this core
     auto pages = tensor_accessor_dst.pages(start_page_id, end_page_id);

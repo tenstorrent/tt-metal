@@ -164,8 +164,9 @@ private:
 /**
  * Iterator over all pages in an interleaved tensor.
  * The iterator is initialized with a start_page_id and can be incremented by one page at a time,
- * or by a given number of pages. It uses a simpler implementation that just calls
- * accessor.get_noc_addr for each page without complex optimizations.
+ * or by a given number of pages. Pages round-robin across the banks, so it keeps the current page's bank and its
+ * address in that bank: a step adds the stride's banks and bytes and wraps the bank once, with no divide by the bank
+ * count (a page lookup only at construction and on +=).
  */
 template <typename Accessor>
 class PagesAddressIteratorInterleaved {
@@ -189,6 +190,13 @@ public:
             current_page_id = end_page_id_;
             return;
         }
+        if constexpr (!kLazy) {
+            const uint32_t num_banks = accessor.contiguous_page_stride();
+            const uint32_t stride_rows = stride_ / num_banks;
+            stride_banks_ = stride_ - stride_rows * num_banks;
+            stride_bytes_ = stride_rows * detail::TransferAccess::bank_page_stride(accessor);
+            set_location(current_page_id);
+        }
         update_current_page();
     }
 
@@ -205,7 +213,14 @@ public:
             current_page_id = end_page_id_;
             return *this;
         }
-
+        if constexpr (!kLazy) {
+            bank_ += stride_banks_;
+            bank_row_addr_ += stride_bytes_;
+            if (bank_ >= accessor.contiguous_page_stride()) {
+                bank_ -= accessor.contiguous_page_stride();
+                bank_row_addr_ += detail::TransferAccess::bank_page_stride(accessor);
+            }
+        }
         update_current_page();
         return *this;
     }
@@ -223,7 +238,9 @@ public:
             current_page_id = end_page_id_;
             return *this;
         }
-
+        if constexpr (!kLazy) {
+            set_location(current_page_id);
+        }
         update_current_page();
         return *this;
     }
@@ -258,19 +275,33 @@ public:
     bool operator>=(const PagesAddressIteratorInterleaved& other) const { return !(*this < other); }
 
 private:
+    // The address generator serves this accessor: don't track the software address (see detail::lazy_page_addr_v).
+    static constexpr bool kLazy = detail::lazy_page_addr_v<Accessor>;
+
     const Accessor& accessor;
     uint32_t current_page_id = 0;
     const uint32_t end_page_id_ = 0;
     const uint32_t stride_ = 1;
     const uint8_t noc = noc_index;
+    // The current page's bank and its address in that bank (without the bank's offset), and a step's advance of them:
+    // stride_ = stride_rows * num_banks + stride_banks_, stride_bytes_ = stride_rows * bank page stride.
+    uint32_t bank_ = 0;
+    uint32_t bank_row_addr_ = 0;
+    uint32_t stride_banks_ = 0;
+    uint32_t stride_bytes_ = 0;
     mutable AccessorPage<Accessor> current_page{0, 0, nullptr};
 
+    void set_location(uint32_t page_id) {
+        detail::TransferAccess::page_location(accessor, page_id, bank_, bank_row_addr_);
+    }
+
     void update_current_page() {
-        if constexpr (detail::lazy_page_addr_v<Accessor>) {
+        if constexpr (kLazy) {
             // The address generator serves the transfer; the page computes its software address only if asked.
             current_page = AccessorPage<Accessor>(detail::kLazyNocAddr, current_page_id, &accessor, noc);
         } else {
-            auto current_noc_addr = detail::transfer_noc_addr(accessor, current_page_id, 0, noc);
+            const uint64_t current_noc_addr =
+                detail::TransferAccess::bank_noc_addr(accessor, bank_, bank_row_addr_, noc);
             current_page = AccessorPage<Accessor>(current_noc_addr, current_page_id, &accessor, noc);
         }
     }

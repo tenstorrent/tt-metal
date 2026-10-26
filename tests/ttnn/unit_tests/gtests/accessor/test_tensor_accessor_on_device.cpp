@@ -969,6 +969,33 @@ INSTANTIATE_TEST_SUITE_P(
     InterleavedAccessorTestsUnalignedPageSizeOnDevice,
     testing::Values(BufferType::DRAM, BufferType::L1));
 
+// The interleaved pages() iterator steps its bank and in-bank address by the iterator stride instead of looking each
+// page up. One core reads every page through iterators of a given stride (around and across the bank count, so the
+// bank wraps and the in-bank address advances by whole rows) and writes it where get_noc_addr puts it.
+class InterleavedAccessorTestsIteratorStrideOnDevice : public GenericMeshDeviceFixture,
+                                                       public ::testing::WithParamInterface<BufferType> {};
+
+TEST_P(InterleavedAccessorTestsIteratorStrideOnDevice, SingleCoreCopyAllPagesStridedIterator) {
+    const CopyParams params{
+        .tensor_shape = tt::tt_metal::Shape{1024, 32},
+        .layout = Layout::ROW_MAJOR,
+        .dtype = DataType::UINT16,
+        .buffer_type = GetParam(),
+    };
+    const uint32_t num_banks = mesh_device_->allocator()->get_num_banks(params.buffer_type);
+    const CoreRangeSet core(CoreRange({0, 0}, {0, 0}));
+    for (const uint32_t stride : {2u, 3u, num_banks - 1, num_banks, num_banks + 1, 2 * num_banks + 3}) {
+        SCOPED_TRACE(fmt::format("stride {} with {} banks", stride, num_banks));
+        test_multi_core_interleaved_copy<uint16_t>(
+            params, mesh_device_.get(), core, {{"ITER_STRIDE", std::to_string(stride)}});
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InterleavedAccessorTests,
+    InterleavedAccessorTestsIteratorStrideOnDevice,
+    testing::Values(BufferType::DRAM, BufferType::L1));
+
 TEST_P(InterleavedAccessorTestsCopyOnDevice, MultiCoreCopyAllPages) {
     const auto& params = GetParam();
 

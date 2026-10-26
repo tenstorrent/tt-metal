@@ -40,6 +40,14 @@ void kernel_main() {
         }
     }
 
+#elif defined(ITER_STRIDE)
+    // Iterators stepping ITER_STRIDE pages per ++ (the iterator's bank / in-bank address stepping), one per residue.
+    for (uint32_t start_offset = 0; start_offset < ITER_STRIDE; ++start_offset) {
+        for (const auto& page : tensor_accessor::Pages<decltype(tensor_accessor_src)>(
+                 tensor_accessor_src, start_page_id + start_offset, end_page_id, ITER_STRIDE)) {
+            process_pages(page);
+        }
+    }
 #else
     // Iterate over the assigned page range for this core
     auto pages = tensor_accessor_src.pages(start_page_id, end_page_id);
