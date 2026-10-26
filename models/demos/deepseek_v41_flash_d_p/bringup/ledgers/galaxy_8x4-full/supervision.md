@@ -115,3 +115,29 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
 - 16:58 FIX.1 before-number (OV-6): perf_shared_expert.py test_shared_flat L00 time, with the pre-FIX.1 padded
   shared_expert.py (9582c9d) loaded by a scratch pytest plugin, on the current build (It 40 plans unchanged by FIX.1).
   Log /scratch/dnijemcevic/fix1_before.log. FIX.3 resumes after it.
+- (correction: the before-measurement ran 16:45-16:51, not 16:58.) FIX.1 before/after (OV-6), 8x4, L00, chunk 5120,
+  640 rows a chip, EXPERTS_PRECISION=glm, synchronized wall time of 5 calls (perf_shared_expert.py test_shared_flat time):
+  shared expert on the model's path (rows, minus the test's rows clone): padded 1280 = 0.702 / 0.206 ms (two runs;
+  the first is an outlier) -> unpadded 576 = 0.153 ms (FIX.1 agent, one run). Own-x path 0.553 / 0.511 -> 0.513 ms
+  (dominated by the x conversion). MoE block 4.517 / 4.609 -> 4.662 ms: within run-to-run noise. Plans: padded
+  gate/up 40 down 30; unpadded gate/up 18 down 30. Accuracy unchanged (rel 0.0213 both). Verdict: ~0.05 ms a layer
+  saved on the shared expert (-26%), no visible MoE-block change at this noise level; X.1's RT-profiler per-op rows
+  will give the precise number. Log /scratch/dnijemcevic/fix1_before.log.
+- 16:51:24 resumed (launcher in tmux ds41-8x4): preflight passed, FIX.3 attempt starts.
+- 16:52 FRAMEWORK BUG: on the 16:51 resume FIX.3 "passed" with no agent (gate B.1 + W.1 reused; commit 5b1a3ec2106 holds
+  only records, no code: VOID). Cause: F87 gates every resumed task first, also a fix job cut off mid-agent whose gate
+  passed before the job. Killed the run in M.1's precheck (seconds in). Fix F193 (7fd0e51f4ee): a precheck-False task
+  gates first on resume only after a STOP; cut off -> its agent runs. Selftest fails without it. Suite 595 passed + F193,
+  only the xing40 failure from before. `rerun --from FIX.3 --no-run`, resumed 16:58:46: FIX.3 overseer attempt 2
+  started (attempt 1 = the 16:39 cut-off).
+- 17:50 OWNER: no sudo on this node; the owner asks the admins for `sudo systemctl restart tt-iommu-domains` (chips 7 /
+  10 identity IOMMU). Until then (owner, "want"): profile on the 30 working chips. DUE at the FIX.2 boundary (framework,
+  orchestrator.py): F194 stop -> warn + record the missing chips on the task (review), no stop; plus ONE device-profiler
+  run of one layer before X.1's numbers are used, to check chips 7 / 10 are not slower than the rest.
+- 17:41 FIX.2 REOPENED (owner): its first pass left 14 fork unit tests failing on a Galaxy chip (12 TP2/TP4 TT_FATAL
+  p.nsg == 1, 2 time bands); I passed it without checking its own done-condition (its gate had only W.1). Gate now W.1 +
+  tests/unit/ on a Galaxy chip; brief requires all 14 to pass, no exceptions. FIX.4 removed (owner: no new fix numbers).
+- 18:10 OWNER: device time of the 8 seed layers before M.1. Plan at the FIX.2 pause: (1) FIX.3 classified framework
+  (no agent): I fix its knowledge text, commit on reused units; (2) seed profile: test_profile.py on rung seed (layers
+  0 1 2 3 14 20 21 24, chunk 5120 at 5120), BRINGUP_PROFILE_OPS=1, RT profiler (30 of 32 chips: 7 / 10 IOMMU), via a
+  scratch pytest plugin (scratchpad/seedprof/run.sh), results outside the ledger; ~18 min load + profile; (3) resume -> M.1.

@@ -134,6 +134,7 @@ tasks:
   - W.1
   gate:
     cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --device auto --run-all ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/
     metrics:
       err_layer_L*: <= limit
       err_state_*_L*: <= limit
@@ -144,14 +145,16 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   brief:
-    details: 'Root-cause the flat_routed_expert first-call hangs on a Galaxy (Blackhole p150b, 12x10 grid) found by FIX.1
-      regression: 11 tests hang on first call, e.g. test_flat_expert_indexed_shapes[mimo], the six test_flat_uneven_split
-      cases, glm_e12 (DS41-119: hangs on the code before FIX.1 too). Reproduce each on one Galaxy chip with a short dispatch
-      timeout, find the actual cause (tt-triage / the stuck core and kernel, not a guess), and fix it in the fork so every
-      case runs on the Galaxy and still on the 2x2 QuietBox; no case skipped or special-cased for the box. Also make the 4
-      test-builder asserts that hard-code the p150 11x10 grid derive the grid from the device. Done when tests/unit/ passes
-      on a Galaxy chip except failures shown to be identical on the QuietBox baseline (list them with evidence), plus the
-      W.1 gate. Record the cause in the fork CHANGELOG and known_issues (DS41-119).'
+    details: 'REOPENED by the overseer (owner order): the hangs are fixed (677bc394faf, keep it), but the job is not
+      done: tests/unit/ of ttnn/ttnn/bringup/flat_routed_expert_ttnn still has 14 failures on one Galaxy chip. Make
+      every one pass. (a) 12 x TT_FATAL ''p.nsg == 1'' in the TP2 / TP4 subgrid cases (failing since the fork''s
+      import, DS41-63; never root-caused): find which side is wrong (the op refusing a subgrid plan it should run, or
+      the tests calling an entry point that supports one subgrid only) and fix it. (b) mimo indexed_perf and k2
+      indexed_rm time bands fail slow on the Galaxy chip (1843456 / 1838520 ns vs upper 1826488; 1573274 / 1575501 vs
+      1572413): bands calibrated on a QuietBox p150 are wrong here: fix how the band is set (per arch / grid, or a
+      baseline measured on the box), not one Galaxy number. No skip, no xfail, no ''known failure'', no ''identical to
+      the baseline'' exception. The gate now runs tests/unit/ on a Galaxy chip as well as W.1; the model''s own calls
+      must not change.'
     gate_tasks:
     - W.1
 - id: FIX.3

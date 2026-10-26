@@ -144,33 +144,74 @@ def test_flat_expert_indexed_determinism(device, case, y_rm):
     assert float(ttnn.to_torch(marker).item()) == 0.0, f"{tag}: flat_routed_expert (indexed) is not deterministic"
 
 
-# Device ns per (case, mode), median of 3, BH p150 (QuietBox chip), counts _counts(E, m, 1). Recalibrate from the
-# "RT-CAL" lines (2026-10-09: write VCs per traffic class, early down done, PR #59149 pack untilize). Indexed costs
-# nothing over the flat buffer; 1 KB x pages (P = H / 512) cost K2 / TP4 +32-38% (1 KB NoC reads), 2 KB pages
-# (P = H / 1024) are free.
+# Device ns per (case, mode), median of 3, counts _counts(E, m, 1), per chip class: (arch, compute grid x, y). The
+# op's plan, its cores and its NoC distances depend on the grid (and the device time on the chip), so a band
+# calibrated on one chip class does not hold on another (a Galaxy card runs mimo / k2 1-4 % slower than a QuietBox
+# p150: deepseek_v41_flash_d_p FIX.2). Recalibrate a class from the "RT-CAL" lines of a run on it; a class with no
+# table has no baseline for any case. Indexed costs nothing over the flat buffer; 1 KB x pages (P = H / 512) cost K2 /
+# TP4 +32-38% (1 KB NoC reads), 2 KB pages (P = H / 1024) are free.
 _PERF_EXPECTED_NS = {
-    ("mimo", "flat"): 1_773_289,
-    ("mimo", "indexed"): 1_772_629,
-    ("mimo", "indexed_rm"): 1_862_795,
-    ("mimo", "indexed_p4"): 1_792_112,
-    ("mimo", "indexed_p8"): 1_779_985,
-    ("k2", "flat"): 1_516_881,
-    ("k2", "indexed"): 1_515_910,
-    ("k2", "indexed_rm"): 1_526_615,
-    ("k2", "indexed_p7"): 1_518_125,
-    ("k2", "indexed_p14"): 2_055_204,
-    ("tp4", "flat"): 922_967,
-    ("tp4", "indexed"): 922_820,
-    ("tp4", "indexed_rm"): 925_450,
-    ("tp4", "indexed_p7"): 922_744,
-    ("tp4", "indexed_p14"): 1_253_915,
-    ("tp2", "flat"): 1_392_508,
-    ("tp2", "indexed"): 1_392_796,
-    ("tp2", "indexed_rm"): 1_390_910,
-    ("tp2", "indexed_p7"): 1_392_149,
-    ("tp2", "indexed_p14"): 1_389_716,
+    # BH p150, QuietBox / LoudBox (11 x 10). 2026-10-09: write VCs per traffic class, early down done, PR #59149 pack
+    # untilize.
+    ("BLACKHOLE", 11, 10): {
+        ("mimo", "flat"): 1_773_289,
+        ("mimo", "indexed"): 1_772_629,
+        ("mimo", "indexed_rm"): 1_862_795,
+        ("mimo", "indexed_p4"): 1_792_112,
+        ("mimo", "indexed_p8"): 1_779_985,
+        ("k2", "flat"): 1_516_881,
+        ("k2", "indexed"): 1_515_910,
+        ("k2", "indexed_rm"): 1_526_615,
+        ("k2", "indexed_p7"): 1_518_125,
+        ("k2", "indexed_p14"): 2_055_204,
+        ("tp4", "flat"): 922_967,
+        ("tp4", "indexed"): 922_820,
+        ("tp4", "indexed_rm"): 925_450,
+        ("tp4", "indexed_p7"): 922_744,
+        ("tp4", "indexed_p14"): 1_253_915,
+        ("tp2", "flat"): 1_392_508,
+        ("tp2", "indexed"): 1_392_796,
+        ("tp2", "indexed_rm"): 1_390_910,
+        ("tp2", "indexed_p7"): 1_392_149,
+        ("tp2", "indexed_p14"): 1_389_716,
+    },
+    # BH p150b, Galaxy card (12 x 10, one row of 13 is fast dispatch). 2026-10-26, deepseek_v41_flash_d_p FIX.2 (the
+    # TP4 / TP2 subgrid plans ran here for the first time: flat_schedule_defines no longer refuses them).
+    ("BLACKHOLE", 12, 10): {
+        ("mimo", "flat"): 1_834_370,
+        ("mimo", "indexed"): 1_852_041,
+        ("mimo", "indexed_rm"): 1_910_414,
+        ("mimo", "indexed_p4"): 1_860_050,
+        ("mimo", "indexed_p8"): 1_862_472,
+        ("k2", "flat"): 1_529_856,
+        ("k2", "indexed"): 1_529_271,
+        ("k2", "indexed_rm"): 1_578_919,
+        ("k2", "indexed_p7"): 1_528_613,
+        ("k2", "indexed_p14"): 2_029_144,
+        ("tp4", "flat"): 928_769,
+        ("tp4", "indexed"): 930_441,
+        ("tp4", "indexed_rm"): 929_577,
+        ("tp4", "indexed_p7"): 928_292,
+        ("tp4", "indexed_p14"): 1_243_044,
+        ("tp2", "flat"): 1_452_958,
+        ("tp2", "indexed"): 1_452_873,
+        ("tp2", "indexed_rm"): 1_706_179,
+        ("tp2", "indexed_p7"): 1_445_984,
+        ("tp2", "indexed_p14"): 1_444_033,
+    },
 }
 _PERF_MARGIN = 0.03
+
+
+def _chip_class(device):
+    """(arch, compute grid x, y): the key of the device-time baselines"""
+    g = device.compute_with_storage_grid_size()
+    return (device.arch().name, g.x, g.y)
+
+
+def _perf_expected_ns(device):
+    """(case, mode) -> ns for this device's chip class (empty for a class never calibrated)"""
+    return _PERF_EXPECTED_NS.get(_chip_class(device), {})
 
 
 @pytest.mark.timeout(3600)
@@ -184,8 +225,9 @@ def test_flat_expert_indexed_perf(device, case):
     op, gids = _op(device, case)
     d, _, _ = _indexed_inputs(device, case, gids, _counts(E, m, 1), 1)
     missing = []
+    expected_ns = _perf_expected_ns(device)
     for mode, (P, y_rm) in _modes(H).items():
-        expected = _PERF_EXPECTED_NS.get((tag, mode))
+        expected = expected_ns.get((tag, mode))
         assert_op_duration_merged(
             device,
             lambda: _call(op, d, P, y_rm).deallocate(True),
@@ -198,7 +240,7 @@ def test_flat_expert_indexed_perf(device, case):
         if expected is None:
             missing.append(mode)
     if missing:
-        pytest.skip(f"no baseline for {tag} {missing}; add them to _PERF_EXPECTED_NS")
+        pytest.skip(f"no baseline for {tag} {missing} on {_chip_class(device)}; add them to _PERF_EXPECTED_NS")
 
 
 @pytest.mark.timeout(1800)

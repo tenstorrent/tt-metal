@@ -1,0 +1,67 @@
+{
+ "used": [
+  {
+   "id": "DS41-63",
+   "how": "started from its 12 TP2/TP4 p.nsg==1 failures: traced the assert to flat_schedule_defines (upstream c485d15bbae) called by the plain op's create; moved it to flat_combine_overlap's call site",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-115",
+   "how": "every deepseek_v41 flat call plans one subgrid (H 5120: It 72, or It <= 32 falls back to nsg 1), so removing the assert from the plain op cannot change the model's programs",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-119",
+   "how": "kept 677bc394faf's leader fix untouched; the Galaxy chip runs the plain-op plans without hangs",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-63",
+   "evidence": "the 12 TP2/TP4 failures were an op bug, not a test limit: device/flat_routed_expert_program_factory.cpp flat_schedule_defines asserted nsg==1 for the overlap but create() calls it for every plan; with the assert at flat_combine_overlap_device_operation.cpp, tests/unit/ on one Galaxy chip: 34 passed / 0 failed (FIX.2 units log, 2026-10-26). Entry rewritten.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "perf bands in fork unit tests are per chip class: an 11 x 10 p150 and a 12 x 10 Galaxy p150b differ by 1-4 % on the same plan (mimo +3.4 %, tp2 +4.3 %)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.2",
+   "answer": "done",
+   "evidence": "(a) op side wrong: c485d15bbae put the overlap-only TT_FATAL(p.nsg == 1) into flat_schedule_defines, which FlatRoutedExpertProgramFactory::create calls for every plan; moved to flat_combine_overlap's call site; the 12 TP2/TP4 cases pass on a Galaxy chip. (b) _PERF_EXPECTED_NS keyed by (arch, grid x, grid y); QuietBox table kept as BLACKHOLE 11x10, new BLACKHOLE 12x10 table measured on the Galaxy chip. Model calls unchanged (nsg 1 everywhere, DS41-115)."
+  },
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or inflated: the fix removes a wrong assert so the planner's own subgrid plans run"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.2",
+  "role": "overseer",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-26T18:32:49",
+  "head": "69ae07f8cd1",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.2.overseer.2.json",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_combine_overlap_device_operation.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_flat_expert_indexed_shapes.py"
+  ]
+ }
+}
