@@ -5,9 +5,9 @@
 """Resolve the MiniMax-H3 diffusers snapshot, optionally fetching it from HuggingFace.
 
 Resolution order matches the lightx2v loader (`experimental/utils/lightx2v_loader.py`): an explicit
-path first, then the HuggingFace cache (first linked in from the local mirror, see `utils/checkpoint.py`),
-then a download -- and the download only happens when it has been opted into with
-`TT_DIT_ALLOW_HF_DOWNLOAD=1`, so no test run pulls 144 GB by surprise.
+path first, then the HuggingFace cache (first linked in from the local mirror, see
+`utils/hf_local_mirror.py`), then a download -- and the download only happens when it has been opted
+into with `TT_DIT_ALLOW_HF_DOWNLOAD=1`, so no test run pulls 144 GB by surprise.
 
 Only the diffusers partitions the caller asks for are fetched. The repo's top-level `FL2VA/` and
 `Ref2VA/` trees are self-contained original-format bundles that duplicate the root partitions and
@@ -22,7 +22,7 @@ from pathlib import Path
 
 from loguru import logger
 
-from ...utils.checkpoint import ensure_cached, hub_cache_dir
+from ...utils.hf_local_mirror import ensure_cached, hub_cache_dir
 
 MINIMAX_H3_REPO_ID = "MiniMaxAI/MiniMax-H3"
 

@@ -23,7 +23,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import cache
 from ....utils.check import assert_quality
-from ....utils.checkpoint import ensure_cached
+from ....utils.hf_local_mirror import ensure_cached
 
 # Shared device configuration for UMT5 tests to reduce code duplication and ensure we are using consistent device configurations.
 

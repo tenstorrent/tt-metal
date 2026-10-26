@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from huggingface_hub import hf_hub_download
 
-from models.tt_dit.utils.checkpoint import WEIGHTS_ROOT_ENV, CheckpointCacheError, ensure_cached, hub_cache_dir
+from models.tt_dit.utils.hf_local_mirror import WEIGHTS_ROOT_ENV, CheckpointCacheError, ensure_cached, hub_cache_dir
 
 REPO_ID = "Org/Model-Diffusers"
 COMMIT = "a" * 40

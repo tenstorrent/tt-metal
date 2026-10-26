@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from models.tt_dit.pipelines.minimax_h3 import weights_minimax_h3 as weights
-from models.tt_dit.utils.checkpoint import WEIGHTS_ROOT_ENV, CheckpointCacheError
+from models.tt_dit.utils.hf_local_mirror import WEIGHTS_ROOT_ENV, CheckpointCacheError
 
 REPO_DIR = "models--MiniMaxAI--MiniMax-H3"
 MIRROR_COMMIT = "f" * 40

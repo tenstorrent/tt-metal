@@ -15,8 +15,8 @@ from ....models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
-from ....utils.checkpoint import ensure_cached
 from ....utils.golden import load_golden, save_golden
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch, local_device_to_torch

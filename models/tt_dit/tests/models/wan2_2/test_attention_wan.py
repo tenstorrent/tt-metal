@@ -13,7 +13,7 @@ from ....models.transformers.wan2_2.attention_wan import WanAttention
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
-from ....utils.checkpoint import ensure_cached
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch

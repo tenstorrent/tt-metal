@@ -28,9 +28,9 @@ from ....models.vae.vae_wan2_1 import (
 from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
-from ....utils.checkpoint import ensure_cached
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width, conv_unpad_height, count_convs
 from ....utils.golden import load_golden, save_golden
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.tensor import typed_tensor_2dshard
 from ....utils.test import skip_if_unsupported_num_links
 

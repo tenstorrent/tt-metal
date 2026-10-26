@@ -27,9 +27,9 @@ from models.tt_dit.pipelines.wan.dbcache import ExpertCacheRunner, WanDBCacheCon
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
-from models.tt_dit.utils.checkpoint import ensure_cached
 from models.tt_dit.utils.conv3d import conv3d_configs
 from models.tt_dit.utils.dbcache import DBCacheConfig
+from models.tt_dit.utils.hf_local_mirror import ensure_cached
 from models.tt_dit.utils.tensor import float32_tensor
 from models.tt_dit.utils.torch_threads import cap_torch_threads_to_half_the_cpus
 from models.tt_dit.utils.tracing import Tracer

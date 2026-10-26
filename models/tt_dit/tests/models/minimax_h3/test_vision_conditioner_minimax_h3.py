@@ -31,7 +31,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
-from ....utils.checkpoint import ensure_cached
+from ....utils.hf_local_mirror import ensure_cached
 from ....utils.tensor import bf16_tensor, local_device_to_torch
 from .common_av import is_host
 
