@@ -57,7 +57,6 @@ enum class EnvVarID {
     TT_METAL_SIMULATOR,                       // Path to simulator executable
     TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
     TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
-    TT_METAL_EMU_BRINGUP,                     // Emulation bring-up owner (umd_server or sival)
     TT_METAL_GRENDEL_JTAG_SERVER,             // OpenOCD TCL endpoint (host:port)
     TT_METAL_GRENDEL_JTAG_SOC_DESC,           // SoC descriptor for the attached package
     TT_METAL_GRENDEL_JTAG_TRANSPORT,          // jtag2axi_v1 or jtag2axi_v2
@@ -550,16 +549,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             break;
 
         case EnvVarID::TT_METAL_EMU_SOC_DESC: this->emu_soc_desc_path = std::string(value); break;
-
-        case EnvVarID::TT_METAL_EMU_BRINGUP:
-            if (std::strcmp(value, "umd_server") == 0) {
-                this->sival_emu_bringup = false;
-            } else if (std::strcmp(value, "sival") == 0) {
-                this->sival_emu_bringup = true;
-            } else {
-                TT_THROW("TT_METAL_EMU_BRINGUP must be 'umd_server' or 'sival', got '{}'", value);
-            }
-            break;
 
         case EnvVarID::TT_METAL_GRENDEL_JTAG_SERVER:
             this->grendel_jtag_server = std::string(value);
@@ -2145,11 +2134,6 @@ void RunTimeOptions::InitializeFromEnvVars() {
     if (this->runtime_target_device_ == tt::TargetDevice::GrendelJtag && this->grendel_jtag_soc_desc_path.empty()) {
         TT_THROW("TT_METAL_GRENDEL_JTAG_SERVER requires TT_METAL_GRENDEL_JTAG_SOC_DESC to be set");
     }
-    if (this->sival_emu_bringup && this->runtime_target_device_ != tt::TargetDevice::EmuAxi &&
-        this->runtime_target_device_ != tt::TargetDevice::GrendelJtag) {
-        TT_THROW("TT_METAL_EMU_BRINGUP=sival requires TT_METAL_EMU_SERVER or TT_METAL_GRENDEL_JTAG_SERVER to be set");
-    }
-
     // On a simulator TT_METAL_SIMULATOR_DRAM_UNCAPPED and the quasar_aether_2x3_uncapped map imply each
     // other: the option moves an ATT run of quasar_aether_2x3 to the map whose DRAM window covers the
     // descriptor's 1 GiB, and naming that map lifts the DRAM clamp.

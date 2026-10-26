@@ -22,10 +22,12 @@ inline __attribute__((always_inline)) volatile tt_l1_ptr CceSpaRoutes* cce_spa_r
 inline __attribute__((always_inline)) uint64_t
 cce_gddr_address(uint32_t local_mimir, uint32_t mimir_index, uint64_t offset) {
     (void)local_mimir;
+    if (mimir_index >= CCE_SPA_ROUTES_MAX_INSTANCES) {
+        __builtin_trap();
+    }
     volatile tt_l1_ptr CceSpaRoutes* routes = cce_spa_routes();
-    const uint32_t index = mimir_index < CCE_SPA_ROUTES_MAX_INSTANCES ? mimir_index : 0;
-    const uint32_t port = routes->gddr_d2d[index];
-    return routes->gddr_d2d_base[port] + static_cast<uint64_t>(index) * routes->gddr_instance_stride + offset;
+    const uint32_t port = routes->gddr_d2d[mimir_index];
+    return routes->gddr_d2d_base[port] + static_cast<uint64_t>(mimir_index) * routes->gddr_instance_stride + offset;
 }
 
 inline __attribute__((always_inline)) void cce_gddr_read(

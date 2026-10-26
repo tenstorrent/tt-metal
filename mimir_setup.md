@@ -128,5 +128,5 @@ export TT_METAL_EMU_SERVER=<host>:<port>
 export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/<yaml_file>
 ```
 
-Run Mimir tests from `$TT_METAL_HOME`. E.g.
+Run Mimir tests from `$TT_METAL_HOME`. A Mimir-only package has no Tensix cores. Set `TT_METAL_SLOW_DISPATCH_MODE=1` to run it; with that variable unset the suite skips. E.g.
 `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_context --gtest_filter=*MimirEmu*`

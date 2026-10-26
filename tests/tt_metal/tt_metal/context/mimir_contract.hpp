@@ -21,8 +21,10 @@
 #include <fmt/format.h>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "umd/device/soc_arch_descriptor.hpp"
 #include "umd/device/types/core_coordinates.hpp"
@@ -64,18 +66,28 @@ struct GddrBackingScope {
     ~GddrBackingScope() { t_gddr_backing = nullptr; }
 };
 
+// The descriptor the runtime will open. A chippy server names its own file. With no server,
+// TT_METAL_SOC_DESC names the package for a transport that discovers the device, such as PCIe.
 inline const char* selected_soc_desc_path() {
-    if (const char* path = std::getenv("TT_METAL_EMU_SOC_DESC")) {
-        return path;
+    if (std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr) {
+        return std::getenv("TT_METAL_GRENDEL_JTAG_SOC_DESC");
     }
-    return std::getenv("TT_METAL_GRENDEL_JTAG_SOC_DESC");
+    if (std::getenv("TT_METAL_EMU_SERVER") != nullptr) {
+        return std::getenv("TT_METAL_EMU_SOC_DESC");
+    }
+    return std::getenv("TT_METAL_SOC_DESC");
 }
 
-inline bool transport_configured() {
-    const bool emu = std::getenv("TT_METAL_EMU_SERVER") != nullptr;
-    const bool jtag = std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr;
-    return emu || jtag;
+inline bool device_transport_configured() {
+    if (std::getenv("TT_METAL_EMU_SERVER") != nullptr || std::getenv("TT_METAL_GRENDEL_JTAG_SERVER") != nullptr) {
+        return true;
+    }
+    const char* path = std::getenv("TT_METAL_SOC_DESC");
+    return path != nullptr && path[0] != '\0';
 }
+
+// The runtime treats any value of this variable, including 0, as slow dispatch. Unset is fast dispatch.
+inline bool slow_dispatch_requested() { return std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr; }
 
 // The package file, not the transport. Opening the device is what makes a skipped case slow, so
 // callers decide from this before CreateDevice.
@@ -97,6 +109,13 @@ inline bool package_has_programmable_dram() {
     return configured_soc_desc().has_programmable_dram_views();
 }
 
+inline bool package_has_tensix_cores() {
+    if (selected_soc_desc_path() == nullptr) {
+        return false;
+    }
+    return !configured_soc_desc().get_cores(tt::CoreType::TENSIX).empty();
+}
+
 // GTEST_SKIP returns from the function that invokes it, so this has to be a macro. Contract tests
 // run for any selected package that declares programmable DRAM cores. A transport is still required
 // to open the device.
@@ -105,8 +124,13 @@ inline bool package_has_programmable_dram() {
         if (!::tt::tt_metal::mimir_contract::package_has_programmable_dram()) {                                     \
             GTEST_SKIP() << "Selected package has no programmable DRAM cores.";                                     \
         }                                                                                                           \
-        if (!::tt::tt_metal::mimir_contract::transport_configured()) {                                              \
+        if (!::tt::tt_metal::mimir_contract::device_transport_configured()) {                                       \
             GTEST_SKIP() << "Selected package has programmable DRAM cores, but no device transport is configured."; \
+        }                                                                                                           \
+        if (!::tt::tt_metal::mimir_contract::package_has_tensix_cores() &&                                          \
+            !::tt::tt_metal::mimir_contract::slow_dispatch_requested()) {                                           \
+            GTEST_SKIP() << "This Mimir-only package has no Tensix cores for fast dispatch. Set "                   \
+                            "TT_METAL_SLOW_DISPATCH_MODE=1.";                                                       \
         }                                                                                                           \
     } while (0)
 
@@ -130,6 +154,40 @@ inline uint32_t location_for_cce(uint32_t cce_index) { return location_for_cce(c
 
 inline uint32_t num_cces_from_soc(const metal_SocDescriptor& soc_desc) {
     return static_cast<uint32_t>(soc_desc.get_num_dram_channels() * locations_per_channel(soc_desc));
+}
+
+inline const std::vector<uint32_t>& cce_indices() {
+    static const std::vector<uint32_t> indices = [] {
+        std::vector<uint32_t> built;
+        if (selected_soc_desc_path() == nullptr) {
+            built.push_back(0);
+            return built;
+        }
+        const uint32_t cce_count = num_cces_from_soc(configured_soc_desc());
+        built.reserve(cce_count);
+        for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
+            built.push_back(cce_index);
+        }
+        return built;
+    }();
+    return indices;
+}
+
+inline const std::vector<uint32_t>& dram_view_indices() {
+    static const std::vector<uint32_t> indices = [] {
+        std::vector<uint32_t> built;
+        if (selected_soc_desc_path() == nullptr) {
+            built.push_back(0);
+            return built;
+        }
+        const uint32_t view_count = static_cast<uint32_t>(configured_soc_desc().get_num_dram_views());
+        built.reserve(view_count);
+        for (uint32_t view = 0; view < view_count; ++view) {
+            built.push_back(view);
+        }
+        return built;
+    }();
+    return indices;
 }
 
 inline const metal_SocDescriptor& soc_desc_of(const IDevice* device) {
@@ -179,15 +237,18 @@ struct CcePartition {
     uint32_t partition = 0;
 };
 
-inline constexpr uint32_t kMaxCces = 4;
-inline constexpr uint32_t kMaxPartitions = 4;
-
 inline const std::vector<CcePartition>& cce_partition_params() {
     static const std::vector<CcePartition> params = [] {
+        if (selected_soc_desc_path() == nullptr) {
+            return std::vector<CcePartition>{{0, 0}};
+        }
+        const metal_SocDescriptor& soc_desc = configured_soc_desc();
+        const uint32_t cce_count = num_cces_from_soc(soc_desc);
+        const uint32_t partition_count = static_cast<uint32_t>(soc_desc.get_num_dram_views());
         std::vector<CcePartition> built;
-        built.reserve(kMaxCces * kMaxPartitions);
-        for (uint32_t cce_index = 0; cce_index < kMaxCces; ++cce_index) {
-            for (uint32_t partition = 0; partition < kMaxPartitions; ++partition) {
+        built.reserve(cce_count * partition_count);
+        for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
+            for (uint32_t partition = 0; partition < partition_count; ++partition) {
                 built.push_back({cce_index, partition});
             }
         }
@@ -291,7 +352,12 @@ inline uint64_t host_slot_offset(const GddrTarget& target, uint32_t slot) {
     return static_cast<uint64_t>(slot) * target.slot_stride;
 }
 
-inline void write_gddr_view(IDevice* device, uint32_t view, uint64_t address, const std::vector<uint32_t>& data) {
+inline void write_gddr_view(
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    uint32_t view,
+    uint64_t address,
+    const std::vector<uint32_t>& data) {
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     const uint32_t size = static_cast<uint32_t>(data.size() * sizeof(uint32_t));
     if (t_gddr_backing != nullptr) {
@@ -300,15 +366,20 @@ inline void write_gddr_view(IDevice* device, uint32_t view, uint64_t address, co
     }
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
-    detail::WriteToDeviceDRAMChannel(
-        device,
+    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(
+        unit_mesh,
         static_cast<int>(view),
         static_cast<uint32_t>(address),
-        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), size));
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), size)));
 }
 
 inline void read_gddr_view(
-    IDevice* device, uint32_t view, uint64_t address, uint32_t size, std::vector<uint32_t>& data) {
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    uint32_t view,
+    uint64_t address,
+    uint32_t size,
+    std::vector<uint32_t>& data) {
     const metal_SocDescriptor& soc_desc = soc_desc_of(device);
     if (t_gddr_backing != nullptr) {
         const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
@@ -317,8 +388,8 @@ inline void read_gddr_view(
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
     data.assign(size / sizeof(uint32_t), 0);
-    ASSERT_TRUE(
-        detail::ReadFromDeviceDRAMChannel(device, static_cast<int>(view), static_cast<uint32_t>(address), size, data));
+    ASSERT_TRUE(slow_dispatch::ReadFromDRAMChannel(
+        unit_mesh, static_cast<int>(view), static_cast<uint32_t>(address), size, data));
 }
 
 inline uint32_t base_dram_view_for_mimir(const metal_SocDescriptor& soc_desc, uint32_t mimir_index) {
@@ -334,13 +405,22 @@ inline uint32_t base_dram_view_for_mimir(const metal_SocDescriptor& soc_desc, ui
 }
 
 inline void write_mimir_gddr(
-    IDevice* device, uint32_t mimir_index, uint64_t address, const std::vector<uint32_t>& data) {
-    write_gddr_view(device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, data);
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    uint32_t mimir_index,
+    uint64_t address,
+    const std::vector<uint32_t>& data) {
+    write_gddr_view(unit_mesh, device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, data);
 }
 
 inline void read_mimir_gddr(
-    IDevice* device, uint32_t mimir_index, uint64_t address, uint32_t size, std::vector<uint32_t>& data) {
-    read_gddr_view(device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, size, data);
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    uint32_t mimir_index,
+    uint64_t address,
+    uint32_t size,
+    std::vector<uint32_t>& data) {
+    read_gddr_view(unit_mesh, device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, size, data);
 }
 
 // Host view of one CCE's SRAM. The address is the HAL NOC address (base plus offset), which UMD
