@@ -17,9 +17,10 @@ import ttnn
 # 0.5x / 2x). The spread is real: bh_sc1 hosts differ by ~40% on denoising, and the two bh_sc4
 # quads by ~25%. Only test_performance_wan.py gates on them, on both bounds.
 #
-# The BH galaxy perf legs run on the high-power pools. Their denoising/total bands still span the
-# standard-pool hosts too (high-power runs so far landed in the same ranges, on fewer hosts); the BH 4x8
-# vae bands come from high-power runs after the bh_sc1 host-contention fix (#61784, 2026-10-24).
+# The BH galaxy perf legs run on the high-power pools. The BH 4x8 bands come only from bh_sc1_high_power
+# runs after the host-contention fix (#61784): 4 per config on 2026-10-24..26, on hosts d06u02, d07u02
+# and d07u08, which agree within ~2%. A slower host joining that pool (the standard pool's d04 hosts
+# denoise ~40% slower) would exceed them. The 4x32 bands still span both sc4 quads.
 TIMING_LIMITS = {
     ("t2v", (2, 2), 480, "bh"): {
         "encoder": (0.01, 0.16),
@@ -28,10 +29,10 @@ TIMING_LIMITS = {
         "total": (270.0, 530.0),
     },
     ("t2v", (4, 8), 480, "bh"): {
-        "encoder": (0.035, 0.17),
-        "denoising": (27.0, 74.0),
-        "vae": (0.18, 0.34),
-        "total": (27.0, 75.0),
+        "encoder": (0.04, 0.19),
+        "denoising": (27.0, 51.0),
+        "vae": (0.18, 0.40),
+        "total": (27.0, 52.0),
     },
     ("t2v", (4, 8), 480, "wh"): {
         "encoder": (0.037, 0.17),
@@ -40,10 +41,10 @@ TIMING_LIMITS = {
         "total": (76.0, 150.0),
     },
     ("t2v", (4, 8), 720, "bh"): {
-        "encoder": (0.034, 0.17),
-        "denoising": (86.0, 210.0),
-        "vae": (0.38, 0.70),
-        "total": (87.0, 210.0),
+        "encoder": (0.04, 0.19),
+        "denoising": (86.0, 164.0),
+        "vae": (0.37, 0.73),
+        "total": (87.0, 165.0),
     },
     ("t2v", (4, 8), 720, "wh"): {
         "encoder": (0.038, 0.17),
@@ -65,12 +66,11 @@ TIMING_LIMITS = {
         "vae": (0.28, 1.2),
         "total": (25.0, 62.0),
     },
-    # One observation (a slow bh_sc1 host); the band follows T2V's so a fast host passes too.
     ("i2v", (4, 8), 720, "bh"): {
-        "encoder": (0.041, 0.17),
-        "denoising": (86.0, 210.0),
-        "vae": (0.39, 0.72),
-        "total": (87.0, 210.0),
+        "encoder": (0.038, 0.17),
+        "denoising": (86.0, 164.0),
+        "vae": (0.37, 0.73),
+        "total": (87.0, 166.0),
     },
     # Not run in CI, so never measured here: upper limits only, carried over from before.
     ("t2v", (2, 4), 480, "bh"): {
