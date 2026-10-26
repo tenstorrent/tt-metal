@@ -28,7 +28,9 @@ void kernel_main() {
     out.wait_front(1);
     noc.async_write(out, o_acc, 2048, {.offset_bytes = 0}, {.page_id = t * 16 + n, .offset_bytes = 0});
     noc.async_write_barrier();
-    cache_writes<HAS_LAT, CACHE_PT>(
-        noc, c_acc, l_acc, p_acc, m_acc, cbs, reinterpret_cast<PW32>(out.get_read_ptr()), t, n);
+    if constexpr (CACHE_PT != 0) {
+        cache_writes<HAS_LAT, CACHE_PT>(
+            noc, c_acc, l_acc, p_acc, m_acc, cbs, reinterpret_cast<PW32>(out.get_read_ptr()), t, n);
+    }
     out.pop_front(1);
 }

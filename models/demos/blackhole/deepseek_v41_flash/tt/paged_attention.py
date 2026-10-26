@@ -133,9 +133,7 @@ class DSV41PagedAttention(_PagedMixin, DSV41Attention):
         self.kv.stage_ring(self.ring_slot, ring.float()[:, : self.kv.ring_rows])
 
     def forward(self, x, st):
-        q, kv, k = self._qkv(x, st)
-        ttnn.deallocate(kv)
-        ttnn.deallocate(k)
+        q = self._qkv_q(x, st)
         o = self._paged_attend(q, None, st, 0, 0, P.WINDOW)
         return self._finish(o, st)
 
@@ -230,9 +228,7 @@ class DSV41PagedCompressedAttention(_PagedMixin, DSV41CompressedAttention):
     def forward(self, x, st):
         lat = self._compress_step(x, st) if self.source is None else self.source.last_lat
         self.last_lat = lat
-        q, kv, k = self._qkv(x, st)
-        ttnn.deallocate(kv)
-        ttnn.deallocate(k)
+        q = self._qkv_q(x, st)
         if (
             self.indexer is not None
         ):  # index-source layer: (owners: append this step's key,) then refresh the selection shared by the next layers

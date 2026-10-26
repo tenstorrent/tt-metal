@@ -243,9 +243,7 @@ class SpecPagedCompressedAttention(_SpecFinish, DSV41PagedCompressedAttention):
             else self.source.last_lat
         )
         self.last_lat = lat
-        q, kv, k = self._qkv(x, st)
-        ttnn.deallocate(kv)
-        ttnn.deallocate(k)
+        q = self._qkv_q(x, st)
         if (
             self.indexer is not None
         ):  # index-source layer: (owners: write the block's keys,) then the per-row top-512 shared with the next layers of this kind

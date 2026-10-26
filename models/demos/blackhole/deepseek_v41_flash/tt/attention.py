@@ -36,6 +36,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.deepseek_v41_flash.tt import attn_fused as AF
+from models.demos.blackhole.deepseek_v41_flash.tt.qk_norm import qk_norm
 
 HEAD_DIM = 512
 ROPE_DIM = 64
@@ -185,6 +186,14 @@ class DSV41Attention:
         # tile-layout gammas: the row-major gamma costs a tilize inside every rms_norm call (20 us vs 13 us)
         self.q_norm = up(w["q_norm"].reshape(1, 1, 1, Q_LORA))
         self.kv_norm = up(w["kv_norm"].reshape(1, 1, 1, HEAD_DIM))
+        if AF.flag(
+            "DSV41_ATTN_QKNORM", "1"
+        ):  # fused slice + q/kv norm (tt/qk_norm.py): bf16 gamma rows replicated, bit-equal to rms_norm
+            from models.demos.blackhole.deepseek_v41_flash.tt.qk_norm import make_gamma
+
+            self.qk_gamma = up(
+                make_gamma(w["q_norm"].to(torch.bfloat16), w["kv_norm"].to(torch.bfloat16)).reshape(1, 1, 32, -1)
+            )
         # column-parallel over heads: wq_b^T [1280, 64*512], local [1280, 8*512]
         self.wq_b = up(w["wq_b"].T.reshape(1, 1, Q_LORA, N_HEADS * HEAD_DIM), dtype=wdt, mapper=col_shard(3))
         # grouped o-projection: group g = column g
@@ -389,6 +398,35 @@ class DSV41Attention:
             ttnn.slice(y, [0, 0, 0, Q_LORA], [1, 1, T, Q_LORA + HEAD_DIM]), weight=self.kv_norm, epsilon=self.eps
         )
         return attn_pre(kv, q, lat, self.cache, st[pos_key], st[comp_key] if comp_key else None, st["Ch"], st["Sh"], T)
+
+    def _qkpost_ok(self):
+        return AF.flag("DSV41_ATTN_QKPOST", "1") and self.T <= 16 and _kv_dtype() == ttnn.bfloat16 and not _kv_emu()
+
+    def _qkv_q(self, x, st):
+        """Paged callers (the ring / pool is written by ``paged_kv_step``): q_rot [1,T,9,512] only (row 0 = RoPE'd kv vector, rows 1..8 = q heads),
+        the same values as ``_qkv`` with concat + create_heads + 2 to_memory_config + RoPE (5 ops) fused into ONE program (attn_pre without cache write).
+        """
+        if not self._qkpost_ok():
+            q, kv, k = self._qkv(x, st)
+            ttnn.deallocate(kv)
+            ttnn.deallocate(k)
+            return q
+        from models.demos.blackhole.deepseek_v41_flash.tt.attn_pre import attn_pre, qk_heads
+
+        T = self.T
+        y = self._lin(x, self.wqkv, "QKV")
+        if hasattr(self, "qk_gamma"):
+            qr, kv = qk_norm(y, self.qk_gamma, T, self.eps)
+        else:
+            qr = ttnn.rms_norm(ttnn.slice(y, [0, 0, 0, 0], [1, 1, T, Q_LORA]), weight=self.q_norm, epsilon=self.eps)
+            kv = ttnn.rms_norm(
+                ttnn.slice(y, [0, 0, 0, Q_LORA], [1, 1, T, Q_LORA + HEAD_DIM]), weight=self.kv_norm, epsilon=self.eps
+            )
+        self._last_qr = qr  # the indexer of index-source layers consumes it
+        q = self._lin(qr, self.wq_b, "QB")
+        if AF.flag("DSV41_ATTN_QKHEADS", "1"):
+            return qk_heads(kv, q, st["Ch"], st["Sh"], T)
+        return attn_pre(kv, q, None, None, None, None, st["Ch"], st["Sh"], T)
 
     def _write_cache(self, cache, row, idx, comp=False):
         """cache [T,1,L,512] <- row [1,T,*,512] (L1 sharded, tile row 0 valid) at per-user index idx (int32 [T])."""

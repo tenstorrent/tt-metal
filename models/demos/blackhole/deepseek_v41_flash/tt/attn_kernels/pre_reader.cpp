@@ -79,7 +79,10 @@ void kernel_main() {
             build_tile(noc, kv_acc, q_acc, cbs, o, t, n);
             noc.async_write(cbx, o_acc, 2048, {.offset_bytes = 0}, {.page_id = t * 16 + n, .offset_bytes = 0});
             noc.async_write_barrier();
-            cache_writes<HAS_LAT, CACHE_PT>(noc, c_acc, l_acc, p_acc, m_acc, cbs, o, t, n);
+            if constexpr (CACHE_PT != 0) {  // CACHE_PT == 0: no cache write (paged/spec callers: the ring is written by
+                                            // paged_kv_step)
+                cache_writes<HAS_LAT, CACHE_PT>(noc, c_acc, l_acc, p_acc, m_acc, cbs, o, t, n);
+            }
         }
     }
 }

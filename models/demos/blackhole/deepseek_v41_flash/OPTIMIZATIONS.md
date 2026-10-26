@@ -181,6 +181,32 @@ Counted in the areas above (P4, SP7) because every Engram item changed a number 
 
 None yet. As of 2026-10-23 `L/ttopt/` holds the specs, the golden decode file and one baseline capture (`results/decode_baseline/evidence.md`: decode window 20.170 ms of device kernel time per token, one step, Tracy), and no `keeps/NN.patch`; the harness commits are on `ssinghal/dsv4p1-opt-dec` (c496c9e2e44, 7d6b6e43001, a47237a9c6c, babe1f948c2) and `ssinghal/dsv4p1-opt-pf` (05aaad29ccb, 5d13b518e68). The traced baselines quoted earlier in this file (23.58 ms per verify round at k=3 on 8 layers, 97.3 ms per prefill chunk replay) were not found in any log under `L/ttopt/`: not verified.
 
+## 8.L06 Attention front for the paged / spec path: fused qk_norm + qk_heads (lever agent, qkpost)
+
+**What changed.** In `DSV41Attention._qkv_q` (the paged / spec decode caller; `tt/attention.py`) two op groups of the attention front become one program each (JIT `generic_op`, no C++ build):
+(1) `tt/qk_norm.py` + `tt/attn_kernels/qkn_{reader,compute,writer}.cpp` replace `slice` + `rms_norm` (q, 1280) + `slice` + `rms_norm` (kv, 512) of the wqkv output (4 ops -> 1; q norm on 8 cores, kv norm on 4 cores);
+(2) `tt/attn_pre.py::qk_heads` + `tt/attn_kernels/qkh_{reader,compute,writer}.cpp` replace `concat` + `nlp_create_qkv_heads_decode` + 2x `to_memory_config` + RoPE (5 ops -> 1; one core per (tile column, 8 users) reads the 9 whole source tiles of its column, RoPE is a tile matmul with a rotation matrix built from the cos / sin rows). Restore the old path: `DSV41_ATTN_QKPOST=0` (both); `DSV41_ATTN_QKNORM=0` (norm only; read at layer build); `DSV41_ATTN_QKHEADS=0` (heads only).
+
+**Exactness (bit-identical).** qk_heads: output bit-equal to the 5-op chain at T = 4, 6, 8. qk_norm: output bit-equal to `ttnn.rms_norm` of the slices at T = 4, 6, 8 and 3 seeds (q and kv, 100 % of the elements). The reference op runs with bf16 intermediates (fp32 destination accumulation off, approximate mode on) and a `reduce_tile` chain over the 40 (16) tiles of the row, so the row sum is order dependent in bf16: a first version that split the sum over cores in fp32 was NOT exact (7-35 % equal elements, 8-layer gate PCC 0.95 and different accepted drafts) and was replaced. The shipped kernel runs the LLK sequence of the reference op (square, `reduce_tile` SUM / REDUCE_ROW over all tiles in order, * fp32 1/N, + bf16 eps tile, rsqrt, column-broadcast multiply, gamma row-broadcast multiply); only the order-independent parts are parallel: every core squares its tiles, the other cores of a group write their bf16 square tiles to the group's reducer core (data, write barrier, semaphore increment), the reducer reduces all tiles in the reference order and sends the rs tile back (same handshake), every core finishes its own tiles.
+
+**Measured, op level (one chip, production shapes, traced marginal us/call, host .47, 1017 weights not involved, 2026-10-26):**
+
+| | old | fused |
+|---|---|---|
+| q + kv norm (2 slice + 2 rms_norm), T = 4 / 6 / 8 | 23.4 / 23.8 / 24.3 | 9.8 / 8.8 / 9.9 |
+| heads (concat + create heads + 2 to_memory_config + rope), T = 4 / 6 / 8 | 23.8 / 24.1 / 24.5 | 8.3 / 8.6 / 9.5 |
+
+**8-layer traced round window** (tt-opt harness `tests/tt_opt/test_tt_opt_decode.py`, 1017 weights, layers 0,1,2,3,14,20,21,24, alternating base / lever, 2 repetitions each, host .47, 2026-10-26; device ms per round): k=3 base 18.6987 / 18.6987, lever 18.4534 / 18.4524 (-0.246 ms); k=5 base 21.9663 / 21.9655, lever 21.7167 / 21.7155 (-0.250 ms). `test_decode_gate` (full harness, prefill + seed, golden written by the base tree): k=3 and k=5 streams PCC 1.000000 over 10 streams, logits PCC 1.000000, accepted ids and drafts equal; the base tree against its own golden gives the same scores.
+
+**40-layer adaptive demos, frozen table (DSV41_SPEC_TIMES=3:47,5:58, DSV41_SPEC_FREEZE_TIMES=1), 1017, host .47, base tree 9ed98f9bbf8 vs lever (same session, alternating):**
+
+| scenario | rounds | accepted / round | k_hist | round ms base | round ms lever | exactness vs plain |
+|---|---|---|---|---|---|---|
+| gsm8k_b4_m1M | 61 / 61 | 2.8859 / 2.8859 | {3:25, 5:36} both | 62.29 | 60.77 (-1.52) | 4/4 identical both |
+| needle64k_b4 | 26 / 26 | 1.4557 / 1.4557 | {3:21, 5:5} both | 70.33 | 68.96 (-1.37) | 4/4 identical both |
+
+The printed outputs of both scenarios are byte-identical between the two trees (gsm8k answers 18, 3, 70000, 540; needle passcode 7816). The 40-layer saving (-1.4 to -1.5 ms) is about the 8-layer window gain times 5 plus the op-level saving of about 29 us per layer. Gains and gates were measured on the frozen-table fixture; a no-fixture adaptive run would only change the k mix.
+
 ## 9. Branches not merged
 
 | # | Optimization | Metric | Before | After | Where |
