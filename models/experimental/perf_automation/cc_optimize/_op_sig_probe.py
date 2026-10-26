@@ -19,8 +19,10 @@ from __future__ import annotations
 # sys.path (perf_test_mcp.py:21) and `cc_optimize` IS the root. Both spellings are tried, which
 # is what every other cross-package import in this tree does.
 try:
+    from ..agent import marker_vocab as _vocab
     from ..agent import stage_seams as _seams
 except ImportError:  # perf_automation itself is the sys.path root
+    from agent import marker_vocab as _vocab
     from agent import stage_seams as _seams
 
 import json
@@ -77,17 +79,11 @@ def _install():
 
 _BLOCK_TAG = "_perf_block_idx"
 _STACK_TAG = "_perf_stack_idx"
-_SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
-# A BLOCK HAS TWO EDGES AND ONLY ONE WAS MARKED. With a start marker alone, every op emitted
-# after the last block of a stack is attributed to that block -- and "after the last block" is
-# the whole rest of the model. Measured on Voxtral 2026-08-13: a normal encoder block dispatches
-# 20 ops and the LAST one was credited with 12573, i.e. 67% of the entire run, including
-# embedding, rms_norm, silu, scaled_dot_product_attention_decode and argmax -- language-model
-# decode ops that are not in the encoder at all. Coverage then concluded the encoder needs all 32
-# layers (it needs 1-2: all 32 blocks are one class emitting identical ops), max() took 32 as the
-# window, capping to 32 changed no work, and the run profiled the whole model.
-_SIGNPOST_END_PREFIX = "PERF_BLOCK_SIGNPOST_END:"
-_STAGE_PREFIX = "PERF_STAGE_SIGNPOST:"
+# This file EMITS these; marker_vocab spells them, because three other modules parse them back and
+# the copies had already drifted. The reason a block needs a closing edge is recorded there too.
+_SIGNPOST_PREFIX = _vocab.BLOCK
+_SIGNPOST_END_PREFIX = _vocab.BLOCK_END
+_STAGE_PREFIX = _vocab.STAGE
 
 
 _ATOMIC = (str, bytes, bytearray, int, float, bool, complex, type(None))
@@ -896,18 +892,6 @@ def _install_block_signposts():
 _SEQ_PRINT_OPS = 50000
 
 
-def _control_prefixes() -> tuple:
-    """Every token the readers treat as structure rather than work, from the one definition of each.
-
-    Spelled from the constants that emit them, so a renamed marker renames this with it; the caller
-    mark lives in the module that writes it."""
-    try:
-        from agent.caller_stacks import MARK as _caller
-    except Exception:  # noqa: BLE001 -- no caller marks is simply three prefixes instead of four
-        _caller = None
-    return tuple(p for p in (_SIGNPOST_PREFIX, _SIGNPOST_END_PREFIX, _STAGE_PREFIX, _caller) if p)
-
-
 def _printable_seq(seq, cap: int = _SEQ_PRINT_OPS) -> list:
     """The head of `seq`, PLUS every control token that falls past it, in original order.
 
@@ -927,10 +911,7 @@ def _printable_seq(seq, cap: int = _SEQ_PRINT_OPS) -> list:
     is the same slice as before, so _work_signal -- which ignores control tokens -- is unchanged.
     """
     head = list((seq or [])[:cap])
-    prefixes = _control_prefixes()
-    if not prefixes:
-        return head
-    tail = [t for t in (seq or [])[cap:] if isinstance(t, str) and t.startswith(prefixes)]
+    tail = [t for t in (seq or [])[cap:] if _vocab.is_control(t)]
     return head + tail
 
 

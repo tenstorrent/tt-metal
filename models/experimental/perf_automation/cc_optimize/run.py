@@ -33,6 +33,15 @@ _tmpstate = _ilu_ts.module_from_spec(_ts_spec)
 _ts_spec.loader.exec_module(_tmpstate)
 state_dir = _tmpstate.state_dir
 
+# The probe's control tokens, loaded the same way and for the same reason: the module above is not
+# importable by name from here either. agent.marker_vocab imports nothing, so loading it by path
+# costs one file read and leaves the strings spelled in exactly one place.
+_mv_spec = _ilu_ts.spec_from_file_location(
+    "_marker_vocab", str(Path(__file__).resolve().parent.parent / "agent" / "marker_vocab.py")
+)
+_marker_vocab = _ilu_ts.module_from_spec(_mv_spec)
+_mv_spec.loader.exec_module(_marker_vocab)
+
 
 PERF_DIR = "models/experimental/perf_automation"
 CC_DIR = PERF_DIR + "/cc_optimize"
@@ -1568,15 +1577,10 @@ def _llm_depth_env(model_root: Path, cov: int) -> dict:
 def _is_control(tok) -> bool:
     """A bookkeeping token the probe wrote into the sequence, not an op the device ran.
 
-    The op filter used to name ONE prefix, so every control token invented later was silently
-    counted as work. That matters more than it sounds: the work signal is what decides INERT, so
-    markers would inflate the very number used to prove a depth cap did nothing -- an uncappable
-    model could look cappable purely from its own instrumentation. Caller markers are emitted per
-    block ENTRY and EXIT, which on a 32-layer stack is 64 phantom ops.
+    agent.marker_vocab holds the list and the reason it must be complete. This name stays because
+    the readers below are written around it.
     """
-    return isinstance(tok, str) and tok.startswith(
-        ("PERF_BLOCK_SIGNPOST:", "PERF_BLOCK_SIGNPOST_END:", "PERF_STAGE_SIGNPOST:", "PERF_CALLER:")
-    )
+    return _marker_vocab.is_control(tok)
 
 
 def _work_signal(seq) -> int:
@@ -1593,8 +1597,8 @@ def _op_block_count(seq) -> int:
     return Counter(vals).most_common(1)[0][0]
 
 
-_SIGNPOST_TOKEN = "PERF_BLOCK_SIGNPOST:"
-_SIGNPOST_END_TOKEN = "PERF_BLOCK_SIGNPOST_END:"
+_SIGNPOST_TOKEN = _marker_vocab.BLOCK
+_SIGNPOST_END_TOKEN = _marker_vocab.BLOCK_END
 
 
 def _signpost_entries(seq) -> int:
@@ -2050,7 +2054,7 @@ def _is_emitted_model(model_root) -> bool:
         return False
 
 
-_STAGE_TOKEN = "PERF_STAGE_SIGNPOST:"
+_STAGE_TOKEN = _marker_vocab.STAGE
 
 
 def stacks_by_stage(seq) -> dict:

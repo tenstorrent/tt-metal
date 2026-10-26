@@ -40,6 +40,8 @@ from agent import integrity as _integrity  # noqa: E402
 from agent.probes import PYTEST_NO_TIMEOUT  # noqa: E402
 from agent.probes import tt_smi_bin as _tt_smi_bin  # noqa: E402
 from agent.layer_depth import set_depth as _set_depth  # noqa: E402
+from agent.marker_vocab import BLOCK as _SIGNPOST_PREFIX  # noqa: E402
+from agent.marker_vocab import is_control as _is_control  # noqa: E402
 from agent.stage_seams import parse_unmeasured as _parse_unmeasured  # noqa: E402
 
 _DEPTH_GUARD = "models.experimental.perf_automation.agent.depth_guard_plugin"
@@ -5483,9 +5485,6 @@ def _mode_rank(mode: str) -> int:
     return _FULLPIPE_MODE_RANK.get(mode, 1)
 
 
-_SIGNPOST_PREFIX = "PERF_BLOCK_SIGNPOST:"
-
-
 def _infer_block_count(counts: dict) -> int:
     vals = [c for c in counts.values() if c > 1]
     if not vals:
@@ -5515,7 +5514,14 @@ def _signposts_usable(seq: list) -> bool:
     # DECOUPLED SIGNPOSTS ARE NOT SIGNPOSTS. A stack whose markers all land in a clump -- typically
     # trailing the ops entirely -- delimits nothing: every op would attribute to block 0. Presence is
     # necessary, interleaving is what makes them usable.
-    return any(isinstance(t, str) and not t.startswith(_SIGNPOST_PREFIX) for t in (seq or [])[idx[0] :])
+    #
+    # WORK IS "NOT A CONTROL TOKEN", NOT "NOT A START MARKER". This asked only whether the entry
+    # failed to begin with the block-START prefix, and a block-END entry does not begin with it --
+    # so a clump of starts and ends answered "yes, there is work after the first marker" and the
+    # guard passed the very shape it exists to reject. run.py's copy of this guard already used the
+    # full control vocabulary and returned False on the same sequence; the two disagreed, and this
+    # one decides which blocks check_lever_coverage reports a lever reached.
+    return any(isinstance(t, str) and not _is_control(t) for t in (seq or [])[idx[0] :])
 
 
 def _block_starts(sequence: list, n_blocks: int | None = None) -> tuple:
@@ -5523,15 +5529,22 @@ def _block_starts(sequence: list, n_blocks: int | None = None) -> tuple:
     sp = [i for i, s in enumerate(seq) if isinstance(s, str) and s.startswith(_SIGNPOST_PREFIX)]
     if sp and _signposts_usable(seq):
         return sp, "signposts"
+    # A CONTROL TOKEN IS NOT AN ANCHOR. The fallback looks for a token that occurs once per block
+    # and reads its positions as the block starts -- so the candidates have to be ops. Counting
+    # markers among them let a stage marker that happens to appear n_blocks times become the
+    # anchor, which hands back stage boundaries labelled as blocks. cc_optimize.run's copy of this
+    # fallback always searched ops only; this one searched the whole sequence and only ever agreed
+    # with it because the markers used to be truncated away before they got here.
+    ops = [t for t in seq if isinstance(t, str) and not _is_control(t)]
     if n_blocks is None:
-        n_blocks = _infer_block_count(_C_counts(seq))
+        n_blocks = _infer_block_count(_C_counts(ops))
     from collections import Counter as _C
 
-    c = _C(seq)
-    anchor = next((s for s in seq if c.get(s) == n_blocks), None)
+    c = _C(ops)
+    anchor = next((t for t in ops if c.get(t) == n_blocks), None)
     if anchor is None:
         return [], "none"
-    return [i for i, s in enumerate(seq) if s == anchor], "inferred"
+    return [i for i, t in enumerate(seq) if t == anchor], "inferred"
 
 
 def _C_counts(seq):

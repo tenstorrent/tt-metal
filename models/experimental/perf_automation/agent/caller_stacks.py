@@ -31,7 +31,8 @@ exceeded tracy's 32K source-location limit and left a pytest process that never 
 
 from __future__ import annotations
 
-MARK = "PERF_CALLER:"
+from .marker_vocab import CALLER as MARK  # the token this module emits; marker_vocab spells it
+
 _MAX_SEQ_SCAN = 512
 _MAX_DEPTH = 8
 _MAX_NODES = 4000

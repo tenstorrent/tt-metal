@@ -51,10 +51,16 @@ def _walk():
         "_is_block_stack", "_uniform_kind", "_child_nodes", "_node_sequence", "_largest_repeated_stack",
         "_enclosing_stack", "StackInfo", "_dominant_type", "_walk_for_stacks", "find_all_stacks",
     }  # fmt: skip
+    # ast.Try IS AN IMPORT HERE. The probe reaches its sibling packages through the dual-spelling
+    # try/except every cross-package import in this tree uses, so dropping Try dropped the imports
+    # and kept the assignments that read them -- which worked only while every one of those
+    # assignments was a literal. The moment a constant was sourced from another module instead of
+    # spelled again, this lift raised NameError on a module that imports perfectly well.
     keep = [
         n
         for n in tree.body
-        if isinstance(n, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign)) or getattr(n, "name", None) in want
+        if isinstance(n, (ast.Import, ast.ImportFrom, ast.Try, ast.Assign, ast.AnnAssign))
+        or getattr(n, "name", None) in want
     ]
     mod = types.ModuleType("_walk_only")
     mod.__dict__["__file__"] = str(_PA / "cc_optimize" / "_op_sig_probe.py")

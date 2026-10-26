@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent import marker_vocab as V
 from cc_optimize import _op_sig_probe as P
 from cc_optimize.run import _blocks_ran, _is_control, _work_signal
 
@@ -58,32 +59,20 @@ def test_a_sequence_inside_the_budget_is_untouched():
 
 
 def test_every_control_token_the_readers_know_is_kept():
-    """Named from the constants that emit them, so this cannot drift from _is_control."""
-    for pref in P._control_prefixes():
+    """Taken from the one vocabulary, so this cannot drift from _is_control."""
+    for pref in V.control_prefixes():
         tok = "%sx" % pref
         assert _is_control(tok), "the reader treats %r as structure" % pref
         assert P._printable_seq(["op", tok], cap=1) == ["op", tok]
 
 
-def test_the_prefixes_are_spelled_from_their_own_constants():
+def test_the_print_no_longer_carries_a_head_slice():
     src = (_PA / "cc_optimize" / "_op_sig_probe.py").read_text()
-    assert "(_SIGNPOST_PREFIX, _SIGNPOST_END_PREFIX, _STAGE_PREFIX, _caller)" in src
-    assert "from agent.caller_stacks import MARK as _caller" in src
     assert "_SEQ[:50000]" not in src, "the head slice is gone from the print"
     assert "_printable_seq(_SEQ)" in src
 
 
-def test_a_missing_caller_module_still_keeps_the_block_markers(monkeypatch):
-    """The caller mark is imported from the module that writes it; losing it is not fatal."""
-    import builtins
-
-    real = builtins.__import__
-
-    def _no_caller(name, *a, **k):
-        if name == "agent.caller_stacks":
-            raise ImportError("gone")
-        return real(name, *a, **k)
-
-    monkeypatch.setattr(builtins, "__import__", _no_caller)
-    assert P._SIGNPOST_PREFIX in P._control_prefixes()
-    assert _blocks_ran(_run(ops_before=50)) == 4
+def test_the_cut_keeps_what_the_readers_call_structure_and_nothing_else():
+    """The filter is the readers' own predicate, so a marker invented later survives the cut too."""
+    assert P._printable_seq(["op", "%sx" % V.CALLER], cap=1) == ["op", "%sx" % V.CALLER]
+    assert P._printable_seq(["op", "another_op"], cap=1) == ["op"], "ops past the cut are still cut"
