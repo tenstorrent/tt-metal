@@ -26,6 +26,16 @@ struct UnaryShardSpecs {
 std::optional<UnaryShardSpecs> get_shard_specs(
     const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
 
+struct RmPageUnits {
+    uint32_t input_units_per_page = 1;
+    uint32_t output_units_per_page = 1;
+    uint32_t input_unit_bytes = 0;
+    uint32_t output_unit_bytes = 0;
+    bool aligned = true;
+};
+
+RmPageUnits get_rm_page_units(const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec);
+
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec);
 
 bool is_uneven(const tt::tt_metal::TensorSpec& t);

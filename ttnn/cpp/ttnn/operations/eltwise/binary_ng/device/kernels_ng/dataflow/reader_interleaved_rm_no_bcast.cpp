@@ -41,6 +41,11 @@ void kernel_main() {
     const uint32_t alignment_b = get_arg_val<uint32_t>(index++);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
     const uint32_t stride_size_bytes = get_arg_val<uint32_t>(index++);
+    index++;
+    const uint32_t units_per_page_a = get_arg_val<uint32_t>(index++);
+    const uint32_t unit_bytes_a = get_arg_val<uint32_t>(index++);
+    const uint32_t units_per_page_b = get_arg_val<uint32_t>(index++);
+    const uint32_t unit_bytes_b = get_arg_val<uint32_t>(index++);
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
@@ -141,11 +146,12 @@ void kernel_main() {
                             uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
+                                const auto addr_a = rm_unit_address(row_idx_a, units_per_page_a, unit_bytes_a);
                                 noc.async_read(
                                     src,
                                     CoreLocalMem<uint32_t>(curr_l1_a),
                                     chunk.read_len_a,
-                                    {.page_id = row_idx_a, .offset_bytes = chunk.offset_a},
+                                    {.page_id = addr_a.page_id, .offset_bytes = addr_a.offset_bytes + chunk.offset_a},
                                     {});
                                 curr_l1_a += chunk.bytes_a;
                             }
@@ -154,11 +160,12 @@ void kernel_main() {
                             uint32_t curr_l1_b = l1_write_addr_src_b;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_b = row_block_b + k * s_h_b;
+                                const auto addr_b = rm_unit_address(row_idx_b, units_per_page_b, unit_bytes_b);
                                 noc.async_read(
                                     src_b,
                                     CoreLocalMem<uint32_t>(curr_l1_b),
                                     chunk.read_len_b,
-                                    {.page_id = row_idx_b, .offset_bytes = chunk.offset_b},
+                                    {.page_id = addr_b.page_id, .offset_bytes = addr_b.offset_bytes + chunk.offset_b},
                                     {});
                                 curr_l1_b += chunk.bytes_b;
                             }

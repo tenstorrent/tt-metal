@@ -8,6 +8,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_rm_stride.hpp"
 void kernel_main() {
     uint32_t index = 0;
     const uint32_t dst_addr = get_arg_val<uint32_t>(index++);
@@ -26,6 +27,8 @@ void kernel_main() {
     const uint32_t alignment = get_arg_val<uint32_t>(index++);
     const uint32_t tiles_per_row = get_arg_val<uint32_t>(index++);
     const uint32_t stride_size_bytes = get_arg_val<uint32_t>(index++);
+    const uint32_t units_per_page = get_arg_val<uint32_t>(index++);
+    const uint32_t unit_bytes = get_arg_val<uint32_t>(index++);
 
     constexpr auto cb_id_out = tt::CBIndex::c_2;
     constexpr auto dst_args = TensorAccessorArgs<0>();
@@ -79,12 +82,13 @@ void kernel_main() {
 
                             for (uint32_t row = 0; row < limit; ++row) {
                                 const uint32_t row_abs_idx = row_block_base_row + row;
+                                const auto addr = rm_unit_address(row_abs_idx, units_per_page, unit_bytes);
                                 noc.async_write(
                                     dfb_out,
                                     dst,
                                     current_write_len,
                                     {.offset_bytes = row * current_chunk_bytes},
-                                    {.page_id = row_abs_idx, .offset_bytes = current_chunk_offset});
+                                    {.page_id = addr.page_id, .offset_bytes = addr.offset_bytes + current_chunk_offset});
                             }
 
                             noc.async_write_barrier();

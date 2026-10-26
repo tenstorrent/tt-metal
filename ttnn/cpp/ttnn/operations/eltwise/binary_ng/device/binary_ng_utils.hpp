@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/tensor/types.hpp"
 
+#include <array>
 #include <initializer_list>
 #include <optional>
 #include <string>
@@ -155,6 +156,16 @@ inline bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a, const std::optional<tt::tt_metal::TensorSpec>& b, const MemoryConfig& c) {
     return is_native_L1_sharding(a, b.has_value() ? &*b : nullptr, c);
 }
+
+struct RmRowSplit {
+    uint32_t units_per_row = 1;
+    uint32_t unit_width = 0;
+    std::array<uint32_t, 3> units_per_page = {1, 1, 1};
+    bool supported = true;
+};
+
+RmRowSplit get_rm_row_split(
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const tt::tt_metal::TensorSpec& c);
 
 // Null entries are skipped, so a missing operand or a missing preallocated output does not count.
 inline bool any_memory_config_sharded(std::initializer_list<const MemoryConfig*> configs) {

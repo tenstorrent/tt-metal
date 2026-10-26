@@ -10,6 +10,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <algorithm>
@@ -19,6 +20,32 @@
 #include <numeric>
 
 namespace ttnn::operations::unary {
+
+RmPageUnits get_rm_page_units(const tt::tt_metal::TensorSpec& input_spec, const tt::tt_metal::TensorSpec& output_spec) {
+    const uint32_t in_elem = tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(input_spec.data_type()));
+    const uint32_t out_elem = tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output_spec.data_type()));
+    const uint32_t in_width = input_spec.compute_page_size_bytes() / in_elem;
+    const uint32_t out_width = output_spec.compute_page_size_bytes() / out_elem;
+    const uint32_t unit_width = std::gcd(in_width, out_width);
+    if (unit_width == 0) {
+        return {};
+    }
+
+    RmPageUnits units{
+        .input_units_per_page = in_width / unit_width,
+        .output_units_per_page = out_width / unit_width,
+        .input_unit_bytes = unit_width * in_elem,
+        .output_unit_bytes = unit_width * out_elem,
+    };
+    auto alignment = [](const tt::tt_metal::TensorSpec& spec) {
+        return spec.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM
+                   ? tt::tt_metal::hal::get_dram_alignment()
+                   : tt::tt_metal::hal::get_l1_alignment();
+    };
+    units.aligned = (units.input_units_per_page == 1 || units.input_unit_bytes % alignment(input_spec) == 0) &&
+                    (units.output_units_per_page == 1 || units.output_unit_bytes % alignment(output_spec) == 0);
+    return units;
+}
 
 const std::optional<tt::tt_metal::ShardSpec>& get_shard_spec(const tt::tt_metal::TensorSpec& tensor_spec) {
     return tensor_spec.memory_config().shard_spec();

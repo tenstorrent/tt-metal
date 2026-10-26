@@ -9,6 +9,20 @@
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
 
+struct RmUnitAddress {
+    uint32_t page_id;
+    uint32_t offset_bytes;
+};
+
+FORCE_INLINE RmUnitAddress rm_unit_address(uint32_t unit_row, uint32_t units_per_page, uint32_t unit_bytes) {
+#if defined(RM_SPLIT_UNITS) && RM_SPLIT_UNITS
+    if (units_per_page != 1) {
+        return RmUnitAddress{unit_row / units_per_page, (unit_row % units_per_page) * unit_bytes};
+    }
+#endif
+    return RmUnitAddress{unit_row, 0};
+}
+
 // The host passes one byte stride, computed from operand A. A chunk is a run of elements;
 // each circular buffer is pitched by that operand's own element size, so a bf16 row and an
 // fp32 row of the same width land on different byte offsets.

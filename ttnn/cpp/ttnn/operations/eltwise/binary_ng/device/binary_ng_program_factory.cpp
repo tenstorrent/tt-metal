@@ -508,8 +508,22 @@ void for_each_core_runtime_args(
     uint32_t common_row_width_elements = 0;
     uint32_t reader_stride_size_bytes = 0;
     uint32_t writer_stride_size_bytes = 0;
+    uint32_t rm_rows_scale = 1;
+    std::array<uint32_t, 3> rm_units_per_page = {1, 1, 1};
+    std::array<uint32_t, 3> rm_unit_bytes = {0, 0, 0};
 
     if (row_major_inputs) {
+        const auto split = get_rm_row_split(
+            a.tensor_spec(), b.has_value() ? &b->tensor_spec() : nullptr, c.tensor_spec());
+        const bool split_rows = split.units_per_row > 1 && split.supported;
+        if (split_rows) {
+            rm_rows_scale = split.units_per_row;
+            rm_units_per_page = split.units_per_page;
+            rm_unit_bytes = {
+                split.unit_width * a.element_size(),
+                split.unit_width * (b.has_value() ? b->element_size() : a.element_size()),
+                split.unit_width * c.element_size()};
+        }
         const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
         const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
         const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
@@ -526,20 +540,27 @@ void for_each_core_runtime_args(
         if (b.has_value() && bWt_r == cWt_r) {
             common_row_width_elements = std::min(common_row_width_elements, b_row_width_elements_aligned);
         }
+        if (split_rows) {
+            common_row_width_elements = split.unit_width;
+        }
         common_row_width_elements = std::max<uint32_t>(1u, common_row_width_elements);
 
         num_rows_per_tile = std::max<uint32_t>(1u, tile_hw / common_row_width_elements);
         const bool aligned_for_a =
-            (aWt_r == cWt_r) ? ((common_row_width_elements * a.element_size()) == a_aligned_page_size) : true;
-        const bool aligned_for_b = (b.has_value() && bWt_r == cWt_r)
-                                       ? ((common_row_width_elements * b->element_size()) == b_aligned_page_size)
-                                       : true;
-        const bool aligned_for_c = (common_row_width_elements * c.element_size()) == c_aligned_page_size;
+            split_rows ? rm_unit_bytes[0] % a_alignment == 0
+            : (aWt_r == cWt_r) ? ((common_row_width_elements * a.element_size()) == a_aligned_page_size)
+                               : true;
+        const bool aligned_for_b =
+            split_rows ? rm_unit_bytes[1] % b_alignment == 0
+            : (b.has_value() && bWt_r == cWt_r) ? ((common_row_width_elements * b->element_size()) == b_aligned_page_size)
+                                                : true;
+        const bool aligned_for_c = split_rows ? rm_unit_bytes[2] % c_alignment == 0
+                                              : (common_row_width_elements * c.element_size()) == c_aligned_page_size;
         if (!aligned_for_a || !aligned_for_b || !aligned_for_c) {
             num_rows_per_tile = 1;
         }
 
-        row_blocks_per_channel = tt::div_up(cHt_r, num_rows_per_tile);
+        row_blocks_per_channel = tt::div_up(cHt_r * rm_rows_scale, num_rows_per_tile);
         const uint32_t total_row_blocks = cND * cD * cN * cC * row_blocks_per_channel;
         tiles_per_row_width = tt::div_up(common_row_width_elements, tile_hw);
         const uint32_t a_tile_bytes = tile_hw * a.element_size();
@@ -628,8 +649,8 @@ void for_each_core_runtime_args(
     // Noop cores get zero-filled runtime args, sized to match the active kernel variant so unused cores
     // neither inflate the per-kernel max runtime-arg allocation nor change slot count when a core flips
     // between noop and work across differently-shaped cache hits.
-    const size_t noop_reader_len = row_major_inputs ? 26 : 23;
-    const size_t noop_writer_len = row_major_inputs ? 14 : (b.has_value() ? 11 : 12);
+    const size_t noop_reader_len = row_major_inputs ? 30 : 23;
+    const size_t noop_writer_len = row_major_inputs ? 16 : (b.has_value() ? 11 : 12);
     const size_t noop_compute_len = (op_type == BinaryOpType::ISCLOSE) ? 5 : 4;
 
     // Scratch lists reused for every core; each core below reassigns all three in full before fn().
@@ -698,14 +719,16 @@ void for_each_core_runtime_args(
                     cD,
                     cN,
                     cC,
-                    cHt_r,
+                    cHt_r * rm_rows_scale,
                     cND,
                     current_block,
                     num_rows_per_tile,
                     static_cast<uint32_t>(c.buffer()->aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
-                    writer_stride_size_bytes};
+                    writer_stride_size_bytes,
+                    rm_units_per_page[2],
+                    rm_unit_bytes[2]};
             } else {
                 writer_runtime_args = {
                     c.buffer(), c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u};
@@ -737,14 +760,16 @@ void for_each_core_runtime_args(
                     cD,
                     cN,
                     cC,
-                    cHt_r,
+                    cHt_r * rm_rows_scale,
                     cND,
                     current_block,
                     num_rows_per_tile,
                     static_cast<uint32_t>(c.buffer()->aligned_page_size()),
                     c_alignment,
                     tiles_per_row_width,
-                    writer_stride_size_bytes};
+                    writer_stride_size_bytes,
+                    rm_units_per_page[2],
+                    rm_unit_bytes[2]};
             } else {
                 writer_runtime_args = {
                     packed_scalar,
@@ -772,14 +797,14 @@ void for_each_core_runtime_args(
             const uint32_t bD_arg = b.has_value() ? bD : 1u;
             const uint32_t bN_arg = b.has_value() ? bN : 1u;
             const uint32_t bC_arg = b.has_value() ? bC : 1u;
-            const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
+            const uint32_t bHt_r_arg = b.has_value() ? bHt_r * rm_rows_scale : 1u;
             reader_runtime_args = {
                 a.buffer(),
                 c_num_tiles_core,
                 aD,
                 aN,
                 aC,
-                aHt_r,
+                aHt_r * rm_rows_scale,
                 aND,
                 b_addr,
                 bD_arg,
@@ -787,7 +812,7 @@ void for_each_core_runtime_args(
                 bC_arg,
                 bHt_r_arg,
                 bND,
-                cHt_r,
+                cHt_r * rm_rows_scale,
                 cC,
                 cND,
                 current_block,
@@ -799,7 +824,11 @@ void for_each_core_runtime_args(
                 b_alignment,
                 tiles_per_row_width,
                 reader_stride_size_bytes,
-                packed_scalar};
+                packed_scalar,
+                rm_units_per_page[0],
+                rm_unit_bytes[0],
+                rm_units_per_page[1],
+                rm_unit_bytes[1]};
         } else {
             reader_runtime_args = {
                 a.buffer(),
@@ -1224,6 +1253,11 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_rm_kernel_name_and_defines(
             operation_attributes.subtile_broadcast_type, b.has_value(), reader_defines);
         writer_kernel = KernelName::WriterRmNoBcastNg;
+        const auto rm_split =
+            get_rm_row_split(a.tensor_spec(), b.has_value() ? &b->tensor_spec() : nullptr, c.tensor_spec());
+        const char* split_units = rm_split.units_per_row > 1 && rm_split.supported ? "1" : "0";
+        reader_defines["RM_SPLIT_UNITS"] = split_units;
+        writer_defines["RM_SPLIT_UNITS"] = split_units;
     } else if (b.has_value()) {
         kernel_config.reader_kernel = CMAKE_UNIQUE_NAMESPACE::get_reader_kernel_name_and_defines(
             operation_attributes.subtile_broadcast_type, reader_defines);

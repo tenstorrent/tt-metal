@@ -11,6 +11,7 @@
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include <cmath>
 
 using namespace tt::tt_metal;
@@ -615,6 +616,51 @@ bool BinaryNgDeviceOperation::skip_launch(
 
 namespace ttnn::prim {
 
+namespace {
+bool needs_rm_interleaved_detour(
+    const Tensor& a,
+    const Tensor* b,
+    const MemoryConfig& mem_config,
+    const ttnn::Shape& output_shape,
+    DataType output_dtype,
+    const std::optional<Tensor>& output_tensor) {
+    if (a.layout() != Layout::ROW_MAJOR || (b != nullptr && b->layout() != Layout::ROW_MAJOR) ||
+        !operations::binary_ng::any_memory_config_sharded(
+            {&a.memory_config(), b != nullptr ? &b->memory_config() : nullptr, &mem_config})) {
+        return false;
+    }
+    const auto b_spec = b != nullptr ? std::optional<TensorSpec>(b->tensor_spec()) : std::nullopt;
+    if (operations::binary_ng::is_native_L1_sharding(a.tensor_spec(), b_spec, mem_config)) {
+        return false;
+    }
+    const auto c_spec =
+        output_tensor.has_value()
+            ? output_tensor->tensor_spec()
+            : TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::ROW_MAJOR), mem_config));
+    const auto split =
+        operations::binary_ng::get_rm_row_split(a.tensor_spec(), b_spec.has_value() ? &*b_spec : nullptr, c_spec);
+    return split.units_per_row > 1 && !split.supported;
+}
+
+Tensor to_interleaved(const Tensor& t) {
+    return t.is_sharded() ? ttnn::to_memory_config(
+                                t, MemoryConfig(TensorMemoryLayout::INTERLEAVED, t.memory_config().buffer_type()))
+                          : t;
+}
+
+bool pages_by_row(const MemoryConfig& mem_config) {
+    return !mem_config.is_sharded() || mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+}
+
+Tensor reshard_into(
+    const Tensor& interleaved, const MemoryConfig& mem_config, const std::optional<Tensor>& output_tensor) {
+    if (output_tensor.has_value()) {
+        return ttnn::interleaved_to_sharded(interleaved, mem_config, std::nullopt, std::nullopt, output_tensor);
+    }
+    return ttnn::to_memory_config(interleaved, mem_config);
+}
+}  // namespace
+
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -745,6 +791,35 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using memory config from output tensor since it is provided");
     }
 
+    if (needs_rm_interleaved_detour(
+            input_tensor_a,
+            &input_tensor_b,
+            mem_config_actual,
+            operations::binary_ng::compute_broadcasted_output(
+                input_tensor_a.logical_shape(), input_tensor_b.logical_shape()),
+            output_tensor.has_value() ? output_tensor->dtype() : output_dtype.value_or(input_tensor_a.dtype()),
+            output_tensor)) {
+        const bool direct = pages_by_row(mem_config_actual);
+        auto interleaved = binary_ng(
+            to_interleaved(input_tensor_a),
+            to_interleaved(input_tensor_b),
+            binary_op_type,
+            output_dtype,
+            direct ? mem_config_actual : MemoryConfig(TensorMemoryLayout::INTERLEAVED, mem_config_actual.buffer_type()),
+            direct ? output_tensor : std::nullopt,
+            fast_and_approximate_mode,
+            lhs_activations,
+            rhs_activations,
+            post_activations,
+            scalar_value,
+            sub_core_grids,
+            sub_device_id,
+            rtol,
+            atol,
+            equal_nan);
+        return direct ? interleaved : reshard_into(interleaved, mem_config_actual, output_tensor);
+    }
+
     auto operation_attributes = OperationType::operation_attributes_t{
         binary_op_type,
         {lhs_activations.begin(), lhs_activations.end()},
@@ -858,6 +933,44 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     auto output_layout = output_tensor ? output_tensor->layout() : Layout::TILE;
     if (!output_tensor.has_value() && input_tensor_a.layout() == Layout::ROW_MAJOR) {
         output_layout = Layout::ROW_MAJOR;
+    }
+
+    if (input_tensor_a.layout() == Layout::ROW_MAJOR) {
+        auto sharded_mem_config = mem_config_actual;
+        if (mem_config_actual.is_sharded() && !mem_config_actual.shard_spec().has_value() &&
+            !mem_config_actual.nd_shard_spec().has_value()) {
+            sharded_mem_config = MemoryConfig(
+                mem_config_actual.memory_layout(),
+                mem_config_actual.buffer_type(),
+                operations::binary_ng::utils::generate_shard_spec_specless(
+                    input_tensor_a, input_tensor_a.padded_shape(), mem_config_actual.memory_layout(), output_layout));
+        }
+        if (needs_rm_interleaved_detour(
+                input_tensor_a,
+                nullptr,
+                sharded_mem_config,
+                input_tensor_a.logical_shape(),
+                output_tensor.has_value() ? output_tensor->dtype() : output_dtype.value_or(dtype_a),
+                output_tensor)) {
+            const bool direct = pages_by_row(sharded_mem_config);
+            auto interleaved = binary_ng(
+                to_interleaved(input_tensor_a),
+                scalar,
+                binary_op_type,
+                output_dtype,
+                direct ? mem_config_actual
+                       : MemoryConfig(TensorMemoryLayout::INTERLEAVED, mem_config_actual.buffer_type()),
+                direct ? output_tensor : std::nullopt,
+                fast_and_approximate_mode,
+                lhs_activations,
+                rhs_activations,
+                post_activations,
+                std::nullopt,
+                sub_core_grids,
+                sub_device_id,
+                scalar_is_lhs);
+            return direct ? interleaved : reshard_into(interleaved, sharded_mem_config, output_tensor);
+        }
     }
 
     auto operation_attributes = OperationType::operation_attributes_t{

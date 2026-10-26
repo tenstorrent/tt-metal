@@ -5,6 +5,8 @@
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <numeric>
 #include <tt_stl/assert.hpp>
 
 #include <fmt/core.h>
@@ -845,12 +847,55 @@ static bool has_empty_shards(const tt::tt_metal::TensorSpec& t, const MemoryConf
     return num_shards < spec.grid.num_cores();
 }
 
+RmRowSplit get_rm_row_split(
+    const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const tt::tt_metal::TensorSpec& c) {
+    auto element_size = [](const tt::tt_metal::TensorSpec& spec) {
+        return tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(spec.data_type()));
+    };
+    auto page_width = [&](const tt::tt_metal::TensorSpec& spec) {
+        return static_cast<uint32_t>(spec.compute_page_size_bytes() / element_size(spec));
+    };
+    const uint32_t a_width = page_width(a);
+    const uint32_t b_width = b != nullptr ? page_width(*b) : a_width;
+    const uint32_t c_width = page_width(c);
+    if (a_width == c_width && b_width == c_width) {
+        return {};
+    }
+
+    const auto& c_shape = c.padded_shape();
+    const uint32_t row_width = c_shape[-1];
+    const uint32_t unit_width = std::gcd(std::gcd(a_width, b_width), c_width);
+    RmRowSplit split{
+        .units_per_row = unit_width == 0 ? 1 : row_width / unit_width,
+        .unit_width = unit_width,
+        .units_per_page = {a_width / unit_width, b_width / unit_width, c_width / unit_width},
+    };
+    auto same_rows = [&](const tt::tt_metal::TensorSpec& spec) {
+        return spec.padded_shape()[-1] == row_width && spec.padded_shape()[-2] == c_shape[-2];
+    };
+    auto addressable = [&](const tt::tt_metal::TensorSpec& spec, uint32_t width, uint32_t units_per_page) {
+        const uint32_t alignment = spec.memory_config().buffer_type() == BufferType::DRAM
+                                       ? tt::tt_metal::hal::get_dram_alignment()
+                                       : tt::tt_metal::hal::get_l1_alignment();
+        return row_width % width == 0 && (units_per_page == 1 || (unit_width * element_size(spec)) % alignment == 0);
+    };
+    split.supported = unit_width != 0 && same_rows(a) && (b == nullptr || same_rows(*b)) &&
+                      addressable(a, a_width, split.units_per_page[0]) &&
+                      (b == nullptr || addressable(*b, b_width, split.units_per_page[1])) &&
+                      addressable(c, c_width, split.units_per_page[2]);
+    return split;
+}
+
 // the check is based on user facing information, input tensors and output memory config
 // more info may be checked in other places, such as actual output is uneven or not
 // this function is called in both earlier and later stages of the program execution
 bool is_native_L1_sharding(
     const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec* b, const MemoryConfig& c) {
     if (!c.is_sharded()) {
+        return false;
+    }
+    if (a.layout() == Layout::ROW_MAJOR && !a.memory_config().is_sharded() &&
+        (b == nullptr || !b->memory_config().is_sharded())) {
         return false;
     }
 

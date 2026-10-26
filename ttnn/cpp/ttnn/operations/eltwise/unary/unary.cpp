@@ -8,6 +8,9 @@
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_utils.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 
 namespace ttnn::operations::unary::detail {
 
@@ -64,6 +67,57 @@ Tensor unary_impl(
     auto output_memory_config = optional_output_tensor.has_value()
                                     ? optional_output_tensor.value().memory_config()
                                     : memory_config.value_or(input_tensor.memory_config());
+
+    if (input_tensor.layout() == Layout::ROW_MAJOR &&
+        (input_tensor.memory_config().is_sharded() || output_memory_config.is_sharded())) {
+        auto sharded_memory_config = output_memory_config;
+        if (output_memory_config.is_sharded() && !output_memory_config.shard_spec().has_value() &&
+            !output_memory_config.nd_shard_spec().has_value()) {
+            const auto element_size = tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype));
+            sharded_memory_config = MemoryConfig(
+                output_memory_config.memory_layout(),
+                output_memory_config.buffer_type(),
+                generate_output_shard_spec(
+                    input_tensor, input_tensor.padded_shape(), output_memory_config.memory_layout(), element_size));
+        }
+        const auto output_spec =
+            optional_output_tensor.has_value()
+                ? optional_output_tensor->tensor_spec()
+                : tt::tt_metal::TensorSpec(
+                      input_tensor.logical_shape(),
+                      tt::tt_metal::TensorLayout(
+                          output_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), sharded_memory_config));
+        if (!get_shard_specs(input_tensor.tensor_spec(), output_spec).has_value() &&
+            !get_rm_page_units(input_tensor.tensor_spec(), output_spec).aligned) {
+            const auto input_interleaved =
+                input_tensor.memory_config().is_sharded()
+                    ? ttnn::to_memory_config(
+                          input_tensor,
+                          MemoryConfig(TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()))
+                    : input_tensor;
+            const bool output_pages_by_row = !output_memory_config.is_sharded() ||
+                                             output_memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+            auto interleaved = prim::unary(
+                input_interleaved,
+                op_chain,
+                output_dtype,
+                output_pages_by_row ? output_memory_config
+                                    : MemoryConfig(TensorMemoryLayout::INTERLEAVED, output_memory_config.buffer_type()),
+                fp32_dest_acc_en,
+                preserve_fp32_precision,
+                bfp8_pack_precise,
+                output_pages_by_row ? optional_output_tensor : std::nullopt,
+                sub_core_grids);
+            if (output_pages_by_row) {
+                return interleaved;
+            }
+            if (optional_output_tensor.has_value()) {
+                return ttnn::interleaved_to_sharded(
+                    interleaved, sharded_memory_config, std::nullopt, std::nullopt, optional_output_tensor);
+            }
+            return ttnn::to_memory_config(interleaved, sharded_memory_config);
+        }
+    }
 
     return prim::unary(
         input_tensor,

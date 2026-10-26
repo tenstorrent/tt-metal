@@ -32,6 +32,10 @@ void kernel_main() {
     const uint32_t last_chunk_size = get_arg(args::last_chunk_size);
     const uint32_t rows_per_tile = get_arg(args::rows_per_tile);
     const uint32_t total_rows = get_arg(args::total_rows);
+#if SPLIT_PAGES
+    const uint32_t units_per_page = get_arg(args::units_per_page);
+    const uint32_t unit_bytes = get_arg(args::unit_bytes);
+#endif
 
     for (uint32_t block = start_id; block < end_id; ++block) {
         uint32_t base_page = block * rows_per_tile;
@@ -42,11 +46,19 @@ void kernel_main() {
             uint32_t bytes = (j == chunks_per_row - 1) ? last_chunk_size : chunk_size;
             dfb_src.reserve_back(onepage);
             for (uint32_t r = 0; r < actual_rows; ++r) {
+                uint32_t page_id = base_page + r;
+                uint32_t unit_offset = 0;
+#if SPLIT_PAGES
+                if (units_per_page > 1) {
+                    unit_offset = (page_id % units_per_page) * unit_bytes;
+                    page_id /= units_per_page;
+                }
+#endif
                 noc.async_read(
                     src,
                     dfb_src,
                     bytes,
-                    {.page_id = base_page + r, .offset_bytes = j * chunk_size},
+                    {.page_id = page_id, .offset_bytes = unit_offset + j * chunk_size},
                     {.offset_bytes = r * bytes});
             }
             noc.async_read_barrier();

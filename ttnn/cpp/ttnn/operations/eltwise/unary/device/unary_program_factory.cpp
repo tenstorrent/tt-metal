@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/hal.hpp>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -153,7 +154,8 @@ std::vector<std::pair<std::string, uint32_t>> dram_read_args(
 }
 
 // Core-invariant ROW_MAJOR-interleaved chunk constants, passed as the reader/writer args
-// chunks_per_row, chunk_size, last_chunk_size, rows_per_tile and total_rows. All shape-derived.
+// chunks_per_row, chunk_size, last_chunk_size, rows_per_tile, total_rows, units_per_page and unit_bytes. All
+// shape-derived.
 // make_run_args writes them on every dispatch.
 struct RmChunkConstants {
     uint32_t chunks_per_row = 1;
@@ -163,6 +165,10 @@ struct RmChunkConstants {
     uint32_t output_last_chunk_size = 0;
     uint32_t rows_per_tile = 1;
     uint32_t total_rows = 0;
+    uint32_t input_units_per_page = 1;
+    uint32_t output_units_per_page = 1;
+    uint32_t input_unit_bytes = 0;
+    uint32_t output_unit_bytes = 0;
 };
 
 // Enumerates the per-core work split for the current tensors. create_program_artifacts and
@@ -220,9 +226,20 @@ void enumerate_core_rt_args(
     const uint32_t input_tile_bytes = tile_size(input_df);
     const uint32_t output_tile_bytes = tile_size(output_df);
 
-    const uint32_t input_page_bytes = rm_interleaved ? static_cast<uint32_t>(input.buffer()->page_size()) : 0;
-    const uint32_t output_page_bytes = rm_interleaved ? static_cast<uint32_t>(output.buffer()->page_size()) : 0;
+    const auto units = rm_interleaved ? get_rm_page_units(input.tensor_spec(), output.tensor_spec()) : RmPageUnits{};
+    const bool split_pages = units.input_units_per_page > 1 || units.output_units_per_page > 1;
+    const uint32_t input_page_bytes =
+        !rm_interleaved ? 0 : (split_pages ? units.input_unit_bytes : static_cast<uint32_t>(input.buffer()->page_size()));
+    const uint32_t output_page_bytes =
+        !rm_interleaved ? 0
+                        : (split_pages ? units.output_unit_bytes : static_cast<uint32_t>(output.buffer()->page_size()));
     RmChunkConstants k;
+    if (split_pages) {
+        k.input_units_per_page = units.input_units_per_page;
+        k.output_units_per_page = units.output_units_per_page;
+        k.input_unit_bytes = units.input_unit_bytes;
+        k.output_unit_bytes = units.output_unit_bytes;
+    }
     k.chunks_per_row = rm_interleaved ? (input_page_bytes + input_tile_bytes - 1) / input_tile_bytes : 1;
     k.input_chunk_size = input_tile_bytes;
     k.input_last_chunk_size =
@@ -230,12 +247,14 @@ void enumerate_core_rt_args(
     k.output_chunk_size = output_tile_bytes;
     k.output_last_chunk_size =
         rm_interleaved ? output_page_bytes - ((k.chunks_per_row - 1) * output_tile_bytes) : output_tile_bytes;
-    k.total_rows = rm_interleaved ? output.buffer()->num_pages() : 0;
+    k.total_rows = rm_interleaved ? output.buffer()->num_pages() * k.output_units_per_page : 0;
     if (rm_interleaved && input_page_bytes > 0 && input_page_bytes < input_tile_bytes) {
         const uint32_t input_element_size = datum_size(input_df);
         const uint32_t row_width_elements = input_page_bytes / input_element_size;
-        const uint32_t aligned_page_size = static_cast<uint32_t>(input.buffer()->aligned_page_size());
-        if (input_page_bytes == aligned_page_size && row_width_elements > 0) {
+        const uint32_t l1_alignment = hal::get_l1_alignment();
+        const bool unpadded = split_pages ? input_page_bytes % l1_alignment == 0 && output_page_bytes % l1_alignment == 0
+                                          : input_page_bytes == static_cast<uint32_t>(input.buffer()->aligned_page_size());
+        if (unpadded && row_width_elements > 0) {
             k.rows_per_tile = tile_hw / row_width_elements;
         }
     }
@@ -430,15 +449,27 @@ tt::tt_metal::experimental::ProgramRunArgs make_run_args(
             AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, w.core, {{"num_tiles", w.compute_units}});
         });
     if (!has_sharding) {
-        for (auto [kra, chunk_size, last_chunk_size] :
-             {std::tuple{&reader_run_args, chunks.input_chunk_size, chunks.input_last_chunk_size},
-              std::tuple{&writer_run_args, chunks.output_chunk_size, chunks.output_last_chunk_size}}) {
+        for (auto [kra, chunk_size, last_chunk_size, units_per_page, unit_bytes] :
+             {std::tuple{
+                  &reader_run_args,
+                  chunks.input_chunk_size,
+                  chunks.input_last_chunk_size,
+                  chunks.input_units_per_page,
+                  chunks.input_unit_bytes},
+              std::tuple{
+                  &writer_run_args,
+                  chunks.output_chunk_size,
+                  chunks.output_last_chunk_size,
+                  chunks.output_units_per_page,
+                  chunks.output_unit_bytes}}) {
             auto& common = kra->common_runtime_arg_values;
             common["chunks_per_row"] = rm_interleaved ? chunks.chunks_per_row : 0;
             common["chunk_size"] = rm_interleaved ? chunk_size : 0;
             common["last_chunk_size"] = rm_interleaved ? last_chunk_size : 0;
             common["rows_per_tile"] = rm_interleaved ? chunks.rows_per_tile : 0;
             common["total_rows"] = rm_interleaved ? chunks.total_rows : 0;
+            common["units_per_page"] = rm_interleaved ? units_per_page : 0;
+            common["unit_bytes"] = rm_interleaved ? unit_bytes : 0;
         }
     }
     compute_run_args.common_runtime_arg_values["packed_scalar1"] = packed_scalar1;
@@ -603,14 +634,20 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
     const TensorParameter output_param{.unique_id = OUTPUT, .spec = output.tensor_spec(), .relaxations = shape_dynamic};
 
     // --- Reader Kernel ---
-    // Readers and writers take {num_pages, start_id} per node; interleaved ones also take the five chunk fields, the
+    // Readers and writers take {num_pages, start_id} per node; interleaved ones also take the seven chunk fields, the
     // same on every node, as common args.
     Group<std::string> dm_runtime_arg_names = {"num_pages", "start_id"};
     Group<std::string> dm_common_runtime_arg_names;
     if (!has_sharding) {
         dm_common_runtime_arg_names.insert(
             dm_common_runtime_arg_names.end(),
-            {"chunks_per_row", "chunk_size", "last_chunk_size", "rows_per_tile", "total_rows"});
+            {"chunks_per_row",
+             "chunk_size",
+             "last_chunk_size",
+             "rows_per_tile",
+             "total_rows",
+             "units_per_page",
+             "unit_bytes"});
     }
     for (const auto& [name, value] : dram_read_args(plan, input, all_device_cores)) {  // values are set per dispatch
         dm_common_runtime_arg_names.push_back(name);
@@ -618,6 +655,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
 
     const auto arch = input.device()->arch();
 
+    const auto rm_units = rm_interleaved ? get_rm_page_units(input.tensor_spec(), output.tensor_spec()) : RmPageUnits{};
     KernelSpec reader{
         .unique_id = READER,
         .source = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary.cpp",
@@ -626,6 +664,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                  {
                      {"SRC_SHARDED", src_sharded ? "1" : "0"},
                      {"RM_INTERLEAVED", rm_interleaved ? "1" : "0"},
+                     {"SPLIT_PAGES", rm_units.input_units_per_page > 1 ? "1" : "0"},
                      {"READ_BURST", std::to_string(read_burst(plan.flow))},
                      {"DRAM_FLOW", dram_flow ? "1" : "0"},
                      {"WORK_QUEUE", work_queue ? "1" : "0"},
@@ -653,6 +692,7 @@ ttnn::device_operation::ProgramArtifacts UnaryDeviceOperation::ProgramFactory::c
                  {
                      {"DST_SHARDED", dst_sharded ? "1" : "0"},
                      {"RM_INTERLEAVED", rm_interleaved ? "1" : "0"},
+                     {"SPLIT_PAGES", rm_units.output_units_per_page > 1 ? "1" : "0"},
                      {"WRITE_BURST", std::to_string(write_burst(plan.flow))},
                      {"DRAM_FLOW", dram_flow ? "1" : "0"},
                      {"WORK_QUEUE", work_queue ? "1" : "0"},
