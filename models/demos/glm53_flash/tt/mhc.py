@@ -69,6 +69,10 @@ MHC_PRE_BLOCK = int(os.environ.get("GLM53_MHC_PRE_BLOCK", "0"))
 # GLM53_MHC_PREFILL_IMPL=wrap (with GLM53_MHC_IMPL=fast): the composite wrap serves the prefill rows, the fast path
 # the decode tile (A/B of the prefill numerics; see TtMHCSplit)
 MHC_PREFILL_IMPL = os.environ.get("GLM53_MHC_PREFILL_IMPL", "wrap" if MHC_IMPL == "fast" else "")
+# tt-blaze G53F-0187: "fast" routes the PREFILL rows of a TtMHCSplit (the default build) through its fast instance
+# (the exact composite projection + the fused h_mix / post_mix programs: ~2 programs per wrap instead of ~64 ops);
+# "" = the composite wrap (default). Read at call time, so one built model can A/B both.
+MHC_PREFILL_RUNTIME = os.environ.get("GLM53_MHC_PREFILL_RUNTIME", "")
 # A3 (decode ledger): the sublayer's input RMSNorm in the exact decode pre-block. "sharded" = typecast to bf16,
 # interleaved_to_sharded into the width-sharded L1 layout over the 8x4 worker grid, the sharded multicore
 # rms_norm (program config pc_norm), sharded_to_interleaved back (4 ops, 32 cores); "sharded_cast" = the same
@@ -140,6 +144,8 @@ class TtMHCSplit:
         self.decode, self.prefill = decode, prefill
 
     def select(self, x: ttnn.Tensor):
+        if MHC_PREFILL_RUNTIME == "fast":
+            return self.decode
         return self.decode if x.padded_shape[-2] == TILE else self.prefill
 
     @property

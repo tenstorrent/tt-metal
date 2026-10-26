@@ -147,15 +147,38 @@ def _kda_state_host(model: GLM53MeshModel, dec) -> dict[str, torch.Tensor]:
     return {"recurrent_state": rec.contiguous(), "conv_history": conv.contiguous().to(torch.bfloat16)}
 
 
+def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int) -> torch.Tensor:
+    """The first ``nb`` dim-0 rows of a mesh-REPLICATED tensor ``t`` on the host (tt-blaze G53F-0182).
+
+    Default: slice them on device and read one chip's replica (one chip's PCIe read: ~1.5 s per GiB). With
+    ``GLM53F_EXPORT_PARTITION=1``: pad ``nb`` up to a multiple of the chip count D, ``ttnn.mesh_partition`` the slice
+    over dim 0 (a per-device slice, no fabric: chip i keeps rows [i nb/D, (i+1) nb/D)) and read all D parts in one mesh
+    read, concatenated in the mesh's device order -- every chip supplies 1/D of the bytes. Falls back to the default when
+    the padded count exceeds the tensor."""
+    nb = min(nb, int(t.shape[0]))
+    rest = [int(t.shape[i]) for i in range(1, len(t.shape))]
+    D = model.mesh.rows * model.mesh.cols
+    if os.environ.get("GLM53F_EXPORT_PARTITION", "0") == "1" and D > 1:
+        nbp = -(-nb // D) * D
+        if nbp <= int(t.shape[0]):
+            part = ttnn.slice(t, [0, 0, 0, 0], [nbp, *rest])
+            p = ttnn.mesh_partition(part, 0)
+            if part.buffer_address() != t.buffer_address():  # a full-size slice IS t (the live cache): never free it
+                ttnn.deallocate(part)
+            out = ttnn.to_torch(p, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh.device, dim=0))
+            ttnn.deallocate(p)
+            return out[:nb]
+    part = ttnn.slice(t, [0, 0, 0, 0], [nb, *rest])
+    out = model.mesh.to_host(part)  # first replica
+    if part.buffer_address() != t.buffer_address():  # a full-size slice IS t (the live cache): never free it
+        ttnn.deallocate(part)
+    return out
+
+
 def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tensor]:
     """Slot 0's latent rows [S, 512] (identity page table), plus the indexer pool cache and raw rings."""
     c = dec.cache
-    # only the blocks holding rows [0, S) of slot 0 (identity page table): a 1 M-position cache is 1 GiB per layer
-    nb = min(-(-S // 32), int(c.cache.shape[0]))
-    part = ttnn.slice(c.cache, [0, 0, 0, 0], [nb, *[int(c.cache.shape[i]) for i in range(1, len(c.cache.shape))]])
-    lat = model.mesh.to_host(part)  # [nb, 1, 32, 512], first replica
-    ttnn.deallocate(part)
-    lat = lat.reshape(-1, lat.shape[-1])[:S]
+    lat = _replicated_rows_host(model, c.cache, -(-S // 32)).reshape(-1, int(c.cache.shape[-1]))[:S]
     out = {"latent": lat.contiguous().to(torch.bfloat16)}
     idx = getattr(c, "index", None) or getattr(dec, "index", None)
     if idx is None:
@@ -165,10 +188,7 @@ def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tenso
         # widens to fp32 itself): the full 1 M allocation is 262 400 rows = 134 MB per layer as fp32 (G53F-0089)
         np_ = -(-S // 4)
         pb = min(-(-np_ // 32), int(idx.pool_blocks))
-        pc = idx.pool_cache
-        part = ttnn.slice(pc, [0, 0, 0, 0], [pb, *[int(pc.shape[i]) for i in range(1, len(pc.shape))]])
-        pool = model.mesh.to_host(part)
-        ttnn.deallocate(part)
+        pool = _replicated_rows_host(model, idx.pool_cache, pb)
         out["index_pool"] = pool.reshape(-1, pool.shape[-1])[:np_].contiguous().to(torch.bfloat16)
         out["index_ring_k"] = model.mesh.to_host(idx.ring_k)[0, 0].contiguous().float()
         out["index_ring_g"] = model.mesh.to_host(idx.ring_g)[0, 0].contiguous().float()
@@ -222,7 +242,17 @@ def test_prefill_vs_blaze_golden(mesh_device):
     w = load_tensors(snapshot, [FINAL_NORM_KEY, LM_HEAD_KEY], shard_headers(snapshot))
     norm_w, head_w = w[FINAL_NORM_KEY].float(), w[LM_HEAD_KEY].to(torch.bfloat16)
     summary: dict = {}
-    for job in JOBS:
+    from models.demos.glm53_flash.tt import mhc as mhc_mod
+
+    # tt-blaze G53F-0187: GLM53F_PREFILL_MHC_MODES="wrap,fast" grades every job under each prefill mHC path in one process
+    modes = [m for m in os.environ.get("GLM53F_PREFILL_MHC_MODES", "").split(",") if m] or [None]
+    runs = [(job, m) for m in modes for job in JOBS]
+    for job, mode in runs:
+        if mode is not None:
+            mhc_mod.MHC_PREFILL_RUNTIME = "" if mode == "wrap" else mode
+            logger.info(
+                f"[g53f-prefill] ===== prefill mHC mode {mode} (MHC_PREFILL_RUNTIME={mhc_mod.MHC_PREFILL_RUNTIME!r})"
+            )
         meta = _meta(job)
         # the golden rows = prompt + its greedy completion (metadata "token_ids" is the prompt only)
         toks = list(meta["prompt_token_ids"]) + list(meta["completion_token_ids"])
@@ -339,9 +369,11 @@ def test_prefill_vs_blaze_golden(mesh_device):
             ttnn.deallocate(st_out)
             rep.setdefault("seeds", {})[n] = {"next_token": nxt, "golden_next": toks[n], "prefill_s": round(wall, 3)}
             logger.info(f"[g53f-prefill] {job} seed at S'={n}: next {nxt} golden {toks[n]} ({wall:.2f} s)")
-        summary[job] = rep
+        tag = job if mode is None else f"{job}_{mode}"
+        rep["mhc_mode"] = mode
+        summary[tag] = rep
         OUT.mkdir(parents=True, exist_ok=True)
-        (OUT / f"report_{job}.json").write_text(json.dumps(rep, indent=1))
+        (OUT / f"report_{tag}.json").write_text(json.dumps(rep, indent=1))
     logger.info(
         f"[g53f-prefill] SUMMARY {json.dumps({j: {k: v for k, v in r.items() if k != 'layers'} for j, r in summary.items()})}"
     )

@@ -107,6 +107,18 @@ _TRIL: dict[tuple[int, int], ttnn.Tensor] = {}
 # regions kernel at 1 user/row) at the cost of a second copy of the expert weights (9.5 GB per chip in bfp8 on the
 # 8x4: fits up to ~512 K of context, not next to the 1 M caches; 45 layers in bfp4 on a (2,4) block do not fit twice)
 REGIONS_KEEP_STACKED = os.environ.get("GLM53_REGIONS_KEEP_STACKED", "0") == "1"
+# regions path: the region buffer's row count (tt-blaze G53F-0183). "full" = T*k + E_local*32 (every pick could be
+# local); "fit" = the rows this call really fills: the chips' per-expert local counts of every sub-chunk are read to
+# the host ONCE per layer call (one small mesh read), and each sub-chunk's buffer is the largest chip's tile-aligned
+# total + 1 (the dummy slot) rounded up to GLM53_REGIONS_BUF_BUCKET rows. A column holds a quarter of the experts, so
+# ~1/4 of the picks are local and the buffer, its gather, the kernel output's typecast and row-major copy shrink ~3x;
+# the used rows and the dummy slot's role are unchanged, so the result is bitwise the same. Read at call time.
+REGIONS_BUF = os.environ.get("GLM53_REGIONS_BUF", "full")
+# regions path: the two row gathers (tokens into the region buffer, every pick's output row back): "embedding" =
+# ttnn.embedding (row-major reader: one 8 KB read in flight per core); "row" = custom_ops/row_gather (batches of reads
+# in flight, the same bytes; tt-blaze G53F-0186). Read at call time.
+REGIONS_GATHER = os.environ.get("GLM53_REGIONS_GATHER", "embedding")
+REGIONS_BUF_BUCKET = int(os.environ.get("GLM53_REGIONS_BUF_BUCKET", "2048"))
 PREFILL_BLOCK_GROUP = int(os.environ.get("GLM53_PREFILL_BLOCK_GROUP", "32"))
 
 
@@ -634,6 +646,7 @@ class TtRoutedExperts(LightweightModule):
             )
         self.prefill_experts = prefill_experts_mode() if not (dense or stream) else "blocks"
         self._dispatch = None
+        self._row_gather = None  # custom_ops/row_gather, built on first use (GLM53_REGIONS_GATHER=row)
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
         # column c's expert selector: the [E, E_local] block of the identity for its experts
@@ -972,7 +985,7 @@ class TtRoutedExperts(LightweightModule):
             ttnn.deallocate(t)
         # region rows = every pick + up to 31 alignment rows per local expert, rounded up to a tile multiple (the
         # kernel wants x_shape[-2] % 32 == 0; decode with 2 gathered tokens x 72 local experts gave 2320)
-        max_buf = self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
+        max_buf = max_buf or self.dispatch_max_tokens or (-(-(T * k + E_loc * TILE) // TILE) * TILE)
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [1, T, H])
         idx_rm = ttnn.reshape(ttnn.to_layout(idx_u16, ttnn.ROW_MAJOR_LAYOUT), [1, T, k])  # dispatch + reduce ids
         ttnn.deallocate(idx_u16)
@@ -1043,13 +1056,18 @@ class TtRoutedExperts(LightweightModule):
         """The regions path in row sub-chunks of at most REGIONS_T gathered tokens (memory bound of the region buffer
         and the per-pick gather tables at long contexts); one call when T fits."""
         T = x.shape[-2]
+        spans = [(t0, min(t0 + REGIONS_T, T)) for t0 in range(0, T, REGIONS_T)]
+        bufs = (
+            self._fit_bufs(dense_w, spans, idx.shape[-1])
+            if REGIONS_BUF == "fit" and not self.dispatch_max_tokens
+            else None
+        )
         if T <= REGIONS_T:
-            return self._forward_regions(x, dense_w, idx, w)
+            return self._forward_regions(x, dense_w, idx, w, max_buf=bufs[0] if bufs else None)
         outs = []
-        for t0 in range(0, T, REGIONS_T):
-            t1 = min(t0 + REGIONS_T, T)
+        for i, (t0, t1) in enumerate(spans):
             parts = [ttnn.slice(t, [0, 0, t0, 0], [1, 1, t1, t.shape[-1]]) for t in (x, dense_w, idx, w)]
-            outs.append(self._forward_regions(*parts))
+            outs.append(self._forward_regions(*parts, max_buf=bufs[i] if bufs else None))
             for t in parts:
                 ttnn.deallocate(t)
         y = ttnn.concat(outs, dim=-2)
@@ -1057,7 +1075,39 @@ class TtRoutedExperts(LightweightModule):
             ttnn.deallocate(o)
         return y
 
-    def _forward_regions(self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor) -> ttnn.Tensor:
+    def _fit_bufs(self, dense_w: ttnn.Tensor, spans: list[tuple[int, int]], k: int) -> list[int]:
+        """``GLM53_REGIONS_BUF=fit``: each sub-chunk's region-buffer rows from the chips' real local counts (one mesh
+        read per layer call): max over the chips of sum_e ceil(count_e / 32) * 32, plus the dummy slot, rounded up to
+        ``REGIONS_BUF_BUCKET`` and capped at the full size of the padded sub-chunk."""
+        d = self._dispatch
+        E, E_loc = self.E, self.E_local
+        parts = []
+        for t0, t1 in spans:
+            dw = ttnn.slice(dense_w, [0, 0, t0, 0], [1, 1, t1, E]) if len(spans) > 1 else dense_w
+            oh = ttnn.multiply(ttnn.typecast(ttnn.ne(dw, 0.0), ttnn.float32), d["mask"])
+            parts.append(ttnn.sum(oh, dim=-2, keepdim=True))  # [1,1,1,E] exact integer counts
+            ttnn.deallocate(oh)
+            if dw is not dense_w:
+                ttnn.deallocate(dw)
+        c = ttnn.concat(parts, dim=-2) if len(parts) > 1 else parts[0]  # [1,1,n,E]
+        host = ttnn.to_torch(c, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0))  # [D, 1, n, E]
+        for t in parts:
+            ttnn.deallocate(t)
+        if c is not parts[0]:
+            ttnn.deallocate(c)
+        cnt = host.float().reshape(host.shape[0], len(spans), E)
+        used = (torch.ceil(cnt / TILE) * TILE).sum(dim=-1).amax(dim=0)  # [n]: the fullest chip's region rows
+        out = []
+        for (t0, t1), u in zip(spans, used.tolist()):
+            T_pad = -(-(t1 - t0) // TILE) * TILE
+            full = -(-(T_pad * k + E_loc * TILE) // TILE) * TILE
+            b = REGIONS_BUF_BUCKET
+            out.append(min(full, -(-(int(u) + TILE) // b) * b))  # + one tile: the dummy slot and a margin
+        return out
+
+    def _forward_regions(
+        self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor, w: ttnn.Tensor, max_buf: int | None = None
+    ) -> ttnn.Tensor:
         """x [1,1,T,H] bf16 TILE (all gathered tokens), dense_w [1,1,T,E] (the router's dense routing matrix, nonzero
         at the picks), idx / w [1,1,T,k] fp32 TILE -> [1,1,T,H] bf16: the chip's expert partial through the d_p
         ``unified_routed_expert_moe`` kernel on a region buffer built with plain ttnn ops (no fabric):
@@ -1108,7 +1158,7 @@ class TtRoutedExperts(LightweightModule):
         # slot -> token (the picks' slots are distinct; the non-local picks all land on the dummy slot)
         slot_src = ttnn.scatter(self._zero_u32_row(max_buf), -1, pos_rm, self._iota_rows(T, k))  # [1, max_buf]
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
-        buf = ttnn.embedding(slot_src, x_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, max_buf, H] bf16: the regions
+        buf = self._gather_rows(slot_src, x_rm)  # [1, max_buf, H] bf16: the regions
         ttnn.deallocate(slot_src)
         ttnn.deallocate(x_rm)
         counts = ttnn.reshape(ttnn.to_layout(ttnn.typecast(counts_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
@@ -1132,7 +1182,7 @@ class TtRoutedExperts(LightweightModule):
         ttnn.deallocate(out)
         y_rm = ttnn.to_layout(out16, ttnn.ROW_MAJOR_LAYOUT)  # the gather table [max_buf, H] bf16 rows
         ttnn.deallocate(out16)
-        comb = ttnn.embedding(pos_rm, y_rm, layout=ttnn.ROW_MAJOR_LAYOUT)  # [1, T*k, H]: every pick's output row
+        comb = self._gather_rows(pos_rm, y_rm)  # [1, T*k, H]: every pick's output row
         ttnn.deallocate(y_rm)
         ttnn.deallocate(pos_rm)
         comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
@@ -1154,6 +1204,16 @@ class TtRoutedExperts(LightweightModule):
         if T_logical != T:
             y = ttnn.slice(y, [0, 0, 0, 0], [1, 1, T_logical, H])
         return y
+
+    def _gather_rows(self, idx: ttnn.Tensor, table: ttnn.Tensor) -> ttnn.Tensor:
+        """[1, N] uint32 ids into a [R, H] bf16 row-major table -> [1, N, H] row-major (``REGIONS_GATHER``)."""
+        if REGIONS_GATHER == "row":
+            if self._row_gather is None:
+                from models.demos.glm53_flash.custom_ops.row_gather.op import RowGather
+
+                self._row_gather = RowGather(self.device)
+            return self._row_gather(idx, table)
+        return ttnn.embedding(idx, table, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def _rank(self, onehot: ttnn.Tensor) -> ttnn.Tensor:
         """Inclusive cumsum of the [1,1,T,E] fp32 0/1 one-hot over the tokens (``REGIONS_RANK``)."""

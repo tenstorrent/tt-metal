@@ -4,7 +4,9 @@
 
 Builds the seed server's model (the same env: ``seed_server42.sh`` long geometry) and runs ``PROF_RUNS``
 passes of ``prefill_chunked`` over the first ``PROF_N`` ids of ``PROF_IDS``. A pass is ``<chunk>:<instr>[:<n>[:<regions_t>]]``
-(``n``: this pass uses only the first n ids; ``regions_t``: the MoE regions sub-chunk for this pass):
+(``n``: this pass uses only the first n ids; ``regions_t``: the MoE regions sub-chunk for this pass; then optionally
+``:<rank>`` (cumsum | mm), ``:<buf>`` (full | fit, the region buffer rows, G53F-0183) and ``:<gather>`` (embedding |
+row, the regions path's row gathers, G53F-0186)):
 ``instr=1`` wraps every layer call, its attention core, its FFN core (MoE: router / experts / shared) with
 device synchronizations and installs the DSA ``StageTimer`` (the sync points change the overlap, so the
 instrumented total is an upper bound); ``instr=0`` times only whole chunks (the real cost). Rows go to
@@ -148,6 +150,14 @@ def test_prefill_profile(mesh_device):
             moe_mod.REGIONS_T = int(spec[3])
         if len(spec) > 4 and spec[4]:  # regions rank mode (cumsum | mm, G53F-0174)
             moe_mod.REGIONS_RANK = spec[4]
+        if len(spec) > 5 and spec[5]:  # regions buffer rows (full | fit, G53F-0183)
+            moe_mod.REGIONS_BUF = spec[5]
+        if len(spec) > 6 and spec[6]:  # regions row gathers (embedding | row, G53F-0186)
+            moe_mod.REGIONS_GATHER = spec[6]
+        if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast, G53F-0187; tt/mhc.py MHC_PREFILL_RUNTIME)
+            from models.demos.glm53_flash.tt import mhc as mhc_mod
+
+            mhc_mod.MHC_PREFILL_RUNTIME = "" if spec[7] == "wrap" else spec[7]
         logger.info(
             f"[prof] run {p}: chunk {chunk} instr {spec[1]} n {int(prompt.numel())} regions_t {moe_mod.REGIONS_T}"
         )
@@ -199,6 +209,9 @@ def test_prefill_profile(mesh_device):
             instr=int(spec[1]),
             regions_t=moe_mod.REGIONS_T,
             rank=moe_mod.REGIONS_RANK,
+            buf=moe_mod.REGIONS_BUF,
+            gather=moe_mod.REGIONS_GATHER,
+            mhc=__import__("models.demos.glm53_flash.tt.mhc", fromlist=["x"]).MHC_PREFILL_RUNTIME or "wrap",
             n=int(prompt.numel()),
             wall_s=round(wall, 3),
             tok_s=round(int(prompt.numel()) / wall, 1),
@@ -497,10 +510,16 @@ def _export_ab(model, prompt: torch.Tensor, f):
 
     digests = {}
     for spec_ in EXPORT_AB.split(","):
-        rt, _, rk = spec_.partition(":")
-        moe_mod.REGIONS_T = int(rt)
-        if rk:
-            moe_mod.REGIONS_RANK = rk
+        # "rt[:rank[:buf[:export]]]": REGIONS_T, the rank mode, the region-buffer rows (full | fit, G53F-0183) and the
+        # export read (one = chip 0's replica | part = mesh_partition + one mesh read, GLM53F_EXPORT_PARTITION, G53F-0182)
+        fields = spec_.split(":")
+        moe_mod.REGIONS_T = int(fields[0])
+        if len(fields) > 1 and fields[1]:
+            moe_mod.REGIONS_RANK = fields[1]
+        if len(fields) > 2 and fields[2]:
+            moe_mod.REGIONS_BUF = fields[2]
+        if len(fields) > 3 and fields[3]:
+            os.environ["GLM53F_EXPORT_PARTITION"] = "1" if fields[3] == "part" else "0"
         n = EXPORT_N
         out = model.prefill(prompt[:n], user=0, start=0)
         first = model.first_token(out[1], owner_row=out[2])
@@ -508,6 +527,8 @@ def _export_ab(model, prompt: torch.Tensor, f):
             if t is not None:
                 ttnn.deallocate(t)
         per_layer = []
+        ttnn.synchronize_device(model.mesh.device)
+        t_exp = time.perf_counter()
         for dec in model.layers:
             st = _dsa_state_host(model, dec, n) if dec.cache is not None else _kda_state_host(model, dec)
             h = hashlib.sha256()
@@ -515,7 +536,9 @@ def _export_ab(model, prompt: torch.Tensor, f):
                 h.update(key.encode())
                 h.update(st[key].contiguous().view(torch.uint8).numpy().tobytes())
             per_layer.append(h.hexdigest()[:16])
+        export_s = time.perf_counter() - t_exp
         digests[spec_] = (first, per_layer)
+        logger.info(f"[prof] export {spec_}: export + hash {export_s:.3f} s")
         logger.info(f"[prof] export {spec_}: first {first}, layer digests {per_layer[:3]}...")
     ref_key = next(iter(digests))
     ref = digests[ref_key]
@@ -529,6 +552,7 @@ def _export_ab(model, prompt: torch.Tensor, f):
             first_equal=first == ref[0],
             layers_equal=sum(a == b for a, b in zip(per_layer, ref[1])),
             layers=len(per_layer),
+            digests=per_layer,  # all 45 (cross-process gates compare these, G53F-0187)
         )
         f.write(json.dumps(row) + "\n")
         f.flush()
