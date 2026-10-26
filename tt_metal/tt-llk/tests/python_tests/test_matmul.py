@@ -36,6 +36,7 @@ from helpers.test_variant_parameters import (
     MATMUL_ROW_MOP,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
+    MATMUL_ROW_END_FOLD,
     MATMUL_STREAM_NARROW,
     MATMUL_REUSE_DIR,
     MATMUL_STREAM_Z,
@@ -193,6 +194,7 @@ def test_matmul(
             *MATMUL_K_LOOP.for_block(
                 formats, dest_acc, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim
             ),
+            *MATMUL_ROW_END_FOLD.for_block(matmul_dims.ct_dim, matmul_dims.rt_dim),
             *MATMUL_FORM_KEYS.for_block(
                 formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim,
                 math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True,
@@ -419,6 +421,7 @@ def test_matmul_full_sync(math_fidelity, formats, dims):
             *MATMUL_K_LOOP.for_block(
                 formats, DestAccumulation.No, math_fidelity, matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim
             ),
+            *MATMUL_ROW_END_FOLD.for_block(matmul_dims.ct_dim, matmul_dims.rt_dim),
             *MATMUL_FORM_KEYS.for_block(
                 formats, matmul_dims.kt_dim, matmul_dims.ct_dim, matmul_dims.rt_dim
             ),

@@ -37,6 +37,7 @@ from helpers.test_variant_parameters import (
     MATMUL_FORM_KEYS,
     MATMUL_ROW_MOP,
     MATMUL_K_LOOP,
+    MATMUL_ROW_END_FOLD,
     MATMUL_IN1_ALT,
     MATMUL_PACK_BLOCK,
     MATMUL_STREAM_NARROW,
@@ -303,6 +304,7 @@ def test_perf_math_matmul(
                 dest_sync=matmul_config.dest_sync,
                 throttle=throttle,
             ),
+            *MATMUL_ROW_END_FOLD.for_block(matmul_config.tile_dimensions.ct_dim, matmul_config.tile_dimensions.rt_dim),
             *(
                 MATMUL_ROW_MOP.for_block(
                     formats,

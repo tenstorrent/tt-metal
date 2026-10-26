@@ -306,6 +306,21 @@ def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt
 
 
 @dataclass
+class MATMUL_ROW_END_FOLD(TemplateParameter):
+    """Blackhole math: the default row form of a block that walks down the held operand (rt_dim > ct_dim) ends each row on a MVMUL that frees both sources and clears the counters, no SETRWC per row."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define MATMUL_ROW_END_FOLD"
+
+    @staticmethod
+    def for_block(ct_dim: int, rt_dim: int) -> list:
+        """[MATMUL_ROW_END_FOLD()] for blocks with rt_dim > ct_dim (the harness shapes never run SFPU ops between init and call), else []."""
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        return [MATMUL_ROW_END_FOLD()] if rt_dim > ct_dim else []
+
+
+@dataclass
 class MATMUL_K_LOOP(TemplateParameter):
     """Blackhole matmul unpack of the whole inner dimension in one _llk_unpack_AB_matmul_k_ call."""
 

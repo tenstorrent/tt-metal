@@ -41,6 +41,7 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     MATMUL_FORM_KEYS,
     MATMUL_K_LOOP,
+    MATMUL_ROW_END_FOLD,
     MATMUL_IN1_ALT,
     MATMUL_PACK_BLOCK,
     MATMUL_STREAM_NARROW,
@@ -333,6 +334,7 @@ def test_math_matmul(
                 matmul_config.tile_dimensions.in1_tile_r_dim,
                 matmul_config.tile_dimensions.in1_tile_c_dim,
             ),
+            *MATMUL_ROW_END_FOLD.for_block(matmul_config.tile_dimensions.ct_dim, matmul_config.tile_dimensions.rt_dim),
             *MATMUL_FORM_KEYS.for_block(
                 formats,
                 matmul_config.tile_dimensions.kt_dim,

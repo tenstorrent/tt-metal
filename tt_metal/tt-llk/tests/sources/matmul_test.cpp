@@ -243,13 +243,18 @@ constexpr bool matmul_prod_keys = true;
 #else
 constexpr bool matmul_prod_keys = false;
 #endif
+#ifdef MATMUL_ROW_END_FOLD
+constexpr bool matmul_row_end_fold_k = true;
+#else
+constexpr bool matmul_row_end_fold_k = false;
+#endif
 #line 176
 #if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
 #define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
 #define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, true
 #else
-#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k
-#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, false, matmul_reuse_dir_k
+#define MATMUL_MATH_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_INIT_TEMPLATE_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, false, matmul_tile_mop, 0, false, false, matmul_reuse_dir_k, matmul_row_end_fold_k
 #endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
