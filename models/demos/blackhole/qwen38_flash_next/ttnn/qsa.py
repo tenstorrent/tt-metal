@@ -6466,6 +6466,55 @@ class Qwen38TTNNQSA:
         _deallocate(full_hidden)
         return output
 
+    def forward_pack(
+        self,
+        hidden_rows,
+        state: Qwen38TTNNQSAGenericState,
+        chunk_state: Qwen38TTNNQSAChunkState,
+        *,
+        cos,
+        sin,
+        block_start_cos,
+        block_start_sin,
+        pack,
+        constants: Qwen38TTNNQSAChunkConstants,
+    ):
+        """A multi-user pack's QSA layer (``ttnn/pack.py``) over the slab rows at position 0 of the caches: the slab's body
+        without the indexer scoring, mask, top-k and id expansion.  For a bucket row count S <= 1024 every complete block of a
+        user is selected, so the block-shared attention kernel takes the bucket's constant ASCENDING block-id rows
+        (``pack.block_ids``, global ids) and the row index as the (global) query positions (``pack.positions_row``).  ``cos`` /
+        ``sin`` and the block-start rows hold the LOCAL positions of each user's rows (host-written per pack).  The KV write and
+        the compressed-index write are the slab's own contiguous writes at position 0 (``pack.chunk``: the zero position
+        scalar and the compressed tile ids); the index query projection is skipped (its output only fed the scoring).
+        Returns the ``[1,1,rows,640]`` output rows; the input is left for the caller to release."""
+
+        self._validate_generic_state(state)
+        self._validate_chunk_state(chunk_state)
+        rows = constants.rows
+        if not is_slab_rows(rows) or chunk_state.rows != rows or pack.chunk.rows != rows:
+            raise ValueError(f"the QSA pack runs on slab rows, got constants {rows}, state {chunk_state.rows}")
+        if not self._slab_attention_admits(rows, state):
+            raise RuntimeError("the QSA pack needs the block-shared slab attention kernel (sparse_sdpa_tiled)")
+        self._validate_rope_rows(cos, sin, rows, "QSA pack RoPE")
+        self._validate_rope_rows(
+            block_start_cos, block_start_sin, constants.block_tiles * CHUNK_ROWS, "QSA pack block-start RoPE"
+        )
+        full_hidden = self._all_gather_hidden_rows(hidden_rows, constants)
+        raw_key = self._linear_rows(full_hidden, self.weights.index_k, self.index_program_config, None)
+        self.mesh_contract.validate_tensor(raw_key, placement=TensorPlacement.REPLICATED)
+        _require_shape(raw_key, (1, 1, rows, INDEX_HEAD_DIM), "raw index key rows")
+        self._write_compressed_index_chunk(
+            state, chunk_state, raw_key, block_start_cos, block_start_sin, pack.chunk, constants
+        )
+        query, gate, key, value = self._main_projection_rows(full_hidden, None, cos, sin, constants)
+        self._write_packed_kv_chunk(state, chunk_state, key, value, pack.chunk)
+        local_attention = self._block_shared_attention_rows(
+            query, gate, pack.block_ids, pack.positions_row, state, constants
+        )
+        output = self._project_output_rows(local_attention, full_hidden, constants)
+        _deallocate(full_hidden)
+        return output
+
     def copy_kept_tile(
         self, source: Qwen38TTNNQSAChunkState, destination: Qwen38TTNNQSAChunkState, *, tile: int
     ) -> None:

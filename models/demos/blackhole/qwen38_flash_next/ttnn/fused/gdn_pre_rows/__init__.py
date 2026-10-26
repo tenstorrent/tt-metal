@@ -612,8 +612,13 @@ def run(
     *,
     rows: int,
     group_b_cores: int | None = None,
+    seg_chunks: int = 0,
 ):
     """The program on explicit tensors (per-device local shapes).
+
+    ``seg_chunks`` (default 0: off, today's program byte for byte) makes the pass a row of segments of that many tile rows
+    (a multi-user pack: S / 32): the FIR window of a tile row with ``chunk % seg_chunks == 0`` starts from ``history``
+    instead of the previous tile row.  ``history`` is then the pack's zero tile.
 
     Inputs: ``projected`` ``[1, 1, T, 4160]`` bf16 TILE (T = 32 NC), ``history`` ``[1, 1, 32, 2560]`` bf16 (rows 0..2
     = the three rows before row 0), ``taps`` four ``[1, 1, 1, 2560]`` bf16 conv weights, and the three constant
@@ -675,18 +680,28 @@ def run(
         fp.cb_descriptor(index, dtype, fp.TILE_BYTES[dtype], pages, split.a_cores if group == "A" else split.b_cores)
         for _name, index, dtype, pages, group in CBS
     ]
+    if (
+        isinstance(seg_chunks, bool)
+        or type(seg_chunks) is not int
+        or seg_chunks < 0
+        or (seg_chunks and chunks % seg_chunks)
+    ):
+        raise ValueError(f"segment tile rows must divide the {chunks} tile rows, got {seg_chunks!r}")
+    segment_defines = [("SEG_CHUNKS", str(seg_chunks))] if seg_chunks else []
     kernels = [
         fp.reader_kernel(
             KERNELS["reader_qkv"],
             split.a_cores,
             reader_a_cta,
             [(w.core, [*reader_a_addrs, w.count, *pairs(split.a_units, w)]) for w in split.a_work],
+            defines=segment_defines,
         ),
         fp.compute_kernel(
             KERNELS["compute_qkv"],
             split.a_cores,
             [],
             [(w.core, [w.count, *pairs(split.a_units, w)]) for w in split.a_work],
+            defines=segment_defines,
             fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest=False,
             approx=False,

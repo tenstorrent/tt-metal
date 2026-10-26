@@ -2958,6 +2958,7 @@ class Qwen38TracedChain:
             open_seconds=0.0,
             misses_forbidden=False,
             chunk_state=chunk_state,
+            slab_state=slab_state,  # a warm hook (the multi-user pack's state) allocates beside it, before any capture
             sampling=(
                 sampling_extension
                 if sampling_extension is not None

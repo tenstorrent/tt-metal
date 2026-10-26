@@ -46,27 +46,28 @@ def _check(tensor, shape, dtype, name):
         raise ValueError(f"{name} requires TILE {dtype} {shape}, got {tensor.shape}/{tensor.dtype}/{tensor.layout}")
 
 
-def prepare(q, k, v, beta, g, constants, *, rows_total, outputs=None):
+def prepare(q, k, v, beta, g, constants, *, rows_total, outputs=None, heads=HEADS):
+    """``heads`` (default 12 value heads) is the head count of the launch: a multi-user pack feeds 12 * G user-major heads."""
     if type(rows_total) is not int or rows_total < CHUNK or rows_total % CHUNK or rows_total > 4096:
         raise ValueError("Source chunk rows must be a complete multiple of 32 in 32..4096")
     nc = rows_total // CHUNK
     mesh = q.device()
-    _check(q, (HEADS, nc, CHUNK, DIM), ttnn.bfloat16, "q")
-    _check(k, (HEADS, nc, CHUNK, DIM), ttnn.bfloat16, "k")
-    _check(v, (1, 1, rows_total, HEADS * DIM), ttnn.bfloat16, "v")
+    _check(q, (heads, nc, CHUNK, DIM), ttnn.bfloat16, "q")
+    _check(k, (heads, nc, CHUNK, DIM), ttnn.bfloat16, "k")
+    _check(v, (1, 1, rows_total, heads * DIM), ttnn.bfloat16, "v")
     for tensor, name in [(beta, "beta"), (g, "g")]:
-        _check(tensor, (HEADS, nc, CHUNK, 1), ttnn.float32, name)
+        _check(tensor, (heads, nc, CHUNK, 1), ttnn.float32, name)
     shapes = (
-        [(HEADS, nc, CHUNK, DIM)] * 3
-        + [(HEADS, nc, CHUNK, CHUNK), (HEADS, nc, DIM, CHUNK)]
-        + [(HEADS, nc, 1, 1), (HEADS, nc, CHUNK, CHUNK)]
+        [(heads, nc, CHUNK, DIM)] * 3
+        + [(heads, nc, CHUNK, CHUNK), (heads, nc, DIM, CHUNK)]
+        + [(heads, nc, 1, 1), (heads, nc, CHUNK, CHUNK)]
     )
     if outputs is None:
         outputs = tuple(allocate(shape, mesh) for shape in shapes)
     for tensor, shape in zip(outputs, shapes):
         _check(tensor, shape, ttnn.float32, "prep output")
-    inputs = (q, k, ttnn.reshape(v, (1, rows_total, HEADS * DIM)), g, beta, *constants)
-    work = _work(mesh, HEADS * nc)
+    inputs = (q, k, ttnn.reshape(v, (1, rows_total, heads * DIM)), g, beta, *constants)
+    work = _work(mesh, heads * nc)
     cores = fp.core_set(work)
     # Exact source allocation order and sizes: the inverse scratch's L1 layout is part of its control.
     sizes = [4, 4, 4, 1, 1, 1, 1, 1, 32, 1, 1, 1, 1, 1, 4, 4, 8, 4, 4, 4, 1, 32, 4, 4, 4, 16, 16, 16, 16, 16, 16, 32]
@@ -81,7 +82,7 @@ def prepare(q, k, v, beta, g, constants, *, rows_total, outputs=None):
             str(KERNELS / "reader_prep.cpp"),
             cores,
             [*dims, *_accessors(inputs), 1, 0],
-            [(w.core, [w.start, w.count, *addresses, nc, HEADS, HEADS]) for w in work],
+            [(w.core, [w.start, w.count, *addresses, nc, heads, heads]) for w in work],
         ),
         fp.writer_kernel(
             str(KERNELS / "writer_prep.cpp"),
@@ -112,17 +113,17 @@ def prepare(q, k, v, beta, g, constants, *, rows_total, outputs=None):
     return outputs
 
 
-def scan(prepared, initial_state, *, rows_total, outputs=None):
+def scan(prepared, initial_state, *, rows_total, outputs=None, heads=HEADS):
     mesh = prepared[0].device()
     nc = rows_total // CHUNK
-    state = ttnn.reshape(initial_state, (HEADS, DIM, DIM))
-    _check(state, (HEADS, DIM, DIM), ttnn.float32, "initial_state")
+    state = ttnn.reshape(initial_state, (heads, DIM, DIM))
+    _check(state, (heads, DIM, DIM), ttnn.float32, "initial_state")
     if outputs is None:
-        outputs = (allocate((HEADS, nc, CHUNK, DIM), mesh), allocate((HEADS, DIM, DIM), mesh))
+        outputs = (allocate((heads, nc, CHUNK, DIM), mesh), allocate((heads, DIM, DIM), mesh))
     grid = mesh.compute_with_storage_grid_size()
-    nv = max(n for n in (1, 2, 4) if HEADS * n <= grid.x * grid.y)
+    nv = max(n for n in (1, 2, 4) if heads * n <= grid.x * grid.y)
     vt = 4 // nv
-    work = _work(mesh, HEADS * nv)
+    work = _work(mesh, heads * nv)
     assert all(w.count == 1 for w in work)
     cores = fp.core_set(work)
     # Literal source scan CB map. Full-K and value-block scratch preserve pack/re-unpack boundaries.
@@ -186,14 +187,20 @@ def scan(prepared, initial_state, *, rows_total, outputs=None):
     return outputs
 
 
-def chunk_source(q, k, v, beta, g, initial_state, constants, *, rows_total):
-    prepared = prepare(q, k, v, beta, g, constants, rows_total=rows_total)
+def chunk_source(q, k, v, beta, g, initial_state, constants, *, rows_total, heads=HEADS, state_output=None):
+    """``heads`` = 12 * G user-major heads for a pack launch (the default is today's single-user 12).  ``state_output``
+    (a pack's persistent final-state buffer; its first ``heads`` heads are written) replaces the scan's fresh one."""
+    prepared = prepare(q, k, v, beta, g, constants, rows_total=rows_total, heads=heads)
     try:
-        result = scan(prepared, initial_state, rows_total=rows_total)
+        outputs = None
+        if state_output is not None:
+            outputs = (allocate((heads, rows_total // CHUNK, CHUNK, DIM), q.device()), state_output)
+        result = scan(prepared, initial_state, rows_total=rows_total, outputs=outputs, heads=heads)
     finally:
         for tensor in prepared:
             ttnn.deallocate(tensor)
-    return ttnn.reshape(result[0], (HEADS, rows_total, DIM)), ttnn.reshape(result[1], (1, HEADS, DIM, DIM))
+    final = result[1] if state_output is not None else ttnn.reshape(result[1], (1, heads, DIM, DIM))
+    return ttnn.reshape(result[0], (heads, rows_total, DIM)), final
 
 
 def chunk_token_major(q, k, v, g, beta, initial_state, constants, *, rows_total, scale):

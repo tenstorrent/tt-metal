@@ -144,6 +144,58 @@ PLE snapshot, 35 GDN layers each); the 32-row and 128-row passes show no change 
 plan within 1.6 ms of the previous bodies').  The padded plan's hand-off adds the kept-tile and history selections (eager
 matmuls, not timed apart: the hand-off's own wait for the last replay hides them in `handoff_ms`).
 
+## The multi-user pack (P3d-2, `ttnn/pack.py`)
+
+A pack prefills 1..G short prompts in ONE replay of the 2048-row slab body.  A bucket is `(S, G)` with S in {128, 256, 512,
+1024} rows per user and G = 2048 / S users (16 / 8 / 4 / 2); user u owns the rows `[u*S, (u+1)*S)`: its P_u <= S prompt tokens
+(the LAST token included, no forced step) first, the fixed pad token after them; an empty slot is an all-pad segment.  The pack
+runs at position 0 of the chain's dense KV and compressed caches (user u at row base `u*S`, compressed row base `u*S/4`), so
+the slab's KV write and its compressed-index write need no change.  One trace per bucket on the existing slab chunk state's
+buffers.  The body is `Qwen38TTNNTextModel.forward_prefill_pack` (`allocate_pack_state`, `capture_prefill_pack`, `run_pack`);
+the layers' `forward_chunk_generic(..., pack=...)` select the pack variants below, the MoE, norms, collectives and dense
+linears are the slab's own and are bitwise row independent (P3d-1 probe P1).
+
+- GDN: the chunk prims run with heads = 12 x users per launch (`gdn_source_chunk.chunk_source(heads=, state_output=)`, at most
+  8 users per launch: 12 x 9 = 108 is the scan's core cap, so S = 128 runs two launches) from a zero state; q/k/beta/g go
+  user-major by `permute` and v / o by slice + concat (about 0.8 ms per layer).  The conv reader and compute kernels take a
+  JIT define `SEG_CHUNKS = S / 32` (`gdn_pre_rows.run(seg_chunks=)`): a tile row with `chunk % SEG_CHUNKS == 0` takes the
+  history tile (a zero tile) and the `Sel_hist` shift selects like tile row 0.  Undefined (every other caller) the kernels
+  compile to today's program.  Pad rows are an identity update (beta = g = 0 by the host-written mask).
+- QSA: no indexer query projection, scoring, mask, top-k or id expansion.  For S <= 1024 every complete block of a user is
+  selected, so `sparse_sdpa_tiled` reads the bucket's constant block-id rows (global ids `u*S/4 ..`, ASCENDING, then
+  sentinels; `pack.block_id_rows`, guarded by `pack.assert_block_ids_ascending`: the kernel misattends silently for any other
+  order) with the row index as the (global) query positions.  RoPE and the compressed rows' block-start RoPE use the LOCAL
+  positions (host-written rows).  The attention order is ascending where production's is descending score: a tolerance-class
+  change (P3d-1 probe P2), deterministic and independent of the other users.
+- PLE: the FIR history is zeroed at every segment start and one snapshot window is kept per user.
+- Output: the last real row of each user is gathered by an exact 0/1 select (`gather_select`, host-written), the final mixer
+  and LM head run on 32 rows (row u = user u), `read_pack_logits` returns the first G rows (fp32, the LM head's padding
+  columns unmasked).  The chain's position, GDN state and QSA staging are not touched.
+
+The persistent buffers must exist BEFORE the chain captures its traces (a buffer allocated after a capture can sit on a
+trace's intermediates and is overwritten by that trace's replays: a pack replay after any single-user replay then hangs on
+a corrupted block-id / zero-state constant).  `allocate_pack_state` and one eager `run_pack` per bucket therefore run in the
+chain's warm hook (`chain_warm_hook`, `chain.slab_state` is set at the chain's construction for this); the pack traces are
+captured after the open.  Landing sources (what the lane landing reads after a replay; layouts in `ttnn/pack.py`): per GDN layer
+the final recurrent state of every user (`states[launch]`, fp32 `[96, 128, 128]`) and its last three conv-input rows
+(`conv_rows`, rows `32 u ..`), per QSA layer the user's rows of the dense caches, `kept_kv` and `kept_raw`, and the per-user
+PLE snapshot windows.
+
+Device tests (`tests/test_prefill_pack_device.py`, one id per process): `leak_<S>`, `slot_<S>`, `edge_<S>`, `numerics`,
+`timing`, `pad_content`, `profile`; host-side tests in `tests/test_pack_no_device.py`.
+
+Measured on 4x P150 (QB2, 2026-10-26, context 32768, single slot): user A's logits and every landing source (36 GDN states and
+conv rows, 12 QSA layers' K/V, compressed, kept `[v|k]` and raw-key rows over its whole segment, the PLE snapshot; 484 digests
+on four devices) are bit-identical when the other users' tokens and lengths change, when the other slots are empty or hold other
+tokens, between slots (0 / middle / last, across the two GDN launches of S = 128), and when the pad token changes (real rows only);
+the other users' outputs do change.  A user's logits are bit-identical in the 256, 512 and 1024 buckets.  The replay is 546-562 ms
+for every bucket against 644 ms for the 2048-row slab (no indexer); host input preparation 51-63 ms per pack (the PLE n-gram rows
+are 46-58 of it: the same 2048-row lookup and upload as a slab); DRAM per device: 641 MiB of pack state (548 MiB of it the GDN
+landing sources) and 61-74 MiB per bucket trace (259 MiB for the four).  Against the single-user path the first-token logits
+are tolerance class: the pack's per-layer K/V, compressed and GDN-state errors equal the cost plan's against the legacy plan
+(relative Frobenius error 0.006 at the first QSA layer to 0.15 at the last), top-1 agrees on 16 of 22 prompts and on 11 of 11
+with a top-2 margin of 0.5 or more; the six flips have margins of 0.0-0.375.
+
 ## Numerics class
 
 The slab is **tolerance-class** against the chunk bodies: a 2D-multicast matmul accumulates K in another block order

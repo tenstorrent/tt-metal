@@ -1383,6 +1383,53 @@ class Qwen38TTNNDecoderLayer:
         _deallocate_unique(*blocks)
         return residual
 
+    def _inject_ple_pack(self, residual_rows, prepared: Qwen38TTNNPLERowsPreparedInput, rows_state, pack):
+        """A multi-user pack's PLE (``ttnn/pack.py``): :meth:`_inject_ple_slab` with the FIR history zeroed at every segment
+        start (a zero copy before the first 128-row block of each user) and one snapshot window per user (``pack.ple_snapshots[u]``,
+        zeroed first, then the host-written keep / take scalars of ``pack`` pick the block that holds the user's last real row).
+        """
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        rows = _shape(residual_rows)[2]
+        segment = pack.bucket.rows_per_user
+        for snapshot in pack.ple_snapshots[: pack.bucket.users]:
+            if _tensor_key(ttnn.fill(snapshot, 0.0, output_tensor=snapshot)) != _tensor_key(snapshot):
+                raise RuntimeError("PLE pack snapshot reset was not in place")
+        blocks = []
+        for start in range(0, rows, LONG_CHUNK_ROWS):
+            if start % segment == 0:
+                copied = ttnn.copy(pack.ple_zero_history, rows_state.history)
+                if copied is not None and _tensor_key(copied) != _tensor_key(rows_state.history):
+                    raise RuntimeError("PLE pack history reset was not in place")
+            residual_block = ttnn.slice(
+                residual_rows,
+                (0, 0, start, 0),
+                (1, RESIDUAL_BRANCHES, start + LONG_CHUNK_ROWS, LOCAL_HIDDEN_SIZE),
+                memory_config=dram,
+            )
+            rows_block = ttnn.slice(
+                prepared.embedding_rows,
+                (0, 0, start, 0),
+                (1, 1, start + LONG_CHUNK_ROWS, LOCAL_HIDDEN_SIZE),
+                memory_config=dram,
+            )
+            rows_block.update_tensor_topology(prepared.embedding_rows.tensor_topology())
+            block_prepared = Qwen38TTNNPLERowsPreparedInput(rows_block, (), ())
+            blocks.append(self.ple.inject_rows(residual_block, block_prepared, rows_state))
+            self.ple.snapshot_window(
+                rows_state,
+                start // LONG_CHUNK_ROWS,
+                snapshot=pack.ple_snapshots[start // segment],
+                keep=pack.ple_keep,
+                take=pack.ple_take,
+            )
+            self.ple.commit_rows_full(rows_state)
+            block_prepared.release()
+        _deallocate_unique(residual_rows)
+        residual = ttnn.concat(blocks, dim=2, memory_config=dram)
+        _deallocate_unique(*blocks)
+        return residual
+
     def forward_chunk_generic(
         self,
         residual_rows,
@@ -1486,6 +1533,88 @@ class Qwen38TTNNDecoderLayer:
         residual = self.mlp_gr.write_rows(mlp_result.hidden_sharded, mlp_gr_state)
         _deallocate_unique(mlp_result.hidden_sharded, mlp_gr_state.residual, mlp_gr_state.injection)
         self._validate_residual_rows(residual, label="chunk decoder-layer output residual rows", rows=rows)
+        return residual
+
+    def forward_pack_generic(
+        self,
+        residual_rows,
+        generic_state: Qwen38TTNNDecoderLayerGenericState,
+        chunk_state: Qwen38TTNNDecoderLayerChunkState,
+        *,
+        prepared_ple_rows: Qwen38TTNNPLERowsPreparedInput | None,
+        rope_rows,
+        qsa_chunk_constants: qsa_module.Qwen38TTNNQSAChunkConstants,
+        pack,
+    ):
+        """Advance the slab rows of one multi-user pack through this layer (``ttnn/pack.py``; ``pack`` is the pack state with
+        its bucket selected): :meth:`forward_chunk_generic`'s slab body with the pack variants of the PLE (history reset at
+        every segment start, one snapshot window per user), the GDN layer (segment-aware conv, user-major prims from a zero
+        state, landing sources in ``pack.layers[i]``, nothing committed into the chain's state) and the QSA layer (no
+        indexer, constant ascending block ids).  The MoE and the residual plumbing are the slab's own.  The input rows are
+        consumed; returns the ``[1,4,rows,640]`` residual rows."""
+
+        rows = chunk_state.rows
+        if not is_slab_rows(rows):
+            raise ValueError(f"the multi-user pack runs on a slab, got {rows} rows")
+        self._validate_residual_rows(residual_rows, label="pack residual rows", rows=rows)
+        self._validate_generic_state(generic_state)
+        self._validate_chunk_state(chunk_state)
+        if self.ple is not None:
+            if prepared_ple_rows is None:
+                raise ValueError("the PLE layer's pack needs its prepared persistent PLE rows")
+            generic_state.ple.token_context = None
+            residual = self._inject_ple_pack(residual_rows, prepared_ple_rows, chunk_state.ple, pack)
+        else:
+            if prepared_ple_rows is not None:
+                raise ValueError("prepared PLE rows were supplied outside checkpoint layer 1")
+            residual = residual_rows
+        self._validate_residual_rows(residual, label="pack PLE-injected residual rows", rows=rows)
+
+        attention_input, attention_gr_state = self.attention_gr.read_rows(residual)
+        self._validate_block_rows(attention_input, label="pack attention GR read", rows=rows)
+        if isinstance(self.attention, Qwen38TTNNGDN):
+            attention_hidden = self.attention.forward_pack(
+                attention_input, generic_state.attention, chunk_state.attention, pack, pack.layers[self.layer_index]
+            )
+            persistent_hidden = True  # the persistent rows output: never deallocated here
+        else:
+            if rope_rows is None or qsa_chunk_constants is None:
+                raise ValueError("pack QSA needs the RoPE rows and the chunk constants")
+            attention_hidden = self.attention.forward_pack(
+                attention_input,
+                generic_state.attention,
+                chunk_state.attention,
+                cos=rope_rows.cos,
+                sin=rope_rows.sin,
+                block_start_cos=rope_rows.block_start_cos,
+                block_start_sin=rope_rows.block_start_sin,
+                pack=pack,
+                constants=qsa_chunk_constants,
+            )
+            persistent_hidden = False
+        _deallocate_unique(attention_input)
+        self._validate_block_rows(attention_hidden, label="pack attention output", rows=rows)
+
+        residual = self.attention_gr.write_rows(attention_hidden, attention_gr_state)
+        _deallocate_unique(
+            None if persistent_hidden else attention_hidden,
+            attention_gr_state.residual,
+            attention_gr_state.injection,
+        )
+        self._validate_residual_rows(residual, label="pack post-attention residual rows", rows=rows)
+
+        mlp_input, mlp_gr_state = self.mlp_gr.read_rows(residual)
+        self._validate_block_rows(mlp_input, label="pack MLP GR read", rows=rows)
+        with self.expert_streamer.layer(self.layer_index, namespace=self.namespace.value) as packed_experts:
+            if not isinstance(packed_experts, tuple) or len(packed_experts) != 2:
+                raise RuntimeError("BF4 streamer must yield exactly (packed_w0_w1, packed_w2)")
+            mlp_result = chunk_state.moe.forward(mlp_input, packed_experts[0], packed_experts[1])
+        _deallocate_unique(mlp_input)
+        self._validate_block_rows(mlp_result.hidden_sharded, label="pack routed/shared MoE output", rows=rows)
+
+        residual = self.mlp_gr.write_rows(mlp_result.hidden_sharded, mlp_gr_state)
+        _deallocate_unique(mlp_result.hidden_sharded, mlp_gr_state.residual, mlp_gr_state.injection)
+        self._validate_residual_rows(residual, label="pack decoder-layer output residual rows", rows=rows)
         return residual
 
     def hand_off_padded_tail(

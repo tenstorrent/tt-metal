@@ -1814,19 +1814,27 @@ class Qwen38TTNNPLE:
         _copy_inplace(history, rows_state.history, label="PLE rows history")
         _deallocate(history)
 
-    def snapshot_window(self, rows_state: Qwen38TTNNPLERowsState, block: int) -> None:
+    def snapshot_window(
+        self, rows_state: Qwen38TTNNPLERowsState, block: int, *, snapshot=None, keep=None, take=None
+    ) -> None:
         """The slab's padded-pass carry: ``snapshot <- snapshot * keep[block] + [history | normalized] * take[block]``
         (called after the block's injection, before its history commit).  The host-written scalars are 1.0 / 0.0 in an
-        exact multiply and add, so only the block that holds the last real row lands in the snapshot, bit for bit."""
+        exact multiply and add, so only the block that holds the last real row lands in the snapshot, bit for bit.
+
+        A multi-user pack passes one user's own ``snapshot`` buffer and its host-written ``keep`` / ``take`` scalar
+        tuples (indexed by the 128-row block of the whole pack); the defaults are the rows state's."""
 
         rows_state.validate()
         dram = ttnn.DRAM_MEMORY_CONFIG
+        snapshot = rows_state.snapshot if snapshot is None else snapshot
+        keep = rows_state.snapshot_keep if keep is None else keep
+        take = rows_state.snapshot_take if take is None else take
         window = self._conv_window_rows(rows_state)
-        kept = ttnn.multiply(rows_state.snapshot, rows_state.snapshot_keep[block], memory_config=dram)
-        taken = ttnn.multiply(window, rows_state.snapshot_take[block], memory_config=dram)
+        kept = ttnn.multiply(snapshot, keep[block], memory_config=dram)
+        taken = ttnn.multiply(window, take[block], memory_config=dram)
         _deallocate(window)
-        landed = ttnn.add(kept, taken, output_tensor=rows_state.snapshot, fast_and_approximate_mode=False)
-        if landed is not None and _tensor_key(landed) != _tensor_key(rows_state.snapshot):
+        landed = ttnn.add(kept, taken, output_tensor=snapshot, fast_and_approximate_mode=False)
+        if landed is not None and _tensor_key(landed) != _tensor_key(snapshot):
             raise RuntimeError("PLE rows snapshot did not land in its persistent buffer")
         _deallocate(kept, taken)
 

@@ -2839,6 +2839,54 @@ class Qwen38TTNNGDN:
         )
         _deallocate(qkv)
 
+    def _slab_pack_conv_rows(self, projected, pack, layer_pack) -> None:
+        """A multi-user pack's lane FIR histories: ``layer_pack.conv_rows`` ``[1, 1, 512, 2560]`` <- the host-written stacked
+        ``pack.conv_select`` ``[1, 1, 512, 2048]`` against the projection's q|k|v columns (an exact 0/1 selection, as
+        ``_slab_pad_history``): rows ``32 u .. 32 u + 2`` are user u's last three conv-input rows, oldest first."""
+
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        rows = _shape(projected)[2]
+        qkv = ttnn.slice(projected, (0, 0, 0, 0), (1, 1, rows, QKV_WIDTH_PER_DEVICE), memory_config=dram)
+        _retag_head_shard_after_reshape(qkv, reference=projected, shard_dim=3)
+        self._select_rows(
+            pack.conv_select,
+            qkv,
+            memory_config=dram,
+            label="GDN pack conv rows select",
+            output_tensor=layer_pack.conv_rows,
+        )
+        _deallocate(qkv)
+
+    def forward_pack(
+        self, hidden_rows, state: Qwen38TTNNGDNState, rows_state: Qwen38TTNNGDNRowsState, pack, layer_pack
+    ):
+        """The multi-user pack's GDN layer (``ttnn/pack.py``): the slab's gather, projection and out-projection around the pack
+        body (segment-aware conv, user-major prims from a zero state, landing sources in ``layer_pack``).  Nothing is
+        committed: the chain's recurrent state and history are not touched.  Returns the persistent output rows."""
+
+        self._validate_state(state)
+        rows = self._validate_rows_state(rows_state)
+        if not (is_slab_rows(rows) and rows_state.fused_prefill):
+            raise RuntimeError("the multi-user pack runs on a slab rows state with the fused prefill rows buffers")
+        full_hidden = self._all_gather_rows(hidden_rows, rows)
+        constants_of = rows_state.constants
+        projected = self._slab_projection(full_hidden, rows_state)
+        gated = fused.gdn_prefill_rows.slab_body_pack(
+            self,
+            projected,
+            self.weights.conv_taps,
+            self.weights.norm,
+            (constants_of.eye, constants_of.tril, constants_of.ones, constants_of.masks),
+            fused.gdn_prefill_rows.constants(self),
+            rows_state,
+            pack,
+            layer_pack,
+            rows=rows,
+        )
+        _deallocate(projected)
+        fused.program.stamp_topology(gated, full_hidden, 3)
+        return self._slab_out_projection(gated, full_hidden, rows_state)
+
     def _conv_window_rows(self, rows_state: Qwen38TTNNGDNRowsState):
         """``[history tile | qkv tiles]``: whole tiles on dim 2 (no row padding, so a plain tile concat).
 

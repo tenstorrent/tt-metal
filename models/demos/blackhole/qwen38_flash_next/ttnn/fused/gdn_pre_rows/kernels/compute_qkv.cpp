@@ -50,7 +50,15 @@
 
 using namespace ckernel;
 
+// Multi-user pack: see reader_qkv.cpp (host define SEG_CHUNKS; undefined = only tile row 0 starts from the history
+// tile).
+#ifndef SEG_CHUNKS
+#define SEG_CHUNKS 0
+#endif
+
 namespace {
+constexpr uint32_t SEGMENT_CHUNKS = SEG_CHUNKS;
+constexpr bool segment_start(uint32_t chunk) { return SEGMENT_CHUNKS == 0 ? chunk == 0 : chunk % SEGMENT_CHUNKS == 0; }
 constexpr uint32_t CB_IN = 0, CB_SEL = 1, CB_TAP = 2, CB_TAPFULL = 3, CB_SHIFT = 4, CB_CONV = 5, CB_X = 6;
 constexpr uint32_t CB_XMM2 = 7, CB_SCALER = 8, CB_EPS = 9, CB_SCALE = 10, CB_EX2 = 11, CB_EX2PE = 12;
 constexpr uint32_t CB_UNIT = 13, CB_OUT = 14, CB_MASK = 15, CB_MASKFULL = 16;
@@ -100,7 +108,7 @@ ALWI void shifted_taps(uint32_t chunk, uint32_t d) {
     cb_reserve_back(CB_SHIFT, HISTORY_ROWS);
     for (uint32_t tap = 0; tap < HISTORY_ROWS; ++tap) {
         const uint32_t shift = HISTORY_ROWS - tap;
-        const uint32_t before = select_index(chunk == 0 ? SELECT_HIST : SELECT_PREV, shift);
+        const uint32_t before = select_index(segment_start(chunk) ? SELECT_HIST : SELECT_PREV, shift);
         tile_regs_acquire();
         matmul_tiles(CB_SEL, CB_IN, before, d, dst0);
         matmul_tiles(CB_SEL, CB_IN, select_index(SELECT_CUR, shift), HEAD_TILES + d, dst0);

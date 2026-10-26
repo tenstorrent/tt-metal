@@ -53,6 +53,7 @@ from models.demos.blackhole.qwen38_flash_next import mrope, vision_splice
 from models.demos.blackhole.qwen38_flash_next.config import CONFIG_SHA256, LAYER_PATTERN, Qwen38Config
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import moe as moe_module
+from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROW_COUNTS,
@@ -724,6 +725,23 @@ class Qwen38TTNNChunkHostInputs:
     rope_rows: tuple[Any, Any, Any, Any] = ()
     feature_rows: Any | None = None
     image_lanes: int = 0
+
+
+@dataclass(frozen=True)
+class Qwen38TTNNPackHostInputs:
+    """One multi-user pack's inputs prepared on the host (:meth:`Qwen38TTNNTextModel.prepare_pack_inputs`, no device call):
+    host tensors for :meth:`Qwen38TTNNTextModel.upload_pack_inputs`."""
+
+    rows_per_user: int
+    lengths: tuple[int, ...]
+    token_rows: Any
+    embedding_rows: Any
+    rope_rows: tuple[Any, Any, Any, Any]
+    row_mask_c: Any
+    conv_select: Any
+    gather_select: Any
+    ple_keep: tuple[Any, ...]
+    ple_take: tuple[Any, ...]
 
 
 @dataclass
@@ -3199,6 +3217,405 @@ class Qwen38TTNNTextModel:
                 self.forward_prefill_chunk_generic(chunk_state, state, gdn_step_anchor=gdn_step_anchor, mtp=mtp)
             ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=cq_id)
         return trace_id
+
+    # ------------------------------------------------------------------ multi-user packed slab (P3d-2)
+    # A pack runs 1..G users, each in its own S-row segment of the 2048-row slab, at position 0 of the chain's caches
+    # (``ttnn/pack.py`` has the layout and the landing sources).  One trace per bucket on the slab chunk state's buffers.
+
+    def allocate_pack_state(
+        self,
+        state: Qwen38TTNNTextModelGenericState,
+        chunk_state: Qwen38TTNNTextModelChunkState,
+        *,
+        buckets: Sequence[int] = pack_module.PACK_BUCKETS,
+    ) -> pack_module.PackState:
+        """The pack's persistent buffers and constants (before any pack capture; DRAM: see ``ttnn/pack.py``): per GDN layer
+        the landing sources (final states for the largest launch count of the buckets, the stacked conv rows), the zero
+        history tile and zero initial states, the PLE zero history and per-user snapshots with their keep / take scalars,
+        the host-written masks and selects, the QSA inputs at position 0 and each bucket's constant block ids."""
+
+        self._validate_generic_state(state)
+        self._validate_chunk_state(chunk_state)
+        if chunk_state.rows != pack_module.PACK_ROWS:
+            raise ValueError(f"the pack runs on the {pack_module.PACK_ROWS}-row slab, got {chunk_state.rows} rows")
+        if self.layers[PLE_CHECKPOINT_LAYER].ple is None:
+            raise RuntimeError("checkpoint layer 1 PLE owner is unavailable")
+        mesh, contract = self.mesh_device, self.mesh_contract
+        bucket_table = {rows: pack_module.pack_bucket(rows) for rows in buckets}
+        launches = max(len(bucket.launches) for bucket in bucket_table.values())
+        heads = sorted(
+            {gdn_module.VALUE_HEADS_PER_DEVICE * count for b in bucket_table.values() for _f, count in b.launches}
+        )
+        owned: list[Any] = []
+
+        def keep(tensor):
+            owned.append(tensor)
+            return tensor
+
+        def zero(shape, dtype, shard_dim, label):
+            return keep(
+                gdn_module._allocate_head_sharded_zero(
+                    mesh, contract, local_shape=shape, dtype=dtype, shard_dim=shard_dim, label=label
+                )
+            )
+
+        try:
+            layers = []
+            for index, layer in enumerate(self.layers):
+                if layer.layer_type is Qwen38TTNNLayerType.GDN:
+                    layers.append(
+                        pack_module.GDNPackLayer(
+                            states=tuple(
+                                zero((96, 128, 128), ttnn.float32, 0, f"pack GDN {index} final state {launch}")
+                                for launch in range(launches)
+                            ),
+                            conv_rows=zero(
+                                (1, 1, pack_module.CONV_SELECT_ROWS, gdn_module.QKV_WIDTH_PER_DEVICE),
+                                ttnn.bfloat16,
+                                3,
+                                f"pack GDN {index} conv rows",
+                            ),
+                        )
+                    )
+                else:
+                    layers.append(None)
+            zero_history = zero(
+                (1, 1, ttnn.TILE_SIZE, gdn_module.QKV_WIDTH_PER_DEVICE), ttnn.bfloat16, 3, "pack GDN zero history"
+            )
+            zero_states = {
+                count: zero((1, count, 128, 128), ttnn.float32, 1, f"pack GDN zero state {count}") for count in heads
+            }
+            images = pack_module.pack_input_images(next(iter(bucket_table.values())), [])
+
+            def replicated(host, dtype, label):
+                return keep(gdn_module._upload_replicated_constant(mesh, contract, host, dtype, label=label))
+
+            row_mask_c = replicated(images["row_mask_c"], ttnn.float32, "pack row mask")
+            conv_select = replicated(
+                images["conv_select"].reshape(1, 1, *images["conv_select"].shape), ttnn.bfloat16, "pack conv select"
+            )
+            gather_select = replicated(
+                images["gather_select"].reshape(1, 1, *images["gather_select"].shape),
+                ttnn.bfloat16,
+                "pack gather select",
+            )
+            mapper = ttnn.ShardTensor2dMesh(mesh, mesh_shape=MESH_SHAPE, dims=(None, 3))
+
+            def ple_zero(token_rows):
+                return keep(
+                    ttnn.from_torch(
+                        torch.zeros((1, token_rows, RESIDUAL_BRANCHES, HIDDEN_SIZE), dtype=torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=mapper,
+                    )
+                )
+
+            def scalar(value):
+                return keep(
+                    ttnn.from_torch(
+                        torch.full((1, 1, 1, 1), value, dtype=torch.bfloat16),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=replicate_tensor_2d_mesh_mapper(mesh),
+                    )
+                )
+
+            ple_blocks = pack_module.PACK_ROWS // pack_module.PLE_BLOCK_ROWS
+            ple_zero_history = ple_zero(pack_module.PLE_HISTORY_ROWS)
+            ple_snapshots = tuple(
+                ple_zero(pack_module.PLE_HISTORY_ROWS + pack_module.PLE_BLOCK_ROWS)
+                for _ in range(pack_module.PACK_MAX_USERS)
+            )
+            ple_keep = tuple(scalar(1.0) for _ in range(ple_blocks))
+            ple_take = tuple(scalar(0.0) for _ in range(ple_blocks))
+            # the QSA inputs at position 0: the zero position scalar, the compressed tile ids, the row index as positions
+            zero_position = keep(
+                qsa_module._upload_uint32(mesh, contract, torch.zeros(1, 1, 1, 1), layout=ttnn.ROW_MAJOR_LAYOUT)
+            )
+            constants = chunk_state.qsa_chunk_constants
+            tile_ids, complete_col, positions_row = qsa_module._derive_slab_tile_inputs(zero_position, constants)
+            _deallocate_unique(complete_col)
+            keep(tile_ids)
+            keep(positions_row)
+            chunk = qsa_module.Qwen38TTNNQSAChunkInputs(
+                rows=chunk_state.rows,
+                kv_block_start=zero_position,
+                block_index_i32=(),
+                indexer_neg_mask=None,
+                row_keep_bits=None,
+                row_fill=None,
+                compressed_tile_i32=tile_ids,
+                q_positions_row=positions_row,
+            )
+            block_ids = {}
+            for rows, bucket in bucket_table.items():
+                host = pack_module.block_id_rows(bucket)
+                block_ids[rows] = keep(
+                    qsa_module._upload_uint32(
+                        mesh,
+                        contract,
+                        host.reshape(1, 1, *host.shape),
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                )
+            compute_config = ttnn.init_device_compute_kernel_config(
+                mesh.arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
+            return pack_module.PackState(
+                chunk_state=chunk_state,
+                buckets=bucket_table,
+                layers=tuple(layers),
+                zero_history=zero_history,
+                zero_states=zero_states,
+                row_mask_c=row_mask_c,
+                conv_select=conv_select,
+                gather_select=gather_select,
+                ple_zero_history=ple_zero_history,
+                ple_snapshots=ple_snapshots,
+                ple_keep=ple_keep,
+                ple_take=ple_take,
+                chunk=chunk,
+                positions_row=positions_row,
+                block_ids=block_ids,
+                zero_position=zero_position,
+                gather_compute_config=compute_config,
+                owned=tuple(owned),
+            )
+        except BaseException:
+            _deallocate_unique(*owned)
+            raise
+
+    def release_pack_state(self, pack_state: pack_module.PackState) -> None:
+        _deallocate_unique(*pack_state.owned)
+
+    def prepare_pack_inputs(
+        self,
+        pack_state: pack_module.PackState,
+        rows_per_user: int,
+        users: Sequence[Sequence[int]],
+        *,
+        pad_token: int = pack_module.PACK_PAD_TOKEN_ID,
+        timing: dict | None = None,
+    ):
+        """The host half of a pack's inputs (no device call): the slab's token rows and n-gram rows (each user's own fresh
+        context), the RoPE rows of the LOCAL positions, and the length-dependent masks and selects.  ``users`` are the prompt
+        token id lists (1..S tokens, text only), slot u = users[u]; the slots past ``len(users)`` are empty.
+        ``timing`` (a dict) receives the milliseconds of each part (``tokens``, ``ple``, ``rope``, ``images``)."""
+
+        clock = time.perf_counter
+        marks = [clock()]
+        bucket = pack_state.buckets[rows_per_user]
+        chunk_state = pack_state.chunk_state
+        lengths = [len(tokens) for tokens in users]
+        if any(n < 1 for n in lengths):
+            raise ValueError("a pack user holds at least one prompt token")
+        padded = pack_module.pack_token_rows(bucket, users, pad_token)
+        flat = [token for row in padded for token in row]
+        if vision_splice.image_lanes(flat):
+            raise ValueError("the pack serves text prompts only")
+        ple = self.layers[PLE_CHECKPOINT_LAYER].ple
+        token_rows = ttnn.from_torch(
+            vision_splice.sentinel_token_rows(self.model_io.embedding.host_token_rows(flat), []),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+        )
+        marks.append(clock())
+        rows, _contexts = ple.host_rows_lanes(padded, [None] * bucket.users)
+        embedding_rows = ttnn.from_torch(
+            rows.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, mesh_shape=MESH_SHAPE, dims=(None, 3)),
+        )
+        marks.append(clock())
+        rope_rows = self.chunk_rope_host_rows(chunk_state, pack_module.local_positions(bucket))
+        marks.append(clock())
+        images = pack_module.pack_input_images(bucket, lengths)
+
+        def host(value, dtype, shape=None):
+            value = value if shape is None else value.reshape(shape)
+            return ttnn.from_torch(
+                value.contiguous(),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
+            )
+
+        scalars = lambda values: tuple(  # noqa: E731
+            host(torch.full((1, 1, 1, 1), float(v), dtype=torch.bfloat16), ttnn.bfloat16) for v in values
+        )
+        prepared = Qwen38TTNNPackHostInputs(
+            rows_per_user=rows_per_user,
+            lengths=tuple(lengths),
+            token_rows=token_rows,
+            embedding_rows=embedding_rows,
+            rope_rows=rope_rows,
+            row_mask_c=host(images["row_mask_c"], ttnn.float32),
+            conv_select=host(images["conv_select"], ttnn.bfloat16, (1, 1, *images["conv_select"].shape)),
+            gather_select=host(images["gather_select"], ttnn.bfloat16, (1, 1, *images["gather_select"].shape)),
+            ple_keep=scalars(images["ple_keep"].tolist()),
+            ple_take=scalars(images["ple_take"].tolist()),
+        )
+        marks.append(clock())
+        if timing is not None:
+            timing.update(
+                tokens_ms=(marks[1] - marks[0]) * 1e3,
+                ple_ms=(marks[2] - marks[1]) * 1e3,
+                rope_ms=(marks[3] - marks[2]) * 1e3,
+                images_ms=(marks[4] - marks[3]) * 1e3,
+            )
+        return prepared
+
+    def upload_pack_inputs(self, pack_state: pack_module.PackState, prepared) -> None:
+        """The device half: the copies into the slab's persistent inputs and the pack's masks and selects (queued behind a
+        replay that reads the same buffers)."""
+
+        chunk_state = pack_state.chunk_state
+        ttnn.copy_host_to_device_tensor(prepared.token_rows, chunk_state.token_row)
+        ttnn.copy_host_to_device_tensor(prepared.embedding_rows, chunk_state.ple_rows.embedding_rows)
+        rope = chunk_state.rope_rows
+        for host, target in zip(prepared.rope_rows, (rope.cos, rope.sin, rope.block_start_cos, rope.block_start_sin)):
+            ttnn.copy_host_to_device_tensor(host, target)
+        self.write_chunk_feature_rows(chunk_state.feature_rows, None)
+        ttnn.copy_host_to_device_tensor(prepared.row_mask_c, pack_state.row_mask_c)
+        ttnn.copy_host_to_device_tensor(prepared.conv_select, pack_state.conv_select)
+        ttnn.copy_host_to_device_tensor(prepared.gather_select, pack_state.gather_select)
+        for host, target in zip(prepared.ple_keep, pack_state.ple_keep):
+            ttnn.copy_host_to_device_tensor(host, target)
+        for host, target in zip(prepared.ple_take, pack_state.ple_take):
+            ttnn.copy_host_to_device_tensor(host, target)
+
+    def forward_prefill_pack(
+        self,
+        pack_state: pack_module.PackState,
+        rows_per_user: int,
+        state: Qwen38TTNNTextModelGenericState,
+    ) -> Qwen38TTNNGenericDecodeOutput:
+        """One pack: the slab body over the 2048 rows (48 layers, the pack variants of PLE / GDN / QSA), the G last-real-token
+        rows gathered by the host-written exact select, the final mixer and LM head on those rows (row u = user u; 32 rows).
+        The chain's position, GDN state and QSA staging are not touched; the KV and compressed caches take the users' rows at
+        their virtual base ``u * S`` (position 0).  Any failure poisons this owner."""
+
+        self._validate_generic_state(state)
+        chunk_state = pack_state.chunk_state
+        self._validate_chunk_state(chunk_state)
+        pack = pack_state.view(rows_per_user)
+        processed_layers = 0
+        try:
+            rope = chunk_state.rope_rows
+            residual = self._embed_residual_rows_from_device_token(
+                chunk_state.token_row, feature_rows=chunk_state.feature_rows.tensor
+            )
+            for layer_index in range(BACKBONE_LAYERS):
+                residual = self.layers[layer_index].forward_pack_generic(
+                    residual,
+                    state.layers[layer_index],
+                    chunk_state.layers[layer_index],
+                    prepared_ple_rows=chunk_state.ple_rows if layer_index == PLE_CHECKPOINT_LAYER else None,
+                    rope_rows=rope,
+                    qsa_chunk_constants=chunk_state.qsa_chunk_constants,
+                    pack=pack,
+                )
+                processed_layers += 1
+            picked = ttnn.matmul(
+                pack_state.gather_select,
+                residual,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=pack_state.gather_compute_config,
+            )
+            picked.update_tensor_topology(residual.tensor_topology())
+            _deallocate_unique(residual)
+            expected = (1, RESIDUAL_BRANCHES, pack_module.GATHER_SELECT_ROWS, LOCAL_HIDDEN_SIZE)
+            if _shape(picked) != expected or picked.dtype != ttnn.bfloat16:
+                raise RuntimeError(f"pack last-row gather must be BF16 {list(expected)}, got {tensor_metadata(picked)}")
+            hidden = self.final_mixer.rows(picked, flat_views=True)
+            _deallocate_unique(picked)
+            logits = self.model_io.lm_head(hidden)
+            _deallocate_unique(hidden)
+            return Qwen38TTNNGenericDecodeOutput(logits)
+        except BaseException as error:
+            self._mark_poisoned("forward_prefill_pack", processed_layers, error)
+
+    def capture_prefill_pack(
+        self,
+        pack_state: pack_module.PackState,
+        rows_per_user: int,
+        state: Qwen38TTNNTextModelGenericState,
+        *,
+        guard: Callable[[str], AbstractContextManager[Any]],
+        cq_id: int = 0,
+    ) -> tuple[int, Qwen38TTNNGenericDecodeOutput]:
+        """Capture one bucket's pack body as one trace (the :meth:`capture_prefill_chunk` discipline); returns the trace id and
+        the retained output (its logits are read after each replay).  Run the body eagerly once before (programs compile).
+        """
+
+        with corruptible_allocation_scope(self.mesh_device):
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=cq_id)
+            with guard("prefill pack capture"):
+                output = self.forward_prefill_pack(pack_state, rows_per_user, state)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=cq_id)
+        return trace_id, output
+
+    def read_pack_logits(self, output: Qwen38TTNNGenericDecodeOutput, users: int) -> torch.Tensor:
+        """The replayed pack's logits of the first ``users`` slots: fp32 ``[users, VOCAB_SIZE]`` (the LM head's padding
+        columns are not masked here)."""
+
+        logits = output.logits
+        gathered = self.model_io.lm_head.gather_full_logits(logits)
+        try:
+            host = ttnn.to_torch(ttnn.get_device_tensors(gathered)[0])
+        finally:
+            ttnn.deallocate(gathered)
+        return host.reshape(int(logits.global_shape[2]), -1).to(torch.float32)[:users]
+
+    def run_pack(
+        self,
+        pack_state: pack_module.PackState,
+        rows_per_user: int,
+        state: Qwen38TTNNTextModelGenericState,
+        users: Sequence[Sequence[int]],
+        *,
+        trace_id: int | None = None,
+        output: Qwen38TTNNGenericDecodeOutput | None = None,
+        pad_token: int = pack_module.PACK_PAD_TOKEN_ID,
+        timing: dict | None = None,
+    ) -> torch.Tensor:
+        """Prepare, upload and run one pack (replaying ``trace_id`` when given, else the eager body), read back the users'
+        logits ``[len(users), VOCAB_SIZE]``.  The landing sources are in the persistent buffers afterwards.  ``timing``
+        (a dict) receives ``prepare_ms`` (host input prep), ``upload_ms``, ``replay_ms`` (blocking replay wall)."""
+
+        started = time.perf_counter()
+        prepared = self.prepare_pack_inputs(pack_state, rows_per_user, users, pad_token=pad_token, timing=timing)
+        prepared_at = time.perf_counter()
+        self.upload_pack_inputs(pack_state, prepared)
+        uploaded_at = time.perf_counter()
+        if trace_id is not None:
+            ttnn._ttnn_execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=True)
+            result = output
+        else:
+            result = self.forward_prefill_pack(pack_state, rows_per_user, state)
+            ttnn.synchronize_device(self.mesh_device)
+        replayed_at = time.perf_counter()
+        logits = self.read_pack_logits(result, len(users))
+        if trace_id is None:
+            result.release_tensors()
+        if timing is not None:
+            timing.update(
+                prepare_ms=(prepared_at - started) * 1e3,
+                upload_ms=(uploaded_at - prepared_at) * 1e3,
+                replay_ms=(replayed_at - uploaded_at) * 1e3,
+            )
+        return logits
 
     def _ring_selects(self) -> tuple[Any, ...]:
         """The hand-off's QSA raw-key ring selects (``qsa_module.chunk_handoff_ring_select_rows``: the select depends only

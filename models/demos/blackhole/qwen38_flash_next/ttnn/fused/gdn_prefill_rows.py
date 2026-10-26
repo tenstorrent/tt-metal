@@ -223,6 +223,136 @@ def slab_body(
     return gated, final_state, history_next
 
 
+def _user_major_pages(pages, users_total: int, chunks: int, first: int, count: int):
+    """The slab's head-major pack pages ``[12, G * chunks, 32, w]`` as the user-major pages ``[12 * count, chunks, 32, w]``
+    of the users ``first .. first + count - 1`` (head ``12 * u + h`` = value head h of user u), by whole-tile page moves.
+
+    Returns ``(pages for the launch, the owned tensors to release after it)``; the reshape views alias their sources."""
+
+    width = int(pages.shape[-1])
+    owned = []
+    view = ttnn.reshape(pages, (HEADS, users_total, chunks, CHUNK, width))
+    if count != users_total:
+        view = ttnn.slice(view, (0, first, 0, 0, 0), (HEADS, first + count, chunks, CHUNK, width), memory_config=DRAM)
+        owned.append(view)
+    moved = ttnn.permute(view, (1, 0, 2, 3, 4), memory_config=DRAM)
+    owned.append(moved)
+    return ttnn.reshape(moved, (count * HEADS, chunks, CHUNK, width)), owned
+
+
+def _user_major_values(v, rows_per_user: int, first: int, count: int):
+    """The token-major ``v`` ``[1, 1, 2048, 1536]`` as ``[1, 1, S, count * 1536]``: user u's rows side by side on dim 3."""
+
+    parts = [
+        ttnn.slice(
+            v,
+            (0, 0, (first + u) * rows_per_user, 0),
+            (1, 1, (first + u + 1) * rows_per_user, VALUE_WIDTH),
+            memory_config=DRAM,
+        )
+        for u in range(count)
+    ]
+    joined = parts[0] if count == 1 else ttnn.concat(parts, dim=3, memory_config=DRAM)
+    return joined, parts if count == 1 else [joined, *parts]
+
+
+def slab_body_pack(
+    gdn,
+    projected,
+    taps,
+    norm,
+    chunk_tiles,
+    tiles: RowsConstants,
+    buffers,
+    pack,
+    layer_pack,
+    *,
+    rows: int,
+):
+    """The multi-user pack's GDN body (``ttnn/pack.py``): the slab body with a segment-aware conv, user-major prims launches
+    from a zero state, and the landing sources written into the layer's persistent pack buffers.
+
+    ``pack`` carries the bucket (``pack.bucket``) and the pack-wide tensors (zero history tile, zero initial states by head
+    count, the host-written ``row_mask_c`` and stacked conv ``select``); ``layer_pack.states[l]`` receives launch l's final
+    recurrent state (first ``12 * users`` heads) and ``layer_pack.conv_rows`` the stacked last-three-conv-rows tiles.
+    Returns ``gated`` (the slab's persistent buffer).  The shared FIR history and recurrent state of the chain are untouched.
+    """
+
+    bucket = pack.bucket
+    s, users = bucket.rows_per_user, bucket.users
+    chunks = bucket.seg_chunks
+    gdn_pre_rows.run(
+        projected,
+        pack.zero_history,
+        taps,
+        tiles.gates,
+        tiles.selects,
+        tiles.scalars,
+        buffers.q,
+        buffers.k,
+        buffers.v,
+        buffers.beta,
+        buffers.g,
+        buffers.sig,
+        rows=rows,
+        seg_chunks=chunks,
+    )
+    restamp_written(buffers, projected, PRE_WRITES)
+    beta = ttnn.multiply(buffers.beta, pack.row_mask_c, memory_config=DRAM)
+    g = ttnn.multiply(buffers.g, pack.row_mask_c, memory_config=DRAM)
+    parts = []
+    for launch, (first, count) in enumerate(bucket.launches):
+        owned = []
+        pages = {}
+        for name, source in (("q", buffers.q), ("k", buffers.k), ("beta", beta), ("g", g)):
+            pages[name], moved = _user_major_pages(source, users, chunks, first, count)
+            owned.extend(moved)
+        v_launch, moved = _user_major_values(buffers.v, s, first, count)
+        owned.extend(moved)
+        o, _state = chunk_source(
+            pages["q"],
+            pages["k"],
+            v_launch,
+            pages["beta"],
+            pages["g"],
+            pack.zero_states[HEADS * count],
+            chunk_tiles,
+            rows_total=s,
+            heads=HEADS * count,
+            state_output=layer_pack.states[launch],
+        )
+        for tensor in owned:
+            ttnn.deallocate(tensor)
+        parts.extend(
+            ttnn.slice(o, (HEADS * u, 0, 0), (HEADS * (u + 1), s, HEAD_DIM), memory_config=DRAM) for u in range(count)
+        )
+        ttnn.deallocate(o)
+    ttnn.deallocate(beta)
+    ttnn.deallocate(g)
+    o_pack = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=1, memory_config=DRAM)
+    for tensor in parts:
+        if tensor is not o_pack:
+            ttnn.deallocate(tensor)
+    gdn_post_rows.post_cast(o_pack, buffers.o16)
+    restamp_written(buffers, projected, CAST_WRITES)
+    ttnn.deallocate(o_pack)
+    gated, _none = gdn_post_rows.post_norm(
+        buffers.o16,
+        buffers.sig,
+        norm,
+        tiles.norm_scalars,
+        projected,
+        buffers.gated,
+        None,
+        rows=rows,
+        history=False,
+    )
+    restamp_written(buffers, projected, ("gated",))
+    # The users' last three conv-input rows (the lanes' FIR history), one exact 0/1 select matmul over the whole projection.
+    gdn._slab_pack_conv_rows(projected, pack, layer_pack)
+    return gated
+
+
 def slab_body_composed(projected, history, taps, norm, chunk_tiles, dt_bias, neg_exp_A, initial_state, *, rows: int):
     """Today's chain over the same span, op for op -- the device test's bitwise oracle, not a production path.
 

@@ -24,7 +24,16 @@
 #include "api/tensor/noc_traits.h"
 #include "../../kernels/zones.h"
 
+// A multi-user pack (host define SEG_CHUNKS = S / 32, set only for a pack): the pass is a row of segments of SEG_CHUNKS
+// tile rows, each a fresh sequence whose FIR window starts from the history tile, so a tile row with
+// chunk % SEG_CHUNKS == 0 reads the history tile like tile row 0.  Undefined (today's passes): only tile row 0 does.
+#ifndef SEG_CHUNKS
+#define SEG_CHUNKS 0
+#endif
+
 namespace {
+constexpr uint32_t SEGMENT_CHUNKS = SEG_CHUNKS;
+constexpr bool segment_start(uint32_t chunk) { return SEGMENT_CHUNKS == 0 ? chunk == 0 : chunk % SEGMENT_CHUNKS == 0; }
 constexpr uint32_t CB_IN = 0, CB_SEL = 1, CB_TAP = 2, CB_SCALER = 8, CB_EPS = 9, CB_SCALE = 10, CB_MASK = 15;
 constexpr uint32_t HEAD_TILES = 4, CONV_KERNEL = 4, QK_HEADS = 4, QK_GROUPS = 8;
 constexpr uint32_t WINDOW = 2 * HEAD_TILES;  // the previous tile row's four column tiles, then this one's
@@ -149,7 +158,7 @@ void kernel_main() {
             cb_reserve_back(CB_IN, WINDOW);
             const uint32_t l1 = get_write_ptr(CB_IN);
             for (uint32_t d = 0; d < HEAD_TILES; ++d) {
-                if (chunk == 0) {
+                if (segment_start(chunk)) {
                     noc_async_read_page(first + d, h, l1 + d * BF16_TILE);
                 } else {
                     noc_async_read_page((chunk - 1) * PROJECTION_TILES + first + d, p, l1 + d * BF16_TILE);
