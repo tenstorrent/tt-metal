@@ -22,10 +22,6 @@ the explicit-axes overload.
 Meshes: the conftest's ``tp_mesh`` / ``fsdp_mesh`` ``[1, 2]`` fixtures, a local ``[1, 2]`` with the data-parallel
 axis on axis 1, and ``[2, 2]`` meshes for DP x TP and HSDP that open or skip like ``test_ccl_topology.py``. Every
 fixture is module-scoped and reopens the device, so each mesh has its own class, in fixture order.
-
-Knobs for a box whose two-axis mesh is not ``[2, 2]``: ``TTML_TEST_TWO_AXIS_MESH=2x4`` sets the DP x TP / HSDP shape
-(the sharded role goes on the smaller axis unless ``TTML_TEST_DP_AXIS=0`` puts dp first) and ``TTML_TEST_DIM=128``
-widens the model so a 4-way shard stays tile-aligned.
 """
 
 from __future__ import annotations
@@ -44,7 +40,7 @@ from ttml.modules import AbstractModuleBase, ColumnParallelLinear, LinearLayer, 
 
 pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
 
-DIM = int(os.environ.get("TTML_TEST_DIM", "64"))  # tile-aligned per device after a 2-way split (128 for 4-way)
+DIM = 64  # tile-aligned per device after a 2-way split
 NATIVE = ttml.autograd.PreferredPrecision.NATIVE
 
 is_sharded_on_axis = ttml.core.distributed.is_sharded_on_axis
@@ -97,19 +93,6 @@ def _restore_mgd_path(previous: Optional[str]) -> None:
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = previous
 
 
-def _two_axis_mesh(role: str) -> tuple[tuple[int, int], tuple[str, str]]:
-    """Shape and axis names for the DP x TP / HSDP fixtures: ``[2, 2]`` with ``("dp", role)`` unless
-    ``TTML_TEST_TWO_AXIS_MESH=RxC`` picks another shape. The sharded role (tp / fsdp) then goes on the smaller axis so
-    ``DIM`` stays tile-aligned per shard; ``TTML_TEST_DP_AXIS=0`` keeps dp on axis 0 (the galaxy layout)."""
-    override = os.environ.get("TTML_TEST_TWO_AXIS_MESH")
-    if not override:
-        return (2, 2), ("dp", role)
-    rows, cols = (int(v) for v in override.lower().split("x"))
-    dp_axis = os.environ.get("TTML_TEST_DP_AXIS")
-    dp_first = dp_axis == "0" if dp_axis is not None else rows > cols
-    return (rows, cols), (("dp", role) if dp_first else (role, "dp"))
-
-
 @contextlib.contextmanager
 def _named_mesh_or_skip(fresh_device_mesh, shape: tuple[int, ...], axis_names: tuple[str, ...]):
     """Open ``shape`` with ``axis_names`` on a fresh ``MetalEnv`` for a module-scoped fixture, or skip its tests.
@@ -156,15 +139,15 @@ def ddp_mesh(fresh_device_mesh):
 
 @pytest.fixture(scope="module")
 def dp_tp_mesh(fresh_device_mesh):
-    """``[2, 2]`` with axes ``("dp", "tp")`` (or the ``TTML_TEST_TWO_AXIS_MESH`` override)."""
-    with _named_mesh_or_skip(fresh_device_mesh, *_two_axis_mesh("tp")) as mesh:
+    """``[2, 2]`` with axes ``("dp", "tp")``."""
+    with _named_mesh_or_skip(fresh_device_mesh, (2, 2), ("dp", "tp")) as mesh:
         yield mesh
 
 
 @pytest.fixture(scope="module")
 def hsdp_mesh(fresh_device_mesh):
-    """``[2, 2]`` with axes ``("dp", "fsdp")`` (or the ``TTML_TEST_TWO_AXIS_MESH`` override)."""
-    with _named_mesh_or_skip(fresh_device_mesh, *_two_axis_mesh("fsdp")) as mesh:
+    """``[2, 2]`` with axes ``("dp", "fsdp")``."""
+    with _named_mesh_or_skip(fresh_device_mesh, (2, 2), ("dp", "fsdp")) as mesh:
         yield mesh
 
 
