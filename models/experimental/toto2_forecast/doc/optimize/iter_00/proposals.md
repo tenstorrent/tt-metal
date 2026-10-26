@@ -34,10 +34,11 @@ The reduced window (time layer 0, the last time layer, the variate layer, embed 
 
 ### Category split and matmul utilization
 
+  (D2 fix: the op table below said 5635.6 ms; sections x layer_counts of job 632 give 5609.8 ms, now used everywhere.)
 - Matmul 5609.8 ms (70.6 %, 246 ops); non-matmul 2331.7 ms (29.4 %, 628 ops) (job 632). Compute / TM / Other 93.95 / 5.44 / 0.62 %
   of the reduced window.
 - **`matmul_weighted_flops_percent` = 31.26 %** (`summary.json`, the number of record). All matmuls do 462.9 TFLOP per
-  forward: 1523 ms at the 110-core HiFi2 peak of ~304 TFLOPs (1289 ms at 359) against 5636 ms measured. Their
+  forward: 1523 ms at the 110-core HiFi2 peak of ~304 TFLOPs (1289 ms at 359) against 5610 ms measured. Their
   intensity (1013-1612 FLOP/B) is above the 594 FLOP/B ridge, so their floor is math.
 - The non-matmul ops move ~818 GB per forward (analyst, unchanged by the policy): a 1598 ms DRAM floor against 2348 ms;
   most run at 80-88 % of DRAM peak, so only fewer bytes (fusion, fewer tokens) cut them. RoPE (36 %) and the
@@ -45,7 +46,7 @@ The reduced window (time layer 0, the last time layer, the variate layer, embed 
 
 | op type (full model, sections x counts) | count | ms | % |
 |---|---|---|---|
-| Matmul | 246 | 5635.6 | 70.6 |
+| Matmul | 246 | 5609.8 | 70.6 |
 | BinaryNg (mul g*silu(u), residual mul beta*x, residual add, embed/head add) | 242 | 792.0 | 9.9 |
 | RotaryEmbeddingLlama (q, k) | 94 | 406.6 | 5.1 |
 | Unary (the SiLU that `ttnn.linear(activation=)` runs as a trailing op with the auto config) | 50 | 400.7 | 5.0 |
