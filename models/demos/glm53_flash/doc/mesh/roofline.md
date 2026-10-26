@@ -4,27 +4,29 @@ Per-op, per-layer and per-step roofline of the traced decode step at 4 users per
 (256 users), TP4 over the 4 columns x DP8 over the 8 rows, hybrid routed experts (72 experts per column, the 2048-wide
 intermediate split over the 8 rows = 256 per chip) with the EP32 layout as the alternative. Every op gets its bytes,
 FLOPs, link bytes, time floor under the stated peaks, the measured device time (which profile), the gap ratio, a bound
-class and an action. Model: `models/demos/glm53_flash/tt/roofline.py` (host-only; `tests/test_roofline_host.py`, 19
+class and an action. Model: `models/demos/glm53_flash/tt/roofline.py` (host-only; `tests/test_roofline_host.py`, 23
 checks). Regenerate any table with
 
     python -m models.demos.glm53_flash.tt.roofline --users-per-row 4 --all-layers --markdown
     python -m models.demos.glm53_flash.tt.roofline --users-per-row 32 --moe ep --json
+    python -m models.demos.glm53_flash.tt.roofline --users-per-row 4 --spec-k 3 --accepted 2.0 --markdown   # section 8
 
 ## 1. Headline
 
 | point | step floor (400 GB/s achievable / 512 spec) | tok/s per user ceiling | e2e measured | op-model sum | ratio | target | after the ranked actions (model) |
 |---|---|---|---|---|---|---|---|
-| 32 users (4/row), hybrid | **32.3 ms / 26.4 ms** | **31.0 / 37.9** (992 aggregate) | 80.55 ms = 12.4 tok/s/u (2026-10-26) | 82.6 ms | 2.5x | 30.3 ms (33 tok/s/u) | 30.7 ms = 32.6 tok/s/u |
+| 32 users (4/row), hybrid | **32.3 ms / 26.4 ms** | **31.0 / 37.9** (992 aggregate) | 80.55 ms = 12.4 tok/s/u (2026-10-26) | 82.6 ms | 2.5x | 30.3 ms (33 tok/s/u) | 35.1 ms = 28.5 tok/s/u |
 | 32 users, EP32 | 40.2 / 31.8 | 24.9 / 31.4 | 67.68 ms rs-remap (71.2 op combine) | 73.1 ms (op combine) | 1.8x | 30.3 ms | 37.2 ms |
-| 256 users (32/row), hybrid (dense experts) | **55.7 ms / 43.7 ms** | **18.0 / 22.9** (4600 aggregate) | 115.0 ms = 8.7 tok/s/u (2026-10-21) | 123.5 ms | 2.1x | 52.6 ms (19 tok/s/u) | 62.3 ms = 16.1 tok/s/u |
+| 256 users (32/row), hybrid (dense experts) | **55.7 ms / 43.7 ms** | **18.0 / 22.9** (4600 aggregate) | 115.0 ms = 8.7 tok/s/u (2026-10-21) | 123.5 ms | 2.1x | 52.6 ms (19 tok/s/u) | 66.7 ms = 15.0 tok/s/u |
 | 256 users, EP32 rs combine | 60.9 / 46.7 | 16.4 / 21.4 | 123.4 ms (2026-10-22) | 127.2 ms | 2.0x | 52.6 ms | 61.6 ms |
 
 * The **32-user target (30.3 ms) sits 2 ms below the current op graph's floor at the achievable DRAM rate**: tuning alone
   cannot reach it; the floor drops to 28.3 ms with the fused mHC pre-block (A1), 29.2 with bfp4 gate|up experts, 25.2 ms
-  (39.7 tok/s/u) with A1 + B5 + bfp4. The op model after the ranked actions lands at 30.7 ms.
+  (39.7 tok/s/u) with A1 + B5 + bfp4. The op model after the ranked actions lands at 35.1 ms (the fused pre-block's
+  own 101 -> 57 us per wrap is carried, not zeroed).
 * The **256-user target (52.6 ms) is below the floor at 400 GB/s (55.7) and above it at the spec peaks (43.7)**: it
   needs design changes (bfp4 gate|up: 49.3 ms; A1: 51.7; A1 + B5 + bfp4: 45.3 ms = 22.1 tok/s/u), and the action list
-  as it stands (62.3 ms) is not enough: the remaining terms are the per-user state traffic (kda_decode 6.0 ms, DSA pool
+  as it stands (66.7 ms) is not enough: the remaining terms are the per-user state traffic (kda_decode 6.0 ms, DSA pool
   gather + SDPA 6.0 ms) and the row collectives running at 2x the CCL fit (5.8 ms).
 * At 4 users/row the hybrid layout has the lower floor (28 active slices = 94 MB per chip vs EP32's slowest chip reading
   6 full experts = 160 MB) but is measured slower today (80.6 vs 67.7 ms) because its T=4 path pays the sparse block op
@@ -257,7 +259,7 @@ layout: 8x4, 4 users/row = 32 users, moe=hybrid (block), experts bfp8/bfp8, ISL 
 | head | 1 | 6 | 626.7 | 448.3 | 657.0 | 1.1 | 502.0 |
 
 step floor: 32.26 ms at 400 GB/s (26.41 ms at the spec peaks) -> ceiling 31.0 tok/s per user (37.9 at spec), 992 aggregate; target 30.3 ms
-step model (sum of the measured / projected ops): 82.61 ms; after the listed actions: 30.72 ms = 32.6 tok/s per user
+step model (sum of the measured / projected ops): 82.61 ms; after the listed actions: 35.13 ms = 28.5 tok/s per user
 e2e measured steps: hybrid 2026-10-26 (A3 sharded norm, B6 ranges, distinct ids): 80.55 ms, hybrid 2026-10-21 (distinct ids): 83.1 ms, hybrid 2026-10-21 (same token on every slot: 2 active experts): 69.8 ms, EP32 op combine 2026-10-21 (distinct ids): 71.2 ms, EP32 rs-remap 2026-10-26 (distinct ids): 67.68 ms
 
 per module (us per layer):
@@ -330,7 +332,7 @@ layout: 8x4, 4 users/row = 32 users, moe=hybrid (stream), experts bfp8/bfp8, ISL
 | head | 1 | 6 | 626.7 | 448.3 | 657.0 | 1.1 | 502.0 |
 
 step floor: 32.09 ms at 400 GB/s (26.24 ms at the spec peaks) -> ceiling 31.2 tok/s per user (38.1 at spec), 997 aggregate; target 30.3 ms
-step model (sum of the measured / projected ops): 68.66 ms; after the listed actions: 30.72 ms = 32.6 tok/s per user
+step model (sum of the measured / projected ops): 68.66 ms; after the listed actions: 35.13 ms = 28.5 tok/s per user
 e2e measured steps: hybrid 2026-10-26 (A3 sharded norm, B6 ranges, distinct ids): 80.55 ms, hybrid 2026-10-21 (distinct ids): 83.1 ms, hybrid 2026-10-21 (same token on every slot: 2 active experts): 69.8 ms, EP32 op combine 2026-10-21 (distinct ids): 71.2 ms, EP32 rs-remap 2026-10-26 (distinct ids): 67.68 ms
 
 per module (us per layer):
@@ -397,7 +399,7 @@ layout: 8x4, 32 users/row = 256 users, moe=hybrid (block), experts bfp8/bfp8, IS
 | head | 1 | 6 | 626.7 | 448.3 | 657.0 | 1.1 | 502.0 |
 
 step floor: 55.65 ms at 400 GB/s (43.66 ms at the spec peaks) -> ceiling 18.0 tok/s per user (22.9 at spec), 4600 aggregate; target 52.6 ms
-step model (sum of the measured / projected ops): 123.48 ms; after the listed actions: 62.26 ms = 16.1 tok/s per user
+step model (sum of the measured / projected ops): 123.48 ms; after the listed actions: 66.67 ms = 15.0 tok/s per user
 e2e measured steps: hybrid dense 2026-10-21 (distinct ids): 115.0 ms, EP32 rs combine 2026-10-22 (distinct ids): 123.4 ms, EP32 op combine 2026-10-21 (distinct ids): 139.2 ms
 
 per module (us per layer):
@@ -638,7 +640,7 @@ ranked actions (ms saved per step at this point):
 | rank | id | action | ms/step 32u (256u) | risk | mechanism | validation |
 |---|---|---|---|---|---|---|
 | 1 | E0 | `GLM53_STREAM_EXPERTS=1` for decode at T <= 32: the expert_stream op (341 us at 28 active) instead of the sparse tuned block (683 us, 13 ops) that the no-knob e2e path runs (`tt/moe.py`: `stream` only with the knob; the 83.1 ms e2e = 68.7 ms of modelled ops + 42 x 0.34) | 13.9 (0) | L | knob; the op is validated (PCC 0.99997, 3 device ops) | layer-4 tracy of the 8x4 hybrid at 4 users/row (none exists), then the 32-user e2e |
-| 2 | A1 | fused mHC pre-block (`GLM53_MHC_PRE_BLOCK=1`): 18 ops / 168 us -> 1 op / 101 us per wrap, measured; 22-layer chain 37.7 -> 33.3 ms | 10.4 (10.5) | M | fuse (custom op exists; mesh PCC 0.70 of 2026-10-21 audited as not a NOC hazard, idle-core gather race fixed) | `test_mhc_pre_block_mesh.py` bit-level vs the composite on all 8 block chips, the 45-layer chain, the 8x4 logits gate |
+| 2 | A1 | fused mHC pre-block (`GLM53_MHC_PRE_BLOCK=1`): 18 ops / 168 us -> 1 op / 101 us per wrap, measured; 22-layer chain 37.7 -> 33.3 ms (the row carries the fused op's 101 us, A4 takes it to 57) | 6.0 (6.1) | M | fuse (custom op exists; mesh PCC 0.70 of 2026-10-21 audited as not a NOC hazard, idle-core gather race fixed) | `test_mhc_pre_block_mesh.py` bit-level vs the composite on all 8 block chips, the 45-layer chain, the 8x4 logits gate |
 | 3 | E1 | expert op: fold the selector matmul + x copy into the op, pipeline the DST fill / pack per expert (the ~110 us fixed cost); at 256 users the dispatch form instead of the dense layout (1198 -> 779 us) and the down op's expert-parallel split | 4.2 (17.6) | M | tune the custom op (kernel work) | `test_moe_block.py` / `test_expert_kernel_perf.py` chip test at 28 / 58 active; 8x4 e2e |
 | 4 | H2 | hybrid combine at T < 32: compact [rows x T, H] expert output (256 KB) + `all_reduce_rows`, each row slicing its T rows, instead of the padded [256, 4096] reduce-scatter + 9 pad / slice ops (162 -> ~50 us) | 4.7 (0) | M | fuse / replace a CCL on 8x fewer bytes | `test_mesh_moe.py` ep/hybrid vs HF on the block, `test_ccl_perf.py` all_reduce_rows |
 | 5 | A4 | per-row Sinkhorn: one token row per core (32 cores) instead of ONE core for the whole tile (52 -> ~8 us per wrap); needs a kernel change (the batched reference graph is +250 us) | 4.0 (4.0) | M | tune inside the fused pre-block | bit-level vs `mhc_split_sinkhorn` per row |
@@ -650,8 +652,8 @@ ranked actions (ms saved per step at this point):
 | 11 | K3 | kda_decode fixed cost (48.6 us) + the 34 us pre-op gap: common runtime args + per-core index instead of 80 x 3 per-core arg vectors, kernel prologue; the per-user slope is at DRAM rate | 1.2 (1.5) | M | tune / dispatch | tracy gap column before the op; `test_kda_decode.py` golden |
 | 12 | C2 | attention TP all-reduce 51 -> 30 us (column skew / input placement; the MoE one on the same shape runs at 30) | 0.8 (0.8) | L | CCL input memory config, column skew diagnosis | `test_ccl_allreduce_gather.py`, tracy per chip |
 
-Sum of 1-12 at 32 users: ~50 ms of the 82.6 ms model -> ~31 ms (32.6 tok/s/u; the floor is 32.3 ms before A1 / C12
-lower it). At 256 users the ranked items (E1, B8, A1, C12, A4, B5, K3, P1 = 58 ms) take the model from 123.5 to ~62 ms;
+Sum of 1-12 at 32 users: ~45 ms of the 82.6 ms model -> ~35 ms (28.5 tok/s/u; the floor is 32.3 ms before A1 / C12
+lower it). At 256 users the ranked items (E1, B8, A1, C12, A4, B5, K3, P1 = 58 ms) take the model from 123.5 to ~67 ms;
 the 52.6 ms target then needs the DSA state terms at their floors (SDPA / index on the paged cache, bfp8 pooled keys) and
 the row collectives at the CCL fit (2x today): see the design-variant table (A1 + B5 + bfp4 floor 45.3 ms).
 
@@ -688,3 +690,103 @@ which EP32's floor (40.2 ms at 32 users) stays above the hybrid's (32.3) because
   the step at either point.
 * The compute floors use the full 120-core chip; decode-shaped matmuls are DRAM-bound by 5-30x, so only the dense expert
   layout at 256 users (116 GFLOP per layer per chip) is compute-relevant.
+
+## 8. Speculative decode (MTP drafts, `tt/spec_decode.py`): `--spec-k K --accepted A --host-ms H`
+
+One iteration of the lossless greedy loop at `B` users per row with `K` drafts: **V** = the verify step (the 45 layers + head
+on `R = B (K + 1)` candidate rows per chip, then the MTP level 1 on all R rows), the **host accept** (readback of the R
+greedy ids + the next iteration's input refresh; a parameter, 2 ms), **C** = the commit (per KDA layer `K + 1` `kda_decode`
+launches replayed on the backup state + the 3 full-state fp32 blends per launch; per DSA layer the pooled-key index
+maintenance of the `K + 1` candidates), **D** = MTP levels 2..K on B rows. Policy `K = min(K_ctx, 32 // B - 1)`
+(`spec_policy_k`): the candidates stay inside one tile row; off when `B (K + 1) > 32`. Modelled on the stream expert
+path (E0; the plain step at 4 users/row is 68.7 ms on that basis, 82.6 with the sparse block) at ISL 16; every per-op
+cost is the plain row's measurement (shape-independent for R <= 32) except:
+
+| verify term | model | source |
+|---|---|---|
+| routed experts on R rows | `92 us + active slices x 3.34 MB at 376 GB/s + 10` per layer; 8R gathered tokens -> 48 active of 72 at R = 16 (vs 28 at R = 4) | stream-op two-point fit (28 / 69 active), routing log-linear between the 32- and 256-token samples |
+| `kda.decode` | `K + 1` sequential launches on the B-row slabs: `(K + 1) x (48.6 + 6.6 B)` us; + `ttnn.copy` backup of the fp32 state + conv history | ep_b4 / ep_b32 fit per launch; copy at 250 GB/s |
+| DSA layers (dense range, v1) | no index query / scoring / top-k / pool gather / state composite: per-candidate latent append (`20 + 4 (K + 1)` us) + flash-MLA decode on R rows over the users' pages (`max(73 us, 3x the DRAM floor)`) | the verify never touches the rings / pools (its index work is C's `spec.index_commit`) |
+| MTP block (layer 45) | glue 18 + `eh_proj` 95 us (35.7 MB bfp8, replicated) + its own dense-range DSA + 288-expert MoE rows + shared-head norm 7 + the LM head rows (657 us incl. the 170 us logits gather, HD1) | no profile of the block exists: projections from the main model's rows |
+| C: `spec.kda_replay` | `34 (K + 1)` launches at the per-launch fit | as the verify's launches |
+| C: `spec.kda_blend` | per launch 3 full-state fp32 elementwise ops (`live = live * keep + backup * take`, 7 B MB) at 175 GB/s + 3 conv blends | the mHC `x*x` fp32 elementwise rate |
+| C: `spec.index_commit` | `11 (K + 1) x` the state-maintenance composite (100 us; B5 program 40) | blk_l3_b4 #439-468 |
+| host accept | 2 ms fixed | parameter (`--host-ms`), to be replaced by the measured loop |
+
+#### 4 users/row (32 users), accepted 2.0 tokens per iteration, host 2 ms (ms; model = sum of the measured / projected rows)
+
+| K | R | V main | V MTP1 | host | C | D | verify step model (x plain) | iteration floor (SP1 design floor) / model / after | tok/s/u floor / model / after | plain model | speedup | tokens for 33 tok/s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 8 | 73.1 | 1.9 | 2.0 | 19.0 | 0.0 | 75.0 (1.09x) | 46.8 (40.1) / 96.0 / 45.5 | 42.7 / 20.8 / 44.0 | 68.7 ms = 14.6 | 1.43x | 3.2 (1.5 at floor) |
+| 2 | 12 | 77.9 | 1.9 | 2.0 | 28.5 | 1.8 | 79.8 (1.16x) | 55.1 (45.1) / 112.1 / 50.0 | 36.3 / 17.8 / 40.0 | 68.7 ms = 14.6 | 1.22x | 3.7 (1.8 at floor) |
+| **3** | **16** | **82.0** | **2.0** | **2.0** | **38.0** | **3.6** | **84.0 (1.22x)** | **62.8 (49.5) / 127.7 / 54.1** | **31.8 / 15.7 / 37.0** | 68.7 ms = 14.6 | **1.08x** | **4.2 (2.1 at floor)** |
+| 5 | 24 | 89.4 | 2.0 | 2.0 | 57.1 | 7.3 | 91.4 (1.33x) | 77.4 (57.4) / 157.7 / 61.6 | 25.9 / 12.7 / 32.5 | 68.7 ms = 14.6 | 0.87x | 5.2 (2.6 at floor) |
+
+#### 1 user/row (8 users)
+
+| K | R | V main | V MTP1 | host | C | D | verify step model (x plain) | iteration floor (SP1 design floor) / model / after | tok/s/u floor / model / after | plain model | speedup | tokens for 33 tok/s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 2 | 63.3 | 1.7 | 2.0 | 8.9 | 0.0 | 65.0 (1.06x) | 32.2 (30.5) / 76.0 / 38.1 | 62.2 / 26.3 / 52.5 | 61.6 ms = 16.2 | 1.62x | 2.5 (1.1 at floor) |
+| 2 | 3 | 67.4 | 1.8 | 2.0 | 13.4 | 1.7 | 69.1 (1.12x) | 36.9 (34.4) / 86.2 / 41.8 | 54.2 / 23.2 / 47.9 | 61.6 ms = 16.2 | 1.43x | 2.8 (1.2 at floor) |
+| 3 | 4 | 71.0 | 1.8 | 2.0 | 17.8 | 3.3 | 72.8 (1.18x) | 41.1 (37.8) / 95.9 / 45.0 | 48.6 / 20.9 / 44.4 | 61.6 ms = 16.2 | 1.28x | 3.2 (1.4 at floor) |
+| 5 | 6 | 77.0 | 1.9 | 2.0 | 26.8 | 6.6 | 78.8 (1.28x) | 48.6 (43.6) / 114.2 / 51.0 | 41.2 / 17.5 / 39.2 | 61.6 ms = 16.2 | 1.08x | 3.8 (1.6 at floor) |
+
+**K = 3 at 4 users/row.** The verify step is **84.0 ms** modelled (1.22x the 68.7 ms plain step; floor 43.7 ms = 1.36x the
+plain floor), the iteration **127.7 ms** modelled (floor 62.8; 49.5 with SP1; 54.1 after the ranked actions + SP1 + B5):
+at 2.0 accepted tokens 15.7 tok/s per user against 14.6 plain (1.08x); the after-actions iteration gives 37.0 against
+28.5. Where the verify's extra 15.3 ms over the plain step comes from (per layer, model us): `kda.decode` 4 launches
+300 vs 75 + the 37 us backup (x34 = 8.9 ms), the experts 48 vs 28 active slices 529 vs 351 (x42 = 7.5 ms), the MTP
+level 1 on 16 rows 2.0 ms; the dense-range DSA attention is 275 us *cheaper* per layer than the plain sparse path
+(-3.0 ms: no pool gather 136, state composite 100, index query / views / scoring / top-k 75; the plain comparison runs
+the sparse path at ISL 16, B8a not applied). At the floor the same two terms (+2.8 GB of expert
+slices = 7.0 ms, +1.2 GB of kda_decode state = 2.9 ms) set the 1.36x: speculation must average more than 1.36 accepted
+tokens per iteration to break even at the floor, 1.22 at the model, before C, D and the host are paid.
+
+K = 3 commit rows per iteration (all layers): `spec.kda_replay` 10.2 ms model (floor 3.0; 136 launches),
+`spec.kda_blend` **23.4 ms** (floor 10.3; 816 fp32 state ops moving 4.1 GB), `spec.index_commit` 4.4 ms (floor 1.3; B5
+1.8). The commit is 30 % of today's iteration and is the first design item: **SP1** = the verify's launches write the
+selected user's state in place (a per-user destination select in `kda_decode`'s writer), which deletes the backup, the
+replay and the blends (-33.6 ms at K = 3, -13.3 ms of floor); SP2 (one masked copy per launch instead of 3 full-state
+ops, 7 -> 2 B MB) is the cheap interim.
+
+#### tok/s per user vs plain step x accepted tokens per iteration (K = 3, 4 users/row)
+
+The verify = the plain step x 1.22 (the R = 16-row cost ratio), the host 2 ms fixed, C + D scaled with the plain step
+as the verify is (the same op classes); the second table puts C + D at their after values (SP1 + B5: C 1.8 ms, D 2.4 ms).
+The last three columns are the accepted tokens per iteration (1 + accepted drafts; K + 1 = 4 at most) a target needs.
+
+today's commit graph:
+
+| plain step ms | verify ms | iteration ms | accepted 1.5 | accepted 2.0 | accepted 2.5 | tokens for 30 tok/s | tokens for 33 tok/s | tokens for 50 tok/s |
+|---|---|---|---|---|---|---|---|---|
+| 80 | 97.9 | 148.4 | 10.1 | 13.5 | 16.8 | 4.45 | 4.90 | 7.42 |
+| 45 | 55.0 | 84.4 | 17.8 | 23.7 | 29.6 | 2.53 | 2.78 | 4.22 |
+| 33 | 40.4 | 62.4 | 24.0 | 32.1 | 40.1 | 1.87 | 2.06 | 3.12 |
+
+SP1 + B5 design (C + D at their after values):
+
+| plain step ms | verify ms | iteration ms | accepted 1.5 | accepted 2.0 | accepted 2.5 | tokens for 30 tok/s | tokens for 33 tok/s | tokens for 50 tok/s |
+|---|---|---|---|---|---|---|---|---|
+| 80 | 97.9 | 104.0 | 14.4 | 19.2 | 24.0 | 3.12 | 3.43 | 5.20 |
+| 45 | 55.0 | 61.2 | 24.5 | 32.7 | 40.9 | 1.84 | 2.02 | 3.06 |
+| 33 | 40.4 | 46.5 | 32.2 | 43.0 | 53.7 | 1.40 | 1.54 | 2.33 |
+
+* **Elasticities at the centre (plain 45 ms, 2.0 accepted: 23.7 tok/s/u)**: plain step -0.89, accepted tokens +1.00,
+  host overhead -0.02, commit + chain cost -0.31. The accepted tokens per iteration dominate (every +10 % is +10 %
+  tok/s), the plain step is nearly as strong (-0.89: the verify is the plain step's ops on more rows), the commit is a
+  third of that, the 2 ms host accept is noise at these iteration lengths (it would matter below ~20 ms iterations).
+* 30 tok/s per user needs 1.87 accepted tokens at a 33 ms plain step (1.40 with SP1 + B5), 2.53 at 45 ms (1.84), 4.45 at
+  80 ms (3.12); 50 tok/s needs 3.12 at 33 ms (2.33), 4.22 at 45 ms (3.06) and is out of reach at 80 ms (7.42 / 5.20 >
+  the K + 1 = 4 cap).
+* The K sweep says K = 1-2 at 4 users/row (1.43x / 1.22x at 2.0 accepted) and K = 1-3 at 1 user/row (1.62x / 1.43x /
+  1.28x) are the useful points on today's commit graph; K = 3 at 4 users/row breaks even (1.08x) and K = 5 loses
+  (0.87x). With SP1 + B5 the iteration cost of one more draft drops from ~16 ms (K + 1 launches + blends + the MTP pass:
+  96.0 -> 127.7 ms from K = 1 to 3) to ~4.3 ms (the verify's extra rows + the MTP pass: 45.5 -> 54.1), so K = 3-5 pay off
+  whenever each extra draft adds more than ~0.2 accepted tokens per iteration (+4.3 ms on a ~50 ms iteration).
+
+Caveats specific to this section: the host accept is a parameter (2 ms; the real loop reads back R ids, computes the
+prefix match and refreshes ids / positions / ring slots / masks: measure it); no R-row expert or kda_decode profile
+exists (the launches are the per-launch fit, the experts the stream-op two-point model); the MTP block is unprofiled
+(its 657 us head pass per level is the LM head + the full-logits gather: HD1 cuts 155 us per pass); the blend rate is
+the mHC fp32 elementwise rate (175 GB/s), the item SP1 removes; the dense-range verify is v1's scope (positions + K <=
+2050), the sparse-range verify (index scorer with K + 1 rows per user) is not modelled.

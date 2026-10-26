@@ -18,6 +18,13 @@ types (31 KDA+MoE, 11 DSA+MoE, 3 KDA+dense, embedding + LM head).
 
     python -m models.demos.glm53_flash.tt.roofline --users-per-row 4
     python -m models.demos.glm53_flash.tt.roofline --users-per-row 32 --layer "KDA+MoE" --markdown
+    python -m models.demos.glm53_flash.tt.roofline --users-per-row 4 --spec-k 3 --accepted 2.0 --markdown
+
+Speculative decode (``--spec-k K``, ``tt/spec_decode.py``): one iteration = V (the 45 layers + head on ``R = B (K + 1)``
+candidate rows per chip, dense-range DSA, ``K + 1`` kda_decode launches, the MTP level 1 on all R rows) + the host accept
+(``--host-ms``) + C (the KDA replay + blends on the backup state per launch, the index maintenance per candidate) + D
+(MTP levels 2 .. K on B rows); ``--accepted`` tokens per iteration give the tok/s per user. Policy ``K = min(K_ctx,
+32 // B - 1)`` (``spec_policy_k``), off above one tile row.
 
 Everything here is a model: the ``proj`` measured entries are projections where no profile exists (DSA layers at 32
 users/row, the hybrid MoE at 4 users/row on the 8x4), marked as such in the ``src`` column.
@@ -29,7 +36,7 @@ import argparse
 import json
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 
@@ -115,6 +122,10 @@ CHIP = {
     ),
 }
 
+# expert_stream op cost model (doc/mesh/expert_kernel_sweep.md: 28 active = 93.5 MB in 341 us, 69 active = 231 MB in 707 us)
+EXPERT_FIXED_US = 92.0
+EXPERT_GBS = 376.0
+
 BYTES = {"bf16": 2.0, "fp32": 4.0, "bfp8": 1088 / 1024, "bfp4": 576 / 1024, "u16": 2.0, "u32": 4.0}
 
 
@@ -145,6 +156,11 @@ class Layout:
     topology: str = "line"  # line | ring (CCL fits)
     mhc_pre_block: bool = False  # A1 fused pre-block (GLM53_MHC_PRE_BLOCK=1, off by default)
     dsa_state_fused: bool = False  # B5 (GLM53_DSA_DECODE_STATE=1, off by default)
+    # speculative decode (tt/spec_decode.py): K drafts per user, R = B (K + 1) candidate rows per chip in the verify
+    spec_k: int = 0
+    dsa_index: bool = True  # False: dense-range rows (verify / MTP chain): no index scoring, selection or gather
+    accepted: float = 2.0  # tokens committed per iteration (1 + mean accepted drafts)
+    host_ms: float = 2.0  # host accept: readback of the R ids + input refresh per iteration
 
     @property
     def users(self) -> int:
@@ -155,9 +171,28 @@ class Layout:
         return TILE  # tile-padded rows per chip for every T <= 32
 
     @property
+    def verify_rows(self) -> int:
+        """R = B (K + 1) candidate rows per chip (spec_decode.candidate_rows); refused above one tile row."""
+        r = self.users_per_row * (self.spec_k + 1)
+        if r > TILE:
+            raise ValueError(f"B={self.users_per_row} K={self.spec_k}: B (K + 1) = {r} exceeds {TILE} rows")
+        return r
+
+    @property
+    def rows_per_chip(self) -> int:
+        """Activation rows per chip: the verify's R under speculation, else the users per row."""
+        return self.verify_rows if self.spec_k else self.users_per_row
+
+    @property
     def point(self) -> str:
         """Which measured column applies: 32 users (4/row) or 256 users (32/row); other T interpolate the state terms."""
         return "256u" if self.users_per_row >= 32 else "32u"
+
+
+def spec_policy_k(users_per_row: int, k_ctx: int) -> int:
+    """The draft length the serving policy picks (``spec_decode.spec_draft_len``): ``K = min(K_ctx, 32 // B - 1)``, 0 =
+    plain decode (at ``B (K + 1) > 32`` the verify leaves one tile row and the weight-bandwidth-bound regime)."""
+    return max(0, min(int(k_ctx), TILE // users_per_row - 1))
 
 
 # ----------------------------------------------------------------------------------------------- floors
@@ -227,7 +262,7 @@ def active_experts(cfg: GLM53FlashConfig, lay: Layout) -> tuple[float, str]:
     uniform Monte-Carlo's ratio extrapolates; ``routing="uniform"`` uses the Monte-Carlo alone."""
     if lay.active_experts is not None:
         return float(lay.active_experts), "override"
-    tokens = lay.users  # the hybrid gathers every row's tokens; EP32 dispatches every token to its experts' chips
+    tokens = lay.rows * lay.rows_per_chip  # every row's rows are gathered (hybrid) or dispatched (EP32)
     e, k = cfg.n_routed_experts, cfg.num_experts_per_tok
     group = e // lay.cols if lay.moe == "hybrid" else e // (lay.rows * lay.cols)
     mc = lambda n: expected_active_experts(e, k, n, group)
@@ -339,10 +374,21 @@ def mhc_wrap_rows(cfg: GLM53FlashConfig, lay: Layout, wrap: str) -> list[OpRow]:
                 fidelity="HiFi4",
                 cores=32,
                 measured={"32u": (12.9, "ep_b4 #248"), "256u": (12.7, "ep_b32 #245")},
-                action_id="A1",
-                action="fuse into mhc_pre_block (reads x once for projection + sum of squares + h_mix)",
-                risk="M",
-                after={"32u": 0.0, "256u": 0.0},
+                steps=[
+                    (
+                        "A1",
+                        {"32u": 101.0, "256u": 101.0},
+                        "M",
+                        "fuse the 18 pre-block ops into mhc_pre_block (measured 101 us per wrap vs 168: this row carries "
+                        "the fused op's cost, the other pre-block rows go to 0)",
+                    ),
+                    (
+                        "A4",
+                        {"32u": 57.0, "256u": 57.0},
+                        "M",
+                        "per-row Sinkhorn inside the fused op (one token row per core, 32 cores: 52 -> ~8 us)",
+                    ),
+                ],
             ),
             OpRow(
                 "mhc.xx",
@@ -407,10 +453,10 @@ def mhc_wrap_rows(cfg: GLM53FlashConfig, lay: Layout, wrap: str) -> list[OpRow]:
                 cores=1,
                 measured={"32u": (52.1, "ep_b4 #260"), "256u": (52.1, "ep_b32 #257")},
                 bound_hint="L1/NoC",
-                action_id="A4",
-                action="per-row Sinkhorn kernel (one token row per core, 32 cores) inside the fused pre-block",
+                action_id="A1",
+                action="inside the fused pre-block (its 101 us include this single-core chain: A4 on the mhc.proj row)",
                 risk="M",
-                after={"32u": 8.0, "256u": 8.0},
+                after={"32u": 0.0, "256u": 0.0},
                 note="single-core serial SFPU chain; the fused A1 op keeps it (101 us total per wrap)",
             ),
             OpRow(
@@ -478,6 +524,8 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
     kda_meas = {"32u": (74.9, "ep_b4 #267 (gap 34.2 before it)"), "256u": (259.7, "ep_b32 #264 (gap 34.3)")}
     if t not in (4, 32):  # two-point fit of the measured op: 48.6 us fixed + 6.6 us per user
         kda_meas = {lay.point: (48.6 + 6.6 * t, "fit of ep_b4 / ep_b32: 48.6 + 6.6 us x users")}
+    if lay.spec_k:
+        return kda_rows_verify(cfg, lay)
     return [
         OpRow(
             "kda.qkv",
@@ -564,11 +612,76 @@ def kda_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
     ]
 
 
+def kda_rows_verify(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
+    """The KDA sublayer of a verify step (``KdaSpecState.verify_attention``): the projections on all R rows (tile-padded:
+    as the plain rows), the state backed up (``ttnn.copy`` of the recurrent + conv), then K + 1 sequential ``kda_decode``
+    launches on the B-row candidate slabs, concat, o_proj, all-reduce."""
+    b, k = lay.users_per_row, lay.spec_k
+    hl, kd = cfg.kda_num_heads // lay.cols, cfg.kda_head_dim
+    state_bytes = hl * kd * kd * BYTES["fp32"]
+    conv_bytes = (cfg.kda_conv_kernel - 1) * 3 * hl * kd * BYTES["bf16"]
+    plain = kda_rows(cfg, replace(lay, spec_k=0))
+    out = []
+    for r in plain:
+        if r.key != "kda.decode":
+            out.append(r)
+            continue
+        out.append(
+            OpRow(
+                "kda.spec_backup",
+                r.module,
+                f"backup S_0: ttnn.copy of the recurrent [{b},16,128,128] fp32 + conv history (verify)",
+                kind="state",
+                n_ops=2,
+                dram_bytes=2 * b * (state_bytes + conv_bytes),
+                measured={
+                    lay.point: (2.0 + 2 * b * (state_bytes + conv_bytes) / 250e3, "proj: copy at 250 GB/s + 2 us")
+                },
+                action_id="SP1",
+                action="write the commit's selected state inside kda_decode's writer (per-user destination select): the "
+                "backup copy, the replay and the 6 blend ops per launch collapse into the launches themselves",
+                risk="M",
+                after={lay.point: 2.0 + 2 * b * (state_bytes + conv_bytes) / 250e3},
+            )
+        )
+        out.append(
+            OpRow(
+                "kda.decode",
+                r.module,
+                f"{k + 1} sequential kda_decode launches on the candidate slabs ([{b}] users each; state in place)",
+                kind="state",
+                n_ops=k + 1,
+                dram_bytes=(k + 1)
+                * (2 * b * (state_bytes + conv_bytes) + 32 * (3 * hl * kd * 2 + (2 * hl * kd + 32) * 4)),
+                flops=(k + 1) * b * hl * (6 * kd * kd + 10 * kd),
+                fidelity="HiFi4",
+                cores=80,
+                measured={
+                    lay.point: (
+                        (k + 1) * (48.6 + 6.6 * b),
+                        f"fit of ep_b4 / ep_b32 per launch: {k + 1} x (48.6 + 6.6 x {b})",
+                    )
+                },
+                gap_us=34.2 * (k + 1),
+                action_id="K3",
+                action="the fixed 49 us + 34 us gap per launch is paid K + 1 times: K3 (runtime-arg volume, prologue) matters "
+                "K + 1 times more under speculation",
+                risk="M",
+                after={lay.point: (k + 1) * (14.0 + 6.6 * b)},
+            )
+        )
+    return out
+
+
 def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
     """DSA (MLA + DeepSeek sparse index) attention per chip (16 of 64 heads): measured on the (2,4) block at 4 users/row
     (report_prof2_l3_b4_stream #438-487: identical per-chip TP4 shapes); no profile exists at 32 users/row, the state
-    terms there are projections (``proj``)."""
-    tp, t = lay.tp, lay.users_per_row
+    terms there are projections (``proj``). ``dsa_index=False`` (the verify / MTP chain rows of the dense range): the
+    index query, scoring, selection and pool gather are dropped, the state maintenance is the per-candidate latent
+    append + the raw k / gate row caches, and the flash-MLA decode runs on R rows over the users' pages."""
+    tp, t = lay.tp, lay.rows_per_chip
+    if not lay.dsa_index or lay.spec_k:  # the verify never scores / selects / gathers: its index work is the commit's
+        return dsa_rows_dense(cfg, lay)
     h = cfg.hidden_size
     hl = cfg.num_attention_heads // lay.cols
     lq, l, dq, dv = cfg.q_lora_rank, cfg.kv_lora_rank, cfg.qk_head_dim, cfg.v_head_dim
@@ -853,14 +966,62 @@ def dsa_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
     return rows
 
 
+def dsa_rows_dense(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
+    """Dense-range DSA rows (verify / MTP chain): see ``dsa_rows``. The projections are the plain rows at the same rows
+    per chip (tile-padded: shape-independent for R <= 32); the index maintenance of the committed rows is charged to
+    the commit (``commit_rows``: ``spec.index_commit``), not here."""
+    t = lay.rows_per_chip
+    l, hl = cfg.kv_lora_rank, cfg.num_attention_heads // lay.cols
+    keys_per_row = lay.isl + lay.spec_k + 1
+    plain = dsa_rows(cfg, replace(lay, dsa_index=True, spec_k=0, users_per_row=t))
+    out = []
+    for r in plain:
+        if r.key in ("dsa.idx_query", "dsa.idx_view", "dsa.index_score", "dsa.topk_rows", "dsa.pool_gather"):
+            continue
+        if r.key in ("dsa.state_composite", "dsa.state_fused"):
+            out.append(
+                OpRow(
+                    "dsa.spec_append",
+                    r.module,
+                    f"per-candidate latent append (paged_update_cache x{t // lay.users_per_row if lay.spec_k else 1}) + the raw k / gate row copies "
+                    "for the commit; no ring / pool writes",
+                    kind="layout",
+                    n_ops=4 + (3 if lay.spec_k else 1),
+                    dram_bytes=6 * t * (l + 2 * cfg.index_head_dim) * 2,
+                    measured={lay.point: (20.0 + 4.0 * (lay.spec_k + 1), "proj: 5-8 small ops at 3-5 us")},
+                    bound_hint="launch/gap",
+                )
+            )
+            continue
+        if r.key == "dsa.sdpa":
+            nbytes = t * keys_per_row * l * 2 + 2 * 32 * hl * l * 2
+            floor = dram_us(nbytes, lay.dram_gbs)
+            out.append(
+                OpRow(
+                    "dsa.sdpa",
+                    r.module,
+                    f"paged flash-MLA decode: {t} rows over the users' pages ({keys_per_row} keys each at ISL {lay.isl})",
+                    kind="state",
+                    dram_bytes=nbytes,
+                    flops=2 * 2 * t * hl * keys_per_row * l,
+                    cores=min(120, 12 * max(1, t // 4)),
+                    measured={lay.point: (max(72.9, floor * 3.0), "proj: max(73 us at B=4, 3x the DRAM floor)")},
+                    bound_hint="launch/gap" if t * keys_per_row * l * 2 < 4e6 else "L1/NoC",
+                )
+            )
+            continue
+        out.append(r)
+    return out
+
+
 def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
     """Routed + shared MoE sublayer per chip. Hybrid: router, row gathers, the chip's expert slices over the 8T gathered
     tokens, reduce-scatter back, shared expert, TP all-reduce. EP32: router, dispatch glue + all_to_all_dispatch, 9
     full experts, reduce-scatter combine, shared expert, TP all-reduce."""
-    tp, t = lay.tp, lay.users_per_row
+    tp, t = lay.tp, lay.rows_per_chip
     h, e, k = cfg.hidden_size, cfg.n_routed_experts, cfg.num_experts_per_tok
     i_full = cfg.moe_intermediate_size
-    n_tok = lay.users  # gathered / dispatched tokens on the mesh
+    n_tok = lay.rows * t  # gathered / dispatched tokens on the mesh
     tok_pad = lay.rows * tp  # the gathered tensor is [rows x 32, H] whatever T
     act_n, src = active_experts(cfg, lay)
     point = lay.point
@@ -938,7 +1099,23 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
                 after={"32u": 15.0, "256u": 15.0},
             ),
         ]
-        if t < TILE:
+        if t < TILE and (t != 4 or lay.spec_k):
+            # no measured point (or a speculative layout): the stream op's two-point cost model from the sweep's 28-active
+            # (93.5 MB, 341 us) and 69-active (231 MB, 707 us) chip measurements: 92 us fixed + bytes at 376 GB/s
+            act_bytes = act_n * slice_bytes
+            ex_meas = {
+                "32u": (
+                    EXPERT_FIXED_US + act_bytes / (EXPERT_GBS * 1e3) + 10.0,
+                    f"model: stream op {EXPERT_FIXED_US:.0f} us + {act_bytes / MB:.0f} MB at {EXPERT_GBS:.0f} GB/s "
+                    "+ selector matmul 8 + x copy 2 (the 351 us stream row at 28 active)",
+                )
+            }
+            ex_ops = 4
+            ex_steps = [
+                ("E1", {"32u": 50.0 + act_bytes / 400e3}, "M", "expert_stream fixed cost (~92 -> ~50 us) at 400 GB/s"),
+                ("C12", {"32u": 50.0 + act_bytes * (2 * 0.53 + 1) / 3 / 400e3}, "M (accuracy)", "bfp4 gate|up experts"),
+            ]
+        elif t < TILE:
             if lay.expert_path == "stream":
                 ex_meas = {
                     "32u": (
@@ -1002,8 +1179,8 @@ def moe_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
             OpRow(
                 "moe.experts",
                 "MOE_HYB_EXPERTS",
-                f"routed experts: {act_n:.0f} of {e // lay.cols} active slices x {slice_bytes / MB:.2f} MB ({w13} gate|up, {w2} down)"
-                + (" [dense layout reads all 72]" if t >= TILE else ""),
+                f"routed experts: {act_n:.0f} of {e // lay.cols} active slices x {slice_bytes / MB:.2f} MB ({w13} gate|up, {w2} down) "
+                f"for {n_tok} gathered tokens" + (" [dense layout reads all 72]" if t >= TILE else ""),
                 kind="generic",
                 n_ops=ex_ops,
                 dram_bytes=act_n * slice_bytes + 2 * tok_pad * h * 2,
@@ -1637,6 +1814,382 @@ def format_actions(actions: list[dict], markdown: bool = False, top: int = 12) -
     return "\n".join("  ".join(_fmt(v, 2) for v in r) for r in [hdr] + rows)
 
 
+# ----------------------------------------------------------------------------------------------- speculative decode
+MTP_GLUE_OPS = 5  # embedding gather, enorm, hnorm, typecast, concat
+
+
+def mtp_block_rows(cfg: GLM53FlashConfig, lay: Layout, rows: int) -> list[OpRow]:
+    """One pass of the MTP block (checkpoint layer 45, ``tt/mtp.py``) on ``rows`` rows per chip: glue (enorm / hnorm /
+    eh_proj [8192, 4096] bfp8, replicated), its own DSA (dense range, own latent cache) and 288-expert MoE, the
+    shared_head norm and the shared LM head (logits + greedy). No mHC wrap (plain residuals)."""
+    sub = replace(lay, users_per_row=rows, spec_k=0, dsa_index=False)
+    h, tp = cfg.hidden_size, lay.tp
+    glue = [
+        OpRow(
+            "mtp.glue",
+            "MTP_GLUE",
+            "embedding gather of the next token, enorm, hnorm, typecast, concat [e | h]",
+            n_ops=MTP_GLUE_OPS,
+            dram_bytes=tp * h * (2 + 2 + 4 + 2 + 4 + 4),
+            measured={lay.point: (18.0, "proj: 5 small ops")},
+            bound_hint="launch/gap",
+        ),
+        OpRow(
+            "mtp.eh_proj",
+            "MTP_GLUE",
+            "eh_proj matmul [32,8192]x[8192,4096] bfp8 (replicated, no collective)",
+            dram_bytes=_w(2 * h, h, "bfp8") + _act(tp, 2 * h, h),
+            flops=2 * tp * 2 * h * h,
+            cores=96,
+            measured={lay.point: (95.0, "proj: 35.7 MB at 390 GB/s")},
+        ),
+    ]
+    tail = [
+        OpRow(
+            "mtp.shared_norm",
+            "MTP_HEAD",
+            "shared_head.norm (rms_norm, bf16)",
+            dram_bytes=3 * tp * h * 2,
+            measured={lay.point: (7.0, "proj: sharded rms_norm")},
+            bound_hint="launch/gap",
+        )
+    ]
+    head = [r for r in head_rows(cfg, sub) if r.key != "embed.gather"]
+    rows_ = glue + dsa_rows(cfg, sub) + moe_rows(cfg, sub) + tail + head
+    for r in rows_:
+        r.module = "MTP_" + r.module if not r.module.startswith("MTP_") else r.module
+    return [evaluate(r, sub) for r in rows_]
+
+
+def commit_rows(cfg: GLM53FlashConfig, lay: Layout) -> list[OpRow]:
+    """The commit graph C per iteration (``KdaSpecState.commit`` x 34 KDA layers, ``DsaSpecState.commit`` x 11 DSA
+    layers), as rows already multiplied by their layer counts."""
+    b, k = lay.users_per_row, lay.spec_k
+    hl, kd = cfg.kda_num_heads // lay.cols, cfg.kda_head_dim
+    state_bytes = hl * kd * kd * BYTES["fp32"]
+    conv_bytes = (cfg.kda_conv_kernel - 1) * 3 * hl * kd * BYTES["bf16"]
+    n_kda, n_dsa = KDA_LAYERS, DSA_LAYERS
+    launches = n_kda * (k + 1)
+    blend_bytes = 7 * b * state_bytes  # in-place multiply (r+w), multiply (r+w), in-place add (2r+w) on the fp32 state
+    maint = 100.3 + 12.0 * (b / 4 - 1) if not lay.dsa_state_fused else 40.0 + 10.0 * (b / 4 - 1)
+    rows = [
+        OpRow(
+            "spec.kda_replay",
+            "COMMIT_KDA",
+            f"{k + 1} kda_decode launches per KDA layer on the backup from the cached projections ({launches} launches)",
+            kind="state",
+            n_ops=launches,
+            dram_bytes=launches * 2 * b * (state_bytes + conv_bytes),
+            flops=launches * b * hl * (6 * kd * kd + 10 * kd),
+            fidelity="HiFi4",
+            cores=80,
+            measured={lay.point: (launches * (48.6 + 6.6 * b), f"fit per launch: {launches} x (48.6 + 6.6 x {b})")},
+            gap_us=34.2 * launches,
+            steps=[
+                (
+                    "K3",
+                    {lay.point: launches * (14.0 + 6.6 * b)},
+                    "M",
+                    "kda_decode fixed cost + pre-op gap (paid per launch)",
+                ),
+                (
+                    "SP1",
+                    {lay.point: 0.0},
+                    "M",
+                    "no replay: the verify's launches write the selected user's state in place (per-user destination select in the writer)",
+                ),
+            ],
+        ),
+        OpRow(
+            "spec.kda_blend",
+            "COMMIT_KDA",
+            f"per launch: live = live * keep_j + backup * take_j on the fp32 state (3 full-state elementwise ops, {7 * b:.0f} MB) + 3 conv blends",
+            n_ops=6 * launches,
+            dram_bytes=launches * (blend_bytes + 7 * b * conv_bytes),
+            measured={
+                lay.point: (
+                    launches * (blend_bytes / 175e3 + 3 * 1.5),
+                    "proj: fp32 elementwise at 175 GB/s (the mHC x*x rate) + 3 tiny ops",
+                )
+            },
+            bound_hint="DRAM (under-utilized)",
+            steps=[
+                (
+                    "SP2",
+                    {lay.point: launches * (2 * b * state_bytes / 300e3 + 1.5)},
+                    "L",
+                    "one masked copy per launch (backup -> live for take_j users) instead of 3 full-state ops: 7 -> 2 x B MB",
+                ),
+                ("SP1", {lay.point: 0.0}, "M", "blend inside kda_decode's writer"),
+            ],
+        ),
+        OpRow(
+            "spec.index_commit",
+            "COMMIT_DSA",
+            f"{k + 1} x the pooled-key index maintenance per DSA layer (ring row + pool rewrite per candidate, rejected rows to dead ring rows)",
+            kind="layout",
+            n_ops=n_dsa * (k + 1) * (1 if lay.dsa_state_fused else 29),
+            dram_bytes=n_dsa * (k + 1) * b * (cfg.kv_lora_rank + 6 * cfg.index_head_dim) * 2 * 4,
+            measured={
+                lay.point: (
+                    n_dsa * (k + 1) * maint,
+                    f"{n_dsa} x {k + 1} x the state maintenance ({maint:.0f} us: blk_l3_b4 composite at B=4"
+                    + (", B5 program)" if lay.dsa_state_fused else ")"),
+                )
+            },
+            steps=[]
+            if lay.dsa_state_fused
+            else [
+                (
+                    "B5",
+                    {lay.point: n_dsa * (k + 1) * (40.0 + 10.0 * (b / 4 - 1))},
+                    "M",
+                    "dsa_decode_state program for the commit rows (29 -> 1 op per candidate)",
+                )
+            ],
+        ),
+    ]
+    return [evaluate(r, lay) for r in rows]
+
+
+def spec_iteration(cfg: GLM53FlashConfig, lay: Layout) -> dict:
+    """One speculative iteration at B users per row with K = ``lay.spec_k`` drafts: V (verify: the 45 layers + head on
+    R = B (K + 1) rows, then the MTP level 1 on all R rows), host accept, C (commit) and D (MTP levels 2 .. K on B rows);
+    floors and modelled times in ms, tokens per iteration and the tok/s per user they imply."""
+    assert lay.spec_k >= 1, "spec_k >= 1"
+    b, k = lay.users_per_row, lay.spec_k
+    if (
+        b < TILE
+    ):  # one expert cost basis for V, D and the plain step: the stream op (E0; the T=4 block op has no R-row point)
+        lay = replace(lay, expert_path="stream")
+    r = lay.verify_rows
+    v_layers = {name: layer_summary(cfg, lay, name) for name in LAYER_COUNTS}
+    v_floor = sum(s["floor_us"] * s["count"] for s in v_layers.values())
+    v_model = sum(s["measured_us"] * s["count"] for s in v_layers.values())
+    v_after = sum(s["after_us"] * s["count"] for s in v_layers.values())
+    mtp_v = mtp_block_rows(cfg, lay, r)
+    mtp_d = mtp_block_rows(cfg, lay, b) if k > 1 else []
+    onehot = (k - 1) * 10.0
+    c_rows = commit_rows(cfg, lay)
+    f = lambda rows: sum(x.floor_us for x in rows)
+    mm = lambda rows: sum(x.measured_us or 0.0 for x in rows)
+    aa = lambda rows: sum(x.after_us if x.after_us is not None else (x.measured_us or 0.0) for x in rows)
+    phases = {
+        "V main model (R rows)": (v_floor, v_model, v_after),
+        "V MTP level 1 (R rows)": (f(mtp_v), mm(mtp_v), aa(mtp_v)),
+        "host accept": (lay.host_ms * 1e3, lay.host_ms * 1e3, lay.host_ms * 1e3),
+        "C commit (KDA replay + blends, index)": (f(c_rows), mm(c_rows), aa(c_rows)),
+        "D MTP levels 2..K (B rows)": (
+            (k - 1) * f(mtp_d) + onehot,
+            (k - 1) * mm(mtp_d) + onehot,
+            (k - 1) * aa(mtp_d) + onehot,
+        ),
+    }
+    tot = [sum(p[i] for p in phases.values()) / 1e3 for i in range(3)]
+    plain = step_table(cfg, replace(lay, spec_k=0))
+    verify = [(v_floor + f(mtp_v)) / 1e3, (v_model + mm(mtp_v)) / 1e3, (v_after + aa(mtp_v)) / 1e3]
+    return {
+        "B": b,
+        "K": k,
+        "R": r,
+        "phases_ms": {name: tuple(x / 1e3 for x in v) for name, v in phases.items()},
+        "verify_ms": tuple(verify),  # V: the 45 layers + head on R rows + MTP level 1 on R rows (floor / model / after)
+        "verify_ratio_model": verify[1] / plain["step_model_measured_ms"],  # the R-row cost ratio over the plain step
+        "verify_ratio_floor": verify[0] / plain["step_floor_ms"],
+        "iteration_floor_ms": tot[0],
+        "design_floor_ms": (
+            tot[0] * 1e3 - sum(x.floor_us for x in c_rows if x.key in ("spec.kda_replay", "spec.kda_blend"))
+        )
+        / 1e3,  # SP1: the verify's launches commit in place, no replay / blend rows
+        "iteration_model_ms": tot[1],
+        "iteration_after_ms": tot[2],
+        "accepted": lay.accepted,
+        "tok_s_per_user_floor": lay.accepted * 1e3 / tot[0],
+        "tok_s_per_user_model": lay.accepted * 1e3 / tot[1],
+        "tok_s_per_user_after": lay.accepted * 1e3 / tot[2],
+        "plain_step_model_ms": plain["step_model_measured_ms"],
+        "plain_step_floor_ms": plain["step_floor_ms"],
+        "tok_s_per_user_plain_model": 1e3 / plain["step_model_measured_ms"],
+        "tokens_needed_for_33": 33.0 * tot[1] / 1e3,
+        "tokens_needed_for_33_floor": 33.0 * tot[0] / 1e3,
+        # accepted tokens per iteration a target tok/s per user needs: model / floor / after-actions iteration
+        "tokens_needed": {
+            tgt: (tgt * tot[1] / 1e3, tgt * tot[0] / 1e3, tgt * tot[2] / 1e3) for tgt in SPEC_TARGETS_TOK_S
+        },
+        "speedup_model": (lay.accepted * 1e3 / tot[1]) / (1e3 / plain["step_model_measured_ms"]),
+        "commit_rows": c_rows,
+        "mtp_rows": mtp_v,
+    }
+
+
+def spec_sweep(cfg: GLM53FlashConfig, lay: Layout, ks=(1, 2, 3, 5)) -> list[dict]:
+    out = []
+    for k in ks:
+        if lay.users_per_row * (k + 1) > TILE:
+            continue
+        out.append(spec_iteration(cfg, replace(lay, spec_k=k)))
+    return out
+
+
+SPEC_TARGETS_TOK_S = (30.0, 33.0, 50.0)
+
+
+def spec_scenarios(
+    cfg: GLM53FlashConfig,
+    lay: Layout,
+    plain_steps=(80.0, 45.0, 33.0),
+    accepted=(1.5, 2.0, 2.5),
+    targets=SPEC_TARGETS_TOK_S,
+) -> dict:
+    """tok/s per user for a plain step of ``plain_steps`` ms and ``accepted`` tokens per iteration: the verify is the
+    plain step x the model's R-row cost ratio (``verify_ratio_model``), the host accept is fixed, and C + D scale with
+    the plain step like the verify (the same op classes: kda_decode launches, elementwise state ops, one MTP pass per
+    level). ``table_design`` puts C + D at their after-actions values instead (SP1: the verify's launches commit in
+    place, B5 index program): the commit no longer scales with anything. ``tokens_needed[target][plain]`` = the
+    accepted tokens per iteration a target tok/s per user needs at that plain step. The elasticities at the central
+    cell say which assumption dominates."""
+    it = spec_iteration(cfg, lay)
+    ph = it["phases_ms"]
+    v = ph["V main model (R rows)"][1] + ph["V MTP level 1 (R rows)"][1]
+    cd = ph["C commit (KDA replay + blends, index)"][1] + ph["D MTP levels 2..K (B rows)"][1]
+    cd_design = ph["C commit (KDA replay + blends, index)"][2] + ph["D MTP levels 2..K (B rows)"][2]
+    plain_model = it["plain_step_model_ms"]
+    host = lay.host_ms
+
+    def iteration(plain, host_ms=host, cd_scale=1.0, design=False):
+        scale = plain / plain_model
+        return v * scale + host_ms + (cd_design if design else cd * scale * cd_scale)
+
+    table = {p: {a: a * 1e3 / iteration(p) for a in accepted} for p in plain_steps}
+    table_design = {p: {a: a * 1e3 / iteration(p, design=True) for a in accepted} for p in plain_steps}
+    tokens_needed = {t: {p: t * iteration(p) / 1e3 for p in plain_steps} for t in targets}
+    tokens_needed_design = {t: {p: t * iteration(p, design=True) / 1e3 for p in plain_steps} for t in targets}
+    p0, a0 = plain_steps[len(plain_steps) // 2], accepted[len(accepted) // 2]
+    base = a0 * 1e3 / iteration(p0)
+    eps = 0.1
+    elast = {
+        "plain step": ((a0 * 1e3 / iteration(p0 * (1 + eps))) / base - 1) / eps,
+        "accepted tokens": ((a0 * (1 + eps) * 1e3 / iteration(p0)) / base - 1) / eps,
+        "host overhead": ((a0 * 1e3 / iteration(p0, host_ms=host * (1 + eps))) / base - 1) / eps,
+        "commit + chain cost": ((a0 * 1e3 / iteration(p0, cd_scale=1 + eps)) / base - 1) / eps,
+    }
+    dominant = max(elast, key=lambda n: abs(elast[n]))
+    return {
+        "table": table,
+        "table_design": table_design,
+        "tokens_needed": tokens_needed,
+        "tokens_needed_design": tokens_needed_design,
+        "center": (p0, a0, base),
+        "elasticities": elast,
+        "dominant": dominant,
+        "v_fraction": v / (v + cd),
+        "verify_ratio": it["verify_ratio_model"],
+        "iteration_at": {p: iteration(p) for p in plain_steps},
+        "iteration_design_at": {p: iteration(p, design=True) for p in plain_steps},
+    }
+
+
+def format_spec(cfg: GLM53FlashConfig, lay: Layout, markdown: bool = False) -> str:
+    lines = []
+    sw = spec_sweep(cfg, lay)
+    hdr = [
+        "K",
+        "R",
+        "V main",
+        "V MTP1",
+        "host",
+        "C",
+        "D",
+        "verify step model ms (x plain)",
+        "iteration floor (design floor) / model / after ms",
+        "tok/s/u floor / model / after",
+        "plain model",
+        "speedup",
+        "tokens for 33 tok/s",
+    ]
+    rows = []
+    for it in sw:
+        ph = it["phases_ms"]
+        rows.append(
+            [
+                it["K"],
+                it["R"],
+                f"{ph['V main model (R rows)'][1]:.1f}",
+                f"{ph['V MTP level 1 (R rows)'][1]:.1f}",
+                f"{ph['host accept'][1]:.1f}",
+                f"{ph['C commit (KDA replay + blends, index)'][1]:.1f}",
+                f"{ph['D MTP levels 2..K (B rows)'][1]:.1f}",
+                f"{it['verify_ms'][1]:.1f} ({it['verify_ratio_model']:.2f}x)",
+                f"{it['iteration_floor_ms']:.1f} ({it['design_floor_ms']:.1f}) / {it['iteration_model_ms']:.1f} / {it['iteration_after_ms']:.1f}",
+                f"{it['tok_s_per_user_floor']:.1f} / {it['tok_s_per_user_model']:.1f} / {it['tok_s_per_user_after']:.1f}",
+                f"{it['plain_step_model_ms']:.1f} ms = {it['tok_s_per_user_plain_model']:.1f}",
+                f"{it['speedup_model']:.2f}x",
+                f"{it['tokens_needed_for_33']:.1f} ({it['tokens_needed_for_33_floor']:.1f} at floor)",
+            ]
+        )
+    lines.append(
+        f"speculative decode at {lay.users_per_row} users/row, accepted {lay.accepted} tokens per iteration, host {lay.host_ms} ms (ms per iteration, model = sum of measured / projected rows):"
+    )
+    if markdown:
+        lines += ["| " + " | ".join(hdr) + " |", "|" + "---|" * len(hdr)] + [
+            "| " + " | ".join(_fmt(v, 1, True) for v in r) + " |" for r in rows
+        ]
+    else:
+        lines += ["  ".join(hdr)] + ["  ".join(_fmt(v) for v in r) for r in rows]
+    if lay.spec_k:
+        it = spec_iteration(cfg, lay)
+        lines.append("")
+        lines.append(f"K={lay.spec_k} commit rows (per iteration, all layers):")
+        for r in it["commit_rows"]:
+            lines.append(
+                f"  {r.key}: {r.measured_us / 1e3:.2f} ms model, floor {r.floor_us / 1e3:.2f}, after {r.after_us / 1e3:.2f} ({' -> '.join(s[0] for s in r.steps)}); {r.op}"
+            )
+        sc = spec_scenarios(cfg, lay)
+        lines.append("")
+        lines.append(
+            f"tok/s per user vs plain step x accepted tokens per iteration (verify = plain step x {sc['verify_ratio']:.2f} "
+            f"(the R = {it['R']}-row cost ratio), host {lay.host_ms} ms fixed; C + D scaled with the plain step):"
+        )
+        acc = list(next(iter(sc["table"].values())).keys())
+        tgts = list(sc["tokens_needed"].keys())
+        h2 = (
+            ["plain step ms", "verify ms", "iteration ms"]
+            + [f"accepted {a}" for a in acc]
+            + [f"tokens for {t:.0f} tok/s" for t in tgts]
+        )
+        tables = [("today's commit graph", "table", "iteration_at", "tokens_needed")]
+        tables.append(
+            (
+                "SP1 + B5 design (C + D at their after values)",
+                "table_design",
+                "iteration_design_at",
+                "tokens_needed_design",
+            )
+        )
+        for title, tk, ik, nk in tables:
+            rows2 = [
+                [f"{p:.0f}", f"{p * sc['verify_ratio']:.1f}", f"{sc[ik][p]:.1f}"]
+                + [f"{sc[tk][p][a]:.1f}" for a in acc]
+                + [f"{sc[nk][t][p]:.2f}" for t in tgts]
+                for p in sc[tk]
+            ]
+            lines.append(f"{title}:")
+            if markdown:
+                lines += ["| " + " | ".join(h2) + " |", "|" + "---|" * len(h2)] + [
+                    "| " + " | ".join(r) + " |" for r in rows2
+                ]
+            else:
+                lines += ["  ".join(h2)] + ["  ".join(r) for r in rows2]
+            lines.append("")
+        e = sc["elasticities"]
+        lines.append(
+            f"elasticities at the centre (plain {sc['center'][0]:.0f} ms, accepted {sc['center'][1]}: {sc['center'][2]:.1f} tok/s/u): "
+            + ", ".join(f"{k} {v:+.2f}" for k, v in e.items())
+            + f" -> dominant: {sc['dominant']} (V is {sc['v_fraction'] * 100:.0f} % of the device time)"
+        )
+    return "\n".join(lines)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--users-per-row", type=int, default=4)
@@ -1655,6 +2208,16 @@ def main(argv=None):
     p.add_argument("--topology", choices=["line", "ring"], default="line")
     p.add_argument("--mhc-pre-block", action="store_true", help="A1 fused pre-block on")
     p.add_argument("--dsa-state-fused", action="store_true", help="B5 on")
+    p.add_argument(
+        "--spec-k",
+        type=int,
+        default=0,
+        help="speculative decode: K drafts per user (0 = plain; the policy picks min(K_ctx, 32 // B - 1): spec_policy_k)",
+    )
+    p.add_argument(
+        "--accepted", type=float, default=2.0, help="tokens committed per iteration (1 + mean accepted drafts)"
+    )
+    p.add_argument("--host-ms", type=float, default=2.0, help="host accept overhead per iteration (ms)")
     p.add_argument("--layer", choices=list(LAYER_COUNTS), default=None, help="print this layer type's op table")
     p.add_argument("--all-layers", action="store_true")
     p.add_argument("--markdown", action="store_true")
@@ -1681,7 +2244,32 @@ def main(argv=None):
         topology=a.topology,
         mhc_pre_block=a.mhc_pre_block,
         dsa_state_fused=a.dsa_state_fused,
+        accepted=a.accepted,
+        host_ms=a.host_ms,
     )
+    if a.spec_k:
+        spec_lay = replace(lay, spec_k=a.spec_k)
+        if a.json:
+            it = spec_iteration(cfg, spec_lay)
+            it = {k: v for k, v in it.items() if k not in ("commit_rows", "mtp_rows")}
+            print(
+                json.dumps(
+                    {
+                        "spec": it,
+                        "sweep": [
+                            {k: v for k, v in s.items() if k not in ("commit_rows", "mtp_rows")}
+                            for s in spec_sweep(cfg, lay)
+                        ],
+                        "scenarios": spec_scenarios(cfg, spec_lay),
+                    },
+                    indent=1,
+                    default=str,
+                )
+            )
+            return
+        print("\n## speculative decode\n")
+        print(format_spec(cfg, spec_lay, a.markdown))
+        return
     step = step_table(cfg, lay)
     if a.json:
         print(json.dumps({"step": step, "actions": ranked_actions(cfg, lay)}, indent=1, default=str))
