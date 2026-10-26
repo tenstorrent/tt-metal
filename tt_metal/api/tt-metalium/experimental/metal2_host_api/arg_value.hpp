@@ -29,8 +29,8 @@ namespace tt::tt_metal::experimental {
 //
 // Kernel arguments are currently all uint32_t on the device.
 //
-// An ArgValue is written, not read back: it has no conversion to an integer.
-// ArgValues compare equal (==) when they hold the same value.
+// To read a value back, call to_uint32(). (There is deliberately no implicit conversion to an
+// integer.) ArgValues compare equal (==) when they hold the same value.
 //
 // ============================================================================
 
@@ -43,20 +43,21 @@ public:
         requires std::is_convertible_v<T, std::uint32_t>
     ArgValue(T value) : u32_(static_cast<std::uint32_t>(value)) {}
 
+    // The value converted to uint32_t: exactly what assigning the original value to a uint32_t gives.
+    std::uint32_t to_uint32() const noexcept { return u32_; }
+
     friend bool operator==(const ArgValue&, const ArgValue&) = default;
 
-    friend std::ostream& operator<<(std::ostream& os, const ArgValue& value) { return os << value.u32_; }
+    friend std::ostream& operator<<(std::ostream& os, const ArgValue& value) { return os << value.to_uint32(); }
 
 private:
-    // MAINTAINER: Keep the representation private, and don't add a public way to read it as
-    // a uint32_t. Typed (and possibly 64-bit) arguments will change what is stored, not how
-    // values are written: every construction that compiles today must keep compiling and, for a
-    // uint32_t argument, keep producing the same argument word. So keep the single constructor
-    // template; an added overload (e.g. for float) would silently change what existing calls store.
-    friend struct ArgValueAccess;  // Implementation-only reader (defined in tt_metal/impl)
-    friend struct std::hash<ArgValue>;
-    friend struct fmt::formatter<ArgValue>;
-
+    // MAINTAINER: Keep the representation private. Typed (and possibly 64-bit) arguments will
+    // change what is stored, not how values are written or read:
+    //  - Every construction that compiles today must keep compiling and, for a uint32_t argument,
+    //    keep producing the same argument word. So keep the single constructor template; an added
+    //    overload (e.g. for float) would silently change what existing calls store.
+    //  - to_uint32() is a conversion, not a view of the representation. It must keep meaning
+    //    static_cast<uint32_t>(original value), even where that isn't the word sent to the device.
     std::uint32_t u32_ = 0;
 };
 
@@ -65,7 +66,7 @@ private:
 template <>
 struct std::hash<tt::tt_metal::experimental::ArgValue> {
     std::size_t operator()(const tt::tt_metal::experimental::ArgValue& value) const noexcept {
-        return std::hash<std::uint32_t>{}(value.u32_);
+        return std::hash<std::uint32_t>{}(value.to_uint32());
     }
 };
 
@@ -75,6 +76,6 @@ struct fmt::formatter<tt::tt_metal::experimental::ArgValue> {
 
     auto format(const tt::tt_metal::experimental::ArgValue& value, format_context& ctx) const
         -> format_context::iterator {
-        return fmt::format_to(ctx.out(), "{}", value.u32_);
+        return fmt::format_to(ctx.out(), "{}", value.to_uint32());
     }
 };

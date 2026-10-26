@@ -20,7 +20,6 @@
 #include <tt_stl/fmt.hpp>
 
 #include "impl/context/metal_context.hpp"
-#include "impl/metal2_host_api/arg_value_access.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
 namespace tt::tt_metal::experimental {
@@ -61,7 +60,7 @@ std::unordered_map<std::string, uint32_t> to_named_compile_args_map(const Kernel
     std::unordered_map<std::string, uint32_t> named_compile_args;
     named_compile_args.reserve(bindings.size());
     for (const auto& [name, value] : bindings) {
-        named_compile_args.emplace(name.str(), ArgValueAccess::u32(value));
+        named_compile_args.emplace(name.str(), value.to_uint32());
     }
     return named_compile_args;
 }

@@ -48,7 +48,6 @@ using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::PageConfig;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorSpec;
-using ::tt::tt_metal::experimental::ArgValue;
 using ::tt::tt_metal::experimental::KernelSpec;
 using Op = MorehMeanBackwardOperation;
 
@@ -108,13 +107,13 @@ std::vector<KernelSpec::CompileTimeArgs> compute_compile_time_args(
     return result;
 }
 
-ArgValue arg_value(const KernelSpec::CompileTimeArgs& args, const std::string& name) {
+uint32_t arg_value(const KernelSpec::CompileTimeArgs& args, const std::string& name) {
     const auto it = args.find(name);
     if (it == args.end()) {
         ADD_FAILURE() << "compute kernel has no compile-time arg " << name;
         return 0;
     }
-    return it->second;
+    return it->second.to_uint32();
 }
 
 class MorehMeanBackwardProgramSpecFixture : public TTNNFixtureWithSuiteDevice<MorehMeanBackwardProgramSpecFixture> {};

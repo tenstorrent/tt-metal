@@ -35,7 +35,6 @@
 #include "tt_metal/impl/dispatch/simple_trace_allocator.hpp"
 #include "tt_metal/impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/metal2_host_api/arg_value_access.hpp"
 #include "tt_metal/impl/metal2_host_api/tensor_binding_crtas.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/program_command_sequence.hpp"
@@ -508,7 +507,7 @@ void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking)
     for (const auto& [name, value] : patch.runtime_args) {
         const auto it = registry.runtime_targets.find(name);
         TT_FATAL(it != registry.runtime_targets.end(), "Unknown command-list runtime parameter '{}'", *name);
-        const uint32_t word = ArgValueAccess::u32(value);
+        const uint32_t word = value.to_uint32();
         for (const auto& target : it->second) {
             stage(target, ttsl::Span<const uint32_t>(&word, 1));
         }
@@ -517,7 +516,7 @@ void CommandList::Impl::update_args(const CmdListArgPatch& patch, bool blocking)
         const auto it = registry.common_runtime_targets.find(name);
         TT_FATAL(
             it != registry.common_runtime_targets.end(), "Unknown command-list common-runtime parameter '{}'", *name);
-        const uint32_t word = ArgValueAccess::u32(value);
+        const uint32_t word = value.to_uint32();
         for (const auto& target : it->second) {
             stage(target, ttsl::Span<const uint32_t>(&word, 1));
         }

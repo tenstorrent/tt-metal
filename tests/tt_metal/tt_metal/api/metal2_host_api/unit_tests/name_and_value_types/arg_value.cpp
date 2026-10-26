@@ -17,19 +17,17 @@
 #include <sstream>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include <fmt/format.h>
 
 #include <tt-metalium/experimental/metal2_host_api/arg_value.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include "impl/metal2_host_api/arg_value_access.hpp"
-
 namespace {
 
 namespace m2 = tt::tt_metal::experimental;
 using m2::ArgValue;
-using m2::ArgValueAccess;
 
 enum UnscopedEnum { kUnscoped = 7 };
 enum class ScopedEnum { kScoped = 7 };
@@ -51,22 +49,23 @@ static_assert(!std::is_constructible_v<ArgValue, const char*>);
 static_assert(!std::is_constructible_v<ArgValue, std::string>);
 static_assert(!std::is_constructible_v<ArgValue, std::nullptr_t>);
 
-// Write-only: no conversion back to an integer, and no ordering.
+// No conversion to an integer (to_uint32() reads the value), and no ordering.
+static_assert(std::is_same_v<decltype(std::declval<const ArgValue&>().to_uint32()), std::uint32_t>);
 static_assert(!std::is_convertible_v<ArgValue, std::uint32_t>);
 static_assert(!std::is_constructible_v<std::uint32_t, ArgValue>);
 static_assert(std::equality_comparable<ArgValue>);
 static_assert(!std::totally_ordered<ArgValue>);
 
-// ---- stored value ------------------------------------------------------------
+// ---- to_uint32 ---------------------------------------------------------------
 
 template <typename T>
 std::uint32_t stored(T source) {
-    return ArgValueAccess::u32(ArgValue(source));
+    return ArgValue(source).to_uint32();
 }
 
-TEST(ArgValueTest, CPU_DefaultConstructedIsZero) { EXPECT_EQ(ArgValueAccess::u32(ArgValue()), 0u); }
+TEST(ArgValueTest, CPU_DefaultConstructedIsZero) { EXPECT_EQ(ArgValue().to_uint32(), 0u); }
 
-TEST(ArgValueTest, CPU_StoresTheImplicitConversionToUint32) {
+TEST(ArgValueTest, CPU_ToUint32IsTheImplicitConversionToUint32) {
     // Each result is what assigning the source to a uint32_t produces.
     EXPECT_EQ(stored(5), 5u);
     EXPECT_EQ(stored(-1), 0xFFFFFFFFu);  // wraps

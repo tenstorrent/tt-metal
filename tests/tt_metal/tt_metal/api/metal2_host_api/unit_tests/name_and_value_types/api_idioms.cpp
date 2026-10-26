@@ -22,12 +22,8 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 
-#include "impl/metal2_host_api/arg_value_access.hpp"
-
 namespace tt::tt_metal::experimental {
 namespace {
-
-std::uint32_t word(const ArgValue& value) { return ArgValueAccess::u32(value); }
 
 TEST(ApiIdiomsTest, CPU_KernelSpecIdiomsCompile) {
     KernelSpec k{.compile_time_args = {{"Ht", 8}}, .runtime_arg_schema = {.runtime_arg_names = {"a", "b"}}};
@@ -43,7 +39,7 @@ TEST(ApiIdiomsTest, CPU_KernelSpecIdiomsCompile) {
     EXPECT_EQ(k.runtime_arg_schema.runtime_arg_names.size(), 6u);
     EXPECT_TRUE(k.runtime_arg_schema.runtime_arg_names[0] == "a");
     EXPECT_TRUE(*k.compile_time_args.get("Ht") == 8u);
-    EXPECT_EQ(word(*k.compile_time_args.get("flag")), 1u);
+    EXPECT_EQ(k.compile_time_args.get("flag")->to_uint32(), 1u);
 }
 
 TEST(ApiIdiomsTest, CPU_BindingIdiomsCompile) {
@@ -82,10 +78,10 @@ TEST(ApiIdiomsTest, CPU_RunArgsIdiomsCompile) {
     r.runtime_arg_values["a"][NodeCoord{0, 3}] = flag;
     AddRuntimeArgsForNode(r.runtime_arg_values, NodeCoord{0, 0}, {{"b", 2}, {"c", u}});
 
-    EXPECT_EQ(word(r.runtime_arg_values["a"][NodeCoord{0, 1}]), 12u);
-    EXPECT_EQ(word(r.runtime_arg_values["a"][NodeCoord{0, 2}]), 0xFFFFFFFFu);
-    EXPECT_EQ(word(r.runtime_arg_values["a"][NodeCoord{0, 3}]), 1u);
-    EXPECT_EQ(word(r.runtime_arg_values["c"][NodeCoord{0, 0}]), 3u);
+    EXPECT_EQ((r.runtime_arg_values["a"][NodeCoord{0, 1}].to_uint32()), 12u);
+    EXPECT_EQ((r.runtime_arg_values["a"][NodeCoord{0, 2}].to_uint32()), 0xFFFFFFFFu);
+    EXPECT_EQ((r.runtime_arg_values["a"][NodeCoord{0, 3}].to_uint32()), 1u);
+    EXPECT_EQ((r.runtime_arg_values["c"][NodeCoord{0, 0}].to_uint32()), 3u);
 
     r.runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"a", 1}});
     r.common_runtime_arg_values = {{"c", 3}};
@@ -97,7 +93,7 @@ TEST(ApiIdiomsTest, CPU_RunArgsIdiomsCompile) {
     for (const auto& [name, value] : legacy) {
         r.runtime_arg_values[name][NodeCoord{1, 1}] = value;
     }
-    EXPECT_EQ(word(r.runtime_arg_values["lead"][NodeCoord{1, 1}]), 4u);
+    EXPECT_EQ((r.runtime_arg_values["lead"][NodeCoord{1, 1}].to_uint32()), 4u);
 }
 
 TEST(ApiIdiomsTest, CPU_CommandListPatchIdiomsCompile) {
@@ -108,8 +104,8 @@ TEST(ApiIdiomsTest, CPU_CommandListPatchIdiomsCompile) {
     };
     patch.runtime_args[CmdListRuntimeArgName{"r"}] = -1;
 
-    EXPECT_EQ(word(*patch.common_runtime_args.get(CmdListCommonRuntimeArgName{"q"})), 9u);
-    EXPECT_EQ(word(*patch.runtime_args.get(CmdListRuntimeArgName{"r"})), 0xFFFFFFFFu);
+    EXPECT_EQ(patch.common_runtime_args.get(CmdListCommonRuntimeArgName{"q"})->to_uint32(), 9u);
+    EXPECT_EQ(patch.runtime_args.get(CmdListRuntimeArgName{"r"})->to_uint32(), 0xFFFFFFFFu);
 }
 
 }  // namespace
