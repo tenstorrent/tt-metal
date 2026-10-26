@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Zero-base coverage for the binary power kernel(FP32 only).
+Zero-base and NaN-exponent coverage for the binary power kernel.
 
 Drives the entry point of
 hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_rpow.h:
@@ -23,8 +23,10 @@ Asserted, for base in {+0, -0} and per IEEE-754 pow:
     pow(+-0, y > 0)   +-0     base sign kept only for odd integer y
     pow(+-0, y < 0)   +-inf   base sign kept only for odd integer y
 
-Domain. Integer exponents stay small: parity comes off a vSMag16 conversion that saturates
-outside +-32767, beyond which an odd exponent loses the result's sign (documented in the kernel).
+and, for a negative base in {-2, -1, -inf}:
+
+    pow(x < 0, +-NaN)   NaN    float32 Dest
+    pow(x < 0, +NaN)    NaN    bfloat16 Dest
 """
 
 import struct
@@ -74,11 +76,23 @@ _EXPONENTS = (
     -2.0,  # negative even integer
     0.5,  # positive non-integer
     -1.5,  # negative non-integer
+    32768.0,  # even integer above 32767
+    -32768.0,
+    32769.0,  # odd integer above 32767
+    -32769.0,
+    16777215.0,  # largest odd integer in float32
+    -16777215.0,
     SMALLEST_NORMAL,
     -SMALLEST_NORMAL,
 )
 
 _BASES = (0.0, -0.0)
+
+NAN_FORMATS = input_output_formats([DataFormat.Float32, DataFormat.Float16_b], same=True)
+
+_NEGATIVE_BASES = (-2.0, -1.0, -INF)
+
+_NAN_EXPONENTS = {DataFormat.Float32: (NAN, -NAN), DataFormat.Float16_b: (NAN,)}
 
 
 def _bits(value: float) -> int:
@@ -96,16 +110,16 @@ def _fmt(value: float) -> str:
     return f"{value:g}"
 
 
-def _exponent_tile() -> torch.Tensor:
+def _exponent_tile(classes=_EXPONENTS) -> torch.Tensor:
     """One tile cycling through the exponent classes so that every class lands in every face."""
-    exponents = torch.tensor(_EXPONENTS, dtype=torch.float32)
-    reps = ELEMENTS_PER_TILE // len(_EXPONENTS) + 1
+    exponents = torch.tensor(classes, dtype=torch.float32)
+    reps = ELEMENTS_PER_TILE // len(classes) + 1
     return exponents.repeat(reps)[:ELEMENTS_PER_TILE].contiguous()
 
 
-def _build_pow_zero_base(formats, base):
+def _build_pow_zero_base(formats, base, classes=_EXPONENTS):
     """Build one variant without running it, returning (configuration, exponents)."""
-    src_A = _exponent_tile()
+    src_A = _exponent_tile(classes)
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
 
     configuration = TestConfig(
@@ -128,7 +142,11 @@ def _build_pow_zero_base(formats, base):
             tile_count_B=1,
             tile_count_res=1,
         ),
-        dest_acc=DestAccumulation.Yes,
+        dest_acc=(
+            DestAccumulation.Yes
+            if formats.input_format.is_32_bit()
+            else DestAccumulation.No
+        ),
         unpack_to_dest=formats.input_format.is_32_bit(),
         compile_time_formats=True,
     )
@@ -183,3 +201,26 @@ def test_sfpu_binary_pow_zero_base(formats, base):
             f"{len(mismatches)}/{ELEMENTS_PER_TILE} lanes disagree with torch across "
             f"{len(classes)} exponent classes:\n{detail}"
         )
+
+
+@parametrize(
+    formats=NAN_FORMATS,
+    base=list(_NEGATIVE_BASES),
+)
+def test_sfpu_binary_pow_negative_base_nan_exponent(formats, base):
+    """base**NaN is NaN for a negative base."""
+    configuration, exponents = _build_pow_zero_base(
+        formats, base, _NAN_EXPONENTS[formats.input_format]
+    )
+    device, exponents = _finish_pow_zero_base(configuration, exponents, formats)
+
+    bad = sorted(
+        {
+            (_fmt(exponents[i].item()), _fmt(device[i].item()))
+            for i in range(ELEMENTS_PER_TILE)
+            if device[i].item() == device[i].item()
+        }
+    )
+    assert not bad, "\n".join(
+        f"  pow({_fmt(base)}, {exp}) = {got}, expected nan" for exp, got in bad
+    )
