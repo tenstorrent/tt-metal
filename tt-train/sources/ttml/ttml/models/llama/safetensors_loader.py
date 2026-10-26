@@ -26,7 +26,8 @@ from . import Llama, LlamaConfig
 # TTML stores a weight as 4-D (1, 1, out_features, in_features).
 ROW_DIM, COL_DIM = 2, 3
 
-# Noise rather than zeros avoids dead neurons; the fixed seed keeps two loads identical.
+# Fills the vocab rows the model adds above the checkpoint's for tile alignment.
+# They are never a real token, so small init-like noise; the fixed seed keeps two loads identical.
 _PAD_SEED = 0
 _PAD_STDDEV = 0.02
 
@@ -35,6 +36,10 @@ _NAME_ALIASES = {
     "wte.weight": "embed_tokens.weight",
     "transformer.wte.weight": "embed_tokens.weight",
 }
+
+# Float dtypes the loader converts to the parameter's own; anything else (FP8, int8, packed 4-bit) is
+# a quantized checkpoint, which would fail mid-load or load raw integers.
+_FLOAT_DTYPES = ("F32", "BF16", "F16")
 
 # Shipped by some checkpoints; TTML derives these at runtime.
 _NOT_WEIGHTS = ("rotary_emb.inv_freq",)
@@ -61,7 +66,6 @@ class _Checkpoint:
         self._where: dict[str, tuple[safe_open, str]] = {}
         try:
             for path in files:
-                print(f"Reading safetensors file: {path}")
                 file = self._files.enter_context(safe_open(str(path), framework="np"))
                 for name in file.keys():
                     canonical = _canonical(name)
@@ -80,9 +84,13 @@ class _Checkpoint:
         self._files.close()
 
     def shape(self, name: str) -> tuple[int, int]:
-        """Return the 2-D shape of *name*, from the file header without reading the data."""
+        """Return the 2-D shape of *name*, from the file header without reading the data.
+        Raise if *name* is not stored as a float the loader supports."""
         file, raw = self._where[name]
-        shape = tuple(file.get_slice(raw).get_shape())
+        header = file.get_slice(raw)
+        if (dtype := header.get_dtype()) not in _FLOAT_DTYPES:
+            raise RuntimeError(f"{raw}: stored as {dtype}; this loader reads only {', '.join(_FLOAT_DTYPES)}")
+        shape = tuple(header.get_shape())
         if len(shape) == 1:  # norm gammas; a 1-row weight downstream
             return 1, shape[0]
         if len(shape) != 2:
@@ -121,15 +129,15 @@ def _assemble(blocks: Sequence[np.ndarray], shard_dim: int | None, mesh_size: in
 
 
 def _pad_to(arr: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """Grow *arr* by rows to *shape*."""
     rows, cols = arr.shape
+    if cols != shape[1]:
+        raise RuntimeError(f"cannot pad {arr.shape} to {shape}: only rows are padded")
+    if shape[0] == rows:
+        return arr
     rng = np.random.default_rng(_PAD_SEED)
-    if shape[1] > cols:
-        right = rng.normal(0.0, _PAD_STDDEV, (rows, shape[1] - cols)).astype(arr.dtype)
-        arr = np.concatenate([arr, right], axis=1)
-    if shape[0] > rows:
-        bottom = rng.normal(0.0, _PAD_STDDEV, (shape[0] - rows, shape[1])).astype(arr.dtype)
-        arr = np.concatenate([arr, bottom], axis=0)
-    return arr
+    bottom = rng.normal(0.0, _PAD_STDDEV, (shape[0] - rows, cols)).astype(arr.dtype)
+    return np.concatenate([arr, bottom], axis=0)
 
 
 def _host_array(rule: _Rule, checkpoint: _Checkpoint, shape: tuple[int, int], shard_dim: int | None, mesh_size: int):
@@ -142,7 +150,6 @@ def _host_array(rule: _Rule, checkpoint: _Checkpoint, shape: tuple[int, int], sh
 
 @dataclass(frozen=True)
 class _TpAxis:
-    mesh: ttml.Mesh
     index: int
     size: int
 
@@ -152,7 +159,7 @@ def _tp_axis() -> _TpAxis | None:
     mesh = ttml.maybe_mesh()
     if mesh is None or not mesh.has_axis("tp"):
         return None
-    return _TpAxis(mesh, mesh.axis_index("tp"), mesh.axis_size("tp"))
+    return _TpAxis(mesh.axis_index("tp"), mesh.axis_size("tp"))
 
 
 def _sharded_dim(param, tp: _TpAxis | None, subject: str) -> int | None:
@@ -361,8 +368,8 @@ def load_from_safetensors(model: Llama, safetensors_path: str | os.PathLike) -> 
 
         for rule, (shard_dim, shape) in zip(rules, plans):
             host = _host_array(rule, checkpoint, shape, shard_dim, mesh_size)
-            mapper = tp.mesh.axis_mapper("tp", tdim=shard_dim) if tp and shard_dim is not None else None
-            ttml.autograd.assign_numpy(parameters[rule.param], host, mapper=mapper)
+            param = parameters[rule.param]
+            ttml.autograd.assign_numpy(param, host, mapper=ttml.Sharding.from_tensor(param).derive_mapper())
         unused = checkpoint.names - {source for rule in rules for source in rule.sources}
 
     return LoadResult(

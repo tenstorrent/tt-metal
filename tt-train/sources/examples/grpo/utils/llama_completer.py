@@ -46,31 +46,29 @@ class LlamaCompletionCtx:
 
 
 def load_checkpoint(model: Any, checkpoint_path: str, dp_mapper: Any = None) -> None:
+    """Load a ``model.safetensors`` the GRPO trainer saved, under TTML's parameter names, into *model*.
+    Raise before writing anything if a parameter is missing, e.g. in a checkpoint saved before a rename."""
     from safetensors.numpy import load_file
     import ml_dtypes
 
     checkpoint = load_file(checkpoint_path)
     parameters = model.parameters()
-    loaded, missing = 0, []
+    missing = sorted(name for name in parameters if name not in checkpoint)
+    if missing:
+        raise RuntimeError(
+            f"{checkpoint_path} lacks {len(missing)} of the model's {len(parameters)} parameters: " + ", ".join(missing)
+        )
 
     for name, param in parameters.items():
-        if name in checkpoint:
-            arr = checkpoint[name].astype(ml_dtypes.bfloat16)
-            if arr.ndim == 1:
-                arr = arr.reshape(1, 1, 1, -1)
-            elif arr.ndim == 2:
-                arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
-            restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
-            param.assign(restored)
-            loaded += 1
-        else:
-            missing.append(name)
+        arr = checkpoint[name].astype(ml_dtypes.bfloat16)
+        if arr.ndim == 1:
+            arr = arr.reshape(1, 1, 1, -1)
+        elif arr.ndim == 2:
+            arr = arr.reshape(1, 1, arr.shape[0], arr.shape[1])
+        restored = ttml.autograd.Tensor.from_numpy(arr, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, dp_mapper)
+        param.assign(restored)
 
-    print(f"Loaded {loaded}/{len(parameters)} parameters from {checkpoint_path}")
-    if missing:
-        print(f"Warning: {len(missing)} parameters not found in checkpoint:")
-        for n in missing:
-            print(f"  - {n}")
+    print(f"Loaded {len(parameters)} parameters from {checkpoint_path}")
 
 
 class LlamaGRPOCompleter(GRPOCompleter):
@@ -84,14 +82,17 @@ class LlamaGRPOCompleter(GRPOCompleter):
         ctx: Generation parameters. ``_tokenizer`` and ``_pad_token`` are set
             automatically from ``model_source``.
         transformer_config: A :class:`ttml.common.config.TransformerConfig`.
+            The architecture comes from the checkpoint's ``config.json``;
+            this sets only ``max_sequence_length``, ``dropout_prob`` and ``runner_type``.
         device_config: Device mesh config (a
             :class:`ttml.common.config.DeviceConfig` instance). Device
             initialisation (``enable_fabric``, ``open_device``) is delegated
             to :meth:`setup_device`, which the constructor calls. Subclasses
             and tests may override ``setup_device`` to swap that behaviour
             (e.g. reuse an already-open device).
-        model_source: A HuggingFace model ID, or a checkpoint directory saved
-            by the GRPO trainer (``model.safetensors``, ``config.json`` and the tokenizer).
+        model_source: A HuggingFace model ID; a local directory holding a HuggingFace checkpoint
+            (``.safetensors``, ``config.json`` and the tokenizer); or a checkpoint directory saved
+            by the GRPO trainer, recognised by its ``trainer_state.json``.
     """
 
     def setup_device(self, device_config: DeviceConfig) -> Any:
@@ -133,9 +134,10 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         tokenizer = AutoTokenizer.from_pretrained(model_source)
 
-        # A local model.safetensors is one this trainer saved, under TTML's parameter names.
-        local_checkpoint = os.path.isdir(model_source) and "model.safetensors" in os.listdir(model_source)
-        if local_checkpoint:
+        # save_checkpoint writes trainer_state.json beside the weights, which use TTML's parameter names;
+        # any other local directory is a HuggingFace checkpoint, which may also be a single model.safetensors.
+        trainer_checkpoint = os.path.isfile(os.path.join(model_source, "trainer_state.json"))
+        if os.path.isdir(model_source):
             checkpoint_dir = model_source
         else:
             logging.info("Downloading model from HuggingFace: %s", model_source)
@@ -186,9 +188,9 @@ class LlamaGRPOCompleter(GRPOCompleter):
         ddp_axis = autograd_ctx.get_parallelism_context().get_ddp_axis() if self._ddp_enabled else None
         self._seed_axes: Any = [int(ddp_axis)] if ddp_axis is not None else None
 
-        if local_checkpoint:
-            logging.info("Loading model from local safetensors: %s", model_source)
-            load_checkpoint(tt_model, model_source, dp_mapper=self._dp_mapper)
+        if trainer_checkpoint:
+            logging.info("Resuming from a GRPO trainer checkpoint: %s", model_source)
+            load_checkpoint(tt_model, os.path.join(model_source, "model.safetensors"), dp_mapper=self._dp_mapper)
         else:
             print(load_from_safetensors(tt_model, checkpoint_dir))
 
@@ -198,7 +200,6 @@ class LlamaGRPOCompleter(GRPOCompleter):
 
         self._ctx = ctx
         self._model = tt_model
-        self.transformer_config = tf_config
 
         self._kv_cache: Any = None
         self._kv_cache_B: int = 0

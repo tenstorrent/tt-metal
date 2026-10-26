@@ -590,8 +590,10 @@ Each checkpoint directory contains:
 | `training_args.bin` | Full `GRPOConfig` dataclass serialized as a dict | `torch.save(dataclasses.asdict(grpo_config))` |
 | `timestamp.txt` | UTC timestamp of when the checkpoint was saved | `datetime.now(timezone.utc)` |
 
-To resume from a checkpoint, point `model_source` at the checkpoint directory
-(it contains `model.safetensors` and the tokenizer files).
+To resume from a checkpoint, point `model_source` at the checkpoint directory. The
+completer recognises it by `trainer_state.json`, reads the architecture from
+`config.json` and the tokenizer from its files, and requires `model.safetensors`
+to hold every parameter of the model.
 
 ---
 

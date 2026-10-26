@@ -166,7 +166,6 @@ class LlamaCompleterRemoteRollout(GRPOCompleter):
 
         self._ctx = ctx
         self._model = tt_model
-        self.transformer_config = tf_config
 
         self._client = inference_client
 

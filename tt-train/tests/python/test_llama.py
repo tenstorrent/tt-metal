@@ -141,8 +141,9 @@ class TestLlamaConfigFromHf:
             ({"hidden_act": "gelu"}, "hidden_act 'gelu'"),
             ({"head_dim": 128}, "head_dim"),
             ({"rope_scaling": {"rope_type": "yarn", "factor": 4.0}}, "rope type 'yarn'"),
+            ({"quantization_config": {"quant_method": "fp8"}}, "quantized checkpoints"),
         ],
-        ids=["model_type", "mlp_bias", "attention_bias", "hidden_act", "head_dim", "rope_type"],
+        ids=["model_type", "mlp_bias", "attention_bias", "hidden_act", "head_dim", "rope_type", "quantized"],
     )
     def test_rejects_what_the_model_cannot_express(self, patch, message, expect_error):
         with expect_error(ValueError, message):
@@ -164,6 +165,11 @@ class TestLlama:
         assert model is not None
         assert isinstance(model, Llama)
         assert model.config == tiny_config
+
+    def test_norm_epsilon_reaches_every_norm(self, tiny_config):
+        model = Llama(replace(tiny_config, rms_norm_eps=1e-3))
+        norms = [model.ln_fc] + [norm for block in model.blocks for norm in (block.attention_norm, block.mlp_norm)]
+        assert [norm.epsilon for norm in norms] == [1e-3] * len(norms)
 
     def test_model_forward_shape(self, tiny_config):
         """Test that Llama forward pass produces correct output shape."""

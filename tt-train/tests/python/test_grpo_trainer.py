@@ -45,6 +45,7 @@ from datasets import Dataset
 
 from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.trainers import GRPOConfig, GRPOTrainer, TrainerCallback
+from ttml.trainers.grpo_trainer import save_checkpoint
 
 # The ``LlamaGRPOCompleter`` reference implementation lives under the
 # examples tree, not under ``ttml`` proper. Surface its package on the
@@ -221,6 +222,55 @@ def test_never_samples_a_checkpoint_row_past_the_tokenizer(monkeypatch, tmp_path
 
     assert all(token < num_tokens for completion in completions for token in completion), completions
     ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+def _save_trainer_checkpoint(completer, output_dir) -> str:
+    """Save *completer*'s model as the trainer does, with distinct values in every parameter so a fresh
+    init can't pass for a resumed one. The tiny model has no HF repo, so its config.json is written here."""
+    rng = np.random.default_rng(0)
+    for param in completer.model.parameters().values():
+        ttml.autograd.assign_numpy(param, rng.standard_normal(param.shape()).astype(np.float32))
+    save_checkpoint(completer.model, step=1, output_dir=str(output_dir), tokenizer=completer.tokenizer)
+    checkpoint_dir = output_dir / "checkpoints" / "grpo_step_1"
+    (checkpoint_dir / "config.json").write_text(json.dumps(TINY_HF_CONFIG))
+    return str(checkpoint_dir)
+
+
+def _resumed_completer(checkpoint_dir: str) -> LlamaGRPOCompleter:
+    return LlamaGRPOCompleter(
+        ctx=LlamaCompletionCtx(max_tokens_to_complete=4, temperature=1.0),
+        transformer_config=TINY_TRANSFORMER_CONFIG,
+        device_config=DEVICE_CONFIG,
+        model_source=checkpoint_dir,
+    )
+
+
+@pytest.mark.requires_device
+def test_resumes_from_a_trainer_checkpoint(patch_llama_weight_loading, tmp_path):
+    saved = _tiny_completer()
+    checkpoint_dir = _save_trainer_checkpoint(saved, tmp_path)
+    expected = {name: param.to_numpy(ttnn.DataType.FLOAT32) for name, param in saved.model.parameters().items()}
+
+    resumed = _resumed_completer(checkpoint_dir)
+
+    for name, param in resumed.model.parameters().items():
+        assert np.array_equal(param.to_numpy(ttnn.DataType.FLOAT32), expected[name]), f"{name} was not resumed"
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+@pytest.mark.requires_device
+def test_rejects_a_trainer_checkpoint_missing_a_parameter(patch_llama_weight_loading, tmp_path, expect_error):
+    """A checkpoint saved under older parameter names must not resume with those weights at init."""
+    from safetensors.numpy import load_file, save_file
+
+    checkpoint_dir = _save_trainer_checkpoint(_tiny_completer(), tmp_path)
+    weights_path = os.path.join(checkpoint_dir, "model.safetensors")
+    weights = load_file(weights_path)
+    del weights["Llama/blocks/0/attention/qkv_linear/weight"]
+    save_file(weights, weights_path)
+
+    with expect_error(RuntimeError, "lacks 1 of the model's"):
+        _resumed_completer(checkpoint_dir)
 
 
 @pytest.mark.requires_device
@@ -401,5 +451,8 @@ def test_capitals_one_by_one_equals_single_batch():
     assert batched_outputs == single_outputs, (
         "Mismatch between one-by-one and batched outputs.\n" f"single={single_outputs}\n" f"batch={batched_outputs}"
     )
+    # Agreeing outputs also pass on a wrong but deterministic load; the right answers don't.
+    for capital, completion in zip(["Paris", "Lisbon", "London", "Prague"], single_outputs):
+        assert capital in completion, f"expected {capital!r} in {completion!r}"
 
     ttml.autograd.AutoContext.get_instance().reset_graph()

@@ -155,6 +155,9 @@ class LlamaConfig:
         model_type = hf_config.get("model_type", "llama")
         if model_type != "llama":
             raise ValueError(f"model_type {model_type!r} is not a Llama checkpoint")
+        if (quantization := hf_config.get("quantization_config")) is not None:
+            method = quantization.get("quant_method", "unknown") if isinstance(quantization, Mapping) else "unknown"
+            raise ValueError(f"quantized checkpoints ({method}) are not supported")
         # The model has no MLP bias, and the loader cannot load attention biases.
         for bias in ("attention_bias", "mlp_bias"):
             if hf_config.get(bias, False):

@@ -14,7 +14,7 @@ from ttml.models.llama import LlamaConfig, LlamaRopeScalingConfig
 
 PRETRAINED_HELP = (
     "HuggingFace repo ID (e.g. TinyLlama/TinyLlama-1.1B-Chat-v1.0) or local directory holding its "
-    ".safetensors files and config.json. Loads the HF tokenizer and the pretrained weights; the "
+    ".safetensors files, config.json and tokenizer files. Loads the HF tokenizer and the pretrained weights; the "
     "architecture comes from config.json, so -m then only sets max_sequence_length, dropout_prob "
     "and runner_type."
 )

@@ -339,21 +339,17 @@ def _pick_shard_dim_from_shape(
 
 
 def _placements_from_mapper(mapper: Any) -> Optional[List[Any]]:
-    """Best-effort read of the placements list backing a ``CppTensorToMesh``.
+    """The placements backing a ``CppTensorToMesh``, or ``None`` for no mapper (replicated).
 
     The mapper is the ``ttnn.CppTensorToMesh`` returned by
     ``ttml.mesh().axis_mapper(...)`` / ``ttnn.create_mesh_mapper(...)``. C++
     binds ``TensorToMesh::config()`` so we can introspect the original
     ``MeshMapperConfig.placements`` without a side channel on
-    :class:`TensorMetadata`. Returns ``None`` if ``mapper`` is ``None`` or the
-    accessor isn't available (older ttnn build before ``config()`` was bound).
+    :class:`TensorMetadata`.
     """
     if mapper is None:
         return None
-    try:
-        return list(mapper.config().placements)
-    except Exception:
-        return None
+    return list(mapper.config().placements)
 
 
 def _param_shape(parameter: Parameter) -> List[int]:
