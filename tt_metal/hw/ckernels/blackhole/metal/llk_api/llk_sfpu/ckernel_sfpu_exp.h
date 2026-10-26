@@ -542,16 +542,16 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
     return _sfpu_exp_fp32_accurate_</*unsafe=*/false, /*base_two=*/true>(x);
 }
 
-// The constants of _sfpu_exp_fp32_accurate_<false> as _sfpu_exp_fp32_accurate_tti_ holds them: LREG12..14 are
-// programmed by exp_init<false, scale, clamp, true>, LREG4..7 are loaded per call, r0 stays an fp16 immediate.
-constexpr float EXP_FP32_LN2_RECIP = 1.442695f;         // LREG12, 0x3FB8AA3B
-constexpr float EXP_FP32_NEG_LN2_HI = -6.93145752e-1f;  // LREG13, 0xBF317200
+// The constants of _sfpu_exp_fp32_accurate_<false> as _sfpu_exp_fp32_accurate_tti_ holds them. 1/ln2, the high
+// part of -ln2 and the first two polynomial coefficients are the hoisted EXP_FP32_LOG2E, EXP_FP32_NEG_LN2_HI,
+// EXP_FP32_P0 and EXP_FP32_P1 above (P0 as the fp16 immediate below); the rest are only here. LREG12..14
+// (LOG2E, NEG_LN2_HI, NEG_LN2_LO) are programmed by exp_init<false, scale, clamp, true>, LREG4..7 (P1, C2..C4)
+// are loaded per call, r0 stays an fp16 immediate.
 constexpr float EXP_FP32_NEG_LN2_LO = -1.42860677e-6f;  // LREG14, 0xB5BFBE8E
-constexpr float EXP_FP32_C1 = 8.37312452e-3f;           // LREG4, 0x3C092F6E
 constexpr float EXP_FP32_C2 = 4.16695364e-2f;           // LREG5, 0x3D2AADAD
 constexpr float EXP_FP32_C3 = 1.66664720e-1f;           // LREG6, 0x3E2AAA28
 constexpr float EXP_FP32_C4 = 4.99999851e-1f;           // LREG7, 0x3EFFFFFB
-constexpr std::uint16_t EXP_FP32_R0_FP16A = 0x15A5;     // 1.37805939e-3f, exact in fp16
+constexpr std::uint16_t EXP_FP32_R0_FP16A = 0x15A5;     // EXP_FP32_P0 = 1.37805939e-3f, exact in fp16
 
 constexpr std::uint16_t EXP_FP32_INF_FP16B = 0x7F80;  // +inf as an fp16b SFPMULI immediate
 
@@ -584,7 +584,7 @@ inline void _sfpu_exp_fp32_load_imm32_() {
  */
 template <bool SCALE_EN, int ITERATIONS>
 inline void _sfpu_exp_fp32_accurate_tti_(const std::uint32_t exp_base_scale_factor) {
-    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG4, exp_detail::bits(EXP_FP32_C1)>();
+    _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG4, exp_detail::bits(EXP_FP32_P1)>();
     _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG5, exp_detail::bits(EXP_FP32_C2)>();
     _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG6, exp_detail::bits(EXP_FP32_C3)>();
     _sfpu_exp_fp32_load_imm32_<p_sfpu::LREG7, exp_detail::bits(EXP_FP32_C4)>();
@@ -1307,8 +1307,7 @@ void exp_init() {
             // _sfpu_exp_fp32_accurate_tti_: DEST advances by 2 on its store; LREG12..14 hold 1/ln2 and -ln2 in two
             // parts.
             addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
-            _sfpu_load_config32_(
-                p_sfpu::LREG12, exp_detail::hi16(EXP_FP32_LN2_RECIP), exp_detail::lo16(EXP_FP32_LN2_RECIP));
+            _sfpu_load_config32_(p_sfpu::LREG12, exp_detail::hi16(EXP_FP32_LOG2E), exp_detail::lo16(EXP_FP32_LOG2E));
             _sfpu_load_config32_(
                 p_sfpu::LREG13, exp_detail::hi16(EXP_FP32_NEG_LN2_HI), exp_detail::lo16(EXP_FP32_NEG_LN2_HI));
             _sfpu_load_config32_(
