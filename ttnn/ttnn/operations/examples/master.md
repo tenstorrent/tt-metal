@@ -17,6 +17,7 @@ functions where the lever lives. Details, the full regime × board table and CLI
 | Few Tensix cores active, or one Tensix core holds the whole time | **Grid not filled** | [`width_split`](width_split/) |
 | Reads/writes dominate, achieved GB/s far below the ceiling, few reads in flight per barrier | **Data movement below the ceiling: latency** | [`double_buffer`](double_buffer/), [`trid_double_issue`](trid_double_issue/) |
 | …and each page goes out as several small writes, one barrier each | **…: transfer size** | [`tile_reorder`](tile_reorder/) |
+| …and each Tensix core reads whole tiles of an operand it uses only part of (row 0 of a row-broadcast vector) | **…: transfer size** | [`partial_tile_read`](partial_tile_read/) |
 | …and one data-movement RISC-V's own time equals the kernel time and scales with the read count | **…: issue-bound** | [`split_reader`](split_reader/) |
 | …and time changes with which Tensix cores / which NoC run the same bytes, or with the order the Tensix cores walk the DRAM banks | **…: contention** | [`noc_placement`](noc_placement/), [`tensix_all_reduce_ring_transport`](tensix_all_reduce_ring_transport/), [`bank_stagger`](bank_stagger/) |
 | Many Tensix cores fetch the same bytes from DRAM | **Redundant reads** | [`shared_input_reuse`](shared_input_reuse/), [`mcast_topology`](mcast_topology/) |
@@ -77,7 +78,7 @@ labelled WH B0 (n150) or BH (p150b unless another board is named). Both boards' 
 the example's `test_<example>_regimes`, which is arch-agnostic: it runs the same regimes on any board
 and asserts only what held on every measured board; a regime whose verdict differs by arch is marked
 `measure` and only logs its speedup, so the per-board verdicts live here and in the README. Sweep
-points come from the README. `trid_double_issue` and `bank_stagger` have no regimes test and no WH measurement; `tensix_all_reduce_wave_pipeline` has no WH measurement.
+points come from the README. `trid_double_issue` and `bank_stagger` have no regimes test and no WH measurement; `partial_tile_read` and `tensix_all_reduce_wave_pipeline` have no WH measurement.
 **Not covered yet** (no example — measure it yourself): fixed launch cost of kernels with nothing to
 move; data already resident in L1 (CB aliasing).
 
@@ -124,6 +125,15 @@ move; data already resident in L1 (CB aliasing).
 **Gist:** write whole pages with one barrier per page or batch whenever the target is remote — the win is fewer barrier round trips; on BH it shows only for L1 destinations or when DRAM is not saturated. Size shapes to the grid: a 64-tile-row shape is one tile-row per Tensix core on 8×8 but not on 12×10.
 **Code:** `examples/tile_reorder/` — `_WRITER_SOURCE` picks `kernels/tile_reorder_writer_relocate.cpp` vs `tile_reorder_writer_scatter.cpp` (writer only; reader, CBs and work split shared).
 **See also:** `noc_placement`, `split_reader`, `double_buffer` (BH DRAM ceiling).
+
+## partial_tile_read — data movement below the ceiling: transfer size
+**Situation:** every Tensix core reads a row-broadcast operand (a `Layout::TILE` [32, W] vector in DRAM: bias, scale, per-column weight) as whole 2048 B tiles, but the broadcast uses only row 0 (the first face-row of faces 0 and 1); lever: read only those bytes, rounded up to the DRAM read alignment (`ttnn.get_dram_alignment()`), at their offsets in the CB tile slot.
+**How to recognize it:** many Tensix cores read the same vector; a no-read ablation of the reader is far faster; Tensix cores × W/32 × 2048 B ÷ kernel ns sits near the DRAM ceiling while ≤ 1/16 of those bytes are used.
+**Helps when:** ≥ 32 Tensix cores read it (8 tiles per barrier): 130 Tensix cores W=8192 209 892 → 107 604 ns = **1.95×** · 32 Tensix cores W=2048 18 331 → 7 773 ns = **2.36×** (BH p150b); 2.0–2.7× over 32–130 Tensix cores, W 1024–8192, and 2.57× for a 1-tile vector on 130. Two small reads per tile then cap at ~0.6 requests per ns chip-wide, so one 576 B span read per tile (`row0_span`) is faster still: **2.9–3.2×**.
+**Does not help when:** 1–8 Tensix cores, where each reader is latency-bound and bytes per tile do not set the time: 1 Tensix core W=8192 21 448 → 21 983 ns = **0.98×**, 8 Tensix cores 0.99×; at 32 tiles per barrier on 1 Tensix core it loses (**0.82×**, twice the requests; span 1.13×). Reuse shrinks it: 16 tile-rows per vector tile on 32 Tensix cores 1.20×. WH B0: not measured.
+**Gist:** when many Tensix cores read a broadcast operand and its whole-tile bytes approach the DRAM ceiling, read only the face-rows the consumer unpacks, as one span read per tile; at few Tensix cores deepen the reader first.
+**Code:** `examples/partial_tile_read/program_descriptor_with_inline_kernels.py` — `_READER_KERNEL` `if constexpr (mode == …)` (reader only), `segment_bytes()`.
+**See also:** `double_buffer` (latency-bound readers), `shared_input_reuse` (every Tensix core reading the same bytes), `tile_reorder`.
 
 ## split_reader — data movement below the ceiling: issue-bound
 **Situation:** one Tensix core gathers many small NoC reads issued from NCRISC alone while BRISC only writes.
