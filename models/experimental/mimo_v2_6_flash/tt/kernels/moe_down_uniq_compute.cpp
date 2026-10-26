@@ -3,7 +3,9 @@
 
 // TRISC: per group of ct output columns, sum over the distinct experts (their count from cb_cnt) of [rows, 32] h
 // tiles @ [kt, ct] w_down (LoFi, fp32 dest) -> ct [rows, 32] bf16 output tiles. Expert j's h holds in row u user u's
-// routing-weighted activation (zero when u did not select it), so row u of the sum is user u's output.
+// routing-weighted activation (zero when u did not select it), so row u of the sum is user u's output. The experts
+// come by ascending id (the reader's and writer's order), so row u adds its experts in an order the other users do
+// not change, and the zero rows add nothing.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/experimental/custom_mm.h"
