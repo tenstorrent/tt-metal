@@ -56,15 +56,27 @@ static constexpr int kWallClockLowIdx = 0;
         }                                                                 \
     }
 
+// A metadata type of the kernel's own, the example in tools/profiler/STREAMING_PROFILER_ZONE_IDS_WALKTHROUGH.md. Tracy
+// takes a zone's colour only from ZoneColorMeta, so a zone carrying this type is drawn in its RISC's colour.
+struct ZoneVerbosityMeta {
+    const char* name;
+    uint32_t color;
+    uint8_t verbosity;
+};
+
 // ZONE_MODE == 0 keeps the wall-clock spin: it needs durations calibrated in microseconds, which a
 // nop-iteration count cannot express.
-// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta.
+// ZONE_C is a ZONE with a colour, carried to the host as the site's ZoneColorMeta; ZONE_V carries a ZoneVerbosityMeta.
 #if ZONE_MODE
 #define ZONE(NAME, GRADUATED) ZONE_NOPS(NAME, ZONE_CYC)
 #define ZONE_C(NAME, GRADUATED, COLOR) ZONE_NOPS_AS(DeviceZoneScopedNC(NAME, COLOR), ZONE_CYC)
+#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) \
+    ZONE_NOPS_AS(DeviceZoneScopedWith(ZoneVerbosityMeta{NAME, COLOR, VERBOSITY}), ZONE_CYC)
 #else
 #define ZONE(NAME, GRADUATED) ZONE_WALL(NAME, GRADUATED)
 #define ZONE_C(NAME, GRADUATED, COLOR) ZONE_WALL_AS(DeviceZoneScopedNC(NAME, COLOR), GRADUATED)
+#define ZONE_V(NAME, GRADUATED, COLOR, VERBOSITY) \
+    ZONE_WALL_AS(DeviceZoneScopedWith(ZoneVerbosityMeta{NAME, COLOR, VERBOSITY}), GRADUATED)
 #endif
 
 // Marker-cost microbench (--bench): bursts of one marker kind, each burst timed against the wall clock, the totals
@@ -120,7 +132,7 @@ void kernel_main() {
         ZONE_C(ZTAG "_Zone2", 7500u, 0xFFE119u);    // ~3 us, yellow
         ZONE_C(ZTAG "_Zone3", 12500u, 0xBFEF45u);   // ~5 us, lime
         ZONE_C(ZTAG "_Zone4", 20000u, 0x3CB44Bu);   // ~8 us, green
-        ZONE_C(ZTAG "_Zone5", 30000u, 0x42D4F4u);   // ~12 us, cyan
+        ZONE_V(ZTAG "_Zone5", 30000u, 0x42D4F4u, 2);  // ~12 us, cyan, verbosity 2
         ZONE_C(ZTAG "_Zone6", 50000u, 0x4363D8u);   // ~20 us, blue
         ZONE_C(ZTAG "_Zone7", 100000u, 0x911EB4u);  // ~40 us, purple
         ZONE_C(ZTAG "_Zone8", 175000u, 0xF032E6u);  // ~70 us, magenta
