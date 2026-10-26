@@ -2019,3 +2019,29 @@ us a call M 128 / 160 (base 494 / 522), y vs base:
   its bytes in the benchmark); the remaining suspects are the DRISC path (tile 1 shared with x's NOC1 reads, and its
   shallow DMA-then-write loop, which feels every extra DRAM latency). Code reverted; the patch is
   /localdev/mstaletovic/dram_xw/op/read_queues.patch. Logs: /localdev/mstaletovic/dram_xw/op/.
+
+### Why x costs more next to DRISC weights: port sharing, not pipeline depth (2026-10-26, bh-lb-09, one chip)
+Per config three runs: real / weights read + x (W_NOFWD, no math / h / y) / the same without x reads (XRD_SKIP);
+x's excess = the last two's difference (its bytes alone at 512 GB/s: ~18 / 31 us GLM-5.3 M 96 / 160). us a call.
+DRAM_TILEs per bank: NOC0-endpoint (worker NOC0 DRAM traffic: the down weights), NOC1-endpoint (worker NOC1 traffic:
+the x reads; in switch mode also DRISC job 1, sending on NOC0), free (DRISC job 0).
+| GLM-5.3 E 8, M 96 / 160 | real | weights + x | weights, no x | x's excess |
+|---|---|---|---|---|
+| DRISC default (switch mode) | 461 / 522 | 418 / 464 | 355 / 382 | 63 / 82 |
+| Tensix readers (DRISC=0) | 444 / 503 | 393 / 434 | 356 / 381 | 37 / 53 |
+| DRISC units in flight 3 (NS_MAX; default 7) | 478 / 524 | 418 / 466 | 355 / 382 | 63 / 84 |
+| DRISC units in flight 14 | 460 / 525 | 418 / 465 | 355 / 382 | 63 / 83 |
+| DRISC DMA only on the free DRAM_TILE (DRISC_TILES=1) | 526 / 564 | 422 / 458 | 396 / 412 | 26 / 46 |
+| Galaxy loads, DRISC / Tensix readers | real | weights + x | weights, no x | x's excess |
+|---|---|---|---|---|
+| GLM-Flash E 9 M 142 | 381 / 373 | 336 / 325 | 286 / 287 | 50 / 38 |
+| K3 E 28 M 91 | 1218 / 1249 | 1125 / 1146 | 1046 / 1087 | 79 / 59 |
+| K2.7 E 12 M 107 | 807 / 778 | 718 / 684 | 614 / 617 | 104 / 67 |
+- Not latency / pipeline depth: 3 or 14 DRISC units in flight leave x's excess at 63 / 83.
+- Port sharing: with no DMA on the NOC1-endpoint DRAM_TILE x's excess falls 82 -> 46 at M 160 (below the Tensix
+  readers' 53) - the NOC1-endpoint DRAM_TILE's DMA and the x reads share its port into the controller. But one DRAM_TILE
+  a bank caps the gate/up stream (weights alone 382 -> 412) and the real run loses (522 -> 564).
+- Weights alone, DRISC = Tensix readers (GLM-5.3, GLM-Flash, K2.7), DRISC better on K3 (1046 vs 1087); the real runs
+  follow x's excess: Tensix readers -19 / -8 / -29 us on GLM-5.3 / GLM-Flash / K2.7, +31 on K3.
+- (AI clock sampled between runs read the 800 MHz idle clock: not a during-run sample.)
+Logs: /localdev/mstaletovic/drisc_mech/ (go.sh, go.out).
