@@ -65,13 +65,16 @@
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_rsub_int32.h"
 #include "llk_sfpu/ckernel_sfpu_selu.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
+#include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_softcap.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
@@ -86,9 +89,6 @@
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
-#include "sfpu/ckernel_sfpu_sigmoid.h"
-#include "sfpu/ckernel_sfpu_silu.h"
-#include "sfpu/ckernel_sfpu_sqrt.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
 // selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
