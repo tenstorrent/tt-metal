@@ -642,7 +642,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             _sfpu_exp_21f_bf16_tti_<SCALE_EN, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(exp_base_scale_factor);
         } else {
             // fp32-dest accurate path: the Juffa exp, with its loop-invariant constants kept out of the row
-            // loop (sfpi (through 7.84.0) never hoists an SFPLOADI literal out of a loop by itself, so each
+            // loop (sfpi (through 7.90.0) never hoists an SFPLOADI literal out of a loop by itself, so each
             // fp32 literal otherwise costs an SFPLOADI pair per row). log2(e) and p2 come from
             // vConstFloatPrgm1/2, programmed by exp_init's fp32 arm; three more live in LRegs, loaded once
             // per call -- the body needs the other five LRegs, so a fourth is a "too few lregs" compile
