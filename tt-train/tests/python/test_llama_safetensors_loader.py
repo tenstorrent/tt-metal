@@ -15,7 +15,7 @@ import pytest
 import ttnn
 import ttml
 from bf16_ulp import assert_within_bf16_ulp
-from ttml.common.utils import build_causal_mask, repermute_proj_rows, unpermute_proj_rows
+from ttml.common.utils import build_causal_mask, unpermute_proj_rows
 from ttml.models import EmbeddingPlacement, WeightTyingType
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig, load_from_safetensors, safetensors_loader
 from ttml.models.llama.safetensors_loader import (
@@ -279,16 +279,6 @@ class TestHelpers:
         """Qwen3 unpermutes its 1-D Q/K biases with the same helper."""
         w = np.arange(12, dtype=np.float32).reshape(12, 1)
         assert np.array_equal(unpermute_proj_rows(w[:, 0], 2), unpermute_proj_rows(w, 2)[:, 0])
-
-    @pytest.mark.parametrize("num_heads", [1, 3], ids=["QK-norm", "3 heads"])
-    @pytest.mark.parametrize("shape", [(6,), (6, 2)], ids=["1-D", "2-D"])
-    def test_repermute_undoes_unpermute_on_numpy_and_torch(self, num_heads, shape):
-        """Qwen3 repermutes to save HF checkpoints, and runs the pair on torch tensors too."""
-        torch = pytest.importorskip("torch")
-        w = np.arange(num_heads * np.prod(shape), dtype=np.float32).reshape(num_heads * shape[0], *shape[1:])
-        assert np.array_equal(repermute_proj_rows(unpermute_proj_rows(w, num_heads), num_heads), w)
-        for permute in (unpermute_proj_rows, repermute_proj_rows):
-            assert np.array_equal(permute(torch.from_numpy(w), num_heads).numpy(), permute(w, num_heads))
 
 
 def save_checkpoint(directory, *shards: dict[str, np.ndarray]) -> None:

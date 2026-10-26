@@ -27,6 +27,7 @@ from ttml.common.utils import unpermute_proj_rows  # noqa: E402
 from ttml.models.qwen3.safetensors_loader import (  # noqa: E402
     _fuse_kv,
     _kv_match,
+    _repermute_proj_rows,
     _split_kv,
 )
 

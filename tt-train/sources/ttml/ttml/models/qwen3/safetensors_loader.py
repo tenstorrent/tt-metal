@@ -27,9 +27,49 @@ import numpy as np
 import ttnn
 import ttml
 
-from ttml.common.utils import repermute_proj_rows, resolve_padded_load_shape, unpermute_proj_rows
+from ttml.common.utils import resolve_padded_load_shape, unpermute_proj_rows
 
 from .. import WeightTyingType
+
+# ---------------------------------------------------------------------------
+# Weight-permutation helpers (module-private)
+# ---------------------------------------------------------------------------
+
+
+def _unpermute_norm_weights(w: np.ndarray) -> np.ndarray:
+    """QK-Norm: HF ``[x1, x2, ..., y1, y2, ...]`` → ttml ``[x1, y1, x2, y2, ...]``."""
+    head_dim = w.shape[0]
+    if head_dim % 2 != 0:
+        raise ValueError(f"QK-Norm weight dim must be even; got {head_dim}")
+    half = head_dim // 2
+    return w.reshape(2, half).T.reshape(-1)
+
+
+def _repermute_proj_rows(w: np.ndarray, n_heads: int) -> np.ndarray:
+    if w.ndim == 1:
+        total = w.shape[0]
+        D = total // n_heads
+        wv = w.reshape(n_heads, D)
+        reals = wv[:, 0::2]
+        imags = wv[:, 1::2]
+        return np.concatenate([reals, imags], axis=1).reshape(total)
+    if w.ndim == 2:
+        rows, cols = w.shape
+        D = rows // n_heads
+        wv = w.reshape(n_heads, D, cols)
+        reals = wv[:, 0::2, :]
+        imags = wv[:, 1::2, :]
+        return np.concatenate([reals, imags], axis=1).reshape(rows, cols)
+    raise ValueError(f"Expected 1D or 2D tensor, got {w.ndim}D")
+
+
+def _repermute_norm_weights(w: np.ndarray) -> np.ndarray:
+    head_dim = w.shape[0]
+    if head_dim % 2 != 0:
+        raise ValueError(f"QK-Norm weight dim must be even; got {head_dim}")
+    half = head_dim // 2
+    return w.reshape(half, 2).T.reshape(-1)
+
 
 # ---------------------------------------------------------------------------
 # Shape helpers
@@ -100,7 +140,7 @@ def _split_kv(fused: np.ndarray, kv_out: int, num_kv_heads: int):
     """
     k = fused[:kv_out]
     v = fused[kv_out : 2 * kv_out]
-    k = repermute_proj_rows(k, num_kv_heads)
+    k = _repermute_proj_rows(k, num_kv_heads)
     return k, v
 
 
@@ -321,7 +361,7 @@ def load_from_safetensors(model, safetensors_path, config) -> None:
         if heads is not None:
             arr = unpermute_proj_rows(arr, heads)
         elif _is_norm_proj(hf_name):
-            arr = unpermute_proj_rows(arr, 1)
+            arr = _unpermute_norm_weights(arr)
 
         param = parameters[ttml_name]
         # expected_shape uses the ORIGINAL hf_name (before any tie remap) so the
@@ -452,9 +492,9 @@ def export_hf_model(model, config, out_dir, hf_source_dir=None) -> str:
         """Repermute (Q/K) or norm-repermute, crop to HF shape, and record ``arr``."""
         heads = _proj_transform_heads(hf_name, config.num_attention_heads, config.num_key_value_heads)
         if heads is not None:
-            arr = repermute_proj_rows(arr, heads)
+            arr = _repermute_proj_rows(arr, heads)
         elif _is_norm_proj(hf_name):
-            arr = repermute_proj_rows(arr, 1)
+            arr = _repermute_norm_weights(arr)
         hf_shape = hf_shapes[hf_name]
         if arr.ndim == 2:
             arr = _crop_to_hf_2d(arr, hf_shape[0], hf_shape[1])
