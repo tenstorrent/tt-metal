@@ -373,6 +373,17 @@ public:
     const std::unordered_map<tt::tt_metal::CoreCoord, TestSender>& get_senders() const { return senders_; }
     const std::unordered_map<tt::tt_metal::CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
 
+    // Cores running the sync kernel (one per device in a sync test, none otherwise)
+    std::vector<tt::tt_metal::CoreCoord> get_sync_kernel_cores() const {
+        std::vector<tt::tt_metal::CoreCoord> cores;
+        if (global_sync_) {
+            for (const auto& [core, _] : sync_workers_) {
+                cores.push_back(core);
+            }
+        }
+        return cores;
+    }
+
     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_connections() const {
         return connection_manager_.get_used_fabric_links();
     }

@@ -30,14 +30,23 @@ place (selector `TT_FABRIC_KERNEL_VERSION=2`, same host args); the `=3` selector
 
 | v3l2b | E0 | v3l2 with v3a's exact idle predicates everywhere (no single-bit test on 2-slot VC1 channels) | Offline; VC0 2D/1D E0 byte-identical to v3l2 |
 | v3l2be1b | both | Exact composition of v3l2b (E0) and v3e1b (E1) | §93: passes everything incl. VC1 at all levels and 10/10 VC1 repeats; ≈ v3a at -O3/-O2; -Os penalty −70%; VC1 −25 to −40; gaps: forwarded +7.8, multicast +3.5, scatter +2.7. Superseded by v3l3be1c |
-| v3l3 | E0 | v3l2b + no calls on the pass path, yield-only context-switch flag, no VC0 combined test | Blocked. §94: forwarded 16 B 112.3, worker 115.6; HUNG on VC1 at -O3 (third VC1 hang) |
+| v3l3 | E0 | v3l2b + no calls on the pass path, yield-only context-switch flag, no VC0 combined test | Unblocked (§98: the hang was the test race). §94: forwarded 16 B 112.3, worker 115.6; HUNG on VC1 at -O3 (third VC1 hang) |
 | v3l3b | E0 | v3l3 with VC0's combined test kept | §94: ≈ v3l3; passes everything incl. VC1 at all levels (once) |
 | v3e1c | E1 | v3e1b + direct scatter/atomic/fused local delivery (scatter counters once per packet) | §94: scatter −7 to −12, atomic −4 to −11 vs v3a; forwarded fused still +5.6 |
 | v3l3be1c | both | Exact composition of v3l3b (E0) and v3e1c (E1); cleaned form `v3sb` (on v3r, PT_LOAD-identical) | §94: lead until v3t (§95). Means vs v3a -O3: -O3 −4.2/−3.6/−4.2/−0.1/−1.5, -O2 −2.3/−2.1/−4.1/−0.6/−1.6, -Os −0.3/+4.7/+0.9/+3.9/+1.9; hook no cost; VC1 passes all levels (once). Open: forwarded fused, E1 opt-level sensitivity, VC1 hang cause |
 | v3r / v3r2 | both | Mainline cleanup of v3l2be1b (PT_LOAD-identical) / plus six null cleanups | §94: v3r2 costs +1 to +2 on means and +4 to +6 on E1 scatter at -O3/-O2, 0 at -Os: E1's inlined main loop is layout-sensitive |
 | v3t | E1 | v3sb + E1 main loop in its own `noinline` function with no non-power-of-two constant multiplies; full-batch completion fast path; 1D decides once; VC2 guard | §95: lead until v3v4 (§98). Means vs v3a -O3: -O3 −8.4/−4.8/−3.8/−0.5/−6.8, -O2 −6.6/−4.5/−3.9/−1.0/−6.3, -Os −5.4/−2.1/−1.3/+0.5/−1.4. Forwarded rows level-independent; VC1 passes all levels. Open: N/S rows and half-ring multicast at -Os, forwarded fused +4.6, hook +2.5 |
 | v3t2 / v3tb | E1 | v3t + v3r2's six null cleanups / v3t with the loop inlined | §95: v3t2 = v3t within 0.4 on every mean and scatter row at all levels (the stability test passes); v3tb ≈ v3t on 2D, 1D +2.4, hook +3 |
-| **v3v4** | E1 | v3tk + local-write preset via the NoC API (`local_write_init_state` / `local_write_with_state`), fixed 2D route decode, completion batches cut at record-word boundaries, 2D partial batch held 8 idle passes | **§98: lead (user, 2026-10-26).** Means vs v3t (4352/mix/flushmix/1D): -O3 −2.1/−1.4/−0.2/−3.7, -O2 −2.6/−1.4/−1.0/−3.8, -Os −3.4/−3.3/−1.4/−1.9; N/S -Os gap mostly closed; FWD fused 154.7 (beats v3a -O3). Known costs: one-hop 4352 B writes +2.4..3 (cause open), MixSize4 +3 (batch cut); half-ring -Os open |
+| **v3z** | both | Exact composition of v3yb (E0) and v3x3 (E1) | **§98: lead (adopted 2026-10-26).** Each ERISC PT_LOAD-identical to its parent; 133 logs clean, VC1 34/34 at all levels. VC1 1-hop −20 to −32 vs v3v6; bursts at v3tk's level or better; jitter band −0.18..+0.06 (2D), edits ≈ run-to-run noise. Means vs v3tk (4352/mix/flushmix/1D): -O3 −2.0/−1.3/−1.1/−3.0, -O2 −2.6/−0.9/−1.0/−3.2, -Os −2.6/−2.2/−1.1/−1.7; vs v3v6 +0.4 to +2.1. Open: VC1 multicast vs v3x (one run each), -Os E0 cost (~1), half-ring -Os |
+| v3x3 | E1 | v3x without the record-word batch cut (= v3x_nocut, mainline comments; PT_LOAD-identical) | §98: every bursty loss back to v3tk's; steady means +1.0 / +0.4 / +0.5 / +0.8 vs v3x at -O3 (the cut's worth); EW_MixSize4 −3.8; NS_Chunk4Fused_Flush +10 (v3tk's level) |
+| v3x2 | E1 | v3x with the cut only on passes that handle a packet | §98: recovers about half of each bursty loss. Out |
+| v3x | E1 | v3v6 + credit holds bounded by the ring (T = 1 below 8 slots, else min(4, slots / 4); partial batch after 4 idle passes) | §98: VC1 −12 to −83 vs v3v6; 2D +0.2 to +0.5; jitter band ±0.03. Bursty losses (16 B N8 G500 +4..5) were the cut's → v3x3 |
+| v3yb | E0 | v3y (helpers, per-round work out of line) + the worker visit takes completions before its send decision | §98: passes everything; VC1 1-hop −4 to −13 vs v3v6; -O3/-O2 means ±0.4; -Os +0.2 to +1.2. Chosen E0 for v3z |
+| v3yc | E0 | helpers + the worker change only | §98: VC1 as v3yb; -O3 1D +0.9 (half-ring); -Os +0.2 to +1.0 |
+| v3v6l3 | E0 | v3v6 with round 11's v3l3 E0 change (no VC0 combined forwarding test) | §98: VC1 worse on every row (up to +14). Out |
+| v3w / v3w4 | E1 | Continuous completion (rate K) / the same rule in batch code with `uncompleted > T` | §98: out (E1-bound rows +7 to +16 / VC1 +30 to +45) |
+| v3v6 | E1 | v3v4 + wait for a full batch's newest write to leave the NIU before crediting (NoC API, capped at 32 reads) | §98: lead until v3z. Means vs v3t (4352/mix/flushmix/1D): -O3 −3.4/−1.7/−1.6/−4.1, -O2 −4.1/−1.9/−2.3/−3.6, -Os −4.8/−3.7/−2.6/−2.5. One-hop 4352 B writes now better than v3t (126.8 vs 128.1). Left: MixSize4 +3 (batch cut), Linear3HopEW -Os +3.5 (1D cut), half-ring -Os |
+| v3v4 | E1 | v3tk + local-write preset via the NoC API (`local_write_init_state` / `local_write_with_state`), fixed 2D route decode, completion batches cut at record-word boundaries, 2D partial batch held 8 idle passes | §98: lead until v3v6. Means vs v3t (4352/mix/flushmix/1D): -O3 −2.1/−1.4/−0.2/−3.7, -O2 −2.6/−1.4/−1.0/−3.8, -Os −3.4/−3.3/−1.4/−1.9; N/S -Os gap mostly closed; FWD fused 154.7 (beats v3a -O3). Known costs: one-hop 4352 B writes +2.4..3 (cause open), MixSize4 +3 (batch cut); half-ring -Os open |
 | v3tk | both | v3t reading the keepalive host setting `ETH_TXQ_SEQ_UPDATE_TIMEOUT` (builder: 1000 on Blackhole, 0 = firmware elsewhere) | §95: PT_LOAD-identical to v3t; on hardware without the study override it reproduces v3t at all three levels (means within 0.3, VC1 34/34) |
 
 Key findings so far: the whole -Os penalty is E1's (§88); v2/v3a's VC1 receiver admits on VC0's streams (§87).
@@ -97,6 +106,23 @@ Suite means decide, not single rows; a design within about a cycle of the best a
 - Minor: E/W atomic +2 vs v3sb at -O3/-O2.
 - E1 design agent working offline on `variants/v3v` (V3E1_NOTES §12); then a hardware round with VC1 and the jitter
   edits.
+
+### VC1 hang cause (2026-10-26, RESULTS §98)
+- The VC1 hangs since §94 are a test_tt_fabric race, not router faults: receivers are not synced before senders start,
+  and a late receiver's buffer is overrun (4 KiB all-to-all, 100 packets into 64 slots).
+- Confirmed by the worker capture (job 319). User decision: v3l3, v3vc and v3w are unblocked.
+- Test fix agreed with the user: a receiver readiness sync for all tests; flow control on by default for validation
+  mode is under evaluation; benchmark mode keeps no flow control.
+- Fix in the experiment tree: the receiver start gate v2 (`streams_rxready.patch`; each receiver counts itself ready on
+  its chip's sync core, the host reads one word per chip). Job 337: a forced 200 ms launch skew, 24/24 on both ranks;
+  job 338: 25 plain repeats, all clean, no gate warning. Flow control by default is still the user's decision.
+
+### Lead (2026-10-26): v3z
+- v3z = v3yb's E0 + v3x3's E1, adopted by the user as the robust-over-peak trade (RESULTS §98): bursts at v3tk's level,
+  the best VC1 1-hop rows, codegen stable under ordinary edits on both ERISCs; 0.4 to 2.1 behind v3v6 on steady means.
+- LEDGER.md is classified against v3z.
+- Open: VC1 multicast vs v3x (one run each), the ~1 cycle the record-word cut saved on steady streams (a cheaper
+  four-record read that keeps the batch shape), v3yc's E0 at -Os (~1), half-ring multicast at -Os.
 
 ## Known defects in the tree's v2 (`fabric_erisc_router_v2.cpp`), left as is (user, 2026-10-25)
 Both come from the study's own changes; main's router has neither. v3 (v3e1b's E1 onward, v3r's generic loop) fixes

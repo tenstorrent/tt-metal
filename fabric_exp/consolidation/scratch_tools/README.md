@@ -16,3 +16,11 @@ Most useful:
 - `ka13/`: the keepalive host-setting checks (RESULTS §95). `mock_ka.py` runs CPU-only mock runs without the study
   override.
 - `shtest/`: local tests of `vc1_capture_lib.sh`, with a fake ttrun.
+- `e0audit/`: the E0 audit of 2026-10-26 (`E0_AUDIT.md`).
+  - `emu2.py` (v3l's `emu.py` plus first-level-ack counters, `--seq` and the credit-frame-to-send lag), `paths.py` (per-pass
+    table over the five hot E0 configs), `e0hot.sh` / `e0cmp.sh` (hot E0 builds; `sender_erisc` function comparison),
+    `rml.py` (compact listing of `run_main_loop`), `full.sh` / `fullv.sh` (all-config builds), `cfgs.py` (E0 config
+    classes from the named CT args).
+  - `mk_v3y.py` (`--api-only` for the API-only control), `mk_cpp.py`, `mk_v3yb.py` (the worker room-first change, nested
+    form), `mk_v3yb_allch.py` and `mk_v3yb_formC.py` (the rejected all-channel forms), `probes.py` (the two per-round
+    edits).

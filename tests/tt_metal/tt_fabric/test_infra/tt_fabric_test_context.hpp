@@ -135,7 +135,9 @@ public:
 
     void compile_programs();
 
-    void launch_programs() { fixture_->run_programs(); }
+    // Starts the test's programs. In a sync test, the sync cores hold the senders until the host releases them, once
+    // every receiver of the test, on every host, is running.
+    void launch_programs();
 
     void wait_for_programs() { fixture_->wait_for_programs(); }
 
@@ -255,6 +257,10 @@ private:
     void update_memory_maps(const tt::tt_fabric::fabric_tests::AllocatorPolicies& policies);
 
     void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size);
+
+    // Start gate of a sync test (launch_programs)
+    void wait_for_local_receivers_to_start() const;
+    void release_local_sync_cores() const;
 
     // Track sync cores for each device
     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;

@@ -185,6 +185,15 @@ std::vector<ParsedStreamSegment> YamlConfigParser::parse_stream(const YAML::Node
         }
 
         TT_FATAL(segment_yaml.IsMap(), "Expected each stream segment to be an ntype string or a map");
+        if (segment_yaml["idle"]) {
+            // An idle segment: the worker waits this many cycles and sends nothing.
+            TT_FATAL(
+                segment_yaml.size() == 1,
+                "An idle stream segment ({{idle: <cycles>}}) sets no other field; packet fields go on their own segments");
+            segment.idle = parse_scalar<uint32_t>(segment_yaml["idle"]);
+            segments.push_back(segment);
+            continue;
+        }
         for (const auto& field : segment_yaml) {
             const auto key = parse_scalar<std::string>(field.first);
             if (key == "ntype") {
@@ -705,6 +714,9 @@ static auto pattern_field_values(const ParsedTrafficPatternConfig& pattern, GetF
         return values;
     }
     for (const auto& segment : pattern.stream.value()) {
+        if (segment.idle.has_value()) {
+            continue;  // an idle segment sends nothing
+        }
         const auto value = get_field(segment);
         values.push_back(value.has_value() ? value : get_field(pattern));
     }
@@ -1988,6 +2000,12 @@ void TestConfigBuilder::validate_stream_senders(const TestConfig& test) const {
                 test.name,
                 sender.stream->counts.size(),
                 sender.patterns.size());
+            TT_FATAL(
+                sender.stream->idle_after.empty() || sender.stream->idle_after.size() == sender.patterns.size(),
+                "Test '{}': stream program has {} idle entries for {} patterns",
+                test.name,
+                sender.stream->idle_after.size(),
+                sender.patterns.size());
         }
     }
 
@@ -2921,7 +2939,20 @@ void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
         StreamProgram program{.repeat = repeat};
         std::vector<ParsedTrafficPatternConfig> segment_patterns;
         segment_patterns.reserve(stream_pattern.stream->size());
+        // Idle segments become waits after the packet segment before them: idle_after[i] follows pattern i's packets
+        // in each lap. Idle at the start of the stream waits at the end of each lap instead (the same sequence, minus
+        // the very first wait). Consecutive idle segments add up.
+        std::vector<uint64_t> idle_after;
+        uint64_t leading_idle = 0;
         for (const auto& segment : stream_pattern.stream.value()) {
+            if (segment.idle.has_value()) {
+                if (segment_patterns.empty()) {
+                    leading_idle += segment.idle.value();
+                } else {
+                    idle_after.back() += segment.idle.value();
+                }
+                continue;
+            }
             ParsedTrafficPatternConfig pattern = stream_pattern;
             pattern.stream.reset();
             pattern.repeat.reset();
@@ -2972,6 +3003,19 @@ void TestConfigBuilder::expand_streams(ParsedTestConfig& test) {
 
             segment_patterns.push_back(std::move(pattern));
             program.counts.push_back(segment.count);
+            idle_after.push_back(0);
+        }
+        TT_FATAL(!segment_patterns.empty(), "Test '{}': a stream needs at least one segment that sends packets", test.name);
+        idle_after.back() += leading_idle;
+        if (std::any_of(idle_after.begin(), idle_after.end(), [](uint64_t cycles) { return cycles != 0; })) {
+            for (const uint64_t cycles : idle_after) {
+                TT_FATAL(
+                    cycles <= std::numeric_limits<uint32_t>::max(),
+                    "Test '{}': a stream's idle segments add up to {} cycles in one place; at most 2^32 - 1",
+                    test.name,
+                    cycles);
+                program.idle_after.push_back(static_cast<uint32_t>(cycles));
+            }
         }
 
         // The sender kernel counts a stream's packets in 32 bits.
@@ -3184,6 +3228,10 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const SenderConfig& c
         out << YAML::Value << YAML::BeginMap;
         out << YAML::Key << "repeat" << YAML::Value << config.stream->repeat;
         out << YAML::Key << "counts" << YAML::Value << YAML::Flow << config.stream->counts;
+        if (!config.stream->idle_after.empty()) {
+            // Cycles the worker waits after patterns[i]'s packets in each lap (idle segments).
+            out << YAML::Key << "idle_after" << YAML::Value << YAML::Flow << config.stream->idle_after;
+        }
         out << YAML::EndMap;
     }
 

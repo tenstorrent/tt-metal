@@ -6179,6 +6179,325 @@ Suite means change vs v3t (4352 / mix / flushmix / 1D):
 - The design agent's polling-period floor sketch is therefore dropped.
 - The mechanism of the +2.4 to +3.0 in the v3v family is still open.
 
+**One-packet round trip** (job 310, `lat_runs.sh`, `lat_compare.py`; exp_latency.yaml, telemetry off; all runs
+passed).
+- Two v3tk runs, first and last in the job, agree within about 5 ns.
+- Median net round trip, change vs v3tk in ns:
+
+| Case | v3vc | v3vb | v3v4 |
+| --- | ---: | ---: | ---: |
+| 1-hop E/W write 4 KiB (v3tk 1626) | +8 | +1 | +9 |
+| 1-hop N/S write 4 KiB (v3tk 1645) | +10 | +11 | +10 |
+| 1-hop N/S write 16 B (v3tk 1315) | +35 | +38 | +19 |
+| fused, 3-hop | ±13 | ±13 | ±13 |
+
+- **Single-packet latency does not explain the one-hop 4352 B throughput regression.**
+  - v3vb's E/W 4 KiB round trip is unchanged (+1 ns), yet its E/W 4352 B throughput regresses like the others.
+  - The +8 to +10 ns of the others is under 1 cycle/packet at these rates.
+- So the cost appears only under sustained load.
+- Working hypothesis, not tested: these rows are bound by the credit window. 17 worker slots × about 128
+  cycles/packet is about 2,200 cycles, close to the measured round trip. How credits are batched and returned under
+  load would then matter more than one packet's latency.
+
+**Cause found: E1 checks a batch's completion too early** (V3E1_NOTES §12.16).
+- In the variants, E1's completion check runs about 10 cycles sooner after a batch's last local write. Two causes:
+  - the NoC API's write updates the software write counters before sending, where v3tk's call updated them after;
+  - the batch cut removes v3tk's slower straddled-batch case.
+- A 4352 B write leaves the NIU about 75–85 cycles after issue. A check landing just before that fails, and the
+  credit then waits for a later pass, about 85 cycles later under load.
+- The one-hop 4352 B rows are bound by the credit window, so the late credits cost throughput.
+
+| Diagnostic (job 311, -O3) | v3tk | v3tk_cw | v3vc | v3vc_cw |
+| --- | ---: | ---: | ---: | ---: |
+| Mesh 1-hop E/W write | 127.9 | 126.9 | 130.9 | 126.9 |
+| E/W write 4352 | 128.4 | 126.9 | 131.1 | 127.0 |
+| N/S write 4352 | 128.6 | 127.7 | 131.5 | 127.9 |
+| Mesh 1-hop E/W bidir write | 137.2 | 135.8 | 139.9 | 135.8 |
+| Mesh 3-hop E/W write | 144.1 | 143.3 | 145.2 | 143.3 |
+
+- `_cw` waits in place for the batch's newest write to leave before crediting; diagnostic builds only.
+- **Confirmed.** It also gains about 1 on v3tk, which was paying the same cost on part of its batches.
+
+**v3v6 = v3v4 + that wait, through the NoC API** (`ncrisc_noc_nonposted_write_with_transaction_id_sent`, capped
+at 32 reads; then the batch goes to a later pass as before).
+- Jobs 312–313, label p19v6. All validation passed; VC1 34/34 at every level.
+- E0 is byte-identical to v3tk; E1 changes only in the 128 configs that run its program.
+
+| Row (-O3 / -O2 / -Os) | v3t | v3v4 | **v3v6** |
+| --- | --- | --- | --- |
+| Mesh 1-hop E/W write | 128.1 / 128.8 / 127.5 | 130.5 / 131.0 / 130.1 | 126.8 / 127.0 / 126.6 |
+| N/S write 4352 | 128.5 / 128.7 / 128.8 | 130.8 / 131.2 / 130.6 | 128.1 / 127.3 / 127.3 |
+| Mesh 3-hop E/W write | 144.0 / 146.0 / 146.0 | 145.9 / 147.5 / 147.2 | 143.2 / 144.7 / 144.1 |
+
+Suite means change vs v3t (4352 / mix / flushmix / 1D):
+
+| | -O3 | -O2 | -Os |
+| --- | --- | --- | --- |
+| v3v4 | −2.11 / −1.38 / −0.23 / −3.70 | −2.63 / −1.44 / −0.99 / −3.84 | −3.40 / −3.29 / −1.39 / −1.86 |
+| **v3v6** | **−3.42 / −1.70 / −1.57 / −4.06** | **−4.13 / −1.87 / −2.31 / −3.63** | **−4.84 / −3.68 / −2.59 / −2.45** |
+
+- **v3v6 is the lead.**
+- Half-ring multicast at -O2 read 235.2 (v3v4 226.3). The ring routers' code is byte-identical between v3v4 and v3v6
+  at -O2 (offline PT_LOAD), so this is run-to-run variation on that row.
+- Left: mixed-size rows +2.8 to +3.6 (batch cut); Linear 3-hop write at -Os +3.5 (1D cut); half-ring at -Os (rings
+  are not on E1's program).
+
+**v3v6 jitter band** (jobs 314–315, `jitter_runs.sh O3|Os v3v6 jv6`; the eight §96 edits on v3v6; all passed).
+- Suite means:
+  - 2D, mix and flushmix within ±0.06 at -O3 and ±0.03 at -Os (v3tk: ±0.2 and ±0.4);
+  - 1D +0.27 at most at -O3;
+  - 1D at -Os: −0.07 to −0.32 for every edit, while the two base runs differ by +0.35 themselves (one bimodal 1D row
+    moved 6.6 between them).
+- Rows: 90% within 0.15–0.17.
+- **v3v6 holds the §96 stability band**, a little tighter than v3tk.
+
+**User, 2026-10-26: the early-check effect is a timing cliff.** The credit goes back at once or about 85 cycles later,
+depending on where a check lands relative to a write leaving the NIU. A stable version is preferred even at 1–2 cycles
+per packet slower.
+- Next: v3w, a continuous completion scheme. Every pass credits every slot whose write has left, and amortization is
+  a rate rule, not a batch shape.
+- Acceptance: a perturbation sweep. Inject 0 to 32 cycles before the completion check and after the write issue;
+  the result must show a smooth slope with no steps.
+
+**Perturbation sweep** (jobs 316–317, `pert_runs.sh`, `pert_compare.py`; diagnostic builds; all passed).
+- **A, delay before the completion check.** Range over d = 8..32 on the one-hop 4352 B writes:
+  - v3tk 1.5–2.1, v3v6 1.6–2.1, v3w4 1.5–2.1;
+  - v3w 4.6–5.1;
+  - no steps anywhere.
+- **B, delay after a local write issue.** All four respond identically: a plateau over d = 8..16 (the spin's minimum
+  is about 14 cycles), then roughly one-for-one. It measures E1's spare capacity per packet and does not separate
+  designs.
+- The sweep did not reproduce the early-check cliff on v3tk or v3v6. It was seen between code versions (v3vc vs
+  v3tk), and v3vc was not swept.
+
+**v3w and v3w4** (jobs 318–321; validation passed).
+- **v3w (K=3) is out.** Its E1-bound rows lose 7 to 16: E/W scatter 156.8, Mesh 3-hop E/W write 148.6, Linear 1-hop
+  scatter 158.9.
+- **v3w4 is out.**
+  - Its means are below v3v6's at every level.
+  - Its VC1 rows lose 30 to 45 cycles/packet (-Os 1-hop E/W 16 B 199.4 → 244.4, 4352 B 214.5 → 257.9; the same at
+    -O2/-O3). Its `uncompleted > T` rule (T = 1 below 8 slots) holds credits on the small VC1 rings.
+  - The user flagged this concern beforehand (bursty and short streams, small windows).
+- **The 20-slot window run was cancelled.** User: slot counts vary by config and must not be relied on.
+
+**v3x** = v3v6 with credit holds bounded relative to the ring (V3E1_NOTES §12.20).
+- T = 1 below 8 slots, otherwise min(4, slots/4).
+- A sender misses at most T−1 slots because of E1 (0 on 2- and 4-slot rings).
+- A partial batch goes after 4 idle passes, about 150 cycles at any window.
+- Bursty-sender benchmark: stream idle segments, `{idle: <cycles>}` (streams plan v2;
+  `fabric_exp/streams/port/streams_idle.patch`, applied to the tree and host rebuilt 2026-10-26), with
+  `fabric_exp/exp_burst.yaml`.
+- v3x's protocol and the burst runs for v3tk / v3v6 / v3w4 / v3x: jobs 328–330.
+
+**The VC1 hangs are a test-harness race, not a router fault** (fifth hang: job 319, v3w at -O2,
+`results/p22wvc1_o2_hangcap`, the first with the worker capture).
+- What the capture shows, in `MultiMeshAllToAll_size_4096_ntype_unicast_write`:
+  - 16 receivers on rank 1, cores (1,2)–(1,5) on chips 4–7, are still running with 0 of 100 packets validated;
+  - each polls for packet 1, while its slot holds packet 65's data. The decoder flags "receiver buffer overrun";
+  - each one's sender on rank 0 sent all 100 packets;
+  - all routers are drained, and the rest of both ranks is done.
+- **Mechanism.**
+  - The test synchronises senders but not receivers. The host barrier runs before launch, and senders wait on the
+    device global sync, which needs each rank's sync core running but not its receivers.
+  - A receiver that starts after its sender has passed packet 64 finds packet 1's slot overwritten (64 slots of 4 KiB
+    per receiver buffer, 100 packets), and waits forever.
+  - At 1 KiB, 100 packets fit without wrapping. That is why every hang was in the 4 KiB all-to-all, under five router
+    designs, at about 4% of full VC1 runs.
+- **Scope.**
+  - Confirmed for the fifth hang. The fourth (v3vc) shows the same drained-fabric signature, router capture only. The
+    third (v3l3) had no capture.
+  - The §93 hangs (v3u3, v3l2e1b) had a real router bug, fixed then (single-bit idle test).
+
+**Bursty senders** (job 328, `burst_runs.sh`, exp_burst.yaml with stream idle segments; 44 tests per build, all
+passed).
+- The idle segments behave as designed: N1_G2000 takes 2093 cycles/packet, N4_G500 196.
+- **Bursts of 1, 2 or 4 packets:** identical across v3tk, v3v6, v3w4 and v3x at both sizes. The 17-slot window
+  absorbs the burst and the gap outlasts any hold.
+- **Bursts of 8 with a 500-cycle gap, 16 B:**
+
+| Build | E/W | N/S |
+| --- | ---: | ---: |
+| v3tk | 129.8 | 130.0 |
+| v3v6 | 136.2 | 137.4 |
+| v3x | 134.0 | 135.1 |
+
+- **4352 B cells are mixed:** N/S 32-packet bursts, 500-cycle gap: v3tk 134.6, v3v6 and v3x 139.2. E/W 8-packet
+  bursts, 500-cycle gap: v3tk 137.2, v3v6 134.6.
+- **v3w4 is worst or tied-worst in most cells.**
+- **Repeat for noise:** job 331, p25_*.
+
+**v3x** (jobs 329–330, label p24x; all validation passed, VC1 34/34 at every level).
+
+| VC1 row (-Os / -O2 / -O3) | v3v6 | v3x |
+| --- | --- | --- |
+| 1-hop E/W 16 B | 199.4 / 195.2 / 194.8 | 178.3 / 176.3 / 176.4 |
+| 1-hop E/W 4352 B | 214.5 / 214.6 / 214.2 | 191.4 / 190.1 / 190.1 |
+| 1-hop N/S 4352 B | 219.1 / 215.2 / 215.8 | 197.6 / 192.9 / 193.2 |
+| Multicast 4352 B | 333.0 / 323.8 / 322.4 | 250.2 / 263.3 / 246.7 |
+
+- The window-relative batch size is 2 on the 8-slot VC0 rings of VC1 routers (v3v6: 4) and 1 on the 4-slot VC1
+  rings. Credits there no longer wait on half the ring.
+- **2D/1D means:** 0.2 to 0.5 behind v3v6 on 4352, mix and flushmix at every level; 1D −0.6 to +0.1.
+- **Jitter band** (jobs 332–333, the eight §96 edits on v3x): 2D, mix and flushmix means ±0.03 at -O3 and -Os; 1D
+  within −0.38..+0.19; flushmix4 noisy as always. v3x is stable.
+- **Burst repeat** (job 331, p25_*): every cell repeats within about 0.3, so the burst differences are real.
+  - The v3v family (v3v6, v3x) loses 4 to 7 against v3tk on 16 B bursts of 8 with 500-cycle gaps, and 4.6 on N/S
+    4352 B bursts of 32 with 500-cycle gaps.
+  - It gains 2 to 4 on 4352 B bursts of 8 and on N/S bursts of 32 with 2000-cycle gaps.
+  - The mechanism is with the design agent.
+- **Test-race fix applied for checking:** streams_rxready.patch (receiver start gate: the host waits for every
+  receiver to start, then the multi-host barrier, then releases the sync cores) and diag_launch_delay.patch
+  (diagnostic only). Jobs 334–336: a deterministic 200 ms launch skew, then 50 plain repeats.
+  - Results with the v1 gate (host polled every receiver): 50 of 50 plain repeats clean, with no gate warning.
+    At the old ~4% rate that alone has about a 13% chance of happening anyway.
+  - The deterministic check was invalid: the delay never fired. The run was not longer (5.5 s vs ~6.1 s), likely
+    because each mesh is rank 0 of its own subcontext in the split. Being fixed (global launch rank, plus a log
+    line per delay).
+  - User nit: do not poll every receiver from the host. Gate v2 (streams_rxready_v2_delta.patch): each receiver
+    increments a ready counter on its chip's sync core, and the host reads one word per chip, then the barrier,
+    then the release.
+  - Gate v2 with the fixed diagnostic (diag_launch_delay v2: global launch rank, one log line per launch). Job 337:
+    - rank 1 logged a 200 ms delay on all 12 launches, and its launches were measured 200 ms after rank 0's;
+    - both runs finished 24/24 with no gate warning;
+    - world size 2 on both processes, so the barrier spans both ranks and the earlier repeats count;
+    - a sender wraps a 64-slot 4 KiB buffer in about 10 µs, so without the gate this skew would overrun;
+    - the negative control (the same skew, no gate) was not run: it would be a deliberate hang and a broker
+      reset.
+    Plain repeats on v2 (job 338): 25 of 25 clean, 24/24 finishes each, no gate warning.
+
+**E0 audit** (agent; `consolidation/E0_AUDIT.md`; LEDGER.md now covers §1–§98 with 'applies to' and 'in the
+lead?' columns; DESIGN_BRIEF.md has the standing rules).
+- **A freed far slot is used one pass late.** The worker visit tests for room before it reads completions, so the
+  pass that receives a credit frame credits the worker and ends; the send waits for the next pass.
+  - It is a fixed lag of about 30–60 cycles per credit frame, not a timing race.
+  - Inferred gain: up to 6–7 cycles/packet on the VC0 rows of VC1 routers, 2–3 on 2D. Candidate v3yc.
+- **E0's per-round work is not insulated** (§97's failure mode). One extra per-round compare re-lays out the whole
+  loop. v3y moves the per-round work out of line, and the same edit then only moves the loop.
+- **E0 raw TX-queue and stream accesses** now go through the existing helpers. The result is PT_LOAD-identical,
+  so no hardware run is needed.
+- **No timing cliffs, and no credit holds,** on E0.
+- **Candidates** (E0 only, E1 identical to v3v6):
+  - v3yc: helpers + the worker change;
+  - v3y: helpers + restructuring;
+  - v3yb: v3y + the worker change;
+  - v3v6l3: round 11's v3l3 E0 change.
+- **Runs:** jobs 339–345 (full protocol for v3yc, v3v6l3 and v3yb; burst runs for all three).
+- **Flow control on by default:** the assessment advises against it. It would route most validation traffic
+  through a test mux, and the 2D torus yamls exceed the mux's receiver cap. The user decides.
+
+**E0 candidates on hardware** (jobs 339–345; labels p29yc, p29yb, p29l3 with the usual o2 / os / s / hook / vc1_*
+suffixes). Everything passed: 93 logs with 0 failures, and VC1 34/34 at every level for all three. E1 is v3v6's in all
+three.
+- **VC1** (cycles/packet, mean of the rows' entries; -Os / -O2 / -O3):
+
+| VC1 row | v3v6 | v3yc | v3yb | v3v6l3 | v3x (E1 change, for scale) |
+| --- | --- | --- | --- | --- | --- |
+| 1-hop E/W 16 B | 199.4 / 195.2 / 194.8 | 186.9 / 186.0 / 186.4 | 188.7 / 186.1 / 185.5 | 196.4 / 198.4 / 199.9 | 178.3 / 176.3 / 176.4 |
+| 1-hop E/W 4352 B | 214.5 / 214.6 / 214.2 | 208.7 / 207.3 / 207.3 | 208.3 / 208.4 / 207.6 | 218.8 / 222.8 / 222.7 | 191.4 / 190.1 / 190.1 |
+| 1-hop N/S 16 B | 200.0 / 198.8 / 198.4 | 196.7 / 186.8 / 187.6 | 198.7 / 187.3 / 187.0 | 214.4 / 203.8 / 201.4 | 187.7 / 180.0 / 180.5 |
+| 1-hop N/S 4352 B | 219.1 / 215.2 / 215.8 | 215.1 / 211.3 / 208.9 | 216.0 / 209.9 / 211.1 | 220.3 / 221.5 / 223.7 | 197.6 / 192.9 / 193.2 |
+| Multicast 4352 B | 319.9 / 310.0 / 309.5 | 322.3 / 311.8 / 311.2 | 320.4 / 311.6 / 309.8 | 316.4 / 310.7 / 310.5 | 257.7 / 255.7 / 254.5 |
+
+- The worker change (taking completions before the send decision) is worth 4 to 13 on the VC1 1-hop rows, as the
+  audit inferred. It does not touch multicast.
+- **2D / 1D means against v3v6** (4352 / mix / flushmix / 1D):
+  - v3yc: -O3 −0.14 / −0.19 / −0.30 / +0.94 (HalfRingMulticast scatter +14, the noisy half-ring row); -O2 −0.36 /
+    −0.02 / +0.10 / +0.39; -Os +0.97 / +0.16 / +0.41 / +0.69.
+  - v3yb: -O3 +0.05 / −0.31 / −0.39 / +0.22; -O2 −0.04 / +0.28 / +0.19 / −0.17; -Os +1.18 / +1.15 / +0.67 / +0.15
+    (multicast +6.5, small writes +3: the -Os cost the audit predicted for v3yb's restructuring).
+  - v3v6l3: VC1 worse on every row (up to +14). Out.
+- STRICT flushes: both up to 0.4 faster than v3v6. The hook probe costs v3yc and v3yb what it costs v3v6 and v3x (about +2).
+- E0 barely moves the burst cells (jobs 344–345, p28_*): every cell within 1.2 of v3v6, and every move a gain
+  (v3yc up to −1.2, v3yb up to −1.0, on the 16 B bursts). The bursty losses are E1's.
+- **Choice: v3yb's E0.** It has v3yc's VC1 gains, a flatter 1D, and per-round work out of the loop (the §97
+  insulation); its -Os cost is about 1. The jitter band of the combined build decides whether the insulation holds.
+
+**The batch cut causes the bursty losses** (job 346, `burst_cut_runs.sh`; labels p30_v3x, p30_v3x_nocut, p30_v3x2
+for exp_burst.yaml at -O3, and p30nc for v3x_nocut's 2D / 1D suites; all passed).
+- v3x_nocut is v3x without the record-word batch cut: every batch reads the four records from its oldest slot,
+  across two words if it must, as v3tk did. v3x2 keeps the cut only on passes that handle a packet.
+- **Bursts** (cycles/packet; p30_v3x repeats p25_v3x within 0.1 in every cell):
+
+| Cell | v3tk | v3x | v3x_nocut | v3x2 |
+| --- | ---: | ---: | ---: | ---: |
+| 16 B, bursts of 8, 500-cycle gap, E/W | 129.7 | 134.1 | 129.7 | 131.9 |
+| 16 B, bursts of 8, 500, N/S | 130.0 | 135.2 | 130.0 | 133.2 |
+| 16 B, bursts of 32, 500, E/W | 123.4 | 125.0 | 123.5 | 124.4 |
+| 4352 B, bursts of 32, 500, N/S | 134.8 | 139.0 | 134.4 | 138.1 |
+| 4352 B, bursts of 8, 500, E/W | 137.2 | 135.4 | 137.1 | 136.6 |
+| 4352 B, bursts of 8, 500, N/S | 141.2 | 137.3 | 137.4 | 137.4 |
+| 4352 B, bursts of 32, 2000, N/S | 183.0 | 180.4 | 180.6 | 180.4 |
+| 16 B, steady (bursts of 1, no gap), E/W | 115.4 | 114.2 | 115.5 | 114.2 |
+| 16 B, steady, N/S | 117.2 | 115.5 | 116.8 | 115.0 |
+
+- Without the cut, every bursty loss returns to v3tk's level, including the unexplained N/S 4352 B bursts of 32
+  (it follows the cut, not the route decode). v3x2 recovers only part. The bounded wait's gains on 4352 B bursts
+  stay except E/W bursts of 8 (+1.7, back to v3tk's).
+- **Steady suites, v3x_nocut against v3x** (-O3): 4352 +1.02, mix +0.40, flushmix +0.50, 1D +0.79. The cut is worth
+  about a cycle on steady streams. It also cost the mixed-size rows: EW_MixSize4 121.6 → 117.8 without it.
+- flushmix4 +4.1: NS_Chunk4Fused_Flush 153.7 → 163.8 (v3tk 162.2). v3x's 153.7 repeats in its two jitter-band base
+  runs, so the cut really is worth ~10 on that row. It has 4-packet chunks with a flush, the same shape as the cut's
+  word of 4 records: a gain from alignment, not one to rely on.
+- Against v3tk, v3x_nocut keeps −2.0 / −1.1 / −1.0 / −2.6 (4352 / mix / flushmix / 1D).
+- **Decision (robust over peak):** drop the cut. It is a quantized batch shape: worth ~1 cycle on steady streams
+  and 10 on one aligned row, it costs bursty senders 4 to 5. The clean form is `v3x3` (v3x_nocut with mainline
+  comments, the unused `to_word_end` removed). v3x2 is out.
+- **Next:** `v3z` = v3yb's E0 + v3x3's E1 (disjoint files), checked offline for each ERISC against its parent, then
+  the full protocol, VC1, the jitter band and the bursts.
+
+**v3z = v3yb's E0 + v3x3's E1** (jobs 347–351; labels p31z*, jz3_* / jzs_*, p31_v3z with p31_v3tk as the
+same-session reference).
+- **Offline:** an exact composition. v3x3 is PT_LOAD-identical to v3x_nocut on both ERISCs, v3z's E1 to v3x3's and
+  v3z's E0 to v3yb's, on every config at -O3, -O2 and -Os (536 / 536 / 534).
+- **Correctness:** 133 logs, 0 failures (validation RELAXED and STRICT, benchmarks at three levels, hook, bursts,
+  jitter builds); VC1 34/34 at every level.
+- **VC1** (mean of the two meshes; -Os / -O2 / -O3). The E0 and E1 gains add up on the 1-hop rows:
+
+| VC1 row | v3v6 | v3x | v3yb | v3z |
+| --- | --- | --- | --- | --- |
+| 1-hop E/W 16 B | 199.4 / 195.2 / 194.8 | 178.3 / 176.3 / 176.4 | 188.7 / 186.1 / 185.5 | 174.9 / 168.0 / 167.2 |
+| 1-hop E/W 4352 B | 214.5 / 214.6 / 214.2 | 191.4 / 190.1 / 190.1 | 208.3 / 208.4 / 207.6 | 186.6 / 182.5 / 182.6 |
+| 1-hop N/S 16 B | 200.0 / 198.8 / 198.4 | 187.7 / 180.0 / 180.5 | 198.7 / 187.3 / 187.0 | 184.9 / 172.8 / 174.6 |
+| 1-hop N/S 4352 B | 219.1 / 215.2 / 215.8 | 197.6 / 192.9 / 193.2 | 216.0 / 209.9 / 211.1 | 192.9 / 187.5 / 187.7 |
+| Multicast 4352 B | 319.9 / 310.0 / 309.5 | 257.7 / 255.7 / 254.5 | 320.4 / 311.6 / 309.8 | 272.2 / 267.6 / 267.5 |
+
+  - Multicast: v3z is 12 to 14 behind v3x. Its two meshes differ by 8 to 15 within each run (v3x 262 / 247, v3z
+    261 / 274 at -O3), so one run each does not settle that row. E1 is identical on VC1 routers (the cut never
+    applied on 8- and 4-slot rings), so any real difference is E0's.
+- **Steady suite means** (`compare.py`; 4352 / mix / flushmix / flushmix4 / 1D, half-ring rows left out of 1D):
+
+| v3z against | -O3 | -O2 | -Os |
+| --- | --- | --- | --- |
+| v3tk | −2.0 / −1.3 / −1.1 / −0.2 / −3.0 | −2.6 / −0.9 / −1.0 / −1.1 / −3.2 | −2.6 / −2.2 / −1.1 / −0.2 / −1.7 |
+| v3v6 | +1.3 / +0.4 / +0.4 / +2.7 / +1.7 | +1.5 / +0.9 / +1.4 / +1.7 / +1.6 | +2.1 / +1.5 / +1.5 / +2.1 / +1.2 |
+
+  - The cost against v3v6 adds up as expected: about 1 from dropping the cut (job 346), plus v3yb's E0 at -Os
+    (about 1).
+  - flushmix4 is the NS_Chunk4Fused_Flush row (+10), the aligned row the cut won.
+- **Bursts:** every cell at v3tk's level or better against the same-session v3tk (largest +0.6, E/W 4352 B bursts of
+  32 at 500). v3tk repeats its job 331 cells within 0.25. The v3v family's gains on N/S 4352 B bursts stay (bursts
+  of 8 at 500 −4.0; of 32 at 2000 −2.7).
+- **STRICT flushed rows:** v3z reproduces the pre-cut designs (v3t, v3t2, v3tk) to within about 1.5 on every row,
+  e.g. EW_Chunk4Fused_Flush 174.3 (v3tk 173.3) and NS_Chunk8Fused_Flush 155.0 (156.5). The cut had moved these by −19
+  to +12. Flushed-chunk rows follow the batch shape; without the cut they are as before v3v.
+- **Jitter band** (the eight §96 edits):
+  - The 2D, mix and flushmix means stay within −0.18..+0.06 at both levels. With the half-ring rows left out, 1D
+    stays within −0.16..+0.38.
+  - The coldmul / init 1D moves (+0.27 / +0.38) are v3x's too.
+  - Edit row changes (90th percentile 0.28 / 0.25) are about v3z's run-to-run noise (0.22 / 0.33). v3v6 and v3x show
+    0.15–0.23.
+  - Offline, on the hot configs (2D E/W, N/S, 1D line, ring, VC1) at -O3 and -Os, six of the eight edits leave both
+    ERISCs' main loops the same or only moved. That includes hb on E0, which re-laid out v3v6's whole E0 loop
+    (E0_AUDIT §1).
+  - statefield changes only E0's prologue: the frame grows by 32 B, and the loop body is identical. cursorfield
+    changes E1's cursor indexing (a 40 B cursor; up to 3 more instructions), which is that edit's purpose.
+- **Verdict: v3z is the most robust v3 so far.**
+  - It keeps every bursty cell at v3tk's level and gives the best VC1 1-hop rows.
+  - Its codegen holds under ordinary edits on both ERISCs.
+  - It runs 0.4 to 2.1 behind v3v6 on steady means: the robust-over-peak trade, inside the 1–2 cycle budget except
+    the -Os 4352 mean (+2.1).
+  - Adopted as the lead (user, 2026-10-26). VC1 -O3 code: E0 13,268 B + E1 11,828 B = 25,096 B (v3v6 25,116).
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then

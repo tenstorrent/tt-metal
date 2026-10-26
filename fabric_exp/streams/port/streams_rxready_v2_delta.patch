@@ -1,0 +1,224 @@
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_receiver.cpp
+@@ -15,6 +15,8 @@
+ constexpr uint8_t NUM_CREDIT_CONNECTIONS = get_compile_time_arg_val(4);
+ constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(5);
+ constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(6);
++// Sync tests: on entry, count this receiver in its chip's sync core (the start gate, TestContext::launch_programs)
++constexpr bool SIGNAL_READY = get_compile_time_arg_val(7);
+ 
+ using ReceiverKernelConfigType = ReceiverKernelConfig<NUM_TRAFFIC_CONFIGS, NUM_CREDIT_CONNECTIONS, IS_2D_FABRIC>;
+ 
+@@ -47,6 +49,14 @@
+     clear_test_results(receiver_config->get_result_buffer_address(), receiver_config->get_result_buffer_size());
+     write_test_status(receiver_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
+ 
++    // Senders start only once every receiver of the test is running: count this one in the chip's sync core (its NoC
++    // encoding and the receivers-ready address follow the mux termination args). Before any packet is read.
++    if constexpr (SIGNAL_READY) {
++        const uint32_t sync_core_noc_encoding = get_local_arg_val<uint32_t>(local_args_idx++);
++        const uint32_t receivers_ready_address = get_local_arg_val<uint32_t>(local_args_idx++);
++        noc_semaphore_inc(get_noc_addr_helper(sync_core_noc_encoding, receivers_ready_address), 1);
++    }
++
+     // Open credit connections (no-op if NUM_CREDIT_CONNECTIONS == 0)
+     receiver_config->open_credit_connections();
+ 
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
+@@ -278,12 +278,14 @@
+         current_addr += PACKET_HEADER_BUFFER_SIZE;
+         packet_headers = BaseMemoryRegion(packet_header_base, PACKET_HEADER_BUFFER_SIZE);
+ 
+-        // global sync region: the sync core's global sync counter, then the host's start release word
++        // global sync region, words: the sync core's global sync counter, the host's start release, and the count of
++        // this chip's receivers that have started
+         uint32_t global_sync_region_base = current_addr;
+         uint32_t global_sync_region_size = l1_alignment;
+         TT_FATAL(
+-            global_sync_region_size >= 2 * sizeof(uint32_t),
+-            "The global sync region ({} bytes) must hold the sync counter and the start release word",
++            global_sync_region_size >= 3 * sizeof(uint32_t),
++            "The global sync region ({} bytes) must hold the sync counter, the start release and the receivers-ready "
++            "count",
+             global_sync_region_size);
+         current_addr += global_sync_region_size;
+         global_sync_region = BaseMemoryRegion(global_sync_region_base, global_sync_region_size);
+@@ -328,9 +330,12 @@
+ 
+     uint32_t get_global_sync_address() const { return global_sync_region.start; }
+     uint32_t get_local_sync_address() const { return local_sync_region.start; }
+-    // Set by the host once every receiver of the test is running; the sync kernel waits for it before its first
+-    // global sync (TestContext::launch_programs). Cleared with the global sync region before launch.
++    // Start gate of a sync test (TestContext::launch_programs), both words on the chip's sync core and cleared with the
++    // global sync region before launch. Each receiver kernel of the chip increments the receivers-ready count on entry;
++    // the host reads it, and once every receiver of the test, on every host, has started, it sets the release, which
++    // the sync kernel waits for before its first global sync.
+     uint32_t get_sync_start_release_address() const { return global_sync_region.start + sizeof(uint32_t); }
++    uint32_t get_sync_receivers_ready_address() const { return global_sync_region.start + 2 * sizeof(uint32_t); }
+ 
+     uint32_t get_global_sync_region_size() const { return global_sync_region.size; }
+     uint32_t get_local_sync_region_size() const { return local_sync_region.size; }
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+@@ -984,7 +984,7 @@
+             {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
+     }
+ 
+-    // Also clears the start release word
++    // Also clears the start release and the receivers-ready count
+     addresses_and_size_to_clear.push_back(
+         {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()});
+     addresses_and_size_to_clear.push_back(
+@@ -1198,6 +1198,19 @@
+     TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
+     TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
+ 
++    // In a sync test every receiver counts itself in this chip's sync core on entry (the start gate,
++    // TestContext::launch_programs). A sync test runs one sync kernel on every chip (create_sync_kernel requires it).
++    const bool signal_ready = global_sync_ && !receivers_.empty();
++    uint32_t sync_core_noc_encoding = 0;
++    if (signal_ready) {
++        TT_FATAL(
++            sync_workers_.size() == 1,
++            "Sync test: device {} has receivers but {} sync cores (expected 1)",
++            fabric_node_id_,
++            sync_workers_.size());
++        sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sync_workers_.begin()->first);
++    }
++
+     for (const auto& [core, receiver] : this->receivers_) {
+         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
+         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
+@@ -1214,7 +1227,8 @@
+             receiver_memory_map_->common.get_kernel_config_size(), /* KERNEL_CONFIG_BUFFER_SIZE */
+             (uint32_t)num_connections,                             /* NUM_CREDIT_CONNECTIONS */
+             has_mux_connections ? 1u : 0u,                         /* HAS_MUX_CONNECTIONS */
+-            num_muxes_to_terminate                                 /* NUM_MUXES_TO_TERMINATE */
++            num_muxes_to_terminate,                                /* NUM_MUXES_TO_TERMINATE */
++            signal_ready ? 1u : 0u                                 /* SIGNAL_READY */
+         };
+ 
+         // Runtime args: memory map args + credit connection args + traffic-to-connection mapping
+@@ -1252,12 +1266,6 @@
+             receiver_memory_map_->common.validate_per_config_capacity(static_cast<uint8_t>(receiver.configs_.size()));
+             addresses_and_size_to_clear.push_back(
+                 {receiver_memory_map_->get_result_buffer_address(), receiver_memory_map_->get_result_buffer_size()});
+-        } else if (global_sync_) {
+-            // The host waits for this status word to show the receiver started before it releases the sync cores
+-            // (TestContext::launch_programs), so a status left from the previous test must not count.
+-            addresses_and_size_to_clear.push_back(
+-                {receiver_memory_map_->get_result_buffer_address() + TT_FABRIC_STATUS_INDEX * sizeof(uint32_t),
+-                 sizeof(uint32_t)});
+         }
+ 
+         // Local args for traffic configs
+@@ -1297,6 +1305,12 @@
+                  receiver_memory_map_->get_mux_termination_sync_size()});
+         }
+ 
++        // Where the receiver counts itself on entry (SIGNAL_READY): the chip's sync core
++        if (signal_ready) {
++            local_args.push_back(sync_core_noc_encoding);
++            local_args.push_back(sender_memory_map_->get_sync_receivers_ready_address());
++        }
++
+         receiver.create_kernel(
+             coord_,
+             ct_args,
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+@@ -84,10 +84,10 @@
+     }
+ }
+ 
+-// Receivers take no part in the device syncs, and a receiver that starts after its sender has sent more packets than
+-// its buffer holds finds its first packets overwritten and waits for them forever. The global sync spans only one
+-// mesh, so across meshes (and hosts) nothing orders a receiver's start before its senders'. In a sync test the sync
+-// cores therefore wait for a release that the host gives only once every receiver, on every host, is running.
++// A receiver that starts after its sender has sent more packets than its buffer holds finds its first packets
++// overwritten and waits for them forever. The global sync spans only one mesh, so across meshes (and hosts) it does not
++// order a receiver's start before its senders'. In a sync test each receiver counts itself in its chip's sync core on
++// entry, and the sync cores wait for a release that the host gives only once every receiver, on every host, has.
+ void TestContext::launch_programs() {
+     fixture_->run_programs();
+ 
+@@ -102,38 +102,48 @@
+     release_local_sync_cores();
+ }
+ 
+-// A receiver writes STARTED to its status word on entry (benchmark-mode receivers then finish at once), and the word
+-// was cleared before launch, so any non-zero status means the receiver is running.
++// Each receiver kernel counts itself in its chip's sync core on entry (SIGNAL_READY), so a chip's receivers are all
++// running once that count reaches the chip's receiver count: one read per chip.
+ void TestContext::wait_for_local_receivers_to_start() const {
+     constexpr auto timeout = std::chrono::seconds(30);
+     constexpr auto poll_interval = std::chrono::microseconds(100);
+ 
+     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+-    const uint32_t status_address =
+-        receiver_memory_map_.get_result_buffer_address() + TT_FABRIC_STATUS_INDEX * sizeof(uint32_t);
++    const uint32_t ready_address = sender_memory_map_.get_sync_receivers_ready_address();
+ 
+-    struct PendingReceiver {
++    struct PendingChip {
+         FabricNodeId node_id;
+         ChipId physical_chip_id;
+-        CoreCoord logical_core;
+-        CoreCoord virtual_core;
++        CoreCoord sync_core;  // virtual
++        uint32_t receivers;
+     };
+-    std::vector<PendingReceiver> pending;
++    std::vector<PendingChip> pending;
+     for (const auto& [coord, test_device] : test_devices_) {
+-        const auto& node_id = test_device.get_node_id();
+-        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
+-        for (const auto& [core, _] : test_device.get_receivers()) {
+-            pending.push_back({node_id, physical_chip_id, core, fixture_->get_virtual_core_from_logical_core(core)});
++        const auto num_receivers = static_cast<uint32_t>(test_device.get_receivers().size());
++        if (num_receivers == 0) {
++            continue;
+         }
++        const auto sync_cores = test_device.get_sync_kernel_cores();
++        TT_FATAL(
++            sync_cores.size() == 1,
++            "Sync test: device {} has receivers but {} sync cores (expected 1)",
++            test_device.get_node_id(),
++            sync_cores.size());
++        const auto& node_id = test_device.get_node_id();
++        pending.push_back(
++            {node_id,
++             control_plane.get_physical_chip_id_from_fabric_node_id(node_id),
++             fixture_->get_virtual_core_from_logical_core(sync_cores.front()),
++             num_receivers});
+     }
+ 
+     const auto deadline = std::chrono::steady_clock::now() + timeout;
+     while (true) {
+-        std::erase_if(pending, [&](const PendingReceiver& receiver) {
+-            const auto status = cluster.read_core<uint32_t>(
+-                receiver.physical_chip_id, receiver.virtual_core, status_address, sizeof(uint32_t));
+-            return status.at(0) != 0;
++        std::erase_if(pending, [&](const PendingChip& chip) {
++            const auto ready =
++                cluster.read_core<uint32_t>(chip.physical_chip_id, chip.sync_core, ready_address, sizeof(uint32_t));
++            return ready.at(0) >= chip.receivers;
+         });
+         if (pending.empty()) {
+             return;
+@@ -143,11 +153,10 @@
+             // receiver that never runs.
+             log_warning(
+                 tt::LogTest,
+-                "{} receiver(s) have not started after {}s (first: device {} core {}); releasing the senders anyway",
++                "{} chip(s) have receivers not started after {}s (first: device {}); releasing the senders anyway",
+                 pending.size(),
+                 timeout.count(),
+-                pending.front().node_id,
+-                pending.front().logical_core.str());
++                pending.front().node_id);
+             return;
+         }
+         std::this_thread::sleep_for(poll_interval);

@@ -63,7 +63,7 @@ struct ParsedDestinationConfig {
     std::optional<uint32_t> atomic_inc_address;
 };
 
-// One entry of a traffic stream: a packet shape and how many packets of it each lap sends.
+// One entry of a traffic stream: a packet shape and how many packets of it each lap sends, or an idle gap.
 // Unset fields are inherited from the pattern that carries the stream.
 struct ParsedStreamSegment {
     std::optional<NocSendType> ntype;
@@ -73,6 +73,9 @@ struct ParsedStreamSegment {
     // Unset keeps the per-type default (atomic_inc: true, fused_atomic_inc: false).
     std::optional<bool> flush;
     uint32_t count = 1;
+    // An idle segment ({idle: <cycles>}) sends nothing: the worker waits this many cycles before its next packet,
+    // which models compute between bursts. It sets no other field.
+    std::optional<uint32_t> idle;
 };
 
 // Upper bound on segments in one stream. Each segment becomes its own traffic config on the sender.
@@ -94,10 +97,12 @@ struct ParsedTrafficPatternConfig {
 };
 
 // Send order for a sender built from a stream: each lap sends counts[i] packets of pattern i, in
-// pattern order, and the sender runs `repeat` laps.
+// pattern order, and the sender runs `repeat` laps. With idle segments, idle_after[i] is how many cycles the worker
+// waits after pattern i's packets in each lap (empty when the stream has no idle segments).
 struct StreamProgram {
     uint32_t repeat = 1;
     std::vector<uint32_t> counts;
+    std::vector<uint32_t> idle_after;
 };
 
 struct ParsedSenderConfig {

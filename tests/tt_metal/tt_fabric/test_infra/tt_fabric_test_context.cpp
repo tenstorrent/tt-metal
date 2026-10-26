@@ -5,6 +5,7 @@
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <thread>
 
@@ -79,6 +80,103 @@ void TestContext::add_sync_traffic_to_devices(const TestConfig& config) {
                 this->test_devices_.at(device_coord)
                     .add_sender_sync_config(sync_core, std::move(sync_traffic_sync_config));
             }
+        }
+    }
+}
+
+// A receiver that starts after its sender has sent more packets than its buffer holds finds its first packets
+// overwritten and waits for them forever. The global sync spans only one mesh, so across meshes (and hosts) it does not
+// order a receiver's start before its senders'. In a sync test each receiver counts itself in its chip's sync core on
+// entry, and the sync cores wait for a release that the host gives only once every receiver, on every host, has.
+void TestContext::launch_programs() {
+    fixture_->run_programs();
+
+    // Latency tests run no sync kernel, and a mock cluster runs no kernels. The test config and the cluster decide
+    // this, so every host takes the same branch and all of them reach the barrier.
+    if (!global_sync_ || performance_test_mode_ == PerformanceTestMode::LATENCY ||
+        tt::tt_metal::MetalContext::instance().get_cluster().is_mock_or_emulated()) {
+        return;
+    }
+    wait_for_local_receivers_to_start();
+    fixture_->barrier();
+    release_local_sync_cores();
+}
+
+// Each receiver kernel counts itself in its chip's sync core on entry (SIGNAL_READY), so a chip's receivers are all
+// running once that count reaches the chip's receiver count: one read per chip.
+void TestContext::wait_for_local_receivers_to_start() const {
+    constexpr auto timeout = std::chrono::seconds(30);
+    constexpr auto poll_interval = std::chrono::microseconds(100);
+
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const uint32_t ready_address = sender_memory_map_.get_sync_receivers_ready_address();
+
+    struct PendingChip {
+        FabricNodeId node_id;
+        ChipId physical_chip_id;
+        CoreCoord sync_core;  // virtual
+        uint32_t receivers;
+    };
+    std::vector<PendingChip> pending;
+    for (const auto& [coord, test_device] : test_devices_) {
+        const auto num_receivers = static_cast<uint32_t>(test_device.get_receivers().size());
+        if (num_receivers == 0) {
+            continue;
+        }
+        const auto sync_cores = test_device.get_sync_kernel_cores();
+        TT_FATAL(
+            sync_cores.size() == 1,
+            "Sync test: device {} has receivers but {} sync cores (expected 1)",
+            test_device.get_node_id(),
+            sync_cores.size());
+        const auto& node_id = test_device.get_node_id();
+        pending.push_back(
+            {node_id,
+             control_plane.get_physical_chip_id_from_fabric_node_id(node_id),
+             fixture_->get_virtual_core_from_logical_core(sync_cores.front()),
+             num_receivers});
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (true) {
+        std::erase_if(pending, [&](const PendingChip& chip) {
+            const auto ready =
+                cluster.read_core<uint32_t>(chip.physical_chip_id, chip.sync_core, ready_address, sizeof(uint32_t));
+            return ready.at(0) >= chip.receivers;
+        });
+        if (pending.empty()) {
+            return;
+        }
+        if (std::chrono::steady_clock::now() > deadline) {
+            // Release anyway: the test then runs as it did without the start gate, and the hang detection sees a
+            // receiver that never runs.
+            log_warning(
+                tt::LogTest,
+                "{} chip(s) have receivers not started after {}s (first: device {}); releasing the senders anyway",
+                pending.size(),
+                timeout.count(),
+                pending.front().node_id);
+            return;
+        }
+        std::this_thread::sleep_for(poll_interval);
+    }
+}
+
+void TestContext::release_local_sync_cores() const {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const uint32_t release_address = sender_memory_map_.get_sync_start_release_address();
+    const uint32_t release = 1;
+
+    for (const auto& [coord, test_device] : test_devices_) {
+        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(test_device.get_node_id());
+        for (const auto& core : test_device.get_sync_kernel_cores()) {
+            cluster.write_core(
+                &release,
+                sizeof(release),
+                tt_cxy_pair(physical_chip_id, fixture_->get_virtual_core_from_logical_core(core)),
+                release_address);
         }
     }
 }

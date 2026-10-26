@@ -1,0 +1,430 @@
+# Bursty senders (study benchmark only; never in validation yamls). Needs fabric_exp/streams/port/streams_idle.patch.
+# A burst of N packets, then G idle cycles on the sender (a stream idle segment: the worker waits G cycles of the clock
+# the run is timed with, and the wait counts in the elapsed time). So at a fixed (N, G), any time one router build
+# takes over another is router-induced. Every row sends 20000 packets (repeat = 20000 / N).
+# N in {1, 2, 4, 8, 32}, G in {500, 2000} (shorter than / about one credit round trip, ~2,200 cycles at 4352 B),
+# plus one G = 0 baseline per direction: with no gap the order is the same for any N, so G = 0 needs one row.
+# 2x4 P150x8 mesh, 1 link; chip ids row-major ([0, 0..3] top row, [0, 4..7] bottom row).
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  # EW, no gap: the baseline (G = 0 sends the same packets for any N)
+  - name: "BurstEW_N1_G0"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 20000
+            stream:
+              - {ntype: unicast_write, count: 1}
+
+  - name: "BurstEW_N1_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 20000
+            stream:
+              - {ntype: unicast_write, count: 1}
+              - {idle: 500}
+
+  - name: "BurstEW_N2_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 10000
+            stream:
+              - {ntype: unicast_write, count: 2}
+              - {idle: 500}
+
+  - name: "BurstEW_N4_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 5000
+            stream:
+              - {ntype: unicast_write, count: 4}
+              - {idle: 500}
+
+  - name: "BurstEW_N8_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 2500
+            stream:
+              - {ntype: unicast_write, count: 8}
+              - {idle: 500}
+
+  - name: "BurstEW_N32_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 625
+            stream:
+              - {ntype: unicast_write, count: 32}
+              - {idle: 500}
+
+  - name: "BurstEW_N1_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 20000
+            stream:
+              - {ntype: unicast_write, count: 1}
+              - {idle: 2000}
+
+  - name: "BurstEW_N2_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 10000
+            stream:
+              - {ntype: unicast_write, count: 2}
+              - {idle: 2000}
+
+  - name: "BurstEW_N4_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 5000
+            stream:
+              - {ntype: unicast_write, count: 4}
+              - {idle: 2000}
+
+  - name: "BurstEW_N8_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 2500
+            stream:
+              - {ntype: unicast_write, count: 8}
+              - {idle: 2000}
+
+  - name: "BurstEW_N32_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 625
+            stream:
+              - {ntype: unicast_write, count: 32}
+              - {idle: 2000}
+
+  # NS, no gap: the baseline (G = 0 sends the same packets for any N)
+  - name: "BurstNS_N1_G0"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 20000
+            stream:
+              - {ntype: unicast_write, count: 1}
+
+  - name: "BurstNS_N1_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 20000
+            stream:
+              - {ntype: unicast_write, count: 1}
+              - {idle: 500}
+
+  - name: "BurstNS_N2_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 10000
+            stream:
+              - {ntype: unicast_write, count: 2}
+              - {idle: 500}
+
+  - name: "BurstNS_N4_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 5000
+            stream:
+              - {ntype: unicast_write, count: 4}
+              - {idle: 500}
+
+  - name: "BurstNS_N8_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 2500
+            stream:
+              - {ntype: unicast_write, count: 8}
+              - {idle: 500}
+
+  - name: "BurstNS_N32_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 625
+            stream:
+              - {ntype: unicast_write, count: 32}
+              - {idle: 500}
+
+  - name: "BurstNS_N1_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 20000
+            stream:
+              - {ntype: unicast_write, count: 1}
+              - {idle: 2000}
+
+  - name: "BurstNS_N2_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 10000
+            stream:
+              - {ntype: unicast_write, count: 2}
+              - {idle: 2000}
+
+  - name: "BurstNS_N4_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 5000
+            stream:
+              - {ntype: unicast_write, count: 4}
+              - {idle: 2000}
+
+  - name: "BurstNS_N8_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 2500
+            stream:
+              - {ntype: unicast_write, count: 8}
+              - {idle: 2000}
+
+  - name: "BurstNS_N32_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 625
+            stream:
+              - {ntype: unicast_write, count: 32}
+              - {idle: 2000}

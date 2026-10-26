@@ -1,0 +1,28 @@
+--- a/tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp
+@@ -17,6 +17,9 @@
+ #include <iomanip>
+ #include <sstream>
+ #include <memory>
++#include <thread>
++
++#include <tt-metalium/distributed_context.hpp>
+ 
+ #include "tt_fabric_test_context.hpp"
+ #include "tt_fabric_test_constants.hpp"
+@@ -305,6 +308,15 @@
+ 
+                 test_context.begin_phase_profile();
+ 
++                // DIAGNOSTIC ONLY (experiment tree, never to merge): TT_FABRIC_TEST_DIAG_LAUNCH_DELAY_MS=<ms> makes
++                // every rank but rank 0 launch that much later, so its receivers start well after rank 0's senders.
++                // Without the start gate (streams_rxready.patch), an inter-mesh 4 KiB all-to-all then hangs.
++                if (const char* diag_delay_ms = std::getenv("TT_FABRIC_TEST_DIAG_LAUNCH_DELAY_MS")) {
++                    if (*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank() != 0) {
++                        std::this_thread::sleep_for(std::chrono::milliseconds(std::stoul(diag_delay_ms)));
++                    }
++                }
++
+                 log_info(tt::LogTest, "Launching programs");
+                 test_context.launch_programs();
+ 

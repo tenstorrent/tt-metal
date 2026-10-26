@@ -1,0 +1,290 @@
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp
+@@ -63,7 +63,7 @@
+     std::optional<uint32_t> atomic_inc_address;
+ };
+ 
+-// One entry of a traffic stream: a packet shape and how many packets of it each lap sends.
++// One entry of a traffic stream: a packet shape and how many packets of it each lap sends, or an idle gap.
+ // Unset fields are inherited from the pattern that carries the stream.
+ struct ParsedStreamSegment {
+     std::optional<NocSendType> ntype;
+@@ -73,6 +73,9 @@
+     // Unset keeps the per-type default (atomic_inc: true, fused_atomic_inc: false).
+     std::optional<bool> flush;
+     uint32_t count = 1;
++    // An idle segment ({idle: <cycles>}) sends nothing: the worker waits this many cycles before its next packet,
++    // which models compute between bursts. It sets no other field.
++    std::optional<uint32_t> idle;
+ };
+ 
+ // Upper bound on segments in one stream. Each segment becomes its own traffic config on the sender.
+@@ -94,10 +97,12 @@
+ };
+ 
+ // Send order for a sender built from a stream: each lap sends counts[i] packets of pattern i, in
+-// pattern order, and the sender runs `repeat` laps.
++// pattern order, and the sender runs `repeat` laps. With idle segments, idle_after[i] is how many cycles the worker
++// waits after pattern i's packets in each lap (empty when the stream has no idle segments).
+ struct StreamProgram {
+     uint32_t repeat = 1;
+     std::vector<uint32_t> counts;
++    std::vector<uint32_t> idle_after;
+ };
+ 
+ struct ParsedSenderConfig {
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_config.cpp
+@@ -185,6 +185,15 @@
+         }
+ 
+         TT_FATAL(segment_yaml.IsMap(), "Expected each stream segment to be an ntype string or a map");
++        if (segment_yaml["idle"]) {
++            // An idle segment: the worker waits this many cycles and sends nothing.
++            TT_FATAL(
++                segment_yaml.size() == 1,
++                "An idle stream segment ({{idle: <cycles>}}) sets no other field; packet fields go on their own segments");
++            segment.idle = parse_scalar<uint32_t>(segment_yaml["idle"]);
++            segments.push_back(segment);
++            continue;
++        }
+         for (const auto& field : segment_yaml) {
+             const auto key = parse_scalar<std::string>(field.first);
+             if (key == "ntype") {
+@@ -704,6 +713,9 @@
+         return values;
+     }
+     for (const auto& segment : pattern.stream.value()) {
++        if (segment.idle.has_value()) {
++            continue;  // an idle segment sends nothing
++        }
+         const auto value = get_field(segment);
+         values.push_back(value.has_value() ? value : get_field(pattern));
+     }
+@@ -1987,6 +1999,12 @@
+                 test.name,
+                 sender.stream->counts.size(),
+                 sender.patterns.size());
++            TT_FATAL(
++                sender.stream->idle_after.empty() || sender.stream->idle_after.size() == sender.patterns.size(),
++                "Test '{}': stream program has {} idle entries for {} patterns",
++                test.name,
++                sender.stream->idle_after.size(),
++                sender.patterns.size());
+         }
+     }
+ 
+@@ -2920,7 +2938,20 @@
+         StreamProgram program{.repeat = repeat};
+         std::vector<ParsedTrafficPatternConfig> segment_patterns;
+         segment_patterns.reserve(stream_pattern.stream->size());
++        // Idle segments become waits after the packet segment before them: idle_after[i] follows pattern i's packets
++        // in each lap. Idle at the start of the stream waits at the end of each lap instead (the same sequence, minus
++        // the very first wait). Consecutive idle segments add up.
++        std::vector<uint64_t> idle_after;
++        uint64_t leading_idle = 0;
+         for (const auto& segment : stream_pattern.stream.value()) {
++            if (segment.idle.has_value()) {
++                if (segment_patterns.empty()) {
++                    leading_idle += segment.idle.value();
++                } else {
++                    idle_after.back() += segment.idle.value();
++                }
++                continue;
++            }
+             ParsedTrafficPatternConfig pattern = stream_pattern;
+             pattern.stream.reset();
+             pattern.repeat.reset();
+@@ -2971,6 +3002,19 @@
+ 
+             segment_patterns.push_back(std::move(pattern));
+             program.counts.push_back(segment.count);
++            idle_after.push_back(0);
++        }
++        TT_FATAL(!segment_patterns.empty(), "Test '{}': a stream needs at least one segment that sends packets", test.name);
++        idle_after.back() += leading_idle;
++        if (std::any_of(idle_after.begin(), idle_after.end(), [](uint64_t cycles) { return cycles != 0; })) {
++            for (const uint64_t cycles : idle_after) {
++                TT_FATAL(
++                    cycles <= std::numeric_limits<uint32_t>::max(),
++                    "Test '{}': a stream's idle segments add up to {} cycles in one place; at most 2^32 - 1",
++                    test.name,
++                    cycles);
++                program.idle_after.push_back(static_cast<uint32_t>(cycles));
++            }
+         }
+ 
+         // The sender kernel counts a stream's packets in 32 bits.
+@@ -3183,6 +3227,10 @@
+         out << YAML::Value << YAML::BeginMap;
+         out << YAML::Key << "repeat" << YAML::Value << config.stream->repeat;
+         out << YAML::Key << "counts" << YAML::Value << YAML::Flow << config.stream->counts;
++        if (!config.stream->idle_after.empty()) {
++            // Cycles the worker waits after patterns[i]'s packets in each lap (idle segments).
++            out << YAML::Key << "idle_after" << YAML::Value << YAML::Flow << config.stream->idle_after;
++        }
+         out << YAML::EndMap;
+     }
+ 
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+@@ -785,6 +785,12 @@
+         logical_core,
+         sender.configs_.size(),
+         stream.counts.size());
++    TT_FATAL(
++        stream.idle_after.empty() || stream.idle_after.size() == stream.counts.size(),
++        "Core {}: stream has {} idle entries for {} segments",
++        logical_core,
++        stream.idle_after.size(),
++        stream.counts.size());
+     sender.stream_ = stream;
+ }
+ 
+@@ -1069,8 +1075,9 @@
+             has_mux_connections ? 1u : 0u,                       /* HAS_MUX_CONNECTIONS */
+             num_muxes_to_terminate,                              /* NUM_MUXES_TO_TERMINATE */
+             sender_vc_id,                                        /* VC_ID */
+-            sender.stream_.has_value() ? 1u : 0u                 /* STREAM_MODE */
+-        };
++            !sender.stream_.has_value()          ? 0u             /* STREAM_MODE: 0 none, 1 stream, */
++            : sender.stream_->idle_after.empty() ? 1u             /* 2 stream with idle segments */
++                                                 : 2u};
+ 
+         // Runtime args with connection type information
+         std::vector<uint32_t> rt_args = sender_memory_map_->get_memory_map_args();
+@@ -1124,10 +1131,13 @@
+             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
+         }
+ 
+-        // Stream program: lap count, then packets per lap for each traffic config in order.
++        // Stream program: lap count, then packets per lap for each traffic config in order, then (idle segments
++        // only) the cycles to wait after each traffic config's packets.
+         if (sender.stream_.has_value()) {
+             local_args.push_back(sender.stream_->repeat);
+             local_args.insert(local_args.end(), sender.stream_->counts.begin(), sender.stream_->counts.end());
++            local_args.insert(
++                local_args.end(), sender.stream_->idle_after.begin(), sender.stream_->idle_after.end());
+         }
+ 
+         // Add mux termination local args (empty vector if not a mux client)
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sender.cpp
+@@ -18,7 +18,11 @@
+ constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
+ constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
+ constexpr uint8_t VC_ID = get_compile_time_arg_val(9);
+-constexpr bool STREAM_MODE = get_compile_time_arg_val(10);
++// 0: no stream; 1: a stream; 2: a stream with idle segments (after a segment's packets the worker may wait a number
++// of cycles, modelling compute gaps). One argument for both, so senders without idle segments build as before.
++constexpr uint32_t STREAM_ARG = get_compile_time_arg_val(10);
++constexpr bool STREAM_MODE = STREAM_ARG != 0;
++constexpr bool STREAM_IDLE = STREAM_ARG == 2;
+ 
+ // Select the EDM sender adapter type based on VC_ID:
+ // VC0/VC1 use WorkerToFabricEdmSender (stream ID 22), VC2 uses WorkerToFabricEdmSenderVC2 (stream ID 30)
+@@ -38,6 +42,7 @@
+ 
+ // A stream feeds one router.
+ static_assert(!STREAM_MODE || NUM_FABRIC_CONNECTIONS == 1, "A stream sender has exactly one fabric connection");
++static_assert(!STREAM_IDLE || STREAM_MODE, "Idle segments belong to a stream");
+ 
+ // A single-pattern benchmark sender runs the stream loop as a one-segment stream.
+ constexpr bool RUNS_STREAM_LOOP = STREAM_MODE || (BENCHMARK_MODE && NUM_TRAFFIC_CONFIGS == 1);
+@@ -56,6 +61,21 @@
+ constexpr uint32_t MAX_FLAT_LAP = 64;
+ uint8_t stream_lap_segment[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
+ uint32_t stream_lap_header[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
++// Idle segments: cycles to wait after each segment's packets, and after each position of a flat lap (non-zero only
++// on a segment's last packet).
++uint32_t stream_segment_idle[STREAM_IDLE ? NUM_TRAFFIC_CONFIGS : 1];
++uint32_t stream_lap_idle[STREAM_IDLE ? MAX_FLAT_LAP : 1];
++
++// An idle segment: the worker sends nothing for `cycles` cycles on the clock the run is timed with, so the wait
++// counts in the run's elapsed time. Returns the cycles actually waited.
++FORCE_INLINE uint64_t stream_idle_wait(uint32_t cycles) {
++    const uint64_t start = get_timestamp();
++    uint64_t now = start;
++    while (now - start < cycles) {
++        now = get_timestamp();
++    }
++    return now - start;
++}
+ 
+ // Sends the header already in the current slot again by returning the slot to the router, without
+ // copying it. Only the VC0 adapter exposes the credit-only update, so other adapters return false
+@@ -92,6 +112,11 @@
+         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+             stream_counts[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+         }
++        if constexpr (STREAM_IDLE) {
++            for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
++                stream_segment_idle[i] = get_local_arg_val<uint32_t>(local_args_idx++);
++            }
++        }
+     }
+ 
+     // Build mux termination manager from local args (uses advanced local_args_idx)
+@@ -171,6 +196,8 @@
+         // Cycles spent waiting for a slot, timed only when a wait happens. The rest of the loop's time
+         // is the worker's own cost per packet, which a router-bound run otherwise hides.
+         uint64_t wait_cycles = 0;
++        // Cycles spent in idle segments, which are part of the run but not the worker's cost per packet.
++        uint64_t idle_cycles = 0;
+         // Slots known to be free since the last check. Checking costs a fence and an L1 read of the
+         // router's counter, so the loop checks only once it has used up the slots it knows about.
+         uint32_t free_slots = 0;
+@@ -211,6 +238,9 @@
+                 for (uint32_t i = 0; i < stream_counts[segment]; i++) {
+                     stream_lap_segment[position] = segment;
+                     stream_lap_header[position] = header_address;
++                    if constexpr (STREAM_IDLE) {
++                        stream_lap_idle[position] = i + 1 == stream_counts[segment] ? stream_segment_idle[segment] : 0;
++                    }
+                     position++;
+                 }
+             }
+@@ -219,6 +249,11 @@
+             position = 0;
+             for (uint32_t packet = 0; packet < total_packets; packet++) {
+                 send_packet(stream_lap_segment[position], stream_lap_header[position]);
++                if constexpr (STREAM_IDLE) {
++                    if (stream_lap_idle[position] != 0) {
++                        idle_cycles += stream_idle_wait(stream_lap_idle[position]);
++                    }
++                }
+                 position = position + 1 == lap_length ? 0 : position + 1;
+             }
+         } else {
+@@ -229,10 +264,18 @@
+                     for (uint32_t i = 0; i < stream_counts[segment]; i++) {
+                         send_packet(segment, header_address);
+                     }
++                    if constexpr (STREAM_IDLE) {
++                        if (stream_segment_idle[segment] != 0) {
++                            idle_cycles += stream_idle_wait(stream_segment_idle[segment]);
++                        }
++                    }
+                 }
+             }
+         }
+-        const uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
++        uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
++        if constexpr (STREAM_IDLE) {
++            busy_cycles -= idle_cycles;
++        }
+         *conn_l1 = local_conn;
+ 
+         for (uint8_t segment = 0; segment < NUM_TRAFFIC_CONFIGS; segment++) {
+@@ -325,6 +368,11 @@
+                         write_progress();
+                     }
+                 }
++                if constexpr (STREAM_IDLE) {
++                    if (stream_segment_idle[segment] != 0) {
++                        stream_idle_wait(stream_segment_idle[segment]);
++                    }
++                }
+             }
+         }
+     };

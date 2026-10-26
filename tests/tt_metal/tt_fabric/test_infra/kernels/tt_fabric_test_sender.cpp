@@ -18,7 +18,11 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(6);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(7);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(8);
 constexpr uint8_t VC_ID = get_compile_time_arg_val(9);
-constexpr bool STREAM_MODE = get_compile_time_arg_val(10);
+// 0: no stream; 1: a stream; 2: a stream with idle segments (after a segment's packets the worker may wait a number
+// of cycles, modelling compute gaps). One argument for both, so senders without idle segments build as before.
+constexpr uint32_t STREAM_ARG = get_compile_time_arg_val(10);
+constexpr bool STREAM_MODE = STREAM_ARG != 0;
+constexpr bool STREAM_IDLE = STREAM_ARG == 2;
 
 // Select the EDM sender adapter type based on VC_ID:
 // VC0/VC1 use WorkerToFabricEdmSender (stream ID 22), VC2 uses WorkerToFabricEdmSenderVC2 (stream ID 30)
@@ -38,6 +42,7 @@ static_assert(
 
 // A stream feeds one router.
 static_assert(!STREAM_MODE || NUM_FABRIC_CONNECTIONS == 1, "A stream sender has exactly one fabric connection");
+static_assert(!STREAM_IDLE || STREAM_MODE, "Idle segments belong to a stream");
 
 // A single-pattern benchmark sender runs the stream loop as a one-segment stream.
 constexpr bool RUNS_STREAM_LOOP = STREAM_MODE || (BENCHMARK_MODE && NUM_TRAFFIC_CONFIGS == 1);
@@ -56,6 +61,21 @@ uint8_t stream_slot_segment[RUNS_STREAM_LOOP ? MAX_STREAM_SLOTS : 1];
 constexpr uint32_t MAX_FLAT_LAP = 64;
 uint8_t stream_lap_segment[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
 uint32_t stream_lap_header[RUNS_STREAM_LOOP ? MAX_FLAT_LAP : 1];
+// Idle segments: cycles to wait after each segment's packets, and after each position of a flat lap (non-zero only
+// on a segment's last packet).
+uint32_t stream_segment_idle[STREAM_IDLE ? NUM_TRAFFIC_CONFIGS : 1];
+uint32_t stream_lap_idle[STREAM_IDLE ? MAX_FLAT_LAP : 1];
+
+// An idle segment: the worker sends nothing for `cycles` cycles on the clock the run is timed with, so the wait
+// counts in the run's elapsed time. Returns the cycles actually waited.
+FORCE_INLINE uint64_t stream_idle_wait(uint32_t cycles) {
+    const uint64_t start = get_timestamp();
+    uint64_t now = start;
+    while (now - start < cycles) {
+        now = get_timestamp();
+    }
+    return now - start;
+}
 
 // Sends the header already in the current slot again by returning the slot to the router, without
 // copying it. Only the VC0 adapter exposes the credit-only update, so other adapters return false
@@ -91,6 +111,11 @@ void kernel_main() {
         stream_repeat = get_local_arg_val<uint32_t>(local_args_idx++);
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             stream_counts[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+        }
+        if constexpr (STREAM_IDLE) {
+            for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
+                stream_segment_idle[i] = get_local_arg_val<uint32_t>(local_args_idx++);
+            }
         }
     }
 
@@ -171,6 +196,8 @@ void kernel_main() {
         // Cycles spent waiting for a slot, timed only when a wait happens. The rest of the loop's time
         // is the worker's own cost per packet, which a router-bound run otherwise hides.
         uint64_t wait_cycles = 0;
+        // Cycles spent in idle segments, which are part of the run but not the worker's cost per packet.
+        uint64_t idle_cycles = 0;
         // Slots known to be free since the last check. Checking costs a fence and an L1 read of the
         // router's counter, so the loop checks only once it has used up the slots it knows about.
         uint32_t free_slots = 0;
@@ -211,6 +238,9 @@ void kernel_main() {
                 for (uint32_t i = 0; i < stream_counts[segment]; i++) {
                     stream_lap_segment[position] = segment;
                     stream_lap_header[position] = header_address;
+                    if constexpr (STREAM_IDLE) {
+                        stream_lap_idle[position] = i + 1 == stream_counts[segment] ? stream_segment_idle[segment] : 0;
+                    }
                     position++;
                 }
             }
@@ -219,6 +249,11 @@ void kernel_main() {
             position = 0;
             for (uint32_t packet = 0; packet < total_packets; packet++) {
                 send_packet(stream_lap_segment[position], stream_lap_header[position]);
+                if constexpr (STREAM_IDLE) {
+                    if (stream_lap_idle[position] != 0) {
+                        idle_cycles += stream_idle_wait(stream_lap_idle[position]);
+                    }
+                }
                 position = position + 1 == lap_length ? 0 : position + 1;
             }
         } else {
@@ -229,10 +264,18 @@ void kernel_main() {
                     for (uint32_t i = 0; i < stream_counts[segment]; i++) {
                         send_packet(segment, header_address);
                     }
+                    if constexpr (STREAM_IDLE) {
+                        if (stream_segment_idle[segment] != 0) {
+                            idle_cycles += stream_idle_wait(stream_segment_idle[segment]);
+                        }
+                    }
                 }
             }
         }
-        const uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
+        uint64_t busy_cycles = get_timestamp() - loop_start - wait_cycles;
+        if constexpr (STREAM_IDLE) {
+            busy_cycles -= idle_cycles;
+        }
         *conn_l1 = local_conn;
 
         for (uint8_t segment = 0; segment < NUM_TRAFFIC_CONFIGS; segment++) {
@@ -323,6 +366,11 @@ void kernel_main() {
                     if (++packets_since_progress == PROGRESS_UPDATE_INTERVAL) {
                         packets_since_progress = 0;
                         write_progress();
+                    }
+                }
+                if constexpr (STREAM_IDLE) {
+                    if (stream_segment_idle[segment] != 0) {
+                        stream_idle_wait(stream_segment_idle[segment]);
                     }
                 }
             }

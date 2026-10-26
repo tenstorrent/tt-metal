@@ -1008,9 +1008,14 @@ Variants:
   v3tk (`local_write_ctrl_preset = false`), to measure that change alone.
 - After the hardware (§12.8 to §12.12), all on the NoC API form: `v3vc`, `v3vd`, `v3ve` (controls without change 1),
   `v3v2` (v3v with the decode fixed) and `v3v3` (v3v2 with a different cut remainder). Then `v3v4` (v3v2 with an
-  8-pass partial-batch hold, §12.13; the current best) and `v3v5` (v3v4 with the cut in 1D only).
-- DIAGNOSTIC ONLY, never for shipping (§12.15): `v3vc_d8`, `v3vc_d20`, `v3vc_d50`, `v3vc_d100`, `v3tk_d50` (E1 waits
-  after each pass without progress).
+  8-pass partial-batch hold, §12.13; the current best), `v3v5` (v3v4 with the cut in 1D only) and
+  `v3v6` (v3v4 with a bounded wait for a full batch's last write, §12.16). Then `v3w` and `v3w4` (§12.18: credits
+  at pass ends the packet count decides, rate 3 / rate 4), and `v3x` (§12.20: v3v6 with holds bounded by the ring).
+  Then `v3x_nocut` (a control: v3x without the record-word cut) and `v3x2` (v3x with the cut only on passes with a
+  packet), §12.21.
+- DIAGNOSTIC ONLY, never for shipping: `v3vc_d8`, `v3vc_d20`, `v3vc_d50`, `v3vc_d100`, `v3tk_d50` (E1 waits after
+  each pass without progress, §12.15); `v3vc_cw`, `v3tk_cw` (a full batch's check waits for its write, §12.16);
+  `<base>_pA<d>` / `<base>_pB<d>` for base v3tk, v3v6, v3w, v3w4 and d 8, 16, 24, 32 (§12.19 perturbation test).
 
 Scratch: `/tmp/claude-4004/-home-aagarwal-tt-metal/76f59f51-9416-4ea6-898e-740976fca7f2/scratchpad/v3v/` (not durable).
 Tools there: `rxscen.py` (v3t's, with `DECODE=x|y` to fix which route byte decides and `ALIGN=al|mis` to fix whether a
@@ -1882,3 +1887,487 @@ E0 main loop, the accesses that hit memory-mapped blocks:
   - No branch hints or allocation steering.
   - Stream access stays through `read_stream_count`.
   - The partial-batch hold should count cycles too, not passes, so the two do not interact.
+
+### 12.16 Hardware round 4 (jobs 309–310): the batch's completion check runs before its last write has left
+
+**Hardware.** All runs passed (labels p17*, p18*; RESULTS §98).
+
+Job 309, E1 idle-wait sweep, -O3, cycles/packet:
+
+| Row | v3tk | v3vc | d8 | d20 | d50 | d100 | v3tk_d50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mesh1HopEW write | 128.0 | 130.9 | 130.2 | 130.4 | 132.5 | 133.3 | 132.1 |
+| NS_PureWrite4352 | 128.6 | 131.4 | 131.0 | 130.8 | 132.0 | 133.5 | 130.5 |
+| Mesh3HopEW write | 143.8 | 145.2 | 146.9 | 147.5 | 149.9 | 156.2 | 148.3 |
+
+Polling less makes these rows worse, so idle-polling contention is ruled out and §12.15's poll-period sketch is
+dropped.
+
+Job 310, one-packet round trip (median net ns against v3tk; a v3tk repeat came within 5 ns):
+
+| Row | v3vc | v3vb | v3v4 |
+| --- | ---: | ---: | ---: |
+| 1-hop E/W write 4 KiB | +8 | +1 | +9 |
+| 1-hop N/S write 4 KiB | +10 | +11 | +10 |
+| N/S 16 B | +35 | +38 | +19 |
+
+Fused and 3-hop round trips are within ±13. v3vb's E/W 4 KiB round trip is unchanged, yet its 4352 B throughput
+regresses like the others, so the cost shows only under load.
+
+The lead's hypothesis:
+- The rows are bound by the credit window: 17 worker slots × ~128 cycles is ~2,200, about the round trip.
+- The variants reach a batch's completion check sooner after the batch's last local write. So the check more often
+  finds that write still in the NIU (`outgoing[trid] != 0`) and leaves the batch to a later pass.
+- Under load that later pass handles the next packet first, so the credit goes a packet later.
+
+**Timing, from the code** (-O3; `rxscen.py write`, `compscen.py fail` (a pass without progress whose full-batch
+check finds the write outgoing), and `cyc.py`):
+- Cycle model: 1 cycle per instruction, +1 per taken branch, loads ready after 8 cycles (MMIO), 5 (L1) or 2 (local
+  memory).
+- Times are from the write's CMD_CTRL store, the moment the 4352 B write is issued.
+- `remain` is the rest of that packet's pass after the issue. The full-batch check on the next pass, which has no
+  packet, reads the status register at `remain` + the pass's own lead-in (~49 to 50 cycles, aligned; ~62 when the
+  batch's records straddle two words).
+
+| Variant | W remain | W check (aligned / straddled) | N/S remain | N/S check (aligned / straddled) |
+| --- | ---: | --- | ---: | --- |
+| v3tk | 31 | 81 / 93 | 31 | 81 / 93 |
+| v3vb (cut: always aligned) | 31 | 80 | 31 | 80 |
+| v3vc, v3vd, v3ve | 21 | 71 / 83 | 21 | 71 / 83 |
+| v3v2, v3v4 (cut) | 21 | 70 | 21 | 70 |
+| v3v6 (below) | 21 | 70, then waits | 21 | 70, then waits |
+
+- **When the write has left:** a 4352 B NoC write leaves the NIU about 75 cycles after issue (§14: back-to-back 4 KiB
+  writes issue every 70.4 cycles; the drain is ~6 more). Seeing that in the status register takes a few more cycles.
+  So the threshold is ~75 to 85 cycles, and every check above lands within about ±10 cycles of it.
+- **Where the next packet is:** packets come every ~128 cycles. With detection (12) and the write pass before its
+  issue (49 to 65), the next packet arrives ~50 to 67 cycles after the issue. That is after the first pass without
+  progress has started (at `remain`, 21 to 31) but before its check. So that check runs, and if it fails, the next
+  pass handles the new packet first. The credit then goes at the end of that pass, ~170 cycles after the issue
+  instead of ~80 to 93: about 85 cycles later.
+- **What moved the check ~10 cycles earlier in each variant:**
+  - The NoC API's write order: `noc_write_with_state` updates the two software write counters before CMD_CTRL, while
+    v3tk's `ncrisc_noc_fast_write` updates them after. That takes `remain` from 31 to 21 (v3vc, v3vd, v3ve, v3v2,
+    v3v4).
+  - The cut: batches are always aligned, so the check never pays the straddled batch's second record word and funnel
+    shift. That removes ~12 cycles of v3tk's straddled case (v3vb, v3v2, v3v4).
+  - v3vb has only the second. Its aligned check (80) is about v3tk's aligned check (81). But v3tk's batches straddle
+    in 3 of 4 ring alignments, which puts its check at 93.
+- **Reading:**
+  - With a threshold near 80 to 90, v3tk passes whenever its batches straddle; every variant fails nearly always.
+  - A deferral of ~85 cycles on every batch adds ~85/17 ≈ 5 cycles/packet if the window binds fully; the measured
+    +2.5 to 3 fits a partial bind, or deferrals on part of the batches.
+  - It also fits the idle-wait sweep. A wait after the failed check delays the next packet's detection and so the
+    credit: d50 and d100 are worse, and v3tk_d50 too.
+  - It fits the one-packet round trip: a lone packet's credit is not on that path.
+  - It suggests v3tk's own rate depends on the ring's alignment, a candidate for the bimodal rows in RESULTS §96.
+- **Confidence: medium.** The mechanism and the direction fit all of round 2 to 4. The margin is ~10 cycles, below
+  what this cycle model can resolve, so the diagnostic below decides.
+- **Not explained here:** N/S 16 B round trip +35 / +38 ns (v3vc / v3vb), +19 (v3v4).
+
+**Diagnostic variants (DIAGNOSTIC ONLY: never for shipping):** `v3vc_cw` and its control `v3tk_cw`.
+- When a full batch whose slots all read one way finds its newest write still outgoing, the check spins on the same
+  `outgoing[trid]` read until the write has left, then credits. It gives up after 64 reads (and leaves the batch to a
+  later pass as before). Nothing else changes.
+- Per-packet paths: as v3vc and v3tk, except N/S -O3 −1 to −2 instructions and N/S -Os +1.
+- Checks: every logged config builds; E0 is PT_LOAD-identical to v3vc's (v3tk_cw: to v3tk's); see §12.17 for the
+  results.
+- **Expected if confirmed:** the one-hop 4352 B rows of v3vc_cw drop to v3tk's ~128 or below; v3tk_cw stays or
+  improves (its aligned-batch deferrals go away).
+
+**v3v6: the shipping form** (v3v4 + the same wait, through the NoC API).
+- In `send_completions`, a full one-read-class batch whose newest write is still in the NIU waits for it with
+  `ncrisc_noc_nonposted_write_with_transaction_id_sent` (an existing API) and then credits. The wait is bounded at 32
+  reads (`completion_wait_reads`, ~250 cycles); past it, the batch is left to a later pass as before.
+- **Why a wait rather than reordering the pass:**
+  - The check usually runs on a pass without progress, which has nothing else to do.
+  - The write was issued at most a pass before, so the wait is short (~5 to 15 cycles here).
+  - On passes with progress the batch excludes the newest slot, so its write is at least a pass old and has
+    normally left.
+  - Moving the check before the packet's work would need the deferred-atomic rule (the newest retired slot may carry
+    one) in a new place, and would move per-packet code.
+- **Cost:** a packet that arrives during a wait is handled up to ~15 cycles later. E1-bound rows rarely reach the
+  wait.
+- **Per-packet paths:** identical to v3v4 except N/S -O3 −1 instruction on each path and 1D -O3 fused ±1 (`score.py`).
+- **Forms tried and not used:**
+  - The wait on passes without progress only: the `progress` test made every 2D per-packet path +1 instruction.
+  - Rotating the 1D loop with an inline wait and the test: 1D +17 on the walker's path.
+  - An out-of-line wait helper with the `progress` test: same +1 on 2D, and the same 1D rotation.
+  - The unconditional inline wait has neither.
+
+### 12.17 Checks for v3vc_cw, v3tk_cw and v3v6, and what to run
+
+| Check | v3vc_cw / v3tk_cw (diagnostic) | v3v6 |
+| --- | --- | --- |
+| Offline builds, every logged config | -O3 536/536, -O2 536/536, -Os 534/536 (the 2 garbled VC1 commands) + 96/96 VC1 at -Os | same |
+| E0 (PT_LOAD) | identical to v3vc's / v3tk's on every config | identical to v3tk's: 208/208, 208/208, 207/207, 48/48 |
+| E1 | the 128 program configs change | the 128 program configs change |
+| Ordinary edits (coldmul, init, templates, os) | not run (diagnostic) | run_main_loop never DIFF: as v3v4 |
+| VC1 code size, -O3 | 25,088 / 25,124 B | 25,116 B; -O2 24,044; -Os 21,640 (limit 26,624) |
+| NoC API rule | the diagnostic spins on the existing raw read | the wait uses `ncrisc_noc_nonposted_write_with_transaction_id_sent`; no command-buffer register access |
+| Coverage, 41 cases at -O3 | not run | identical to v3tk case by case (inherited `*_nofuse`, `wh_vc1` 15/20); `bh_2d_vc2` 56/56 at -O3, -O2, -Os |
+
+What to run (all three levels, every suite):
+1. **v3vc_cw and v3tk_cw** (diagnostics), against v3vc and v3tk on the one-hop 4352 B writes and Mesh3HopEW.
+   Confirmation: v3vc_cw back to ~128 or below, and v3tk_cw not worse.
+2. **v3v6** (the candidate) against v3v4. Expected: the one-hop 4352 B rows at or below v3tk's; Mesh3HopEW down
+   (forwards are one-read-class batches too); everything else as v3v4.
+
+### 12.18 v3w: credit timing without a cliff (after jobs 311+; RESULTS §98)
+
+**Hardware round 5** (lead's summary):
+- The early-check analysis is confirmed. v3vc_cw and v3tk_cw recover the one-hop 4352 B rows: v3vc 130.9 → 126.9,
+  v3tk 127.9 → 126.9.
+- v3v6 passed everything (VC1 34/34 at all levels) and is the lead.
+  - One-hop E/W at -O3 / -O2 / -Os: 126.8 / 127.0 / 126.6.
+  - Suite means against v3t (4352 / mix / flushmix / 1D):
+
+| Level | 4352 | mix | flushmix | 1D |
+| --- | ---: | ---: | ---: | ---: |
+| -O3 | −3.42 | −1.70 | −1.57 | −4.06 |
+| -O2 | −4.13 | −1.87 | −2.31 | −3.63 |
+| -Os | −4.84 | −3.68 | −2.59 | −2.45 |
+
+**The problem (user).** The credit goes back either at once or ~85 cycles later, depending on whether a check lands
+just before or just after a write leaves the NIU. So a ~10-cycle shift anywhere in E1 changes these rows by 2 to 4%.
+- v3v6's bounded wait patches the case found, but keeps a cliff at its cap and ties packet latency to it.
+- It also keeps a second race, which the model below shows. Its wait runs only if the pass after the write starts
+  before the next packet is seen. With the pass ending later (perturbation b ≥ ~24), the next packet is seen first and
+  the credit again goes a packet later.
+- The user accepts 1 to 2 cycles/packet slower for a design that is stable against this class of perturbation.
+
+**Design.** A slot is credited at a point the packet count decides, never at a point that races its own write.
+- Candidates, at every pass end (with or without a packet): the retired, uncredited slots except the newest. The
+  newest's write was issued by this pass or the last, and it is the only one whose write can still be leaving.
+- Rate rule: candidates go in one frame (up to 4 oldest) once there are at least K. That is a count, not a batch
+  shape: no slot waits for a particular slot's write, and no record-word alignment decides anything.
+- Tail rule: after 8 passes in a row without a packet, the newest is a candidate too and any number goes. That is the
+  stream stopping; 8 idle passes (≥ ~150 cycles) is over twice the longest gap inside a stream at wire rate.
+- No wait anywhere. A check that finds a write still in the NIU, or the TX queue busy, leaves the slots to the next
+  pass.
+- Exactness is unchanged: the same records-based check (the newest reading slot per command buffer), now on 1 to 4
+  slots.
+- The deferred flushed atomic is safe for the same reason as before. On passes with a packet the newest slot is never
+  credited (as v3t's rule); on passes without one, the atomic is drained before completions.
+- Same rule in 1D and 2D (1D used to credit a partial batch, newest included, at the first idle pass: the same race).
+
+**Worst-case credit delay** (stream at interval I, a write leaving L after issue, R = rest of the pass after the issue;
+4352 B: I ≈ 128, L ≈ 75, R ≈ 21):
+- **With packets arriving:** a group's oldest slot is credited at the end of the pass where the count reaches K, about
+  K·I + R after its own issue. The group's newest slot is credited about I + R after its issue.
+  - After the write has left: at most K·I + R − L (K = 3: ~330 cycles for the oldest, ~74 for the newest).
+  - Mean over a group, from issue: (K + 1)/2 · I + R. K = 3: ~277 cycles; K = 4: ~341. v3v6 when its wait works:
+    ~1.5 I + L ≈ 270.
+- **With no packet arriving:** everything left is credited by the eighth pass without a packet, ~150 to 200 cycles
+  after the last packet's pass. All writes have left by then, so the check succeeds.
+- **Why a shift of the check cannot make a step:**
+  - Each candidate's write was issued at least one whole pass before the check: ≥ I in a stream, ≥ ~100 cycles when
+    E1 is the limit. That is longer than the slot's write takes to leave (L ≈ 75 at the largest slot) by a margin of
+    ~25 to 50 cycles.
+  - So moving the check by less than that margin cannot turn a success into a failure. The credit goes at the pass end
+    the count picks, and that time moves continuously with any added delay (slope ≤ 1 on the credit, ≤ 1/17 on a
+    window-bound stream).
+  - Perturbations (a) and (b) only lengthen passes, which widens the margin.
+  - The count and the tail threshold depend on packets and idle passes, not on when writes leave.
+  - A step is left only where the margin is gone: a write slower than a whole pass (NoC congestion). There the credit
+    goes one pass later, and only for that group.
+
+**Cost, and the window.** Every slot now waits at least to the next packet's pass, about 0.4 I more than v3v6's best
+case at K = 4.
+- On a stream bound by the worker's 17-slot credit window that is ~+3.6 cycles/packet in the model below (the same
+  deferral v3vc paid).
+- K = 3 recovers most of it (+1, with a third more credit frames, which the far E0 pays ~35 cycles each).
+- **One spare worker slot removes the cost entirely in the model:** with 18 or more slots the window no longer binds
+  and v3w4 equals v3v6.
+
+Model (`sim/window2.py`; one-hop 4352 B, E0 100 cycles/packet + 35 per credit return, wire 125, E1 pass timing from
+the -O3 listings, worker window W; calibrated so that v3tk, v3vc and v3v6 order as measured; cycles/packet over
+injected delay 0 / 8 / 16 / 24 / 32):
+
+| W = 17 | a: before the check | b: after the write issue |
+| --- | --- | --- |
+| v3tk | 127.5 127.5 127.5 127.5 128.8 | 127.5 128.5 130.6 131.9 137.0 |
+| v3vc | 131.2 **127.5** 127.5 127.5 127.5 | 131.2 **127.5** 127.6 **130.1** 131.4 |
+| v3v6 | 127.5 127.5 127.5 127.5 127.5 | 127.5 127.5 127.6 **130.1** 131.4 |
+| v3w4 (K = 4) | 131.1 131.2 131.2 131.3 131.4 | 131.1 131.2 131.2 131.2 132.3 |
+| v3w (K = 3) | 128.4 128.4 128.3 128.3 128.3 | 128.4 128.4 128.3 128.3 133.6 (E1 saturates) |
+
+| W = 20 | a: before the check | b: after the write issue |
+| --- | --- | --- |
+| v3tk | 127.5 127.5 127.5 127.5 127.6 | 127.5 127.5 127.5 129.0 137.0 |
+| v3v6 | 127.5 127.5 127.5 127.5 127.5 | 127.5 127.5 127.5 127.5 127.5 |
+| v3w4 | 127.5 127.5 127.5 127.5 127.5 | 127.5 127.5 127.5 127.5 129.5 |
+| v3w | 128.4 128.4 128.3 128.3 128.3 | 128.4 128.4 128.3 128.3 133.7 |
+
+- In bold: the steps. v3vc and v3v6 both step under (b) at ~24 cycles, where the next packet is seen before the pass
+  that would wait.
+- v3w and v3w4 have no step under (a) or (b). Their only rise is at b = 32, where 32 cycles per packet push E1 toward
+  the packet interval (frames included). That is a capacity slope, not a timing step.
+- The model's absolute values are not calibrated; only the shapes and differences carry.
+
+**Dirs.**
+- **`v3w`** (K = 3; on v3v4): `send_completions` rewritten as above, `credit_rate = 3` (1 on rings under 8 slots),
+  `credit_tail_idle_passes = 8`.
+  - No record cut: groups straddle words when they do, and a rate of 3 rotates the alignment through all four on a
+    ring of 16.
+  - Per-packet paths: +2 to +3 instructions on W and N/S, +5 to +6 on 1D, +5 to +9 on VC1 against v3v4. This is the
+    decision's register use (the rate constant and the candidate count live alongside the retire count); it is
+    allocation, not added work, and it is what K = 3 costs here.
+- **`v3w4`** (K = 4; on v3v4): the same rule in v3v4's own batch code. The one change is that a pass without a packet
+  credits only `uncompleted > 4` (never the newest) or the tail. The same tail rule now applies in 1D.
+  - Per-packet paths identical to v3v4 on W and N/S; 1D +2 (the idle count reset, new in 1D); VC1 +2 at -O3 and -O2,
+    +5 (stall +12) at -Os.
+  - The structural form at no per-packet cost. It pays the deferral on a window-bound stream unless the window has a
+    spare slot.
+
+**Worker-window headroom (report only; host/builder side; derived from source, not measured).**
+- **2D VC0-only:** 81 slots of 4448 B fit in 364,352 B of buffer space (L1 455,264 B top minus 90,912 B start).
+  - The allocator takes {16,16} per channel and gives the one spare slot to the worker channel: {17,16,16,16} + 16
+    receiver slots.
+  - 4,064 B remain, 384 B short of an 82nd slot.
+  - The phase-profile scratch (when enabled) takes a slot back.
+- **VC0+VC1:** the worker channel already gets every spare slot (51, or 45 with a Z boundary).
+- **1D:** {16,32} uses 281,600 B; 84,160 B (19 slots) unused, but spare slots go to the worker channel only on
+  Mesh/Torus.
+- **Ways to give the 2D worker channel more slots:**
+  - Branch env `TT_FABRIC_EXP_WORKER_SLOTS=20`: {20,15,15,15}, taking one slot from each forwarding channel. It can
+    run today, and forwarded rows should be watched.
+  - Size the 2D field area for the sender channels actually used instead of the maximum of 10: 144 B per unused
+    channel, 864 B for six, enough for an 82nd slot.
+  - Cut `MEM_ERISC_KERNEL_CONFIG_SIZE` by ≥ 448 B (the stated need is 25,680 of 26,624 B).
+  - A device-side check: slot counts up to 127 are supported, and the worker channel's count is independent of the
+    far receiver's.
+
+### 12.19 Checks, the perturbation dirs, and what to run
+
+| Check | v3w | v3w4 |
+| --- | --- | --- |
+| Offline builds, every logged config | -O3 536/536, -O2 536/536, -Os 534/536 (the 2 garbled VC1 commands) + 96/96 VC1 at -Os | same |
+| E0 (PT_LOAD) | identical to v3tk's: 208/208, 208/208, 207/207, 48/48 | same |
+| E1 | the 128 program configs change; the 200 others identical | same |
+| Ordinary edits (coldmul, init, templates, os; W, N/S, 1D, VC1; 3 levels) | run_main_loop never DIFF: coldmul moved; init moved (VC1 same); templates same; os moved at -O3/-O2, same at -Os | same |
+| VC1 code size, -O3 (limit 26,624) | 25,596 B (-O2 24,396; -Os 21,972) | 25,124 B (-O2 24,012; -Os 21,640) |
+| NoC API rule | no command-buffer register access in E1 code | same |
+| Coverage, 41 cases at -O3 | identical to v3tk case by case (inherited `*_nofuse`, `wh_vc1` 15/20); `bh_2d_vc2` 56/56 at -O3, -O2, -Os | same |
+
+**Perturbation dirs (DIAGNOSTIC ONLY, never for shipping)**, 32 dirs:
+- Naming: `<base>_pA<d>` and `<base>_pB<d>` for base ∈ {v3tk, v3v6, v3w, v3w4} and d ∈ {8, 16, 24, 32}. The d = 0
+  point is the base itself; a zero delay compiles to the base's own code.
+- (a) spins d core cycles immediately before the completion check (before its first status read, on passes that
+  check).
+- (b) spins d cycles immediately after a packet's local write is issued: after the plain write, after the last scatter
+  chunk, and in a fused write before its atomic.
+- The spin reads only the core's own cycle counter (`csrr mcycle`), and reads it at least twice, so the actual delay
+  is about max(d, 14) + a few cycles.
+- So d = 8 already carries the spin's code and ~14 cycles. Read the slope over d = 8 to 32, and the 0 → 8 step as
+  code + ~14 cycles.
+- Checks: each builds every logged config at -O3 (536/536); E0 PT_LOAD-identical to v3tk on all 208; E1 changes in
+  the 128 program configs.
+
+What to run:
+1. **v3w and v3w4, all three levels, every suite.** Against v3v6: v3w4's 2D per-packet code is v3v4's, so any change
+   is the credit rule; v3w adds the rate of 3.
+2. **The 32 perturbation dirs at -O3**, with their bases: the one-hop 4352 B rows (Mesh1HopEW/NS, EW/NS_PureWrite4352),
+   Mesh3HopEW, and scatter (E/W, N/S, Linear1HopEW).
+   - Expected (model above): v3tk and v3v6 step somewhere in (b), v3v6 around b ≈ 24.
+   - v3w and v3w4: smooth in both, with a rise only where (b) pushes E1 toward the packet interval.
+3. **The worker window**: v3v6, v3w4 and v3w with `TT_FABRIC_EXP_WORKER_SLOTS=20` ({20,15,15,15}), -O3 at least.
+   - In the model one spare worker slot makes v3w4 equal to v3v6 and flattens every policy.
+   - The forwarded rows show what the forwarding channels' 16 → 15 costs.
+
+### 12.20 v3x: credit holds bounded by the ring, for bursty and sparse senders
+
+**Hardware round 6** (jobs 316–317, p20_*; all passed):
+- Perturbation (a), before the completion check: d = 8 → 32 adds 1.5 to 2.1 cycles/packet on the one-hop 4352 B
+  writes for v3tk, v3v6 and v3w4, and 4.6 to 5.1 for v3w. There are no steps anywhere.
+- Perturbation (b) is a capacity test. All four respond identically (a plateau over 8 → 16 from the spin minimum,
+  then ~1:1), so it does not discriminate.
+- At d = 0:
+  - v3w: one-hop 126.3, but scatter 156.8, Mesh3HopEW 148.6 and Linear1HopEW scatter 158.9, so v3w is out.
+  - v3w4: one-hop 129.0 to 129.4, the rest as v3v6.
+- The 20-slot window run was cancelled. The user does not want to rely on specific slot counts: robustness must hold
+  at whatever window a config gets.
+
+**The concern (user).** Any credit hold penalizes bursty or sparse senders: collectives interleave compute and fabric
+traffic, bursts of a few packets with gaps.
+- v3w4's `uncompleted > T` with T = 1 on rings under 8 slots made a 4-slot VC1 receiver ring hold a lone packet's
+  credit until a second packet or 8 idle passes. The 2-slot VC1 sender channels upstream of it wait on exactly that
+  credit.
+- v3v4 and v3v6 used `>= T` there.
+
+**v3x** (on v3v6: its completion timing and its wait kept). One rule for every ring, 1D and 2D, VC0 and VC1:
+- **Batch size from the ring.** `batch_target = 1` on rings under 8 slots, else `min(4, num_slots / 4)`: 8 to 11
+  slots → 2, 12 to 15 → 3, 16 or more → 4.
+- **With a packet:** a batch goes once more than T wait. The newest is never in it, as before.
+- **Without a packet:** a full batch (T) goes at once, waiting for its newest write to leave if needed (v3v6's wait).
+  A partial batch goes after `credit_release_idle_passes = 4` passes without a packet. That was 8 in v3v4/v3v6 2D,
+  and 1D credited at once.
+- **The full-batch logic covers any T**: one-sender credit, one-read-class check with the wait, the newest record at
+  byte T − 1. So rings with T = 1 or 2 also credit as soon as the write has left.
+- Unchanged: the record-word cut (T = 4 rings), the exactness check, and the deferred-atomic rule (the newest is never
+  credited on a pass with a packet; on a pass without one, the atomic is drained first).
+
+**Worst-case slots a sender is missing because of E1** (writes left, credit held), by the ring E1 credits:
+
+| Ring (slots) | T | Held at most |
+| ---: | ---: | ---: |
+| 2 | 1 | 0 |
+| 4 (VC1 receiver) | 1 | 0 |
+| 8 (VC0 receiver on VC1 routers) | 2 | 1 |
+| 16 / 17 (VC0 receiver) | 4 | 3 |
+| 32 / 51 | 4 | 3 |
+
+Held slots are at most T − 1, under a quarter of the ring. The 17-slot worker channel's credits come from a 16-slot
+receiver ring (at most 3 held); the 51-slot worker channel on VC1 routers from an 8-slot ring (at most 1 held). On top,
+the newest slot's own write may still be leaving: that is in flight, not held. v3v6 holds up to 3 of an 8-slot ring.
+
+**Worst-case credit delay after a burst ends** (t = end of the burst's last pass; L = its write's time to leave the
+NIU, ~75 cycles at 4352 B, a few at 16 B):
+- If ≥ T slots wait: the first pass without a packet credits a full batch, waiting for the newest write. The credit
+  goes at ≈ max(issue + L, t + ~50) + the frame.
+- If < T wait: they go after 4 passes without a packet, ≈ t + 4 × ~20 + ~50 ≈ t + 130 to 150 cycles. Every write has
+  left by then.
+- T = 1 rings: every slot is credited at the first pass without a packet, as soon as its write has left.
+- So the hold after a burst is bounded by ~150 cycles, at any window size. v3v6: ~8 idle passes (≈ 210) for partials
+  in 2D. v3w4: the same, even for single packets on small rings.
+
+**Cost to watch.** Partial batches now go after 4 idle passes instead of 8 (2D). Streams whose gaps exceed ~4 idle
+passes send more, smaller frames, which the far E0 pays ~35 cycles each. v3v4's 8-pass hold gained 0.3 to 1.9 on
+Mesh3HopEW, MixSize4 and small writes; v3x may give some of that back. That is the trade the user asked for.
+
+**Per-packet paths** against v3v6 (`score.py`):
+- W and N/S: identical.
+- 1D: +2 to +3 instructions (the idle count, new in 1D).
+- VC1 (8-slot VC0 ring, now T = 2): +0 to +1 instructions, −1 to −5 estimated stall.
+
+**Checks:**
+- Every logged config builds: 536 / 536 / 534 (the 2 garbled VC1 commands) + 96 / 96 VC1 at -Os.
+- E0 PT_LOAD-identical to v3tk: 208, 208, 207, 48.
+- E1 changes in the 128 program configs.
+- Ordinary edits never DIFF.
+- VC1 -O3 code 24,948 B (-O2 23,884, -Os 21,596).
+- No command-buffer register access.
+- Coverage identical to v3tk over 41 cases; `bh_2d_vc2` 56/56 at all levels.
+
+**Bursty-sender test (study only).** Stream idle segments, `fabric_exp/streams/port/streams_idle.patch` (see the
+streams plan, "Idle segments"). `fabric_exp/exp_burst.yaml` and `fabric_exp/vc1/exp_burst_vc1.yaml`:
+- 1-hop E/W and N/S unicast_write at 4352 B and 16 B.
+- Bursts of N ∈ {1, 2, 4, 8, 32} packets, then G ∈ {500, 2000} idle cycles, plus a G = 0 baseline.
+- 20000 packets per row.
+- On the VC1 split, only intra-mesh rows can be timed (the profiler aborts on inter-mesh benchmark patterns). Those
+  routers' VC0 rings have 8 slots, where v3v6 batches 4 and v3x 2. The 2-slot VC1 channels themselves get only a
+  validation-mode inter-mesh idle stream (data checked, no throughput).
+
+### 12.21 Bursty senders: what costs v3v6 / v3x on bursts of 8, and v3x_nocut / v3x2
+
+**Hardware** (RESULTS §98, exp_burst.yaml at -O3, p23 / p25, repeat within ~0.3). Cycles/packet, v3tk / v3v6 / v3x:
+
+| Cell | E/W | N/S |
+| --- | --- | --- |
+| 16 B, bursts of 8, 500-cycle gap | 129.8 / 136.2 / 134.0 | 130.0 / 137.4 / 135.1 |
+| 4352 B, bursts of 8, 500 | 137.2 / 134.6 / 135.5 | 141.2 / 137.3 / 137.4 |
+| 4352 B, bursts of 32, 500 | 133.7 / 132.7 / 133.3 | 134.6 / 139.2 / 139.2 |
+| 4352 B, bursts of 32, 2000 | 179.7 / 178.4 / 178.7 | 183.0 / 180.4 / 180.4 |
+
+Bursts of 1, 2 and 4, and every 2000-cycle cell of 8, are identical across builds.
+
+**The window arithmetic.** A worker slot comes free only when the far E1's completion for it has come back (no
+first-level ack): worker write, E0 send, link, E1 retire and batch, credit frame, link, E0 `credit_worker`. Under a
+steady 16 B stream that loop is ~1,955 cycles (17 slots x 115).
+- The worker's own lap at N8 G500 is ~1,006 cycles (from the N1/N2/N4 G500 rows: ~62 per lap plus ~55.6 per packet,
+  plus the 500).
+- So about two bursts are in flight, 16 of the 17 slots. Burst k+2 can send its 2nd packet only once burst k's first
+  batch is credited, and its 6th only once burst k's second batch is.
+- The lap is then max(worker lap, c + L / 2), with L the credit loop of a burst's batch and c ~55 the worker's cost per
+  packet. The measured laps (1,038 / 1,090 / 1,072) give L ≈ 1,965 / 2,070 / 2,034: v3v6 holds a burst's credits about
+  105 cycles longer than v3tk, v3x about 70.
+- This fits the cells that do not move: bursts of 1 to 4 at 500 (the window holds four bursts or more) and bursts of
+  8 at 2000 (the lap, 2,469, outlasts L) never wait. Bursts of 32 fill the window inside every burst.
+
+**What E0 sees.** E0's code is the same in all three builds. It frees worker slots only when a credit frame arrives
+and pays ~35 cycles of its own per frame (`credit_worker`, RESULTS §56, §72). So E1 changes the cell only through
+when its frames leave, and how many there are.
+
+**What E1 does with a burst.** A 16 B packet takes E1 ~60 cycles; under E0's pace the next one comes ~100 cycles
+later, so E1 runs 1 to 3 idle passes between packets. Batches of 4 go on the idle pass after the 4th uncredited slot
+(u ≥ T), and a partial batch after 4 idle passes (8 in v3v6). A longer gap inside a burst (the worker waiting on the
+window, or E0 busy with a credit return) releases a partial batch, which moves the ring's oldest uncredited slot off a
+word of slot records. From there:
+- v3tk keeps crediting 4 at a time; its batches straddle two record words (a second load and a funnel shift).
+- v3v6 and v3x cut the next batch at the word's end. On an idle pass the cut piece goes at once, and the rest is a new
+  partial batch that waits 4 (v3x) or 8 (v3v6) more idle passes, about 90 or 180 cycles, and costs E0 one more frame.
+  A burst's last slots are the ones that wait.
+- The other E1 changes do not change this pattern: the bounded wait only acts on a write still in the NIU, which a
+  16 B write leaves within a few cycles; the decode and the local-write path move per-packet work by at most 3
+  instructions, with E1 idle for 1 to 3 passes per packet anyway.
+- And v3v6 and v3x differ only in the hold (8 against 4 passes), which is worth 2.2 here: partial batches do occur in
+  this cell, and their wait is what it measures.
+
+**Models** (`fabric_exp/consolidation/scratch_tools/v3v/sim/`).
+- `e1burst.py` (E1 alone: bursts of 8, packets 60 to 120 cycles apart, mid-burst gaps of 100 to 300 cycles at
+  different positions, laps of 1,040 and 1,092; 126 scenarios), mean credit latency per packet / frames per burst:
+  v3tk 283 / 2.53, v3v6 311 / 2.53, v3x 295 / 2.78, v3x without the cut 283 / 2.53, v3x with the cut on passes with a
+  packet only 284 / 2.55. Same order as the hardware.
+- `burstsim.py` (the whole loop: worker window, E0 pace and credit returns, E1 policy) reproduces the window binding
+  (v3tk ≈ 130 at N8 G500 and ≈ 115 at G0; bursts of 4 and the 2000-cycle cells unchanged), but with latencies fitted
+  to those rows its rate moves by at most ~1 under these policy changes, against 4 to 7 on hardware. It does not size
+  the effect; the controls below test it.
+- 4352 B: the bounded wait credits a batch when its write leaves rather than a pass later, so the v3v forms win on
+  N8 G500 (−2.6 / −3.9) and N32 G2000 (−1.3 / −2.6). e1burst's 4352 B bursts of 32: mean credit latency 473 (v3tk)
+  against 442 to 446 for every form with the wait. Both new dirs keep it.
+
+**Not explained: N/S 4352 B, bursts of 32, 500-cycle gap (+4.6 in v3v6 and v3x alike, E/W unaffected).** It is not
+the hold (v3v6 and v3x hold differently and score the same). The one N/S-only E1 change, the route decode, compiles at
+-O3 to the same N/S destination path as v3tk's `Routing2DCodec` (same instructions, one zero-extend placed
+differently; checked on the hot N/S config with a v3x + codec build), so it is not the decode either. Whether it
+follows the cut is for v3x_nocut and v3x2 to show.
+
+**Dirs.**
+- `v3x_nocut` (control): v3x without the record-word cut; every batch is read with `four_from` and may straddle two
+  words, as in v3tk. Everything else is v3x.
+- `v3x2` (candidate): v3x with the cut only on passes with a packet. A batch credited on a pass without one (a
+  burst's last batch, or a partial batch) is taken whole, straddling two words if it must: such a pass has the time,
+  and nothing then waits a second hold. On a pass with a packet the cut stays, so E1-bound streams keep whole-word
+  batches (v3v5 showed the 2D cut is worth −2.4 to −2.6 on N/S fused and E/W scatter).
+- Tried for v3x2 and not kept: the cut keyed on `uncompleted > T` (+2 per packet at -O3/-O2); the idle-pass batch out
+  of line (+1 to +3 per packet); two inline batch forms per pass kind (−1 to +3 at -O3/-O2, +2 to +4 at -Os).
+
+**Per-packet paths against v3x** (`score.py`; instructions, the completion as the path difference per batch of 4):
+
+| | write, fwd | atomic, fused, scatter | write + completion of 4 |
+| --- | --- | --- | --- |
+| v3x_nocut, W and N/S -O3 / -O2 / -Os | 0 | 0 (N/S -O2: −1) | +2 to +4 (the straddle-capable read) |
+| v3x_nocut, 1D -O3 / -O2 (-Os) | 0 | +1 (0) | +4 to +5 (+3) |
+| v3x2, W, N/S, 1D -O3 / -O2 | 0 | +1 | −3 to −4 (−1 with estimated stall) |
+| v3x2, -Os | +1 | +1 | +1 to +2 |
+| both, VC1 | identical (the cut never applies on 8- and 4-slot rings) | | |
+
+**Checks** (both dirs):
+- Every logged config builds: 536 / 536 / 534 (the 2 garbled VC1 commands) + 96 / 96 VC1 at -Os.
+- E0 PT_LOAD-identical to v3tk: 208, 208, 207, 48.
+- E1 against v3x: identical in 248 of 328 configs; the 80 that differ are the ones with 16- or 32-slot rings. VC1
+  E1 identical to v3x at -Os (48 / 48), so the VC1 rows cannot move.
+- VC1 -O3 code 24,948 B (-O2 23,884, -Os 21,596): as v3x.
+- Ordinary edits never DIFF (coldmul, init, templates, os: same or moved only).
+- No command-buffer register access.
+- Coverage identical to v3tk and v3x over 41 cases; `bh_2d_vc2` 56/56 at all levels.
+
+**Predictions.**
+- v3x_nocut: the 16 B bursts of 8 at 500 return to v3tk's (~130) in both directions; the 4352 B bursts of 8 keep v3x's
+  gain (the wait). 2D E1-bound rows with partial batches (fused, scatter, mixes) may lose part of the cut's gain; that
+  is why it is a control.
+- v3x2: the bursts as v3x_nocut; the steady suites within the jitter band of v3x; VC1 equal to v3x.
+- If the 16 B cells do not move in v3x_nocut, the cut is not the cause, and the next suspects are the local-write
+  path (per-packet timing of E1 against E0's pace) and E0's frame count, which the models here cannot separate.
+
+**Outcome** (job 346, RESULTS §98).
+- v3x_nocut: as predicted on the 16 B bursts of 8 (129.7 / 130.0, v3tk's). Also, not predicted: the N/S 4352 B bursts
+  of 32 at 500 return to v3tk's (134.4). So that cell follows the cut, which the models did not show. Of the 4352 B
+  bursts of 8, N/S keeps v3x's gain (137.4) and E/W loses it (137.1, v3tk's 137.2).
+- The cut's worth on steady streams: +1.0 / +0.4 / +0.5 / +0.8 without it (4352 / mix / flushmix / 1D, -O3), the
+  straddle-capable read's +2 to +5 instructions per batch. EW_MixSize4 is 3.8 better without it. NS_Chunk4Fused_Flush
+  is 10 worse (163.8, v3tk 162.2): that row's 4-packet flushed chunks line up with the cut's 4-record words.
+- v3x2: prediction wrong. It recovers about half of each bursty loss (16 B bursts of 8 131.9 / 133.2; N/S 4352 B
+  bursts of 32 138.1). So the cut costs bursts on passes with a packet too, not only through a second hold.
+- Decision: drop the cut (robust over peak). `v3x3` = v3x_nocut with mainline comments (PT_LOAD-identical at -O3,
+  -O2 and -Os). Composed with v3yb's E0 as `v3z`.

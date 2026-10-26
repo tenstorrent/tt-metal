@@ -542,10 +542,41 @@ The worker cap is fixed for these mixes. The flag still guards against cases thi
 
 ## Later (v2)
 
-- **Idle segments.** `{idle: <cycles>}` makes the worker wait before its next credit bump. This models compute gaps and short bursts.
+- **Idle segments (built 2026-10-26; see below).** `{idle: <cycles>}` makes the worker wait before its next credit bump. This models compute gaps and short bursts.
 - **Lap completion time.** The last packet of a lap triggers a reply, and the sender times the round trip for each lap. This approximates "time until a chunk's semaphore lands", which is the latency number a collective developer cares about.
 - **Seeded shuffle within a lap**, to avoid aliasing with periodic router behaviour such as bit 22's batches of 4.
 - **Streams on all-to-all style patterns, via one config per flow.** See below.
+
+### Idle segments (built 2026-10-26)
+
+A burst of N packets with a gap of G cycles is `stream: [{ntype: unicast_write, size: 4352, count: N}, {idle: G}]`
+with `repeat: R`. Made in the streams worktree first, ported as `fabric_exp/streams/port/streams_idle.patch`.
+
+- **YAML.** A segment `{idle: <cycles>}` sets no other field (a build error otherwise). The ntype and size filters skip
+  it.
+- **Host.** `expand_streams` turns an idle segment into a wait after the packet segment before it:
+  - `StreamProgram::idle_after[i]` holds the cycles after pattern i's packets in each lap.
+  - Consecutive idle segments add up.
+  - Idle at the start of the stream waits at the end of each lap instead: the same sequence, minus the very first
+    wait.
+  - A stream needs at least one packet segment.
+  - No pattern is made for an idle segment, so receivers, the allocator and the bandwidth accounting see only the
+    packet segments.
+  - `idle_after` is empty when there are no idle segments, or when they are all 0 cycles.
+  - `--dump-built-tests` prints `idle_after` next to `counts`.
+- **Kernel args.** The sender's STREAM_MODE compile-time arg becomes 0 (no stream), 1 (stream) or 2 (stream with idle
+  segments), so no new compile-time arg is added. With 2, the local args carry `idle_after` after the counts.
+- **Sender kernel.** After a segment's last packet in a lap, the worker spins for the segment's idle cycles on
+  `get_timestamp()`, the clock the run is timed with. This applies in both the benchmark loops (flat lap and nested)
+  and the validation stream loop. The wait counts in the elapsed time.
+  - The benchmark loop's busy-cycles counter (the worker-cost diagnostic) leaves the waits out.
+  - The CSV schema is unchanged.
+- **Unchanged builds.** Non-stream senders and streams without idle segments compile to byte-identical sender code
+  (checked: .text and .data identical for plain, single-pattern benchmark, round-robin benchmark and validation, and
+  stream benchmark and validation builds).
+- **Use.** At a fixed (N, G), any time one router build takes over another is router-induced.
+  `fabric_exp/exp_burst.yaml` (2D) and `fabric_exp/vc1/exp_burst_vc1.yaml` (VC1 split) sweep N in {1, 2, 4, 8, 32}
+  × G in {500, 2000}, plus one G = 0 baseline (with no gap the order is the same for every N).
 
 ### One config per flow
 
@@ -591,6 +622,26 @@ The worker cap is fixed for these mixes. The flag still guards against cases thi
 - **Unchanged:** the YAML, the bandwidth-accounting fix, the slot-tag logic in the benchmark path, and the stream sanity YAML.
 - **Results:** for senders with one flow, both designs send the same packets in the same order, so P1–P3 numbers stay valid.
 - **Thrown away:** only `expand_streams` and the order program.
+
+## Harness fix on this branch: receiver start gate (2026-10-26)
+
+Not streams work, but carried on the same branch (worktree, uncommitted) and ported as
+`fabric_exp/streams/port/streams_rxready.patch`.
+
+- **Bug.** Receivers took no part in the syncs. A receiver that starts after its sender has sent more packets than
+  its buffer holds finds its first slots overwritten and waits forever. The global sync spans one mesh, and the host
+  barrier runs before launch, so across hosts nothing ordered a receiver's start before its senders'. Seen as the VC1
+  4 KiB all-to-all hangs (64 slots, 100 packets; RESULTS §98).
+- **Fix (sync tests).** Each receiver kernel, on entry, increments a receivers-ready count on its chip's sync core
+  (a local NoC atomic; compile-time arg SIGNAL_READY). `TestContext::launch_programs` launches, reads that one word
+  per chip until it reaches the chip's receiver count, joins the host barrier, then writes a release word to the local
+  sync cores. The sync kernel waits for the release before its first global sync. Both words sit in the sync core's
+  global sync region and are cleared before launch. Senders still start at the sync core's local sync, outside their
+  timed region. Every chip of a sync test runs one sync kernel (create_sync_kernel requires it), so every chip with
+  receivers has a place to count them.
+- **Unchanged.** Sender kernels (byte-identical) and their args; receiver kernels outside sync tests
+  (byte-identical); the memory map layout; tests without `sync` (no start alignment at all, as before); latency
+  tests; mock clusters (skipped). In sync tests the receiver gains the one entry increment.
 
 ## Decisions
 

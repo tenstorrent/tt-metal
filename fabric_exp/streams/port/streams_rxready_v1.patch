@@ -1,0 +1,232 @@
+--- a/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_test_sync.cpp
+@@ -48,10 +48,20 @@
+     MuxTerminationManager<HAS_MUX_CONNECTIONS, NUM_MUXES_TO_TERMINATE> mux_termination_manager(
+         local_args_idx, common_memory_map.mux_termination_sync_address);
+ 
++    // The host's start release word follows the mux termination args.
++    auto* start_release_ptr =
++        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_local_arg_val<uint32_t>(local_args_idx++));
++
+     // Clear test results area and mark as started
+     clear_test_results(sync_config->get_result_buffer_address(), sync_config->get_result_buffer_size());
+     write_test_status(sync_config->get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
+ 
++    // Senders start when this core's syncs release them, so hold the syncs until every receiver of the test is
++    // running: the host sets the release word once all of them, on every host, have started
++    // (TestContext::launch_programs). The global sync spans only this mesh, and a receiver on another host can start
++    // after its sender has sent more packets than its buffer holds.
++    noc_semaphore_wait_min(start_release_ptr, 1);
++
+     // Perform global sync (master sync core) for start of sync
+     uint8_t local_sync_iter = 0, global_sync_iter = 0;
+     for (uint8_t i = 0; i < NUM_START_GLOBAL_SYNC_ITERS; i++) {
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_memory_map.hpp
+@@ -278,9 +278,13 @@
+         current_addr += PACKET_HEADER_BUFFER_SIZE;
+         packet_headers = BaseMemoryRegion(packet_header_base, PACKET_HEADER_BUFFER_SIZE);
+ 
+-        // global sync region
++        // global sync region: the sync core's global sync counter, then the host's start release word
+         uint32_t global_sync_region_base = current_addr;
+         uint32_t global_sync_region_size = l1_alignment;
++        TT_FATAL(
++            global_sync_region_size >= 2 * sizeof(uint32_t),
++            "The global sync region ({} bytes) must hold the sync counter and the start release word",
++            global_sync_region_size);
+         current_addr += global_sync_region_size;
+         global_sync_region = BaseMemoryRegion(global_sync_region_base, global_sync_region_size);
+ 
+@@ -324,6 +328,9 @@
+ 
+     uint32_t get_global_sync_address() const { return global_sync_region.start; }
+     uint32_t get_local_sync_address() const { return local_sync_region.start; }
++    // Set by the host once every receiver of the test is running; the sync kernel waits for it before its first
++    // global sync (TestContext::launch_programs). Cleared with the global sync region before launch.
++    uint32_t get_sync_start_release_address() const { return global_sync_region.start + sizeof(uint32_t); }
+ 
+     uint32_t get_global_sync_region_size() const { return global_sync_region.size; }
+     uint32_t get_local_sync_region_size() const { return local_sync_region.size; }
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.cpp
+@@ -973,6 +973,9 @@
+         sync_connection_manager.generate_mux_termination_local_args_for_core(sync_core, device_info_provider_);
+     local_args.insert(local_args.end(), mux_termination_local_args.begin(), mux_termination_local_args.end());
+ 
++    // Start release word, set by the host once every receiver is running (TestContext::launch_programs)
++    local_args.push_back(sender_memory_map_->get_sync_start_release_address());
++
+     std::vector<std::pair<size_t, size_t>> addresses_and_size_to_clear;
+ 
+     // Only clear result buffer from host if progress monitoring is enabled
+@@ -981,6 +984,7 @@
+             {sender_memory_map_->get_result_buffer_address(), sender_memory_map_->get_result_buffer_size()});
+     }
+ 
++    // Also clears the start release word
+     addresses_and_size_to_clear.push_back(
+         {sender_memory_map_->get_global_sync_address(), sender_memory_map_->get_global_sync_region_size()});
+     addresses_and_size_to_clear.push_back(
+@@ -1248,6 +1252,12 @@
+             receiver_memory_map_->common.validate_per_config_capacity(static_cast<uint8_t>(receiver.configs_.size()));
+             addresses_and_size_to_clear.push_back(
+                 {receiver_memory_map_->get_result_buffer_address(), receiver_memory_map_->get_result_buffer_size()});
++        } else if (global_sync_) {
++            // The host waits for this status word to show the receiver started before it releases the sync cores
++            // (TestContext::launch_programs), so a status left from the previous test must not count.
++            addresses_and_size_to_clear.push_back(
++                {receiver_memory_map_->get_result_buffer_address() + TT_FABRIC_STATUS_INDEX * sizeof(uint32_t),
++                 sizeof(uint32_t)});
+         }
+ 
+         // Local args for traffic configs
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_device_setup.hpp
+@@ -373,6 +373,17 @@
+     const std::unordered_map<tt::tt_metal::CoreCoord, TestSender>& get_senders() const { return senders_; }
+     const std::unordered_map<tt::tt_metal::CoreCoord, TestReceiver>& get_receivers() const { return receivers_; }
+ 
++    // Cores running the sync kernel (one per device in a sync test, none otherwise)
++    std::vector<tt::tt_metal::CoreCoord> get_sync_kernel_cores() const {
++        std::vector<tt::tt_metal::CoreCoord> cores;
++        if (global_sync_) {
++            for (const auto& [core, _] : sync_workers_) {
++                cores.push_back(core);
++            }
++        }
++        return cores;
++    }
++
+     std::unordered_map<RoutingDirection, std::set<uint32_t>> get_used_fabric_connections() const {
+         return connection_manager_.get_used_fabric_links();
+     }
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.cpp
+@@ -5,6 +5,7 @@
+ #include <tt_stl/reflection.hpp>
+ #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp"
+ 
++#include <chrono>
+ #include <filesystem>
+ #include <thread>
+ 
+@@ -82,6 +83,94 @@
+         }
+     }
+ }
++
++// Receivers take no part in the device syncs, and a receiver that starts after its sender has sent more packets than
++// its buffer holds finds its first packets overwritten and waits for them forever. The global sync spans only one
++// mesh, so across meshes (and hosts) nothing orders a receiver's start before its senders'. In a sync test the sync
++// cores therefore wait for a release that the host gives only once every receiver, on every host, is running.
++void TestContext::launch_programs() {
++    fixture_->run_programs();
++
++    // Latency tests run no sync kernel, and a mock cluster runs no kernels. The test config and the cluster decide
++    // this, so every host takes the same branch and all of them reach the barrier.
++    if (!global_sync_ || performance_test_mode_ == PerformanceTestMode::LATENCY ||
++        tt::tt_metal::MetalContext::instance().get_cluster().is_mock_or_emulated()) {
++        return;
++    }
++    wait_for_local_receivers_to_start();
++    fixture_->barrier();
++    release_local_sync_cores();
++}
++
++// A receiver writes STARTED to its status word on entry (benchmark-mode receivers then finish at once), and the word
++// was cleared before launch, so any non-zero status means the receiver is running.
++void TestContext::wait_for_local_receivers_to_start() const {
++    constexpr auto timeout = std::chrono::seconds(30);
++    constexpr auto poll_interval = std::chrono::microseconds(100);
++
++    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
++    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
++    const uint32_t status_address =
++        receiver_memory_map_.get_result_buffer_address() + TT_FABRIC_STATUS_INDEX * sizeof(uint32_t);
++
++    struct PendingReceiver {
++        FabricNodeId node_id;
++        ChipId physical_chip_id;
++        CoreCoord logical_core;
++        CoreCoord virtual_core;
++    };
++    std::vector<PendingReceiver> pending;
++    for (const auto& [coord, test_device] : test_devices_) {
++        const auto& node_id = test_device.get_node_id();
++        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(node_id);
++        for (const auto& [core, _] : test_device.get_receivers()) {
++            pending.push_back({node_id, physical_chip_id, core, fixture_->get_virtual_core_from_logical_core(core)});
++        }
++    }
++
++    const auto deadline = std::chrono::steady_clock::now() + timeout;
++    while (true) {
++        std::erase_if(pending, [&](const PendingReceiver& receiver) {
++            const auto status = cluster.read_core<uint32_t>(
++                receiver.physical_chip_id, receiver.virtual_core, status_address, sizeof(uint32_t));
++            return status.at(0) != 0;
++        });
++        if (pending.empty()) {
++            return;
++        }
++        if (std::chrono::steady_clock::now() > deadline) {
++            // Release anyway: the test then runs as it did without the start gate, and the hang detection sees a
++            // receiver that never runs.
++            log_warning(
++                tt::LogTest,
++                "{} receiver(s) have not started after {}s (first: device {} core {}); releasing the senders anyway",
++                pending.size(),
++                timeout.count(),
++                pending.front().node_id,
++                pending.front().logical_core.str());
++            return;
++        }
++        std::this_thread::sleep_for(poll_interval);
++    }
++}
++
++void TestContext::release_local_sync_cores() const {
++    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
++    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
++    const uint32_t release_address = sender_memory_map_.get_sync_start_release_address();
++    const uint32_t release = 1;
++
++    for (const auto& [coord, test_device] : test_devices_) {
++        const auto physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(test_device.get_node_id());
++        for (const auto& core : test_device.get_sync_kernel_cores()) {
++            cluster.write_core(
++                &release,
++                sizeof(release),
++                tt_cxy_pair(physical_chip_id, fixture_->get_virtual_core_from_logical_core(core)),
++                release_address);
++        }
++    }
++}
+ 
+ void TestContext::wait_for_programs_with_progress() {
+     last_test_hung_ = false;
+--- a/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp
++++ b/tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_context.hpp
+@@ -135,7 +135,9 @@
+ 
+     void compile_programs();
+ 
+-    void launch_programs() { fixture_->run_programs(); }
++    // Starts the test's programs. In a sync test, the sync cores hold the senders until the host releases them, once
++    // every receiver of the test, on every host, is running.
++    void launch_programs();
+ 
+     void wait_for_programs() { fixture_->wait_for_programs(); }
+ 
+@@ -256,6 +258,10 @@
+ 
+     void validate_packet_sizes_for_policy(const TestConfig& config, uint32_t payload_chunk_size);
+ 
++    // Start gate of a sync test (launch_programs)
++    void wait_for_local_receivers_to_start() const;
++    void release_local_sync_cores() const;
++
+     // Track sync cores for each device
+     std::unordered_map<FabricNodeId, CoreCoord> device_global_sync_cores_;
+     std::unordered_map<FabricNodeId, std::vector<CoreCoord>> device_local_sync_cores_;

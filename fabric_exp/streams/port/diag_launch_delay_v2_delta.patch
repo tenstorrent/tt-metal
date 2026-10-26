@@ -1,0 +1,68 @@
+--- a/tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp
++++ b/tests/tt_metal/tt_fabric/test_infra/test_tt_fabric.cpp
+@@ -41,6 +41,48 @@
+         {{Topology::Torus, "XY"}, FabricConfig::FABRIC_2D_TORUS_XY},
+ };
+ 
++// DIAGNOSTIC ONLY (experiment tree, never to merge; see TT_FABRIC_TEST_DIAG_LAUNCH_DELAY_MS below). The process's
++// global launch rank: tt-run's TT_RUN_RANK (set per rank from the rank bindings), else Open MPI's
++// OMPI_COMM_WORLD_RANK, else the unsplit MPI world's rank.
++static void diag_launch_delay(unsigned long delay_ms) {
++    using tt::tt_metal::distributed::multihost::DistributedContext;
++    int rank = 0;
++    const char* source = "world context";
++    if (const char* env = std::getenv("TT_RUN_RANK")) {
++        rank = std::stoi(env);
++        source = "TT_RUN_RANK";
++    } else if (const char* env = std::getenv("OMPI_COMM_WORLD_RANK")) {
++        rank = std::stoi(env);
++        source = "OMPI_COMM_WORLD_RANK";
++    } else {
++        rank = *DistributedContext::get_world_context()->rank();
++    }
++    const auto& current = DistributedContext::get_current_world();
++    const auto world = DistributedContext::get_world_context();
++    if (rank != 0) {
++        log_info(
++            tt::LogTest,
++            "diag: rank {} ({}) delaying launch by {} ms; world rank {} of {}, current-world rank {} of {}",
++            rank,
++            source,
++            delay_ms,
++            *world->rank(),
++            *world->size(),
++            *current->rank(),
++            *current->size());
++        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
++    } else {
++        log_info(
++            tt::LogTest,
++            "diag: rank 0 ({}) launches without delay; world rank {} of {}, current-world rank {} of {}",
++            source,
++            *world->rank(),
++            *world->size(),
++            *current->rank(),
++            *current->size());
++    }
++}
++
+ int main(int argc, char** argv) {
+     std::vector<std::string> input_args(argv, argv + argc);
+ 
+@@ -309,12 +351,11 @@
+                 test_context.begin_phase_profile();
+ 
+                 // DIAGNOSTIC ONLY (experiment tree, never to merge): TT_FABRIC_TEST_DIAG_LAUNCH_DELAY_MS=<ms> makes
+-                // every rank but rank 0 launch that much later, so its receivers start well after rank 0's senders.
+-                // Without the start gate (streams_rxready.patch), an inter-mesh 4 KiB all-to-all then hangs.
++                // every process but the one with global launch rank 0 launch that much later, so its receivers start
++                // well after rank 0's senders. Without the start gate (streams_rxready.patch), an inter-mesh 4 KiB
++                // all-to-all then hangs.
+                 if (const char* diag_delay_ms = std::getenv("TT_FABRIC_TEST_DIAG_LAUNCH_DELAY_MS")) {
+-                    if (*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->rank() != 0) {
+-                        std::this_thread::sleep_for(std::chrono::milliseconds(std::stoul(diag_delay_ms)));
+-                    }
++                    diag_launch_delay(std::stoul(diag_delay_ms));
+                 }
+ 
+                 log_info(tt::LogTest, "Launching programs");

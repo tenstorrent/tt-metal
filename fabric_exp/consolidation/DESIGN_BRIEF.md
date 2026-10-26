@@ -1,9 +1,58 @@
 # v3 design brief (Phase 1, whole-ERISC designs)
 
-Read first: `PLAN.md`, `PHASE1.md`, `ROUTER_MAP.md`, the header and the LOST-CONTEXT / OPEN rows of `LEDGER.md`,
-`V3A_NOTES.md`, and RESULTS §82–§84 (`../RESULTS.md`, `grep -n '^## 8'`).
+Read first: `PLAN.md`, `PHASE1.md`, `ROUTER_MAP.md`, `LEDGER.md` (both parts: the "Look at these first" list, the
+LOST-CONTEXT / OPEN rows, and the Phase 1 part's "Applies to" / "In the lead?" columns, which say what one ERISC
+program learned that the other has not used yet), `V3A_NOTES.md`, and RESULTS §82–§98 (`../RESULTS.md`,
+`grep -n '^## [89]'`).
 
-## Starting point
+## Standing rules (user; collected 2026-10-26)
+These hold for every design and override anything older below.
+1. **ERISC roles.** Never put receive work on E0. One worker channel per router (mix flows on a link through forwarded
+   traffic). E0's worker connection/teardown check stays in every pass of the inner loop; only the rare handling it
+   triggers (open, close) may be out of line.
+2. **No compiler-fragile tricks.** No register pinning, no allocation or layout steering, no branch hints, no new
+   `optimize()` attributes or pragmas added for performance, no empty-asm barriers. The source must not assume how
+   GCC allocates, scalarizes, unrolls or peels. (One small, documented load-group primitive with an explicit contract
+   remains allowed, as below; it is not a barrier.)
+3. **No rules or gates that burden other contributors or the shared toolchain** (RESULTS §96): no codegen-identity
+   gates, no bans on ordinary constructs. The constant-multiply rule of §95 is withdrawn (§97); synth_mult is a
+   documented gotcha with a diagnosis method (`rtlfirst.py`).
+4. **NoC programming through the provided NoC APIs**, stateful `set_state` / `with_state` forms included, wrapped in
+   named helpers where a pattern repeats. Where the API lacks a call, propose an API addition instead of hand-rolling
+   register access. The same goes for the Ethernet TX-queue and stream-register helpers (`eth_txq_reg_read`,
+   `remote_update_ptr_val`, `increment_local_update_ptr_val`, `NOC_STREAM_READ_REG`).
+5. **Robust over peak.** Prefer designs whose performance is a smooth function of timing: no check whose success
+   depends on landing just before or just after an event, so that work happens at once or a whole pass later
+   (RESULTS §98, the early completion check). Holds and batching are bounded relative to the window and judged on
+   bursty and short senders and small windows too. Do not rely on specific configuration numbers: slot counts vary by
+   config. 1–2 cycles/packet is an accepted price for this.
+6. **How designs are judged.** Suite means across -O3, -O2 and -Os decide, not single rows. Static counts (instructions,
+   loads, the emulator's score) explain and target; hardware decides.
+
+## Structure every design keeps (learned in Phase 1)
+- Each ERISC's main loop is a function of its own that owns its state, and its once-per-round and rare work
+  (termination and router-command tests, heartbeat, context-switch handshake, pause, rare send types, intermesh exit)
+  lives in small functions of its own, so that the loop function holds only per-pass code. With that work inlined,
+  edits to cold or per-round code re-lay out the whole loop (RESULTS §94 v3r2, §97 2x2; E0_AUDIT §1).
+- Code size does not grow with the channel count the way inlining every channel does; VC1 E0 + E1 fits the 26,624 B
+  buffer at -O3.
+- Idle tests agree with the generic loop for every register value (exact predicates, RESULTS §93).
+- E0 sets up the sender side only; E1 owns the receiver-side init (contract, V3L_NOTES §7).
+
+## Checks every candidate passes offline (2026-10-26)
+- Every logged config builds at -O3 / -O2 / -Os (536 / 536 / 534; the 2 garbled logged VC1 commands fail for every
+  variant) and the 96 VC1 configs at -Os from their -O2 commands (`--set-opt Os`).
+- The ERISC a design does not touch is PT_LOAD-identical to its base on every config (`scratch_tools/v3l/loadcmp.py`).
+- Ordinary edits (`jitter_edits.py` coldmul, init, templates, os) leave the touched program's `run_main_loop` the same
+  or moved, never DIFF, on its hot configs at all three levels (`scratch_tools/v3t/fncmp.py`).
+- VC1 E0 + E1 within 26,624 B at -O3.
+- `coverage.py build --opt O3` matches v3tk's case results (only the inherited `*_nofuse` and `wh_vc1` failures).
+- Per-path counts against the base, with the method stated (E1: `rxscen.py` walker; E0: `emu.py`-based pass emulator).
+- On hardware, besides validation and the suites: VC1 34/34 at every level with the capture armed, the jitter band
+  (§96), the perturbation sweep (§98) for anything touching credit timing, and the burst benchmark for anything that
+  holds credits.
+
+## Starting point (2026-10-24; the lead is now `fabric_exp/variants/v3z`, RESULTS §98)
 `fabric_exp/variants/v3a/`: the faithful consolidation of s79mc as `fabric_erisc_router_v3.cpp` plus a few shared
 headers. Its code is instruction-for-instruction s79mc without the study's five branch hints, on all 440 logged
 configs at -O3, -O2 and -Os. Measured (as s79mc without hints, RESULTS §83), cycles/packet:
@@ -47,8 +96,9 @@ I (the coordinating session) run hardware; designers work offline only. A design
 2. performance at -O3 against v3a (suite means across 2D 4352, mixes, flushed-signal mixes, 1D);
 3. stability: the same at -O2 and -Os, and with the `hook` probe;
 4. code size, and VC1 at -O2/-O3.
-Static instruction or stack-access counts do not predict cycles (§82), so do not tune by counting instructions.
-Design by removing work and by structure; use disassembly only to confirm the design compiled the way the source says.
+Static instruction or stack-access counts do not predict cycles (§82): they explain and target, hardware decides
+(standing rule 6). Design by removing work and by structure; use disassembly to confirm the design compiled the way
+the source says.
 
 ## Tools (no device; never edit the live tree; no git state changes)
 - Build every logged config: `python3 fabric_exp/consolidation/offline_build.py build --variant <dir> --out <dir>

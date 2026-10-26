@@ -7,6 +7,7 @@
 # Flags 13129088 (v2 reads only bit 22; v3 none), fast dispatch, BW telemetry off, keepalive 1000.
 # KA_ENV= (set and empty) runs without the study's keepalive override (TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT), so the
 # router gets the host's setting (ETH_TXQ_SEQ_UPDATE_TIMEOUT, RESULTS §95); v1, v2 and v3a then keep the firmware's 8000.
+# EXTRA_ENV="VAR=value ..." adds study settings to every run (e.g. TT_FABRIC_EXP_WORKER_SLOTS=20, RESULTS §98).
 cd /home/aagarwal/tt-metal
 [ -n "${KA_ENV+x}" ] && [ -z "$KA_ENV" ] && unset TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT
 SAN=tests/tt_metal/tt_fabric/test_infra/test_yamls
@@ -51,7 +52,7 @@ stack_check() {  # cache marker-file
 }
 run() {  # label yaml cache opt
     env -u TT_METAL_SLOW_DISPATCH_MODE TT_FABRIC_KERNEL_VERSION=2 timeout 1200 fabric_exp/run_exp.sh "$1" "$2" \
-        TT_FABRIC_NO_BW_TELEMETRY=1 ${KA_ENV-TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000} TT_FABRIC_EXP_FLAGS=13129088 \
+        TT_FABRIC_NO_BW_TELEMETRY=1 ${KA_ENV-TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000} TT_FABRIC_EXP_FLAGS=13129088 $EXTRA_ENV \
         TT_METAL_CACHE=$3 TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 TT_METAL_FABRIC_OPT_LEVEL=$4 \
         | grep --line-buffered -v 'Running Test'
     local res=$(grep -oE 'Tests: .*executed, [0-9]+ failed' fabric_exp/results/$1.log 2>/dev/null)
@@ -65,6 +66,8 @@ suite_yaml() {
         4352) echo fabric_exp/exp_2d_4352.yaml ;; mix) echo fabric_exp/streams/p3_mixes.yaml ;;
         flushmix) echo fabric_exp/streams/flush_mix.yaml ;; flushmix4) echo fabric_exp/streams/flush_mix4.yaml ;;
         1d) echo fabric_exp/exp_1d_4352.yaml ;;
+        lat) echo fabric_exp/exp_latency.yaml ;;  # latency mode (RESULTS §19): results/<label>_latency.csv
+        burst) echo fabric_exp/exp_burst.yaml ;;  # bursty senders: stream idle segments (RESULTS §98)
     esac
 }
 M=$(mktemp)
