@@ -13,7 +13,7 @@ dummy slot of the non-local picks, which the reduce then skips (their weight is 
 at the dummy slot), a token's rows in flight together. Same rows, same programs: bit-identical output.
 
 Contract: ``table`` [R, H] bf16 ROW_MAJOR DRAM interleaved (one page per row; R - 1 = the dummy slot); ``pos`` [1, T*k]
-uint32 ROW_MAJOR (one page); ``weights`` [1, 1, T, k, 1] bf16 ROW_MAJOR with ``w == 0`` exactly where
+uint32 ROW_MAJOR (one page) or the [1, 1, T, k] fp32 TILE slot table (G53F-0193); ``weights`` [1, 1, T, k, 1] bf16 ROW_MAJOR with ``w == 0`` exactly where
 ``pos == R - 1`` (and pick 0 any value); T % 32 == 0, H % 32 == 0, H <= 8192. Returns [1, 1, T, H] bf16 TILE DRAM.
 """
 
@@ -46,8 +46,16 @@ class GatherCombineReduce:
         k = int(weights.shape[-2])
         T = int(weights.shape[-3])
         assert table.dtype == ttnn.bfloat16 and table.layout == ttnn.ROW_MAJOR_LAYOUT, (table.dtype, table.layout)
-        assert pos.dtype == ttnn.uint32 and pos.layout == ttnn.ROW_MAJOR_LAYOUT, (pos.dtype, pos.layout)
-        assert int(pos.shape[-1]) == T * k, (pos.shape, T, k)
+        # pos: the [1, T*k] uint32 ROW_MAJOR slot copy, or (G53F-0193) the [1,1,T,k] fp32 TILE slot table itself
+        pos_tile = pos.layout == ttnn.TILE_LAYOUT
+        if pos_tile:
+            assert pos.dtype == ttnn.float32 and int(pos.shape[-1]) == k and int(pos.shape[-2]) == T, (
+                pos.dtype,
+                pos.shape,
+            )
+        else:
+            assert pos.dtype == ttnn.uint32 and pos.layout == ttnn.ROW_MAJOR_LAYOUT, (pos.dtype, pos.layout)
+            assert int(pos.shape[-1]) == T * k, (pos.shape, T, k)
         assert weights.dtype == ttnn.bfloat16 and weights.layout == ttnn.ROW_MAJOR_LAYOUT
         assert T % TOKENS_PER_CHUNK == 0 and H % 32 == 0, (T, H)
         emb_dim_cb_tiles = -(-H // 1024)
@@ -75,14 +83,15 @@ class GatherCombineReduce:
             )
 
         tile = BF16_TILE_BYTES
+        pos_cb = pos_page if pos_tile else TOKENS_PER_CHUNK * k * 4 + 64
         cbs = [
             cb(self.CB_IN, 2 * k * emb_dim_cb_tiles * tile, tile, ttnn.bfloat16),  # two tokens' k rows in flight
             cb(self.CB_W, tile, tile, ttnn.bfloat16),
-            cb(self.CB_POS, TOKENS_PER_CHUNK * k * 4 + 64, TOKENS_PER_CHUNK * k * 4 + 64, ttnn.uint32),
+            cb(self.CB_POS, pos_cb, pos_cb, ttnn.uint32),
             cb(self.CB_OUT, TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile, tile, ttnn.bfloat16),
             cb(self.CB_RM, TOKENS_PER_CHUNK * emb_dim_cb_tiles * tile, tile, ttnn.bfloat16),
         ]
-        reader_ct = [k, emb_dim_cb_tiles, emb_dim_bytes, R - 1, self.CB_POS, pos_page, tile]
+        reader_ct = [k, emb_dim_cb_tiles, emb_dim_bytes, R - 1, self.CB_POS, pos_page, tile, int(pos_tile)]
         reader_ct += ttnn.TensorAccessorArgs(table).get_compile_time_args()
         reader_ct += ttnn.TensorAccessorArgs(pos).get_compile_time_args()
         compute_ct = [k, emb_dim_cb_tiles, 0, 0]  # no dispatch table: the weight-based skip

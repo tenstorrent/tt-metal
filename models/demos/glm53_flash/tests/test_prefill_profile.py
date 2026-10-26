@@ -159,6 +159,10 @@ def test_prefill_profile(mesh_device):
             moe_mod.REGIONS_GATHER = spec[6]
         if len(spec) > 8 and spec[8]:  # regions combine (reduce | fused, G53F-0190)
             moe_mod.REGIONS_COMBINE = spec[8]
+        if len(spec) > 9 and spec[9]:  # expert output -> rows (two | direct, G53F-0192)
+            moe_mod.REGIONS_UNTILIZE = spec[9]
+        if len(spec) > 10 and spec[10]:  # region buffer fill (embedding | custom, G53F-0193)
+            moe_mod.REGIONS_SCATTER = spec[10]
         if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast | trace, G53F-0187 / 0188; tt/mhc.py)
             from models.demos.glm53_flash.tt import mhc as mhc_mod
 
@@ -228,6 +232,8 @@ def test_prefill_profile(mesh_device):
             warm_chunk_s=round(sum(r["seconds"] for r in warm) / len(warm), 4),
             **_dram_view(mesh_device),
             regions=dict(moe_mod.REGIONS_STATS),  # what the regions calls ran (buffer rows, combine path)
+            untilize=moe_mod.REGIONS_UNTILIZE,
+            scatter=moe_mod.REGIONS_SCATTER,
         )
         moe_mod.REGIONS_STATS.clear()
         if instr:

@@ -121,12 +121,18 @@ REGIONS_GATHER = os.environ.get("GLM53_REGIONS_GATHER", "embedding")
 # regions path: the gather back + weighted sum over the picks (tt-blaze G53F-0190): "reduce" = ttnn.embedding of every
 # pick's output row (T*k rows, ~3/4 of them the dummy slot) + post_combine_reduce; "fused" = custom_ops/
 # gather_combine_reduce, post_combine_reduce's own compute + writer kernels behind a reader that fetches the table rows
-# directly and only those the reduce uses (bit-identical). Read at call time.
-REGIONS_COMBINE = os.environ.get("GLM53_REGIONS_COMBINE", "reduce")
+# directly and only those the reduce uses (bit-identical; default since 2026-10-26: the 256k prefill chunk -19.6 %, logits
+# equal). Read at call time.
+REGIONS_COMBINE = os.environ.get("GLM53_REGIONS_COMBINE", "fused")
 # regions path: the expert output (bf8 TILE [max_buf, H]) -> the gather table (bf16 rows) (tt-blaze G53F-0192): "two" =
-# ttnn.typecast to bf16 TILE, then to_layout(ROW_MAJOR); "direct" = one ttnn.untilize (bf8 in, bf16 rows out). Read at
-# call time.
-REGIONS_UNTILIZE = os.environ.get("GLM53_REGIONS_UNTILIZE", "two")
+# ttnn.typecast to bf16 TILE, then to_layout(ROW_MAJOR); "direct" = one ttnn.untilize (bf8 in, bf16 rows out; default since
+# 2026-10-26, bitwise on 32 chips, 2.2x per call). Read at call time.
+REGIONS_UNTILIZE = os.environ.get("GLM53_REGIONS_UNTILIZE", "direct")
+# regions path: how the region buffer is filled (tt-blaze G53F-0193): "embedding" = slots to a uint32 row copy +
+# ttnn.scatter of a slot -> token map + ttnn.embedding of every max_buf row; "custom" = custom_ops/region_scatter, only
+# the local picks' rows written, slots read from their fp32 TILE layout (with REGIONS_COMBINE=fused the uint32 copy is
+# never made). Bit-identical for every row the output depends on. Read at call time.
+REGIONS_SCATTER = os.environ.get("GLM53_REGIONS_SCATTER", "embedding")
 # what the regions calls actually ran (host-side ints, no device sync): the region buffer rows and the combine path,
 # so an A/B can show the knob took effect (G53F-0183: a knob echoed in a summary is not its effect). Reset by the reader.
 REGIONS_STATS: dict = {}
@@ -669,9 +675,8 @@ class TtRoutedExperts(LightweightModule):
         self.prefill_experts = prefill_experts_mode() if not (dense or stream) else "blocks"
         self._dispatch = None
         self._row_gather = None  # custom_ops/row_gather, built on first use (GLM53_REGIONS_GATHER=row)
-        self._gather_combine = (
-            None  # custom_ops/gather_combine_reduce, built on first use (GLM53_REGIONS_COMBINE=fused)
-        )
+        self._gather_combine = None  # custom_ops/gather_combine_reduce (GLM53_REGIONS_COMBINE=fused), on first use
+        self._region_scatter = None  # custom_ops/region_scatter (GLM53_REGIONS_SCATTER=custom), on first use
         if self.prefill_experts in ("dispatch", "regions"):
             self._build_dispatch_path(fabric=self.prefill_experts == "dispatch")
         # column c's expert selector: the [E, E_local] block of the identity for its experts
@@ -1179,13 +1184,22 @@ class TtRoutedExperts(LightweightModule):
         ttnn.deallocate(pos_te)
         ttnn.deallocate(onehot)
         ttnn.deallocate(idx_u32)
-        pos_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k])
-        ttnn.deallocate(pos_tk)
-        # slot -> token (the picks' slots are distinct; the non-local picks all land on the dummy slot)
-        slot_src = ttnn.scatter(self._zero_u32_row(max_buf), -1, pos_rm, self._iota_rows(T, k))  # [1, max_buf]
         x_rm = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), [T, H])
-        buf = self._gather_rows(slot_src, x_rm)  # [1, max_buf, H] bf16: the regions
-        ttnn.deallocate(slot_src)
+        if REGIONS_SCATTER == "custom":
+            # G53F-0193: write only the local picks' rows, slots read from pos_tk's fp32 TILE layout (no uint32 copy,
+            # no scatter, no gather of every max_buf row)
+            if self._region_scatter is None:
+                from models.demos.glm53_flash.custom_ops.region_scatter.op import RegionScatter
+
+                self._region_scatter = RegionScatter(self.device)
+            buf = self._region_scatter(x_rm, pos_tk, max_buf)  # [max_buf, H] bf16: the regions (other rows unwritten)
+            pos_rm = None
+        else:
+            pos_rm = ttnn.reshape(ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k])
+            # slot -> token (the picks' slots are distinct; the non-local picks all land on the dummy slot)
+            slot_src = ttnn.scatter(self._zero_u32_row(max_buf), -1, pos_rm, self._iota_rows(T, k))  # [1, max_buf]
+            buf = self._gather_rows(slot_src, x_rm)  # [1, max_buf, H] bf16: the regions
+            ttnn.deallocate(slot_src)
         ttnn.deallocate(x_rm)
         counts = ttnn.reshape(ttnn.to_layout(ttnn.typecast(counts_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
         offsets = ttnn.reshape(ttnn.to_layout(ttnn.typecast(offsets_f, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, E])
@@ -1220,23 +1234,28 @@ class TtRoutedExperts(LightweightModule):
         w_rm = ttnn.unsqueeze(ttnn.to_layout(w16, ttnn.ROW_MAJOR_LAYOUT), -1)  # [1,1,T,k,1]
         ttnn.deallocate(w_loc)
         ttnn.deallocate(w16)
-        _regions_stat(max_buf, REGIONS_COMBINE)
+        _regions_stat(max_buf, REGIONS_COMBINE + ("+scatter" if pos_rm is None else ""))
         if REGIONS_COMBINE == "fused":  # G53F-0190: the same reduce reading table[pos] directly, local rows only
             if self._gather_combine is None:
                 from models.demos.glm53_flash.custom_ops.gather_combine_reduce.op import GatherCombineReduce
 
                 self._gather_combine = GatherCombineReduce(self.device)
-            y = self._gather_combine(y_rm, pos_rm, w_rm)  # [1,1,T,H] TILE, bit-identical to the two ops below
+            # the uint32 slot copy, or (custom scatter) the fp32 TILE slot table itself
+            y = self._gather_combine(y_rm, pos_tk if pos_rm is None else pos_rm, w_rm)  # [1,1,T,H] TILE, bit-identical
             comb = None
         else:
+            if pos_rm is None:  # the reduce path needs the uint32 slot copy
+                pos_rm = ttnn.reshape(
+                    ttnn.to_layout(ttnn.typecast(pos_tk, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT), [1, T * k]
+                )
             comb = self._gather_rows(pos_rm, y_rm)  # [1, T*k, H]: every pick's output row
             comb5 = ttnn.reshape(comb, [1, 1, T, k, H])
             y = ttnn.experimental.deepseek_prefill.post_combine_reduce(
                 comb5, w_rm, expert_dim=3, output_memory_config=ttnn.DRAM_MEMORY_CONFIG
             )  # [1,1,T,H] TILE: sum over the picks, zero weights skipped
         ttnn.deallocate(y_rm)
-        ttnn.deallocate(pos_rm)
-        for t in (comb, w_rm, counts, offsets):
+        ttnn.deallocate(pos_tk)
+        for t in (comb, pos_rm, w_rm, counts, offsets):
             if t is not None:
                 ttnn.deallocate(t)
         if y.dtype != self.activation_dtype:

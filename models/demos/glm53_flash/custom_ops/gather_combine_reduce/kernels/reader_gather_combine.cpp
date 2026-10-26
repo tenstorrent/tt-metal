@@ -26,10 +26,32 @@ constexpr uint32_t dummy_slot = get_compile_time_arg_val(3);
 constexpr uint32_t cb_pos_id = get_compile_time_arg_val(4);
 constexpr uint32_t pos_page_bytes = get_compile_time_arg_val(5);
 constexpr uint32_t tile_bytes = get_compile_time_arg_val(6);
-constexpr auto table_args = TensorAccessorArgs<7>();
+// POS_TILE (G53F-0193): pos is the [1,1,T,k] fp32 TILE slot table itself (one 32x32 tile per 32-token chunk), not its
+// uint32 ROW_MAJOR copy -- the typecast + untilize that made the copy are skipped
+constexpr bool POS_TILE = get_compile_time_arg_val(7) != 0;
+constexpr auto table_args = TensorAccessorArgs<8>();
 constexpr auto pos_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
-constexpr uint32_t chunk_pos_bytes = TOKENS_PER_CHUNK * num_experts * 4;
+constexpr uint32_t chunk_pos_bytes = POS_TILE ? pos_page_bytes : TOKENS_PER_CHUNK * num_experts * 4;
+
+// the fp32 bit pattern of a non-negative integer value below 2^24 -> that integer (exact; no FPU on the data movers)
+FORCE_INLINE uint32_t f32_to_u32(uint32_t bits) {
+    const uint32_t e = (bits >> 23) & 0xFFu;
+    if (e < 127u) {
+        return 0u;
+    }
+    const uint32_t m = (bits & 0x7FFFFFu) | 0x800000u;
+    return e >= 150u ? (m << (e - 150u)) : (m >> (150u - e));
+}
+
+FORCE_INLINE uint32_t slot_of(const CoreLocalMem<volatile uint32_t>& pos, uint32_t t, uint32_t j) {
+    if constexpr (POS_TILE) {
+        const uint32_t face = t < 16u ? 0u : 2u;  // rows 0-15 in faces 0/1, 16-31 in faces 2/3; j < 16: left face
+        return f32_to_u32(pos[face * 256u + (t & 15u) * 16u + j]);
+    } else {
+        return pos[t * num_experts + j];
+    }
+}
 
 void kernel_main() {
     const uint32_t table_addr = get_arg_val<uint32_t>(0);
@@ -48,17 +70,26 @@ void kernel_main() {
 
     for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
         // the chunk's 32 x k slots: one contiguous read (token_start is a multiple of 32: 1 KB aligned at k = 8)
-        noc.async_read(
-            s_pos,
-            CoreLocalMem<uint32_t>(pos_base),
-            chunk_pos_bytes,
-            {.page_id = 0, .offset_bytes = token_start_idx * num_experts * 4u},
-            {});
+        if constexpr (POS_TILE) {
+            noc.async_read(
+                s_pos,
+                CoreLocalMem<uint32_t>(pos_base),
+                chunk_pos_bytes,
+                {.page_id = token_start_idx / TOKENS_PER_CHUNK},
+                {});
+        } else {
+            noc.async_read(
+                s_pos,
+                CoreLocalMem<uint32_t>(pos_base),
+                chunk_pos_bytes,
+                {.page_id = 0, .offset_bytes = token_start_idx * num_experts * 4u},
+                {});
+        }
         noc.async_read_barrier();
         for (uint32_t t = 0; t < TOKENS_PER_CHUNK; ++t) {
             cb_in.reserve_back(num_experts * emb_dim_cb_tiles);
             for (uint32_t j = 0; j < num_experts; ++j) {
-                const uint32_t slot = pos[t * num_experts + j];
+                const uint32_t slot = slot_of(pos, t, j);
                 if (j == 0 || slot != dummy_slot) {
                     noc.async_read(
                         s_table,
