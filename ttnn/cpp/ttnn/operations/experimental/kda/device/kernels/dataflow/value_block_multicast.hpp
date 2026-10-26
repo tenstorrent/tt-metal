@@ -16,11 +16,10 @@
 namespace kda {
 
 // Inputs that do not depend on the value columns are identical for every value block of a head. With
-// mcast_shared, value block 0 reads them from DRAM once and multicasts them into its siblings' buffers.
-// The slot addresses match on every core because every block makes the same reserve/push sequence on
-// identically specified buffers. Handshake: receivers reserve their slots, reset valid and raise ready; the
-// sender stages its reads, waits for every receiver, multicasts the data, flushes, then multicasts the valid
-// flag before publishing its own copy.
+// mcast_shared, value block 0 reads them from DRAM once and multicasts them into its siblings' buffers. The slot
+// addresses match on every core because every block makes the same reserve/push sequence on identically specified
+// buffers. Two handshakes: multicast_shared / receive_shared (one round trip per payload) and SharedInputStream
+// (pipelined).
 template <typename DFB>
 struct SharedInput {
     DFB* buffer;
@@ -37,14 +36,20 @@ FORCE_INLINE uint32_t
 stage_contiguous_tiles(const Accessor& accessor, DFB& buffer, Noc& noc, uint32_t base, uint32_t count) {
     buffer.reserve_back(count);
     const uint32_t entry_size = buffer.get_entry_size();
+    // A tile is one NoC packet, so each read takes the one-packet issue.
+    ASSERT(entry_size <= NOC_MAX_BURST_SIZE);
     uint32_t tile = 0;
+    // Each page carries its address from the iteration, which steps it from the previous page without a lookup.
     for (const auto& page : accessor.pages(base, base + count)) {
-        noc.async_read(accessor, buffer, entry_size, {.page_id = page.page_id()}, {.offset_bytes = tile * entry_size});
+        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            page, buffer, entry_size, {}, {.offset_bytes = tile * entry_size});
         ++tile;
     }
     return buffer.get_write_ptr();
 }
 
+// Receivers reserve their slots, reset valid and raise ready; the sender stages its reads, waits for every receiver,
+// multicasts the data, flushes, then multicasts the valid flag before publishing its own copy.
 template <uint32_t N, typename ReadySem, typename ValidSem, typename DFB>
 FORCE_INLINE void multicast_shared(
     Noc& noc,
@@ -78,6 +83,118 @@ FORCE_INLINE void multicast_shared(
         input.buffer->push_back(input.tiles);
     }
 }
+
+// One payload per chunk, read by the sender and multicast to its siblings, pipelined as deep as the buffers. ready and
+// valid count monotonically from dispatch's zero: a receiver reserves payload p's slots and raises ready once; the
+// sender multicasts p after ready >= receivers * (p + 1), flushes, then multicasts valid = p + 1. stage(p + 1) runs
+// inside publish(p) on both sides, so the next reads (sender) or the next ready (receiver) are issued before anyone
+// waits. Slot addresses match on every block (the same reserve/push sequence); a sender reuses a slot only after a
+// later payload's reserve. Payloads alternate between two descriptor sets.
+template <uint32_t N, typename DFB, typename ReadySem, typename ValidSem>
+class SharedInputStream {
+public:
+    SharedInputStream(
+        Noc& noc,
+        ReadySem& ready,
+        ValidSem& valid,
+        bool sender,
+        uint32_t x0,
+        uint32_t y0,
+        uint32_t x1,
+        uint32_t y1,
+        uint32_t receivers) :
+        noc_(noc),
+        ready_(ready),
+        valid_(valid),
+        sender_(sender),
+        x0_(x0),
+        y0_(y0),
+        x1_(x1),
+        y1_(y1),
+        receivers_(receivers) {}
+
+    // for_each_input(input) calls input(accessor, buffer, first_page, tiles) for each of the payload's N buffers, in
+    // the order compute consumes them.
+    template <typename ForEachInput>
+    FORCE_INLINE void stage(uint32_t payload, ForEachInput&& for_each_input) {
+        auto& inputs = inputs_[payload & 1];
+        uint32_t count = 0;
+        for_each_input([&](const auto& accessor, DFB& buffer, uint32_t first_page, uint32_t tiles) {
+            inputs[count++] = {
+                &buffer, tiles, sender_ ? stage_contiguous_tiles(accessor, buffer, noc_, first_page, tiles) : 0};
+        });
+        if (!sender_) {
+            // A reservation does not advance the write pointer, so a payload staged behind unpublished ones reserves
+            // their slots too.
+            ++staged_;
+            for (auto& input : inputs) {
+                input.buffer->reserve_back(staged_ * input.tiles);
+            }
+            ready_.up(noc_, x0_, y0_, 1);
+        }
+    }
+
+    template <typename StageNext>
+    FORCE_INLINE void publish(uint32_t payload, StageNext&& stage_next) {
+        auto& inputs = inputs_[payload & 1];
+        if (sender_) {
+            noc_.async_read_barrier();
+            for (auto& input : inputs) {
+                input.buffer->push_back(input.tiles);
+            }
+            stage_next();
+            ready_.wait_min(receivers_ * (payload + 1));
+            MulticastEndpoint destination;
+            for (uint32_t index = 0; index < N; ++index) {
+                auto& input = inputs[index];
+                noc_.async_write_multicast(
+                    CoreLocalMem<uint32_t>(input.slot),
+                    destination,
+                    input.tiles * input.buffer->get_entry_size(),
+                    receivers_,
+                    {},
+                    {.noc_x_start = x0_, .noc_y_start = y0_, .noc_x_end = x1_, .noc_y_end = y1_, .addr = input.slot},
+                    /*linked=*/index + 1 < N);
+            }
+            // The flag multicast issues from a different command buffer than the data, so only this flush orders the
+            // data before the flag. It also retires the previous flag's multicast, which sourced the word set here.
+            noc_.async_writes_flushed();
+            valid_.set(payload + 1);
+            valid_.set_multicast(noc_, x0_, y0_, x1_, y1_, receivers_);
+        } else {
+            stage_next();
+            valid_.wait_min(payload + 1);
+            for (auto& input : inputs) {
+                input.buffer->push_back(input.tiles);
+            }
+            --staged_;
+        }
+    }
+
+    // Retire the multicast writes or the ready increments before exit; dispatch re-initializes both semaphores on
+    // every launch.
+    FORCE_INLINE void finish() {
+        if (sender_) {
+            noc_.async_write_barrier();
+        } else {
+            noc_.async_atomic_barrier();
+        }
+    }
+
+private:
+    Noc& noc_;
+    ReadySem& ready_;
+    ValidSem& valid_;
+    bool sender_;
+    uint32_t x0_;
+    uint32_t y0_;
+    uint32_t x1_;
+    uint32_t y1_;
+    uint32_t receivers_;
+    // A receiver's payloads staged and not yet published.
+    uint32_t staged_ = 0;
+    SharedInput<DFB> inputs_[2][N];
+};
 
 template <uint32_t N, typename ReadySem, typename ValidSem, typename DFB>
 FORCE_INLINE void receive_shared(

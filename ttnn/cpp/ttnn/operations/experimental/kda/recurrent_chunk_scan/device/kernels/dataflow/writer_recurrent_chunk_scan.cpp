@@ -42,7 +42,8 @@ FORCE_INLINE void write_value_slice(
                     {.page_id = destination + value_tile});
             }
         }
-        noc.async_write_barrier();
+        // The packet may be reused once its data has left; the writes complete by the writer's final barrier.
+        noc.async_writes_flushed();
         if constexpr (Consume) {
             buffer.pop_front(packet_tiles);
         }
@@ -146,7 +147,7 @@ FORCE_INLINE void write_summary(
                     {.offset_bytes = (Vt + t) * entry_size},
                     {.page_id = page + t});
             }
-            noc.async_write_barrier();
+            noc.async_writes_flushed();
             chunk_pair.pop_front(2 * Vt);
             if (straddles && chunk + 1 == reset_chunk) {
                 write_value_slice<Kt, Vt, row_stride, 1>(head_a_accessor, split_head_a, noc, row_base, a_column);
@@ -188,6 +189,8 @@ FORCE_INLINE void write_summary(
         write_value_slice<Kt, Vt, VtFull, Kt>(
             TensorAccessor(tensor::final_b), final_b, noc, state_row, value_block * Vt);
     }
+    // Every output write was only flushed from L1 as it was issued; complete them all once, at the end.
+    noc.async_write_barrier();
 }
 
 // The peers' segment and receiver count for the writer's multicast of the state update's inputs.
@@ -262,11 +265,9 @@ FORCE_INLINE void write_recurrent(
             }
             write_output(chunk);
         }
-        // Retire the multicast writes and ready increments before exit; dispatch re-initializes both semaphores
-        // on every launch.
-        if (sender) {
-            noc.async_write_barrier();
-        } else {
+        // Retire the ready increments before exit (the sender's multicasts complete with the final write barrier);
+        // dispatch re-initializes both semaphores on every launch.
+        if (!sender) {
             noc.async_atomic_barrier();
         }
     } else {
@@ -281,6 +282,8 @@ FORCE_INLINE void write_recurrent(
             final_state_accessor, final_state, noc, final_head * Kt * VtFull, value_block * Vt);
     }
     write_value_slice<Kt, Vt, VtFull, Kt>(final_state_accessor, final_state, noc, head * Kt * VtFull, value_block * Vt);
+    // Every output write was only flushed from L1 as it was issued; complete them all once, at the end.
+    noc.async_write_barrier();
 }
 
 template <
