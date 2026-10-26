@@ -14,6 +14,15 @@
 // core waits for the pre tile (SEM_PRE) and the rsqrt tile (SEM_RS2) -- fanned out by the coordinator to the
 // leaders and by each leader (this kernel) to its column. Semaphores are reset by their waiter, so the program
 // replays under trace.
+//
+// MHC_MAX_EXTRA > 0 (compile define; the "extras" work split of op.py): runtime args [count_proj, n_extra, i0, c0,
+// i1, c1, ...] after mask_addr: fn tiles are loaded for the first count_proj columns only (a two-column core projects
+// its first column; its second is projected elsewhere), and the n_extra extra stream tiles (i, c) -- x into CB_X
+// after the columns' tiles, fn into CB_FN after the projected columns' tiles.
+#ifndef MHC_MAX_EXTRA
+#define MHC_MAX_EXTRA 0
+#endif
+
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t fn_addr = get_arg_val<uint32_t>(1);
@@ -26,6 +35,16 @@ void kernel_main() {
     const bool leader = get_arg_val<uint32_t>(6) != 0;
     const bool coordinator = get_arg_val<uint32_t>(7) != 0;
     const uint32_t my_noc_x = get_arg_val<uint32_t>(8);
+    constexpr uint32_t MAX_EXTRA = MHC_MAX_EXTRA;
+    constexpr uint32_t EXTRA_BASE = 10;  // [count_proj, n_extra, i0, c0, ...]
+    uint32_t count_proj = count, n_extra = 0;
+    if constexpr (MAX_EXTRA > 0) {
+        count_proj = get_arg_val<uint32_t>(EXTRA_BASE);
+        n_extra = get_arg_val<uint32_t>(EXTRA_BASE + 1);
+        if (n_extra > MAX_EXTRA) {
+            n_extra = MAX_EXTRA;
+        }
+    }
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_fn = get_compile_time_arg_val(1);
@@ -76,13 +95,16 @@ void kernel_main() {
 
     // ---- inputs
     if (worker) {
-        cbx.reserve_back(n * count);
-        cbfn.reserve_back(n * count * frep);
+        cbx.reserve_back(n * count + n_extra);
+        cbfn.reserve_back((n * count_proj + n_extra) * frep);
         cbw.reserve_back(count);
         for (uint32_t col = 0; col < count; ++col) {
             for (uint32_t i = 0; i < n; ++i) {
                 const uint32_t t = col * n + i;
                 noc.async_read(s_x, cbx, x_page, {.page_id = i * Ct + c0 + col}, {.offset_bytes = t * x_page});
+                if (col >= count_proj) {
+                    continue;  // a delegated column: its stream tiles stay for the mix, its fn tiles are not needed
+                }
                 for (uint32_t q = 0; q < frep; ++q) {
                     noc.async_read(
                         s_fn,
@@ -94,6 +116,23 @@ void kernel_main() {
             }
             noc.async_read(s_w, cbw, w_page, {.page_id = c0 + col}, {.offset_bytes = col * w_page});
         }
+        if constexpr (MAX_EXTRA > 0) {
+            for (uint32_t e = 0; e < n_extra; ++e) {
+                const uint32_t ei = get_arg_val<uint32_t>(EXTRA_BASE + 2 + 2 * e);  // stream
+                const uint32_t ec = get_arg_val<uint32_t>(EXTRA_BASE + 3 + 2 * e);  // column tile
+                const uint32_t tx = n * count + e;
+                const uint32_t tf = n * count_proj + e;
+                noc.async_read(s_x, cbx, x_page, {.page_id = ei * Ct + ec}, {.offset_bytes = tx * x_page});
+                for (uint32_t q = 0; q < frep; ++q) {
+                    noc.async_read(
+                        s_fn,
+                        cbfn,
+                        fn_page,
+                        {.page_id = (ei * Ct + ec) * frep + q},
+                        {.offset_bytes = (tf * frep + q) * fn_page});
+                }
+            }
+        }
         if constexpr (frep > 1) {
             CircularBuffer cbm(cb_mask);
             cbm.reserve_back(1);
@@ -102,8 +141,8 @@ void kernel_main() {
             cbm.push_back(1);
         }
         noc.async_read_barrier();
-        cbx.push_back(n * count);
-        cbfn.push_back(n * count * frep);
+        cbx.push_back(n * count + n_extra);
+        cbfn.push_back((n * count_proj + n_extra) * frep);
         cbw.push_back(count);
     }
     cbzero.reserve_back(1);

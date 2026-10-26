@@ -82,3 +82,13 @@ writes `h * rs2 * w` as bf16. Compile-time args: the CB ids in the order of `Mhc
 the Sinkhorn iterations, eps, eps*nC, 1/C, rms_eps (compute); the reader / writer additionally carry the NoC
 coordinate tables of the grid rows / columns and the TensorAccessorArgs. Runtime args: buffer addresses, worker /
 leader / coordinator flags, the column tile, the NoC coordinates of the leader and the coordinator, the slots.
+
+## Roofline knobs (2026-10-26, `_agents/mhc_roofline/STATUS.md`; both default off = the program above)
+
+| constructor | env (`tt/mhc.py`) | kernel define | what |
+|---|---|---|---|
+| `sinkhorn="fused"` | `GLM53_MHC_PRE_SINKHORN=fused` | `MHC_SINKHORN_FUSED=1` | the Sinkhorn as one dest pass per normalisation (`normalize_fused`: FPU matmul into dest, +eps, recip, m copied in, SFPU multiply, one pack) and one pass per coefficient head: 2*iters + 3 passes instead of ~130 LLK ops with a CB round trip each. The products are fp32 SFPU multiplies where the LLK sequence used 19-bit FPU operands: a bounded rounding change (logits gate before it becomes the default) |
+| `split="extras"` | `GLM53_MHC_PRE_SPLIT=extras` | `MHC_MAX_EXTRA=2` | a two-column core projects only its first column; the second column's n stream tiles are projected as single "extra" tiles on single-column, non-leader cores (`plan_work_extras`, `delegate_units`): 12x10 critical path 10 -> 7 cost units; 13x10 / 8x8 unchanged. The h / norm phases keep both columns on the owner; runtime args `[count_proj, n_extra, i, c, ...]` after the reader's base args, `[count_proj, n_extra]` after the compute kernel's; the writer is untouched. FPU projection only |
+
+Host tests: `tests/test_mhc_roofline_host.py` (planner coverage on 6 grids, the arg tails vs these sources, the fused
+pass model bit-identical to the LLK sequence); device A/B: `tests/test_mhc_roofline_mesh.py`.

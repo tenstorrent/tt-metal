@@ -11,6 +11,14 @@
 // (page r each) into CB_RAW (the compute kernel builds the x8 tiles); otherwise the n comb x8 tiles (pages r*n + j) and
 // the post x8 tile (page r) into CB_COEF. Per position p = r * Ct + c: the n stream tiles x[r, i, c] (page (r*n + i)*Ct
 // + c) into CB_X and y[r, c] (page r*Ct + c, fp32 or bf16) into CB_Y.
+//
+// MHC_MAX_EXTRA > 0 (compile define; the "extras" work split of op.py): after its positions a core serves up to
+// MHC_MAX_EXTRA (position, output stream) units of positions owned by other cores (runtime args [n_extra, p0, j0, p1,
+// j1, ...] after `count`); the reader fetches the same inputs as for a full position (j is the compute / writer side).
+#ifndef MHC_MAX_EXTRA
+#define MHC_MAX_EXTRA 0
+#endif
+
 void kernel_main() {
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t y_addr = get_arg_val<uint32_t>(1);
@@ -18,6 +26,8 @@ void kernel_main() {
     const uint32_t comb_addr = get_arg_val<uint32_t>(3);
     const uint32_t start_pos = get_arg_val<uint32_t>(4);
     const uint32_t num_pos = get_arg_val<uint32_t>(5);
+    constexpr uint32_t MAX_EXTRA = MHC_MAX_EXTRA;
+    constexpr uint32_t EXTRA_BASE = 6;  // [n_extra, p0, j0, p1, j1, ...]
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_y = get_compile_time_arg_val(1);
@@ -45,7 +55,9 @@ void kernel_main() {
     CircularBuffer cbx(cb_x), cby(cb_y), cbraw(cb_raw), cbcoef(cb_coef);
 
     uint32_t cur_r = 0xFFFFFFFFu;
-    for (uint32_t p = start_pos; p < start_pos + num_pos; ++p) {
+    // the inputs of position p (a full one or an extra's): the coefficients of its token-tile when it changed, the n
+    // stream tiles and (unless HMODE) y
+    auto fetch_position = [&](uint32_t p) {
         const uint32_t r = p / Ct;
         const uint32_t c = p - r * Ct;
 
@@ -84,12 +96,25 @@ void kernel_main() {
         if constexpr (hmode) {
             noc.async_read_barrier();
             cbx.push_back(n);
-            continue;
+            return;
         }
         cby.reserve_back(1);
         noc.async_read(s_y, cby, y_page, {.page_id = r * Ct + c}, {.offset_bytes = 0});
         noc.async_read_barrier();
         cbx.push_back(n);
         cby.push_back(1);
+    };
+
+    for (uint32_t p = start_pos; p < start_pos + num_pos; ++p) {
+        fetch_position(p);
     }
+    if constexpr (MAX_EXTRA > 0) {
+        const uint32_t n_extra = get_arg_val<uint32_t>(EXTRA_BASE);
+        for (uint32_t e = 0; e < n_extra && e < MAX_EXTRA; ++e) {
+            fetch_position(get_arg_val<uint32_t>(EXTRA_BASE + 1 + 2 * e));
+        }
+    }
+    // every NoC transaction acknowledged before the kernel returns (a late ack after the next program's NOC init leaves
+    // its counters unequal forever)
+    noc_async_full_barrier();
 }

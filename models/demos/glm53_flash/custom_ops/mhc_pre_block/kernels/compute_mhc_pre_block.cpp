@@ -16,6 +16,23 @@
 // tree, receives rsqrt(mean + eps) by multicast and writes hn * w as bf16. Dataflow kernels own the NoC sync.
 //
 // Dest slots (SyncFull fp32): 0..3 x_i (or scratch), 4..7 scratch. See the README for the CB plan.
+//
+// Compile defines (op.py, both default off = the program above byte for byte):
+//   MHC_SINKHORN_FUSED=1  the Sinkhorn as one dest pass per normalisation (matmul -> [+eps] -> recip in dest -> m
+//                         copied in -> SFPU multiply -> pack): 2*ITERS + 3 passes instead of ~130 LLK ops with a CB
+//                         round trip each (`sinkhorn_fused`). The products m * recip are fp32 SFPU multiplies where the
+//                         LLK sequence used the FPU (19-bit SrcA/SrcB operands): a bounded rounding change.
+//   MHC_MAX_EXTRA=<k>     the "extras" work split: a core with two column tiles projects only its first (the h / norm
+//                         phases keep both); the second column's n stream tiles are projected by up to k "extra" tiles
+//                         on other cores (runtime args [count_proj, n_extra] after the flags; the reader loads them
+//                         after the column tiles). The projection partial and the sum of squares are per stream tile,
+//                         so the tree sums the same terms; only their grouping into partial tiles changes.
+#ifndef MHC_SINKHORN_FUSED
+#define MHC_SINKHORN_FUSED 0
+#endif
+#ifndef MHC_MAX_EXTRA
+#define MHC_MAX_EXTRA 0
+#endif
 
 #include <cstdint>
 #include "api/compute/common.h"
@@ -83,7 +100,10 @@ constexpr uint32_t EPS_NC_BITS = get_compile_time_arg_val(32);    // norm_eps * 
 constexpr uint32_t INV_C_BITS = get_compile_time_arg_val(33);     // 1 / C
 constexpr uint32_t NORM_EPS_BITS = get_compile_time_arg_val(34);  // the sublayer norm eps
 constexpr uint32_t MAX_COLS = 2;  // column tiles per core (128 column tiles over 120 cores)
+constexpr bool SINKHORN_FUSED = MHC_SINKHORN_FUSED != 0;
+constexpr uint32_t MAX_EXTRA = MHC_MAX_EXTRA;  // extra single stream tiles projected on this core (0: none)
 static_assert(N == 4, "the lane layout and the dest slot plan are written for n = 4");
+static_assert(MAX_EXTRA <= N, "an extras group is split like one column: at most N tiles in dest slots 0..N-1");
 
 // Sinkhorn constants: tile indices within CB_CONSTS (build_consts order)
 constexpr uint32_t SEL_PRE = 0, SEL_POST = 1, SEL_COMB = 2, BASE_PRE = 3, BASE_POST = 4, BASE_COMB = 5, RB = 6, CBC = 7;
@@ -228,95 +248,181 @@ FORCE_INLINE void sinkhorn() {
     cb_mixes.pop_front(1);
 }
 
+// ------------------------------------------------------------------ the Sinkhorn, fused passes (MHC_SINKHORN_FUSED)
+// one normalisation in one dest pass: dest 0 = m @ K (the row / column sums broadcast; FPU, fp32 dest), [+eps],
+// 1 / dest 0 (SFPU), dest 1 = m (copied in), dest 1 *= dest 0 (SFPU fp32 multiply), [+eps on the way out], pack.
+// The LLK sequence packs the sums, the reciprocals and the products through three CB round trips instead.
+FORCE_INLINE void normalize_fused(uint32_t m_in, uint32_t k_tile, bool use_eps, uint32_t m_out, bool eps_out) {
+    CircularBuffer cb_m(m_in);
+    cb_m.wait_front(1);
+    reconfig_data_format(m_in, CB_CONSTS);
+    matmul_init(m_in, CB_CONSTS);
+    tile_regs_acquire();
+    matmul_tiles(m_in, CB_CONSTS, 0, k_tile, 0);
+    if (use_eps) {
+        binop_with_scalar_tile_init();
+        add_unary_tile(0, EPS_BITS);
+    }
+    recip_tile_init();
+    recip_tile(0);
+    reconfig_data_format_srca(m_in);
+    copy_init(m_in);
+    copy_tile(m_in, 0, 1);
+    mul_binary_tile_init();
+    mul_binary_tile(1, 0, 1);
+    if (eps_out) {
+        binop_with_scalar_tile_init();
+        add_unary_tile(1, EPS_BITS);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_one(1, m_out);
+    tile_regs_release();
+    cb_m.pop_front(1);
+}
+
+constexpr uint32_t COEF_EXP = 0, COEF_PRE = 1, COEF_POST = 2;
+
+// one coefficient head in one pass: dest 0 = mixes @ sel + bias, then exp(min(., 80)) (comb logits) / sigmoid + eps
+// (pre) / 2 sigmoid (post) -> `out`
+FORCE_INLINE void coef_fused(uint32_t sel_tile, uint32_t bias_tile, uint32_t head, uint32_t out) {
+    CircularBuffer cb_mixes(CB_MIXES);
+    cb_mixes.wait_front(1);
+    reconfig_data_format(CB_MIXES, CB_CONSTS);
+    matmul_init(CB_MIXES, CB_CONSTS);
+    tile_regs_acquire();
+    matmul_tiles(CB_MIXES, CB_CONSTS, 0, sel_tile, 0);
+    reconfig_data_format_srca(CB_CONSTS);
+    copy_init(CB_CONSTS);
+    copy_tile(CB_CONSTS, bias_tile, 1);
+    add_binary_tile_init();
+    add_binary_tile(0, 1, 0);
+    if (head == COEF_EXP) {
+        unary_min_tile_init();
+        unary_min_tile(0, 0x42a00000u);  // min(x, 80.0f): no inf out of exp
+        exp_tile_init();
+        exp_tile(0);
+    } else {
+        sigmoid_tile_init();
+        sigmoid_tile(0);
+        binop_with_scalar_tile_init();
+        if (head == COEF_PRE) {
+            add_unary_tile(0, EPS_BITS);
+        } else {
+            mul_unary_tile(0, TWO_BITS);
+        }
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_one(0, out);
+    tile_regs_release();
+}
+
+// CB_MIXES (1 tile, kept) -> CB_SPRE, CB_SPOST, CB_SCOMB: the same math as sinkhorn() in 2*ITERS + 3 passes
+FORCE_INLINE void sinkhorn_fused() {
+    CircularBuffer cb_mixes(CB_MIXES);
+    coef_fused(SEL_COMB, BASE_COMB, COEF_EXP, CB_MB);
+    normalize_fused(CB_MB, RB, false, CB_MA, true);                           // row softmax, then + eps
+    normalize_fused(CB_MA, CBC, true, ITERS == 1 ? CB_SCOMB : CB_MB, false);  // the first column normalisation
+    for (uint32_t i = 1; i < ITERS; ++i) {
+        normalize_fused(CB_MB, RB, true, CB_MA, false);
+        normalize_fused(CB_MA, CBC, true, (i + 1 == ITERS) ? CB_SCOMB : CB_MB, false);
+    }
+    coef_fused(SEL_PRE, BASE_PRE, COEF_PRE, CB_SPRE);
+    coef_fused(SEL_POST, BASE_POST, COEF_POST, CB_SPOST);
+    cb_mixes.pop_front(1);
+}
+
 // ------------------------------------------------------------------ phases
 // x (fp32) -> bf16 parts hi, lo, lo2 with x == hi + lo + lo2 exactly (each pack rounds to bf16, the residuals
-// are exact fp32 subtractions). CB_X is never popped: x stays for the mix.
-FORCE_INLINE void split_x(uint32_t col) {
+// are exact fp32 subtractions). CB_X is never popped: x stays for the mix. `cnt` tiles from CB_X slot `x0`
+// (a column's N stream tiles, or the core's extra tiles).
+FORCE_INLINE void split_x_tiles(uint32_t x0, uint32_t cnt) {
     CircularBuffer cbx(CB_X), cbhi(CB_HI), cblo(CB_LO), cblo2(CB_LO2);
-    const uint32_t x0 = col * N;  // this column's tiles within CB_X
     // hi = bf16(x)
     tile_regs_acquire();
     copy_init(CB_X);
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         copy_tile(CB_X, x0 + i, i);
     }
     tile_regs_commit();
     tile_regs_wait();
     pack_to(CB_HI);
-    cbhi.reserve_back(N);
-    for (uint32_t i = 0; i < N; ++i) {
+    cbhi.reserve_back(cnt);
+    for (uint32_t i = 0; i < cnt; ++i) {
         pack_tile(i, CB_HI, i);
     }
-    cbhi.push_back(N);
+    cbhi.push_back(cnt);
     tile_regs_release();
     // lo = bf16(x - hi)
-    cbhi.wait_front(N);
+    cbhi.wait_front(cnt);
     tile_regs_acquire();
     copy_init(CB_X);
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         copy_tile(CB_X, x0 + i, i);
     }
     reconfig_data_format_srca(CB_X, CB_HI);
     copy_init(CB_HI);
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         copy_tile(CB_HI, i, N + i);
     }
     sub_binary_tile_init();
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         sub_binary_tile(i, N + i, N + i);
     }
     tile_regs_commit();
     tile_regs_wait();
     pack_to(CB_LO);
-    cblo.reserve_back(N);
-    for (uint32_t i = 0; i < N; ++i) {
+    cblo.reserve_back(cnt);
+    for (uint32_t i = 0; i < cnt; ++i) {
         pack_tile(N + i, CB_LO, i);
     }
-    cblo.push_back(N);
+    cblo.push_back(cnt);
     tile_regs_release();
     // lo2 = bf16(x - hi - lo)
-    cblo.wait_front(N);
+    cblo.wait_front(cnt);
     tile_regs_acquire();
     reconfig_data_format_srca(CB_HI, CB_X);
     copy_init(CB_X);
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         copy_tile(CB_X, x0 + i, i);
     }
     reconfig_data_format_srca(CB_X, CB_HI);
     copy_init(CB_HI);
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         copy_tile(CB_HI, i, N + i);
     }
     sub_binary_tile_init();
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         sub_binary_tile(i, N + i, N + i);  // r1 = x - hi
     }
     copy_init(CB_LO);
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         copy_tile(CB_LO, i, i);
     }
     sub_binary_tile_init();
-    for (uint32_t i = 0; i < N; ++i) {
+    for (uint32_t i = 0; i < cnt; ++i) {
         sub_binary_tile(N + i, i, N + i);  // r2 = r1 - lo
     }
     tile_regs_commit();
     tile_regs_wait();
     pack_to(CB_LO2);
-    cblo2.reserve_back(N);
-    for (uint32_t i = 0; i < N; ++i) {
+    cblo2.reserve_back(cnt);
+    for (uint32_t i = 0; i < cnt; ++i) {
         pack_tile(N + i, CB_LO2, i);
     }
-    cblo2.push_back(N);
+    cblo2.push_back(cnt);
     tile_regs_release();
-    cblo2.wait_front(N);
+    cblo2.wait_front(cnt);
     reconfig_data_format_srca(CB_HI, CB_X);
 }
 
-// partial tile = sum over the 3 parts and the 4 streams of part_i @ fn_i (fp32 accumulation of exact products)
-// + the rows' sum of x^2 in column 24 -> CB_PART
-FORCE_INLINE void project_partial(uint32_t col) {
+FORCE_INLINE void split_x(uint32_t col) { split_x_tiles(col * N, N); }
+
+// partial tile = sum over the 3 parts and the `cnt` stream tiles (CB_X slot x0.., CB_FN slot f0..) of part @ fn
+// (fp32 accumulation of exact products) + the rows' sum of x^2 in column 24 -> CB_PARTS
+FORCE_INLINE void project_partial_tiles(uint32_t x0, uint32_t f0, uint32_t cnt) {
     CircularBuffer cbfn(CB_FN), cbzero(CB_ZERO), cbhi(CB_HI), cblo(CB_LO), cblo2(CB_LO2);
-    const uint32_t f0 = col * N;
     cbzero.wait_front(1);
     tile_regs_acquire();
     copy_init(CB_ZERO);
@@ -325,27 +431,29 @@ FORCE_INLINE void project_partial(uint32_t col) {
         const uint32_t cb = part == 0 ? CB_HI : (part == 1 ? CB_LO : CB_LO2);
         reconfig_data_format(cb, CB_FN);
         matmul_init(cb, CB_FN);
-        for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t i = 0; i < cnt; ++i) {
             matmul_tiles(cb, CB_FN, i, f0 + i, 4);
         }
     }
     // the rows' sum of squares of the fp32 x into column 24
     reconfig_data_format_srca(CB_HI, CB_X);
     copy_init(CB_X);
-    for (uint32_t i = 0; i < N; ++i) {
-        copy_tile(CB_X, f0 + i, i);
+    for (uint32_t i = 0; i < cnt; ++i) {
+        copy_tile(CB_X, x0 + i, i);
     }
     sfpu_bcast_col_init();
     MATH((_llk_math_eltwise_binary_sfpu_params_(
-        mhc_sfpu::rowsum_sq_into, 4, 0, 4, VectorMode::None, N, SS_GROUP, SS_LANE)));
+        mhc_sfpu::rowsum_sq_into, 4, 0, 4, VectorMode::None, cnt, SS_GROUP, SS_LANE)));
     tile_regs_commit();
     tile_regs_wait();
     pack_one(4, CB_PARTS);
     tile_regs_release();
-    cbhi.pop_front(N);
-    cblo.pop_front(N);
-    cblo2.pop_front(N);
+    cbhi.pop_front(cnt);
+    cblo.pop_front(cnt);
+    cblo2.pop_front(cnt);
 }
+
+FORCE_INLINE void project_partial(uint32_t col) { project_partial_tiles(col * N, col * N, N); }
 
 // EXACT_PROJ: the partial of column `col` with the projection on the SFPU: for every stream tile, x_i (slot 0)
 // against its three row-replicated fn tiles (slots 1-3) into the accumulator slot 4; then the sum of squares
@@ -443,7 +551,11 @@ FORCE_INLINE void coordinator_coefficients() {
     tile_regs_release();
     g2.pop_front(GX);
 
-    sinkhorn();
+    if constexpr (SINKHORN_FUSED) {
+        sinkhorn_fused();
+    } else {
+        sinkhorn();
+    }
 
     // lane-layout tiles: pre, post, comb_0, comb_1 (one acquire), comb_2, comb_3 (another)
     CircularBuffer spre(CB_SPRE), spost(CB_SPOST), scomb(CB_SCOMB), cout(CB_COEF_OUT);
@@ -547,8 +659,9 @@ FORCE_INLINE void coordinator_rs2() {
     g2.pop_front(GX);
 }
 
-// worker: hn_j = h_j * rs2 * w_j -> bf16 CB_OUT, per column tile
-FORCE_INLINE void finish(uint32_t count) {
+// worker: hn_j = h_j * rs2 * w_j -> bf16 CB_OUT, per column tile; releases the x / fn tiles (the `count` columns'
+// N tiles each plus the `n_extra` extra tiles; fn was loaded for the `count_proj` projected columns + the extras)
+FORCE_INLINE void finish(uint32_t count, uint32_t count_proj, uint32_t n_extra) {
     CircularBuffer cbh(CB_H), cbrs(CB_RS2), cbw(CB_W), cbx(CB_X), cbfn(CB_FN);
     cbh.wait_front(count);
     cbrs.wait_front(1);
@@ -575,8 +688,8 @@ FORCE_INLINE void finish(uint32_t count) {
     cbh.pop_front(count);
     cbrs.pop_front(1);
     cbw.pop_front(count);
-    cbx.pop_front(N * count);
-    cbfn.pop_front(N * count * (EXACT_PROJ ? FREP : 1));
+    cbx.pop_front(N * count + n_extra);
+    cbfn.pop_front((N * count_proj + n_extra) * (EXACT_PROJ ? FREP : 1));
 }
 
 }  // namespace
@@ -588,12 +701,21 @@ void kernel_main() {
     const bool leader = get_arg_val<uint32_t>(1) != 0;
     const bool coordinator = get_arg_val<uint32_t>(2) != 0;
     const bool worker = count != 0;
+    // extras split: the columns this core projects itself (its first count_proj) and its extra stream tiles
+    uint32_t count_proj = count, n_extra = 0;
+    if constexpr (MAX_EXTRA > 0) {
+        count_proj = get_arg_val<uint32_t>(3);
+        n_extra = get_arg_val<uint32_t>(4);
+        if (n_extra > MAX_EXTRA) {
+            n_extra = MAX_EXTRA;
+        }
+    }
 
     if (worker) {
         CircularBuffer cbx(CB_X), cbfn(CB_FN);
-        cbx.wait_front(N * count);
-        cbfn.wait_front(N * count * (EXACT_PROJ ? FREP : 1));
-        for (uint32_t col = 0; col < count; ++col) {
+        cbx.wait_front(N * count + n_extra);
+        cbfn.wait_front((N * count_proj + n_extra) * (EXACT_PROJ ? FREP : 1));
+        for (uint32_t col = 0; col < count_proj; ++col) {
             if constexpr (EXACT_PROJ) {
                 project_partial_exact(col);
             } else {
@@ -601,7 +723,16 @@ void kernel_main() {
                 project_partial(col);
             }
         }
-        sum_tiles(CB_PARTS, count, CB_PART, (DEBUG && coordinator) ? CB_DBG : 0xFFFFFFFFu);  // DEBUG: own partial
+        uint32_t parts = count_proj;
+        if constexpr (MAX_EXTRA > 0 && !EXACT_PROJ) {
+            if (n_extra) {  // the extra tiles sit after the columns' tiles in CB_X and after the projected ones in
+                            // CB_FN
+                split_x_tiles(N * count, n_extra);
+                project_partial_tiles(N * count, N * count_proj, n_extra);
+                parts += 1;
+            }
+        }
+        sum_tiles(CB_PARTS, parts, CB_PART, (DEBUG && coordinator) ? CB_DBG : 0xFFFFFFFFu);  // DEBUG: own partial
     }
     if (leader) {
         sum_tiles(CB_GATHER1, GY, CB_PART);
@@ -619,6 +750,6 @@ void kernel_main() {
         coordinator_rs2();
     }
     if (worker) {
-        finish(count);
+        finish(count, count_proj, n_extra);
     }
 }

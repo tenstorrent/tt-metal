@@ -79,7 +79,32 @@ MHC_NORM = os.environ.get(
 )  # the 32-core norm (A3); single = the pre-A3 one-core norm. Default
 # since 2026-10-26: chip-0 A/B PCC 0.999998 vs single (traced wrap 246 -> 210 us), block decoder + e2e, 8x4 e2e 80.6 ms at
 # 32 users, logits gate 0.9948 / top-1 95.3 %, 64 K needle 32/32
-assert MHC_NORM in ("sharded", "sharded_cast", "single"), MHC_NORM
+NORM_MODES = ("sharded", "sharded_cast", "single")
+assert MHC_NORM in NORM_MODES, MHC_NORM
+# The norm mode of a fast-path call inside a prefill scope (``GLMMesh.prefill_scope``: ``decoder_layer.prefill_forward``
+# and the MTP prefill enter it). A 128-token prompt on 8 rows is 16-row slabs = one tile, which ``TtMHCSplit.select``
+# routes to the fast path, so the sharded norm's 4 ops ran inside the traced prefill: measured on the 8x4
+# (2026-10-26, 45 layers, 4 users/row, 128-token prompt, one run each) GLM53_MHC_NORM=sharded -> decode 79.75 ms /
+# TTFT 297 ms, =single -> decode 83.06 ms / TTFT 266 ms. "single" (default): prefill-scope calls take the one-core
+# norm, everything else the configured GLM53_MHC_NORM (``effective_norm_mode``); "same": the configured mode
+# everywhere (A/B). ``decoder_layer._hc_call_impl`` passes ``prefill=self.mesh.in_prefill``.
+MHC_PREFILL_NORM = os.environ.get("GLM53_MHC_PREFILL_NORM", "single")
+assert MHC_PREFILL_NORM in ("single", "same"), MHC_PREFILL_NORM
+
+
+def effective_norm_mode(configured: str, *, prefill: bool = False, override: str | None = None) -> str:
+    """The norm mode one fast-path call runs: an explicit per-call ``override`` wins; otherwise ``single`` inside a
+    prefill scope (``MHC_PREFILL_NORM == "single"``), the ``configured`` mode (the instance's) outside. Pure function of
+    its arguments and the module knob: a captured trace replays the mode it was captured in."""
+    if override is not None:
+        assert override in NORM_MODES, override
+        return override
+    assert configured in NORM_MODES, configured
+    if prefill and MHC_PREFILL_NORM == "single":
+        return "single"
+    return configured
+
+
 # A4 (decode ledger): the parametrization (pre / post / Sinkhorn comb). "kernel" = the fused mhc_split_sinkhorn op
 # (one program per token tile: all T <= 32 users' 4x4 matrices sit in ONE tile and every normalisation is one
 # matmul + recip + mul on that tile, 52 us on one core); "batched" = that tile sequence as composite ttnn ops
@@ -88,6 +113,40 @@ assert MHC_NORM in ("sharded", "sharded_cast", "single"), MHC_NORM
 # not the default; the lever on the 52 us is the kernel's per-tile sequence (ledger A4, a kernel change).
 MHC_SINKHORN = os.environ.get("GLM53_MHC_SINKHORN", "kernel")
 assert MHC_SINKHORN in ("kernel", "batched"), MHC_SINKHORN
+# ---- mHC roofline knobs (_agents/mhc_roofline/STATUS.md); every default is today's path
+# A9: the two K-split reductions of the composite decode projection (part [1,32,32,32] and ssp [1,32,32,1], summed
+# over the 32 batches). "exact" = ttnn.sum(dim=1) (SFPU fp32; transpose + reduce + transpose [+ fill_pad]: 7 ops for
+# both, 25 us); "fast" = ttnn.experimental.fast_reduce_nc (2 ops, ~4 us): its FPU add unpacks every fp32 partial through
+# SrcA at 19 bits, a 2^-11 relative rounding per partial (~4.9e-4 rel on the mixes, the comb coefficients ~1e-5 abs;
+# tests/test_mhc_roofline_host.py). The composite decode pre-block only: the fused pre-block (A1) sums its partials
+# exactly on the SFPU and has none of these ops. Honoured only with GLM53_MHC_DECODE_EXACT=1 (=0 already uses the fast
+# reduce).
+MHC_KSUM = os.environ.get("GLM53_MHC_KSUM", "exact")
+assert MHC_KSUM in ("exact", "fast"), MHC_KSUM
+# A4 inside the fused pre-block: "llk" = the mhc_split_sinkhorn tile sequence (one LLK op + CB round trip per step, ~130
+# ops on the coordinator core, ~52 us per wrap); "fused" = one dest pass per normalisation (matmul, [+eps], recip,
+# m copied in, SFPU multiply: 2*iters + 3 passes, ~20 us expected). A bounded rounding change (fp32 SFPU products where
+# the LLK sequence multiplied through 19-bit FPU operands): logits gate required before it becomes the default.
+MHC_PRE_SINKHORN = os.environ.get("GLM53_MHC_PRE_SINKHORN", "llk")
+assert MHC_PRE_SINKHORN in ("llk", "fused"), MHC_PRE_SINKHORN
+# the fused pre-block's work split: "cols" = 128 column tiles over the grid (two on each of the first 8 cores of a 12x10
+# grid: they bound the projection phase); "extras" = a two-column core projects only its first column, the second's 4
+# stream tiles are projected by 4 single-column non-leader cores (12x10: critical path 10 -> 7 cost units; 13x10 / 8x8
+# unchanged by construction). Same partial sums, grouped differently: bit-level agreement is not guaranteed (fp32 adds
+# in a different order), PCC-level is.
+MHC_PRE_SPLIT = os.environ.get("GLM53_MHC_PRE_SPLIT", "cols")
+assert MHC_PRE_SPLIT in ("cols", "extras"), MHC_PRE_SPLIT
+# the post-mix kernel's work split: "tile" = one (token-tile, column-tile) position per unit (128 over 120 cores: 8
+# cores take two); "extras" = those 8 cores' second positions split by output stream over 32 one-position cores
+# (critical path 12 -> 9 cost units; every output tile is still computed by exactly one core: bit-identical)
+MHC_POST_SPLIT = os.environ.get("GLM53_MHC_POST_SPLIT", "tile")
+assert MHC_POST_SPLIT in ("tile", "extras"), MHC_POST_SPLIT
+# D13: the residual-stream layout over the TP columns. "replicated" = every column chip holds the packed [B, 4*C]
+# streams (today); "colsharded" = each column chip holds its C/4 columns of every stream (design only: see
+# _agents/mhc_roofline/STATUS.md D13 -- after A1 the wrap's cost is the serial Sinkhorn + the gather tree, not the
+# elementwise 2 MB, and the two collectives it adds per wrap outweigh the /4; TtMHCFast refuses it at construction)
+MHC_LAYOUT = os.environ.get("GLM53_MHC_LAYOUT", "replicated")
+assert MHC_LAYOUT in ("replicated", "colsharded"), MHC_LAYOUT
 
 
 @dataclass(frozen=True)
@@ -438,8 +497,21 @@ class TtMHCFast(LightweightModule):
         post_kernel: bool | None = None,
         norm_mode: str | None = None,
         sinkhorn_mode: str | None = None,
+        ksum_mode: str | None = None,
+        pre_sinkhorn: str | None = None,
+        pre_split: str | None = None,
+        post_split: str | None = None,
+        layout: str | None = None,
     ):
         assert dtype == ttnn.float32, f"TtMHCFast is fp32-only (fused op requires FLOAT32), got {dtype}"
+        layout = MHC_LAYOUT if layout is None else str(layout)
+        if layout != "replicated":
+            raise NotImplementedError(
+                f"GLM53_MHC_LAYOUT={layout}: the column-sharded residual (D13) is a design, not a path "
+                "(_agents/mhc_roofline/STATUS.md); the residual contract through the embedding, the sublayer input "
+                "assembly and the head collapse is not wired"
+            )
+        self.layout = layout
         self.device = device
         self.cfg = cfg
         self.exact = MHC_EXACT if exact is None else int(exact)  # residual update: 0 | 2 | 3 bf16 parts
@@ -448,12 +520,25 @@ class TtMHCFast(LightweightModule):
         assert self.post_kernel in (0, 1, 2), self.post_kernel
         # A3 / A4 knobs (module defaults from GLM53_MHC_NORM / GLM53_MHC_SINKHORN; constructor overrides for A/Bs)
         self.norm_mode = MHC_NORM if norm_mode is None else str(norm_mode)
-        assert self.norm_mode in ("sharded", "sharded_cast", "single"), self.norm_mode
+        assert self.norm_mode in NORM_MODES, self.norm_mode
         self.sinkhorn_mode = MHC_SINKHORN if sinkhorn_mode is None else str(sinkhorn_mode)
         assert self.sinkhorn_mode in ("kernel", "batched"), self.sinkhorn_mode
+        # roofline knobs (module defaults; constructor overrides for the A/Bs)
+        self.ksum_mode = MHC_KSUM if ksum_mode is None else str(ksum_mode)
+        self.pre_sinkhorn = MHC_PRE_SINKHORN if pre_sinkhorn is None else str(pre_sinkhorn)
+        self.pre_split = MHC_PRE_SPLIT if pre_split is None else str(pre_split)
+        self.post_split = MHC_POST_SPLIT if post_split is None else str(post_split)
+        assert self.ksum_mode in ("exact", "fast"), self.ksum_mode
+        assert self.pre_sinkhorn in MhcPreBlock.SINKHORN_MODES, self.pre_sinkhorn
+        assert self.pre_split in MhcPreBlock.SPLIT_MODES, self.pre_split
+        assert self.post_split in ("tile", "extras"), self.post_split
         self.n = int(cfg.n)
         # the fused post-block as a model-local generic op (custom_ops/mhc_post_mix); output allocated per call
-        self.post_mix = MhcPostMix(self.n, version=self.post_kernel) if self.post_kernel else None
+        self.post_mix = (
+            MhcPostMix(self.n, version=self.post_kernel, split=self.post_split if self.post_kernel == 2 else "tile")
+            if self.post_kernel
+            else None
+        )
         # the fused pre-block (built on the first decode call with the fused norm: it holds the norm weight)
         self.pre_block_on = MHC_PRE_BLOCK != 0 and self.post_kernel == 2
         self._fn_raw = fn.float() if self.pre_block_on else None
@@ -617,8 +702,9 @@ class TtMHCFast(LightweightModule):
 
     def _reduce_batches(self, t: ttnn.Tensor) -> ttnn.Tensor:
         """``[1,K,Tp,w]`` -> ``[1,1,Tp,w]`` sum over the K-split batches: exact fp32 (``ttnn.sum``, SFPU; it
-        transposes, 15 us on these tiny tensors) or ``fast_reduce_nc`` (rounds the partials to bf16, 4e-4)."""
-        if MHC_DECODE_EXACT:
+        transposes, 15 us on these tiny tensors) or ``fast_reduce_nc`` (A9, ``ksum_mode="fast"`` or
+        ``MHC_DECODE_EXACT=0``: the FPU add unpacks every partial through the 19-bit SrcA, ~4.9e-4 rel on the sum)."""
+        if MHC_DECODE_EXACT and self.ksum_mode == "exact":
             return ttnn.sum(t, dim=1, keepdim=True, compute_kernel_config=self.ckc)
         return ttnn.experimental.fast_reduce_nc(t, dims=[1], compute_kernel_config=self.ckc)
 
@@ -708,9 +794,10 @@ class TtMHCFast(LightweightModule):
         ttnn.deallocate(rs)
         return mixes
 
-    def _collapse(self, x32: ttnn.Tensor, x_sm: ttnn.Tensor, pre: ttnn.Tensor, norm):
+    def _collapse(self, x32: ttnn.Tensor, x_sm: ttnn.Tensor, pre: ttnn.Tensor, norm, norm_mode: str | None = None):
         """h ``[1,1,Tp,C]`` = sum_i pre_i x_i (fp32 interleaved), or with ``norm = (weight, eps)`` the
-        sublayer's input ``RMSNorm(h)`` in bf16 interleaved."""
+        sublayer's input ``RMSNorm(h)`` in bf16 interleaved (``norm_mode``: this call's A3 mode, default the
+        instance's)."""
         Tp = x32.shape[-2]
         if Tp == TILE and MHC_DECODE_EXACT and self.post_kernel == 2:
             # exact fp32 h = sum_i pre_i x_i through the post-mix kernel's pre-mix mode (the P@x matmul rounds
@@ -719,7 +806,7 @@ class TtMHCFast(LightweightModule):
             self.post_mix.h_mix(x32, _view_rows(pre, Tp), h)
             if norm is None:
                 return h
-            return self._norm_decode(h, norm)
+            return self._norm_decode(h, norm, norm_mode)
         if Tp == TILE:
             v = ttnn.matmul(_view_tile_width(pre), self.s_pre, compute_kernel_config=self.ckc)  # [1,1,Tp,nTp]
             P = ttnn.multiply(v, self.i_pre)
@@ -771,7 +858,7 @@ class TtMHCFast(LightweightModule):
         ttnn.deallocate(hb)
         return hn
 
-    def _norm_decode(self, h: ttnn.Tensor, norm) -> ttnn.Tensor:
+    def _norm_decode(self, h: ttnn.Tensor, norm, norm_mode: str | None = None) -> ttnn.Tensor:
         """The sublayer's input RMSNorm of the exact decode ``h`` ``[1,1,32,C]`` fp32 interleaved -> bf16 interleaved
         (A3). ``sharded``: typecast, reshard into ``h_mem`` (width-sharded bf16, 4 tiles per core on the 8x4 grid),
         the sharded multicore ``rms_norm`` (``pc_norm``), reshard back to DRAM interleaved for the sublayer: 4 ops,
@@ -779,16 +866,19 @@ class TtMHCFast(LightweightModule):
         3 ops). ``single``: the composite's typecast + interleaved ``rms_norm`` (2 ops on ONE core at this height).
         All three consume ``h``. ``h_mem`` / ``pc_norm`` are built once in ``__init__``: the decode tile is always
         the 32-row tile (``_view_rows`` widens every T <= 32), so there is one shape per wrap; nothing here
-        touches the host (trace-safe), the L1 shards are transient within the step."""
+        touches the host (trace-safe), the L1 shards are transient within the step. ``norm_mode`` overrides the
+        instance's mode for this call (``forward(norm_mode=...)`` / the prefill-scope selection)."""
         weight, eps = norm
-        if self.norm_mode == "single":
+        mode = self.norm_mode if norm_mode is None else norm_mode
+        assert mode in NORM_MODES, mode
+        if mode == "single":
             hb = ttnn.typecast(h, ttnn.bfloat16)
             ttnn.deallocate(h)
             hn = ttnn.rms_norm(hb, epsilon=eps, weight=weight, compute_kernel_config=self.ckc)
             ttnn.deallocate(hb)
             return hn
         assert h.padded_shape[-2] == TILE and h.padded_shape[-1] == self.C, h.padded_shape
-        if self.norm_mode == "sharded_cast":
+        if mode == "sharded_cast":
             hs = ttnn.interleaved_to_sharded(h, self.h_mem, output_dtype=ttnn.bfloat16)
             ttnn.deallocate(h)
         else:
@@ -849,12 +939,15 @@ class TtMHCFast(LightweightModule):
                 norm_eps=self.norm_eps,
                 rms_eps=float(eps),
                 exact=MHC_PRE_BLOCK == 2,
+                sinkhorn=self.pre_sinkhorn,
+                split=self.pre_split,
             )
             self._pre_block_norm = weight
         return self.pre_block
 
-    def _pre(self, x: ttnn.Tensor, norm=None):
-        """x ``[1,1,T,nC]`` -> (h ``[1,1,T,C]``, post ``[Tp,n]``, comb ``[Tp,n*n]``, x32, x_sm, owned)."""
+    def _pre(self, x: ttnn.Tensor, norm=None, norm_mode: str | None = None):
+        """x ``[1,1,T,nC]`` -> (h ``[1,1,T,C]``, post ``[Tp,n]``, comb ``[Tp,n*n]``, x32, x_sm, owned).
+        ``norm_mode``: this call's A3 norm mode (default the instance's; the fused pre-block norms in-kernel)."""
         T = x.shape[-2]
         x32 = _view_rows(x, _rows_up(T))
         if self.pre_block_on and norm is not None and x32.shape[-2] == TILE:
@@ -870,7 +963,7 @@ class TtMHCFast(LightweightModule):
         mixes = self._project(x32, x_sm)
         pre, post, comb = self._parametrize(mixes)
         ttnn.deallocate(mixes)
-        h32 = self._collapse(x32, x_sm, pre, norm)
+        h32 = self._collapse(x32, x_sm, pre, norm, norm_mode)
         ttnn.deallocate(pre)
         return _view_rows(h32, T), post, comb, x32, x_sm, owned
 
@@ -979,16 +1072,32 @@ class TtMHCFast(LightweightModule):
             ttnn.deallocate(res_sm)
         return out
 
-    def forward(self, x: ttnn.Tensor, sublayer, sublayer_dtype=None, norm=None, collapse: bool = False) -> ttnn.Tensor:
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        sublayer,
+        sublayer_dtype=None,
+        norm=None,
+        collapse: bool = False,
+        *,
+        norm_mode: str | None = None,
+        prefill: bool = False,
+    ) -> ttnn.Tensor:
         """x: ``[1,1,T,nC]``; sublayer: ``[1,1,T,C]`` -> ``[1,1,T,C]``. Returns ``[1,1,T,nC]``.
         ``sublayer_dtype`` casts the collapsed hidden going in and back to ``x``'s dtype coming out;
         ``norm = (weight [1,1,1,C] bf16, eps)`` applies the sublayer's input RMSNorm to the collapsed
         hidden inside the pre-block (bf16 out; ``sublayer_dtype`` must then be bf16); ``collapse``
         returns the LM head's mean over the n new streams ``[1,1,T,C]`` fp32 instead of the streams
-        (the last layer's FFN wrap feeding the head; decode shapes only)."""
+        (the last layer's FFN wrap feeding the head; decode shapes only).
+        ``norm_mode`` (``sharded`` / ``sharded_cast`` / ``single``) overrides the instance's A3 norm mode for
+        this call; ``prefill`` marks a call inside a prefill scope (``decoder_layer._hc_call_impl`` passes
+        ``mesh.in_prefill``): without an override such a call takes the one-core norm (``effective_norm_mode``,
+        ``GLM53_MHC_PREFILL_NORM``), so a one-tile prefill slab routed here by ``TtMHCSplit.select`` does not pay
+        the sharded norm's reshards inside the traced prefill."""
         if norm is not None:
             assert sublayer_dtype == ttnn.bfloat16, "the fused norm emits bf16"
-        h, post, comb, x32, x_sm, owned = self._pre(x, norm)
+        mode = effective_norm_mode(self.norm_mode, prefill=prefill, override=norm_mode)
+        h, post, comb, x32, x_sm, owned = self._pre(x, norm, mode)
         if sublayer_dtype is None or norm is not None:
             cast = h
         else:
