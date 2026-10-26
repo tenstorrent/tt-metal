@@ -20,17 +20,15 @@ namespace tt::tt_metal::experimental {
 //
 // The value of a kernel argument.
 //
-// An ArgValue is implicitly constructible from any value that converts implicitly to
-// uint32_t, with exactly the result of that conversion (integers wrap, in-range floating point
-// values truncate, bools and unscoped enums convert):
-//   KernelSpec{.compile_time_args = {{"Ht", Ht}}}
-//   run_args.runtime_arg_values["num_tiles"][node] = n;
-//   run_args.common_runtime_arg_values["sentinel"] = -1;  // 0xFFFFFFFF, as for a uint32_t
+// Kernel arguments are currently all uint32_t on the device, but other argument
+// types will be supported in the future.
 //
-// Kernel arguments are currently all uint32_t on the device.
-//
-// To read a value back, call to_uint32(). (There is deliberately no implicit conversion to an
-// integer.) ArgValues compare equal (==) when they hold the same value.
+// NOTES:
+//  - An ArgValue is implicitly constructible from uint32_t or any value that converts
+//    implicitly to uint32_t, with exactly that conversion's result (-1 becomes 0xFFFFFFFF).
+//  - To read an ArgValue back as a uint32_t, use to_uint32(). ArgValue deliberately has
+//    no implicit conversion to uint32_t: once other argument types exist, it would
+//    silently convert them.
 //
 // ============================================================================
 
@@ -38,14 +36,15 @@ class ArgValue {
 public:
     ArgValue() = default;
 
-    // Implicit, so that values can be used wherever an ArgValue is expected.
+    // Implicit construction from uint32_t (or any implicitly convertible type)
     template <typename T>
         requires std::is_convertible_v<T, std::uint32_t>
     ArgValue(T value) : u32_(static_cast<std::uint32_t>(value)) {}
 
-    // The value converted to uint32_t: exactly what assigning the original value to a uint32_t gives.
-    std::uint32_t to_uint32() const noexcept { return u32_; }
+    // Get the arg value as a uint32_t (static_cast<uint32_t>(original value))
+    std::uint32_t to_uint32() const { return u32_; }
 
+    // Equality comparison (there is deliberately no ordering)
     friend bool operator==(const ArgValue&, const ArgValue&) = default;
 
     friend std::ostream& operator<<(std::ostream& os, const ArgValue& value) { return os << value.to_uint32(); }
