@@ -164,9 +164,7 @@ def test_prefill_profile(mesh_device):
             moe_mod.REGIONS_UNTILIZE = spec[9]
         if len(spec) > 10 and spec[10]:  # region buffer fill (embedding | custom, G53F-0193)
             moe_mod.REGIONS_SCATTER = spec[10]
-        if (
-            len(spec) > 11 and spec[11]
-        ):  # DSA sparse prefill attention block rows (tt/dsa.py prefill_blocks, read per call)
+        if len(spec) > 11 and spec[11]:  # DSA sparse prefill attention block rows (dsa.prefill_blocks, per call)
             os.environ["GLM53_PREFILL_ABLOCK"] = spec[11]
         if len(spec) > 12 and spec[12]:  # DSA sparse prefill score sub-block rows
             os.environ["GLM53_PREFILL_QBLOCK"] = spec[12]
