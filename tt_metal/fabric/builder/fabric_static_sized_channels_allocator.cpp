@@ -198,6 +198,7 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         }
     }
     uint32_t buffer_addr_end = receiver_buffer_addr;
+    this->channel_buffers_end_address = buffer_addr_end;
 
     // set the base addresses for the remote channels
     uint32_t remote_sender_buffer_addr = buffer_region_start;
