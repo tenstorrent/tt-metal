@@ -427,6 +427,15 @@ class TTSampling(LightweightModule):
                 self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
             ),
         )
+        self._scale_logprobs = ttnn.from_torch(
+            torch.ones_like(temp).reshape(1, 1, -1, 1).to(torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
+            ),
+        )
 
         # Create device offset indices for global indexing
         self._create_indices_tensors()
@@ -853,6 +862,7 @@ class TTSampling(LightweightModule):
         enable_log_probs: bool | list[bool] = None,
         num_logprobs: int | list[int] = None,
         empty_slots: list[int] | None = None,
+        log_probs_enable_temperature: list[bool] | None = None,
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         k, temp = self._normalize_device_params(k, temp)
@@ -896,21 +906,38 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
+            col_mapper = (
+                ttnn.ShardTensor2dMesh(self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape)
+                if self._sampling_dp > 1
+                else None
+            )
+
             # Keep the greedy tie-break mask (1.0 where k==1) in sync with k, distributed like k_tensor.
             self._greedy_col_new = ttnn.from_torch(
                 (k.reshape(1, 1, -1, 1) == 1).to(torch.bfloat16),
                 device=None,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=(
-                    ttnn.ShardTensor2dMesh(
-                        self.mesh_device, dims=self._greedy_col_dims(), mesh_shape=self.cluster_shape
-                    )
-                    if self._sampling_dp > 1
-                    else None
-                ),
+                mesh_mapper=col_mapper,
             )
             ttnn.copy_host_to_device_tensor(self._greedy_col_new, self._greedy_col)
+
+            enable_temperature = torch.as_tensor(
+                log_probs_enable_temperature if log_probs_enable_temperature is not None else False, dtype=torch.bool
+            )
+            if enable_temperature.any() and self.log_probs_calculator._use_topk_logprobs:
+                raise ValueError(
+                    "log_probs_enable_temperature is not supported with top-k log-probs (use_topk_logprobs)"
+                )
+            scale_logprobs = torch.where(enable_temperature, temp, torch.ones_like(temp))
+            self._scale_logprobs_new = ttnn.from_torch(
+                scale_logprobs.reshape(1, 1, -1, 1).to(torch.bfloat16),
+                device=None,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=col_mapper,
+            )
+            ttnn.copy_host_to_device_tensor(self._scale_logprobs_new, self._scale_logprobs)
 
     def _greedy_col_dims(self):
         """Map the 1-D k_tensor shard dims (self._param_dims, batch on dim0) to the [1,1,N,1] greedy
@@ -1439,7 +1466,9 @@ class TTSampling(LightweightModule):
             )
         elif self.log_probs_calculator.enable_log_probs:
             # Old path: single sampled-token logprob
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(logits_for_log_probs, tt_out_tok)
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(
+                logits_for_log_probs, tt_out_tok, scale_logprobs=self._scale_logprobs
+            )
         else:
             self.tt_log_probs = None
 
