@@ -213,11 +213,15 @@ class GLM53MeshModel:
         logits = self.head.last_token_logits(streams, local_last + 1) if self.head is not None else None
         return streams, logits, owner_row
 
-    def prefill_chunked(self, prompt_ids: torch.Tensor, user: int = 0, chunk: int = 32768, on_chunk=None):
+    def prefill_chunked(
+        self, prompt_ids: torch.Tensor, user: int = 0, chunk: int = 32768, on_chunk=None, on_streams=None
+    ):
         """A long prompt through ``prefill`` in consecutive chunks (every chunk but the last is a multiple
         of ``32 * rows`` tokens, so the row slabs stay tile-aligned). ``on_chunk(start, end, seconds)`` is
-        called after every chunk (synchronised). Returns the LAST chunk's ``(streams, logits_last,
-        owner_row)``: its ``owner_row`` / local row index the prompt's last token."""
+        called after every chunk (synchronised). ``on_streams(streams, start, end)`` (tt-blaze G53F-0227) gets
+        every chunk's final streams (this row's slab) before they are freed: the MTP state builder of the
+        disaggregated prefill. Returns the LAST chunk's ``(streams, logits_last, owner_row)``: its ``owner_row``
+        / local row index the prompt's last token."""
         S = int(prompt_ids.numel())
         unit = 32 * self.mesh.rows
         chunk = max(unit, (chunk // unit) * unit)
@@ -237,6 +241,8 @@ class GLM53MeshModel:
                 pad_to = min(chunk, -(-(e - s0) // bucket) * bucket)
             t0 = time.perf_counter()
             out = self.prefill(prompt_ids[s0:e], user=user, start=s0, pad_to=pad_to)
+            if on_streams is not None:
+                on_streams(out[0], s0, e)
             # host time to enqueue the chunk (tt-blaze G53F-0202): ~ the wall when the host binds, below it when
             # the device does (the command queue absorbs the difference)
             self.last_enqueue_s = time.perf_counter() - t0

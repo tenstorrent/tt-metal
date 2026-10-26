@@ -95,8 +95,11 @@ class TtMTPBlock(LightweightModule):
         expert_down_dtype=ttnn.bfloat8_b,
         mesh: GLMMesh | None = None,
         partition_users: bool = False,
+        cache_only: bool = False,
     ):
-        """``state_dict``: the raw checkpoint tensors of ``model.language_model.layers.45.`` (prefix stripped, fp8
+        """``cache_only`` (tt-blaze G53F-0227, the disaggregated prefill server): build only what fills the block's own
+        cache (glue, input norm, DSA): no MoE (its weights are not even read), so only ``prefill_state_rows`` works.
+        ``state_dict``: the raw checkpoint tensors of ``model.language_model.layers.45.`` (prefix stripped, fp8
         groups dequantized: ``reference/checkpoint.load_layer_raw(snapshot, 45)``); the ``mlp.experts.N.*`` tensors
         may be absent when the expert cache under ``weight_cache_path`` is complete (``TtMoE.expert_cache_complete``).
         ``embedding`` / ``head``: the main model's (shared) table and head. ``max_batch`` user slots per mesh row and
@@ -134,15 +137,19 @@ class TtMTPBlock(LightweightModule):
         self.attn = TtDSA(
             device, cfg, _strip(sd, "self_attn."), layer_idx=MTP_LAYER, weight_dtype=weight_dtype, mesh=self.mesh
         )
-        self.mlp = TtMoE(
-            device,
-            cfg,
-            _strip(sd, "mlp."),
-            weight_dtype=weight_dtype,
-            expert_dtype=expert_dtype,
-            expert_down_dtype=expert_down_dtype,
-            mesh=self.mesh,
-            weight_cache_path=weight_cache_path,
+        self.mlp = (
+            None
+            if cache_only
+            else TtMoE(
+                device,
+                cfg,
+                _strip(sd, "mlp."),
+                weight_dtype=weight_dtype,
+                expert_dtype=expert_dtype,
+                expert_down_dtype=expert_down_dtype,
+                mesh=self.mesh,
+                weight_cache_path=weight_cache_path,
+            )
         )
         # the MTP's own autoregressive state: latent cache + pooled-key index (``TtLatentCache.index``)
         self.cache = TtLatentCache(
@@ -199,8 +206,11 @@ class TtMTPBlock(LightweightModule):
         mesh = mesh if mesh is not None else GLMMesh.from_device(device)
         cache_dir = Path(weight_cache_root) / f"layer{MTP_LAYER}" if weight_cache_root else None
         if raw is None:
-            hit = TtMoE.expert_cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype)
-            name_filter = (lambda n: not _EXPERT_RE.match(n)) if hit else None
+            if kw.get("cache_only"):  # G53F-0227: no MoE tensors at all (the cache builder never runs it)
+                name_filter = lambda n: not n.startswith("mlp.")
+            else:
+                hit = TtMoE.expert_cache_complete(cache_dir, mesh, expert_dtype, expert_down_dtype)
+                name_filter = (lambda n: not _EXPERT_RE.match(n)) if hit else None
             raw = load_layer_raw(snapshot, MTP_LAYER, headers, name_filter=name_filter)
         if embedding is None:
             embedding = TtEmbedding.from_checkpoint(device, cfg, snapshot, headers)
@@ -393,6 +403,37 @@ class TtMTPBlock(LightweightModule):
         (the caller deallocates it)."""
         x = self.project(ids, hidden)
         return self.prefill_rows(x, user=user, seq_len=seq_len, start=start)
+
+    def prefill_state_rows(
+        self, ids: ttnn.Tensor, hidden: ttnn.Tensor, *, user: int, seq_len: int, start: int = 0
+    ) -> None:
+        """tt-blaze G53F-0227: the block's latent cache + pooled-key index of ``user``'s MTP positions
+        ``[start, start + seq_len)`` WITHOUT the attention output or the MoE -- the state the disaggregated prefill
+        exports to the ring's MTP stage (row p's latent / index keys are functions of ``input_layernorm(x_p)`` only,
+        ``x_p = eh_proj(enorm(e_{t_{p+1}}), hnorm(H_p))``). ``ids`` / ``hidden``: this mesh row's slab as in
+        ``prefill_cache``; on a multi-row mesh the normed rows are gathered over the rows and every row fills its
+        replicated cache / index identically (``TtDSA.prefill_state`` on the whole chunk, the v1 form)."""
+        rows = self.mesh.rows
+        T = int(hidden.shape[-2]) * rows
+        if T % TILE or seq_len > T or seq_len <= 0:
+            raise ValueError(f"T_pad={T} must be a multiple of {TILE} and 0 < seq_len={seq_len} <= T_pad")
+        if start < 0 or start % self.cache.block_size:
+            raise ValueError(f"chunk start {start} must be a non-negative multiple of {self.cache.block_size}")
+        if start + seq_len > self.max_seq_len:
+            raise ValueError(f"start {start} + seq_len {seq_len} > max_seq_len {self.max_seq_len}")
+        if start and start != self.next_start[user]:
+            raise ValueError(f"user {user}: chunk start {start} is not contiguous (expected {self.next_start[user]})")
+        x = self.project(ids, hidden)
+        h = self._norm(x, self.input_norm_w)
+        ttnn.deallocate(x)
+        if rows > 1:
+            h_full = self.mesh.all_gather_rows(h, dim=2)  # [1,1,T,H], slabs in mesh-row order
+            ttnn.deallocate(h)
+        else:
+            h_full = h
+        self.attn.prefill_state(h_full, self.cache, user, seq_len, start=start)
+        ttnn.deallocate(h_full)
+        self.next_start[user] = start + seq_len
 
     @staticmethod
     def ids_row(ids: ttnn.Tensor) -> ttnn.Tensor:

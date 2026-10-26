@@ -34,6 +34,7 @@ import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -134,13 +135,48 @@ def _recv_exact(sock, n: int) -> bytes:
     return bytes(buf)
 
 
-def _prefill(model, ids: list[int]):
+# tt-blaze G53F-0227: GLM53F_SEED_MTP=1 -- the server also builds the MTP layer's (checkpoint layer 45) prompt state for the
+# ring's MTP stage: every chunk's final hidden + the next tokens fill the block's own latent cache / index, exported and
+# pushed as "layer 45" (the ring's MTP stage registers that layer). Set by the server at start (``_MTP``).
+SEED_MTP = os.environ.get("GLM53F_SEED_MTP", "0") == "1"
+_MTP = {"block": None}
+
+
+def _mtp_hook(model, nxt: list[int]):
+    """``prefill_chunked``'s ``on_streams``: chunk [s0, e) -> the MTP rows [s0, e) (row p: H_p = the head's normed final
+    hidden, t_{p+1} = ``nxt[p]``) into the MTP block's cache, state only (``TtMTPBlock.prefill_state_rows``)."""
+    mtp, rows = _MTP["block"], model.mesh.rows
+
+    def hook(streams, s0: int, e: int):
+        T_pad = int(streams.shape[-2]) * rows
+        h = model.head.collapse(streams)
+        hn = model.head.norm(h)  # [1,1,T_loc,H] bf16 = the LM-head input (the MTP's H)
+        if h is not streams:
+            ttnn.deallocate(h)
+        host = model.embedding.tokens_to_host(torch.tensor(nxt[s0:e], dtype=torch.int64), pad_to=T_pad)
+        if rows > 1:
+            ids_dev = model.mesh.upload(host, ttnn.uint32, rows=3, layout=ttnn.ROW_MAJOR_LAYOUT)
+        else:
+            ids_dev = ttnn.from_torch(host, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=model.device)
+        mtp.prefill_state_rows(ids_dev, hn, user=0, seq_len=e - s0, start=s0)
+        ttnn.deallocate(ids_dev)
+        ttnn.deallocate(hn)
+
+    return hook
+
+
+def _prefill(model, ids: list[int], mtp_next: list[int] | None = None):
     """``(streams, logits_last, owner_row)`` of a whole prompt for slot 0: one eager prefill up to ``CHUNK`` tokens,
-    16 K chunks above (``GLM53MeshModel.prefill_chunked``)."""
+    16 K chunks above (``GLM53MeshModel.prefill_chunked``). ``mtp_next`` (with the MTP block built, G53F-0227): the
+    next token of every prompt row (``ids[1:] + [t]``), and the MTP state is built chunk by chunk alongside."""
     t = torch.tensor([int(v) for v in ids], dtype=torch.int64)
     chunk = int(os.environ.get("GLM53F_PREFILL_CHUNK", CHUNK))  # per call: the diagnosis ops' env can A/B it
-    if len(ids) > chunk:
-        return model.prefill_chunked(t, user=0, chunk=chunk)
+    hook = None
+    if _MTP["block"] is not None and mtp_next is not None:
+        assert len(mtp_next) == len(ids), (len(mtp_next), len(ids))
+        hook = _mtp_hook(model, [int(v) for v in mtp_next])
+    if len(ids) > chunk or hook is not None:  # one chunk of prefill_chunked == prefill (start 0, no padding knob)
+        return model.prefill_chunked(t, user=0, chunk=chunk, on_streams=hook)
     return model.prefill(t, user=0)
 
 
@@ -282,6 +318,24 @@ def test_prefill_seed_server(mesh_device):
         expert_down_dtype=EXPERT_DOWN_DTYPE,
     )
     logger.info(f"[seed-server] model built in {time.time() - t0:.0f} s; warm-up prefill")
+    push_layers = list(layers)
+    if SEED_MTP:
+        from models.demos.glm53_flash.tt.mtp import MTP_LAYER, TtMTPBlock
+
+        tm = time.time()
+        _MTP["block"] = TtMTPBlock.from_checkpoint(
+            mesh_device,
+            cfg,
+            embedding=model.embedding,
+            head=model.head,
+            weight_cache_root=CACHE_ROOT,
+            mesh=model.mesh,
+            max_batch=1,
+            max_seq_len=MAX_SEQ,
+            cache_only=True,
+        )
+        push_layers.append(MTP_LAYER)
+        logger.info(f"[seed-server] MTP layer {MTP_LAYER} cache builder in {time.time() - tm:.0f} s (G53F-0227)")
     # compile the programs at the lengths the ring will ask for (GLM53F_SEED_WARMUP, default 4 and 4092 tokens: the
     # first request at a new length otherwise pays its compile, 4.66 s vs 1.82 s at 4092, G53F-0085)
     # "N" (two passes) or "N:REPS": a long warm-up (e.g. 1040000:1) creates every DSA pools-bucket width's programs and
@@ -293,7 +347,7 @@ def test_prefill_seed_server(mesh_device):
             ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[: min(n, MAX_SEQ)], dtype=torch.int64)
             ttnn.synchronize_device(mesh_device)
             tw = time.perf_counter()
-            st, lg, _ = _prefill(model, ids.tolist())
+            st, lg, _ = _prefill(model, ids.tolist(), mtp_next=ids.tolist()[1:] + ids.tolist()[-1:])
             ttnn.synchronize_device(mesh_device)
             tp = time.perf_counter()
             ttnn.deallocate(st)
@@ -309,6 +363,8 @@ def test_prefill_seed_server(mesh_device):
             )
     _warm_tails(model, mesh_device)
     decs = {d.layer_idx: d for d in model.layers}
+    if _MTP["block"] is not None:  # the MTP layer exports like a DSA layer: its cache + pooled-key index
+        decs[push_layers[-1]] = SimpleNamespace(cache=_MTP["block"].cache, layer_idx=push_layers[-1])
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -353,8 +409,13 @@ def test_prefill_seed_server(mesh_device):
                     continue
                 if hdr["op"] == "register":
                     ranks[int(hdr["layer"])] = c
+                    if int(hdr["layer"]) not in push_layers:  # e.g. an MTP ring's layer 45 on a server without MTP
+                        logger.warning(
+                            f"[seed-server] layer {hdr['layer']} registered but this server does not seed it"
+                        )
                     logger.info(
-                        f"[seed-server] layer {hdr['layer']} registered from {hdr.get('host', addr)} ({len(ranks)}/45)"
+                        f"[seed-server] layer {hdr['layer']} registered from {hdr.get('host', addr)} "
+                        f"({sum(L in ranks for L in push_layers)}/{len(push_layers)})"
                     )
                 elif hdr["op"] == "driver":
                     driver = c
@@ -459,13 +520,15 @@ def test_prefill_seed_server(mesh_device):
             assert hdr["op"] == "prefill", hdr
             ids = [int(t) for t in hdr["ids"]]
             slot = int(hdr.get("slot", 0))
-            sp = POOL * ((len(ids) - 1) // POOL)
+            sp = POOL * ((len(ids) - 1) // POOL)  # < len(ids): the MTP rows [0, sp) need t_1 .. t_sp, all prompt tokens
             request += 1
             rep = {"op": "done", "S_prime": sp, "request": request, "prompt_len": len(ids)}
             if sp == 0:
                 _send(s, rep)
                 continue
-            while len(ranks) < len(layers):  # every decoder rank must be registered before the first push
+            while not all(
+                L in ranks for L in push_layers
+            ):  # every seeded rank must be registered before the first push
                 c, h2, addr = _accept_one()
                 if c is not None and h2["op"] == "register":
                     ranks[int(h2["layer"])] = c
@@ -480,7 +543,7 @@ def test_prefill_seed_server(mesh_device):
             ttnn.synchronize_device(mesh_device)
             t1 = time.perf_counter()
             try:
-                st, lg, owner = _prefill(model, ids[:sp])
+                st, lg, owner = _prefill(model, ids[:sp], mtp_next=ids[1 : sp + 1])
             finally:
                 for k, v in env_old.items():
                     if v is None:
@@ -521,9 +584,11 @@ def test_prefill_seed_server(mesh_device):
             # tt-blaze G53F-0219: the 11 DSA layers first (GLM53F_SEED_DSA_FIRST=1, default): their 1 GiB pushes + ring
             # writes are the tail after the last export, and the 34 small KDA exports (~0.9 s, flat in S) then run
             # under that tail instead of before it. Same bytes per layer; only the order of the pushes changes.
-            order = layers
+            order = push_layers
             if os.environ.get("GLM53F_SEED_DSA_FIRST", "1") == "1":
-                order = [L for L in layers if decs[L].cache is not None] + [L for L in layers if decs[L].cache is None]
+                order = [L for L in push_layers if decs[L].cache is not None] + [
+                    L for L in push_layers if decs[L].cache is None
+                ]
             try:
                 for L in order:
                     dec = decs[L]
