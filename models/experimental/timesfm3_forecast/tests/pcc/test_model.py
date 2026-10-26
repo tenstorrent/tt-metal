@@ -58,15 +58,15 @@ def _run(tt, contexts, horizon, capture=None, **kw):
 
 
 def _check_layers(name, g, capture, prepared, stack_floor=LAYER_FLOOR):
-    valid = prepared.token_valid[..., None].expand(-1, -1, 1280)
-    rows, n = prepared.rows, prepared.num_patches
-    ref_in = g["transformer_input"].reshape(rows, n, -1)
+    rows, n, kept = prepared.rows, prepared.num_patches, prepared.num_kept_patches
+    valid = prepared.token_valid[:, :kept, None].expand(-1, -1, 1280)
+    ref_in = g["transformer_input"].reshape(rows, n, -1)[:, :kept]
     check_pcc(f"{name} transformer_input", ref_in, capture["transformer_input"], LAYER_FLOOR, where=valid)
     for key, ref in sorted(g["layers"].items(), key=lambda kv: int(kv[0][5:].split(".")[0])):
         if "." in key:
             continue
         floor = stack_floor if key == "layer19" else LAYER_FLOOR
-        check_pcc(f"{name} {key} output", ref.reshape(rows, n, -1), capture[key], floor, where=valid)
+        check_pcc(f"{name} {key} output", ref.reshape(rows, n, -1)[:, :kept], capture[key], floor, where=valid)
 
 
 def test_single_series_every_layer(device):

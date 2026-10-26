@@ -175,9 +175,9 @@ class TtTimesFM3:
         return host_lib.prepare(contexts, horizon, **kw)
 
     def upload_inputs(self, prepared: host_lib.HostInputs) -> TtInputs:
-        rows, n = prepared.rows, prepared.num_patches
+        rows, n = prepared.rows, prepared.num_kept_patches
         s = pad_to_tile(n)
-        tokens = torch.nn.functional.pad(prepared.tokens, (0, 0, 0, s - n)).reshape(1, 1, rows * s, -1)
+        tokens = torch.nn.functional.pad(prepared.tokens[:, :n], (0, 0, 0, s - n)).reshape(1, 1, rows * s, -1)
         cos, sin = rope_tables(s, torch.float32)
         nfm = prepared.num_front_masked
         padded = bool((nfm > 0).any())
@@ -380,7 +380,11 @@ class TtTimesFM3:
 
         picked = take_slots(x, inputs.rows, inputs.padded_seq, inputs.readout_start, inputs.readout_count)
         out = linear(
-            picked, self.head_w, self.precision, bias=self.head_b, compute_kernel_config=self.precision.matmul_config("head")
+            picked,
+            self.head_w,
+            self.precision,
+            bias=self.head_b,
+            compute_kernel_config=self.precision.matmul_config("head"),
         )
         ttnn.deallocate(picked)
         return out

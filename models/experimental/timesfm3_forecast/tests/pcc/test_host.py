@@ -138,3 +138,13 @@ def test_broken_bands_fail_the_gates(name):
             ]
             passing = [k for k in must_fail if k not in failing]
             assert not passing, f"{name}: the {label.lower()} output passes the {precision} {passing}"
+
+
+@pytest.mark.parametrize("horizon", [64, 128])
+def test_dropped_trailing_tokens(horizon):
+    """R1-1: the device runs tokens up to the last read-out token only; the ROLLS tokens after it are dropped."""
+    g = load_golden("full16_2048_h64" if horizon == 64 else "full16_2048_h128")
+    hi = _prepare(g)
+    assert g["horizon"] == horizon
+    assert hi.num_kept_patches == hi.readout_tokens.stop
+    assert hi.num_patches - hi.num_kept_patches == host.ROLLS == 2

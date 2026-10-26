@@ -40,7 +40,7 @@ def _layer_index(case: str) -> int:
 
 def _inputs(tt, nfm: torch.Tensor, variates: int, n: int):
     """Device inputs (masks, RoPE tables) for module tests; no tokens."""
-    from models.experimental.timesfm3_forecast.common.host import HostInputs
+    from models.experimental.timesfm3_forecast.common.host import HostInputs, num_forecast_patches
 
     rows = nfm.shape[0]
     z = torch.zeros(rows, n)
@@ -48,9 +48,9 @@ def _inputs(tt, nfm: torch.Tensor, variates: int, n: int):
         tokens=torch.zeros(rows, n, 192, dtype=torch.float64),
         num_front_masked=nfm,
         variates=variates,
-        num_context_patches=n - 2,
+        num_context_patches=n + 1 - num_forecast_patches(64),  # read-out ends at token n - 1: nothing dropped
         horizon=64,
-        context_len=(n - 2) * 32,
+        context_len=(n + 1 - num_forecast_patches(64)) * 32,
         running_n=z,
         running_mu=z,
         running_sigma=z,

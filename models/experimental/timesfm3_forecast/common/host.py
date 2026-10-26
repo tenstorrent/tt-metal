@@ -186,6 +186,11 @@ class HostInputs:
         return self.num_context_patches - 1
 
     @property
+    def num_kept_patches(self) -> int:
+        """Tokens the device runs: everything up to the last read-out token (causal attention, per-patch rest)."""
+        return self.readout_start + self.num_forecast_patches
+
+    @property
     def readout_tokens(self) -> range:
         return range(self.readout_start, self.readout_start + self.num_forecast_patches)
 
