@@ -24,11 +24,14 @@ import pytest
 import torch
 
 M_ROWS = 1024 * 128
+# TIREX2_SWEEP_ROLES=a,b limits the sweep to those roles
 # role: (K, N, input dtype, output dtype, weight dtype)
 ROLES = {
     "mlstm_qkv": (512, 1536, "bf16", "bf16"),
     "mlstm_o_out": (512, 512, "bf16", "bf16"),
-    "ffn_down": (2048, 512, "bf16", "bf16"),
+    "variate_wo": (2048, 512, "bf16", "bf16"),  # was "ffn_down" in the R1-2f table; FFN down is 1408 x 512
+    "ffn_down": (1408, 512, "bf16", "bf16"),  # R1-2f' (D6)
+    "mlstm_qkvo": (512, 2048, "bf16", "bf16"),  # R1-2e: o packed after qkv
     "w_in": (512, 2048, "bf16", "fp32"),
     "embed_hidden": (64, 512, "bf16", "bf16"),
     "head_out": (512, 288, "bf16", "bf16"),
@@ -71,7 +74,10 @@ def test_sweep_matmul(device):
             ts.append(time.perf_counter() - t0)
         return out, statistics.median(ts)
 
+    only = [r for r in os.environ.get("TIREX2_SWEEP_ROLES", "").split(",") if r]
     for role, (K, N, din, dout) in ROLES.items():
+        if only and role not in only:
+            continue
         x = ttnn.from_torch(torch.randn(1, 1, M_ROWS, K), dtype=dt[din], layout=ttnn.TILE_LAYOUT, device=device)
         w = ttnn.from_torch(torch.randn(K, N) / K**0.5, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         base, base_s = timed(
@@ -82,7 +88,8 @@ def test_sweep_matmul(device):
         rows = [{"role": role, "config": "linear default", "ms": base_s * 1e3, "pcc": 1.0}]
         kt, nt = K // 32, N // 32
         for (mb, kb, nb), (sh, sw) in itertools.product(BLOCKS, SUBBLOCKS):
-            kb, nb = min(kb, kt), min(nb, nt)
+            # the largest K block <= kb that divides K (as tt/layers.py: _mm_config does)
+            kb, nb = max(d for d in range(1, min(kb, kt) + 1) if kt % d == 0), min(nb, nt)
             if kt % kb or mb % sh or nb % sw or sh * sw > 4:
                 continue
             name = f"minimal M{mb} K{kb} N{nb} sub{sh}x{sw}"
@@ -119,7 +126,7 @@ def test_sweep_matmul(device):
         results += rows
         (out_dir / "matmul_sweep.json").write_text(json.dumps(results, indent=1) + "\n")
     lines = [
-        "# R1-2f matmul sweep (M = 131072, HiFi4, fp32 acc; median of 10)",
+        f"# matmul sweep ({','.join(only) or 'all roles'}; M = 131072, HiFi4, fp32 acc; median of 10)",
         "",
         "| role | config | ms | pcc |",
         "|---|---|---|---|",
