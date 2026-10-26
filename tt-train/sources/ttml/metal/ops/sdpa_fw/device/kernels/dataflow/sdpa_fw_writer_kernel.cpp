@@ -30,9 +30,9 @@ void kernel_main() {
     constexpr auto output_args = TensorAccessorArgs<4>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
+    [[maybe_unused]] constexpr auto intermediates_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 #ifdef RETURN_INTERMEDIATES
     const uint32_t interm_tile_bytes = get_tile_size(cb_intermediates);
-    constexpr auto intermediates_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
     const auto intermediates_addr_generator = TensorAccessor(intermediates_args, intermediates_addr, interm_tile_bytes);
 #endif
 
