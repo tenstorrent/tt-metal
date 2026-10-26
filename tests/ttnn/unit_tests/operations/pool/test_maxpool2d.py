@@ -462,3 +462,26 @@ def test_max_pool2d_in_mem_config(device, input_spec, cores, tensor_map):
         nightly_skips=False,
         config_tensor_in_dram=True,
     )
+
+
+def test_max_pool2d_dram_slice_rejects_zero_stride(device, expect_error):
+    in_n, in_c, in_h, in_w = 1, 64, 32, 32
+    ttnn_input = ttnn.from_torch(
+        torch.randn(1, 1, in_n * in_h * in_w, in_c, dtype=torch.bfloat16),
+        ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    with expect_error(RuntimeError, "Stride must be greater than 0"):
+        ttnn.max_pool2d(
+            input_tensor=ttnn_input,
+            batch_size=in_n,
+            input_h=in_h,
+            input_w=in_w,
+            channels=in_c,
+            kernel_size=[3, 3],
+            stride=[0, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            dram_slice_config=ttnn.Op2DSliceConfig(num_slices=2, slice_type=SliceWidth),
+        )

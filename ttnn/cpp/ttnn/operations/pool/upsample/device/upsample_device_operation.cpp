@@ -89,8 +89,20 @@ UpsampleOperation::spec_return_value_t UpsampleOperation::compute_output_specs(
 
     // Compute output dimensions (floor for PyTorch compatibility)
     const uint32_t out_n = input_shape[0];
-    const uint32_t out_h = static_cast<uint32_t>(std::floor(input_shape[1] * args.scale_factor_h));
-    const uint32_t out_w = static_cast<uint32_t>(std::floor(input_shape[2] * args.scale_factor_w));
+    const float out_h_f = std::floor(input_shape[1] * args.scale_factor_h);
+    const float out_w_f = std::floor(input_shape[2] * args.scale_factor_w);
+    TT_FATAL(
+        out_n > 0 && out_h_f >= 1.0f && out_w_f >= 1.0f,
+        "upsample: output shape must be non-empty, got N={}, H={}, W={} for input H={}, W={} with scale ({}, {})",
+        out_n,
+        out_h_f,
+        out_w_f,
+        input_shape[1],
+        input_shape[2],
+        args.scale_factor_h,
+        args.scale_factor_w);
+    const uint32_t out_h = static_cast<uint32_t>(out_h_f);
+    const uint32_t out_w = static_cast<uint32_t>(out_w_f);
     const uint32_t out_c = input_shape[3];
     const ttnn::Shape output_shape({out_n, out_h, out_w, out_c});
 
