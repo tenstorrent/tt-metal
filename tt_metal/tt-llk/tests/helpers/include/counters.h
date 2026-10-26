@@ -11,11 +11,6 @@
 // START_PERF_MEASURE expands to ZONE_SCOPED, so the zone layer must be in scope here; self-guarded on LLK_PROFILER.
 #include "profiler.h"
 
-// Counters on (PERF_COUNTERS_COMPILED, set only by --enable-perf-counters builds) counts the zones the host names for a
-// launch. Counters off compiles no counter code: a zone keeps only its rendezvous, the same barriers in both builds.
-
-// BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
-
 // Counter inventory, register map and register primitives are shared with the metal profiler. On Quasar
 // bank_regs() defaults to the TRISC-local window, so every thread reaches the block of its own NEO.
 #include <array>
@@ -36,6 +31,8 @@ inline void clear_debug_features()
 #endif
 }
 
+// Counters on (PERF_COUNTERS_COMPILED, set only by --enable-perf-counters builds) counts the zones the host names for a
+// launch. Counters off compiles no counter code: a zone keeps only its rendezvous, the same barriers in both builds.
 #if defined(PERF_COUNTERS_COMPILED)
 
 using llk::perf::Bank;
@@ -193,7 +190,7 @@ constexpr std::uint32_t COUNTED_ZONES_REG = PERF_COUNTERS_LAUNCH_WORD_ADDR;
 constexpr std::uint32_t LAUNCH_WORD_OVERLAY_BASE = 0xFFB40000;
 #if defined(ARCH_WORMHOLE)
 constexpr std::uint32_t LAUNCH_WORD_SCRATCH_INDEX = 249;
-#else
+#elif defined(ARCH_BLACKHOLE)
 constexpr std::uint32_t LAUNCH_WORD_SCRATCH_INDEX = 37;
 #endif
 constexpr std::uint32_t COUNTED_ZONES_REG = LAUNCH_WORD_OVERLAY_BASE + LAUNCH_WORD_SCRATCH_INDEX * 4;
@@ -369,6 +366,7 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 
 #endif // PERF_COUNTERS_COMPILED
 
+// The per-zone measurement layer also needs LLK_PROFILER; BRISC builds only the config above.
 #if defined(LLK_PROFILER)
 
 #if defined(PERF_COUNTERS_COMPILED)
