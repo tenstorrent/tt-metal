@@ -32,7 +32,8 @@
 //     device ever waits for data from another core, so corruption cannot turn into a hang.
 //
 // Environment knobs (all optional):
-//   TT_NOC_SWEEP_TRANSFER_BYTES  bytes per (source, destination) pair, multiple of 128    (default 1024)
+//   TT_NOC_SWEEP_TRANSFER_BYTES  comma list of bytes per (source, destination) pair, each a multiple of 128;
+//                                every step of every sweep runs once per size   (default 1024,2048,4096,8192)
 //   TT_NOC_SWEEP_CHUNK_BYTES     bytes per NOC transaction, 0 = whole transfer per call   (default 0)
 //   TT_NOC_SWEEP_ITERS           how many times each step re-sends the same data         (default 1)
 //   TT_NOC_SWEEP_SEED            payload RNG seed                                        (default 0xC0FFEE)
@@ -120,7 +121,7 @@ struct RiscNoc {
 constexpr auto kProgressInterval = std::chrono::seconds(10);
 
 struct SweepConfig {
-    uint32_t transfer_bytes = 1024;
+    std::vector<uint32_t> transfer_sizes = {1024, 2048, 4096, 8192};
     uint32_t chunk_bytes = 0;
     uint32_t num_iters = 1;
     uint32_t seed = 0xC0FFEE;
@@ -167,8 +168,14 @@ std::vector<uint32_t> parse_list(const std::string& s) {
 
 SweepConfig config_from_env() {
     SweepConfig cfg;
-    cfg.transfer_bytes = tt::parse_env<uint32_t>("TT_NOC_SWEEP_TRANSFER_BYTES", cfg.transfer_bytes);
-    cfg.transfer_bytes = std::max<uint32_t>(kFlitPairBytes, cfg.transfer_bytes - (cfg.transfer_bytes % kFlitPairBytes));
+    const std::string sizes = tt::parse_env<std::string>("TT_NOC_SWEEP_TRANSFER_BYTES", "");
+    if (!sizes.empty()) {
+        cfg.transfer_sizes = parse_list(sizes);
+        TT_FATAL(!cfg.transfer_sizes.empty(), "TT_NOC_SWEEP_TRANSFER_BYTES must list at least one size");
+    }
+    for (auto& t : cfg.transfer_sizes) {
+        t = std::max<uint32_t>(kFlitPairBytes, t - (t % kFlitPairBytes));
+    }
     cfg.chunk_bytes = tt::parse_env<uint32_t>("TT_NOC_SWEEP_CHUNK_BYTES", cfg.chunk_bytes);
     cfg.chunk_bytes -= cfg.chunk_bytes % kFlitBytes;
     cfg.num_iters = std::max<uint32_t>(1, tt::parse_env<uint32_t>("TT_NOC_SWEEP_ITERS", cfg.num_iters));
@@ -410,11 +417,15 @@ protected:
         for (NOC n : cfg_.nocs) {
             noc_list += fmt::format("{}{}", noc_list.empty() ? "" : ",", static_cast<int>(n));
         }
+        std::string size_list;
+        for (uint32_t t : cfg_.transfer_sizes) {
+            size_list += fmt::format("{}{}", size_list.empty() ? "" : ",", t);
+        }
         log_info(
             tt::LogTest,
             "NOC line sweep config: transfer={}B chunk={}B iters={} seed=0x{:x} nocs={} dispatch={} verbose={} "
             "inject_xor=0x{:x} inject_flit_word={}",
-            cfg_.transfer_bytes,
+            size_list,
             cfg_.chunk_bytes,
             cfg_.num_iters,
             cfg_.seed,
@@ -464,8 +475,8 @@ protected:
     }
 
     // Cap the transfer so that every core of the sink line can hold one slot per source core.
-    uint32_t effective_transfer(const Line& sources, const Line& sinks) const {
-        uint32_t t = cfg_.transfer_bytes;
+    uint32_t effective_transfer(const Line& sources, const Line& sinks, uint32_t requested) const {
+        uint32_t t = requested;
         for (const Line* l : {&sources, &sinks}) {
             const Region r = unreserved_region(l->prog_type);
             // payload + num_sources slots must fit; payload area is rounded up to 1 KB.
@@ -484,13 +495,15 @@ protected:
         const Line& passive,
         RiscNoc rn,
         bool pull,
+        uint32_t requested_transfer,
         uint32_t step_index) {
         IDevice* device = mesh_device->get_device(distributed::MeshCoordinate(0, 0));
         const ChipId dev_id = device->id();
         const Line& sources = pull ? passive : active;
         const Line& sinks = pull ? active : passive;
-        const uint32_t transfer = effective_transfer(sources, sinks);
-        if (transfer != cfg_.transfer_bytes && warned_caps_.insert(sources.name + "->" + sinks.name).second) {
+        const uint32_t transfer = effective_transfer(sources, sinks, requested_transfer);
+        if (transfer != requested_transfer &&
+            warned_caps_.insert(fmt::format("{}->{}@{}", sources.name, sinks.name, requested_transfer)).second) {
             log_warning(
                 tt::LogTest,
                 "[dev {}] {} -> {}: transfer capped to {} B so that {} slots fit in the {} unreserved region",
@@ -623,7 +636,7 @@ protected:
                 }
                 bad_pairs++;
                 const std::string msg = fmt::format(
-                    "[dev {}] {} {} -> {} {} over noc{} ({}, {}): {}",
+                    "[dev {}] {} {} -> {} {} over noc{} ({}, {}, {} B): {}",
                     dev_id,
                     sources.name,
                     core_desc(device, r.src, sources.host_type),
@@ -632,6 +645,7 @@ protected:
                     static_cast<int>(rn.noc),
                     pull ? "PULL/read" : "PUSH/write",
                     active.is_eth() ? "erisc kernel" : "tensix kernel",
+                    transfer,
                     pair_signature(r));
                 suite_failures_.push_back(msg);
                 if (reported++ < cfg_.max_report) {
@@ -694,6 +708,7 @@ protected:
                 const Line* active;
                 const Line* passive;
                 RiscNoc rn;
+                uint32_t transfer;
             };
             std::vector<Step> plan;
             for (const auto& active : active_lines) {
@@ -704,24 +719,34 @@ protected:
                         "supported on this arch)",
                         device->id(),
                         active.name);
-                    continue;
                 }
-                for (const auto& passive : passive_lines) {
-                    if (passive.kind == active.kind && passive.name == active.name) {
+            }
+            // Every (active, passive, risc/noc) combination is run once per transfer size, smallest size first so
+            // the whole chip gets a quick first pass before the larger packets.
+            for (uint32_t transfer : cfg_.transfer_sizes) {
+                for (const auto& active : active_lines) {
+                    if (!can_run_kernel(active, slow_dispatch_, arch_)) {
                         continue;
                     }
-                    for (const RiscNoc& rn : risc_noc_combos(active, cfg_.nocs)) {
-                        plan.push_back({&active, &passive, rn});
+                    for (const auto& passive : passive_lines) {
+                        if (passive.kind == active.kind && passive.name == active.name) {
+                            continue;
+                        }
+                        for (const RiscNoc& rn : risc_noc_combos(active, cfg_.nocs)) {
+                            plan.push_back({&active, &passive, rn, transfer});
+                        }
                     }
                 }
             }
             log_info(
                 tt::LogTest,
-                "[dev {}] sweep '{}': {} active x {} passive lines, {} steps, grid {}x{}, harvesting mask 0x{:x}",
+                "[dev {}] sweep '{}': {} active x {} passive lines x {} sizes, {} steps, grid {}x{}, harvesting mask "
+                "0x{:x}",
                 device->id(),
                 sweep_name,
                 active_lines.size(),
                 passive_lines.size(),
+                cfg_.transfer_sizes.size(),
                 plan.size(),
                 device->compute_with_storage_grid_size().x,
                 device->compute_with_storage_grid_size().y,
@@ -742,12 +767,12 @@ protected:
             const uint32_t pairs_before = pairs_checked_;
             for (uint32_t i = 0; i < plan.size(); i++) {
                 const Step& st = plan[i];
-                dev_bad += run_step(mesh_device, *st.active, *st.passive, st.rn, pull, i);
+                dev_bad += run_step(mesh_device, *st.active, *st.passive, st.rn, pull, st.transfer, i);
                 const auto now = std::chrono::steady_clock::now();
                 if (!cfg_.verbose && i + 1 < plan.size() && now - last_report >= kProgressInterval) {
                     log_info(
                         tt::LogTest,
-                        "[dev {}] sweep '{}': step {}/{} ({} {} {} noc{}), {} bad so far, {:.1f} s elapsed",
+                        "[dev {}] sweep '{}': step {}/{} ({} {} {} noc{} {} B), {} bad so far, {:.1f} s elapsed",
                         device->id(),
                         sweep_name,
                         i + 1,
@@ -756,6 +781,7 @@ protected:
                         pull ? "<-" : "->",
                         st.passive->name,
                         static_cast<int>(st.rn.noc),
+                        st.transfer,
                         dev_bad,
                         std::chrono::duration<double>(now - t0).count());
                     last_report = now;

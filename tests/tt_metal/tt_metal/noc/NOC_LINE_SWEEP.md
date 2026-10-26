@@ -32,7 +32,9 @@ Faults it is designed to expose:
   * PUSH: every core of the active line runs the kernel and writes its own host-generated payload into a dedicated
     slot on every core of the passive line.
   * PULL: every core of the active line reads every passive core's payload into a dedicated local slot.
-* A **sweep** iterates: for each active line, for each other passive line, for each NOC (and RISC) combination.
+* A **sweep** iterates: for each transfer size, for each active line, for each other passive line, for each NOC
+  (and RISC) combination. The default sizes are 1, 2, 4 and 8 KB per (source, destination) pair, each sent as a
+  single NOC transaction, so every path carries packets of 16, 32, 64 and 128 flits.
 * After every step the host reads every slot back and compares it word for word with the expected payload.
 * Payloads are random flits, each followed by its bitwise complement. Every bit at every position inside a 64-byte
   flit is therefore sent as both 0 and 1 in every 128 bytes, so a stuck-at in either direction cannot hide behind
@@ -80,9 +82,9 @@ Output is deliberately compact. Each sweep logs one header line and one summary 
 every 10 s while it runs, and the bad pairs of any failing step (capped by `TT_NOC_SWEEP_MAX_REPORT`):
 
 ```
-[dev 0] sweep 'tensix row-major push': 8 active x 8 passive lines, 112 steps, grid 8x8, harvesting mask 0x204
-[dev 0] sweep 'tensix row-major push': step 57/112 (row4 -> row0 noc1), 0 bad so far, 10.0 s elapsed
-[dev 0] sweep 'tensix row-major push': 112 steps, 7168 pairs, 0 bad, 0.4 s (3.5 ms/step: host-write 0.2, build+run 0.9, readback+check 2.4)
+[dev 0] sweep 'tensix row-major push': 8 active x 8 passive lines x 4 sizes, 448 steps, grid 8x8, harvesting mask 0x204
+[dev 0] sweep 'tensix row-major push': step 230/448 (row4 -> row0 noc1 4096 B), 0 bad so far, 10.0 s elapsed
+[dev 0] sweep 'tensix row-major push': 448 steps, 28672 pairs, 0 bad, 1.8 s (4.1 ms/step: host-write 0.2, build+run 1.0, readback+check 2.8)
 ```
 
 The summary splits the per-step time into host L1 writes (payload and poison), program build + launch + wait for completion, and L1 readback + compare, which shows directly which part is slow on a given platform. The progress line only appears for sweeps that run longer than 10 s. A progress line that stops advancing means
@@ -91,7 +93,7 @@ a kernel on the active line never finished; the step named in the last progress 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `TT_NOC_SWEEP_TRANSFER_BYTES` | 1024 | bytes per (source, destination) pair, multiple of 128 |
+| `TT_NOC_SWEEP_TRANSFER_BYTES` | `1024,2048,4096,8192` | comma list of bytes per (source, destination) pair, each a multiple of 128; every step runs once per size |
 | `TT_NOC_SWEEP_CHUNK_BYTES` | 0 | bytes per NOC transaction; 0 = whole transfer per call |
 | `TT_NOC_SWEEP_ITERS` | 1 | re-send the same data this many times per step |
 | `TT_NOC_SWEEP_SEED` | 0xC0FFEE | payload RNG seed |
@@ -106,9 +108,11 @@ a kernel on the active line never finished; the step named in the last progress 
 The transfer size is capped automatically when a sink line cannot hold one slot per source core (small Ethernet L1
 on some architectures); a warning says so.
 
-Cost: about 2 s per chip on Wormhole N300 (about 4 ms per step) and about 15-20 s per chip on Blackhole (10-21 ms
-per step; host L1 readback is the largest share, Ethernet program load the next). Send the output to a file: on a
-slow terminal the log writes themselves can take several times longer than the test.
+Cost: about 10 s per chip on Wormhole N300 with the default four sizes (about 4 ms per step, independent of size
+there). On Blackhole the per-step cost grows with the transfer size because host L1 readback dominates; a single
+1 KB size measured 10-21 ms per step and about 15-20 s per chip, so budget several times that for the default
+sizes, or set `TT_NOC_SWEEP_TRANSFER_BYTES=1024` for a quick pass. Send the output to a file: on a slow terminal
+the log writes themselves can take several times longer than the test.
 
 ## Reading a failure
 
@@ -116,7 +120,7 @@ Every bad (source, destination) pair is logged once, the step it belongs to is l
 fixture prints a summary at the end:
 
 ```
-[dev 0] active-eth log(0,2) virt(...) phys(2,1) -> row0 log(3,0) virt(...) phys(4,2) over noc1 (PUSH/write, erisc kernel):
+[dev 0] active-eth log(0,2) virt(...) phys(2,1) -> row0 log(3,0) virt(...) phys(4,2) over noc1 (PUSH/write, erisc kernel, 1024 B):
     8/256 bad words, xor_or=0x00000800, fault=stuck-at-1 [0->1: 8/8, 1->0: 0/8], flit-word{idx:count}={15:8}, first bad @+0x3c exp=... got=...
 ```
 
@@ -148,7 +152,8 @@ To confirm the checker reports what you expect, make the host write a corrupted 
 still expecting the pristine one. Every pair must then be reported with exactly that signature:
 
 ```bash
-TT_METAL_SLOW_DISPATCH_MODE=1 TT_NOC_SWEEP_INJECT_XOR=0x800 TT_NOC_SWEEP_INJECT_FLIT_WORD=15 \
+TT_METAL_SLOW_DISPATCH_MODE=1 TT_NOC_SWEEP_TRANSFER_BYTES=1024 \
+TT_NOC_SWEEP_INJECT_XOR=0x800 TT_NOC_SWEEP_INJECT_FLIT_WORD=15 \
   ./build/test/tt_metal/unit_tests_noc --gtest_filter='NocLineSweepFixture.TensixRowMajorPush'
 # ... 8/256 bad words, xor_or=0x00000800, fault=stuck-at-1 [0->1: 8/8, 1->0: 0/8], flit-word{idx:count}={15:8} ...
 ```
@@ -156,7 +161,8 @@ TT_METAL_SLOW_DISPATCH_MODE=1 TT_NOC_SWEEP_INJECT_XOR=0x800 TT_NOC_SWEEP_INJECT_
 A 1 KB payload has 16 flits, so 16 samples of word 15, of which exactly 8 carry a 0 at bit 11 and 8 carry a 1
 (each flit is paired with its complement). `set` corrupts the 8 zeros and reports `stuck-at-1 [0->1: 8/8, 1->0: 0/8]`;
 `TT_NOC_SWEEP_INJECT_MODE=clear` corrupts the 8 ones and reports `stuck-at-0 [0->1: 0/8, 1->0: 8/8]`; `flip`
-corrupts all 16 and reports `inverted [0->1: 8/8, 1->0: 8/8]` with 16/256 bad words.
+corrupts all 16 and reports `inverted [0->1: 8/8, 1->0: 8/8]` with 16/256 bad words. Larger sizes scale the
+counts: 8 KB gives `[0->1: 64/64, 1->0: 0/64]`.
 
 ## Limitations
 
