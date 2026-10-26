@@ -28,7 +28,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.dsa import TtDSA, TtLatentCache, sparse_decode_enabled
-from models.demos.glm53_flash.tt.kda import TtKDA
+from models.demos.glm53_flash.tt.kda import TtKDA, chrono_anchor
 from models.demos.glm53_flash.tt.mesh import GLMMesh, single_chip
 from models.demos.glm53_flash.tt.mhc import build_mhc
 
@@ -235,13 +235,16 @@ class TtDecoderLayer(LightweightModule):
 
         def attention(h):  # h: [1,1,T/rows,hidden] bf16, input_layernorm applied
             if self.is_kda:
-                start_t = actual_start if actual_start is not None else self.attn.scalar(start)
+                T_loc = h.shape[-2]
+                # tt-blaze G53F-0226: ttKDA's chronology anchor for the contiguous slab layout (``chrono_anchor``:
+                # the raw start rotates a ragged last chunk at start > 0)
+                k_start = chrono_anchor(start, T_loc, self.mesh.rows) if actual_start is None else start
+                start_t = actual_start if actual_start is not None else self.attn.scalar(k_start)
                 end = actual_end
                 # the exclusive global valid end; a chunk at start > 0 always carries it so the kernels'
                 # chronology is the clipped interval [start, start + seq_len) (derive_interval)
                 if end is None and (seq_len != T or start):
-                    end = self.attn.scalar(start + seq_len)
-                T_loc = h.shape[-2]
+                    end = self.attn.scalar(k_start + seq_len)
                 y, new_state.kda = self.attn.prefill_forward(
                     ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end
                 )

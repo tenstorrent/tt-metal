@@ -104,6 +104,22 @@ def kda_config(cfg: GLM53FlashConfig) -> KDAConfig:
     )
 
 
+def chrono_anchor(start: int, local_rows: int, rows: int) -> int:
+    """tt-blaze G53F-0226: the actual_start to hand ttKDA for a chunk laid out CONTIGUOUSLY over the mesh rows (mesh
+    row r holds chunk rows [r * local_rows, (r + 1) * local_rows), ``GLM53MeshModel.prefill``). ttKDA derives its
+    chronology BLOCK-CYCLICALLY from the absolute start (``kda/device/kernels/chronology.hpp`` ``derive``: first rank
+    = (start / local_rows) % rows, split when start % local_rows != 0), which matches the contiguous layout only when
+    start % (rows * local_rows) == 0 -- true for every full 16 K chunk (8 x 2048), false for nearly every ragged last
+    chunk at start > 0, which ttKDA then runs ROTATED (a mid-slab first row, a wrapped tail, the last row's padding
+    taken as tokens). KDA has no positional encoding: only the chronology reads the start, so anchoring it at the
+    largest multiple of rows * local_rows <= start (> 0 for any start > 0, as start >= 16384 >= rows * local_rows)
+    is the contiguous order. Opt-in ``GLM53_KDA_CHRONO_ANCHOR=1`` until validated (read per call)."""
+    if os.environ.get("GLM53_KDA_CHRONO_ANCHOR", "0") != "1" or rows <= 1:
+        return start
+    span = rows * local_rows
+    return start - start % span
+
+
 def device_scalar_u32(device, value: int) -> ttnn.Tensor:
     """Replicated UINT32 row-major [1,1,1,1] device scalar (ttKDA's actual_start / actual_end)."""
     return ttnn.from_torch(

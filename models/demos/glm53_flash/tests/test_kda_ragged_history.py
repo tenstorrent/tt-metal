@@ -24,7 +24,7 @@ import ttnn
 from models.demos.glm53_flash.reference.checkpoint import default_snapshot_dir, load_layer_raw, shard_headers
 from models.demos.glm53_flash.tests.utils import pcc
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-from models.demos.glm53_flash.tt.kda import TtKDA
+from models.demos.glm53_flash.tt.kda import TtKDA, chrono_anchor
 from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "8,4").split(","))
@@ -74,8 +74,9 @@ def test_kda_ragged_history(mesh_device):
             ttnn.deallocate(p_dev)
         _poison(mesh_device, junk)
         x_dev = mesh.upload(x, ttnn.bfloat16, rows=1)
-        end = tt.scalar(PRE + S) if (S != T or PRE) else None
-        y, new_state = tt.prefill_forward(x_dev, state, tt.scalar(PRE), end)
+        k0 = chrono_anchor(PRE, T_loc, rows)  # G53F-0226 (GLM53_KDA_CHRONO_ANCHOR): the start ttKDA is handed
+        end = tt.scalar(k0 + S) if (S != T or PRE) else None
+        y, new_state = tt.prefill_forward(x_dev, state, tt.scalar(k0), end)
         out = mesh.to_host(y, rows=1).float()[0]  # [T, 4096] in slab order
         rec = ttnn.to_torch(mesh.device_tensors(new_state.recurrent)[0]).float()
         outs.append((junk, out, rec))
@@ -95,6 +96,23 @@ def test_kda_ragged_history(mesh_device):
             y_hf = hf(
                 x[:, :S], cache_params=DynamicCache(config=text), attention_mask=torch.ones(1, S, dtype=torch.bool)
             )
+    if PRE:
+        # G53F-0226 reference: the same PRE + S tokens as ONE chunk from position 0 (no carry-in, no ragged start): the
+        # ragged chunk's rows must match it up to the decomposition's rounding, per mesh row of the ragged chunk
+        x_all = torch.cat([x_pre, x], dim=1)  # [1, PRE + T, H]; rows PRE + S.. are zero padding
+        assert (PRE + T) % (rows * 32) == 0, (PRE, T)
+        a_dev = mesh.upload(x_all, ttnn.bfloat16, rows=1)
+        y_all, st_all = tt.prefill_forward(a_dev, tt.allocate_state(1), tt.scalar(0), tt.scalar(PRE + S))
+        ref_all = mesh.to_host(y_all, rows=1).float()[0][PRE : PRE + S]
+        rec_all = ttnn.to_torch(mesh.device_tensors(st_all.recurrent)[0]).float()
+        two = outs[0][1][:S]
+        per = [round(pcc(ref_all[r * T_loc : min(S, (r + 1) * T_loc)], two[r * T_loc : min(S, (r + 1) * T_loc)]), 6)
+               for r in range(rows) if r * T_loc < S]  # fmt: skip
+        logger.info(
+            f"[ragged] PRE={PRE} T={T} S={S} anchor start {chrono_anchor(PRE, T_loc, rows)}: ragged chunk vs one-chunk "
+            f"reference pcc {pcc(ref_all, two):.6f}, per mesh row {per}, max abs {float((ref_all - two).abs().max()):.4g}; "
+            f"final state pcc {pcc(rec_all, outs[0][2]):.6f}"
+        )
     ref_junk, ref, ref_rec = outs[0]
     for junk, out, rec in outs:
         diff = (out[:S] != ref[:S]).any(-1).nonzero().flatten()
