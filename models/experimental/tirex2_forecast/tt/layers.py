@@ -100,6 +100,7 @@ MM_BLOCKS = {
     (512, 2048): (8, 8, 8, 4, 1),
     (512, 512): (4, 8, 8, 4, 1),
     (2048, 512): (8, 8, 4, 4, 1),
+    (1408, 512): (16, 11, 4, 2, 2),  # FFN w_down, R1-2f' (iter_01/r1_2fp/matmul_sweep.md: 4.00 -> 1.82 ms)
     (64, 512): (4, 2, 8, 2, 2),
     (512, 288): (8, 8, 4, 1, 4),
 }
@@ -252,7 +253,6 @@ def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.ML
     lf = ttnn.log(sig)  # f is soft-capped to [-15, 15]: log(sigmoid) is exact enough in fp32
     free(sig, f_col)
     b_col = ttnn.cumsum(lf, dim=2)  # inclusive cumsum of log forget gates inside each chunk
-    g_last = ttnn.sum(lf, dim=2, keepdim=True)  # total log forget of each chunk (R1-4: no row slice of b_col)
     free(lf)
     b_row = ttnn.transpose(b_col, -2, -1)
     i_row = ttnn.transpose(i_col, -2, -1)
@@ -263,6 +263,7 @@ def mlstm_chunkwise(device, q, k, v, g, consts: DeviceConsts, eps: float = df.ML
     D_masked = ttnn.add(D, consts.mask)
     free(D)
     rmax = ttnn.max(D_masked, dim=-1, keepdim=True)  # [N, 1, L, 1]
+    g_last = ttnn.slice(b_col, (0, 0, L - 1, 0), (N, 1, L, 1))  # total log forget of each chunk
     a_row = ttnn.add(u_row, g_last)  # g - b_s + i_s: log weight of token s at the chunk end
     free(u_row)
     amax = ttnn.max(a_row, dim=-1, keepdim=True)  # [N, 1, 1, 1]
