@@ -1622,7 +1622,8 @@ template <
     uint32_t cb_windowed_k_range = 0,
     bool padded_q_slots_enabled = true,
     bool qk_row_mop = false,
-    bool out_row_mop = false>
+    bool out_row_mop = false,
+    bool qk_form_keys = true>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1808,7 +1809,7 @@ void sdpa_inner_loop(
              */
             reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks<qk_row_mop, DHt, sdpa_pack_format<cb_qk_im>()>(
+            matmul_blocks<qk_row_mop, qk_form_keys ? DHt : 0, qk_form_keys ? sdpa_pack_format<cb_qk_im>() : DataFormat::Invalid>(
                 cb_q_in,
                 cb_k_in,
                 cb_qk_im,
@@ -2351,7 +2352,8 @@ template <
     bool use_joint_mask,
     uint32_t scale_fp32,
     bool qk_row_mop = false,
-    bool out_row_mop = false>
+    bool out_row_mop = false,
+    bool qk_form_keys = true>
 void sdpa_joint(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2412,7 +2414,8 @@ void sdpa_joint(
         0,      // cb_windowed_k_range (not used)
         true,   // padded_q_slots_enabled (default)
         qk_row_mop,
-        out_row_mop>(
+        out_row_mop,
+        qk_form_keys>(
         Skt,
         qk_in0_block_w,
         qk_subblock_w,

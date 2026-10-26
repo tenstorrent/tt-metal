@@ -34,11 +34,15 @@ void kernel_main() {
     constexpr uint32_t mask_chunk_1 = get_compile_time_arg_val(17);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(18);
 #ifdef ARCH_BLACKHOLE
-    constexpr bool qk_row_mop = qk_subblock_h * qk_subblock_w >= 8 && qk_in0_block_w > 1;
+    // One-row 8-tile QK sub blocks read slower on the keyed row form than on main's tile form.
+    constexpr bool qk_wide_row = qk_subblock_h == 1 && qk_subblock_w >= 8;
+    constexpr bool qk_row_mop = qk_subblock_h * qk_subblock_w >= 8 && qk_in0_block_w > 1 && !qk_wide_row;
+    constexpr bool qk_form_keys = !qk_wide_row;
     constexpr bool out_row_mop = out_subblock_h * out_subblock_w >= 8 && out_in0_block_w > 1;
 #else
     constexpr bool qk_row_mop = false;
     constexpr bool out_row_mop = false;
+    constexpr bool qk_form_keys = true;
 #endif
 
     uint32_t argidx = 0;
@@ -86,7 +90,8 @@ void kernel_main() {
                 use_joint_mask,
                 scale_fp32,
                 qk_row_mop,
-                out_row_mop>(
+                out_row_mop,
+                qk_form_keys>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,
