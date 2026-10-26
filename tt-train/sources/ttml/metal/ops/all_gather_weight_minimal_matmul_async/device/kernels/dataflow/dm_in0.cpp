@@ -89,12 +89,6 @@ void kernel_main() {
             bool is_last_block = (m_block_iter == M_blocks_per_core - 1) && (n_block_iter == (N_blocks_per_core - 1));
 
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                if constexpr (is_output_writer) {
-                    if (deferred.pending && k_block == defer_write_k_block) {
-                        deferred.write(out_writer, cb_out_id, M_tiles, N_tiles, out_tile_size);
-                    }
-                }
-
                 cb_in0.reserve_back(in0_block_num_tiles);
 
                 uint32_t in0_start_address = cb_in0.get_write_ptr();
@@ -133,10 +127,16 @@ void kernel_main() {
 
                     in0_valid_semaphore.relay_unicast(noc, in0_receiver_semaphore, in0_dest_noc_x, in0_dest_noc_y);
                 }
+
+                if constexpr (is_output_writer) {
+                    if (deferred.pending && k_block == defer_write_k_block) {
+                        deferred.write(out_writer, cb_out_id, M_tiles, N_tiles, out_tile_size);
+                    }
+                }
             }
 
             if constexpr (is_output_writer) {
-                if (is_last_block || is_injector_core) {
+                if (is_last_block) {
                     write_block_columns<M_block_tiles, N_block_tiles, true>(
                         out_writer, M_tiles, N_tiles, cb_out_id, out_tile_size, m_tile, m_tile_end, cols, width);
                 } else {
