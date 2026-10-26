@@ -34,8 +34,9 @@ ttnn::Tensor ones(
 // Mapper that replicates a tensor over `device`'s mesh with one Replicate per mesh axis, the label a fresh device
 // tensor gets from create_device_tensor. ttnn::distributed::replicate_tensor_to_mesh_mapper (and a plain host tensor
 // moved to the mesh) produce the collapsed `{N}, [Replicate]` instead, a single placement for the whole mesh that
-// cannot be indexed by mesh axis; every tensor created without a mapper goes through this one so a parameter's
-// placement can always be read per axis (FSDP, synchronize_gradients, checkpointing).
+// cannot be indexed by mesh axis. from_vector, full / zeros / ones, and nanobind's from_numpy go through this one
+// when no mapper is given, so a parameter's placement can always be read per axis (FSDP, synchronize_gradients,
+// checkpointing).
 [[nodiscard]] std::unique_ptr<ttnn::distributed::TensorToMesh> replicate_to_mesh_mapper(
     ttnn::distributed::MeshDevice& device);
 

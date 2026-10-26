@@ -87,7 +87,9 @@ ttnn::Tensor empty(
 }
 
 ttnn::Tensor full(const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
-    return ttnn::full(shape, value, dtype, ttnn::Layout::TILE, std::ref(*device));
+    // Replicated per mesh axis (see replicate_to_mesh_mapper).
+    const auto host = ttnn::full(shape, value, dtype, ttnn::Layout::TILE);
+    return ttnn::distributed::distribute_tensor(host, *replicate_to_mesh_mapper(*device), std::ref(*device));
 }
 
 ttnn::Tensor zeros(const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, ttnn::DataType dtype) {
@@ -125,8 +127,7 @@ ttnn::Tensor from_vector(
     const auto tensor_layout =
         tt::tt_metal::TensorLayout(TensorType, ttnn::PageConfig(ttnn::Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{});
 
-    // Without a mapper the tensor is replicated with one placement per mesh axis (a 1x1 mesh included), so its label
-    // can be read per axis; a plain host tensor would reach the mesh under the collapsed `{N}, [Replicate]`.
+    // Without a mapper, replicated per mesh axis (see replicate_to_mesh_mapper).
     std::unique_ptr<ttnn::distributed::TensorToMesh> replicate;
     if (mesh_mapper == nullptr) {
         replicate = replicate_to_mesh_mapper(*device);

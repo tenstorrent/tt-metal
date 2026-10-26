@@ -137,8 +137,7 @@ ttnn::Tensor create_tensor_from_span(
     tt::tt_metal::TensorLayout tensor_layout(tensor_data_type, tensor_page_config, tensor_memory_config);
     auto* device = &ttml::autograd::ctx().get_device();
 
-    // Without a mapper the tensor is replicated with one placement per mesh axis (a 1x1 mesh included), so its label
-    // can be read per axis; a plain host tensor would reach the mesh under the collapsed `{N}, [Replicate]`.
+    // Without a mapper, replicated per mesh axis (see ttml::core::replicate_to_mesh_mapper).
     std::unique_ptr<ttnn::distributed::TensorToMesh> replicate;
     if (mapper == nullptr) {
         replicate = ttml::core::replicate_to_mesh_mapper(*device);

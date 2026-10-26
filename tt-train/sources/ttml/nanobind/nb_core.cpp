@@ -151,8 +151,7 @@ void py_module(nb::module_& m) {
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
 
-        // One Replicate per mesh axis (not ttnn's collapsed `{N}, [Replicate]`), the label every tensor created
-        // without a mapper carries, so a parameter's placement can be read per mesh axis.
+        // One Replicate per mesh axis; see ttml::core::replicate_to_mesh_mapper.
         py_distributed.def(
             "replicate_tensor_to_mesh_mapper",
             &ttml::core::replicate_to_mesh_mapper,

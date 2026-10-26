@@ -500,6 +500,26 @@ TEST_F(Mesh1x2CommOpsTest, SynchronizeGradientsNDGradientIsAveragedAndReadsRepli
     EXPECT_TRUE(xt::allclose(expected, shards[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 }
 
+TEST_F(Mesh1x2CommOpsTest, FullOnesZerosReplicatePerMeshAxis) {
+    // RMSNorm / LayerNorm weights and init::constant_init are built by core::full / ones / zeros: one Replicate per
+    // mesh axis, like from_vector without a mapper, rather than a host tensor's collapsed `{2}, [Replicate]`.
+    auto* device = &ttml::autograd::ctx().get_device();
+    const ttnn::Shape shape({1U, 1U, 1U, 64U});
+    const std::array<std::pair<ttnn::Tensor, float>, 3> cases{
+        std::pair{ttml::core::full(shape, 0.5F, device), 0.5F},
+        std::pair{ttml::core::ones(shape, device), 1.F},
+        std::pair{ttml::core::zeros(shape, device), 0.F}};
+    for (const auto& [tensor, value] : cases) {
+        ASSERT_EQ(tensor.tensor_topology().placements().size(), 2U);
+        EXPECT_TRUE(all_replicate(tensor));
+        const auto shards = ttml::core::to_xtensor<float>(tensor, ttml::core::IdentityComposer{});
+        ASSERT_EQ(shards.size(), 2U);
+        for (const auto& shard : shards) {
+            EXPECT_TRUE(xt::all(xt::equal(shard, value)));
+        }
+    }
+}
+
 TEST_F(Mesh1x2CommOpsTest, IsShardedOnAxisReadsTensorParallelShardsPerAxis) {
     // A TP weight sharded on dim 3 along axis 1, spelled N-D and collapsed, reads as sharded on axis 1 only. A label
     // that does not cover the mesh is refused rather than guessed, and so is a host tensor, which is on no mesh to

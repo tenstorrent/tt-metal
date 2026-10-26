@@ -312,6 +312,24 @@ class TestTP:
         with expect_error(RuntimeError, "cannot tell whether the tensor is sharded"):
             is_sharded_on_axis(forged, tp)
 
+    def test_constant_inits_are_labelled_per_axis(self, tp_mesh):
+        """Eager ``ttml.init.ones / zeros / constant`` (norm weights, zero-init biases) replicate with one Replicate
+        per mesh axis, like every other tensor created without a mapper. Negative control: they moved a host tensor to
+        the mesh, which carries the collapsed ``{2}, [Replicate]``."""
+        for name, init, value in (
+            ("ones", ttml.init.ones(), 1.0),
+            ("zeros", ttml.init.zeros(), 0.0),
+            ("constant", ttml.init.constant(0.5), 0.5),
+        ):
+            t = init((1, 1, 1, DIM)).get_value(NATIVE)
+            placements = _placements(t)
+            assert len(placements) == 2, f"{name}: label {t.tensor_topology()} is not per axis"
+            assert all(isinstance(p, ttnn.PlacementReplicate) for p in placements), f"{name}: {placements}"
+            for device, shard in enumerate(_shards(t)):
+                np.testing.assert_array_equal(
+                    shard, np.full((1, 1, 1, DIM), value, dtype=shard.dtype), err_msg=f"{name}: device {device}"
+                )
+
     def test_synchronize_over_tp_leaves_the_tp_shards_alone(self, tp_mesh):
         """``synchronize_gradients(params, [tp])`` averages only the gradients of parameters replicated on tp. A
         TP-sharded parameter holds a different piece of the weight on each tp device, so averaging along tp would add
