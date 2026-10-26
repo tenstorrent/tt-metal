@@ -168,7 +168,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = vDH / TILE_WIDTH;
     const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
-    const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
+    uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
 
     // ========== Grid & Core Configuration ==========
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
@@ -213,7 +213,28 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t num_cores_per_batch = num_cores_per_head * num_kv_heads / num_heads_per_core;
     const uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     const uint32_t num_output_cores = B;
-    const uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
+    uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
+
+    // ========== Length-balanced (lean) mode ==========
+    // Length-balanced ("lean") schedule: every core takes an equal slice of the (batch, kv head, k chunk) work list,
+    // derived on device from cur_pos, so a long user no longer runs on the few cores the static per-batch allocation
+    // gives it. Used whenever the call fits the kernels below; everything else keeps the static allocation.
+    const bool lean_half_tile = is_causal && num_q_heads <= 16 && input_tensor_q.dtype() == DataType::BFLOAT16;
+    // A sharded Q must hold one user per shard (the tt_transformers decode layout).
+    const bool lean_q_ok =
+        !is_q_sharded || (input_tensor_q.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+                          input_tensor_q.shard_spec()->shape[0] == PNH && input_tensor_q.shard_spec()->shape[1] == DH &&
+                          input_tensor_q.shard_spec()->grid.num_cores() >= B);
+    const bool lean_mode = is_causal && use_cur_pos_tensor && !use_attention_mask && !use_attention_sink &&
+                           sliding_window_size == 0 && !spec_multi_pos && !use_mla && lean_q_ok &&
+                           !q_locally_available && !is_output_sharded &&
+                           !(cur_pos_tensor.has_value() && cur_pos_tensor->is_sharded()) &&
+                           q_heads_parallel_factor == 1 && !on_subcoregrid && !has_block_padding && !tilize_q &&
+                           !lean_half_tile && capacity_t == 0 && num_kv_heads > 1 && PNHt == 1;
+    if (lean_mode) {
+        num_active_cores = num_cores_available;
+    }
+    const uint32_t lean_max_children = 2 * num_cores_available / num_kv_heads + 2;
 
     // ========== Compute Kernel Config ==========
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -376,7 +397,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     std::vector<uint32_t> reduce_core_physical_xs(num_reducer_cores);
     std::vector<uint32_t> reduce_core_physical_ys(num_reducer_cores);
     uint32_t reducer_count = 0;
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
+    for (uint32_t i = 0; i < num_active_cores && !lean_mode; ++i) {
         if (i % num_cores_per_head != 0) {
             continue;
         }
@@ -394,7 +415,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     std::vector<uint32_t> output_core_physical_xs(num_output_cores);
     std::vector<uint32_t> output_core_physical_ys(num_output_cores);
     uint32_t output_count = 0;
-    for (uint32_t i = 0; i < num_active_cores; ++i) {
+    for (uint32_t i = 0; i < num_active_cores && !lean_mode; ++i) {
         if (i % num_cores_per_batch != 0) {
             continue;
         }
@@ -426,6 +447,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // ========== Compute Configuration ==========
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
+    if (lean_mode && Sk_chunk_t == 0) {
+        Sk_chunk_t = dst_size;
+    }
     // Spec mode multiplies every Q-shaped CB (q, qk_im, out_im, out_accumulate, mask, ...)
     // by PNHt == T, so the K/V/mask/qk CBs — the only ones that scale with the chunk size —
     // are capped to keep the per-core L1 footprint in range. 4 tiles = 128 KV positions per
@@ -492,7 +516,8 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     // L1 (110 tiles/block * 63 blocks = 14 MB at T=11, 64 cores/head).
     const uint32_t intermed_output_blocks =
         spec_multi_pos ? std::min(num_cores_per_head - 1, num_tree_reduction_rounds) : (num_cores_per_head - 1);
-    const uint32_t intermed_output_tiles = (out_tiles + 2 * PNHt) * intermed_output_blocks;
+    const uint32_t intermed_output_tiles =
+        (out_tiles + 2 * PNHt) * (lean_mode ? lean_max_children : intermed_output_blocks);
 
     // ========== Data Formats ==========
     const tt::DataFormat q_df = tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -635,7 +660,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     };
 
     // Input CBs
-    add_cb(CBIndex::c_0, q_tiles * q_tile_size, q_df, q_tile_size, &q_tile, q_locally_available ? q_buffer : nullptr);
+    add_cb(
+        CBIndex::c_0,
+        (lean_mode ? 2 : 1) * q_tiles * q_tile_size,
+        q_df,
+        q_tile_size,
+        &q_tile,
+        q_locally_available ? q_buffer : nullptr);
     add_cb(CBIndex::c_1, k_tiles * k_tile_size, k_df, k_tile_size);                        // K input
     add_cb(CBIndex::c_2, v_tiles * v_tile_size, v_df, v_tile_size);                        // V input
     add_cb(CBIndex::c_3, qk_tiles * mask_tile_size, mask_df, mask_tile_size, &mask_tile);  // attn_mask
@@ -706,6 +737,10 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // Output CBs
     add_cb(CBIndex::c_16, out_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    if (lean_mode) {
+        // Lean: received child O (writer -> compute), kept apart from c_16 (compute -> writer).
+        add_cb(CBIndex::c_13, out_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
+    }
     add_cb(CBIndex::c_17, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     add_cb(CBIndex::c_18, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);
     if (intermed_output_tiles > 0) {
@@ -914,6 +949,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
 
+    if (lean_mode) {
+        compute_defines["LEAN_B"] = std::to_string(B);
+        compute_defines["LEAN_NKV"] = std::to_string(num_kv_heads);
+        compute_defines["LEAN_NUM_CORES"] = std::to_string(num_cores_available);
+    }
     KernelDescriptor::Defines compute_defines_vec;
     compute_defines_vec.reserve(compute_defines.size());
     for (auto& [k, v] : compute_defines) {
@@ -924,21 +964,27 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const std::string kernel_path = "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/";
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = kernel_path + "dataflow/reader_decode_all.cpp";
+    reader_desc.kernel_source =
+        kernel_path + (lean_mode ? "dataflow/reader_decode_lean.cpp" : "dataflow/reader_decode_all.cpp");
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_grid;
     reader_desc.compile_time_args = std::move(reader_compile_time_args_common);
     reader_desc.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_desc;
-    writer_desc.kernel_source = kernel_path + "dataflow/writer_decode_all.cpp";
+    writer_desc.kernel_source =
+        kernel_path + (lean_mode ? "dataflow/writer_decode_lean.cpp" : "dataflow/writer_decode_all.cpp");
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_grid;
     writer_desc.compile_time_args = std::move(writer_compile_time_args_common);
     writer_desc.config = WriterConfigDescriptor{};
+    if (lean_mode) {
+        writer_desc.defines = {{"LEAN_B", std::to_string(B)}};
+    }
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = kernel_path + "compute/sdpa_flash_decode.cpp";
+    compute_desc.kernel_source =
+        kernel_path + (lean_mode ? "compute/sdpa_flash_decode_lean.cpp" : "compute/sdpa_flash_decode.cpp");
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = std::move(compute_compile_time_args_common);
@@ -961,6 +1007,45 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     Buffer* attention_sink_buffer = use_attention_sink ? attention_sink.value().buffer() : nullptr;
 
     // ========== Runtime Arguments ==========
+    if (lean_mode) {
+        std::vector<uint32_t> q_shard_xs(B, 0), q_shard_ys(B, 0);
+        if (is_q_sharded) {
+            const auto& q_spec = input_tensor_q.shard_spec().value();
+            const auto q_cores = corerange_to_cores(q_spec.grid, B, q_spec.orientation == ShardOrientation::ROW_MAJOR);
+            for (uint32_t b = 0; b < B; ++b) {
+                const auto phys = device->worker_core_from_logical_core(q_cores[b]);
+                q_shard_xs[b] = phys.x;
+                q_shard_ys[b] = phys.y;
+            }
+        }
+        for (uint32_t i = 0; i < num_active_cores; ++i) {
+            const CoreCoord core = core_group[i];
+            KernelDescriptor::RTArgList reader_rt_args;
+            reader_rt_args.push_back(q_buffer);
+            reader_rt_args.push_back(k_buffer);
+            reader_rt_args.push_back(v_buffer);
+            reader_rt_args.push_back(cur_pos_buffer);
+            reader_rt_args.push_back(page_table_buffer);
+            reader_rt_args.push_back(page_table_stick_size);
+            reader_rt_args.push_back(i);
+            reader_rt_args.append(q_shard_xs);
+            reader_rt_args.append(q_shard_ys);
+            KernelDescriptor::RTArgList writer_rt_args;
+            writer_rt_args.push_back(out_buffer);
+            writer_rt_args.push_back(i);
+            writer_rt_args.append(reduction_group_core_xs);
+            writer_rt_args.append(reduction_group_core_ys);
+            KernelDescriptor::RTArgList compute_rt_args;
+            compute_rt_args.push_back(i);
+            reader_desc.emplace_runtime_args(core, reader_rt_args);
+            writer_desc.emplace_runtime_args(core, writer_rt_args);
+            compute_desc.emplace_runtime_args(core, compute_rt_args);
+        }
+        desc.kernels.push_back(std::move(reader_desc));
+        desc.kernels.push_back(std::move(writer_desc));
+        desc.kernels.push_back(std::move(compute_desc));
+        return desc;
+    }
     for (uint32_t i = 0; i < num_active_cores; ++i) {
         CoreCoord core = core_group[i];
         bool do_k_mcast = false;
