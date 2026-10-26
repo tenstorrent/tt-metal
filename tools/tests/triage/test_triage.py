@@ -19,7 +19,6 @@ import threading
 import time
 
 import pytest
-from rich.text import Text
 
 
 metal_home = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -34,6 +33,7 @@ sys.path.insert(0, triage_home)
 import triage
 from triage import CheckType, run_script, ScriptArguments
 from triage_hw_utils import device_has_firmware
+from serializers import strip_rich_markup
 from ttexalens.context import Context
 from ttexalens.tt_exalens_init import init_ttexalens
 from ttexalens.coordinate import OnChipCoordinate
@@ -632,7 +632,7 @@ class TestTriage:
             # Verify the quoted ASSERT if specified
             expected_assert_code = expected.get("assert_code")
             if expected_assert_code:
-                code = Text.from_markup(check.result.kernel_callstack_with_message.code_line).plain  # drops [info]..[/]
+                code = strip_rich_markup(check.result.kernel_callstack_with_message.code_line)
                 assert (
                     code == expected_assert_code
                 ), f"{check.risc_name}: Expected {expected_assert_code!r}, got {code!r}"
