@@ -300,7 +300,8 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer, std::optional<DeviceAd
                 BankManager::AllocatorDependencies::AllocatorID{0},
                 additional_ranges,
                 scoped_dependent_allocators,
-                requested_address);
+                requested_address,
+                config_->l1_alignment);
             break;
         }
         case BufferType::L1_SMALL: {
@@ -314,7 +315,8 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer, std::optional<DeviceAd
                 BankManager::AllocatorDependencies::AllocatorID{0},
                 {},
                 std::nullopt,
-                requested_address);
+                requested_address,
+                config_->l1_alignment);
             break;
         }
         case BufferType::TRACE:

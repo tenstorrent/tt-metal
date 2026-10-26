@@ -211,7 +211,11 @@ class TtTransformer(LightweightModule):
         if self.prefetcher_setup is not None:
             # Programs compiled in decode embed the first GCB addresses, so every later
             # decode setup recreates the GCB there instead of wherever L1 is free.
-            self._global_cb_addresses = self.prefetcher_setup.release_global_cb()
+            global_cb_addresses = self.prefetcher_setup.release_global_cb()
+            # A failed decode setup can leave a prefill setup with no GCB installed.
+            # Returning to prefill must not clear the first decode addresses.
+            if self._global_cb_addresses is None:
+                self._global_cb_addresses = global_cb_addresses
         # BH unfused-CCL path: prefill uses the fused all_gather_minimal_matmul + interleaved weights, never
         # the ring matmuls or the prefetcher global CB (those are decode-only). Run prefill exactly like the
         # no-prefetcher path (default sub-device, no custom manager). Loading the prefetcher's prefill

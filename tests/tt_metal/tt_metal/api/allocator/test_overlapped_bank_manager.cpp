@@ -194,21 +194,44 @@ TEST(OverlappedAllocators, CPU_FixedAddressOwnershipAndBounds) {
     bank_manager.deallocate_buffer(address);
 }
 
-TEST(OverlappedAllocators, CPU_FixedAddressUsesFreeListAlignment) {
-    // Legacy L1 managers check 16 B alignment, but their free lists align to the larger DRAM alignment.
+TEST(OverlappedAllocators, CPU_FixedAddressUsesL1Alignment) {
     constexpr DeviceAddr block_size = 1024;
-    constexpr DeviceAddr address = 4096;
     constexpr uint32_t l1_alignment = 16;
+    constexpr DeviceAddr address = 4096 + l1_alignment;
     ASSERT_GT(get_dram_alignment_from_hal(), l1_alignment);
-    auto bank_manager = get_bank_manager_with_allocator_dependencies(16384, l1_alignment, {});
-    const auto allocate_at = [&](DeviceAddr requested) {
-        return bank_manager.allocate_buffer(
-            block_size, block_size, false, CoreRangeSet{}, std::nullopt, AllocatorID{0}, {}, std::nullopt, requested);
-    };
-    EXPECT_THROW(allocate_at(address + l1_alignment), std::runtime_error);
-    EXPECT_EQ(bank_manager.get_statistics().total_allocated_bytes, 0);
-    EXPECT_EQ(allocate_at(address), address);
-    bank_manager.deallocate_buffer(address);
+    const CoreRangeSet compute_grid(CoreRange(CoreCoord{0, 0}, CoreCoord{0, 0}));
+    // Legacy L1 uses L1 alignment in BankManager. HYBRID uses DRAM alignment
+    // there, but an explicitly chosen address still only needs L1 alignment.
+    for (const auto buffer_type : {BufferType::L1, BufferType::L1_SMALL}) {
+        for (const auto manager_alignment : {l1_alignment, get_dram_alignment_from_hal()}) {
+            BankManager bank_manager(
+                buffer_type, std::vector<int64_t>{0}, 16384, manager_alignment, get_dram_alignment_from_hal());
+            const std::optional<uint32_t> requested_alignment =
+                manager_alignment == l1_alignment ? std::nullopt : std::make_optional(l1_alignment);
+            const auto allocate_at = [&](DeviceAddr requested) {
+                return bank_manager.allocate_buffer(
+                    block_size,
+                    block_size,
+                    false,
+                    compute_grid,
+                    1,
+                    AllocatorID{0},
+                    {},
+                    std::nullopt,
+                    requested,
+                    requested_alignment);
+            };
+            EXPECT_THROW(allocate_at(address + 1), std::runtime_error);
+            EXPECT_EQ(bank_manager.get_statistics().total_allocated_bytes, 0);
+            EXPECT_EQ(allocate_at(address), address);
+            EXPECT_EQ(bank_manager.get_statistics().total_allocated_bytes, block_size);
+            EXPECT_THROW(allocate_at(address), std::runtime_error);
+            bank_manager.deallocate_buffer(address);
+            EXPECT_EQ(bank_manager.get_statistics().total_allocated_bytes, 0);
+            EXPECT_EQ(allocate_at(address), address);
+            bank_manager.deallocate_buffer(address);
+        }
+    }
 }
 
 TEST(OverlappedAllocators, CPU_FixedAddressRespectsOtherReservations) {
