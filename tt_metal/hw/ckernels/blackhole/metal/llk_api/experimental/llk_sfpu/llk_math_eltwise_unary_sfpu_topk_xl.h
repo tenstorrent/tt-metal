@@ -53,6 +53,16 @@ inline void llk_math_eltwise_unary_sfpu_topk_xl_rebuild(
         ckernel::sfpu::_topk_xl_rebuild_<K, fused>, dst_index, vector_mode, dst_index, ascending);
 }
 
+// Sort each 64 row column of a fused K = 1024 tile that is already bitonic. Call it right after the fused merge: it
+// relies on that merge's SFPLOADMACRO setup and programs none.
+template <std::uint32_t K>
+inline void llk_math_eltwise_unary_sfpu_topk_xl_rebuild_columns(
+    std::uint32_t dst_index, bool ascending, VectorMode vector_mode = VectorMode::RC_custom) {
+    SAN_HOOK(unsupported());
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_rebuild_columns_<K>, dst_index, vector_mode, dst_index, ascending);
+}
+
 inline void llk_math_eltwise_unary_sfpu_topk_xl_add_lsb_indices_init() {
     SAN_HOOK(unsupported());
     llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(ckernel::sfpu::_topk_xl_add_lsb_indices_init_);
@@ -96,9 +106,7 @@ inline void llk_math_topk_xl_pack_supplied_indices(
     SAN_HOOK(unsupported());
     static_assert(is_fp32_dest_acc_en, "supplied-index packing requires FP32 DEST accumulation");
     static_assert(Dst == DstSync::SyncHalf || Dst == DstSync::SyncFull, "invalid DEST synchronization scope");
-    LLK_ASSERT(
-        (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK) != 0,
-        "supplied-index packing requires runtime FP32 DEST accumulation");
+    LLK_ASSERT(llk_assert_fp32_dest_acc_en, "supplied-index packing requires runtime FP32 DEST accumulation");
     constexpr std::uint32_t tiles = K == 2048 ? 2 : 1;
     // Check the starts as well as the ends so adding the second tile cannot wrap an invalid index.
     _llk_math_eltwise_sfpu_assert_dst_index_<Dst>(scores, "score start out of range");
@@ -119,14 +127,16 @@ inline void llk_math_topk_xl_pack_supplied_indices(
 }
 
 // Reprogram only the MOP Expander after a topk_xl copy, instead of a full
-// topk_xl_init. See ckernel_sfpu_topk_xl.h for what copy init clobbers.
+// topk_xl_init. See ckernel_sfpu_topk_xl.h for what copy init clobbers. The unfused form also reprograms the
+// SFPLOADMACRO Sequence and Misc registers and clobbers LREG0.
 template <bool fused>
 inline void llk_math_eltwise_unary_sfpu_topk_xl_reinit_mop_after_copy() {
     SAN_HOOK(unsupported());
     ckernel::sfpu::topk_mop_config<fused>();
 }
 
-// Restore the ADDR_MODs and MOP state the unfused rebuild needs after a copy.
+// Restore the ADDR_MODs and MOP state the unfused rebuild needs after a copy, and the unfused SFPLOADMACRO Sequence
+// and Misc registers (clobbering LREG0).
 inline void llk_math_eltwise_unary_sfpu_topk_xl_reinit_unfused_rebuild_after_copy() {
     SAN_HOOK(unsupported());
     ckernel::sfpu::topk_reinit_unfused_rebuild_after_copy();

@@ -64,7 +64,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
-from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
@@ -241,8 +241,9 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, CI run 39456857459 / job 118751643362.
-    (78, 11, 10): [0.416, 0.418, 0.428, 0.421, 0.429, 0.429, 0.426, 0.426, 0.438, 0.443, 0.448],
+    # Scaled-FP8 KV cache, recentered to CI run 39783366880 / job 119942061826: high_bw_all_gather's fabric program
+    # takes every chunk 1.4-2.7% under the previous centre (CI run 39456857459 / job 118751643362).
+    (78, 11, 10): [0.410, 0.408, 0.415, 0.412, 0.420, 0.421, 0.417, 0.419, 0.427, 0.431, 0.436],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -257,31 +258,29 @@ MISTRAL4_UNTRACED_MAX_OUT_OF_BAND = 1
 # is armed; other parametrizations have no key and stay record-only. Values are per-chunk medians
 # from a CI run, not a galaxy box.
 MISTRAL4_TRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
-    # Cut on bh_sc1_high_power, run 39599819522 (MLA matmul configs, llama4 scale on q_a, 2D RMSNorm
-    # post-op, on LoFi SDPA + 8256 B packets and the MoE running the routed expert then combine_fabric2d
-    # as separate ops; Mistral does not opt into the overlap). Must be cut there: on plain bh_sc1 the
-    # same rows split into two clusters 1.5x apart depending which box the pool gave them.
+    # Cut on bh_sc1_high_power (run 39359928012), with the routed expert overlapped with combine_fabric2d.
+    # On plain bh_sc1 the same rows split into two clusters 1.5x apart depending on the box.
     (36, 20, 10): [
-        0.091,
+        0.080,
+        0.085,
+        0.089,
         0.096,
         0.100,
-        0.107,
-        0.112,
-        0.118,
-        0.126,
-        0.128,
-        0.132,
-        0.138,
-        0.147,
+        0.106,
+        0.113,
+        0.117,
+        0.120,
+        0.127,
+        0.134,
+        0.135,
+        0.141,
         0.146,
-        0.152,
+        0.151,
         0.157,
         0.162,
-        0.168,
+        0.169,
         0.173,
-        0.181,
-        0.185,
-        0.190,
+        0.178,
     ],
 }
 MISTRAL4_UNTRACED_BASELINE_CHUNK_TIMES_S: dict[tuple[int, int, int], list[float]] = {
@@ -1998,8 +1997,9 @@ def run_chunked_transformer_updated(
             topk_cores = {resources.topk_core_grid.num_cores() for _, resources in active}
             gather_cores = {resources.gather_core_grid.num_cores() for _, resources in active}
             assert profiles == {expected_overlap_profile}, profiles
-            assert topk_cores == {80}, topk_cores
-            assert gather_cores == {40}, gather_cores
+            gather_rows = _SPARSE_MLA_OVERLAP_GATHER_ROWS  # the worker rows below the Ethernet row
+            assert topk_cores == {worker_grid.x * (worker_grid.y - gather_rows)}, topk_cores
+            assert gather_cores == {worker_grid.x * gather_rows}, gather_cores
             observed_profile = next(iter(profiles))
             observed_topk_cores = next(iter(topk_cores))
             observed_gather_cores = next(iter(gather_cores))

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Threshold decoding of the tt-llk scalar compares (tt-llk#1701 item 16).
+"""Threshold decoding of the scalar compares (tt-llk#1701 item 16).
 
 ``_calculate_comp_unary_<APPROX, unary_*>(std::uint32_t value)`` in
 ``ckernel_sfpu_comp.h`` (Blackhole and Wormhole) takes the threshold as fp32 bits, like the metal

@@ -48,8 +48,13 @@ class MistralSmall4Config:
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 
     # MoE configuration
+    ROUTED_EXPERT_COMBINE_OVERLAP = True
     NUM_ROUTED_EXPERTS = 128  # n_routed_experts
     NUM_EXPERTS_PER_TOKEN = 4  # num_experts_per_tok
+    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
+    # what it trades. Held at 8: top-4 leaves the region shallow, and halving it again costs this model
+    # 15.3% on hot_expert traffic -- the worst of the eight -- to save 13 -> 7 MB a chip.
+    COMBINE_FWD_REDUCTION = 8
     NUM_SHARED_EXPERTS = 1  # n_shared_experts
     NUM_EXPERT_GROUPS = 1  # n_group
     NUM_LIMITED_GROUPS = 1  # topk_group
