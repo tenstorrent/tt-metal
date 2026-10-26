@@ -849,7 +849,9 @@ class SpecDecoder:
         )
 
     def capture(self, cq_id: int = 0):
-        """Capture V, C and D (after ``warmup``; every persistent tensor already exists)."""
+        """Capture V, C and D (after ``warmup``; every persistent tensor already exists). Call ``warmup`` before ANY
+        trace capture of the model (the plain decode trace included): a collective of a new shape compiled after a
+        capture places its semaphores in the L1 the captured trace overwrites, and the replay hangs."""
         if not self.compiled:
             self.warmup(cq_id=cq_id)
         dev = self.mesh.device

@@ -265,8 +265,14 @@ def test_verify_and_commit_vs_sequential(mesh_device):
     assert K >= 1, f"B={B} leaves no room for drafts"
     spec = SpecDecoder(model, mtp, K)
     tok, pos0 = _prefill_all(model, mtp, prompt)
-    trace_plain, outs = model.capture(torch.full((U,), tok), [pos0] * U)
+    # Every program is compiled BEFORE the first trace capture: a collective of a new shape compiled after a capture
+    # puts its semaphores where the captured trace's L1 intermediates live and the replay hangs (2026-10-26 on the
+    # block: the plain trace captured first, the spec warm-up compiled the 8-row collectives, the replay spun for
+    # 21 min and needed a reset; the 2026-10-16 Gemma 4 case is the same mechanism). The warm-up writes placeholder
+    # rows, so the prefill is repeated before the capture.
     spec.warmup([pos0] * U)
+    tok, pos0 = _prefill_all(model, mtp, prompt)
+    trace_plain, outs = model.capture(torch.full((U,), tok), [pos0] * U)
     spec.capture()
 
     # ---- the plain reference: K + 1 traced steps, states after every step
@@ -341,8 +347,14 @@ def test_spec_decode_lossless(mesh_device):
     assert K >= 1
     spec = SpecDecoder(model, mtp, K)
     tok, pos0 = _prefill_all(model, mtp, prompt)
-    trace_plain, outs = model.capture(torch.full((U,), tok), [pos0] * U)
+    # Every program is compiled BEFORE the first trace capture: a collective of a new shape compiled after a capture
+    # puts its semaphores where the captured trace's L1 intermediates live and the replay hangs (2026-10-26 on the
+    # block: the plain trace captured first, the spec warm-up compiled the 8-row collectives, the replay spun for
+    # 21 min and needed a reset; the 2026-10-16 Gemma 4 case is the same mechanism). The warm-up writes placeholder
+    # rows, so the prefill is repeated before the capture.
     spec.warmup([pos0] * U)
+    tok, pos0 = _prefill_all(model, mtp, prompt)
+    trace_plain, outs = model.capture(torch.full((U,), tok), [pos0] * U)
     spec.capture()
     n = N_TOKENS
     assert pos0 + n + K + 1 < MAX_SEQ_LEN
