@@ -48,8 +48,6 @@ traced."""
 import itertools
 from types import SimpleNamespace
 
-import random
-
 import pytest
 import torch
 
@@ -102,6 +100,7 @@ from models.experimental.mimo_v2_6_flash.reference.mtp_backfill import (
 from models.experimental.mimo_v2_6_flash.reference.spec_chain import CHAIN_HSLOTS
 from models.experimental.mimo_v2_6_flash.reference.spec_inputs import pack_mtp_layers, pack_verify
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, dp_submeshes, model_path
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 from models.experimental.mimo_v2_6_flash.tests.test_spec_inputs_host import (
     REP,
     B,
@@ -307,7 +306,7 @@ def test_spec_chain_tp8(mesh_device):
         chain.drafts()
 
     replay = replayed(mesh, run)
-    rng = random.Random(0)
+    rng = SeededRng(0)
     cases = []  # (verify pass, chain row or None, accept words)
     for bonus in (1, 255, 256, 257, 511, 512, MAX_SEQ_LEN - 1 - MAX_DRAFTS, MAX_SEQ_LEN - 2):
         for n in range(MAX_DRAFTS + 1):
@@ -384,7 +383,7 @@ def test_spec_chain_dflash_tp8(mesh_device):
         chain.drafts()
 
     replay = replayed(mesh, run)
-    rng = random.Random(1)
+    rng = SeededRng(1)
     cases = []  # (verify pass, chain row or None, accept words)
     for bonus in (1, 600, 1023, 1024, 1025, 2047, MAX_SEQ_LEN - 1 - MAX_DRAFTS, MAX_SEQ_LEN - 2):
         for n in range(MAX_DRAFTS + 1):
@@ -442,7 +441,7 @@ def test_greedy_verify_tp8(mesh_device):
         gv(None, argmax)
 
     replay = replayed(mesh, run)
-    rng = random.Random(2)
+    rng = SeededRng(2)
     cases = []
     for requests in range(1, min(4, SPEC_SLOTS) + 1):
         for _ in range(12):
@@ -505,7 +504,7 @@ def test_spec_chain_layers_tp8(mesh_device):
     li = make_layer_inputs(plan, B, 64)
     chain = SpecChain(plan, spec, accept, argmax, heads, li)
     chain.warm()
-    rng = random.Random(1)
+    rng = SeededRng(1)
 
     # The chain and drafts steps.
     def run_chain():
@@ -605,7 +604,7 @@ def test_mtp_history_tp8(mesh_device, layers):
     li = make_layer_inputs(plan, B, hidden_size) if layers > 1 else None
     hist.warm(li)
     mirror = History(hidden_size)
-    rng = random.Random(layers)
+    rng = SeededRng(layers)
     g = torch.Generator().manual_seed(layers)
 
     def device_rows(rows):
@@ -780,7 +779,7 @@ def test_spec_relay_tp8(mesh_device):
     ctrl = u32(GROUPS * GROUP_WORDS)
     chain = SpecChain(plan, spec, accept, argmax, heads)
     replay = replayed(mesh, lambda: chain.relay(ctrl))
-    rng = random.Random(1)
+    rng = SeededRng(1)
     limit = MAX_SEQ_LEN - MAX_DRAFTS
 
     def one_pass(tokens, first, n, relay=False):

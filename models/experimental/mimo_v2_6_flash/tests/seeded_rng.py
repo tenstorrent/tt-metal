@@ -20,3 +20,6 @@ class SeededRng:
 
     def random(self):
         return float(torch.rand((), dtype=torch.float64, generator=self.generator))
+
+    def gauss(self, mu, sigma):
+        return mu + sigma * float(torch.randn((), dtype=torch.float64, generator=self.generator))

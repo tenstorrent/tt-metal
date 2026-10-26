@@ -15,7 +15,6 @@ each request in its draft group of 4). Two checks per pass:
   tests/test_sample_verify_host.py commits on the full logits with the same Q24 uniforms, away from rounding edges.
 """
 
-import random
 import time
 
 import pytest
@@ -31,6 +30,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_decode import (
     plan_verify_passes,
 )
 from models.experimental.mimo_v2_6_flash.tests.common import GALAXY_DEVICE_PARAMS, dp_submeshes
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 from models.experimental.mimo_v2_6_flash.tests.test_sample_verify_host import q24, ref_walk
 from models.experimental.mimo_v2_6_flash.tt.common import TILE, MeshPlan
 from models.experimental.mimo_v2_6_flash.tt.device_sampler import CANDIDATES_PER_CHIP, DeviceSampler
@@ -163,7 +163,7 @@ def check_semantics(logits, vp, spec_sampling, out):
 def test_verify_sampler(mesh_device):
     plan = MeshPlan(dp_submeshes(mesh_device)[0])
     vocab_local = VOCAB // plan.tp
-    gen, rng = torch.Generator().manual_seed(0), random.Random(0)
+    gen, rng = torch.Generator().manual_seed(0), SeededRng(0)
     sampler = DeviceSampler(plan, vocab_local, USERS, B)
     verify = VerifySampler(sampler, VOCAB)
     argmax_tt = ttnn.from_torch(

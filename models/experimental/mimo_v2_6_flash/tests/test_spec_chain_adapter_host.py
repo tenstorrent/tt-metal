@@ -15,7 +15,6 @@ that speculative greedy decoding reproduces the oracle sequence. With DFlash dra
 accept trace ends with reference.spec_chain.dflash_chain_step and the fake drafter checks every context row against
 the taps the last step left and that its ring holds the request's positions without a gap below the anchor."""
 
-import random
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +41,7 @@ from models.experimental.mimo_v2_6_flash.reference.spec_inputs import (
     pack_mtp_commits,
     pack_verify,
 )
+from models.experimental.mimo_v2_6_flash.tests.seeded_rng import SeededRng
 from models.experimental.mimo_v2_6_flash.tt import generator_vllm
 from models.experimental.mimo_v2_6_flash.tt.generator_vllm import MiMoV2ForCausalLM
 from models.experimental.mimo_v2_6_flash.reference import spec_decode as spec_layout
@@ -343,7 +343,7 @@ def hidden_of(q, token):
 def accepts(q):
     """Whether the fake target takes the draft after position q (60% of positions, pseudo-random): counts of every
     size."""
-    return random.Random(q).random() < 0.6
+    return SeededRng(q).random() < 0.6
 
 
 class LayersMTP:
