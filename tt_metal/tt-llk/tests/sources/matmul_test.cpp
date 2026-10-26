@@ -364,7 +364,8 @@ inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std
 #if MATMUL_PACK_FORM != 0
     // The fast forms need four faces of 16 rows. At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
     constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
-    constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
+    // the closed block pack at full sync issues its destination words before the math wait, as pack_block_prepare does in the ttnn kernels
+    constexpr bool fast_closed = false;
     if (MATMUL_PACK_FORM == 1 && fast_plain)
     {
         _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
@@ -442,6 +443,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM == 2
+                if constexpr (dest_sync == DstSync::SyncFull)
+                {
+                    _llk_pack_block_closed_pre_(0, LOOP_FACTOR > 1 ? PERF_ADDRESS(PERF_OUTPUT, 0) : L1_ADDRESS(buffer_Res[0]));
+                }
+#endif
                 _llk_packer_wait_for_math_done_();
                 // Pack dest occupancy (RT×CT).
                 for (std::uint32_t i = 0; i < CT_DIM * RT_DIM; i++)
@@ -461,6 +468,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         {
                             LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
                         }
+#if MATMUL_PACK_FORM == 2
+                        if constexpr (dest_sync == DstSync::SyncFull)
+                        {
+                            _llk_pack_block_closed_run_(CT_DIM * RT_DIM, TILE_SIZE_PACK << 4, 4);
+                            break;
+                        }
+#endif
                         matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
                         break;
                     }
