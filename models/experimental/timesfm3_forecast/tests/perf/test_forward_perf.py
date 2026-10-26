@@ -127,7 +127,7 @@ def test_forward_perf(device, shape, precision):
         f"\n[PERF] forward {shape} / {precision}: {rows} rows x {tokens} tokens"
         f"\n  cold {cold_s:.3f} s, steady {statistics.median(steady):.4f} s ({', '.join(f'{s:.4f}' for s in steady)})"
         f"\n  split: prepare {prepare_s:.4f} upload {upload_s:.4f} device {device_s:.4f} postprocess {postprocess_s:.4f}"
-        f"\n  cpu {g['cpu_s']:.2f} s ({g['threads']} threads); "
+        f"\n  cpu {g.get('cpu_s', float('nan')):.2f} s ({g.get('threads')} threads); "
         + ", ".join(f"{k} {v:.6f}" for k, v in metrics.items())
         + f"\n  gates: {'ok' if not failures else failures}"
     )
@@ -150,7 +150,7 @@ def test_forward_perf(device, shape, precision):
             "floor_ok": not failures,
             "gate_failures": {k: v[0] for k, v in failures.items()},
             "policy": tt.precision.describe(),
-            "cpu_s": g["cpu_s"],
+            "cpu_s": g.get("cpu_s"),
             "chip": os.environ.get("TTQ_CHIP_SERIAL"),
             **_git_state(),
         }
