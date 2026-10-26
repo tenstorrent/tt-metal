@@ -492,22 +492,34 @@ class TestCollapsedInputs:
 
 
 class TestMeshPartitionTopology:
-    """mesh_partition through tt-train's wrapper (`ttml.core.distributed.mesh_partition`, the path the comm-ops
-    backward takes): the output is sharded on `cluster_axis` and its label says so, for the two layouts tt-train
-    produces. The label rules themselves are pinned in tests/nightly/t3000/ccl/test_ccl_topology_labels.py and the
-    CclTopologyUtils gtests."""
+    """mesh_partition as the comm-ops backward runs it: ``ttml.ops.distributed.all_gather(..., REPLICATED)``'s backward
+    partitions the replicated output gradient. The input's gradient is sharded on `cluster_axis` and its label says so,
+    for the two layouts tt-train produces. The label rules themselves are pinned in
+    tests/nightly/t3000/ccl/test_ccl_topology_labels.py and the CclTopologyUtils gtests."""
 
     ROWS, COLS = MESH_SHAPE_2X2
 
     @pytest.fixture(autouse=True)
     def _setup(self, ccl_mesh):
         self.mesh = ccl_mesh
+        ctx = ttml.autograd.AutoContext.get_instance()
+        ctx.set_gradient_mode(ttml.autograd.GradMode.ENABLED)
+        yield
+        ctx.reset_graph()
+
+    def _input_grad(self, value, out_grad):
+        """The gradient all_gather(REPLICATED)'s backward gives `value` for the output gradient `out_grad`."""
+        x = ttml.autograd.create_tensor(value, True)
+        out = ttml.ops.distributed.all_gather(x, 3, CLUSTER_AXIS, ttml.ops.distributed.GradOutputType.REPLICATED)
+        out.set_grad(out_grad)
+        out.backward(False)
+        return x.get_grad()
 
     def test_replicated_input_becomes_sharded_on_the_axis(self):
-        tensor = _replicated_tensor((1, 1, 64, 128), seed=40)
-        data = _compose_by_label(tensor)
+        grad = _replicated_tensor((1, 1, 64, 128), seed=40)
+        data = _compose_by_label(grad)
 
-        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+        result = self._input_grad(_replicated_tensor((1, 1, 64, 128 // self.COLS), seed=42), grad)
 
         _assert_replicated(result, OTHER_AXIS, "untouched axis")
         _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
@@ -517,10 +529,10 @@ class TestMeshPartitionTopology:
     def test_other_axis_sharding_preserved(self):
         placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
         placements[OTHER_AXIS] = ttnn.PlacementShard(2)
-        tensor = _make_tensor((1, 1, 64, 128), placements, seed=41)
-        data = _compose_by_label(tensor)
+        grad = _make_tensor((1, 1, 64, 128), placements, seed=41)
+        data = _compose_by_label(grad)
 
-        result = ttml.core.distributed.mesh_partition(tensor, 3, cluster_axis=CLUSTER_AXIS)
+        result = self._input_grad(_make_tensor((1, 1, 64, 128 // self.COLS), placements, seed=43), grad)
 
         _assert_shard(result, OTHER_AXIS, 2, "other axis preserved")
         _assert_shard(result, CLUSTER_AXIS, 3, "mesh_partition output")
