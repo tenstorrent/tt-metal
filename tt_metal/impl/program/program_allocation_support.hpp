@@ -54,6 +54,10 @@ struct EphemeralAllocationMetadata {
     // These seals stop the arena from giving out space on those cores, per arena and per core. The seals are released
     // via RAII once this metadata is destructed.
     std::unordered_map<PersistentL1Arena*, std::unordered_map<CoreCoord, PersistentL1Arena::Seal>> seals;
+
+    // `PersistentL1Arena::high_water_mark` of an empty CoreRangeSet, to be returned when allocation on an empty core
+    // seet is requested.
+    DeviceAddr empty_cores_high_water_mark = 0;
 };
 
 // Registers regions of allocation sharing the same allocation.
@@ -73,16 +77,28 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
 
 // TODO(#62451):
 // The allocation logic should be unified in the future but we unfortunately have different allocation routine for now.
-// The dfb allocation should be fixed before we unify the two.
+// The dfb allocation maybe erroneous and thus should be fixed while we unify the two.
 
 // Performs lockstep allocation of a circular buffer or dataflow buffer across `cores`.
 //
 // Returns the start of the allocation, aligned to `alignment`; [address, address + size) is reserved on every core
 // of `cores`. The address is read from the regions whose core_range exactly matches a range of `cores`.
 //
+// When an empty `cores` is supplied, no allocation will be performed. The return value forwards
+// `PersistentL1Arena::high_water_mark` of an empty CoreRangeSet, when recorded by the last
+// `prepare_ephemeral_allocation()` call.
+//
 // pre-condition:
-//  - every range of `cores` has been registered in `metadata` with register_ephemeral_allocation().
+//  - the cores are empty or
+//      - every range of `cores` has been registered in `metadata` with register_ephemeral_allocation().
 //  - prepare_ephemeral_allocation() has been called on `metadata`, and no region has been added since.
+//
+// post-condition:
+//  - the returned address is at or above the start of the address range for user-facing memory objects (outside
+//    firmware-reserved L1).
+//  - when `cores` is not empty, [address, address + size) is reserved exclusively for the caller on every core of
+//    `cores`: it overlaps neither persistent L1 nor any other allocation made through `metadata`.
+//    TODO(#62451): can currently be violated when allocations are placed on overlapping core ranges.
 //
 // side-effect:
 //  - mutates `metadata` regions that have core_range intersecting with `cores`.
@@ -95,9 +111,20 @@ DeviceAddr allocate_dfb(
 // of `cores`. The address is above every region whose core_range intersects `cores`, so it never overlaps an earlier
 // allocation, but may reserve more than needed.
 //
+// When an empty `cores` is supplied, no allocation will be performed. The return value forwards
+// `PersistentL1Arena::high_water_mark` of an empty CoreRangeSet, when recorded by the last
+// `prepare_ephemeral_allocation()` call.
+//
 // pre-condition:
-//  - every range of `cores` has been registered in `metadata` with register_ephemeral_allocation().
+//  - the cores are empty or
+//      - every range of `cores` has been registered in `metadata` with register_ephemeral_allocation().
 //  - prepare_ephemeral_allocation() has been called on `metadata`, and no region has been added since.
+//
+// post-condition:
+//  - the returned address is at or above the start of the address range for user-facing memory objects (outside
+//    firmware-reserved L1).
+//  - when `cores` is not empty, [address, address + size) is reserved exclusively for the caller on every core of
+//    `cores`: it overlaps neither persistent L1 nor any other allocation made through `metadata`.
 //
 // side-effect:
 //  - mutates `metadata` regions that have core_range intersecting with `cores`.

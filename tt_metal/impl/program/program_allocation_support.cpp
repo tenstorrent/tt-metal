@@ -69,10 +69,17 @@ void prepare_ephemeral_allocation(EphemeralAllocationMetadata& metadata, Persist
             //     region.l1_regions.front().first);
         }
     }
+
+    // Record the water mark for when allocation is requested on an empty core grid.
+    metadata.empty_cores_high_water_mark = persistent_l1.high_water_mark(CoreRangeSet());
 }
 
 DeviceAddr allocate_dfb(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
+    if (cores.empty()) {
+        return metadata.empty_cores_high_water_mark;
+    }
+
     auto& regions = metadata.regions;
     uint64_t computed_addr = 0;
     for (const CoreRange& core_range : cores.ranges()) {
@@ -114,6 +121,10 @@ DeviceAddr allocate_dfb(
 
 DeviceAddr allocate_scratchpad(
     EphemeralAllocationMetadata& metadata, const CoreRangeSet& cores, uint64_t size, uint32_t alignment) {
+    if (cores.empty()) {
+        return metadata.empty_cores_high_water_mark;
+    }
+
     auto& regions = metadata.regions;
     for (const CoreRange& core_range : cores.ranges()) {
         TT_FATAL(
