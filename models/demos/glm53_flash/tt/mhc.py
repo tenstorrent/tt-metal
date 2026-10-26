@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _streams as _composite_st
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import _upload, build_consts  # noqa: F401  (re-exported)
 from models.demos.glm53_flash.custom_ops.mhc_post_mix.op import MhcPostMix
 from models.demos.glm53_flash.custom_ops.mhc_pre_block.op import MhcPreBlock
+from models.demos.glm53_flash.custom_ops.row_sumsq.op import RowSumSq
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 
 TILE = 32
@@ -61,6 +62,9 @@ MHC_PREFILL_EXACT = os.environ.get("GLM53_MHC_PREFILL_EXACT", "1") == "1"
 # (tt-blaze G53F-0197; "1" = on, the default since 2026-10-26: bitwise on full 256k prefills; "0" = the composite chain).
 # Read at call time.
 MHC_PREFILL_HMIX_ENV = "GLM53_MHC_PREFILL_HMIX"
+# prefill projection: 1 = the row sums of squares from custom_ops/row_sumsq (one pass over the streams instead of the
+# x*x tensor and its sum; bit-identical, tt-blaze G53F-0209); read per call, so one built model can A/B it. Default off.
+MHC_PREFILL_SUMSQ_ENV = "GLM53_MHC_SUMSQ"
 # decode (T <= 32) pre-block: 1 = exact fp32 reductions of the K-split partials (ttnn.sum, SFPU) instead of
 # fast_reduce_nc (bf16 rounding) and h through the post-mix kernel's pre-mix mode + the composite's typecast +
 # rms_norm (default, needs GLM53_MHC_POST_KERNEL=2); 0 = fast_reduce_nc + the P@x matmul + sharded norm (A/B)
@@ -834,12 +838,33 @@ class TtMHCFast(LightweightModule):
         return out
 
     # ------------------------------------------------------------------ stages
+    def _project_sumsq(self, x32: ttnn.Tensor) -> ttnn.Tensor:
+        """``_composite_project`` (no TP sum) with ``ttnn.sum(ttnn.multiply(x, x), dim=-1)`` from the fused
+        ``custom_ops/row_sumsq`` (the same LLK calls in the same order: bit-identical, tt-blaze G53F-0209); every
+        other op as the composite has it."""
+        if getattr(self, "_sumsq", None) is None:
+            self._sumsq = RowSumSq(x32.device())
+        mixes_un = ttnn.matmul(x32, self.fn_T, compute_kernel_config=self.ckc)
+        ss = self._sumsq(x32)
+        ms = ttnn.multiply(ss, 1.0 / x32.shape[-1])
+        ttnn.deallocate(ss)
+        a = ttnn.add(ms, self.norm_eps)
+        ttnn.deallocate(ms)
+        r = ttnn.rsqrt(a)
+        ttnn.deallocate(a)
+        mixes = ttnn.multiply(mixes_un, r)
+        ttnn.deallocate(mixes_un)
+        ttnn.deallocate(r)
+        return mixes
+
     def _project(self, x32: ttnn.Tensor, x_sm: ttnn.Tensor) -> ttnn.Tensor:
         """``[1,1,Tp,nC]`` -> mixes ``[1,1,Tp,32]`` = RMSNorm(x) @ fn_T (zero columns past mix_hc)."""
         Tp = x32.shape[-2]
         if Tp != TILE and MHC_PREFILL_EXACT:
             # prefill: the composite's projection, op for op (matmul + sum of squares + rsqrt scale), so
             # mixes is bit-identical to TtMHCWrap.project; [1,1,Tp,24] (one tile wide)
+            if os.environ.get(MHC_PREFILL_SUMSQ_ENV, "0") == "1":
+                return self._project_sumsq(x32)
             return _composite_project(x32, self.fn_T, self.norm_eps, self.ckc)
         if Tp == TILE:
             xk, fn_k, pc = ttnn.experimental.view(x32, [1, self.ks, Tp, self.nC // self.ks]), self.fn_k, self.pc_ksplit

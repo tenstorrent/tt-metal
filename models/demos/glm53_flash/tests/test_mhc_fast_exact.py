@@ -8,7 +8,8 @@ The decoder's two prefill wrap paths, on the same random streams and parameters:
   (``decoder_layer._hc_call_impl``, the decoder's ``norm_compute``);
 * fused: ``TtMHCFast.forward(x, F, bf16, norm=(w, eps))`` (the norm inside its pre-block, the v2 post-mix kernel),
   under ``GLM53_MHC_POST_ORDER`` = ``composite`` (the composite's term order) and ``kernel`` (the original order),
-  and in the composite order with ``GLM53_MHC_PREFILL_HMIX=1`` (the pre-mix kernel for h, G53F-0197).
+  and in the composite order with ``GLM53_MHC_PREFILL_HMIX=1`` (the pre-mix kernel for h, G53F-0197), with and
+  without ``GLM53_MHC_SUMSQ=1`` (the projection's fused row sums of squares, G53F-0209).
 
 F is one bf16 op. Reports, per row count, whether the sublayer input (the pre-block + norm) and the wrap output are
 bitwise equal, the max |d|, and the eager time per wrap of each path.
@@ -101,16 +102,22 @@ def test_mhc_fast_exact(mesh_device):
         ref, ref_h, yr = once(run_comp, x)
         ttnn.deallocate(yr)
         t_comp = timed(run_comp, x)
-        for order, hmix in (("composite", "0"), ("composite", "1"), ("kernel", "0")):
+        for order, hmix, sumsq in (
+            ("composite", "0", "0"),
+            ("composite", "1", "0"),
+            ("composite", "1", "1"),
+            ("kernel", "0", "0"),
+        ):
             os.environ["GLM53_MHC_POST_ORDER"] = order
             os.environ["GLM53_MHC_PREFILL_HMIX"] = hmix  # G53F-0197: the pre-mix kernel for the prefill h
+            os.environ["GLM53_MHC_SUMSQ"] = sumsq  # G53F-0209: the fused row sums of squares in the projection
             got, got_h, yg = once(run_fast, x)
             ttnn.deallocate(yg)
             t_fast = timed(run_fast, x)
             h_eq, y_eq = torch.equal(got_h, ref_h), torch.equal(got, ref)
             d = (got.float() - ref.float()).abs()
             logger.info(
-                f"[mhc-exact] T={T} order={order} hmix={hmix}: sublayer input equal {h_eq}, output equal {y_eq} "
+                f"[mhc-exact] T={T} order={order} hmix={hmix} sumsq={sumsq}: sublayer input equal {h_eq}, output equal {y_eq} "
                 f"(max|d| {d.max().item():.3e}, {int((d > 0).sum())} / {d.numel()} differ); "
                 f"composite {t_comp:.3f} ms, fused {t_fast:.3f} ms per wrap"
             )
@@ -118,5 +125,6 @@ def test_mhc_fast_exact(mesh_device):
                 ok = ok and h_eq and y_eq
         os.environ.pop("GLM53_MHC_POST_ORDER", None)
         os.environ.pop("GLM53_MHC_PREFILL_HMIX", None)
+        os.environ.pop("GLM53_MHC_SUMSQ", None)
         ttnn.deallocate(x)
     assert ok, "the fused prefill path in the composite order is not bit-identical"

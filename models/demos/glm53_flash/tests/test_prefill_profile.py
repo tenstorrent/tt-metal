@@ -51,6 +51,8 @@ RUNS = [r.split(":") for r in os.environ.get("PROF_RUNS", "16384:1,16384:0").spl
 OUT = os.environ.get("PROF_OUT", "/mnt/tt-data/sdawle/glm53f/prefill/logs/prof.jsonl")
 TRACE_AB = int(os.environ.get("PROF_TRACE_AB", "0"))  # decoder index whose FFN is A/B'd eager vs trace (0 = off)
 TRACE_T = int(os.environ.get("PROF_TRACE_T", "16384"))
+#: decoder indices whose WHOLE layer (attention + mHC wraps + FFN) is A/B'd eager vs trace replay (tt-blaze G53F-0208)
+TRACE_LAYERS = [int(v) for v in os.environ.get("PROF_TRACE_LAYERS", "").split(",") if v.strip()]
 DUMP = os.environ.get("PROF_DUMP", "")
 OPS_AB = int(os.environ.get("PROF_OPS", "0"))
 #: G53F-0174 gate: "rt:rank,rt:rank,..." -- prefill the first PROF_EXPORT_N ids under each setting and sha256 every layer's
@@ -306,6 +308,10 @@ def test_prefill_profile(mesh_device):
         prof.on = False  # no synchronizations inside a trace capture
         _set_dsa_timer(model, prof, False)
         _trace_ab(model, mesh_device, full, f)
+    if TRACE_LAYERS:
+        prof.on = False
+        _set_dsa_timer(model, prof, False)
+        _trace_ab_layers(model, mesh_device, full, f)
     f.close()
 
 
@@ -380,6 +386,88 @@ def _trace_ab(model, dev, prompt: torch.Tensor, f):
     f.write(json.dumps(row) + "\n")
     f.flush()
     logger.info(f"[prof] trace_ab {json.dumps(row)}")
+
+
+def _trace_ab_layers(model, dev, prompt: torch.Tensor, f):
+    """Eager vs captured-trace replay of whole decoder layers (``PROF_TRACE_LAYERS``) on the input streams a real
+    first chunk (``PROF_TRACE_T`` tokens, start 0) hands them: the replay is device time only, so eager - replay is
+    the host dispatch cost the command queue does NOT hide (tt-blaze G53F-0208). The layer runs as a new prompt's
+    first chunk: a KDA layer from a zero state built outside the capture, a DSA layer rewriting its cache rows
+    [0, T) with the same values, so the eager and replayed outputs must be bitwise equal."""
+    grab: dict[int, ttnn.Tensor] = {}
+    for k in TRACE_LAYERS:
+        dec = model.layers[k]
+        fwd = dec.prefill_forward
+
+        def keep(streams, *a, _k=k, _fwd=fwd, **kk):
+            if _k not in grab:
+                grab[_k] = ttnn.clone(streams)
+            return _fwd(streams, *a, **kk)
+
+        object.__setattr__(dec, "prefill_forward", keep)  # instance attribute over the bound method
+    try:
+        out = model.prefill(prompt[:TRACE_T], user=0, start=0)
+    finally:
+        for k in TRACE_LAYERS:
+            model.layers[k].__dict__.pop("prefill_forward", None)
+    for t in out[:2]:
+        if t is not None:
+            ttnn.deallocate(t)
+
+    def timed(fn, n=5):
+        ttnn.synchronize_device(dev)
+        t = time.perf_counter()
+        for _ in range(n):
+            fn()
+        t_enq = time.perf_counter() - t
+        ttnn.synchronize_device(dev)
+        return (time.perf_counter() - t) / n, t_enq / n
+
+    for k in TRACE_LAYERS:
+        dec, x = model.layers[k], grab[k]
+        layer = dec._require_weights()
+        T = x.shape[-2] * model.mesh.rows
+        state, temps = dec._state_for_prefill(0, 0)
+
+        def run():
+            y, ns = layer.prefill_forward(x, state, user=0, seq_len=T, start=0)
+            fresh = [ns.kda.recurrent, ns.kda.convolution] if dec.is_kda and ns.kda is not state.kda else []
+            return y, fresh
+
+        def eager():
+            y, fresh = run()
+            for t in [y, *fresh]:
+                ttnn.deallocate(t)
+
+        row = dict(kind="trace_ab_layer", layer=k, is_kda=bool(dec.is_kda), T_loc=int(x.shape[-2]))
+        try:
+            for _ in range(2):
+                eager()
+            row["eager_s"], row["eager_enqueue_s"] = (round(v, 5) for v in timed(eager))
+            y_ref, fresh = run()
+            ref = ttnn.to_torch(model.mesh.device_tensors(y_ref)[0])
+            for t in [y_ref, *fresh]:
+                ttnn.deallocate(t)
+            tid = ttnn.begin_trace_capture(dev, cq_id=0)
+            y_tr, fresh_tr = run()
+            ttnn.end_trace_capture(dev, tid, cq_id=0)
+            row["trace_s"], row["trace_enqueue_s"] = (
+                round(v, 5) for v in timed(lambda: ttnn.execute_trace(dev, tid, cq_id=0, blocking=False))
+            )
+            got = ttnn.to_torch(model.mesh.device_tensors(y_tr)[0])
+            ttnn.release_trace(dev, tid)
+            for t in [y_tr, *fresh_tr]:
+                ttnn.deallocate(t)
+            row["host_share"] = round(1 - row["trace_s"] / row["eager_s"], 3)
+            row["bitwise"] = bool(torch.equal(ref, got))
+        except Exception as e:  # noqa: BLE001 -- a layer that cannot be captured is a result, not a failure
+            row["error"] = repr(e)[:400]
+        for t in temps:
+            ttnn.deallocate(t)
+        ttnn.deallocate(x)
+        f.write(json.dumps(row) + "\n")
+        f.flush()
+        logger.info(f"[prof] trace_ab_layer {json.dumps(row)}")
 
 
 def _regions_ops(model, dev, prompt: torch.Tensor, f, regions_t: int):
