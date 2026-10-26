@@ -120,7 +120,9 @@ def test_mm_epilogue_error(device):
 
 # D5 (e): per role, in both precisions, minimal_matmul (with its fused bias / SiLU) must be no less accurate than
 # ttnn.linear on the same inputs: rms error vs fp64 within MM_TOL x linear's. The control (LoFi, no fp32 dest
-# accumulation, SiLU as a separate bf16 unary) must fail that same check, or the check cannot fail.
+# accumulation, SiLU as a separate bf16 unary) must fail that same check, or the check cannot fail. Roles already at
+# LoFi (performance ffn / variate) cannot resolve that control (job 738); there the control also rounds the weights to
+# bfp4, the next precision step down.
 MM_TOL = 1.10
 EPI_CASES = [
     # (K, N), role, output dtype, bias, activation
@@ -129,7 +131,7 @@ EPI_CASES = [
     ((512, 288), "head", "bfloat16", True, None),
     ((512, 2048), "variate", "bfloat16", False, "silu"),  # variate w_wi: SiLU without bias
     ((512, 512), "mlstm", "bfloat16", False, None),
-    ((2048, 512), "ffn", "bfloat16", False, None),
+    ((2048, 512), "variate", "bfloat16", False, None),  # variate w_wo (FFN w_down is 1408 x 512: not swept)
 ]
 
 
@@ -190,7 +192,15 @@ def test_mm_vs_linear(device, precision):
 
         lin = ttnn.to_torch(ttnn.linear(tx, tw, bias=tb, activation=act, dtype=odt, compute_kernel_config=cfg))
         got = ttnn.to_torch(minimal(cfg)).double()
-        ctl = ttnn.to_torch(minimal(kernel_config(ttnn.MathFidelity.LoFi, fp32_acc=False), fused=False)).double()
+        ctl_cfg = kernel_config(ttnn.MathFidelity.LoFi, fp32_acc=False)
+        if cfg.math_fidelity == ttnn.MathFidelity.LoFi:
+            tw4 = ttnn.from_torch(w, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=device)
+            y = ttnn.experimental.minimal_matmul(
+                tx, tw4, bias_tensor=tb, config=mmc, compute_kernel_config=ctl_cfg, dtype=odt
+            )
+            ctl = ttnn.to_torch(ttnn.silu(y) if act else y).double()
+        else:
+            ctl = ttnn.to_torch(minimal(ctl_cfg, fused=False)).double()
         rms = lambda t: float((t - ref).pow(2).mean().sqrt() / ref.pow(2).mean().sqrt())
         e_lin, e_mm, e_ctl = rms(lin.double()), rms(got), rms(ctl)
         dmax = float((got - lin.double()).abs().max())
