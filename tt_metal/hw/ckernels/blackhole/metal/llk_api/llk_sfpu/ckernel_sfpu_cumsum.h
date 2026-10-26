@@ -97,15 +97,18 @@ inline void cumsum_init() {
     });
 }
 
+// SFPADD takes SFPMAD's Mod1 bits; sfpi does not define the negate ones. SFPADD(1.0, a, b) then gives b - a.
+constexpr std::uint32_t SFPADD_MOD1_NEGATE_VA = 1;
+
 // One row of the compensated (Kahan) scan, the steps of the permuted path's calculate_kahan_step:
 // y = x - c, t = s + y, c = (t - s) - y, and c = 0 where t - s is not finite. x, then t, is in
 // LREG<ROW>, s in LREG<S> and c in LREG6; LREG4 and LREG5 hold y and t - s.
 template <std::uint32_t ROW, std::uint32_t S>
 inline void compensated_scan_row() {
-    TTI_SFPADD(p_sfpu::LCONST_1, 6, ROW, 4, 1);  // SFPMAD_MOD1_NEGATE_VA
+    TTI_SFPADD(p_sfpu::LCONST_1, 6, ROW, 4, SFPADD_MOD1_NEGATE_VA);
     TTI_SFPADD(p_sfpu::LCONST_1, S, 4, ROW, 0);
-    TTI_SFPADD(p_sfpu::LCONST_1, S, ROW, 5, 1);  // SFPMAD_MOD1_NEGATE_VA
-    TTI_SFPADD(p_sfpu::LCONST_1, 4, 5, 6, 1);    // SFPMAD_MOD1_NEGATE_VA
+    TTI_SFPADD(p_sfpu::LCONST_1, S, ROW, 5, SFPADD_MOD1_NEGATE_VA);
+    TTI_SFPADD(p_sfpu::LCONST_1, 4, 5, 6, SFPADD_MOD1_NEGATE_VA);
     // t - s is inf or NaN exactly when its biased exponent is 255: subtract 255 (as a 12-bit
     // immediate) and set c = 0 on the lanes where the result is >= 0.
     TTI_SFPEXEXP(0, 5, 5, sfpi::SFPEXEXP_MOD1_NODEBIAS);
