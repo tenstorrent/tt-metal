@@ -43,7 +43,9 @@ MODES = [("single", "kernel"), ("sharded", "kernel"), ("sharded_cast", "kernel")
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-@pytest.mark.parametrize("T", [4, 32])
+@pytest.mark.parametrize(
+    "T", [1, 2, 4, 32]
+)  # 1 and 2: the batch-1 / batch-2 decode rows (the 2026-10-26 batch-1 hang candidate)
 def test_mhc_a3a4_modes(mesh_device, T):
     snapshot = default_snapshot_dir()
     cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
