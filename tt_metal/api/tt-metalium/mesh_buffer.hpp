@@ -17,6 +17,11 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+
+namespace tt::tt_metal {
+class TensorSpec;
+}
 
 namespace tt::tt_metal::distributed {
 
@@ -78,6 +83,9 @@ class MeshBuffer;
 
 // Forward declaration for experimental per-core allocation friend
 namespace tt::tt_metal::experimental::per_core_allocation {
+struct PerNodeMeshDeviceMemorySpan;
+distributed::MeshBuffer create_sram_buffer_view(
+    distributed::MeshDevice&, const TensorSpec&, const PerNodeMeshDeviceMemorySpan&);
 std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
     const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
     const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
@@ -196,6 +204,12 @@ private:
     using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
     MeshBufferState state_;
 
+    friend tt::tt_metal::distributed::MeshBuffer
+    tt::tt_metal::experimental::per_core_allocation::create_sram_buffer_view(
+        tt::tt_metal::distributed::MeshDevice&,
+        const tt::tt_metal::TensorSpec&,
+        const tt::tt_metal::experimental::per_core_allocation::PerNodeMeshDeviceMemorySpan&);
+
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,
         const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
@@ -206,11 +220,6 @@ private:
 class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {
 public:
     AnyBuffer() = default;
-    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-    static AnyBuffer create(
-        const tt::tt_metal::ShardedBufferConfig& config, std::optional<uint64_t> address = std::nullopt);
-    [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-04.")]]
-    static AnyBuffer create(const tt::tt_metal::BufferConfig& config, std::optional<uint64_t> address = std::nullopt);
 
     Buffer* get_buffer() const;
     bool is_mesh_buffer() const;

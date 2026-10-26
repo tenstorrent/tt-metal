@@ -19,6 +19,10 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
     if (not t.memory_config().is_sharded()) {
         return false;
     }
+    // An ND-sharded tensor has no 2D shard spec, so it cannot take the native L1 sharding path.
+    if (not get_shard_spec(t).has_value()) {
+        return true;
+    }
     const auto& shape = t.padded_shape();
     const auto& shard = get_shard_spec(t)->shape;
     const auto rank = shape.rank();
@@ -27,6 +31,28 @@ bool is_uneven(const tt::tt_metal::TensorSpec& t) {
         volume_except_last *= shape[i];
     }
     return (volume_except_last % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
+}
+
+static bool has_empty_shards(const tt::tt_metal::TensorSpec& t, const tt::tt_metal::MemoryConfig& c) {
+    using namespace tt::tt_metal;
+    if (not c.shard_spec().has_value()) {
+        return false;
+    }
+    const auto& shape = t.padded_shape();
+    const auto& spec = *c.shard_spec();
+    uint64_t volume_except_last = 1;
+    for (int i = 0; i < static_cast<int>(shape.rank()) - 1; ++i) {
+        volume_except_last *= shape[i];
+    }
+    const uint64_t shards_h = (volume_except_last + spec.shape[0] - 1) / spec.shape[0];
+    const uint64_t shards_w = (shape[-1] + spec.shape[1] - 1) / spec.shape[1];
+    uint64_t num_shards = shards_h * shards_w;
+    if (c.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_shards = shards_h;
+    } else if (c.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_shards = shards_w;
+    }
+    return num_shards < spec.grid.num_cores();
 }
 
 // Check based on input specs and output memory config (two tensors, same shape and memory config).
@@ -61,7 +87,7 @@ static bool is_native_L1_sharding(
     if (b.memory_config().is_sharded() && b.memory_config().buffer_type() == BufferType::L1) {
         return true;
     }
-    if (c.is_sharded() && c.buffer_type() == BufferType::L1) {
+    if (c.is_sharded() && c.buffer_type() == BufferType::L1 && !has_empty_shards(a, c)) {
         return true;
     }
     return false;
@@ -126,7 +152,8 @@ bool is_native_L1_sharding(
         if (false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (output_memory_config.buffer_type() == BufferType::L1) {
+        if (output_memory_config.buffer_type() == BufferType::L1 &&
+            !has_empty_shards(predicate_spec, output_memory_config)) {
             return true;
         }
     }
@@ -470,6 +497,16 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
+    } else if (dtype == DataType::BFLOAT8_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp8";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    } else if (dtype == DataType::BFLOAT4_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfp4";
+        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
@@ -493,6 +530,16 @@ std::map<std::string, std::string> make_dataflow_defines(
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
+    } else if (b_dtype == DataType::BFLOAT8_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp8";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp8";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
+    } else if (b_dtype == DataType::BFLOAT4_B) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfp4";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfp4";
+        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
         defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
@@ -516,6 +563,16 @@ std::map<std::string, std::string> make_dataflow_defines(
             defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
             defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<uint32_t>";
             defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, uint32_t>";
+        } else if (c_dtype == DataType::BFLOAT8_B) {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfp8";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfp8";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element_bfp8";
+            defines["FILL_WITH_VALUE_C"] = "fill_with_val_bfloat16";
+        } else if (c_dtype == DataType::BFLOAT4_B) {
+            defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfp4";
+            defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfp4";
+            defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element_bfp4";
+            defines["FILL_WITH_VALUE_C"] = "fill_with_val_bfloat16";
         } else {
             defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfloat16";
             defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfloat16";

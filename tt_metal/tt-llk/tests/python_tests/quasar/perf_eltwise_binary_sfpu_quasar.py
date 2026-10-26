@@ -7,7 +7,6 @@ from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
     ApproximationMode,
-    ImpliedMathFormat,
     MathOperation,
 )
 from helpers.param_config import parametrize
@@ -36,10 +35,8 @@ def _perf_approx_modes(mathop):
     return [ApproximationMode.No]
 
 
-# implied_math_format is QSR-only. One value so a BH/WH cell joins a single QSR row.
 _FLOAT_PERF_SWEEP = {
     **_func.FLOAT_SWEEP,
-    "implied_math_format": [ImpliedMathFormat.Yes],
     "approx_mode": _perf_approx_modes,
 }
 
@@ -83,7 +80,6 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
     dest_acc,
     mathop,
     approx_mode,
-    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
@@ -93,7 +89,6 @@ def test_perf_eltwise_binary_sfpu_float_quasar(
         dest_acc,
         mathop,
         approx_mode,
-        implied_math_format,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
@@ -121,7 +116,6 @@ def test_perf_eltwise_binary_sfpu_bf16_rne_quasar(
 
 _BCAST_PERF_SWEEP = {
     **_func.BCAST_SWEEP,
-    "implied_math_format": [ImpliedMathFormat.Yes],
 }
 
 
@@ -137,7 +131,6 @@ def test_perf_eltwise_binary_sfpu_bcast_quasar(
     dest_acc,
     mathop,
     broadcast_type,
-    implied_math_format,
     run_types,
     loop_factor,
     is_perf,
@@ -147,16 +140,14 @@ def test_perf_eltwise_binary_sfpu_bcast_quasar(
         dest_acc,
         mathop,
         broadcast_type,
-        implied_math_format,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
 
 
 _MAX_MIN_FLOAT_PERF_SWEEP = dict(
-    formats_dest_acc_implied_math_is_max_input_dims=_func._generate_max_min_combinations(
+    formats_dest_acc_is_max_input_dims=_func._generate_max_min_combinations(
         _func.SFPU_BINARY_MAX_MIN_FLOAT_FORMATS,
-        implied_math_formats=(ImpliedMathFormat.Yes,),
     ),
 )
 
@@ -169,13 +160,13 @@ _MAX_MIN_FLOAT_PERF_SWEEP = dict(
 )
 def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
     perf_report,
-    formats_dest_acc_implied_math_is_max_input_dims,
+    formats_dest_acc_is_max_input_dims,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_max_min_float_quasar(
-        formats_dest_acc_implied_math_is_max_input_dims,
+        formats_dest_acc_is_max_input_dims,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )
@@ -189,13 +180,13 @@ def test_perf_eltwise_binary_sfpu_max_min_float_quasar(
 )
 def test_perf_eltwise_binary_sfpu_max_min_int32_quasar(
     perf_report,
-    formats_dest_acc_implied_math_is_max_input_dims,
+    formats_dest_acc_is_max_input_dims,
     run_types,
     loop_factor,
     is_perf,
 ):
     _func.test_eltwise_binary_sfpu_max_min_int32_quasar(
-        formats_dest_acc_implied_math_is_max_input_dims,
+        formats_dest_acc_is_max_input_dims,
         _func.DEFAULT_SFPU_BINARY_TILE_INDICES,
         **_perf_kwargs(perf_report, run_types, loop_factor, is_perf),
     )

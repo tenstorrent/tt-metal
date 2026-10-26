@@ -16,6 +16,7 @@ namespace ttml::optimizers {
 
 SGDComposite::SGDComposite(ttml::serialization::NamedParameters parameters, const SGDCompositeConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
+    require_bf16_parameters(m_parameters, "SGDComposite");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
             m_theta.emplace(
@@ -48,6 +49,9 @@ void SGDComposite::step() {
         }
 
         auto gradients = tensor_ptr->get_grad();
+
+        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
 
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
@@ -99,6 +103,7 @@ void SGDComposite::step() {
                 gradients,
                 m_config.lr,
                 /* fast_and_approximate_mode*/ true)));
+        restore_topology({tensor_ptr, theta_ptr}, topology);
     }
     m_steps++;
 }

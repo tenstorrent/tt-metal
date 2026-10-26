@@ -26,9 +26,9 @@ class RMSNorm(nn.Module):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2))
-            if self.is_distributed
-            else None,
+            mesh_mapper=(
+                self.mesh_config.shard_mapper(mesh_device, mesh_dims=(None, -2)) if self.is_distributed else None
+            ),
         )
 
         self.eps = hf_config.rms_norm_eps
@@ -88,3 +88,16 @@ class RMSNorm(nn.Module):
                 # program_config=program_config,
             )
             return tt_output
+
+    def forward_sharded(self, x):
+        """Batched decode residual stream (batched_decode.py): width-sharded multi-core norm on the activation's own
+        shards."""
+        from .batched_decode import sharded_norm_program_config
+
+        return ttnn.rms_norm(
+            x,
+            weight=self.tt_weight,
+            epsilon=self.eps,
+            program_config=sharded_norm_program_config(x.memory_config()),
+            memory_config=x.memory_config(),
+        )

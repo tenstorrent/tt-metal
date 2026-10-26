@@ -13,6 +13,9 @@ void kernel_main() {
     auto B = get_arg(args::B);
     auto Ht = get_arg(args::Ht);
     auto Wt = get_arg(args::Wt);
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_in1_obj(dfb::in1);
+    DataflowBuffer dfb_out_obj(dfb::out);
 
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
@@ -29,8 +32,9 @@ void kernel_main() {
                 ckl::WaitPolicy::PerTile,
                 ckl::PopPolicy::PerTile,
                 ckl::InputTileMapping::Col,
-                ckl::DataFormatReconfig::Disabled)>{},
+                ckl::DataFormatReconfig::Disabled)>{dfb_in0_obj, dfb_in1_obj},
         // Output remains one tile per (row,col); only the column-shaped input is streamed per row.
         ckl::PackTile<ckl::output(
-            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
+            dfb::out, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{
+            dfb_out_obj});
 }

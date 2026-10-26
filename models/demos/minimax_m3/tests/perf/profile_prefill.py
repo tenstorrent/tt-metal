@@ -17,7 +17,7 @@ single chunk profiles both classes; the report separates them by the layer tag.
 
 What you get per zone: summed DEVICE KERNEL DURATION [ns] per device (with the across-device skew),
 op count, bytes moved (from the CSV's input/output shapes + dtypes) and the implied GB/s. Parse with
-    python3 models/demos/minimax_m3/tests/perf/parse_zone_perf.py <ops_perf_results_*.csv> --html report.html
+    python3 models/demos/minimax_m3/tests/perf/visualize_zones.py <ops_perf_results_*.csv>
 
 Zone list — dense layer: input_norm, attn/{qkv_proj,split_heads,qk_norm,rope,kv_write,
 ring_joint_sdpa,concat_heads,o_proj,ccl_out_allreduce}, post_attn_norm, mlp/{gate_up_proj,swiglu,
@@ -111,10 +111,6 @@ def _raise_nproc_limit():
             print(f"[zone-prof] WARNING: could not raise RLIMIT_NPROC (soft={soft}): {e}", file=sys.stderr)
 
 
-# MSA layers pick the top-16 of 128-token blocks; topk_large_indices aborts with fewer than 16 blocks,
-# so a chunk must cover at least this many tokens. Keep in sync with tt/attention/msa.py.
-MSA_MIN_TOKENS = 16 * 128  # 2048
-
 # sparse_attention_freq marks layers 0-2 dense and 3-59 sparse (tt/layer.py).
 FIRST_SPARSE_LAYER = 3
 
@@ -146,8 +142,9 @@ def plan(chunk: int, cache: int):
     chunks (the runtime fills the cache one chunk at a time, so a partial prefix is not reachable),
     and `total` is the cache capacity the KV cache must be allocated for.
     """
-    assert chunk % 1024 == 0, f"chunk ({chunk}) must be a multiple of 1024 (MSA needs S%1024==0)"
-    assert chunk >= MSA_MIN_TOKENS, f"chunk ({chunk}) below the MSA floor {MSA_MIN_TOKENS}"
+    # Whole 128-token MSA blocks per SP rank (SP <= 8). A cold chunk below the 2048-token top-k window reads
+    # the KV cache, so there is no 2048 floor.
+    assert chunk > 0 and chunk % 1024 == 0, f"chunk ({chunk}) must be a positive multiple of 1024"
     n_prefix = cache // chunk
     cache_aligned = n_prefix * chunk
     n_chunks = n_prefix + 1
@@ -405,8 +402,8 @@ def main():
             f"  wall-clock: {wall*1e3:.1f} ms  ({chunk_reads} profiler reads inside the chunk, "
             f"{prefix_reads} before it)\n"
             f"  device-kernel time per zone: parse the ops CSV with\n"
-            f"    python3 models/demos/minimax_m3/tests/perf/parse_zone_perf.py "
-            f"<generated/profiler/reports/*/ops_perf_results_*.csv> --html zones.html",
+            f"    python3 models/demos/minimax_m3/tests/perf/visualize_zones.py "
+            f"<generated/profiler/reports/*/ops_perf_results_*.csv>",
             flush=True,
         )
         print("[zone-prof] DONE", flush=True)

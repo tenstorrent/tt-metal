@@ -20,6 +20,7 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t num_workers) {
 
 RemoteOptimizer::RemoteOptimizer(serialization::NamedParameters parameters, int aggregator_rank) :
     OptimizerBase(std::move(parameters)) {
+    require_bf16_parameters(m_parameters, "RemoteOptimizer");
     m_aggregator_rank = core::distributed::Rank{aggregator_rank};
     m_sorted_parameters = SortedParameters(m_parameters.begin(), m_parameters.end());
 
@@ -79,9 +80,8 @@ void RemoteOptimizer::send_gradients() {
 void RemoteOptimizer::receive_weights() {
     auto& socket_manager = autograd::ctx().get_socket_manager();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
-        auto tensor = tensor_ptr->get_value();
-        tensor = socket_manager.recv(tensor, m_distributed_ctx, m_aggregator_rank);
-        tensor_ptr->set_value(tensor);
+        // Frozen fp32 tensors, which the bf16 check skips, keep their dtype too.
+        socket_manager.recv_value(*tensor_ptr, m_distributed_ctx, m_aggregator_rank);
     }
 }
 

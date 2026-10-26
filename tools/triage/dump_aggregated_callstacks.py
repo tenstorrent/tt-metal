@@ -135,7 +135,11 @@ class AggregationBucket:
         d = first.dispatcher_core_data
         self.kernel_name = d.kernel_name
         self.op_id = d.host_assigned_id
-        self.callstack = first.kernel_callstack_with_message
+        cs = first.kernel_callstack_with_message
+        if not cs.callstack and first.pc is not None:
+            # No frames to show the PC, so prefix it to the failure message
+            cs = KernelCallstackWithMessage(callstack=[], message=f"0x{first.pc:08X} {cs.message}")
+        self.callstack = cs
         self.risc_name = risc_name
 
         # Existing aggregation for plain text mode

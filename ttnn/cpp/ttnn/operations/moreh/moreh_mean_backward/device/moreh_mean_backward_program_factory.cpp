@@ -242,7 +242,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardProgramFactory::create_program_arti
             .compile_time_args =
                 {{"num_output_tiles", num_output_tiles},
                  {"wt_need_bcast", need_bcast_dim[0]},
-                 {"ht_need_bcast", need_bcast_dim[1]}},
+                 {"ht_need_bcast", need_bcast_dim.size() > 1 ? need_bcast_dim[1] : 0u}},
             .hw_config = compute_hw_config,
         };
     };

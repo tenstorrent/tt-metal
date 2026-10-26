@@ -111,7 +111,7 @@ StreamPlacements decide_device_placement(
             // links[k], not k: the returned indices are the forwarding-capable subset of the
             // direction's channels, so an ordinal is not a link index.
             const uint32_t link_idx = links[k];
-            const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(self_node, nbr_node, link_idx);
+            const auto eth_core = tt::tt_fabric::get_forwarding_eth_core(*mesh, self_node, nbr_node, link_idx);
             const auto closest =
                 tt::tt_metal::experimental::Device::get_closest_worker_to_eth_core(*dev, eth_core, SENDER_NOC);
             const StreamId stream = make_stream_id(k, delta == 1);

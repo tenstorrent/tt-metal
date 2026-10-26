@@ -23,11 +23,11 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
+#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 
@@ -241,7 +241,10 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     // Quasar dispatch-engine FD uses dedicated dispatch tiles from the soc `dispatch:` list, so
     // Tensix workers listed under dispatch_cores in the fast-dispatch core descriptor YAML are not
     // reserved (same effective worker pool as slow dispatch).
-    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) || quasar_dispatch_engine_fd) {
+    // A worker-grid override (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE) is honoured on the dispatch-engine
+    // path too, falling through to the descriptor-derived grid below.
+    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) ||
+        (quasar_dispatch_engine_fd && !get_rtoptions().is_core_grid_override_todeprecate())) {
         compute_grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
         if (quasar_dispatch_engine_fd) {
             log_info(

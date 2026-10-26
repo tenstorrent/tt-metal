@@ -13,6 +13,7 @@
 #include "llk_math_common.h"
 #include "llk_operands.h"
 #include "llk_sync.h"
+#include "api/debug/waypoint.h"
 
 namespace llk_math_detail {
 template <auto...>
@@ -109,7 +110,9 @@ inline void llk_math_wait_for_dest_available() {
 
 /**
  * @brief Signals that the current destination section is done.
- * After math is done, posts to the MATH_PACK semaphore so the packer can proceed;
+ * After math is done, posts to the MATH_PACK semaphore so the packer can proceed; on the unpack-to-dest path it then
+ * gets UNPACK_MATH, releasing the unpacker's count for this section. SyncHalf: flips this thread's section base in
+ * both paths, so under unpack-to-dest the SFPU follows the bank the unpacker wrote.
  * @tparam EN_32BIT_DEST: Set to true to use 32bit math dest in Float32 or Int32 format
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
@@ -122,18 +125,21 @@ inline void llk_math_dest_section_done() {
     // no-real-work unpack-to-dest forwarder.
     _llk_sync_post_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::MATH_PACK);
     if constexpr (UnpackToDestEn) {
-        // Release the unpacked tile only now, after MATH_PACK counts it: getting it at acquire left both
-        // semaphores at zero while SFPU still worked on Dest, and unpack overwrote the tile.
-        _llk_sync_get_<p_stall::MATH, p_stall::WAIT_SFPU>(semaphore::UNPACK_MATH);
+        // Release the unpacker's count for this section. This comes after the MATH_PACK post on purpose: the section
+        // is then always held by one of the two semaphores, from the unpacker's write until pack releases it.
+        // No stall before the get: the post above already waited for MATH and SFPU, and nothing ran in between.
+        _llk_sync_get_(semaphore::UNPACK_MATH);
     }
-    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf && !UnpackToDestEn) {
+    if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
         _llk_sync_advance_dest_section_<ckernel::TRISC_ID, EN_32BIT_DEST, p_stall::WAIT_SFPU, p_stall::MATH>();
     }
 }
 
 /**
  * @brief Initializes math–pack synchronization for the destination register.
- * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore
+ * Waits for any previous packs to finish, resets the dest bank id, initializes the MATH_PACK semaphore. In the
+ * unpack-to-dest path it then passes the UNPACK_INIT startup barrier that @ref llk_unpack_hw_configure raises behind
+ * its seeds of UNPACK_MATH / UNPACK_PACK, so this thread's first wait on them cannot be armed before they exist.
  *
  * @warning SYNC SCHEME: semaphores. There are two mutually exclusive Dest register synchronization schemes: the
  * dest-dvalid scheme and the semaphore scheme. Never mix them. Currently the semaphore scheme is used in llk and
@@ -143,35 +149,42 @@ inline void llk_math_pack_sync_init() {
     _llk_math_pack_sync_init_<DST_SYNC_MODE>();
 
     if constexpr (UnpackToDestEn) {
-        constexpr std::uint32_t N = (DST_SYNC_MODE == DstSync::SyncFull) ? 1 : 2;
-        _llk_sync_init_(semaphore::UNPACK_MATH, N, 0);
+        // Startup barrier: the unpack thread seeds UNPACK_MATH / UNPACK_PACK (the semaphores it posts) in
+        // llk_unpack_hw_configure and raises UNPACK_INIT behind the seeds. Pass it here, before this thread's first
+        // SEMWAIT on UNPACK_MATH, so no SEMINIT can land on a pending waiter. A RISC-side spin, see
+        // _llk_sync_barrier_pass_; it costs nothing, math has nothing to do before the unpacker's first post anyway.
+        // Unbounded: a program whose unpack thread never calls llk_unpack_hw_configure stays here, so the spin is
+        // bracketed by waypoints for the watcher.
+        WAYPOINT("MHBW");
+        _llk_sync_barrier_pass_(semaphore::UNPACK_INIT);
+        WAYPOINT("MHBD");
     }
 }
 
 // Math has no per-tile data-format state on Quasar; format reconfig is unpack-only.
 // The wrappers below are intentionally empty no-ops, kept so reconfig_data_format.h
 // can issue MATH((...)) uniformly across arches.
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(const std::uint32_t /*srca_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_new_operand*/, const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format(
     const std::uint32_t /*srca_old_operand*/,
     const std::uint32_t /*srca_new_operand*/,
     const std::uint32_t /*srcb_old_operand*/,
     const std::uint32_t /*srcb_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srca(
     const std::uint32_t /*srca_old_operand*/, const std::uint32_t /*srca_new_operand*/) {}
 
-template <bool EN_32BIT_DEST /*maybe_unused*/, bool to_from_int8 /*maybe_unused*/ = false>
+template <bool EN_32BIT_DEST /*maybe_unused*/, bool skip_int8 /*maybe_unused*/ = false>
 inline void llk_math_reconfig_data_format_srcb(
     const std::uint32_t /*srcb_old_operand*/, const std::uint32_t /*srcb_new_operand*/) {}

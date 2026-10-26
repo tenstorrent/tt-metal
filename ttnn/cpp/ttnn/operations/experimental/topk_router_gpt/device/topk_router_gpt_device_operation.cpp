@@ -106,13 +106,14 @@ spec_return_value_t TopkRouterGptDeviceOperation::compute_output_specs(
     auto B = input_shape[0];
     auto l1_rm = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
 
-    uint32_t k_padded = tt::round_up(attrs.k, 8);
-
     const auto logical_shape = ttnn::Shape({B, attrs.k});
-    const auto padded_shape = ttnn::Shape({32, k_padded});
+    // Pad rows only. The data-movement kernel emits all 32 physical rows; the column padding it writes
+    // (k_padded = round_up(k, 8) elements per row) stays inside each row's L1-aligned page slot, so the
+    // row-major page is k elements wide. A padded width of k_padded would make downstream zero-copy
+    // reshapes to [..., k] build views whose buffer page count no longer matches the row count.
+    const auto padded_shape = ttnn::Shape({32, attrs.k});
 
-    // The data-movement kernel emits all 32 physical rows. Preserve the
-    // caller's logical B while allocating those rows in the RM backing buffer.
+    // Preserve the caller's logical B while allocating all 32 rows in the RM backing buffer.
     const auto idx_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
         DataType::UINT16, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), l1_rm, logical_shape, padded_shape);
     auto idx_spec = tt::tt_metal::TensorSpec(logical_shape, idx_layout);

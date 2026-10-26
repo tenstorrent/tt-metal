@@ -8,6 +8,7 @@
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
+#include "tt_metal/fabric/channel_trimming_io.hpp"
 #include "tt_metal/fabric/channel_trimming_report.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "tt_metal/llrt/hal.hpp"
@@ -41,7 +42,7 @@ bool fabric_has_intermesh_z_edge(const MeshGraph& mesh_graph) {
 }  // namespace
 
 StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id) const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = fabric_context_.get_control_plane();
     const bool express_enabled = control_plane.express_routing_enabled(mesh_id);
     // The credit plan follows express enablement (per mesh) and multi-TXQ (device-wide, from the
     // shared router config) -- the same facts the per-router derivation used, lifted to the scope
@@ -65,8 +66,7 @@ StreamAssignment FabricBuilderContext::compute_stream_assignment(MeshId mesh_id)
         .max_sender_counts = max_senders,
         .max_receiver_counts = max_receivers,
         .vc2_present = intermesh_vc_config_.requires_vc2,
-        .tensix_relay_present = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() ==
-                                tt::tt_fabric::FabricTensixConfig::UDM};
+        .tensix_relay_present = fabric_context_.get_fabric_tensix_config() == tt::tt_fabric::FabricTensixConfig::UDM};
     return make_stream_assignment(stream_requirements(placement, plan));
 }
 
@@ -92,7 +92,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
     // the shared router config would report fewer sender channels than a router actually maps -- the
     // variant-to-router channel lookup would then index past its end. Asked across every local mesh
     // rather than per node, since this maximum is fabric-wide.
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = fabric_context_.get_control_plane();
     bool any_mesh_uses_express = false;
     for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
         any_mesh_uses_express = any_mesh_uses_express || control_plane.express_routing_enabled(mesh_id);
@@ -170,9 +170,11 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
         "Capture mode instruments routers to record usage; override mode applies forced channel settings. "
         "Enable only one at a time.");
     if (rtoptions.has_fabric_trimming_profile()) {
-        const auto& path = rtoptions.get_fabric_trimming_profile_path();
-        log_info(tt::LogFabric, "Loading channel trimming profile: {}", path);
-        channel_trimming_overrides_ = load_channel_trimming_overrides(path);
+        // Multi-rank: the profile path may be a directory of per-rank captures; each rank
+        // resolves and loads only its own file (override lookups are per-local-router).
+        const auto resolved_path = resolve_channel_trimming_profile_path(rtoptions.get_fabric_trimming_profile_path());
+        log_info(tt::LogFabric, "Loading channel trimming profile: {}", resolved_path);
+        channel_trimming_overrides_ = load_channel_trimming_overrides(resolved_path.string());
     }
 
     // Load global overrides from override file if specified
@@ -186,8 +188,9 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
 
     // Log trimming report after intermesh config is known (VC1 affects expected channel counts)
     if (rtoptions.has_fabric_trimming_profile()) {
-        const auto& path = rtoptions.get_fabric_trimming_profile_path();
-        generate_and_log_channel_trimming_report(path, fabric_context.get_fabric_topology(), intermesh_vc_config_.requires_vc1);
+        const auto resolved_path = resolve_channel_trimming_profile_path(rtoptions.get_fabric_trimming_profile_path());
+        generate_and_log_channel_trimming_report(
+            resolved_path.string(), fabric_context.get_fabric_topology(), intermesh_vc_config_.requires_vc1);
     }
 
     // Compute max channel counts for this fabric instance
@@ -203,7 +206,7 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     tensix_config_ = nullptr;
 
     // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = fabric_context.get_control_plane();
     for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
         stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
     }

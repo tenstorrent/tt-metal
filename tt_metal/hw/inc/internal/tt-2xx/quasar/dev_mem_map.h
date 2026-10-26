@@ -53,7 +53,7 @@
 #define MEM_DM_FIRMWARE_SIZE (1024 * 12)
 #define MEM_TRISC_FIRMWARE_SIZE (1024 * 5)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
-#define MEM_DM_GLOBAL_SIZE (1024 * 2)
+#define MEM_DM_GLOBAL_SIZE (1024 * 4)  // the DM .data section also holds .rodata (the ATT map tables)
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
 // Per-DM stride of the local region: crt0 puts tp at base + n * size and sp at base + (n+1) * size,
 // so these also place every stack. The DM D$ indexes on addr[10:6] (2-way, 32 sets of 64 B), so keep
@@ -97,7 +97,7 @@
 #define UNCACHED_MEM_MAILBOX_BASE (0x400010)  // workaround for https://github.com/tenstorrent/tt-metal/issues/19265
 // Magic sizes must be big enough to hold mailboxes_t.  static_asserts will fire if either is too small.
 // The dispatch engine mailbox is DM-only (8 processors).
-#define MEM_MAILBOX_SIZE 59632
+#define MEM_MAILBOX_SIZE 59904
 #define MEM_DISPATCH_MAILBOX_SIZE 23616
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_DISPATCH_MAILBOX_END (MEM_MAILBOX_BASE + MEM_DISPATCH_MAILBOX_SIZE)

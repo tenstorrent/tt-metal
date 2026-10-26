@@ -32,10 +32,9 @@ CHUNK_SIZE=5120
 WARMUP_CHUNKS=10
 PCC_THRESHOLD=0.85
 GOLDEN_LEN=56320
-# Off by default. Reads the runner-side probe in summarize_ci_run.py's perf JSON, not the producer's
-# log line, which times the push schedule and returns long before the model is done.
 EXPECTED_TPS="${PREFILL_EXPECTED_TPS:-}"
-PERF_MARGIN="${PREFILL_PERF_MARGIN:-0.15}"
+PERF_BASELINES="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_baselines.json"
+PERF_GATE="${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/perf_gate.py"
 # Demand a measurement even before a baseline exists, so a leg being calibrated cannot pass green
 # on nothing.
 REQUIRE_TPS="${PREFILL_REQUIRE_TPS:-0}"
@@ -60,7 +59,7 @@ case "${MODEL}" in
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/prefill_runner_kv}"
     MANIFEST="${MANIFEST_DIR}/kimi27.json"
     PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; \
-        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/deepseek-ai/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
+        export PREFILL_TRACE_DIR=/mnt/weka/model-cache/stable/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-256000-last5120;"
     ;;
   glm53)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/glm53_prefill_runner_kv}"
@@ -80,6 +79,8 @@ case "${MODEL}" in
     # the 5k..250k ones GLM-5.3 reports and sc4's 1M request adds 510k and 1M on top. Not a
     # baseline for sc4 -- 24 layers against 93 -- which is why the summary job reports sc4 alone.
     SC1_NUM_LAYERS=24
+    # sc1 is sc4's stage 0, so it opens sc4's slots.
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
     RUNNER_ENV="export PREFILL_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized;"
     # The sc4 93-layer leg's KV PCC
     # collapsed to ~0 past layer ~24 on run 36717057668 with the Weka trace (it reads 0.900..0.994 on
@@ -142,16 +143,21 @@ if [ -n "${PREFILL_NUM_USERS:-}" ]; then
   NUM_USERS=${PREFILL_NUM_USERS}
   RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_NUM_USERS=${NUM_USERS};"
 fi
+# tt-run does not forward PREFILL_*: pass a cache-format override to every rank.
+if [ -n "${PREFILL_SCALED_FP8_KV_CACHE:-}" ]; then
+  RUNNER_OVERRIDES="${RUNNER_OVERRIDES} export PREFILL_SCALED_FP8_KV_CACHE=${PREFILL_SCALED_FP8_KV_CACHE};"
+fi
 echo "resolved shape for ${MODEL}/${CONFIG}: max_seq_len=${MAX_SEQ_LEN} num_users=${NUM_USERS}"
 
 REAL_CHUNKS=$((MAX_SEQ_LEN / CHUNK_SIZE))
 
 SC1_CHUNKS=$((SC1_MAX_SEQ_LEN / CHUNK_SIZE))
 SC4_CHUNKS=$((SC4_MAX_SEQ_LEN / CHUNK_SIZE))
-# Start, ~50k, and the midpoint + tail of each config's window. Deduped: a model with one config
-# yields the same chunk twice.
-PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" \
-  "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
+# Start, ~50k, ~100k, ~255k, and the midpoint + tail of each config's window. Deduped: a model with
+# one config yields the same chunk twice, and the summary drops chunks past a short window.
+PROBE_CHUNKS="${PROBE_CHUNKS:-$(printf '%s\n' 0 "$((50000 / CHUNK_SIZE))" "$((100000 / CHUNK_SIZE))" \
+  "$((256000 / CHUNK_SIZE))" "$((SC1_CHUNKS / 2 - 1))" "$((SC1_CHUNKS - 1))" "$((SC4_CHUNKS / 2 - 1))" \
+  "$((SC4_CHUNKS - 1))" | sort -n -u | paste -sd,)}"
 
 
 mkdir -p "${PIPELINE_DIR}"
@@ -164,6 +170,7 @@ TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
 MR_DIR=$(mktemp -d "${PIPELINE_DIR}/${MODEL}_prefill_ci_mr.XXXXXX")
+GATE_LOG="${MR_DIR}/gates.log"
 export TABLE_PATH="${MR_DIR}/kv_chunk_table.pb"
 PCC_DIR="${MR_DIR}/pcc_verdict"
 RANKLOGS="${MR_DIR}/ranklogs"
@@ -228,6 +235,10 @@ cleanup() {
       fi
     fi
   fi
+  # Last in the log, after the rank-log tails, so a failed gate is what a tail reader sees.
+  echo "==================== gate verdicts ===================="
+  echo "producer rc=${PROD_RC:-<unset>} runner rc=${RUNNER_RC:-<unset>} perf gate rc=${PERF_GATE_RC:-<unset>} pcc gate rc=${PCC_GATE_RC:-<unset>}"
+  grep -h "GATE" "${GATE_LOG}" 2>/dev/null || true
   rm -rf "${MR_DIR}"
 }
 trap cleanup EXIT
@@ -277,8 +288,7 @@ setsid python3 "${TTRUN_PY}" \
     export PREFILL_CHUNK_SIZE=${CHUNK_SIZE}; \
     export PREFILL_SYNC_PER_CHUNK=1; \
     export PREFILL_TIMING_DIR='${TIMING_DIR}'; \
-    export PREFILL_ENABLE_MIGRATION=1; \
-    export PREFILL_MOCK_MIGRATION=1; \
+    export PREFILL_ENABLE_MIGRATION=0; \
     export PREFILL_MIGRATION_TABLE_PATH='${TABLE_PATH}'; \
     ${RUNNER_OVERRIDES} \
     ${NUM_LAYERS_ENV} \
@@ -352,47 +362,29 @@ if [ "${PROD_RC}" -eq 0 ]; then
   fi
 fi
 
-TPS_GATE_RC=0
-if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ]; then
+PERF_GATE_RC=0
+if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINES}" ]; then
   # The summary normally runs in the EXIT trap, after this point; force it early so the gate has
   # a file to read. The trap's own call is a no-op once this one has run.
   emit_summary
-  python3 - "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" "${EXPECTED_TPS}" "${PERF_MARGIN}" \
-    <<'TPSPY' || TPS_GATE_RC=$?
-import json, sys
-
-path, expected, margin = sys.argv[1], sys.argv[2], float(sys.argv[3])
-try:
-    rec = json.load(open(path))
-except Exception as e:
-    print(f"TPS GATE FAIL: no perf metrics at {path}: {type(e).__name__}: {e}", file=sys.stderr)
-    sys.exit(1)
-
-probes, index = rec.get("throughput_tok_s") or {}, rec.get("chunk_index") or {}
-# Gate the deepest probe: throughput falls as the KV cache grows, so it is the worst case and the
-# one a full-context user sees.
-label = max(probes, key=lambda k: index.get(k, -1), default=None)
-if label is None:
-    print(f"TPS GATE FAIL: {path} has no throughput probes; the run measured nothing", file=sys.stderr)
-    sys.exit(1)
-
-tps = probes[label]
-if not expected:
-    print(f"TPS: {tps:,.0f} tok/s {label} (no PREFILL_EXPECTED_TPS set -- reporting, not gating)")
-    sys.exit(0)
-
-expected = float(expected)
-lo, hi = expected * (1 - margin), expected * (1 + margin)
-print(f"TPS GATE {label}: {tps:,.0f} tok/s vs {expected:,.0f} +/- {margin * 100:.0f}% [{lo:,.0f}, {hi:,.0f}]")
-if not lo <= tps <= hi:
-    print(f"TPS GATE FAIL: {tps:,.0f} outside [{lo:,.0f}, {hi:,.0f}]", file=sys.stderr)
-    sys.exit(1)
-print("TPS GATE PASS")
-TPSPY
+  PERF_POWER=""
+  if [ -z "${EXPECTED_TPS}" ] && [ -f "${PERF_BASELINES}" ]; then
+    PERF_POWER=$("${MPIRUN}" -np 1 --host "${RESOLVED_HOSTS%%,*}:1" --bind-to none --allow-run-as-root \
+      bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' python3 ${PERF_GATE} --print-power" | tail -n 1) || true
+    case "${PERF_POWER}" in
+      8kw|14kw) ;;
+      *) echo "perf baseline WARN: power probe on ${RESOLVED_HOSTS%%,*} returned '${PERF_POWER}'" >&2; PERF_POWER="" ;;
+    esac
+  fi
+  python3 "${PERF_GATE}" \
+    "${PREFILL_SUMMARIES}/perf_json/${MODEL}_${CONFIG}.json" \
+    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
+    --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
+    --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi
 
 PCC_GATE_RC=0
-python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' || PCC_GATE_RC=$?
+python3 - "${PCC_DIR}" "${EXPECTED_RANKS}" "${PCC_THRESHOLD}" "${PRODUCER_USERS}" <<'PY' 2>&1 | tee -a "${GATE_LOG}" || PCC_GATE_RC=$?
 import glob, json, math, os, sys
 
 pcc_dir, expected, threshold = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
@@ -449,7 +441,7 @@ if [ "${RUNNER_RC}" -ne 0 ]; then
   echo "runner exited non-zero after producer success (rc=${RUNNER_RC})" >&2
   exit "${RUNNER_RC}"
 fi
-if [ "${TPS_GATE_RC}" -ne 0 ]; then
-  exit "${TPS_GATE_RC}"
+if [ "${PERF_GATE_RC}" -ne 0 ]; then
+  exit "${PERF_GATE_RC}"
 fi
 exit "${PCC_GATE_RC}"

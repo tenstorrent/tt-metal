@@ -17,7 +17,8 @@ inline void llk_unpack_AB_sdpa_custom_mm(
     const std::uint32_t tile_index_1,
     const std::uint32_t kt_dim,
     const std::uint32_t ct_dim = 1,
-    const bool mask_chunk = false) {
+    const bool mask_chunk = false,
+    const std::uint32_t row_stride = 0) {
     SAN_HOOK(unsupported());
     // Swap operands, for matmul operand0 goes to SrcB and operand1 goes to SrcA
     const std::uint32_t operandA_id = get_operand_id(operand1);
@@ -41,5 +42,6 @@ inline void llk_unpack_AB_sdpa_custom_mm(
         kt_dim,
         ct_dim,
         mask_chunk,
-        get_operand_face_r_dim(operandB_id));
+        get_operand_face_r_dim(operandB_id),
+        row_stride);
 }

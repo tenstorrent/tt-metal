@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "config_id": "down4_l24to34_head8_lofi",
+  "model": "IFM/K2-Horizon-7B",
+  "base_policy": "optimized_full_model_stage7",
+  "max_context": 524288,
+  "layer_defaults": {
+    "qkv_dtype": "bfloat8_b",
+    "o_dtype": "bfloat8_b",
+    "mlp": "bfloat4_b",
+    "down": "bfloat8_b",
+    "kv": "bfloat8_b",
+    "qkv_fidelity": "HiFi2",
+    "o_fidelity": "HiFi2",
+    "mlp_fidelity": "LoFi",
+    "down_fidelity": "HiFi2",
+    "sdpa_fidelity": "HiFi2",
+    "attention_activation": "bfloat16",
+    "mlp_activation": "bfloat16",
+    "prefill_qkv_activation": "bfloat8_b",
+    "prefill_mlp_activation": "bfloat8_b"
+  },
+  "layer_exceptions": {
+    "0": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "3": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "4": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "5": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "6": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "7": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "8": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "9": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "10": {
+      "mlp": "bfloat8_b",
+      "mlp_fidelity": "HiFi2"
+    },
+    "1": {
+      "prefill_qkv_activation": "bfloat16"
+    },
+    "24": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "25": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "26": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "27": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "28": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "29": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "30": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "31": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "32": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "33": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    },
+    "34": {
+      "down": "bfloat4_b",
+      "down_fidelity": "LoFi"
+    }
+  },
+  "dtypes": {
+    "embedding": "bfloat16",
+    "norm": "bfloat16",
+    "residual": "bfloat16",
+    "matmul_output": "bfloat16",
+    "logits": "bfloat16",
+    "sampling_values": "bfloat16",
+    "token_ids": "uint32",
+    "rope": "bfloat16",
+    "ccl": "bfloat16"
+  },
+  "head": {
+    "weight_dtype": "bfloat8_b",
+    "compute_fidelity": "LoFi"
+  },
+  "accumulation": {
+    "decode_fp32": true,
+    "prefill_fp32": true,
+    "head_fp32": true,
+    "norm_fidelity": "HiFi4",
+    "math_approx_mode": false,
+    "packer_l1_acc": true
+  }
+}

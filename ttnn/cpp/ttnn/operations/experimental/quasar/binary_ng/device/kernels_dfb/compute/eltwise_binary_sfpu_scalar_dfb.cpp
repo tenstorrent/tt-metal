@@ -29,6 +29,7 @@
 #include "api/compute/mul_int_sfpu.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/binary_remainder.h"
 // SFPU op headers NOT yet ported to Quasar: they unconditionally pull in WH/BH-only ckernel impls or
 // symbols (InstrModLoadStore, DataFormat::UInt32, ckernel_sfpu_div_int32_floor.h, ...) absent from the
 // Quasar ckernel tree, so they only compile off-Quasar. The float SFPU binary ops this kernel runs on
@@ -39,7 +40,6 @@
 #include "api/compute/sub_int_sfpu.h"
 #include "api/compute/div_int32_floor.h"
 #include "api/compute/div_int32_sfpu.h"
-#include "api/compute/binary_remainder.h"
 #include "api/compute/binary_fmod.h"
 #include "api/compute/quantization.h"
 #include "api/compute/gcd.h"
@@ -54,17 +54,18 @@
 #include "eltwise_utils_sfpu_dfb.hpp"
 
 // Process n LHS tiles against the scalar tile parked at index 0 in dfb_post_rhs.
+// The DataflowBuffer arguments are kernel_main's objects: an object built here would drain at every return.
+template <typename DFBPreLhs, typename DFBPostLhs, typename DFBPostRhs, typename DFBOut>
 FORCE_INLINE void process_sfpu_scalar_tiles(
     uint32_t n,
-    uint32_t dfb_pre_lhs_id,
-    uint32_t dfb_post_lhs_id,
-    uint32_t dfb_post_rhs_id,
-    uint32_t dfb_out_id ISCLOSE_RT_ARG_PARAMS) {
-    DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
-    DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
-    DataflowBuffer dfb_out(dfb_out_id);
-
-    PREPROCESS(LHS, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_out_id, n);
+    DFBPreLhs& dfb_pre_lhs,
+    DFBPostLhs& dfb_post_lhs,
+    DFBPostRhs& dfb_post_rhs,
+    DFBOut& dfb_out ISCLOSE_RT_ARG_PARAMS) {
+    const uint32_t dfb_post_lhs_id = dfb_post_lhs.get_id();
+    const uint32_t dfb_post_rhs_id = dfb_post_rhs.get_id();
+    const uint32_t dfb_out_id = dfb_out.get_id();
+    PREPROCESS(LHS, dfb_pre_lhs, dfb_post_lhs, dfb_out_id, n);
     dfb_post_lhs.wait_front(n);
 
     dfb_out.reserve_back(n);
@@ -144,25 +145,37 @@ void kernel_main() {
     BINARY_SFPU_INIT
 #endif
 
+    // Each object drains once, at kernel exit. An activation chain reads its operand from the pre ring. Without
+    // one, PREPROCESS compiles to nothing. The LHS pre object is then the post one, because the chunk function
+    // takes it.
+    DataflowBuffer dfb_post_lhs(dfb_post_lhs_id);
     DataflowBuffer dfb_post_rhs(dfb_post_rhs_id);
+    DataflowBuffer dfb_out(dfb_out_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer dfb_pre_lhs(dfb_pre_lhs_id);
+#else
+    auto& dfb_pre_lhs = dfb_post_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer dfb_pre_rhs(dfb_pre_rhs_id);
+#endif
 
     // The scalar RHS tile is filled ONCE by writer_scalar_dfb.cpp: preprocess + wait it a single time
     // here (outside the chunk loop), then reuse tile index 0 on every binary op below.
-    PREPROCESS(RHS, dfb_pre_rhs_id, dfb_post_rhs_id, dfb_out_id, 1);
+    PREPROCESS(RHS, dfb_pre_rhs, dfb_post_rhs, dfb_out_id, 1);
     dfb_post_rhs.wait_front(1);
 
     // Process full chunks
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
         process_sfpu_scalar_tiles(
-            num_tiles_per_cycle, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id ISCLOSE_RT_ARG_FWD);
+            num_tiles_per_cycle, dfb_pre_lhs, dfb_post_lhs, dfb_post_rhs, dfb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_scalar_tiles(
-            remainder, dfb_pre_lhs_id, dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id ISCLOSE_RT_ARG_FWD);
+        process_sfpu_scalar_tiles(remainder, dfb_pre_lhs, dfb_post_lhs, dfb_post_rhs, dfb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Pop the single reused scalar tile from the RHS DFB.

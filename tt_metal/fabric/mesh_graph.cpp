@@ -20,8 +20,8 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -306,7 +306,9 @@ static std::vector<std::pair<ChipId, ChipId>> expand_express_link_edges(
 
 void MeshGraph::initialize_from_mgd(
     const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy) {
-    static const std::unordered_map<const proto::Architecture, tt::ARCH> proto_arch_to_arch = {
+    // Intentionally leaked: a control plane (and thus a MeshGraph) can be constructed from the atexit
+    // teardown path, after a plain function-local static's destructor has already run.
+    static const auto& proto_arch_to_arch = *new std::unordered_map<const proto::Architecture, tt::ARCH>{
         {proto::Architecture::WORMHOLE_B0, tt::ARCH::WORMHOLE_B0},
         {proto::Architecture::BLACKHOLE, tt::ARCH::BLACKHOLE},
         {proto::Architecture::QUASAR, tt::ARCH::QUASAR},
