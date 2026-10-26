@@ -45,8 +45,18 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+bool bf16_dest_erfinv();
+template <int ITERATIONS>
+void calculate_erfinv_bf16();
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 inline void calculate_erfinv() {
+    if constexpr (!is_fp32_dest_acc_en) {
+        if (bf16_dest_erfinv()) {
+            calculate_erfinv_bf16<8>();
+            return;
+        }
+    }
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
@@ -57,7 +67,7 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
 void erfinv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     log_init<false, false, false>();
@@ -65,3 +75,5 @@ void erfinv_init() {
 
 }  // namespace sfpu
 }  // namespace ckernel
+
+#include "ckernel_sfpu_erfinv_bf16.h"
