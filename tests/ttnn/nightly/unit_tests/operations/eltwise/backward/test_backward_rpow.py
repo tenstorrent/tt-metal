@@ -99,6 +99,12 @@ def test_bw_rpow_base_two_agrees_with_exp2_bw(input_shapes, device):
     ), "rpow_bw(x, 2.0) and exp2_bw(x) differ, but exp2(x) and rpow(x, 2.0) are the same function"
 
 
+def _reads_back_as_nan(tensor):
+    # The op writes NaN, but in bfloat16 the packer stores NaN as +inf (the hardware limitation
+    # test_unary.py also works around), so on device that NaN reads back as +inf.
+    return torch.isnan(tensor) | torch.isposinf(tensor)
+
+
 @pytest.mark.parametrize("exponent", (-2.0, -0.5, -10.0))
 @pytest.mark.parametrize("input_value", (-3.0, 0.0, 1.5, 7.0))
 def test_bw_rpow_negative_base_is_nan_everywhere(exponent, input_value, device):
@@ -108,7 +114,8 @@ def test_bw_rpow_negative_base_is_nan_everywhere(exponent, input_value, device):
     #
     # This is checked element by element on purpose. compare_pcc masks NaN and Inf element
     # by element unless one side is NaN everywhere, so a partly-NaN result can pass; this
-    # checks every element directly.
+    # checks every element directly. +inf is accepted because it is how bfloat16 returns NaN;
+    # the old x ** e derivative still fails here, because it is finite at 1.5 and 7.0.
     shape = torch.Size([1, 1, 32, 32])
     torch_input = torch.full(shape, input_value, dtype=torch.float32)
     torch_grad = torch.ones(shape, dtype=torch.float32)
@@ -118,9 +125,10 @@ def test_bw_rpow_negative_base_is_nan_everywhere(exponent, input_value, device):
 
     tt_out = ttnn.to_torch(ttnn.rpow_bw(grad_tensor, input_tensor, exponent)[0]).float()
 
-    assert torch.isnan(tt_out).all(), (
+    assert _reads_back_as_nan(tt_out).all(), (
         f"rpow_bw with negative base {exponent} at input {input_value} returned "
-        f"{tt_out.flatten()[0].item()}, but a negative base has no real derivative"
+        f"{tt_out.flatten()[0].item()}, but a negative base has no real derivative "
+        f"(expected NaN, which bfloat16 returns as +inf)"
     )
 
 
@@ -129,7 +137,7 @@ def test_bw_rpow_zero_base_splits_at_zero(input_value, device):
     # 0 ** input is 0 above zero and +inf below it, so the derivative the op promises is
     # 0 above zero and -inf below it. Both halves are exact values, not approximations,
     # and -inf is precisely what compare_pcc would normalize away. A NaN input gives NaN,
-    # as in torch.
+    # as in torch, which bfloat16 returns as +inf.
     shape = torch.Size([1, 1, 32, 32])
     torch_input = torch.full(shape, input_value, dtype=torch.float32)
     torch_grad = torch.ones(shape, dtype=torch.float32)
@@ -142,9 +150,9 @@ def test_bw_rpow_zero_base_splits_at_zero(input_value, device):
     tt_out = ttnn.to_torch(ttnn.rpow_bw(grad_tensor, input_tensor, 0.0)[0]).float()
 
     if math.isnan(input_value):
-        assert torch.isnan(
+        assert _reads_back_as_nan(
             tt_out
-        ).all(), f"rpow_bw with base 0 at input NaN returned {tt_out.flatten()[0].item()}, expected NaN"
+        ).all(), f"rpow_bw with base 0 at input NaN returned {tt_out.flatten()[0].item()}, expected NaN or +inf"
     elif input_value < 0.0:
         expected = float("-inf")
         assert (
