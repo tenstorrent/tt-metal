@@ -1,0 +1,41 @@
+{
+ "metrics": {
+  "drift_layers": {
+   "t": "2026-10-26T10:43:54",
+   "value": 40
+  },
+  "drift_layers_above_res": {
+   "t": "2026-10-26T10:43:54",
+   "value": 40
+  },
+  "drift_metrics": {
+   "t": "2026-10-26T10:43:54",
+   "value": 208
+  },
+  "golden_chunks": {
+   "t": "2026-10-26T10:43:54",
+   "value": 11
+  },
+  "golden_files_missing": {
+   "t": "2026-10-26T10:43:54",
+   "value": 400
+  },
+  "golden_hash_ok": {
+   "t": "2026-10-26T10:43:54",
+   "value": 1
+  },
+  "golden_imported": {
+   "t": "2026-10-26T10:43:54",
+   "value": 1
+  },
+  "golden_layers": {
+   "t": "2026-10-26T10:43:54",
+   "value": 40
+  },
+  "official_identical": {
+   "t": "2026-10-26T10:43:54",
+   "value": 0
+  }
+ },
+ "task": "G.s56320"
+}
