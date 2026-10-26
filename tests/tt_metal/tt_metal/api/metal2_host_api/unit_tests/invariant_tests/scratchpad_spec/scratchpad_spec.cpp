@@ -23,8 +23,8 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
-using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecTestBlackhole;
@@ -92,7 +92,7 @@ void CheckSharedScratchpad(distributed::MeshDevice& device, ProgramSpec spec) {
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"shared"},
         .size_per_node = 1024,
-        .advanced_options = {.allow_multi_kernel_binding = true},
+        .advanced_options = {.allow_instance_multi_binding = true},
     }};
     spec.kernels[0].scratchpad_bindings = {
         {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "a"}};
@@ -130,8 +130,24 @@ void CheckSharedScratchpad(distributed::MeshDevice& device, ProgramSpec spec) {
     check_addresses();
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadAllocationAndReallocation) {
-    CheckSharedScratchpad(*mesh_device_, MakeMinimalValidProgramSpec());
+TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadDMAndComputeFails) {
+    EXPECT_THAT(
+        [&] { CheckSharedScratchpad(*mesh_device_, MakeMinimalValidProgramSpec()); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadMultiBindingFlagWithSingleBinderFails) {
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 1024,
+        .advanced_options = {.allow_instance_multi_binding = true},
+    }};
+    spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("only supported on Gen1")));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadAllocationAndReallocation) {
@@ -142,7 +158,7 @@ TEST_F(ProgramSpecTestBlackhole, CPU_SharedScratchpadAllocationAndReallocation) 
     CheckSharedScratchpad(*mesh_device_, MakeMinimalGen1ValidProgramSpec());
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadReallocationWithUnequalPersistentBases) {
+TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadReallocationWithUnequalPersistentBases) {
     auto& arena = mesh_device_->allocator_impl()->persistent_l1();
     const auto alignment = mesh_device_->allocator()->get_alignment(BufferType::DRAM);
     const auto persistent = arena.allocate(CoreRangeSet(CoreRange({1, 0})), 4096, alignment);
@@ -151,9 +167,9 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadReallocationWithUnequalPersist
     ASSERT_GT(higher_base, lower_base);
 
     {
-        ProgramSpec spec = MakeMinimalValidProgramSpec();
-        auto left = MakeMinimalGen2DMKernel("left");
-        auto right = MakeMinimalGen2DMKernel("right");
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto left = MakeMinimalGen1DMKernel("left");
+        auto right = MakeMinimalGen1DMKernel("right");
         left.scratchpad_bindings = {
             {.scratchpad_spec_name = ScratchpadSpecName{"private"}, .accessor_name = "local"},
             {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "pad"},
@@ -166,7 +182,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadReallocationWithUnequalPersist
             ScratchpadSpec{
                 .unique_id = ScratchpadSpecName{"shared"},
                 .size_per_node = 1024,
-                .advanced_options = {.allow_multi_kernel_binding = true}},
+                .advanced_options = {.allow_instance_multi_binding = true}},
         };
         spec.work_units = {
             MakeMinimalWorkUnit("left_work", NodeCoord{0, 0}, {"left"}),
@@ -212,10 +228,10 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadReallocationWithUnequalPersist
     arena.deallocate(persistent.id);
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
+TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
     ProgramSpec spec;
     spec.name = "shared_scratchpad_without_dfbs";
-    spec.kernels = {MakeMinimalGen2DMKernel("left"), MakeMinimalGen2DMKernel("right")};
+    spec.kernels = {MakeMinimalGen1DMKernel("left"), MakeMinimalGen1DMKernel("right")};
     spec.work_units = {
         MakeMinimalWorkUnit("left_work", NodeCoord{0, 0}, {"left"}),
         MakeMinimalWorkUnit("right_work", NodeCoord{2, 0}, {"right"}),
@@ -224,11 +240,11 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
         ScratchpadSpec{
             .unique_id = ScratchpadSpecName{"shared"},
             .size_per_node = 1024,
-            .advanced_options = {.allow_multi_kernel_binding = true}},
+            .advanced_options = {.allow_instance_multi_binding = true}},
         ScratchpadSpec{
             .unique_id = ScratchpadSpecName{"other_shared"},
             .size_per_node = 256,
-            .advanced_options = {.allow_multi_kernel_binding = true}},
+            .advanced_options = {.allow_instance_multi_binding = true}},
     };
     for (auto& kernel : spec.kernels) {
         kernel.scratchpad_bindings = {
@@ -270,12 +286,12 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadWithoutDfbsOnDisjointNodes) {
     check_addresses();
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadUsesEntireBinderNodeUnion) {
+TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadUsesEntireBinderNodeUnion) {
     // The DFB occupies only nodes 1 and 2. The shared scratchpad must clear it even
     // if the first binding kernel's node set does not include node 2.
     for (bool reverse_order : {false, true}) {
-        ProgramSpec spec = MakeMinimalValidProgramSpec();
-        auto extra = MakeMinimalGen2DMKernel("extra");
+        ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+        auto extra = MakeMinimalGen1DMKernel("extra", DataMovementProcessor::RISCV_1);
         spec.kernels.push_back(extra);
         spec.work_units = {
             MakeMinimalWorkUnit("left", NodeCoord{0, 0}, {"extra"}),
@@ -286,12 +302,12 @@ TEST_F(ProgramSpecTestQuasar, CPU_SharedScratchpadUsesEntireBinderNodeUnion) {
             ScratchpadSpec{
                 .unique_id = ScratchpadSpecName{"shared"},
                 .size_per_node = 1024,
-                .advanced_options = {.allow_multi_kernel_binding = true}},
+                .advanced_options = {.allow_instance_multi_binding = true}},
             ScratchpadSpec{.unique_id = ScratchpadSpecName{"private"}, .size_per_node = 512},
             ScratchpadSpec{
                 .unique_id = ScratchpadSpecName{"other_shared"},
                 .size_per_node = 256,
-                .advanced_options = {.allow_multi_kernel_binding = true}},
+                .advanced_options = {.allow_instance_multi_binding = true}},
         };
         for (auto& kernel : spec.kernels) {
             kernel.scratchpad_bindings = {

@@ -20,9 +20,11 @@
 namespace tt::tt_metal::experimental {
 namespace {
 
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
+using test_helpers::ProgramSpecTestGen1;
 using test_helpers::ProgramSpecTestQuasar;
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundTwiceInOneKernelFails) {
@@ -42,14 +44,14 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundTwiceInOneKernelFails) {
             ::testing::HasSubstr("binds scratchpad 'scratch_0' more than once")));
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundTwiceInOneKernelWithMultiKernelBindingEnabledFails) {
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadBoundTwiceInOneKernelWithMultiKernelBindingEnabledFails) {
     // Sharing across kernels does not permit duplicate bindings within one kernel.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"scratch_0"},
         .size_per_node = 1024,
-        .advanced_options = {.allow_multi_kernel_binding = true},
+        .advanced_options = {.allow_instance_multi_binding = true},
     }};
     spec.kernels[0].scratchpad_bindings = {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s_a"},

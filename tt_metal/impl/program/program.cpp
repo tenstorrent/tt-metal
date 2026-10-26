@@ -2256,7 +2256,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
     };
 
     // Multiple Scratchpad bindings could share the same allocation through:
-    // ScratchpadAdvancedOptions::allow_multi_kernel_binding.
+    // ScratchpadAdvancedOptions::allow_instance_multi_binding.
     //
     // Shared allocation are identified by an ID.
     std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, std::vector<ScratchpadBindingRef>>

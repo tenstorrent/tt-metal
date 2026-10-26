@@ -20,6 +20,17 @@ void ValidateScratchpadSpec(const ScratchpadSpec& scratchpad, tt::ARCH arch) {
         "(did you forget to set size_per_node?).",
         scratchpad.unique_id);
 
+    // Quasar DM cores use cached L1 while compute cores access L1 uncached. Synchronization
+    // alone cannot prevent stale reads or cache write-backs overwriting compute-side writes.
+    // Restrict the option to Gen1 until a cache-coherent sharing strategy is available.
+    if (is_gen2_arch(arch)) {
+        TT_FATAL(
+            !scratchpad.advanced_options.allow_instance_multi_binding,
+            "ScratchpadSpec '{}' sets allow_instance_multi_binding, which is only supported on Gen1 (WH/BH) "
+            "architectures. On Gen2, DM and compute scratchpad accesses are not cache-coherent.",
+            scratchpad.unique_id);
+    }
+
     const bool has_format = scratchpad.data_format_metadata.has_value();
     const bool has_tile = scratchpad.tile_format_metadata.has_value();
     TT_FATAL(

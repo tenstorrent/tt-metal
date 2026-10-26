@@ -179,7 +179,7 @@ struct ScratchpadBindingHandle {
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
     std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
     // Present only if the binding handle could share it's allocation with another scratchpad.
-    // Configured in advanced options: ScratchpadAdvancedOptions::allow_multi_kernel_binding.
+    // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
     // For all the scratchpad binding handle sharing the same identifier,
     // the size_bytes are all equivalent.
     //

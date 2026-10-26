@@ -102,7 +102,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedScratchpadBindingJITSmokeDMAndComputeKerne
     spec.scratchpads = {ScratchpadSpec{
         .unique_id = ScratchpadSpecName{"shared"},
         .size_per_node = 64,
-        .advanced_options = {.allow_multi_kernel_binding = true},
+        .advanced_options = {.allow_instance_multi_binding = true},
     }};
     spec.work_units = {MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"})};
 

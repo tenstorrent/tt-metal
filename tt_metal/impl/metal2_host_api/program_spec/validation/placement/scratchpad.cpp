@@ -25,7 +25,7 @@ void ValidateScratchpadBindersPerNode(const ValidationContext& ctx) {
     const CollectedSpecData& collected = ctx.collected;
 
     for (const auto& scratchpad : spec.scratchpads) {
-        if (scratchpad.advanced_options.allow_multi_kernel_binding) {
+        if (scratchpad.advanced_options.allow_instance_multi_binding) {
             continue;
         }
         auto binders_it = collected.scratchpad_binders.find(scratchpad.unique_id);
@@ -53,7 +53,7 @@ void ValidateScratchpadBindersPerNode(const ValidationContext& ctx) {
                 "ScratchpadSpec '{}' is bound by {} kernel instances on node {} ({}). A scratchpad is "
                 "private node-local L1; multiple kernels may bind the same scratchpad only on disjoint "
                 "nodes, so each node's instance stays private to one kernel. Sharing one node's "
-                "scratchpad across kernels requires advanced_options.allow_multi_kernel_binding = true "
+                "scratchpad across kernels requires advanced_options.allow_instance_multi_binding = true "
                 "and explicit synchronization in kernel code.",
                 scratchpad.unique_id,
                 kernels.size(),

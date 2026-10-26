@@ -276,14 +276,22 @@ struct DFBAdvancedOptions {
 };
 
 struct ScratchpadAdvancedOptions {
-    // Allow the same scratchpad to be bounded by multiple kernels on a node, such as a
-    // DM kernel and a compute kernel. Both kernels access the same backing L1 memory.
-    // By default, a scratchpad is private to one kernel on each node.
+    ////////////////////////////////////////////////////////////////////////////////
+    // Scratchpad multi-bindings
+    ////////////////////////////////////////////////////////////////////////////////
+
+    // By default, a scratchpad instance (i.e., a scratchpad on a particular node) is
+    // bound by exactly one kernel instance. A *ScratchpadSpec* may still be bound by
+    // more than one KernelSpec, as long as their node sets are disjoint.
     //
-    // CAUTION: Scratchpad by itself does not provide means of synchnization, any concurrent
-    //          access into the scratchpad from multiple kernels need to be synchnized by the
-    //          use site.
-    bool allow_multi_kernel_binding = false;
+    // "Multi-binding" refers to a scratchpad instance bound by more than one kernel
+    // instance. All binding kernel instances on a node access the same backing memory.
+    //
+    // CAUTION:
+    // Multi-binding a scratchpad instance is UNSAFE in most circumstances.
+    // Scratchpad provides no synchronization; kernel logic must explicitly ensure
+    // access safety and synchronization.
+    bool allow_instance_multi_binding = false;
 };
 
 struct ProgramAdvancedOptions {

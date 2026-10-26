@@ -25,6 +25,7 @@ namespace {
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
@@ -345,13 +346,13 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsSameNodeFails) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
 }
 
-TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadMultiBindingOptInIsPerResource) {
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadMultiBindingOptInIsPerResource) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
     spec.scratchpads = {
         ScratchpadSpec{
             .unique_id = ScratchpadSpecName{"shared"},
             .size_per_node = 1024,
-            .advanced_options = {.allow_multi_kernel_binding = true}},
+            .advanced_options = {.allow_instance_multi_binding = true}},
         ScratchpadSpec{.unique_id = ScratchpadSpecName{"private"}, .size_per_node = 1024},
     };
     for (auto& kernel : spec.kernels) {
@@ -363,7 +364,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadMultiBindingOptInIsPerResource) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("ScratchpadSpec 'private' is bound by")));
-    spec.scratchpads[1].advanced_options.allow_multi_kernel_binding = true;
+    spec.scratchpads[1].advanced_options.allow_instance_multi_binding = true;
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
