@@ -271,7 +271,7 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
         receiver_worker_cores.size());
 
     // Calculate buffer parameters
-    const size_t packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     const uint32_t page_size = op_config.get_page_size();
     const uint32_t pages_per_packet = packet_size / page_size;
     const uint32_t cb_pages = TRIPLE_BUFFER_MULTIPLIER * pages_per_packet;
