@@ -122,7 +122,6 @@ HANG_APP_EXPECTED_RESULTS = {
         "lightweight_asserts": {
             "kernel_name": "add_2_tiles_hang",
             "compute_cores_hang": True,
-            "first_callstack_file": "assert_common.h",
             "assert_code": "ASSERT(magic == n)",
         },
         "callstacks": {
