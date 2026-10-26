@@ -54,6 +54,9 @@ SKIP = (
         "*bringup/overseer.yaml",  # notes and the fix queue
         "*bringup/approvals.yaml",  # F162: who approved what; no test reads it
         "*bringup/dashboard/*",
+        "*bringup/ledgers/*/overseer.yaml",  # F189: the same files in a seeded run's ledger (F183)
+        "*bringup/ledgers/*/approvals.yaml",
+        "*bringup/ledgers/*/dashboard/*",
         "models/demos/common/bringup/core/stamps.py",
         "models/demos/common/bringup/core/verify.py",
         "models/demos/common/bringup/__main__.py",

@@ -2009,3 +2009,13 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
 - orchestrator.py: when nothing is left to run and the final task (step perf, no role) has passed, the run's end
   runs the pending full gates (the same code as before the final task: newest pick first, shared commands share a
   run). Selftest test_a_pick_accepted_after_the_final_task_runs_its_full_gate_at_the_end.
+
+## F189: the overseer files of a seeded run ledger are the overseer (2026-10-26)
+- DeepSeek-V4.1 galaxy_8x4-full W.1: the gate passed, but the overseer supervision.md in bringup/ledgers/<run>/ counted as
+  the agent change outside its allowed paths, so a needless attempt 2 started (and an abort wrote overseer.yaml, flagged
+  the same way). F183 moved the overseer files into the ledger; orchestrator.IGNORED and core/stamps.SKIP still matched
+  only bringup/<file>.
+- Both now also match bringup/ledgers/<run>/ (overseer.yaml, supervision.md, history_state.json; stamps: overseer.yaml,
+  approvals.yaml, dashboard/). Selftest test_seeded_ledger_overseer_files.py.
+- Not done: a gate whose units all passed, with only an out-of-scope-path problem, still starts a new attempt; it could
+  commit and stop for the overseer instead.
