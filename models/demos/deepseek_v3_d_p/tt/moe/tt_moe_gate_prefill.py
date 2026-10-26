@@ -22,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_real_token_counts
 from models.demos.deepseek_v3_d_p.tt.moe.debug_logging import DEBUG_LOGGING_ENABLED
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
@@ -358,6 +359,20 @@ class TtMoEGateConfig:
                 ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
                     in0_block_w=23,
+                    out_subblock_h=1,
+                    out_subblock_w=1,
+                    out_block_h=2,
+                    out_block_w=1,
+                    per_core_M=2,
+                    per_core_N=1,
+                    transpose_mcast=False,
+                    fuse_batch=True,
+                )
+            ),
+            (GATE_PRODUCTION_SP_DIM, MistralSmall4Config.EMB_SIZE // 4, MistralSmall4Config.NUM_ROUTED_EXPERTS): (
+                ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(4, 10),
+                    in0_block_w=8,
                     out_subblock_h=1,
                     out_subblock_w=1,
                     out_block_h=2,

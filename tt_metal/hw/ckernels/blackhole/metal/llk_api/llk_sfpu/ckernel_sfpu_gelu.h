@@ -11,7 +11,7 @@
 #include "cmath_common.h"  // math::reset_counters, p_setrwc
 
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
@@ -364,10 +364,8 @@ inline void calculate_gelu_tanh() {
 
         // reload due to register pressure
         x = sfpi::dst_reg[0];
-        sfpi::vFloat result = sfpi::copysgn(sfpi::vFloat(0.0f), x);
-
         sfpi::vFloat half_x = 0.5f * x;
-        result = half_x * t + half_x;
+        sfpi::vFloat result = half_x * t + half_x;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
@@ -517,7 +515,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     }
 
     // For x >= GELU_DERIV_SAT_ONE, output saturates to 1 (verified saturation threshold)
-    v_if(is_fp32_dest_acc_en ? (neg_x <= -GELU_DERIV_SAT_ONE) : (x >= GELU_DERIV_SAT_ONE)) { result = 1.0f; }
+    v_if(is_fp32_dest_acc_en ? sfpi::vBool(neg_x <= -GELU_DERIV_SAT_ONE) : sfpi::vBool(x >= GELU_DERIV_SAT_ONE)) { result = 1.0f; }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).

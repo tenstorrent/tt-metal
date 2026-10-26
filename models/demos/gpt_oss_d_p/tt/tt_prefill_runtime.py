@@ -369,7 +369,8 @@ class TtPrefillRuntime:
             sink = self._layer_completion_sink
 
             def on_layer_complete(layer_idx: int) -> None:
-                sink(self.config.first_layer_idx + layer_idx, request_id)
+                global_layer = self.config.first_layer_idx + layer_idx
+                sink.layers_completed(global_layer, global_layer + 1, slot_id, actual_start, actual_end)
 
         else:
             on_layer_complete = None
@@ -394,9 +395,8 @@ class TtPrefillRuntime:
         return out  # logits [1,1,chunk_local,vocab_shard], SP-sharded on seq / TP-sharded on vocab
 
     def set_layer_completion_sink(self, sink) -> None:
-        """Register a per-layer completion sink for pipelined (multi-rank) prefill. Called once per layer as
-        ``sink(global_layer_idx, request_id)``; request_id is bound per ``prefill_chunk`` call so the sink
-        reads no mutable runtime state."""
+        """Register a layer-completion sink for pipelined (multi-rank) prefill. Called once per layer as
+        ``sink.layers_completed(global_layer, global_layer + 1, slot_id, actual_start, actual_end)``."""
         assert self.compiled, "Call compile() before set_layer_completion_sink()"
         self._layer_completion_sink = sink
 

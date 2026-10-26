@@ -12,7 +12,6 @@ from __future__ import annotations
 import os
 import pickle
 
-import ml_dtypes
 from tqdm import tqdm
 
 import ttnn
@@ -47,14 +46,9 @@ def _tensor_meta(tensor: ttml.autograd.Tensor) -> dict:
 
 def _load_into(live: ttml.autograd.Tensor, meta: dict, data) -> None:
     """Load header `meta` + its streamed `data` into the `live` tensor in place. The live tensor decides the sharding
-    (its mapper distributes the data; see `Sharding.derive_mapper`) and the dtype (`assign()` casts to it)."""
+    (its mapper distributes the data; see `Sharding.derive_mapper`) and the dtype (see `assign_numpy`)."""
     layout = ttnn.Layout.ROW_MAJOR if meta["layout"] == "ROW_MAJOR" else ttnn.Layout.TILE
-    if meta["dtype"] == "FLOAT32":
-        arr, new_type = data, ttnn.DataType.FLOAT32
-    else:
-        arr, new_type = data.astype(ml_dtypes.bfloat16), ttnn.DataType.BFLOAT16
-    mapper = Sharding.from_tensor(live).derive_mapper()
-    live.assign(ttml.autograd.Tensor.from_numpy(arr, layout=layout, new_type=new_type, mapper=mapper))
+    ttml.autograd.assign_numpy(live, data, layout=layout, mapper=Sharding.from_tensor(live).derive_mapper())
 
 
 def _walk(value) -> tuple:

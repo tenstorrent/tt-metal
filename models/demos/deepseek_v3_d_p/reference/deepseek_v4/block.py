@@ -27,7 +27,7 @@ def v4_block_modules(config, layer_idx: int) -> dict:
     """The six modules a V4 block is made of, freshly initialised.
 
     Both callers fill them in afterwards -- ``build_v4_block_reference`` randomises them,
-    ``tests/v4/golden.py`` copies checkpoint weights over them -- so the dict's shape is settled
+    ``tt/v4/weights.py`` copies checkpoint weights over them -- so the dict's shape is settled
     here rather than in each of them.
     """
     attn = DeepseekV4Attention(config, layer_idx=layer_idx).eval()
@@ -45,15 +45,30 @@ def v4_block_modules(config, layer_idx: int) -> dict:
     }
 
 
-def build_v4_block_reference(config, layer_idx: int, seed: int = 0):
+def _normal_per_expert(param: torch.Tensor, std: float) -> None:
+    """``param.normal_(0, std)``, drawn one expert at a time in fp32 when ``param`` is not fp32: torch's
+    bf16 ``normal_`` is ~4x slower, and a whole fp32 draw would cost the memory a bf16 MoE saves."""
+    if param.dtype == torch.float32:
+        param.normal_(0.0, std)
+        return
+    for expert in param:
+        expert.copy_(torch.empty(expert.shape).normal_(0.0, std))
+
+
+def build_v4_block_reference(config, layer_idx: int, seed: int = 0, moe_dtype: torch.dtype = torch.float32):
     """A randomised V4 decoder block: the two norms, the layer's attention, and its MoE.
 
     Random, and deliberately not near-identity: the norm gains are drawn away from 1.0 and the sinks
     from N(0,1), so a PCC pass cannot come from weights that make the block an identity map.
+
+    ``moe_dtype`` is the MoE's parameter dtype; everything else stays fp32. The MoE is nearly all of a
+    layer's host memory, and the device is handed bf16 copies of its weights either way.
     """
     torch.manual_seed(seed)
     ref = v4_block_modules(config, layer_idx)
     attn, mlp = ref["attn"], ref["mlp"]
+    # Cast before the draws, so the fp32 allocation is never touched.
+    mlp.to(moe_dtype)
     hidden, inter, n_exp = config.hidden_size, config.intermediate_size, config.num_local_experts
     hs, ds = hidden**-0.5, inter**-0.5
     with torch.no_grad():
@@ -63,10 +78,14 @@ def build_v4_block_reference(config, layer_idx: int, seed: int = 0):
         if attn.compressor is not None:
             attn.compressor.position_bias.normal_(0.0, 0.02)
             attn.compressor.kv_norm.weight.uniform_(0.5, 1.5)
+            indexer = getattr(attn.compressor, "indexer", None)
+            if indexer is not None:
+                indexer.position_bias.normal_(0.0, 0.02)
+                indexer.kv_norm.weight.uniform_(0.5, 1.5)
 
         mlp.gate.weight.normal_(0.0, hs)
-        mlp.experts.gate_up_proj.normal_(0.0, hs)
-        mlp.experts.down_proj.normal_(0.0, ds)
+        _normal_per_expert(mlp.experts.gate_up_proj, hs)
+        _normal_per_expert(mlp.experts.down_proj, ds)
         for p in (mlp.shared_experts.gate_proj, mlp.shared_experts.up_proj):
             p.weight.normal_(0.0, hs)
         mlp.shared_experts.down_proj.weight.normal_(0.0, ds)
@@ -182,5 +201,6 @@ def v4_block_forward(ref, config, hidden_states, input_ids):
             comb.to(dtype).transpose(-1, -2), h
         )
         post, comb, collapsed = ref["ffn_hc"](h)
-        mlp_out = mlp(ref["ffn_norm"](collapsed), input_ids=input_ids)
+        moe_dtype = mlp.experts.gate_up_proj.dtype
+        mlp_out = mlp(ref["ffn_norm"](collapsed).to(moe_dtype), input_ids=input_ids).to(dtype)
         return post.to(dtype).unsqueeze(-1) * mlp_out.unsqueeze(-2) + torch.matmul(comb.to(dtype).transpose(-1, -2), h)

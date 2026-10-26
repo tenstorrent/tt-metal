@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <cfg_defines.h>
 #include <ckernel_proj_params.h>
 
 #include <cstdint>
 
-#include "cfg_defines.h"
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "ckernel_buf_desc.h"
@@ -128,18 +128,35 @@ constexpr std::uint32_t get_dest_tile_size_log2(const DstTileShape tile_shape)
  * than 32x16.
  *
  * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
- * @tparam ACCUM_MODE: Accumulation mode, true for 32-bit and false for 16-bit
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
  * @tparam TILE_SHAPE: Destination tile shape
  * @return Maximum number of destination tiles.
  */
-template <ckernel::DstSync SYNC_MODE, bool ACCUM_MODE, DstTileShape TILE_SHAPE>
+template <ckernel::DstSync SYNC_MODE, bool EN_32BIT_DEST, DstTileShape TILE_SHAPE>
 constexpr std::uint32_t get_dest_max_tiles()
 {
     constexpr std::uint32_t DEST_REGISTER_SIZE = SYNC_MODE == ckernel::DstSync::SyncHalf
-                                                     ? (ACCUM_MODE ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
-                                                     : (ACCUM_MODE ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
+                                                     ? (EN_32BIT_DEST ? DEST_REGISTER_HALF_SIZE >> 1 : DEST_REGISTER_HALF_SIZE)
+                                                     : (EN_32BIT_DEST ? DEST_REGISTER_FULL_SIZE >> 1 : DEST_REGISTER_FULL_SIZE);
 
     return DEST_REGISTER_SIZE >> get_dest_tile_size_log2(TILE_SHAPE);
+}
+
+/**
+ * @brief Maximum number of tiles that fit in the math destination region, at the per-tile stride
+ * the last math init programmed into the TILE_SHAPE_IDX GPR. Only valid for ops that address dest
+ * by rows (_set_dst_write_addr_by_rows_) and whose init programs the GPR.
+ *
+ * @tparam SYNC_MODE: Destination synchronization mode, values = <SyncHalf/SyncFull>
+ * @tparam EN_32BIT_DEST: Whether the Dest register is in 32-bit mode
+ * @return Maximum number of destination tiles.
+ */
+template <ckernel::DstSync SYNC_MODE, bool EN_32BIT_DEST>
+inline std::uint32_t get_dest_max_tiles()
+{
+    constexpr std::uint32_t DEST_REGISTER_SIZE = get_dest_max_tiles<SYNC_MODE, EN_32BIT_DEST, DstTileShape::Tile32x32>()
+                                                 << get_dest_tile_size_log2(DstTileShape::Tile32x32);
+    return DEST_REGISTER_SIZE >> ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
 }
 
 /**
@@ -153,6 +170,8 @@ constexpr std::uint32_t get_dest_max_tiles()
 template <std::uint8_t TRISC_ID>
 inline void _set_dest_section_base_(const std::uint32_t base_addr)
 {
+    static_assert(TRISC_ID < 4, "_set_dest_section_base_ takes a per-Neo thread id in [0, 3]");
+
     if constexpr (TRISC_ID == 0)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC0_Offset_ADDR32] = base_addr;
@@ -165,7 +184,7 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC2_Offset_ADDR32] = base_addr;
     }
-    else
+    else if constexpr (TRISC_ID == 3)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC3_Offset_ADDR32] = base_addr;
     }

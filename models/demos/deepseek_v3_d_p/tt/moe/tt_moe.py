@@ -235,7 +235,7 @@ class TtMoe(LightweightModule):
         latent_use_norm: bool = True,
         rms_norm_eps: float = 1e-5,
         max_gate_seq_len_per_chip: Optional[int] = None,
-        overlap_routed_expert_with_combine: Optional[bool] = None,
+        overlap_routed_expert_with_combine: Optional[bool] = False,
     ):
         """
         Initialize TtMoe module.
@@ -321,11 +321,13 @@ class TtMoe(LightweightModule):
                 agnostic, so this never invalidates one.
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
-                written. Blackhole only. None means on wherever it is supported AND the mesh's fabric payload
-                fits half a bf16 token plus combine_fabric2d's routing tail -- open the mesh with
-                init_helpers.moe_fabric_payload_size for that; with the model's own EMB_SIZE payload MoE runs
-                the routed expert then combine. Also needs a threshold that leaves the unified half
-                some experts. Even when enabled, a forward only overlaps while a trace controller is
+                written. Blackhole only. Off by default (False): only models that opt in with
+                ROUTED_EXPERT_COMBINE_OVERLAP (Kimi K2.7, GLM 5.3, Mistral Small 4) pass
+                init_helpers.routed_expert_combine_overlap_arg's None, which means on wherever it is
+                supported AND the mesh's fabric payload fits half a bf16 token plus combine_fabric2d's
+                routing tail -- open the mesh with init_helpers.moe_fabric_payload_size for that; with the
+                model's own EMB_SIZE payload MoE runs the routed expert then combine. True demands it.
+                Also needs a threshold that leaves the unified half some experts. Even when enabled, a forward only overlaps while a trace controller is
                 attached (set_trace_controller): eager it runs the routed expert then combine, since the
                 overlapped program is host-bound when dispatched op by op. Its three global semaphores live in the mesh's TT_CCL; everything else it
                 places in L1 is freed when the op returns.
@@ -535,7 +537,7 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
-        # Overlapping is the default wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
+        # An opted-in model (None) overlaps wherever the op can run: only Blackhole has it, combine_fabric2d relays tokens
         # around a ring so the 2D fabric must wrap along mesh axis 0, and each token is at most two fabric packets so
         # the payload must fit half of one. A mesh opened with the model's own payload (EMB_SIZE), or on a fabric that
         # does not wrap, runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for

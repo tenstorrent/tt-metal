@@ -23,6 +23,7 @@
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/eth/eth_test_common.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.
@@ -113,7 +114,7 @@ void RunTest(
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     // The ethernet variant still needs the legacy API (Metal 2.0 places kernels on Tensix only), and
     // a Program cannot mix the two APIs -- so that variant keeps the whole program on the old path.
@@ -193,7 +194,7 @@ TEST_F(DevicePrintFixture, TensixActiveEthTestPrintPrependDeviceCoreRisc) {
     tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
         tt::llrt::RunTimeDebugFeatureDprint, true);
     for (auto& mesh_device : this->devices_) {
-        if (mesh_device->get_devices()[0]->get_active_ethernet_cores(true).empty()) {
+        if (mesh_device->impl().get_devices()[0]->get_active_ethernet_cores(true).empty()) {
             const auto device_id = mesh_device->get_device_ids()[0];
             log_info(tt::LogTest, "Skipping device {} due to no active ethernet cores...", device_id);
             continue;

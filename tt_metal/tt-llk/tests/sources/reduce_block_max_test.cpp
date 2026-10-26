@@ -53,7 +53,11 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "params.h"
+#include "perf.h"
+#include "profiler.h"
 #include "tensor_shape.h"
 
 using namespace ckernel;
@@ -65,9 +69,6 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 static constexpr DstSync DST_SYNC = DstSync::SyncHalf;
 
-// 32x32 operand tile: 4 faces (2x2 face grid).
-static constexpr std::uint32_t NUM_FACES = 4;
-
 // RESPECT_TRIGGER / OVERLAP_FIRST_HALF are supplied by the Python driver (params.h).
 
 #ifdef LLK_TRISC_UNPACK
@@ -75,36 +76,88 @@ static constexpr std::uint32_t NUM_FACES = 4;
 #include "experimental/llk_unpack_AB_reduce_custom.h"
 #include "experimental/llk_unpack_AB_reduce_custom_runtime.h"
 #include "llk_unpack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t TILE_SIZE_UNPACK_A = params.TILE_SIZE_UNPACK_A;
+    const std::uint32_t TILE_SIZE_UNPACK_B = params.TILE_SIZE_UNPACK_B;
+    const int num_faces_r_dim_A            = params.num_faces_r_dim_A;
+    const Operand& buffer_A                = params.buffer_A;
+    const Operand& buffer_B                = params.buffer_B;
+#endif
+    // 32x32 operand tile (2x2 faces) or 16x32 tiny tile (one face-row).
+    TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
 
-    // compute_kernel_hw_startup
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, NUM_FACES, NUM_FACES);
+    {
+        START_PERF_MEASURE("INIT")
+        // compute_kernel_hw_startup
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src,
+            formats.unpack_B_src,
+            formats.unpack_A_dst,
+            formats.unpack_B_dst,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            tensor_shape.total_num_faces(),
+            tensor_shape.total_num_faces(),
+            TILE_SIZE_UNPACK_A,
+            TILE_SIZE_UNPACK_B);
+
+        if constexpr (USE_RUNTIME)
+        {
+            // reduce_block_max_row_init_runtime
+            _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, RESPECT_TRIGGER, tensor_shape);
+        }
+        else
+        {
+            // reduce_block_max_row_init
+            _llk_unpack_AB_reduce_block_max_row_init_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en, RESPECT_TRIGGER>(tensor_shape);
+        }
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            // One scaler face for the whole block, then one full operand tile per UNPACR.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(1 /*iterations*/);
+                _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // Operand A is REDUCE_BLOCK_CT_DIM contiguous tiles; scaler B is a single tile of 1.0.
+                if constexpr (USE_RUNTIME)
+                {
+                    _llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]), RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
+                }
+                else
+                {
+                    _llk_unpack_AB_reduce_block_max_row_<RESPECT_TRIGGER>(L1_ADDRESS(buffer_A[0]), L1_ADDRESS(buffer_B[0]));
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 
     if constexpr (USE_RUNTIME)
     {
-        // reduce_block_max_row_init_runtime
-        _llk_unpack_AB_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, RESPECT_TRIGGER, tensor_shape);
-
-        // Operand A is REDUCE_BLOCK_CT_DIM contiguous tiles; scaler B is a single tile of 1.0.
-        _llk_unpack_AB_reduce_block_max_row_runtime_(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
-
         _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(RESPECT_TRIGGER, OVERLAP_FIRST_HALF);
     }
     else
     {
-        // reduce_block_max_row_init
-        _llk_unpack_AB_reduce_block_max_row_init_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en, RESPECT_TRIGGER>(tensor_shape);
-
-        _llk_unpack_AB_reduce_block_max_row_<RESPECT_TRIGGER>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]));
-
         _llk_unpack_AB_reduce_block_max_row_uninit_<RESPECT_TRIGGER>();
     }
 }
@@ -117,7 +170,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "experimental/llk_math_reduce_runtime_custom.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_binary.h"
-#include "params.h"
 
 // CLOBBER_OP selector: an op run between reduce init and reinit that overwrites the
 // reduce config, so the reinit path must actually restore it (reconfig-escape guard).
@@ -164,17 +216,9 @@ static inline void clobber_reduce_config([[maybe_unused]] const ckernel::TensorS
     }
 }
 
-void run_kernel(RUNTIME_PARAMETERS params)
+// Reduce init, then the optional clobber + reinit the functional variants use to guard the reconfig-escape path.
+inline void init_block_max_reduce(const ckernel::TensorShape& tensor_shape)
 {
-#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
-    const FormatConfig& formats = params.formats;
-#endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
-
-    // compute_kernel_hw_startup
-    _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-
     if constexpr (USE_RUNTIME)
     {
         _llk_math_reduce_block_max_row_init_runtime_<is_fp32_dest_acc_en>(REDUCE_BLOCK_CT_DIM, tensor_shape);
@@ -200,12 +244,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // (ADDR_MOD_1/2/3/6) and nothing else. Paired with CLOBBER_OP 3 (addrmod-only scramble).
             _llk_math_reduce_block_max_row_reinit_runtime_();
         }
-
-        _llk_math_wait_for_dest_available_<DST_SYNC>();
-        _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
-        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
-
-        _llk_math_reduce_block_max_row_uninit_runtime_<is_fp32_dest_acc_en>();
     }
     else
     {
@@ -228,11 +266,74 @@ void run_kernel(RUNTIME_PARAMETERS params)
             reduce_max_row_configure_addrmod_reinit_minimal();
         }
 #endif
+    }
+}
 
-        _llk_math_wait_for_dest_available_<DST_SYNC>();
-        _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
-        _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+void run_kernel(RUNTIME_PARAMETERS params)
+{
+#if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
+    const FormatConfig& formats = params.formats;
+#endif
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
+#endif
+    TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
+    constexpr bool sync_with_pack                                      = PERF_RUN_TYPE != PerfRunType::MATH_ISOLATE;
 
+    {
+        START_PERF_MEASURE("INIT")
+        // compute_kernel_hw_startup
+        _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        init_block_max_reduce(tensor_shape);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        {
+            // The reduce clears SrcA after every tile and the scaler SrcB once per block.
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(REDUCE_BLOCK_CT_DIM /*iterations*/);
+                _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(1 /*iterations*/);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                if constexpr (sync_with_pack)
+                {
+                    _llk_math_wait_for_dest_available_<DST_SYNC>();
+                }
+                if constexpr (USE_RUNTIME)
+                {
+                    _llk_math_reduce_block_max_row_runtime_<is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+                }
+                else
+                {
+                    _llk_math_reduce_block_max_row_<REDUCE_BLOCK_CT_DIM, is_fp32_dest_acc_en>(0 /* dst_index */, tensor_shape);
+                }
+                if constexpr (sync_with_pack)
+                {
+                    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
+
+    if constexpr (USE_RUNTIME)
+    {
+        _llk_math_reduce_block_max_row_uninit_runtime_<is_fp32_dest_acc_en>();
+    }
+    else
+    {
         _llk_math_reduce_block_max_row_uninit_<is_fp32_dest_acc_en>();
     }
 }
@@ -243,31 +344,39 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
-#include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const ckernel::TensorShape tensor_shape = {FACE_R_DIM, FACE_C_DIM, 2 /* num_faces_r_dim */, 2 /* num_faces_c_dim */};
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
+    const int num_faces_r_dim_A     = params.num_faces_r_dim_A;
+    const Operand& buffer_Res       = params.buffer_Res;
+#endif
+    TEST_TENSOR_SHAPE(tensor_shape, FACE_R_DIM, FACE_C_DIM, num_faces_r_dim_A, MAX_NUM_FACES_C_DIM);
 
     const std::uint32_t tile_size = tensor_shape.total_tensor_size();
     const std::uint32_t num_faces = tensor_shape.total_num_faces();
     const bool partial_face       = tensor_shape.face_r_dim < FACE_R_DIM;
     const bool narrow_tile        = tensor_shape.num_faces_c_dim == 1;
 
-    // compute_kernel_hw_startup
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
-        formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+    {
+        START_PERF_MEASURE("INIT")
+        // compute_kernel_hw_startup
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
+            formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
-        formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
+        _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
+            formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    // reduce_block_max_row_init: mask so only the reduced row-max column [0] is packed.
-    _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(tensor_shape.face_r_dim);
+        // reduce_block_max_row_init: mask so only the reduced row-max column [0] is packed.
+        _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_ROW>(tensor_shape);
 
-    _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
+        _llk_pack_dest_init_wrapper_<DST_SYNC, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
+        PROFILER_SYNC();
+    }
 
     // Producer half of the trigger handshake. Operand A is pre-staged in L1, so the
     // second half is always "ready": post the data-ready tokens up front (before the
@@ -286,10 +395,30 @@ void run_kernel(RUNTIME_PARAMETERS params)
         t6_semaphore_post<>(ckernel::semaphore::FPU_SFPU);
     }
 
-    // Single output tile: the per-row maxima live in column [0] of DEST[0].
-    _llk_packer_wait_for_math_done_();
-    _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(params.buffer_Res[0]));
-    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            constexpr bool sync_with_math = PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE && PERF_RUN_TYPE != PerfRunType::L1_CONGESTION;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                // Single output tile: the per-row maxima live in column [0] of DEST[0].
+                if constexpr (sync_with_math)
+                {
+                    _llk_packer_wait_for_math_done_();
+                }
+                _llk_pack_<DST_SYNC, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0 /* dst_index */, L1_ADDRESS(buffer_Res[0]));
+                if constexpr (sync_with_math)
+                {
+                    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
 
     // reduce_block_max_row_uninit
     _llk_pack_reduce_mask_clear_();
