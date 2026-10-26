@@ -49,11 +49,30 @@ from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
 from .moe_stream import KERNEL_DIR, user_rows, zero_output
+from .profiling import steps
 from .rope import permute_heads_for_rope
 
 # chunked_flash_mla_prefill reads its start position from a device tensor (chunk_start_idx_tensor); builds without
 # that keyword key the program on the scalar start, which compiles a program for every new start.
 MLA_RUNTIME_START = "chunk_start_idx_tensor" in (ttnn.transformer.chunked_flash_mla_prefill.__doc__ or "")
+
+# A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
+# grouped heads (SDPAProgramConfig.q_heads_per_unit: G heads share each K/V chunk read) and a K split (k_splits: each
+# unit's keys over S work items, merged after the program) on the full grid, the K / V reads drop by G and every core
+# gets the same share; at 1M one layer's chunk goes 203 -> 139 ms per chip. The split's merge costs a few ms, so it
+# only pays from about 64K of context (MIMO_GLOBAL_SDPA_MIN_START). MIMO_GLOBAL_SDPA="gGsS" picks G and S; "legacy"
+# keeps the 8x8, one head per unit program everywhere.
+GLOBAL_SDPA = os.environ.get("MIMO_GLOBAL_SDPA", "g2s15")
+GLOBAL_SDPA_MIN_START = int(os.environ.get("MIMO_GLOBAL_SDPA_MIN_START", "65536"))
+GROUPED_SDPA = hasattr(ttnn.SDPAProgramConfig, "q_heads_per_unit")
+
+
+def global_sdpa_split():
+    """(G, S) for a global layer's later chunks, or None for the legacy program."""
+    if not GROUPED_SDPA or GLOBAL_SDPA == "legacy":
+        return None
+    g, s = GLOBAL_SDPA.lstrip("g").split("s")
+    return int(g), int(s)
 
 
 def page_table_width(blocks):
@@ -453,6 +472,8 @@ class TtMiMoAttention:
         self.is_swa = dims.is_swa
         self.rep = kv_replication(tp, dims.num_kv_heads)
         self.split_users = self.rep > 1  # global layers on TP=8: the chip pair splits the users
+        self.kv_both_chips = False  # keep_kv_on_both_chips
+        self.wo_v = None
         self.v_head_dim = dims.v_head_dim
         self.rope = rope_setup
         prefix = f"layer{layer_idx}_attn_tp{tp}"
@@ -554,8 +575,12 @@ class TtMiMoAttention:
         # MIMO_SDPA_FP32_ACC=1: prefill SDPA accumulates in fp32 dest (positions >= 2 KL -9% with stock-packed experts).
         # Off by default: its larger circular buffers clash with decode's persistent L1 buffers once the vLLM adapter
         # warms the 2048-token prefill chunks. Decode SDPA stays in bf16 dest (fp32 dest gave non-finite values).
+        # Prefill SDPA at HiFi2 (MIMO_PREFILL_SDPA_FIDELITY overrides): a global layer's chunk at 128K is compute bound,
+        # 78.3 -> 46.7 ms; top-1, the chunked-prefill PCCs and the 32K pass keys are unchanged (tp8_dp4_plan.md).
         self.sdpa_config = compute_config(
-            ttnn.MathFidelity.HiFi4, fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1", packer_l1_acc=False
+            getattr(ttnn.MathFidelity, os.environ.get("MIMO_PREFILL_SDPA_FIDELITY", "HiFi2")),
+            fp32_acc=os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1",
+            packer_l1_acc=False,
         )
         self.decode_sdpa_config = compute_config(ttnn.MathFidelity.HiFi4, fp32_acc=False, packer_l1_acc=False)
         self.decode_sdpa_program = ttnn.SDPAProgramConfig(
@@ -599,6 +624,16 @@ class TtMiMoAttention:
         real = ttnn.slice(cols, (0, 0, 0, 0), (1, 1, k, width), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         flat.deallocate(True)
         return ttnn.reshape(real, (k, width))
+
+    def keep_kv_on_both_chips(self):
+        """Both chips of the pair keep every slot's K / V (vLLM's caches, or TtMiMoModel(replicate_global_kv=True)), so a
+        later prefill chunk runs 8 of the group's 16 heads on each chip (_prefill_pair_chunk) instead of all 16 on both
+        and discarding one. Its o projection reads the prefill o_proj without the V padding rows, made here: before
+        any trace is captured."""
+        assert self.split_users
+        self.kv_both_chips = True
+        if self.wo_v is None:
+            self.wo_v = self._unpadded_o()
 
     def _unpadded_o(self):
         """Per-chip padded o_proj [nh_local * head_dim, hidden] -> [nh_local * v_head_dim, hidden], on device.
@@ -693,11 +728,24 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
 
-    def _prefill_sdpa_program(self, seq_len, start_pos=0):
-        """Q / K chunk sizes that divide ``seq_len`` (and ``start_pos``: chunked SDPA needs that)."""
+    def _prefill_sdpa_program(self, seq_len, start_pos=0, later_chunk=False):
+        """Q / K chunk sizes that divide ``seq_len`` (and ``start_pos``: chunked SDPA needs that). ``later_chunk``: a
+        global layer's chunk after the first, which takes the grouped / K split program (global_sdpa_split)."""
         chunk = 256 if seq_len >= 2048 else (128 if seq_len >= 128 else 32)
         while seq_len % chunk or start_pos % chunk:
             chunk //= 2
+        split = global_sdpa_split() if later_chunk and start_pos >= GLOBAL_SDPA_MIN_START else None
+        fp32_acc = os.environ.get("MIMO_SDPA_FP32_ACC", "0") == "1"  # the grouped program needs bf16 dest
+        if split is not None and chunk == 256 and not fp32_acc:
+            heads, splits = split
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.plan.mesh_device.compute_with_storage_grid_size(),
+                q_chunk_size=chunk,
+                k_chunk_size=chunk,
+                exp_approx_mode=False,
+                q_heads_per_unit=heads,
+                k_splits=splits,
+            )
         return ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
             q_chunk_size=chunk,
@@ -786,9 +834,17 @@ class TtMiMoAttention:
         """
         assert start_pos == 0 or tables is not None, "a later chunk needs its kv.PrefillTables"
         assert users == 1 or (start_pos == 0 and isinstance(tables, BatchFillTables)), "a batch is first chunks"
-        if start_pos > 0 and self.split_users:
-            return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables)
+        with steps() as step:  # profiling zones (profiling.py)
+            if start_pos > 0 and self.split_users:
+                if self.kv_both_chips:
+                    return self._prefill_pair_chunk(x, user_id, kv_cache, start_pos, tables, step)
+                return self._prefill_owner_chunk(x, user_id, kv_cache, start_pos, tables, step)
+            return self._prefill_chunk(x, user_id, page_table, kv_cache, start_pos, tables, users, step)
+
+    def _prefill_chunk(self, x, user_id, page_table, kv_cache, start_pos, tables, users, step):
+        """forward_prefill of a first chunk, or of an SWA layer's later chunk (window from the cache)."""
         seq_len = x.shape[-2] // users
+        step("qkv")
         xqkv = self._prefill_qkv(x)
         if users > 1:
             xqkv = ttnn.reshape(xqkv, (users, 1, seq_len, xqkv.shape[-1]))
@@ -800,8 +856,10 @@ class TtMiMoAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         xqkv.deallocate(True)
+        step("rope")
         q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
 
+        step("kv_cache")
         lead = 0
         if start_pos > 0:
             # SWA: the window before the chunk from the cache, read before the fill can reuse any of its blocks.
@@ -815,6 +873,7 @@ class TtMiMoAttention:
                 v_win.deallocate(True)
                 v_win = padded
         self._fill(kv_cache, k_rot, v, page_table, user_id, tables)
+        step("sdpa")
         if lead:
             q_lead = ttnn.zeros(
                 (1, self.nh_local, lead, self.head_dim),
@@ -848,6 +907,7 @@ class TtMiMoAttention:
             chunk = ttnn.slice(attn, (0, 0, lead, 0), (1, self.nh_local, lead + seq_len, self.head_dim))
             attn.deallocate(True)
             attn = chunk
+        step("o_proj")
         attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         if users > 1:  # [R, 1, S, heads * dim] -> the users' rows back to back (after the head concat: see above)
@@ -860,14 +920,69 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
         attn_cat.deallocate(True)
+        step("all_reduce")
         return self.plan.all_reduce(out)
 
-    def _prefill_owner_chunk(self, x, user_id, kv_cache, start_pos, tables):
+    def _prefill_pair_chunk(self, x, user_id, kv_cache, start_pos, tables, step):
+        """A global layer's chunk after the first when both chips of the pair hold the user's K / V: each chip runs its
+        8 prefill heads (``wqkv``, as a first chunk does) over the whole cached context, and the row all-reduce adds
+        the chips' o projections."""
+        assert self.sinks is None and self.sliding_window is None
+        seq_len = x.shape[-2]
+        step("qkv")
+        xqkv = self._prefill_qkv(x)
+        q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+            xqkv,
+            num_heads=self.nh_local,
+            num_kv_heads=self.nkv_local,
+            transpose_k_heads=False,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        xqkv.deallocate(True)
+        step("rope")
+        q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
+        step("kv_cache")
+        self._fill(kv_cache, k_rot, v, None, user_id, tables)
+        k_rot.deallocate(True)
+        v.deallocate(True)
+
+        step("sdpa")
+        k_cache, v_cache = kv_cache
+        assert tables.context.shape[-1] * k_cache.shape[-2] >= start_pos + seq_len, "chunk runs past its context table"
+        start = dict(chunk_start_idx_tensor=tables.start) if MLA_RUNTIME_START else dict(chunk_start_idx=start_pos)
+        attn = ttnn.transformer.chunked_flash_mla_prefill(
+            q_rot,
+            k_cache,
+            self.v_head_dim,
+            tables.context,
+            **start,
+            scale=self.scale,
+            program_config=self._prefill_sdpa_program(seq_len, start_pos, later_chunk=True),
+            compute_kernel_config=self.sdpa_config,
+            input_tensor_v=v_cache,
+        )  # [1, 8, S, 128]
+        q_rot.deallocate(True)
+        step("o_proj")
+        attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        attn.deallocate(True)
+        out = ttnn.linear(
+            attn_cat,
+            self.wo_v,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.mm_config,
+        )
+        attn_cat.deallocate(True)
+        step("all_reduce")
+        return self.plan.all_reduce(out)
+
+    def _prefill_owner_chunk(self, x, user_id, kv_cache, start_pos, tables, step):
         """A global layer's chunk after the first: the group's 16 Q heads over the whole cached context on the
         chip that owns the user (the other chip of the pair runs the same program on its scratch block and its
         result is zeroed)."""
         assert self.sinks is None and self.sliding_window is None
         seq_len = x.shape[-2]
+        step("qkv")
         xqkv = ttnn.linear(
             x,
             self.wqkv_decode,
@@ -883,11 +998,14 @@ class TtMiMoAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         xqkv.deallocate(True)
+        step("rope")
         q_rot, k_rot = self._rope_prefill(q, k, start_pos, seq_len)
+        step("kv_cache")
         self._fill(kv_cache, k_rot, v, None, user_id, tables)
         k_rot.deallocate(True)
         v.deallocate(True)
 
+        step("sdpa")
         k_cache, v_cache = kv_cache
         assert tables.context.shape[-1] * k_cache.shape[-2] >= start_pos + seq_len, "chunk runs past its context table"
         # The context table is one fixed width for every chunk; the kernel reads only its blocks before the chunk's end.
@@ -899,11 +1017,12 @@ class TtMiMoAttention:
             tables.context,
             **start,
             scale=self.scale,
-            program_config=self._prefill_sdpa_program(seq_len, start_pos),
+            program_config=self._prefill_sdpa_program(seq_len, start_pos, later_chunk=True),
             compute_kernel_config=self.sdpa_config,
             input_tensor_v=v_cache,
         )  # [1, 16, S, 128]
         q_rot.deallocate(True)
+        step("o_proj")
         attn_cat = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attn.deallocate(True)
         owned = ttnn.mul(attn_cat, self.prefill_owner_masks[user_id % self.rep], memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -916,6 +1035,7 @@ class TtMiMoAttention:
             compute_kernel_config=self.mm_config,
         )
         owned.deallocate(True)
+        step("all_reduce")
         return self.plan.all_reduce(out)
 
     # ---------------------------------------------------------------- decode

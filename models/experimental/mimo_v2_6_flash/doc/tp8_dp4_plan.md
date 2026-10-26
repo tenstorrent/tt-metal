@@ -526,3 +526,196 @@ Expected per step: the 2.4 ms logits readback and the 6.1 ms host walk go, and t
 fills the plugin's [16, 4, 152k] logits buffer; the accept trace adds the sampler head per pass (the decode head takes
 0.164 ms) and a 128-byte read. Roughly 40 -> 30-32 ms per step, TPOT ~11.5-12 ms at 2.6 accepted tokens: about a
 greedy MTP step plus the accept head. The MTP draft (8.2 ms) and the gap (3.2 ms) are unchanged.
+
+## Prefill profile, 2026-10-21 (#61418, on `mimo-v2.6/dev`, MOPD)
+
+`tests/perf/profile_prefill.py` under `python -m tracy` profiles the last 4096-token chunk of a prompt on one row,
+one user, all 48 layers. The zones (`tt/profiling.py`, on with `MIMO_PROFILE_ZONES=1`) mark every layer and its
+QKV, RoPE, KV write, SDPA, o_proj, all-reduces, router, expert plan, grouped expert matmul and combine;
+`tests/perf/parse_prefill_zones.py` sums the device-kernel time between the markers (worst of the row's 8 chips).
+The profiler is read every 3 layers: one read of a 48-layer chunk (~1700 programs per chip) fails its marker
+matching. For 32K and 128K the earlier chunks only take their SWA blocks (`--fill skip`) and the cache keeps zeros:
+at 32K on layers 0, 1, 5 this changes the chunk by 0.4% and SDPA by 0.0%, the MoE experts by 4-10% (routing sees
+other hidden states).
+
+TTFT, one user on one row, random tokens, chunks of 4096, profiler off (`profile_prefill.py --ttft`, second run):
+
+| Prompt | TTFT | tokens/s |
+|---|---|---|
+| 4K | 0.58 s | 7.1k |
+| 32K | 5.12 s | 6.4k |
+| 128K | 29.06 s | 4.5k |
+
+Device time of the last chunk, all 48 layers (ms, summed over the layers):
+
+| Zone | 4K (start 0) | 32K (start 28K) | 128K (start 124K) |
+|---|---|---|---|
+| MoE grouped expert matmul | 186.9 | 178.4 | 176.4 |
+| MoE plan (`DevicePlan`) | 74.6 | 73.4 | 73.3 |
+| MoE combine | 38.1 | 38.0 | 38.0 |
+| MoE router | 23.2 | 23.1 | 23.2 |
+| SDPA, 9 global layers | 7.6 | 168.6 | 704.9 |
+| SDPA, 39 SWA layers | 10.5 | 15.3 | 15.3 |
+| QKV + o_proj | 54.6 | 62.0 | 62.0 |
+| RoPE + KV write | 8.5 | 10.3 | 10.3 |
+| All-reduces (2 per layer) | 77.8 | 80.6 | 84.0 |
+| Dense MLP (layer 0) | 2.2 | 2.2 | 2.2 |
+| Norms, residual adds, other | 46.1 | 45.7 | 45.7 |
+| **Chunk** | **530.1** | **697.6** | **1235.2** |
+
+- The MoE is ~311 ms of every chunk at any context: 59% of a 4K chunk. The expert plan (1.56 ms per layer) moves
+  almost no data (1.2 GB/s): it is latency, 14% of a 4K chunk.
+- A global layer's SDPA grows linearly with the cached context (0.84 ms at 4K, 18.7 ms at 32K, 78.3 ms at 128K), so
+  over a whole prompt it grows quadratically: 57% of the 128K chunk, ~11 s of the 29 s 128K TTFT (the MoE ~10 s).
+  Summing the chunks this way gives 28 s for 128K, against 29.06 s measured.
+- The global SDPA is compute-bound: 256 (head, 256-query) units of 131072 keys each, 4 per core on the 8 x 8 grid,
+  ~1.1 TFLOP/s per core at HiFi4. Its other chip of the pair runs the same program on the scratch block (#60957).
+
+### Global prefill SDPA at 128K: program config and math fidelity
+
+One global layer's SDPA, last chunk of 128K (layers 0, 1, 5 profiled, `--fill skip`):
+
+| Change | ms | |
+|---|---|---|
+| 8 x 8 grid, Q / K chunks 256, HiFi4 (before) | 78.3 | |
+| Whole 12 x 10 grid (120 cores) | 78.4 | the 128 causal (q, q') pairs still give some cores 2 |
+| Q chunk 128 / 64 (whole grid) | 97.2 / 175.4 | smaller units run slower; halving the units (Q 512) gains 1% |
+| Q chunk 128 (8 x 8) | 86.9 | |
+| K chunk 128 / with Q chunk 512 | 90.5 / 89.3 | Q 512 with K 256 and Q 1024 do not fit L1 |
+| HiFi3 | 62.4 | |
+| **HiFi2 (now the default, `MIMO_PREFILL_SDPA_FIDELITY` overrides)** | **46.7** | 1.68x |
+
+Accuracy at HiFi2 against HiFi4 (decode SDPA stays HiFi4):
+
+- `test_chunked_prefill_tp8_dp4.py` (short and 32k, layers 0, 1, 5): 8 passed, every prefill PCC within 0.0008 of
+  HiFi4 (worst chunked vs reference 0.99843 -> 0.99860, worst delta 0.99374 -> 0.99369).
+- `test_model_tp8_dp4.py`: top-1 0.950 both, 34/34 rows with a clear margin; logits PCC min 0.9004 -> 0.8658 (a row
+  whose reference margin is 0.07), mean 0.9929 -> 0.9917.
+- `test_model_long_tp8_dp4.py -k 32k`: every pass key found at 10-90% depth by both cuts, chunked vs one shot logits
+  PCC 0.9933-0.9966 (HiFi4: 0.9948-0.9972), shared prompt identical on all rows.
+
+TTFT (one user, one row, chunks of 4096): 4K 0.58 -> 0.56 s, 32K 5.12 -> 4.78 s, **128K 29.06 -> 24.35 s**.
+
+### The next three costs, 2026-10-22
+
+**Global SDPA on both chips of the pair.** A later chunk of a global layer ran the group's 16 heads on both chips of
+the pair and kept one result (`_prefill_owner_chunk`). When both chips keep the user's K / V, it now runs 8 heads per
+chip like a first chunk does, over the whole cached context, and the row all-reduce adds the two o projections
+(`_prefill_pair_chunk`, `TtMiMoAttention.keep_kv_on_both_chips`). vLLM's caches always keep both copies, so serving
+takes this path; the standalone model takes it with `TtMiMoModel(replicate_global_kv=True)` (twice the global KV:
+0.8 -> 1.6 GB per chip for 4 users at 128K). `test_chunked_prefill_tp8_dp4.py` has `kvboth` cases for layers 0 and 5
+(short and 32k, and the program-cache test): all pass, every PCC within 0.0002 of the split-user layout.
+
+**MoE plan in two programs.** `plan.cpp` had every one of its 16 cores read and count all T x 8 pairs, then scan them
+again for its experts (latency-bound, 1.2 GB/s). `DevicePlanSplit` (`plan_slice.cpp`, `plan_gather.cpp`): each core
+counts and sorts one slice of the tokens by expert, then each core gathers its experts' records from every slice in
+slice order. The outputs are bit-identical (`tests/perf/moe_plan_bench.py` checks all four on skewed routing).
+Device time per call on one row:
+
+| Tokens | `DevicePlan` | `DevicePlanSplit` |
+|---|---|---|
+| 32 | 0.135 ms | 0.180 ms |
+| 1056 | 0.551 ms | 0.339 ms |
+| 4096 | 1.553 ms | 0.601 ms |
+
+`PrefillExperts` uses the split plan from 256 tokens (`SPLIT_PLAN_MIN_TOKENS`). A 4K chunk of all 48 layers:
+530.1 -> 482.0 ms (the plan 74.6 -> 29.8 ms).
+
+**Fabric packet size.** 8192-byte packets (`--fabric-packet 8192` in `profile_prefill.py`) take 0.03-0.14 ms off each
+all-reduce: 29.5 -> 29.1 ms for layers 0, 1, 5 at 4K, about 7 ms of a 48-layer chunk. The packet size is set where the
+mesh is opened (test fixtures, the vLLM plugin) and changes decode's collectives too, so it is left at the default
+until decode is measured with it.
+
+TTFT, one user on one row, chunks of 4096, profiler off:
+
+| | 4K | 32K | 128K |
+|---|---|---|---|
+| Before (HiFi4) | 0.58 s | 5.12 s | 29.06 s |
+| Prefill SDPA at HiFi2 | 0.56 s | 4.78 s | 24.35 s |
+| + global heads split over the pair (`replicate_global_kv`) | 0.57 s | 4.53 s | 20.62 s |
+| + MoE plan in two programs | **0.54 s** | **4.18 s** | **19.20 s** |
+
+### Global prefill SDPA past 128K: grouped heads and split-K, 2026-10-23
+
+Up to 1M (one user per row, `--users 1`, so the cache fits), the 9 global layers' SDPA is most of a long prompt.
+After the pair split, one global layer's later chunk runs `chunked_flash_mla_prefill` with 8 Q heads over one KV
+head per chip: 8 heads x 16 Q chunks = 128 units on the 8 x 8 grid, every unit streaming the whole cached K / V
+(340 B per position, BFP8). At 1M that is 45.6 GB of K / V reads per call and 108 TFLOP/s, a third of the chip's
+HiFi2 peak (~330 TFLOP/s on 120 cores). `tests/perf/global_sdpa_bench.py` times this one call alone
+(`grid:q_chunk:k_chunk[:gG][:sS]` configs, last 4096-token chunk of each context).
+
+Two program options in ttnn, both off by default:
+
+- **Grouped heads, `SDPAProgramConfig.q_heads_per_unit` (G).** G Q heads of one KV head form a unit; each K / V chunk
+  read is used for all G heads before it is released, so the reads drop by G. Each head keeps its own accumulators.
+- **Split-K, `k_splits` (S), now honoured on the chunked path.** Each unit's causal K range is cut into S slices on
+  device from the runtime chunk start (one program for every start), and the slices spread over the whole grid. A
+  piece writes its normalized output with its row max and row sum to its own plane of a
+  `[pieces, H, Sq, DV + 64]` tensor; empty planes carry sum 0. `chunked_flash_mla_prefill` merges the planes with
+  ttnn ops, weights in fp32 (3-5 ms per call). Causal pair distribution is off for these units: with 64 units it put
+  them on 32 cores.
+
+G = 1, S = 1 builds the same kernels as before. Validation limits G > 1 / S > 1 to chunked causal prefill on the
+streaming kernel with bf16 dest, no sink or sliding window, Q heads divisible by KV heads x G, and (S > 1) bf16 Q and
+output.
+
+One global layer, last chunk, one chip (ms):
+
+| Program | 128K | 512K | 1M | TFLOP/s at 1M |
+|---|---|---|---|---|
+| 8 x 8, Q / K 256 (before) | 24.5 | 100.6 | 202-204 | 108 |
+| 12 x 10, Q / K 256 | 24.6 | 100.8 | 203.2 | 108 |
+| 8 x 8, G 2 | 24.5 | 100.1 | 199.6 | 110 |
+| 12 x 10, S 15 | 21.7 | 77.2 | 155.1 | 142 |
+| **12 x 10, G 2, S 15 (MiMo now)** | **19.9** | **71.5** | **139-143** | **153-158** |
+| 12 x 10, G 2, S 30 / S 120 | 20.1 / 20.2 | 72.7 / 73.1 | 143.9 / 143.9 | 153 |
+| 12 x 10, G 2, S 15, K 512 | | | 130.6 | 168 |
+| 12 x 10, G 2, S 15, K 128 / Q 128 | | | 161.5 / 158.3 | |
+| 8 x 8, Q 128, K 768, K / V forwarding chains | | | 188.3 | 116 |
+
+- G alone gains nothing: on 64 cores the program is compute-bound, not read-bound. S alone fills the 120 cores, but
+  then 128 units' reads hit the K / V read ceiling (~300 GB/s). Together the reads halve and all cores work.
+- K 512 is the fastest, but its circular buffers (~1.4 MB, estimated) do not fit beside the L1 buffers vLLM's
+  decode keeps allocated (from 1.21 MB); K 256 is ~1.06 MB. G 3 does not fit at Q / K 256.
+- The last row is the other design tried: the cores of a KV head forward the K / V prefix along chains instead of
+  each reading it from DRAM (#57395 extended to paged MLA prefill). It is capped at ~126-129 TFLOP/s on the grid and
+  was not kept.
+- Below 64K of context the merge costs more than the split saves (32K: 8.7 ms against 5.9 ms).
+
+MiMo (`TtMiMoAttention._prefill_sdpa_program`): a global layer's later chunk (`_prefill_pair_chunk`,
+`_prefill_owner_chunk`) starting at 64K or later, with Q chunk 256 and bf16 dest, takes G 2, S 15 on the whole grid.
+`MIMO_GLOBAL_SDPA=legacy` keeps the 8 x 8 program everywhere, `MIMO_GLOBAL_SDPA=gGsS` picks G and S, and
+`MIMO_GLOBAL_SDPA_MIN_START` moves the threshold.
+
+Accuracy:
+
+- `test_mla_prefill.py::test_chunked_flash_mla_prefill_grouped_heads`: G 2 is bit-identical to G 1 at four chunk
+  starts, Q / K 128 and 256, and the program cache does not grow across starts.
+- `test_mla_prefill.py::test_chunked_flash_mla_prefill_k_split`: (G, S) in (1, 3), (2, 3), (1, 15), (2, 15), shuffled
+  pages: PCC against torch 0.99966-0.99978, max abs error 0.0053-0.0557 (unsplit 0.0060-0.0557).
+- SDPA regression (`test_mla_prefill.py`, `test_sdpa_prefill.py`, `test_sdpa_chunked.py`,
+  `test_mla_prefill_chunked_vs_not.py`): 102 passed, 2 skipped.
+- With the split forced on every eligible chunk (`MIMO_GLOBAL_SDPA_MIN_START=0`): `test_chunked_prefill_tp8_dp4.py`
+  13 passed; `test_model_tp8_dp4.py` top-1 0.950, 34/34 rows with a clear margin, logits PCC mean 0.9917 (as before);
+  `test_model_long_tp8_dp4.py -k 32k` every pass key found.
+
+TTFT, one user on one row (`profile_prefill.py --ttft --replicate-global-kv --users 1`, chunks of 4096, second run):
+
+| | 4K | 32K | 128K | 512K | 1M |
+|---|---|---|---|---|---|
+| Before (HiFi2, pair split, MoE plan) | 0.520 s | 4.163 s | 19.22 s | 119.3 s | 353.0 s |
+| K / V forwarding chains (not kept) | 0.549 s | 4.171 s | 18.91 s | 114.0 s | 333.1 s |
+| **Grouped heads + split-K** | **0.516 s** | **4.163 s** | **18.83 s** | **101.1 s** | **272.5 s** |
+| tokens/s | 7.9k | 7.9k | 7.0k | 5.2k | 3.8k |
+
+(`--users 1` sizes the caches for one user; the 4-user table above has 4K 0.54 s, 32K 4.18 s, 128K 19.20 s.)
+
+- The 1M saving, 80.5 s, matches the bench: about 36 ms per layer on an average chunk (half the context) x 9 layers x
+  256 chunks = 82 s.
+- From the bench, the global SDPA is still ~55% of the 1M TTFT (~150 s). The rest is the ~470 ms every chunk spends
+  in the MoE, projections and all-reduces at any context (~120 s over 256 chunks).
+- Up to 32K nothing changes: the MoE (grouped expert matmul ~177 ms of a chunk) and the SWA layers dominate.
+
+Left for later: merging the split planes on chip (saves the 3-5 ms and the ~38 MB DRAM tensor per call), K 512 if
+decode's L1 buffers shrink, the MoE expert matmul for short prompts, a traced prefill chunk, and batch > 1 on the new
+programs (written, not run on device).

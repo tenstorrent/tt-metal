@@ -36,7 +36,8 @@ void kernel_main() {
     constexpr uint32_t kt = block_k * blocks_per_pair;
     constexpr uint32_t silu_iterations = rows / 2;  // SFPU rows per face iteration: 2
 
-    custom_mm_block_init<false, true, false>(cb_x, cb_w, cb_h, ct);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<false, dest_layout>(cb_x, cb_w, cb_h, ct);
     cb_wait_front(cb_x, kt);
     cb_wait_front(cb_cnt, 1);
     const uint32_t n = read_tile_value(cb_cnt, 0, 0);
@@ -46,11 +47,11 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t b = 0; b < blocks_per_pair - 1; b++) {
             cb_wait_front(cb_w, block_tiles);
-            custom_mm_block<false>(cb_x, cb_w, b * block_k, 0, 0, block_k, ct);
+            custom_mm_block<dest_layout, false>(cb_x, cb_w, b * block_k, 0, 0, block_k, ct);
             cb_pop_front(cb_w, block_tiles);
         }
         cb_wait_front(cb_w, block_tiles);
-        custom_mm_block<true>(cb_x, cb_w, (blocks_per_pair - 1) * block_k, 0, 0, block_k, ct);
+        custom_mm_block<dest_layout>(cb_x, cb_w, (blocks_per_pair - 1) * block_k, 0, 0, block_k, ct);
         cb_pop_front(cb_w, block_tiles);
 
         // Only rows 0..rows-1 are packed (tiny [rows, 32] h tile): silu runs on those rows of faces 0 and 1 only;
@@ -79,7 +80,7 @@ void kernel_main() {
         cb_push_back(cb_h, 1);
 
         // The SFPU and copy inits reprogram address modes and the unpacker the matmul relies on.
-        custom_mm_block_init_short<false, true, false>(cb_x, cb_w, cb_h, ct);
+        custom_mm_block_init_short<false, dest_layout>(cb_x, cb_w, cb_h, ct);
     }
     cb_pop_front(cb_x, kt);
 }

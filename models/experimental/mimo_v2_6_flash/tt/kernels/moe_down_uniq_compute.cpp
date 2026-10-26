@@ -23,7 +23,8 @@ void kernel_main() {
     constexpr uint32_t cb_cnt = get_compile_time_arg_val(7);
     constexpr uint32_t block_tiles = kt * ct;
 
-    custom_mm_block_init<false, true, false>(cb_h, cb_w, cb_out, ct);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<false, dest_layout>(cb_h, cb_w, cb_out, ct);
     cb_wait_front(cb_cnt, 1);
     const uint32_t n = read_tile_value(cb_cnt, 0, 0);
     cb_pop_front(cb_cnt, 1);
@@ -33,11 +34,11 @@ void kernel_main() {
         tile_regs_acquire();
         for (uint32_t p = 0; p < n - 1; p++) {
             cb_wait_front(cb_w, block_tiles);
-            custom_mm_block<false>(cb_h, cb_w, p * kt, 0, 0, kt, ct);
+            custom_mm_block<dest_layout, false>(cb_h, cb_w, p * kt, 0, 0, kt, ct);
             cb_pop_front(cb_w, block_tiles);
         }
         cb_wait_front(cb_w, block_tiles);
-        custom_mm_block<true>(cb_h, cb_w, (n - 1) * kt, 0, 0, kt, ct);
+        custom_mm_block<dest_layout>(cb_h, cb_w, (n - 1) * kt, 0, 0, kt, ct);
         cb_pop_front(cb_w, block_tiles);
         tile_regs_commit();
 

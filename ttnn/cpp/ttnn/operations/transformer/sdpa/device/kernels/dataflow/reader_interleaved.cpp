@@ -12,6 +12,15 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/chunked_ksplit.hpp"
+
+// Chunked causal prefill with grouped Q heads and a K split (see sdpa_grouped_v2 in compute_streaming.hpp).
+#ifndef SDPA_Q_HEADS_PER_UNIT
+#define SDPA_Q_HEADS_PER_UNIT 1
+#endif
+#ifndef SDPA_K_SPLITS
+#define SDPA_K_SPLITS 1
+#endif
 
 // Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
@@ -272,6 +281,10 @@ void kernel_main() {
     constexpr uint32_t mask_tile_bytes = use_provided_mask ? get_tile_size(cb_mask_in) : 0;
     constexpr uint32_t attention_sink_tile_bytes = use_attention_sink ? get_tile_size(cb_attention_sink) : 0;
 
+    // Work items are (unit, K slice) pairs; a unit is q_heads_per_unit consecutive Q heads of one K/V head.
+    constexpr uint32_t q_heads_per_unit = SDPA_Q_HEADS_PER_UNIT;
+    constexpr uint32_t k_splits = SDPA_K_SPLITS;
+    constexpr bool grouped_or_split = q_heads_per_unit > 1 || k_splits > 1;
     constexpr uint32_t q_heads_per_k = NQH / NKH;
     constexpr uint32_t q_heads_per_v = NQH / NVH;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
@@ -430,8 +443,16 @@ void kernel_main() {
         uint32_t mask_batch_offset = 0;
         uint32_t retain_prev_nb = static_cast<uint32_t>(-1), retain_prev_key = static_cast<uint32_t>(-1);
         for (uint32_t global_q_iter = 0; global_q_iter < global_q_count; ++global_q_iter) {
-            const auto decoded =
-                decompose_global_q_index(global_q_start + global_q_iter, q_num_chunks, NQH, use_zigzag_balancing);
+            // Grouped / K split: the core's slices of one unit run as one piece (chunked_piece_at), so the loop
+            // steps over all of them at once.
+            ChunkedPiece piece = {global_q_start + global_q_iter, 0, 0, 1};
+            if constexpr (grouped_or_split) {
+                piece = chunked_piece_at(global_q_start + global_q_iter, global_q_start + global_q_count, k_splits);
+                global_q_iter += piece.items - 1;
+            }
+            auto decoded =
+                decompose_global_q_index(piece.unit, q_num_chunks, NQH / q_heads_per_unit, use_zigzag_balancing);
+            decoded.nq *= q_heads_per_unit;  // the unit's first Q head
             if (decoded.nb != prev_nb) {
                 if constexpr (!broadcast_provided_mask_batch) {
                     if constexpr (broadcast_provided_mask_heads) {
@@ -565,11 +586,40 @@ void kernel_main() {
             const uint32_t q_row_tile_count = q_row_end_tile - q_row_start_tile;
             uint32_t q_read_tile_id = q_tile_shape.id_of(nb, nq, read_offset + q_row_start_tile, 0);
 
+            // K split: the piece's part of the unit's causal K range. An empty piece reads nothing (no Q, no K/V);
+            // compute skips it and the writer fills its output.
+            ChunkedKSplitRange k_split_range = {0, 0};
+            if constexpr (grouped_or_split) {
+                k_split_range = chunked_piece_range(
+                    piece,
+                    (chunked_q_chunk_offset + q_chunk) * Sq_chunk_t,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    k_num_chunks,
+                    k_splits);
+            }
+
             // Q read is deferred into the K loop (k_chunk==0) for subblock interleaving.
             // When use_q_subblock_push is false, Q is read in full before the K loop (original behavior).
             if constexpr (!use_q_subblock_push) {
-                read_chunk_with_padding<q_tile_bytes>(
-                    q_reader, cb_q_in, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                if constexpr (grouped_or_split) {
+                    if (k_split_range.lo < k_split_range.hi) {
+                        for (uint32_t g = 0; g < q_heads_per_unit; ++g) {
+                            read_chunk_with_padding<q_tile_bytes>(
+                                q_reader,
+                                cb_q_in,
+                                q_tile_shape.id_of(nb, nq + g, read_offset + q_row_start_tile, 0),
+                                q_row_tile_count,
+                                DHt,
+                                Sq_chunk_t,
+                                DHt,
+                                barrier_threshold);
+                        }
+                    }
+                } else {
+                    read_chunk_with_padding<q_tile_bytes>(
+                        q_reader, cb_q_in, q_read_tile_id, q_row_tile_count, DHt, Sq_chunk_t, DHt, barrier_threshold);
+                }
             }
 
             q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -603,6 +653,11 @@ void kernel_main() {
                 // Must match what this reader pushed to compute and what the writer self-computes.
                 k_loop_start = windowed_k_lo;
                 q_high_idx = windowed_k_hi * Sk_chunk_t;
+            }
+            if constexpr (grouped_or_split) {
+                // Must match sdpa_grouped_v2's loop over the same slice.
+                k_loop_start = k_split_range.lo;
+                q_high_idx = k_split_range.hi * Sk_chunk_t;
             }
 
             const uint32_t first_k_chunk = use_row_map ? block_map_first : k_loop_start;
@@ -879,17 +934,23 @@ void kernel_main() {
                 // when NOC writes are in-flight).
                 if constexpr (use_q_subblock_push) {
                     if (k_chunk == first_k_chunk) {
-                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                            read_q_subblock<q_tile_bytes>(
-                                q_reader,
-                                cb_q_in,
-                                q_read_tile_id,
-                                q_sub * qk_subblock_h,
-                                qk_subblock_h,
-                                q_row_tile_count,
-                                DHt,
-                                DHt,
-                                barrier_threshold);
+                        // Grouped heads: each head's Q chunk in turn, the order compute reads them in.
+                        for (uint32_t g = 0; g < q_heads_per_unit; ++g) {
+                            if (g > 0) {
+                                q_read_tile_id = q_tile_shape.id_of(nb, nq + g, read_offset + q_row_start_tile, 0);
+                            }
+                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                read_q_subblock<q_tile_bytes>(
+                                    q_reader,
+                                    cb_q_in,
+                                    q_read_tile_id,
+                                    q_sub * qk_subblock_h,
+                                    qk_subblock_h,
+                                    q_row_tile_count,
+                                    DHt,
+                                    DHt,
+                                    barrier_threshold);
+                            }
                         }
                     }
                 }
