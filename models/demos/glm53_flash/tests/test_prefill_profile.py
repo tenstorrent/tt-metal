@@ -7,7 +7,7 @@ passes of ``prefill_chunked`` over the first ``PROF_N`` ids of ``PROF_IDS``. A p
 (``n``: this pass uses only the first n ids; ``regions_t``: the MoE regions sub-chunk for this pass; then optionally
 ``:<rank>`` (cumsum | mm), ``:<buf>`` (full | fit, the region buffer rows, G53F-0183) and ``:<gather>`` (embedding |
 row, the regions path's row gathers, G53F-0186), then ``:<mhc>``, ``:<combine>``, ``:<untilize>``, ``:<scatter>`` and the DSA sparse
-prefill's ``:<ablock>`` / ``:<qblock>`` rows, then ``:<route>``):
+prefill's ``:<ablock>`` / ``:<qblock>`` rows, then ``:<route>`` and ``:<hmix>``):
 ``instr=1`` wraps every layer call, its attention core, its FFN core (MoE: router / experts / shared) with
 device synchronizations and installs the DSA ``StageTimer`` (the sync points change the overlap, so the
 instrumented total is an upper bound); ``instr=0`` times only whole chunks (the real cost). Rows go to
@@ -170,6 +170,8 @@ def test_prefill_profile(mesh_device):
             os.environ["GLM53_PREFILL_QBLOCK"] = spec[12]
         if len(spec) > 13 and spec[13]:  # regions routing tables (composite | custom, G53F-0195)
             moe_mod.REGIONS_ROUTE = spec[13]
+        if len(spec) > 14 and spec[14]:  # prefill mHC h through the pre-mix kernel (0 | 1, G53F-0197; read per call)
+            os.environ["GLM53_MHC_PREFILL_HMIX"] = spec[14]
         if len(spec) > 7 and spec[7]:  # prefill mHC rows (wrap | fast | trace, G53F-0187 / 0188; tt/mhc.py)
             from models.demos.glm53_flash.tt import mhc as mhc_mod
 
@@ -242,6 +244,7 @@ def test_prefill_profile(mesh_device):
             untilize=moe_mod.REGIONS_UNTILIZE,
             scatter=moe_mod.REGIONS_SCATTER,
             route=moe_mod.REGIONS_ROUTE,
+            hmix=os.environ.get("GLM53_MHC_PREFILL_HMIX", "0"),
             dsa_blocks=__import__("models.demos.glm53_flash.tt.dsa", fromlist=["x"]).prefill_blocks(),
         )
         moe_mod.REGIONS_STATS.clear()

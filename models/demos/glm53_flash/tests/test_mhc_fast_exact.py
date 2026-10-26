@@ -7,7 +7,8 @@ The decoder's two prefill wrap paths, on the same random streams and parameters:
 * composite: ``TtMHCWrap.forward(x, normed, bf16)`` with the decoder's closure ``normed(h) = F(rms_norm(h))``
   (``decoder_layer._hc_call_impl``, the decoder's ``norm_compute``);
 * fused: ``TtMHCFast.forward(x, F, bf16, norm=(w, eps))`` (the norm inside its pre-block, the v2 post-mix kernel),
-  under ``GLM53_MHC_POST_ORDER`` = ``composite`` (the composite's term order) and ``kernel`` (the original order).
+  under ``GLM53_MHC_POST_ORDER`` = ``composite`` (the composite's term order) and ``kernel`` (the original order),
+  and in the composite order with ``GLM53_MHC_PREFILL_HMIX=1`` (the pre-mix kernel for h, G53F-0197).
 
 F is one bf16 op. Reports, per row count, whether the sublayer input (the pre-block + norm) and the wrap output are
 bitwise equal, the max |d|, and the eager time per wrap of each path.
@@ -100,20 +101,22 @@ def test_mhc_fast_exact(mesh_device):
         ref, ref_h, yr = once(run_comp, x)
         ttnn.deallocate(yr)
         t_comp = timed(run_comp, x)
-        for order in ("composite", "kernel"):
+        for order, hmix in (("composite", "0"), ("composite", "1"), ("kernel", "0")):
             os.environ["GLM53_MHC_POST_ORDER"] = order
+            os.environ["GLM53_MHC_PREFILL_HMIX"] = hmix  # G53F-0197: the pre-mix kernel for the prefill h
             got, got_h, yg = once(run_fast, x)
             ttnn.deallocate(yg)
             t_fast = timed(run_fast, x)
             h_eq, y_eq = torch.equal(got_h, ref_h), torch.equal(got, ref)
             d = (got.float() - ref.float()).abs()
             logger.info(
-                f"[mhc-exact] T={T} order={order}: sublayer input equal {h_eq}, output equal {y_eq} "
+                f"[mhc-exact] T={T} order={order} hmix={hmix}: sublayer input equal {h_eq}, output equal {y_eq} "
                 f"(max|d| {d.max().item():.3e}, {int((d > 0).sum())} / {d.numel()} differ); "
                 f"composite {t_comp:.3f} ms, fused {t_fast:.3f} ms per wrap"
             )
             if order == "composite" and T > 32:
                 ok = ok and h_eq and y_eq
         os.environ.pop("GLM53_MHC_POST_ORDER", None)
+        os.environ.pop("GLM53_MHC_PREFILL_HMIX", None)
         ttnn.deallocate(x)
     assert ok, "the fused prefill path in the composite order is not bit-identical"
