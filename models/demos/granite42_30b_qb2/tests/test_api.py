@@ -72,3 +72,30 @@ def test_partial_batches_keep_requests_independent(server_url, batch):
     after = completion(server_url, thinking=False)
     assert before["content"] == after["content"]
     assert httpx.get(server_url + "/health", timeout=10).status_code == 200
+
+
+def test_seeded_mixed_sampling_survives_slot_reordering(server_url):
+    requests = [
+        {
+            "model": MODEL,
+            "prompt": f"Count from {i}: ",
+            "temperature": 0 if i % 3 == 0 else 0.8,
+            "top_k": 1 if i % 3 == 0 else 32,
+            "top_p": 1.0 if i % 2 else 0.9,
+            "seed": 42 + i,
+            "max_tokens": 8,
+        }
+        for i in range(10)
+    ]
+
+    def sample(request):
+        response = httpx.post(server_url + "/v1/completions", json=request, timeout=600)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["usage"]["completion_tokens"] > 0
+        return body["choices"][0]["text"]
+
+    baselines = [sample(request) for request in requests]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+        reordered = list(pool.map(sample, reversed(requests)))
+    assert reordered[::-1] == baselines
