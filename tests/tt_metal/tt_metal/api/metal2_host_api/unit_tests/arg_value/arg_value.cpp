@@ -10,6 +10,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,18 @@ using m2::ArgValue;
 
 enum UnscopedEnum { kUnscoped = 7 };
 enum class ScopedEnum { kScoped = 7 };
+
+struct PackedConfig {
+    std::uint32_t low : 8;
+    std::uint32_t high : 24;
+};
+
+// Has both an explicit conversion to uint32_t and an implicit one to int. Assigning it to a uint32_t
+// ignores the explicit operator, and so must ArgValue.
+struct ExplicitAndImplicit {
+    explicit operator std::uint32_t() const { return 1; }
+    operator int() const { return 2; }
+};
 
 // ---- conversions (compile-time) ----------------------------------------------
 
@@ -64,6 +77,19 @@ std::uint32_t stored(T source) {
 }
 
 TEST(ArgValueTest, CPU_DefaultConstructedIsZero) { EXPECT_EQ(ArgValue().to_uint32(), 0u); }
+
+TEST(ArgValueTest, CPU_AcceptsSourcesThatAssignToUint32) {
+    const std::atomic<std::uint32_t> atomic{5};  // not copyable
+    EXPECT_EQ(ArgValue(atomic).to_uint32(), 5u);
+
+    const PackedConfig config{.low = 3, .high = 4};
+    EXPECT_EQ(ArgValue(config.low).to_uint32(), 3u);  // a bit-field
+
+    const ExplicitAndImplicit both;
+    const std::uint32_t assigned = both;
+    EXPECT_EQ(assigned, 2u);
+    EXPECT_EQ(ArgValue(both).to_uint32(), assigned);  // the implicit conversion, as for assignment
+}
 
 TEST(ArgValueTest, CPU_ToUint32IsTheImplicitConversionToUint32) {
     // Each result is what assigning the source to a uint32_t produces.
