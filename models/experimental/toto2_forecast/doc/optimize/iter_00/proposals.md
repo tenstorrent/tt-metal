@@ -3,7 +3,7 @@
 This file is the round's analysis record with `summary.md`, `summary.json` and `perf_report.*` (PLAN section 9 v1.1:
 no `analysis.md`). The read-only analyst ran on the first round-0 profile, taken before the v1.1 policy change (bf16
 dest accumulation; kept in `pre_v1.1/`). Its mechanisms and row reading hold; every number below is re-derived from
-the final round-0 profile (ttq job 526) and bench (jobs 554) by the worker, with the arithmetic shown.
+the final round-0 profile (ttq job 632 on 3100146054d, fp32 dest acc on every matmul and SDPA) and bench (job 635, same sha) by the worker, with the arithmetic shown.
 
 ## Preamble
 
@@ -16,27 +16,27 @@ the final round-0 profile (ttq job 526) and bench (jobs 554) by the worker, with
 | steady wall (median of 5) | **8412 ms** |
 | host split | prepare 85 ms, upload 10 ms, postprocess 13 ms |
 | reduced-window estimate | **7984.0 ms** over 874 ops (`summary.json`) |
-| gate metrics | pcc_normalized 0.99993, pcc_spread 0.99990, pcc_row_p01_active 0.9992, spread_ratio p01/p99 0.975/1.044, pcc_final / pcc_final_spread 1.0000 (job 554, no floor missed) |
+| gate metrics | pcc_normalized 0.99993, pcc_spread 0.99990, pcc_row_p01_active 0.9992, spread_ratio p01/p50/p99 0.975/1.006/1.044, pcc_final / pcc_final_spread 1.0000 (job 635, no floor missed) |
 | shape | 66 tokens per row (64 context + 2 masked) padded to S_pad = 96: every per-token op runs on M = 98304 rows, of which 67584 are real (68.75 %) and 66560 live (token 65 is never read) |
 
 ### Reconciliation
 
-The reduced window (time layer 0, the last time layer, the variate layer, embed and head, scaled by `layer_counts.json`) gives 7984.0 ms against 8209 ms measured: -2.7 %. The profile is taken op by op with a device sync at each section signpost, so it omits the op-to-op dispatch gaps inside the 46 repeated layers (about 4.9 ms per layer, 874 ops); within the skill's 3 % bound, above PLAN G1 item 4's 2 %, explained here.
+The reduced window (time layer 0, the last time layer, the variate layer, embed and head; job 632) sums to 307.0 ms, and the same 3-layer model benched (BENCH_LAYERS=3, job 638) measures 307.0 ms: op-to-op gaps are 0.8 ms per forward in total (sections/*.csv), not 4.9 ms per layer as the earlier draft said. Scaled by layer_counts.json the profile gives 7941.5 ms against 8208 ms measured (-3.2 %). The gap is per-layer time under sustained load: BENCH_LAYERS 12 / 24 / 36 (job 652) cost 172.0 / 174.9 / 175.3 ms per added time layer against 169.7 ms profiled, and 307 + 45 x 175.3 = 8196 ms matches the full bench. The cause (clock or thermal slowdown over an 8 s forward) is not measured directly.
 
 | section | device ms | ops | x count | ms |
 |---|---|---|---|---|
-| embed | 49.43 | 5 | 1 | 49.4 |
-| layer_time | 170.60 | 18 | 46 | 7847.7 |
-| last_time | 83.52 | 22 | 1 | 83.5 |
+| embed | 49.56 | 5 | 1 | 49.6 |
+| layer_time | 169.66 | 18 | 46 | 7804.4 |
+| last_time | 84.41 | 22 | 1 | 84.4 |
 | layer_variate | 2.12 | 13 | 1 | 2.1 |
 | head | 1.25 | 6 | 1 | 1.2 |
-| **total** | | 874 | | **7984.0** |
+| **total** | | 874 | | **7941.5** |
 
 ### Category split and matmul utilization
 
-- Matmul 5635.6 ms (70.6 %, 246 ops); non-matmul 2348.4 ms (29.4 %, 628 ops). Compute / TM / Other 93.95 / 5.44 / 0.62 %
+- Matmul 5609.8 ms (70.6 %, 246 ops); non-matmul 2331.7 ms (29.4 %, 628 ops) (job 632). Compute / TM / Other 93.95 / 5.44 / 0.62 %
   of the reduced window.
-- **`matmul_weighted_flops_percent` = 31.29 %** (`summary.json`, the number of record). All matmuls do 462.9 TFLOP per
+- **`matmul_weighted_flops_percent` = 31.26 %** (`summary.json`, the number of record). All matmuls do 462.9 TFLOP per
   forward: 1523 ms at the 110-core HiFi2 peak of ~304 TFLOPs (1289 ms at 359) against 5636 ms measured. Their
   intensity (1013-1612 FLOP/B) is above the 594 FLOP/B ridge, so their floor is math.
 - The non-matmul ops move ~818 GB per forward (analyst, unchanged by the policy): a 1598 ms DRAM floor against 2348 ms;

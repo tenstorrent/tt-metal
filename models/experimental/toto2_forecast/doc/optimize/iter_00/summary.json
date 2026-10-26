@@ -6,34 +6,34 @@
     "MODEL_END"
   ],
   "reduced_window": {
-    "device_us": 306918.483,
-    "op_to_op_gap_us": 2696.3959999999997,
+    "device_us": 306994.0290000001,
+    "op_to_op_gap_us": 2612.1129999999994,
     "ops": 64
   },
   "sections": {
     "embed": {
-      "device_us": 49428.191999999995,
-      "op_to_op_gap_us": 2.195,
+      "device_us": 49555.689,
+      "op_to_op_gap_us": 2.2119999999999997,
       "ops": 5
     },
     "layer_time": {
-      "device_us": 170601.11099999995,
-      "op_to_op_gap_us": 9.386000000000001,
+      "device_us": 169655.998,
+      "op_to_op_gap_us": 9.324000000000002,
       "ops": 18
     },
     "last_time": {
-      "device_us": 83524.58399999999,
-      "op_to_op_gap_us": 11.408999999999999,
+      "device_us": 84414.33499999999,
+      "op_to_op_gap_us": 11.633,
       "ops": 22
     },
     "layer_variate": {
-      "device_us": 2119.542,
-      "op_to_op_gap_us": 269.3869999999999,
+      "device_us": 2121.838,
+      "op_to_op_gap_us": 247.41599999999994,
       "ops": 13
     },
     "head": {
-      "device_us": 1245.054,
-      "op_to_op_gap_us": 140.083,
+      "device_us": 1246.169,
+      "op_to_op_gap_us": 143.96300000000002,
       "ops": 6
     }
   },
@@ -45,147 +45,147 @@
     "head": 1
   },
   "full_model_estimate": {
-    "device_ms": 7983.968477999997,
+    "device_ms": 7941.513939,
     "ops": 874
   },
   "measured": null,
   "category_percent": {
-    "Compute": 93.95000000000002,
+    "Compute": 93.94999999999999,
     "TM": 5.440000000000001,
-    "Other": 0.62
+    "Other": 0.61
   },
-  "matmul_weighted_flops_percent": 31.29,
+  "matmul_weighted_flops_percent": 31.26,
   "stacked": [
     {
       "op": "MatmulDeviceOperation (in0:dram_interleaved)",
-      "percent": 70.04,
-      "device_us": 214956.24,
+      "percent": 70.08,
+      "device_us": 215151.67,
       "count": 21,
       "category": "Compute"
     },
     {
       "op": "BinaryNgDeviceOperation (in0:dram_interleaved)",
-      "percent": 8.23,
-      "device_us": 25267.12,
+      "percent": 8.22,
+      "device_us": 25226.41,
       "count": 17,
       "category": "Compute"
     },
     {
       "op": "RotaryEmbeddingLlamaDeviceOperation (in0:dram_interleaved)",
-      "percent": 5.64,
-      "device_us": 17301.08,
+      "percent": 5.63,
+      "device_us": 17296.29,
       "count": 4,
       "category": "Compute"
     },
     {
       "op": "UnaryDeviceOperation (in0:dram_interleaved)",
-      "percent": 5.26,
-      "device_us": 16151.54,
+      "percent": 5.17,
+      "device_us": 15861.41,
       "count": 5,
       "category": "Compute"
     },
     {
       "op": "NlpCreateHeadsDeviceOperation (in0:dram_interleaved)",
       "percent": 3.74,
-      "device_us": 11481.17,
+      "device_us": 11478.22,
       "count": 2,
       "category": "TM"
     },
     {
       "op": "SDPAOperation (in0:dram_interleaved)",
-      "percent": 2.83,
-      "device_us": 8681.07,
+      "percent": 2.91,
+      "device_us": 8931.39,
       "count": 2,
       "category": "Compute"
     },
     {
       "op": "LayerNormDeviceOperation (in0:dram_interleaved)",
-      "percent": 1.95,
-      "device_us": 5980.55,
+      "percent": 1.94,
+      "device_us": 5951.75,
       "count": 7,
       "category": "Compute"
     },
     {
       "op": "NLPConcatHeadsDeviceOperation (in0:dram_interleaved)",
       "percent": 1.28,
-      "device_us": 3914.91,
+      "device_us": 3921.03,
       "count": 2,
       "category": "TM"
     },
     {
       "op": "UntilizeCodegenDeviceOperation (in0:dram_interleaved)",
-      "percent": 0.62,
-      "device_us": 1891.93,
+      "percent": 0.61,
+      "device_us": 1883.0,
       "count": 1,
       "category": "Other"
     },
     {
       "op": "TilizeWithValPaddingDeviceOperation (in0:dram_interleaved)",
       "percent": 0.24,
-      "device_us": 746.84,
+      "device_us": 746.6,
       "count": 1,
       "category": "TM"
     },
     {
       "op": "ReshapeViewDeviceOperation (in0:dram_interleaved)",
       "percent": 0.15,
-      "device_us": 455.3,
+      "device_us": 455.37,
       "count": 1,
       "category": "TM"
     },
     {
       "op": "SliceDeviceOperation (in0:dram_interleaved)",
       "percent": 0.03,
-      "device_us": 90.73,
+      "device_us": 90.9,
       "count": 1,
       "category": "TM"
     }
   ],
   "slowest_ops": [
     {
-      "id": "77",
-      "op": "MatmulDeviceOperation 98304 x 2048 x 6144",
-      "device_us": 44104.719,
-      "bound": "SLOW",
-      "cores": "110",
-      "dram_percent": 7.243850709036373,
-      "flops_percent": 18.443395496014286,
-      "fidelity": "HiFi2 BF16 x BF16 => BF16",
-      "in0_block_w": "2",
-      "subblock": "2x2"
-    },
-    {
       "id": "97",
       "op": "MatmulDeviceOperation 98304 x 2048 x 6144",
-      "device_us": 44038.04,
+      "device_us": 44660.181,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 7.2548187884837745,
-      "flops_percent": 18.471321061463584,
+      "dram_percent": 7.153755153836032,
+      "flops_percent": 18.21400535205121,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
     },
     {
-      "id": "87",
-      "op": "MatmulDeviceOperation 98304 x 2048 x 5472",
-      "device_us": 26893.447,
+      "id": "77",
+      "op": "MatmulDeviceOperation 98304 x 2048 x 6144",
+      "device_us": 43786.121,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 10.900261316446343,
-      "flops_percent": 26.938558337616254,
+      "dram_percent": 7.296558651541661,
+      "flops_percent": 18.577593931135752,
+      "fidelity": "HiFi2 BF16 x BF16 => BF16",
+      "in0_block_w": "2",
+      "subblock": "2x2"
+    },
+    {
+      "id": "88",
+      "op": "MatmulDeviceOperation 98304 x 2048 x 5472",
+      "device_us": 26703.976,
+      "bound": "SLOW",
+      "cores": "110",
+      "dram_percent": 10.977601238107763,
+      "flops_percent": 27.129693754558904,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "1x1"
     },
     {
-      "id": "88",
+      "id": "87",
       "op": "MatmulDeviceOperation 98304 x 2048 x 5472",
-      "device_us": 26591.186,
+      "device_us": 26594.84,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 11.02416417229378,
-      "flops_percent": 27.244767905767382,
+      "dram_percent": 11.02264950644561,
+      "flops_percent": 27.241024608874913,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "1x1"
@@ -193,11 +193,11 @@
     {
       "id": "71",
       "op": "MatmulDeviceOperation 98304 x 8192 x 2048",
-      "device_us": 26267.94,
+      "device_us": 26262.901,
       "bound": "FLOP",
       "cores": "110",
-      "dram_percent": 15.218917052498215,
-      "flops_percent": 82.57881668757436,
+      "dram_percent": 15.2218370697129,
+      "flops_percent": 82.59466088762251,
       "fidelity": "HiFi4 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -205,11 +205,11 @@
     {
       "id": "91",
       "op": "MatmulDeviceOperation 98304 x 5472 x 2048",
-      "device_us": 15645.281,
+      "device_us": 15592.046,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 18.736998076288945,
-      "flops_percent": 46.306019745448545,
+      "dram_percent": 18.800970700060784,
+      "flops_percent": 46.46411964851123,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "1",
       "subblock": "2x2"
@@ -217,19 +217,19 @@
     {
       "id": "69",
       "op": "MatmulDeviceOperation 98304 x 64 x 8192",
-      "device_us": 10712.987,
+      "device_us": 10813.614,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 29.612208061113115,
-      "flops_percent": 6.327528570055328,
-      "fidelity": "HiFi4 BF16 x BF16 => BF16",
+      "dram_percent": 29.56391822382415,
+      "flops_percent": 6.268647217584363,
+      "fidelity": "HiFi4 FP32 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
     },
     {
       "id": "89",
       "op": "UnaryDeviceOperation",
-      "device_us": 8545.536,
+      "device_us": 8255.039,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
@@ -239,13 +239,13 @@
       "subblock": "x"
     },
     {
-      "id": "83",
+      "id": "103",
       "op": "MatmulDeviceOperation 98304 x 2048 x 2048",
-      "device_us": 7223.144,
+      "device_us": 7227.818,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 22.00216415455652,
-      "flops_percent": 37.538629335442465,
+      "dram_percent": 21.987936054837018,
+      "flops_percent": 37.514354297870426,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -253,7 +253,7 @@
     {
       "id": "90",
       "op": "BinaryNgDeviceOperation",
-      "device_us": 7197.434,
+      "device_us": 7215.503,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
@@ -263,13 +263,13 @@
       "subblock": "x"
     },
     {
-      "id": "103",
+      "id": "83",
       "op": "MatmulDeviceOperation 98304 x 2048 x 2048",
-      "device_us": 7193.65,
+      "device_us": 7204.772,
       "bound": "SLOW",
       "cores": "110",
-      "dram_percent": 22.092373134639576,
-      "flops_percent": 37.69253789835831,
+      "dram_percent": 22.05826915827454,
+      "flops_percent": 37.63435196180049,
       "fidelity": "HiFi2 BF16 x BF16 => BF16",
       "in0_block_w": "2",
       "subblock": "2x2"
@@ -277,19 +277,7 @@
     {
       "id": "70",
       "op": "UnaryDeviceOperation",
-      "device_us": 7081.084,
-      "bound": "",
-      "cores": "110",
-      "dram_percent": 0.0,
-      "flops_percent": 0.0,
-      "fidelity": "BF16 => BF16",
-      "in0_block_w": "",
-      "subblock": "x"
-    },
-    {
-      "id": "78",
-      "op": "NlpCreateHeadsDeviceOperation",
-      "device_us": 5752.816,
+      "device_us": 7087.064,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
@@ -301,7 +289,19 @@
     {
       "id": "98",
       "op": "NlpCreateHeadsDeviceOperation",
-      "device_us": 5728.359,
+      "device_us": 5750.691,
+      "bound": "",
+      "cores": "110",
+      "dram_percent": 0.0,
+      "flops_percent": 0.0,
+      "fidelity": "BF16 => BF16",
+      "in0_block_w": "",
+      "subblock": "x"
+    },
+    {
+      "id": "78",
+      "op": "NlpCreateHeadsDeviceOperation",
+      "device_us": 5727.53,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
@@ -313,7 +313,7 @@
     {
       "id": "101",
       "op": "SDPAOperation",
-      "device_us": 4341.439,
+      "device_us": 4587.528,
       "bound": "",
       "cores": "110",
       "dram_percent": 0.0,
