@@ -709,11 +709,19 @@ class TtDSAIndexer(LightweightModule):
             # (``untilize_with_unpadding``, end indices inclusive): the former ``ttnn.slice`` + ``to_layout`` pair
             # moved the [T, kv_len] block twice (two 268 MB copies per 512-row sub-block at 1 M); pure data
             # movement either way, bit-identical.
+            # indexer_score_dsa emits a ROW_MAJOR block (measured 2026-10-26: untilize_with_unpadding rejects it), so
+            # the one-pass crop applies only to a tile-major block; a row-major block takes the plain slice.
             if kv_len < scores.shape[-1]:
-                scores_rm = ttnn.untilize_with_unpadding(scores, [0, 0, T - 1, kv_len - 1])
-            else:
+                if scores.layout == ttnn.TILE_LAYOUT:
+                    scores_rm = ttnn.untilize_with_unpadding(scores, [0, 0, T - 1, kv_len - 1])
+                else:
+                    scores_rm = ttnn.slice(scores, [0, 0, 0, 0], [1, 1, T, kv_len])
+            elif scores.layout == ttnn.TILE_LAYOUT:
                 scores_rm = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
-            ttnn.deallocate(scores)
+            else:
+                scores_rm = scores
+            if scores_rm is not scores:
+                ttnn.deallocate(scores)
         row_slice = None
         if row is not None:
             row_slice = ttnn.slice(scores_rm, [0, 0, row, 0], [1, 1, row + 1, scores_rm.shape[-1]])
