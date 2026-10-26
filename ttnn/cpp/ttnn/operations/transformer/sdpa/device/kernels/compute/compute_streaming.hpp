@@ -33,6 +33,45 @@ constexpr bool reduce_trigger_supported = false;
 constexpr bool reduce_trigger_supported = true;
 #endif
 
+// The SFPU work of exp_packthread_tile, exp_tile_first_column and recip_tile as used here, compiled on
+// both the math and the pack thread so that __builtin_rvtt_peer_ran on one can name what the other ran.
+#if defined(ARCH_BLACKHOLE) && (defined(TRISC_MATH) || defined(TRISC_PACK))
+constexpr bool sdpa_peer_sfpu_supported = true;
+
+template <uint32_t scale_fp32>
+ALWI void sdpa_exp_block_sfpu(uint32_t idst) {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(sfpu::exp_init<true, scale_fp32, false, DST_ACCUM_MODE>);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_exponential,
+        (true, DST_ACCUM_MODE, false, 32, false),
+        idst,
+        VectorMode::None,
+        p_sfpu::kCONST_1_FP16B);
+}
+
+template <uint16_t scale_bf16>
+ALWI void sdpa_exp_first_column_sfpu(uint32_t idst) {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>(
+        sfpu::exp_init<EXP_APPROX_MODE, 0x3F800000, true, DST_ACCUM_MODE>);
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_exponential_first_column,
+        (EXP_APPROX_MODE, scale_bf16, DST_ACCUM_MODE),
+        idst,
+        VectorMode::C);
+}
+
+ALWI void sdpa_recip_sfpu(uint32_t idst) {
+    SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, DST_ACCUM_MODE));
+    SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reciprocal, (APPROX, DST_ACCUM_MODE, 8), idst, VectorMode::C);
+}
+#else
+constexpr bool sdpa_peer_sfpu_supported = false;
+#endif
+
 // Template-driven profiling: MaybeDeviceZoneScopedN(ENABLED, name)
 // When ENABLED=true: RAII profileScope writes timestamps (same as DeviceZoneScopedN)
 // When ENABLED=false: empty struct, zero overhead (compiler eliminates entirely)
@@ -386,8 +425,12 @@ void sub_exp_block_bcast_cols(
         constexpr VectorMode vector_mode_exp = VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
+#ifdef ARCH_BLACKHOLE
+                PACK((sdpa_exp_block_sfpu<scale_fp32>(dst_index++)));
+#else
                 exp_packthread_tile<true, false, InputClamping::None, iterations, DST_ACCUM_MODE, scale_fp32>(
                     dst_index++, vector_mode_exp);
+#endif
             }
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
@@ -445,7 +488,11 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
     {
         tile_regs_wait();
         for (uint32_t dst_index = 0; dst_index < tiles_per_row; dst_index++) {
+#ifdef ARCH_BLACKHOLE
+            PACK((sdpa_exp_first_column_sfpu<scale_bf16>(dst_index)));
+#else
             PACK((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(dst_index)));
+#endif
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
@@ -550,13 +597,16 @@ template <
     uint32_t scale_fp32 = 0,
     bool use_attention_sink = false,
     uint32_t cb_attention_sink = INVALID_CB,
-    bool sink_per_row = false>
+    bool sink_per_row = false,
+    bool peer_sfpu = false>
 static inline __attribute__((always_inline)) void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
     uint32_t sbh,
     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
-    [[maybe_unused]] uint32_t sink_row_offset = 0) {
+    [[maybe_unused]] uint32_t sink_row_offset = 0,
+    [[maybe_unused]] bool peer_exp_block = false,
+    [[maybe_unused]] bool peer_exp_first_column = false) {
     // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
     // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
     if constexpr (use_attention_sink) {
@@ -591,13 +641,32 @@ static inline __attribute__((always_inline)) void normalize_row_streaming(
                 add_binary_tile(0, 1, 0);
             }
 #ifdef ARCH_BLACKHOLE
-            MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+            if constexpr (peer_sfpu) {
+                // The matmul above waits for the sums, which come after the pack thread's last exp.
+                MATH(({
+                    if (peer_exp_block) {
+                        __builtin_rvtt_peer_ran(reinterpret_cast<void*>(&sdpa_exp_block_sfpu<scale_fp32>));
+                    }
+                    if (peer_exp_first_column) {
+                        __builtin_rvtt_peer_ran(
+                            reinterpret_cast<void*>(&sdpa_exp_first_column_sfpu<uint16_t(scale_fp32 >> 16)>));
+                    }
+                }));
+                peer_exp_block = false;
+                peer_exp_first_column = false;
+                MATH((sdpa_recip_sfpu(0)));
+            } else {
+                MATH((recip_tile(0 /*dst_index*/, VectorMode::C)));
+            }
 #else
             MATH((recip_tile_first_column_wh_idst0_direct()));
 #endif
             tile_regs_commit();
 
             tile_regs_wait();
+            if constexpr (peer_sfpu) {
+                PACK((__builtin_rvtt_peer_ran(reinterpret_cast<void*>(&sdpa_recip_sfpu))));
+            }
             pack_tile(0, scratch_cb);
             tile_regs_release();
             CircularBuffer(scratch_cb).push_back(1);
@@ -1066,6 +1135,8 @@ template <
     // Circular sliding KV cache: mask K origins come from the work plan, not from
     // inverting local cache rows (ambiguous once chunk groups alias one local slab).
     bool circular_kv_cache = false,
+    // The math and pack threads name each other's SFPU work with __builtin_rvtt_peer_ran.
+    bool peer_sfpu = false,
     typename Half>
 static void sdpa_inner_loop_step(
     Half& prev,
@@ -1451,6 +1522,10 @@ static void sdpa_inner_loop_step(
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
         [[maybe_unused]] uint32_t sink_row_offset = 0;
+        // Which of the pack thread's exp functions ran since the math thread's last recip. Phase 1 and the
+        // drain above ran sdpa_exp_block_sfpu; sdpa_exp_first_column_sfpu runs only after them.
+        [[maybe_unused]] bool peer_exp_block = true;
+        [[maybe_unused]] bool peer_exp_first_column = false;
         [[maybe_unused]] auto normalize_row = [&, out_cb](uint32_t& pushed, uint32_t sbh) {
             MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             CircularBuffer(cur.sum()).push_back(sbh);
@@ -1464,7 +1539,12 @@ static void sdpa_inner_loop_step(
                 cb_normalized_out,
                 scale_fp32,
                 use_attention_sink,
-                cb_attention_sink>(cur.sum(), out_cb, sbh, cur.max(), sink_row_offset);
+                cb_attention_sink,
+                false,
+                peer_sfpu>(
+                cur.sum(), out_cb, sbh, cur.max(), sink_row_offset, peer_exp_block, peer_exp_first_column);
+            peer_exp_block = false;
+            peer_exp_first_column = false;
             if constexpr (use_attention_sink) {
                 sink_row_offset += sbh;
             }
@@ -1517,6 +1597,7 @@ static void sdpa_inner_loop_step(
                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
                 sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                     prev.max(), cur.max(), cb_exp_max_diff, salad_row, qktv_h);
+                peer_exp_first_column = true;
                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
             }
 
@@ -1565,6 +1646,7 @@ static void sdpa_inner_loop_step(
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                         prev.max(), cur.max(), cb_exp_max_diff, drain_salad_row, drain_h);
+                    peer_exp_first_column = true;
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
 
                     salad_correct_row(salad_row, w_salad, qktv_h);
@@ -1619,6 +1701,7 @@ static void sdpa_inner_loop_step(
                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
                     sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                         prev.max(), cur.max(), cb_exp_max_diff, drain_salad_row, drain_h);
+                    peer_exp_first_column = true;
                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
                     salad_correct_row(drain_salad_row, 0, drain_h);
                 }
@@ -1861,7 +1944,10 @@ __attribute__((flatten)) void sdpa_standard_v2(
                 sliding_window_size,
                 use_attention_sink,
                 cb_attention_sink,
-                use_provided_mask>(
+                use_provided_mask,
+                false,
+                false,
+                sdpa_peer_sfpu_supported && !use_attention_sink>(
                 prev,
                 cur,
                 is_last,
