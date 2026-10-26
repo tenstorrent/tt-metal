@@ -123,7 +123,9 @@ inline std::mutex& GetExecutorMutex() {
 // (https://github.com/taskflow/taskflow/issues/479) This wrapper ensures that exceptions are re-thrown by packaged_task
 // whenever .get() is called on future object
 // https://stackoverflow.com/questions/16344663/is-there-a-packaged-taskset-exception-equivalent
-// launch an async tf job only if not all workers are occupied
+// A worker runs the job itself when every worker is occupied, so a worker never blocks on a queued job no worker is
+// free to run. Any other thread always queues it: run inline, the job would keep that thread from queueing its next
+// one while workers that free up in the meantime sit idle.
 template <class F, class... Args>
 auto async(F&& func, Args&&... args) {
     using return_type = std::invoke_result_t<F, Args...>;
@@ -133,7 +135,7 @@ auto async(F&& func, Args&&... args) {
     std::shared_future<return_type> res(std::move(task->get_future()));
     GetExecutorMutex().lock();
 
-    if (GetExecutor().num_topologies() >= GetExecutor().num_workers()) {
+    if (GetExecutor().this_worker_id() >= 0 && GetExecutor().num_topologies() >= GetExecutor().num_workers()) {
         GetExecutorMutex().unlock();
         (*task)();
         return res;
