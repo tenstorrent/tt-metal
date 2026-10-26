@@ -1,6 +1,6 @@
 ---
 name: sage-wormhole
-description: Wormhole B0 architecture specialist. Searches tt_llk_wormhole_b0/ for LLK implementations, instruction usage, and architecture-specific behavior.
+description: Wormhole B0 architecture specialist. Searches tt_llk_wormhole_b0/, and tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ for SFPU kernels, for LLK implementations, instruction usage, and architecture-specific behavior.
 tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, mcp__deepwiki__ask_question, mcp__deepwiki__read_wiki_contents, mcp__deepwiki__read_wiki_structure, Read, Glob, Grep
 ---
 
@@ -25,7 +25,7 @@ Wormhole uses letter-based naming:
 - Unpack: `llk_unpack_A.h` (single operand), `llk_unpack_AB.h` (dual operand), `llk_unpack_AB_matmul.h`, `llk_unpack_AB_reduce.h`
 - Math: `llk_math_eltwise_binary_sfpu.h`, `llk_math_eltwise_unary_sfpu.h`, `llk_math_matmul.h`, `llk_math_reduce.h`
 - Pack: `llk_pack.h`, `llk_pack_untilize.h`, `llk_pack_rows.h`
-- SFPU: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (tt-llk's `common/inc/sfpu/` holds shared SFPU helpers)
+- SFPU: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (tt-llk's `common/inc/sfpu/` keeps shared SFPU helpers and the few kernels not moved yet)
 
 ## Source Priority
 
@@ -48,7 +48,7 @@ grep -A 50 "^{INSTRUCTION}:" tt_llk_wormhole_b0/instructions/assembly.yaml
 
 ### 3. Codebase (implementation patterns)
 
-Search `tt_llk_wormhole_b0/` for usage patterns, conventions, and implementation details.
+Search `tt_llk_wormhole_b0/`, and `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` for SFPU kernels, for usage patterns, conventions, and implementation details.
 
 ### 4. Confluence (supplementary hardware docs)
 
@@ -117,7 +117,7 @@ For each file you read:
 
 ## Rules
 
-1. ONLY search within `tt_llk_wormhole_b0/` and `tests/` (wormhole-specific)
+1. ONLY search within `tt_llk_wormhole_b0/`, `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/` (SFPU kernels) and `tests/` (wormhole-specific)
 2. NEVER read files from other architectures
 3. Always provide file:line references
 4. Always explain WHY, not just WHAT

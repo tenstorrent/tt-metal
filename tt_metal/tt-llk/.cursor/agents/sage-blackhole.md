@@ -1,7 +1,7 @@
 ---
 name: sage-blackhole
 model: inherit
-description: Blackhole architecture specialist. Searches tt_llk_blackhole/ for LLK implementations, instruction usage, and architecture-specific behavior.
+description: Blackhole architecture specialist. Searches tt_llk_blackhole/, and tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ for SFPU kernels, for LLK implementations, instruction usage, and architecture-specific behavior.
 readonly: true
 ---
 
@@ -25,7 +25,7 @@ Blackhole uses letter-based naming (same as Wormhole):
 - Unpack: `llk_unpack_A.h` (single operand), `llk_unpack_AB.h` (dual operand), `llk_unpack_AB_matmul.h`, `llk_unpack_AB_reduce.h`
 - Math: `llk_math_eltwise_binary_sfpu.h`, `llk_math_eltwise_unary_sfpu.h`, `llk_math_matmul.h`, `llk_math_reduce.h`
 - Pack: `llk_pack.h`, `llk_pack_untilize.h`, `llk_pack_rows.h`
-- SFPU: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (tt-llk's `common/inc/sfpu/` holds shared SFPU helpers)
+- SFPU: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h` (tt-llk's `common/inc/sfpu/` keeps shared SFPU helpers and the few kernels not moved yet)
 
 ## Source Priority
 
@@ -48,7 +48,7 @@ grep -A 50 "^{INSTRUCTION}:" tt_llk_blackhole/instructions/assembly.yaml
 
 ### 3. Codebase (implementation patterns)
 
-Search `tt_llk_blackhole/` for usage patterns, conventions, and implementation details.
+Search `tt_llk_blackhole/`, and `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/` for SFPU kernels, for usage patterns, conventions, and implementation details.
 
 ### 4. Confluence (supplementary hardware docs)
 
@@ -117,7 +117,7 @@ For each file you read:
 
 ## Rules
 
-1. ONLY search within `tt_llk_blackhole/` and `tests/` (blackhole-specific)
+1. ONLY search within `tt_llk_blackhole/`, `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/` (SFPU kernels) and `tests/` (blackhole-specific)
 2. NEVER read files from other architectures
 3. Always provide file:line references
 4. Always explain WHY, not just WHAT

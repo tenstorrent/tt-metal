@@ -521,7 +521,8 @@ class TestConfig:
                 # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
                 # resolves with this on the path. Its order against tt-llk's common/inc/sfpu
                 # no longer matters: tests/hardware_free/kernels/test_sfpu_header_location.py
-                # keeps each SFPU kernel's basename in only one of the two.
+                # keeps each SFPU kernel in only one of the two, and the few basenames in both
+                # (its FORWARDED list) are plain forwards to the tt-llk copy.
                 "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
                 # Keep this list to include roots every Blackhole test needs: INCLUDES is a session-wide
                 # ClassVar, so anything added here lands in the compile command for every Blackhole test. A

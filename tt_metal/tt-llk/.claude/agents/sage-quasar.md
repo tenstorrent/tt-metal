@@ -1,6 +1,6 @@
 ---
 name: sage-quasar
-description: Quasar architecture specialist. Searches tt_llk_quasar/ for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details.
+description: Quasar architecture specialist. Searches tt_llk_quasar/, and tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/ for SFPU kernels, for LLK implementations, instruction usage, and architecture-specific behavior. No tt-isa-documentation available — uses Confluence and assembly.yaml for ISA details.
 tools: mcp__atlassian__search, mcp__atlassian__searchConfluenceUsingCql, mcp__atlassian__getConfluencePage, mcp__atlassian__getAccessibleAtlassianResources, mcp__glean_default__search, mcp__glean_default__chat, mcp__glean_default__read_document, Read, Glob, Grep
 ---
 
@@ -94,7 +94,7 @@ If you cannot determine the page's last-modified date from the MCP response, tre
 
 ### 3. Codebase (implementation patterns)
 
-Search `tt_llk_quasar/` for usage patterns, conventions, and implementation details.
+Search `tt_llk_quasar/`, and `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` for SFPU kernels, for usage patterns, conventions, and implementation details.
 
 ### 4. Glean (supplementary internal docs)
 
@@ -170,7 +170,7 @@ For each file you read:
 
 ## Rules
 
-1. ONLY search within `tt_llk_quasar/` and `tests/` (quasar-specific)
+1. ONLY search within `tt_llk_quasar/`, `tt_metal/hw/ckernels/quasar/metal/llk_api/llk_sfpu/` (SFPU kernels) and `tests/` (quasar-specific)
 2. NEVER read files from other architectures
 3. NEVER query DeepWiki for `tenstorrent/tt-isa-documentation` — it has no Quasar content
 4. Always provide file:line references

@@ -35,14 +35,19 @@ ARCHES = ("wormhole_b0", "blackhole", "quasar")
 
 # Not eltwise kernels, so they stay in tt-llk: the helpers that llk_lib, common/inc/ckernel_sfpu.h
 # and the llk_sfpu kernels include (converter, load_config, welfords), and Blackhole's triangle_solve.
-SHARED = frozenset(
+# Quasar keeps none; its converter is in llk_sfpu. test_exceptions_are_current fails on a stale entry.
+_HELPERS = frozenset(
     {
         "ckernel_sfpu_converter.h",
         "ckernel_sfpu_load_config.h",
         "ckernel_sfpu_welfords.h",
-        "ckernel_sfpu_triangle_solve.h",
     }
 )
+SHARED = {
+    "wormhole_b0": _HELPERS,
+    "blackhole": _HELPERS | {"ckernel_sfpu_triangle_solve.h"},
+    "quasar": frozenset(),
+}
 
 # Eltwise kernels that #56276 moves into llk_sfpu on Wormhole and Blackhole. They stay in tt-llk
 # until it lands; test_exceptions_are_current fails once a name here has moved.
@@ -147,16 +152,18 @@ def test_no_header_in_both_trees(arch: str):
     assert not both, (
         f"{arch}: {both} exist in both {_rel(_tt_llk_sfpu(arch))} and "
         f"{_rel(_llk_sfpu(arch))}, so which one a bare include compiles depends on the "
-        "build. Keep only the llk_sfpu one. (A FORWARDED header is exempt only while it holds "
-        'nothing but #pragma once and #include "sfpu/<its own name>".)'
+        "build. Keep only the llk_sfpu one, unless it is a SHARED helper: keep that in tt-llk, "
+        'delete the llk_sfpu copy and include it as "sfpu/<name>". (A FORWARDED header is '
+        'exempt only while it holds nothing but #pragma once and #include "sfpu/<its own name>".)'
     )
 
 
 @pytest.mark.parametrize("arch", ARCHES)
 def test_tt_llk_sfpu_holds_only_shared_headers(arch: str):
-    """tt-llk's sfpu directory keeps the SHARED headers, and no eltwise kernels."""
+    """tt-llk's sfpu directory keeps the SHARED headers and no eltwise kernels, except the
+    AWAITING_MOVE ones until #56276 lands."""
     tt_llk, _ = _trees(arch)
-    extra = sorted(tt_llk - SHARED - _awaiting(arch))
+    extra = sorted(tt_llk - SHARED[arch] - _awaiting(arch))
     assert not extra, (
         f"{arch}: {extra} in {_rel(_tt_llk_sfpu(arch))}. Eltwise SFPU kernels belong in "
         f"{_rel(_llk_sfpu(arch))}. If llk_lib itself needs the header, add it to SHARED "
@@ -166,11 +173,16 @@ def test_tt_llk_sfpu_holds_only_shared_headers(arch: str):
 
 @pytest.mark.parametrize("arch", ARCHES)
 def test_exceptions_are_current(arch: str):
-    """AWAITING_MOVE and FORWARDED name only headers that are still where they say.
+    """SHARED, AWAITING_MOVE and FORWARDED name only headers that are still where they say.
 
     A stale entry would let that name back into tt-llk unnoticed.
     """
     tt_llk, llk_sfpu = _trees(arch)
+    gone = sorted(SHARED[arch] - tt_llk)
+    assert not gone, (
+        f"{arch}: {gone} are no longer in {_rel(_tt_llk_sfpu(arch))}. Remove them from "
+        f'SHARED["{arch}"] in this test.'
+    )
     moved = sorted(_awaiting(arch) - tt_llk)
     assert not moved, (
         f"{arch}: {moved} are no longer in {_rel(_tt_llk_sfpu(arch))}. Remove them "
@@ -185,14 +197,21 @@ def test_exceptions_are_current(arch: str):
 
 @pytest.mark.parametrize("arch", ARCHES)
 def test_llk_sfpu_includes_tt_llk_headers_by_sfpu_path(arch: str):
-    """An llk_sfpu header includes a header that stayed in tt-llk as "sfpu/<name>"."""
+    """An llk_sfpu header includes a header that stayed in tt-llk as "sfpu/<name>".
+
+    Covers ``experimental/llk_sfpu/`` too: the JIT build compiles those, and their bare includes
+    resolve in their own directory or in llk_sfpu, never in tt-llk's sfpu.
+    """
     tt_llk, llk_sfpu = _trees(arch)
+    llk_api = _llk_sfpu(arch).parent
     bare = []
-    for path in sorted(_llk_sfpu(arch).glob("*.h")):
-        for number, text in enumerate(path.read_text().splitlines(), 1):
-            match = _BARE_INCLUDE.match(text)
-            if match and match[1] in tt_llk and match[1] not in llk_sfpu:
-                bare.append(f"{path.name}:{number}: {match[1]}")
+    for directory in (_llk_sfpu(arch), llk_api / "experimental" / "llk_sfpu"):
+        found = llk_sfpu | _headers(directory)
+        for path in sorted(directory.glob("*.h")):
+            for number, text in enumerate(path.read_text().splitlines(), 1):
+                match = _BARE_INCLUDE.match(text)
+                if match and match[1] in tt_llk and match[1] not in found:
+                    bare.append(f"{path.relative_to(llk_api)}:{number}: {match[1]}")
     assert not bare, (
         f"{arch}: llk_sfpu headers include tt-llk sfpu headers by bare name: {bare}. "
         "tt-metal's JIT build does not search tt-llk's common/inc/sfpu, so these fail "
