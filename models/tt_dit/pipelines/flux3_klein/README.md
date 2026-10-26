@@ -24,7 +24,7 @@ latent rows H8 over axis 1 regardless of the DiT layout.
 
 | variant     | Hugging Face repo                             | files the port reads                                     |
 |-------------|-----------------------------------------------|----------------------------------------------------------|
-| `distilled` | `black-forest-labs/flux-3-image-klein`        | `model.safetensors` (DiT), `vae/` (decoder + encoder), `text_encoder/` (Qwen3-VL) |
+| `distilled` | `black-forest-labs/flux-3-image-klein`        | `model.safetensors` (DiT), `vae/` (decoder + encoder), `text_encoder/` (Qwen3-VL); `ae.safetensors` must be present too (`REQUIRED`), though the port does not read it |
 | `base`      | `black-forest-labs/flux-3-image-klein-base`   | the same layout (357 DiT tensors: no `ref_time_in`)      |
 | `pup`       | `black-forest-labs/flux-3-image-klein-pup`    | `model.safetensors`, `config.json`, `tokenizer.json`     |
 
@@ -73,7 +73,9 @@ Flags (`demo_flux3_klein.parse_args`): `prompt` (positional) or `--prompt-file`;
 next to it); `--weights-base`, `--weights-distilled`; `--eager` (no tracing); `--cache F8B0:0.08:w8` (DBCache spec,
 implies eager); `--layout {sp4tp8,sp8tp4,dual}` (default `sp8tp4`; `dual` keeps both resident and picks SP8 x TP4
 from 16384 tokens up); `--repeat N` (the second render replays the captured traces). A structurally invalid request is
-refused on the host before any device work and exits with code 3 (`REFUSED: <reason>`); argument errors exit 2.
+refused by `policy.admit` inside `generate`, on the host, before the request touches the device (the mesh is already
+open and the weights resident); the demo prints `REFUSED: <reason> (budget <check>, measured <dict>)` and exits with
+code 3. Argument errors exit 2.
 
 The upsampler alone, on one chip:
 
@@ -116,7 +118,7 @@ Goldens are produced by an out-of-tree GPU harness (`generate_goldens.py`) that 
 one directory per case under `$FLUX3_KLEIN_GOLDENS/<set>/<case>/`: `record.json` (model, size, seed, token counts,
 noise sha256), `inputs.safetensors` (text tokens and ids, reference tokens and ids, the noise, the schedule),
 `steps.safetensors` (per step `x_t` and `velocity`, `final_tokens`, the decoded image) and `golden.png`; the layout is
-documented in `tests/models/flux3_klein/common.py`. The gates compare: the vendored CPU DiT against the golden's per-step velocities
+documented in `models/tt_dit/tests/models/flux3_klein/common.py`. The gates compare: the vendored CPU DiT against the golden's per-step velocities
 (`test_reference_flux3_klein.py`, PCC floor `FLUX3_KLEIN_GOLDEN_PCC`); the device sampler fed the golden's recorded
 text and reference rows against its per-step velocities and final state (`test_denoise_flux3_klein.py`
 `teacher_forced_floor` / `final_gate`); the device render against `golden.png` (`PSNR_INTERIM`) and against the CPU
@@ -219,7 +221,8 @@ an approximation by construction; it is off unless `Flux3KleinRequest.cache` is 
 Keep these when touching any op in the path. Operands are bf16 with fp32 accumulation everywhere (`layers/linear.py`
 `fp32_dest_acc_en=True`; the block replaces the attention's shared SDPA config with HiFi2, `math_approx_mode=False`,
 `fp32_dest_acc_en=True`). The time-embedding MLP runs fp32 operands at HiFi4; the VAE convolutions and GroupNorms run
-HiFi4 with fp32 accumulation, the exact GroupNorm path reduces fp32 statistics. No bfp8, bfp4 or fp16 anywhere
+HiFi4 with fp32 accumulation (the VAE mid-block attention is HiFi2 with fp32 accumulation, `models/vae/vae.py`), the
+exact GroupNorm path reduces fp32 statistics. No bfp8, bfp4 or fp16 anywhere
 (`FLUX3_KLEIN_DIT_WEIGHTS` is a measurement override, never a default). The one approved approximation is the SFPU
 approximate exp inside the ring SDPA softmax (`transformer_block_flux3_klein.py`, `ring_sdpa_exp_approx = True`).
 Host-side values are the reference's own: bf16 timestep rounding (`scheduler.py`), bf16-valued noise, the
