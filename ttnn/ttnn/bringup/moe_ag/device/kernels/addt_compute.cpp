@@ -9,6 +9,7 @@
 #include "api/compute/common.h"
 #include "core_range.hpp"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 
 void kernel_main() {
@@ -17,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t DST = 4;
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_24);
     for (uint32_t blk = 0; blk < n; ++blk) {
-        add_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+        add_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
         pack_reconfig_data_format(tt::CBIndex::c_24);
         cb_wait_front(tt::CBIndex::c_0, 32);
         cb_wait_front(tt::CBIndex::c_1, 32);

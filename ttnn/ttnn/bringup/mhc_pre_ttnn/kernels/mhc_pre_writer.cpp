@@ -67,7 +67,6 @@
 //   w_pc_wait / w_pc_write            owned rows: post/comb tiles
 // Ablation (perf tournaments only): MHC_ABLATE_YWRITE skips the y DRAM writes (pops unchanged).
 
-using namespace dataflow_kernel_lib;
 using namespace dataflow_kernel_lib_mcast_v1;  // (the vendored multicast helpers)
 
 constexpr uint32_t MCAST_CT_BASE = 22;

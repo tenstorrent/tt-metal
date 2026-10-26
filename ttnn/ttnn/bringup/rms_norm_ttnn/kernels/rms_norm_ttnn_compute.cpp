@@ -551,7 +551,7 @@ ALWI void combine_fold() {
     cb_wait_front(CB_IN, SLOTS);
     reconfig_data_format(CB_IN, CB_IN);
     pack_reconfig_data_format(CB_OUT);
-    add_tiles_init(CB_IN, CB_IN, /*acc_to_dest=*/true);
+    add_init(CB_IN, CB_IN, /*acc_to_dest=*/true);
     if constexpr (FINALIZE) {
         // MANDATORY, not decorative: rms_stat_rsqrt_body reads sfpi::vConstIntPrgm0 /
         // vConstFloatPrgm1..2, which sfpu::rsqrt_init programs -- persistent SFPU PROGRAM

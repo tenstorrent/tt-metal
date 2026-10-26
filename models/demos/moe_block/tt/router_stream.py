@@ -1048,15 +1048,18 @@ class RouterStream:
         col = lo.x == hi.x and hi.y - lo.y + 1 == len(self.cores)
         row = lo.y == hi.y and hi.x - lo.x + 1 == len(self.cores)
         assert col or row, "the router cores must be one column or one row rectangle"
+        from models.demos.moe_block.tt.se_engine3 import next_semaphore_id
+
         rect = ttnn.CoreRangeSet([ttnn.CoreRange(lo, hi)])
-        mc = ttnn.Mcast1D(
+        mc = ttnn.Mcast(
             self.mesh,
+            ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True),
             rect,
-            ttnn.Mcast1DShape.PerColumn if col else ttnn.Mcast1DShape.PerRow,
-            ttnn.Mcast1DRotatingSenderConfig(),
-            ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0),
+            len(self.cores),  # (one group: the column or the row)
+            ttnn.McastRotatingSenderConfig(),
+            ttnn.McastCoreOrder.ColumnMajor if col else ttnn.McastCoreOrder.RowMajor,
         )
-        mc.attach(prog, "rw", [self.ncrisc])
+        mc.attach(prog, "rw", [self.ncrisc], next_semaphore_id(prog))
 
     ra = None  # (the routing exchange + planner riding the router BRISC: routing_stream.RoutingStream)
 

@@ -13,7 +13,7 @@
 
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "dataflow_common.hpp"
 #include "../windowed_loop_geometry.hpp"
 

@@ -93,7 +93,7 @@ def device_map(mesh) -> dict:
         for c in range(cols):
             fid = mesh.get_fabric_node_id(ttnn.MeshCoordinate(r, c))
             out[(int(fid.mesh_id), int(fid.chip_id))] = int(
-                ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(fid.mesh_id), int(fid.chip_id))
+                ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh, int(fid.mesh_id), int(fid.chip_id))
             )
     return out
 

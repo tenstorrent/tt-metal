@@ -549,7 +549,7 @@ def _noc_grid(mesh_device):
 
 def _chip_maps(mesh_device, coord):
     node = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
-    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(int(node.mesh_id), int(node.chip_id)))
+    uid = int(ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh_device, int(node.mesh_id), int(node.chip_id)))
     return _eth_physical_lists(mesh_device).get(uid, (None, False, {}))
 
 

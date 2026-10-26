@@ -15,7 +15,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"  // CircularBuffer: COMPILE_FOR_TRISC-aware CB lifecycle
-#include <tt-metalium/constants.hpp>       // tt::constants::TILE_HEIGHT
+#include "api/tile_constants.h"       // tt::constants::TILE_HEIGHT
 
 // Make in-place packer writes to a held CB visible to the next unpacker read.
 ALWI void pack_to_unpack_sync() {

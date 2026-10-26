@@ -226,6 +226,7 @@ _ADD_COMPUTE = r"""
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 // run_pages tiles per chunk. First n_copy chunks: out(c_16) = c_0 (a ring port's leading block: it starts that block's
 // chain). Then n chunks: out = c_0 + c_1 [+ c_2], or c_0 + c_2 (a final core without a forward upstream).
@@ -242,7 +243,8 @@ void kernel_main() {
     }
     const uint32_t cb_b = has_b ? 1 : 2;
     const bool three = has_b && has_c;
-    binary_op_init_common(0, cb_b, 16);
+    compute_kernel_hw_startup(0, cb_b, 16);
+    add_init(0, cb_b);
     if (n_copy > 0) {
         copy_init(0);
         for (uint32_t i = 0; i < n_copy; ++i) {
@@ -265,7 +267,7 @@ void kernel_main() {
             cb_pop_front(0, R);
         }
     }
-    add_tiles_init(0, cb_b);
+    add_init(0, cb_b);
     for (uint32_t i = 0; i < n; ++i) {
         cb_wait_front(0, R);
         cb_wait_front(cb_b, R);
@@ -277,7 +279,7 @@ void kernel_main() {
             const uint32_t m = R - j0 < DST ? R - j0 : DST;
             tile_regs_acquire();
             if (three) {
-                add_tiles_init(0, cb_b);
+                add_init(0, cb_b);
             }
             for (uint32_t j = 0; j < m; ++j) {
                 add_tiles(0, cb_b, j0 + j, j0 + j, j);

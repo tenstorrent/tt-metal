@@ -1221,6 +1221,11 @@ def _subsets(nf, GX):
     return best
 
 
+def next_semaphore_id(prog):
+    """The first semaphore id past the program's (a multicast family takes its ids from there)."""
+    return max((int(sd.id) for sd in prog.semaphores), default=-1) + 1
+
+
 class SeEngine3:
     """The shared expert a chip, row-chunk-major, weights resident: x [rows, H] (the gathered x) -> y [rows, H] (this
     chip's partial over its I slice). glu "silu" / "situ" / "clamped_silu" (limit 10)."""
@@ -2176,15 +2181,13 @@ class SeEngine3:
             [ttnn.CoreRange(ttnn.CoreCoord(cx0 + c, 0), ttnn.CoreCoord(cx0 + c, GY - 1)) for c in cs]
         )  # noqa: E731
         fams = [
-            ("x0", ttnn.Mcast1DRotatingSenderConfig(sender_grid=cols(self.fam0))),
-            ("x1", ttnn.Mcast1DRotatingSenderConfig(sender_grid=cols(self.fam1))),
-            ("h", ttnn.Mcast1DRotatingSenderConfig()),
+            ("x0", ttnn.McastRotatingSenderConfig(sender_cores=cols(self.fam0))),
+            ("x1", ttnn.McastRotatingSenderConfig(sender_cores=cols(self.fam1))),
+            ("h", ttnn.McastRotatingSenderConfig()),
         ][: 3 if self.down else 2]
-        for name, cfg in fams:
-            mc = ttnn.Mcast1D(
-                self.mesh, rect, ttnn.Mcast1DShape.PerRow, cfg, ttnn.McastConfig(handshake=True, noc=ttnn.NOC.NOC_0)
-            )
-            mc.attach(prog, name, [self.brisc])
+        for name, cfg in fams:  # (one family a row of the engine: the receiver groups are its rows)
+            mc = ttnn.Mcast(self.mesh, ttnn.McastConfig(noc=ttnn.NOC.NOC_0, handshake=True), rect, GX, cfg)
+            mc.attach(prog, name, [self.brisc], next_semaphore_id(prog))
 
     def run_alone(self, x, w):
         y = ttnn.allocate_tensor_on_device(

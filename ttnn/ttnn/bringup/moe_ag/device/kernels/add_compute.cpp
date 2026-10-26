@@ -4,6 +4,7 @@
 //
 // Row add, compute: c_16 = c_0 + c_1, tile by tile (row-major data: element-wise ops are layout agnostic).
 // CT: 0 TILES (per row)   Common RT: 0 rows, 1 rows per core, 2 grid x
+#include "api/compute/compute_kernel_hw_startup.h"
 #include <cstdint>
 #include "api/compute/common.h"
 #include "core_range.hpp"
@@ -14,8 +15,8 @@ void kernel_main() {
     constexpr uint32_t DST = 4;  // fp32 DEST, half sync
     const uint32_t n =
         core_range(get_common_arg_val<uint32_t>(0), get_common_arg_val<uint32_t>(1), get_common_arg_val<uint32_t>(2)).n;
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-    add_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    add_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     for (uint32_t i = 0; i < n; ++i) {
         cb_wait_front(tt::CBIndex::c_0, TILES);
         cb_wait_front(tt::CBIndex::c_1, TILES);
