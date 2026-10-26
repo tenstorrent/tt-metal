@@ -44,13 +44,14 @@ constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
 constexpr auto kMatMulReduceCbIndex = tt::CBIndex::c_6;  // used for matmul reduction
 constexpr auto kAttentionWeightsCbIndex = tt::CBIndex::c_7;
 
-constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
-constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // used for holding max value during reduce
-constexpr auto kExpMaxDiffCbIndex = tt::CBIndex::c_10;   // used for holding exp sum diff during reduce
-constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;   // used for holding exp sum during reduce
-constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;    // used for holding exp sum during reduce
-constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // used for holding previous matmul output
-constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // used for holding current matmul output
+// Online-softmax state, one tile per Q row; prev/cur swap roles every K step.
+constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // running row max, previous step
+constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // running row max, current step
+constexpr auto kExpMaxDiffCbIndex = tt::CBIndex::c_10;   // exp(scale * (prev max - cur max)), the rescale factor
+constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;   // running row sum of P, previous step
+constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;    // running row sum of P, current step
+constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // running P @ V accumulator, previous step
+constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // running P @ V accumulator, current step
 
 constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 constexpr auto kGateCbIndex = tt::CBIndex::c_16;
@@ -431,7 +432,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
         program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, cb_stat_tiles);
 
-    // lets try to use precise data format for holding exp sum/diff values
+    // fp32 for the running sums and the rescale factors; the max stays bf16 like the scores it came from.
     [[maybe_unused]] auto cb_exp_max_diff = create_circular_buffer(
         program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, cb_stat_tiles);
 
