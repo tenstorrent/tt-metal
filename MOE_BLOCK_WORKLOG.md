@@ -1887,3 +1887,32 @@ its fused-head programs at its first call); the shared expert is bf8 / HiFi2 vs 
 - experts_during_dispatch with x read once (the default since e2ea8cc627b) read x before the dispatch landed (PCC
   0.951): with xdual the helpers read x and their x-ready arg slot held an arena address; now the relay's ready word.
   PCC 0.98694. Traced block (owners, fused head) 3105 -> 3181 us with it: off.
+
+### GLM-Flash on the block: stress, routing over prompts, accuracy (2026-10-26)
+
+- Eager stress: 100 back-to-back 56k prefills (real weights, shared expert at HiFi2 then): no hang, 4.965 - 4.975 s
+  each (median 11335 tok/s). Cold first prefill 40 s (was 52 before the shared head program).
+- Run-to-run: the block is not bit-reproducible (the ag path is: top1 picks 100% equal over 11 runs): ~89% of the last
+  chunk's top-1 picks equal run 1's, top1 vs the text 0.665 - 0.722 (1024 rows). MoEOptions.deterministic (the router
+  fin's order) does not change it: the combine's fp32 accumulators sum a token's rows in landing order and 45 layers
+  amplify the last bits.
+- Accuracy (6-run means of top1, first 1024 rows of the last chunk): shared expert bf8 / HiFi2 0.687, bf16 / HiFi2
+  0.683, bf8 / HiFi4 0.719 (ops head), bf16 / HiFi4 0.714 (ops head); fused head bf8 HiFi3 0.708, HiFi4 0.700; ag
+  0.705 - the fidelity, not the weights. GLM now runs its shared expert at HiFi3 (11295 tok/s).
+- Routing over prompts (zz_scratch_routing_prompts, 56k each, profiled - the real-time profiler's runtime ids are 16
+  bits: matched as op id & 0xFFFF in one pass):
+
+| prompt | unique tokens | prefill | tok/s | MoE a chunk (42 layers, busiest chip) | MoE a layer | flat imbalance max |
+|---|---|---|---|---|---|---|
+| book (canonical) | 7293 | 4.99 s | 11280 | 153.4 ms | 3.14 - 4.74 ms | 1.18 |
+| babilong (another book) | 7206 | 4.97 s | 11335 | 151.4 ms | 3.15 - 4.71 ms | 1.08 |
+| code (ttnn python) | 4174 | 4.92 s | 11455 | 146.7 ms | 3.09 - 4.39 ms | 1.10 |
+| numbers | 288 | 4.98 s | 11307 | 152.3 ms | 3.24 - 4.53 ms | 1.08 |
+| one sentence repeated | 11 | 5.09 s | 11066 | 162.4 ms | 3.16 - 5.59 ms | 1.16 |
+| random tokens | 47127 | 5.03 s | 11187 | 157.7 ms | 3.25 - 5.14 ms | 1.14 |
+
+  Real text: the MoE share of a chunk moves +-3% (146.7 - 155.5 ms); degenerate inputs +6%. Per layer it is larger:
+  L39 3.63 (code) - 5.18 ms (repeat), L23 3.54 - 4.89 (random), L30 3.47 - 4.52; most layers within 0.3 ms. The flat op's
+  busiest chip is at most 1.18x the mean chip: EP 8 over 288 experts spreads even skewed routing.
+- Traced stress (spec defaults, shared expert HiFi3): 2000 replays of the 45-layer chain (real weights, chunk 5120 at
+  51200), 904 s, no hang; 452.1 ms a replay (eager 452.7).
