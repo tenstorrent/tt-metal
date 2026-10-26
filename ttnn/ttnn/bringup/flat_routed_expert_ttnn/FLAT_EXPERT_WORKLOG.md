@@ -2133,3 +2133,11 @@ Bit-exact (M 128 and six routings' real rows). us a call, x read twice -> helper
 - Block (2x4 traced, device): K3 g224 chunk 1280 experts + combine 1206 (twice) / 1170 (one snake) / 1164 us, block
   1982 -> 1944; GLM-Flash 1231 (combine-bound). test_closeout_flat 9/9, test_closeout_plans, 20k-call soaks at the four
   Galaxy loads (no hang). Logs: /localdev/mstaletovic/x1/ (xd*, xdv*, val5*, blk5*), routings/ (rt_*_xd).
+
+## FlatRoutedExpert.replanned: one weight set, a plan per chunk (2026-10-26)
+
+A model running several chunk sizes on one layer's weights (GLM-5.3-Flash on the MoE block: chunks 2048 / 5120 /
+8192) needs a plan per capacity m, and 42 layers cannot hold a second weight copy (~510 MB a chip each at bfp4).
+replanned(m, layout) returns a copy with its own plan sharing w_gu / w_d / gidx / done; it asserts the two plans pack
+the weights the same way (_weight_packing: the weight cache's key, now one function) and use the same down
+coordinators (the done words). GLM's flat cache key is the same for the ag layout and the block's (985f637a8d15).

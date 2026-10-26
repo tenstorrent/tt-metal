@@ -1209,7 +1209,11 @@ FlatRoutedExpertProgramFactory::cached_program_t FlatRoutedExpertProgramFactory:
                     .lits(sgx(k));
                 if (indexed) {
                     xr.a(AddrSrc::TokenIndex);
-                    xr.a(AddrSrc::Arena, p.ti_off);
+                    if (lo.x_ready > 0) {  // (the helpers read x too: they wait for the dispatch's count as well)
+                        xr.a(AddrSrc::Words, X_READY_OFF);
+                    } else {
+                        xr.a(AddrSrc::Arena, p.ti_off);
+                    }
                 }
             }
             add_rt((xhelp_noc0 || xhelp_all) && idx >= NR ? kxr_h : kxr, rl, xr);

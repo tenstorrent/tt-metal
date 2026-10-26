@@ -22,7 +22,9 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_p
 from models.demos.moe_block.moe_block import (
     GLM_53_FLASH,
     KIMI_K3,
+    Geometry,
     MoEBlock,
+    MoELayer,
     MoEModel,
     MoEOptions,
     MoEWeights,
@@ -502,6 +504,65 @@ def replay_device_times(mesh_device, tid, model, batches=(10, 40, 100)):
             f"{statistics.median(sums) if sums else 0:.0f} us, span {statistics.median(spans) if spans else 0:.0f} us "
             f"(median, max {max(spans) if spans else 0:.0f}); replay wall {wall:.0f} us"
         )
+
+
+_LAYER_PARAMS = [
+    pytest.param(
+        (R, C),
+        _fab(fabric_payload_size=fabric_payload(GLM_53_FLASH.routed_width), l1_small_size=0),
+        "glm53_flash",
+        chunk,
+        id=f"glm53_flash-{chunk}",
+    )
+    for chunk in (1280, 5120)
+]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, chunk", _LAYER_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.timeout(3600)
+def test_moe_block_layers(mesh_device, device_params, model, chunk):
+    """Two layers (their own random weights) on one block, called in turn: each output checked against its own layer's
+    reference and not the other's - the block's layer switch (MoEBlock.forward(x, layer=...): the fused head's weights
+    patched into the same programs, the ops head's swapped)."""
+    import os
+
+    m = MODELS[model]
+    T, H = chunk, m.emb_dim
+    opts = MoEOptions(head=os.environ.get("MOE_HEAD", "auto"), residual=os.environ.get("MOE_RESIDUAL", "sp_tp"))
+    g = Geometry.of(mesh_device, m, chunk, 2, zigzag=False)
+    ws = [random_weights(m, seed=s) for s in (0, 1)]
+    layers = [MoELayer.build(mesh_device, g, m, w) for w in ws]
+    block = MoEBlock(mesh_device, m, chunk, layers[0], WeightCache(path=None, layer=0), options=opts)
+    logger.info(f"MoEBlock {model} layers: {block.summary}")
+    if opts.residual == "owners":
+        mapper, composer = ttnn.ShardTensorToMesh(mesh_device, dim=2), ttnn.ConcatMeshToTensor(mesh_device, dim=2)
+    else:
+        mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=(R, C), dims=(2, 3))
+    xs = [torch.randn(T, H, generator=torch.Generator().manual_seed(3000 + k)).to(torch.bfloat16) for k in range(3)]
+    xts = [
+        ttnn.from_torch(
+            x_.view(1, 1, T, H), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+        )
+        for x_ in xs
+    ]
+    for call in range(8):
+        li, k = call % 2, call % 3
+        block.keep_taps = True
+        out = block(xts[k], layer=layers[li])
+        ttnn.synchronize_device(mesh_device)
+        y = ttnn.to_torch(out, mesh_composer=composer).reshape(T, H).float()
+        ttnn.deallocate(out)
+        ids_d, wts_d = device_routing(block.taps()["rows"], g.tokens_per_chip, m.top_k)
+        p_own = pcc(y, reference(xs[k], ws[li], m, ids=ids_d, wts=wts_d)[0])
+        p_other = pcc(y, reference(xs[k], ws[1 - li], m, ids=ids_d, wts=wts_d)[0])
+        logger.info(
+            f"MoEBlock {model} call {call} (layer {li}, x {k}): PCC own layer {p_own:.5f}, other layer {p_other:.5f}"
+        )
+        assert p_own > 0.98, f"call {call}: layer {li}'s output off (PCC {p_own:.5f})"
+        assert p_other < 0.9, f"call {call}: the output matches the other layer's weights (PCC {p_other:.5f})"
 
 
 _SE_PARAMS = [

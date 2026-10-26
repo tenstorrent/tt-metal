@@ -558,14 +558,10 @@ class HeadSE3:
         self.rw = self.router.upload(w_router, bias)
 
     def use_layer(self, key, rw):
-        """Run with this layer's weights: its router weights and its own programs (their args hold its weights'
-        addresses - the prepared dispatch patches only per-call tensors), kept per layer. The first layer adopts the
-        programs built so far."""
-        if getattr(self, "_layer", None) is None:
-            self.states, self._layer = {key: self.state}, key
-        elif key != self._layer:
-            self.state = self.states.setdefault(key, dict(key=None, arena=None))
-            self._layer = key
+        """Run with this layer's weights (several layers on one head): its router weights; the shared expert's are
+        run()'s w. The kernels take every weight tensor at its base address (offsets are args of their own), so the
+        programs stay and the prepared dispatch patches the weights' slots - no rebuild a layer."""
+        self.layers = True
         self.rw = rw
 
     def _rebind(self):
@@ -696,11 +692,23 @@ class HeadSE3:
         # patches only the runtime args holding an io tensor's address (x: the block input, at a new address per
         # call - its args are its base address) and the CBs on the arena. Rebuilt when the arena's base or any other
         # io tensor's address moves (their args may point inside them, which exact-address patching cannot follow)
-        skey = (self.eng.base, len(io)) + tuple(int(t.buffer_address()) for t in io[1:])
+        # (several layers on the head - use_layer: the weights' slots are patched like x's, their addresses out of the
+        # keys - the shared expert's w, the router's tensors)
+        layers = getattr(self, "layers", False)
+        nr = 4 + len(self.outputs)
+        wpos = {1} | (set(range(nr, nr + len(self.rw))) if self.router is not None else set())
+        skey = (self.eng.base, len(io)) + tuple(
+            0 if layers and i in wpos else int(t.buffer_address()) for i, t in enumerate(io) if i
+        )
         if self.state.get("pp") is not None and self.state.get("skey") == skey:
             ttnn.bringup.run_prepared(self.state["pp"], io)
             return y
-        key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), self.eng.base)
+        key = (
+            int(x.buffer_address()),
+            int(y.buffer_address()),
+            0 if layers else int(w.buffer_address()),
+            self.eng.base,
+        )
         key += tuple(int(t.buffer_address()) for t in self.outputs.values())
         if self.state["key"] == key and self.state["arena"] is not self.eng.arena:
             self._rebind()  # (the arena taken again at its address: only the CBs bound to it change)

@@ -1841,3 +1841,49 @@ tail, combine + its fit check), ~110 us the fused flat + combine op, the rest th
   Outputs: bit-exact against the start-of-day path on GLM-Flash; on K3 one input alternates run to run between the
   reference and one row (365) off by 0.0156 in 6 values - two outcomes only (accumulation order of one token's
   contributions), PCC unchanged (0.99624 / 0.99616 / 0.99611).
+
+## GLM-5.3-Flash on the block, whole model (2026-10-26, bh-lb-19 2x4, chunk 5120, real weights)
+
+The model's MoE layers ran on the all-gather path (GLM_EXPERTS_MODE=ag): none of the block / prepared-dispatch work
+reached it. Now GLM_EXPERTS_MODE=block (tt/experts_block.py): router, shared expert and routed experts in one block call.
+- Residual: GLM's split layout is the block's owners' rows already ([S/8, H] a chip, row-major chip order), so the block
+  takes it as is (MoEOptions.residual "owners") instead of the model moving to [S/SP, H/TP]: the ops head gathers rows
+  over TP (not width); the fused head (reads the width split) takes x through a TP all-to-all; the tail is the shared
+  expert's add (its RS output is the owners' rows) - no tail all-to-all.
+- One block for the 42 MoE layers (42 blocks do not fit L1): MoELayer holds a layer's routed experts (FlatRoutedExpert
+  from GLM's flat weight cache - the block's layout keeps its key) and a host source for the router / shared expert;
+  the fused head lays out each layer's weights at its first call and keeps a prepared program per layer. Other chunks:
+  FlatRoutedExpert.replanned (same weights, a plan per capacity; asserted same packing / coordinators).
+- Fused head at 2560 rows a mesh row (4x a Galaxy chip): HeadSE3 asserted the legacy layout list (no "router cores on
+  the free rows" layout) before using the planner's; the logits ports' words were fixed at 16 (an end chip of the
+  TP line sends 3 owners x 10 router cores). Planned engine 11x8, MT 2, 5 chunks, predicted 899 us.
+- Clamped SiLU (limit 10) in the SE engine (SE_GLU 3, the flat op's calculate_clamped_silu_glu); GLM_53_FLASH now
+  clamped (the checkpoint's swiglu_limit) - it was plain SiLU.
+- Hang on the first in-model run: the spec's fabric payload is 8192 B, the combine's packet needs 2 Hr + 32 = 8224.
+  Now asserted at build; runs use BRINGUP_FABRIC_PAYLOAD=8256 (ag unchanged at 8256: 9986 tok/s).
+- The bring-up profiler did not see ttnn.bringup.run_prepared launches (the exchange's zero / prep / sparse dispatch:
+  ~0.5 ms a layer were missing from "device" times); now counted.
+
+| GLM-Flash 2x4, 5120 | ag | block, ops head | block, fused head |
+|---|---|---|---|
+| MoE a kda_moe layer (router + experts + SE), device | 4.73 ms | ~4.04 ms | ~3.15 ms |
+| block alone, traced replay (test_moe_block owners) | - | 3974 us | 3104 us |
+| 45-layer chain, traced (last chunk, at 51200) | 507.5 ms | 488.7 ms | 449.7 ms |
+| warm 56k prefill (test_perf) | 5.64 s, 9986 tok/s | 5.52 s, 10199 tok/s | 4.99 s, 11287 tok/s |
+| last-chunk top1 / top5 | 0.7107 / 0.9051 | 0.6997 / 0.8978 | 0.7064 / 0.9013 |
+
+Ops-head breakdown in the model (us, 2560 rows a mesh row): x row gather 345, router chain ~205 (partition 29, logits 61,
+RS 69, top-k 38), SE 403 (gate / up 2 x 111: the clamped activation is not fused into one matmul), SE RS 348, routing
+gather 48, planner 73, prep 32, sparse dispatch 459, flat + combine 2071, tilize + add 63. Per MoE layer ~78 MB a chip
+crosses the 200G links (gather 15, RS 15, dispatch ~24, combine ~24): on the LoudBox the head's collectives are the
+lever - the fused head overlaps them (user: keep the shared expert / router TP-split, no replication).
+Open: experts_during_dispatch at 5120 / owners gives PCC 0.951 (wrong output); cold prefill 52 s (each layer builds
+its fused-head programs at its first call); the shared expert is bf8 / HiFi2 vs GLM's own bf16 / HiFi4 (top1 -0.4%).
+- Follow-ups (same day): the fused head keeps one prepared program for every layer - its kernels take each weight tensor
+  (SE w, the router's W / bias / index tiles) at its base address, so a layer switch is the prepared dispatch patching
+  those slots (weights out of the rebuild keys) instead of a descriptor build a layer at its first call.
+  test_moe_block_layers: two layers of their own random weights alternating on one block (owners and sp_tp, chunk
+  5120): every call PCC 0.9869 against its layer's reference, ~0.000 against the other's.
+- experts_during_dispatch with x read once (the default since e2ea8cc627b) read x before the dispatch landed (PCC
+  0.951): with xdual the helpers read x and their x-ready arg slot held an arena address; now the relay's ready word.
+  PCC 0.98694. Traced block (owners, fused head) 3105 -> 3181 us with it: off.
