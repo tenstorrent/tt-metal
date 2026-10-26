@@ -237,16 +237,19 @@ def _golden_function_mesh_partition(
 
 def _mesh_partition_keeps_input_label(mesh_shape, shard_dims, dim, cluster_axis):
     """The cases in which mesh_partition's output-topology hook declines and the result keeps the input's label
-    (see the rule table in mesh_partition_device_operation.hpp), as far as a label's placements show them: a
-    whole-mesh partition of a tensor sharded on another dim along a non-trivial axis (rule 2); a cluster-axis
-    partition of a dim another non-trivial axis already shards unless that axis is outer and every further axis is
-    trivial (rule 1(iii) vs 1(ii)); a cluster axis the label has no placement for (a collapsed label on a multi-axis
-    mesh, rules 3-5, which this golden's mesh model cannot represent)."""
+    (the CCL topology helper's partition rules, ccl_topology_utils.hpp), as far as a label's placements show them: a
+    whole-mesh partition of a tensor sharded on another dim along a non-trivial axis; a cluster-axis
+    partition along an axis that itself shards another dim (each device would keep its chunk of that dim next to its
+    new piece of `dim`); a cluster-axis partition of a dim another non-trivial axis already shards unless that axis
+    is outer and every further axis is trivial; a cluster axis the label has no placement for (a collapsed label on
+    a multi-axis mesh, which this golden's mesh model cannot represent)."""
     if cluster_axis is None:
         return any(
             size > 1 and shard_dim is not None and shard_dim != dim for size, shard_dim in zip(mesh_shape, shard_dims)
         )
     if cluster_axis >= len(shard_dims):
+        return True
+    if shard_dims[cluster_axis] is not None and shard_dims[cluster_axis] != dim:
         return True
     partitioned_composes = shard_dims[cluster_axis] is None or shard_dims[cluster_axis] == dim
     for axis, (size, shard_dim) in enumerate(zip(mesh_shape, shard_dims)):

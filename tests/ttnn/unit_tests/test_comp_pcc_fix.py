@@ -14,7 +14,7 @@ import math
 import pytest
 import torch
 
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc
 
 
 class TestCompPccConstantTensor:

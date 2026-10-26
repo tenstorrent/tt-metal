@@ -28,7 +28,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR              = params.LOOP_FACTOR;
     const std::uint32_t INPUT_NUM_BLOCKS         = params.INPUT_NUM_BLOCKS;
     const std::uint32_t INPUT_NUM_TILES_IN_BLOCK = params.INPUT_NUM_TILES_IN_BLOCK;
     const int num_faces_r_dim_A                  = params.num_faces_r_dim_A;
@@ -163,8 +163,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR    = params.LOOP_FACTOR;
-    const std::uint32_t num_faces      = params.num_faces;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
+    const std::uint32_t num_faces                 = params.num_faces;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const std::uint32_t INPUT_NUM_BLOCKS          = params.INPUT_NUM_BLOCKS;
 #endif
@@ -195,7 +195,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
         }
 
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+        _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
 
         if constexpr (unpack_to_dest)
         {
@@ -203,7 +203,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
-            _configure_default_alu_data_format_state_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format);
+            _configure_default_alu_data_format_state_<false, is_fp32_dest_acc_en>(math_format, math_format);
         }
         _llk_math_eltwise_unary_broadcast_init_<BROADCAST_TYPE, is_fp32_dest_acc_en, unpack_to_dest>(tensor_shape);
 
@@ -285,7 +285,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
 #ifndef SPEED_OF_LIGHT
-    const std::uint32_t LOOP_FACTOR           = params.LOOP_FACTOR;
+    const std::uint32_t LOOP_FACTOR               = params.LOOP_FACTOR;
     const std::uint32_t OUTPUT_NUM_BLOCKS         = params.OUTPUT_NUM_BLOCKS;
     const std::uint32_t OUTPUT_NUM_TILES_IN_BLOCK = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_Res                     = params.buffer_Res;

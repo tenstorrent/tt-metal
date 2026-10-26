@@ -5,7 +5,7 @@
 import torch
 import pytest
 import ttnn
-from models.common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import (
     assert_equal,
     assert_with_ulp,
@@ -13,6 +13,7 @@ from tests.ttnn.utils_for_testing import (
     flush_subnormal_values_to_zero,
 )
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    bf16_binade_samples,
     generate_float32_bits,
     generate_float32_bits_in_range,
     flush_to_zero,
@@ -148,14 +149,12 @@ def test_spl_value_check_ops(device, ttnn_op):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Logical NOT (-0.0) returns False while golden returns True
+# Logical NOT
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def test_logical_not_ops(device):
     input_tensor = generate_float32_bits(include_spl_values=True)
-    # Replace -0.0 with 0.0
-    input_tensor = torch.where(input_tensor == -0.0, torch.zeros_like(input_tensor), input_tensor)
     ttnn_op = ttnn.logical_not
     tt_in = to_float32_tt_tensor(input_tensor, device)
 
@@ -863,17 +862,13 @@ def test_expm1_saturation(device):
     |------------------------------------------------|----------|---------|
     | [-MAX_BF16, -87]: first, middle and last       | -1       | ULP ≤ 1 |
     | bfloat16 mantissa of every binade, plus -87    |          |         |
-    | [88.5, MAX_BF16]: same sampling, plus 89 (the  | +inf     | exact   |
+    | [89, MAX_BF16]: same sampling, plus 89 (the    | +inf     | exact   |
     | first bfloat16 above log(FLT_MAX))             |          |         |
 
     Every input here saturates, so a few values per binade (power-of-two
     interval) are enough to catch a magnitude where range reduction breaks.
     """
-    exponent_fields = torch.arange(127 + 6, 255, dtype=torch.int32)
-    mantissas = torch.tensor([0x00, 0x40, 0x7F], dtype=torch.int32)
-    bits = ((exponent_fields[:, None] << 7) | mantissas).flatten().to(torch.int16)
-    magnitudes = torch.cat([bits.view(torch.bfloat16).float(), torch.tensor([87.0, 89.0, MAX_BF16])]).unique()
-    input_tensor = torch.cat([-magnitudes[magnitudes >= 87.0], magnitudes[magnitudes >= 88.5]])
+    input_tensor = torch.cat([-bf16_binade_samples(87.0), bf16_binade_samples(89.0)])
 
     tt_in = to_float32_tt_tensor(input_tensor, device)
 

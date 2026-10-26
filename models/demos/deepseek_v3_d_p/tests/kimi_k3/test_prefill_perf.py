@@ -122,6 +122,8 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         # match. A single-chunk run passes neither.
         is_chunked=num_chunks > 1,
         weight_cache_path=cache,
+        # Dense KV dedup needs the chunked path.
+        tp_shard_kv=num_chunks > 1,
     )
 
     kvpe = None
@@ -134,6 +136,7 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
             sp_axis=SP_AXIS,
             num_layers=model.schedule.num_mla_layers,
             num_users=1,
+            tp_axis=TP_AXIS if num_chunks > 1 else None,
         )
     chunks = [
         prepare_prefill_input_tensor(

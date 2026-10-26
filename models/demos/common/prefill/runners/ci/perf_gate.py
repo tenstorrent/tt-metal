@@ -17,14 +17,13 @@ METRICS = {
 def power_class():
     from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
 
-    if is_high_power():
-        return "14kw"
+    cls = "14kw" if is_high_power() else "8kw"
     try:
         tdp = get_tdp_limit_max()
     except Exception as e:
         tdp = f"unreadable ({type(e).__name__})"
-    print(f"perf baseline: TDP_LIMIT_MAX={tdp} is below 130 W; using 8kw", file=sys.stderr)
-    return "8kw"
+    print(f"perf baseline: TDP_LIMIT_MAX={tdp} -> {cls} (14kw needs >= 130 W)", file=sys.stderr)
+    return cls
 
 
 def lookup(table, model, config, cls):
@@ -39,7 +38,7 @@ def lookup(table, model, config, cls):
     return entry["probe"], {metric: (value, table["margin"][metric]) for metric, value in entry[cls].items()}
 
 
-def check(rec, path, label, metric, expected, margin, fast_fails):
+def check(rec, path, label, metric, expected, margin):
     name, unit, fmt, higher_is_better = METRICS[metric]
     value = (rec.get(metric) or {}).get(label)
     if not isinstance(value, (int, float)) or not math.isfinite(value):
@@ -50,26 +49,19 @@ def check(rec, path, label, metric, expected, margin, fast_fails):
         f"{name} GATE {label}: {value:{fmt}} {unit} vs {expected:{fmt}} +/- {margin * 100:.0f}% "
         f"[{lo:{fmt}}, {hi:{fmt}}]"
     )
-    slow = value < lo if higher_is_better else value > hi
-    fast = value > hi if higher_is_better else value < lo
-    if fast_fails:
-        if slow or fast:
-            print(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]", file=sys.stderr)
-            return False
-    elif slow:
-        side, bound = ("below", lo) if higher_is_better else ("above", hi)
-        print(f"{name} GATE FAIL: {value:{fmt}} {side} {bound:{fmt}}", file=sys.stderr)
+    if value < lo or value > hi:
+        faster = (value > hi) == higher_is_better
+        hint = "; faster than the baseline, update the configured baseline in this change" if faster else ""
+        print(f"{name} GATE FAIL: {value:{fmt}} outside [{lo:{fmt}}, {hi:{fmt}}]{hint}", file=sys.stderr)
         return False
-    elif fast:
-        side, bound = ("above", hi) if higher_is_better else ("below", lo)
-        print(f"{name} GATE WARN: {value:{fmt}} {side} {bound:{fmt}}; update the baseline if this holds")
     print(f"{name} GATE PASS")
     return True
 
 
 def main():
     parser = argparse.ArgumentParser(description="Gate a prefill run's perf JSON against its baseline.")
-    parser.add_argument("perf_json")
+    parser.add_argument("perf_json", nargs="?")
+    parser.add_argument("--print-power", action="store_true", help="print this host's power class and exit")
     parser.add_argument("--table", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--config", default="")
@@ -80,10 +72,13 @@ def main():
     )
     parser.add_argument("--require", default="0", help="1 fails the run if nothing was measured")
     args = parser.parse_args()
+    if args.print_power:
+        print(power_class())
+        return 0
 
-    probe, baseline, fast_fails = None, None, False
+    probe, baseline = None, None
     if args.expected_tps:
-        baseline, fast_fails = {"throughput_tok_s": (float(args.expected_tps), float(args.margin or 0.15))}, True
+        baseline = {"throughput_tok_s": (float(args.expected_tps), float(args.margin or 0.15))}
     elif args.table and os.path.isfile(args.table):
         with open(args.table) as f:
             found = lookup(json.load(f), args.model, args.config, args.power)
@@ -118,8 +113,7 @@ def main():
         return 1
 
     results = [
-        check(rec, args.perf_json, label, metric, expected, margin, fast_fails)
-        for metric, (expected, margin) in baseline.items()
+        check(rec, args.perf_json, label, metric, expected, margin) for metric, (expected, margin) in baseline.items()
     ]
     return 0 if all(results) else 1
 

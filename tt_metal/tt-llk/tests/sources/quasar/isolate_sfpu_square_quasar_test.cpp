@@ -60,7 +60,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         L1_ADDRESS(buffer_Res[0]),
         static_cast<DataFormat>(formats.pack_S_src),
         static_cast<DataFormat>(formats.pack_S_dst),
-        IMPLIED_MATH_FORMAT);
+        false /*implied_math_format*/);
 
     const DataFormat srcs_format = static_cast<DataFormat>(formats.unpack_S_dst);
     LLK_ASSERT(srcs_format == static_cast<DataFormat>(formats.pack_S_src), "SrcS square requires matching unpack destination and pack source formats");

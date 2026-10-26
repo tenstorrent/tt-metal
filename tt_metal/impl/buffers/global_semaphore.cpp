@@ -10,6 +10,7 @@
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt_metal.hpp>
 #include <cstdint>
 #include <memory>
@@ -17,6 +18,7 @@
 #include <vector>
 
 #include "global_semaphore_impl.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
@@ -109,6 +111,12 @@ GlobalSemaphore CreateGlobalSemaphore(
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
     uint64_t address) {
+    // Validate every destination in its selected SRAM region before any constructor can write.
+    for (auto* local_device : device.get_devices()) {
+        const auto& allocator = local_device->allocator_impl();
+        const auto footprint = tt::align(sizeof(uint32_t), allocator->get_alignment(BufferType::L1));
+        allocator->validate_l1_range(address, footprint, buffer_type);
+    }
     return GlobalSemaphore{GlobalSemaphoreImpl{device, cores, initial_value, buffer_type, address}};
 }
 }  // namespace experimental

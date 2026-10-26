@@ -13,7 +13,6 @@ from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
     DestSync,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -33,7 +32,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -262,7 +260,6 @@ def _rand_config(
             "templates": [
                 MATH_OP(mathop=MathOperation.Rand),
                 APPROX_MODE(ApproximationMode.No),
-                IMPLIED_MATH_FORMAT(ImpliedMathFormat.No),
                 DATA_COPY_TYPE(DataCopyType.A2D),
                 UNPACKER_ENGINE_SEL(
                     UnpackerEngine.UnpDest

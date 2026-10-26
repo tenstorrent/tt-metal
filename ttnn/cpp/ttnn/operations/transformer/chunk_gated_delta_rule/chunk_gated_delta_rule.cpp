@@ -47,17 +47,6 @@ ttnn::Tensor head_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint
     return t;
 }
 
-// [B,T,Hn] -> [B*Hn, T], TILE fp32 (permute on TILE, no untilize).
-ttnn::Tensor headvec_split_tile(const ttnn::Tensor& x, uint32_t B, uint32_t T, uint32_t Hn) {
-    ttnn::Tensor t = x;
-    if (t.dtype() != DataType::FLOAT32) {
-        t = ttnn::typecast(t, DataType::FLOAT32);
-    }
-    t = ttnn::permute(t, ttsl::SmallVector<int64_t>{0, 2, 1});  // [B, Hn, T] TILE
-    t = ttnn::reshape(t, ttnn::Shape({B * Hn, T}));             // [BH, T] TILE
-    return t;
-}
-
 // Pad TILE [BH, T, D] to [BH, L, D] along the time dim with zeros.
 ttnn::Tensor pad_time_tile(const ttnn::Tensor& x, uint32_t BH, uint32_t D, uint32_t pad, MeshDevice* dev) {
     if (pad == 0) {
@@ -147,7 +136,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    std::optional<uint32_t> num_key_heads) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
     ttnn::prim::validate_gdn_chunk_size(chunk_size);
 
@@ -158,16 +148,43 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const uint32_t T = qs[1];
     // Flat q/k/v: rank-3 inputs are FLAT token-major tensors — the model adapter (fused_chunk.py) skips
     // the head-split relayout. Head counts can't be read off a flat width, so: HV comes from beta [B,T,HV];
-    // for the flat q/k path we assume per-head K==V (true for GDN: linear_key_head_dim==value_head_dim),
-    // so K=V and H = q_flat_width / K. The prep reader tile-addresses q/k/v out of the flat grids.
+    // for the flat q/k path K==V is assumed (true for GDN: linear_key_head_dim==value_head_dim) unless the
+    // caller passes num_key_heads, in which case H = num_key_heads and K = q_flat_width / H (K != V works).
+    // Without num_key_heads, K=V and H = q_flat_width / K. The prep reader tile-addresses q/k/v out of the
+    // flat grids.
     const bool flat_v = (vs.rank() == 3);
     const bool flat_qk = (qs.rank() == 3);
     const uint32_t HV = flat_v ? beta_in.logical_shape()[2] : vs[2];
     const uint32_t V = flat_v ? (vs[2] / HV) : vs[3];
-    const uint32_t K = flat_qk ? V : qs[3];
-    const uint32_t H = flat_qk ? (qs[2] / K) : qs[2];
+    uint32_t K = 0;
+    uint32_t H = 0;
     if (flat_qk) {
-        TT_FATAL(qs[2] == H * K, "flat q width {} != H*K ({}*{}); flat q/k path assumes K==V", qs[2], H, K);
+        if (num_key_heads.has_value()) {
+            H = *num_key_heads;
+            TT_FATAL(
+                H > 0 && qs[2] % H == 0,
+                "flat q width ({}) must be divisible by num_key_heads ({}) (and num_key_heads > 0)",
+                qs[2],
+                H);
+            K = qs[2] / H;
+        } else {
+            K = V;
+            H = qs[2] / K;
+        }
+        TT_FATAL(
+            qs[2] == H * K,
+            "flat q width {} != H*K ({}*{}); without num_key_heads the flat q/k path assumes K==V",
+            qs[2],
+            H,
+            K);
+    } else {
+        K = qs[3];
+        H = qs[2];
+        TT_FATAL(
+            !num_key_heads.has_value() || *num_key_heads == qs[2],
+            "num_key_heads ({}) must equal q's head count ({}) for rank-4 q/k",
+            num_key_heads.value_or(0),
+            qs[2]);
     }
     TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
     const uint32_t G = HV / H;
@@ -191,8 +208,24 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // Otherwise head-split to [BH,T,V] as usual.
     ttnn::Tensor v = flat_v ? (v_in.dtype() != DataType::BFLOAT16 ? ttnn::typecast(v_in, DataType::BFLOAT16) : v_in)
                             : head_split_tile(v_in, B, T, HV, V);
-    ttnn::Tensor g = headvec_split_tile(g_in, B, T, HV);        // [B*HV, T] TILE
-    ttnn::Tensor beta = headvec_split_tile(beta_in, B, T, HV);  // [B*HV, T] TILE
+    // g, beta stay [B, T, HV] as they arrive: the readers address them token-major, in fp32 or bf16 (any other
+    // dtype widens to fp32 here), and zero the rows past T themselves.
+    auto as_gate = [&](const ttnn::Tensor& t, const char* name) {
+        const auto& s = t.logical_shape();
+        TT_FATAL(
+            s.rank() == 3 && s[0] == B && s[1] == T && s[2] == HV,
+            "chunk_gated_delta_rule: {} must be [B, T, HV] = [{}, {}, {}], got {}",
+            name,
+            B,
+            T,
+            HV,
+            s);
+        return (t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16)
+                   ? t
+                   : ttnn::typecast(t, DataType::FLOAT32);
+    };
+    ttnn::Tensor g_c = as_gate(g_in, "g");
+    ttnn::Tensor beta_c = as_gate(beta_in, "beta");
 
     // GQA expand q,k from H heads to HV heads (repeat_interleave along head-major dim 0).
     // OPT-A: for flat q/k the reader maps value-head hv -> key-head hk=hv/G at read time, so no expand.
@@ -210,21 +243,14 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
         q = ttnn::multiply(q, scale);
     }
 
-    // Pad time to a multiple of C (q/k/v are TILE; g/beta are RM). Flat tensors require pad==0
-    // (asserted below), so no padding for the flat q/k/v.
+    // Pad time to a multiple of C (q/k/v are TILE). Flat tensors require pad==0 (asserted below), so no padding
+    // for the flat q/k/v.
     if (!flat_qk) {
         q = pad_time_tile(q, BH, K, pad, dev);
         k = pad_time_tile(k, BH, K, pad, dev);
     }
     if (!flat_v) {
         v = pad_time_tile(v, BH, V, pad, dev);
-    }
-    // g, beta are [BH, T] TILE; pad along dim 1.
-    if (pad > 0) {
-        ttnn::Tensor zc = ttnn::zeros(
-            ttnn::Shape({BH, pad}), DataType::FLOAT32, Layout::TILE, std::ref(*dev), ttnn::DRAM_MEMORY_CONFIG);
-        g = ttnn::concat(std::vector<ttnn::Tensor>{g, zc}, 1);
-        beta = ttnn::concat(std::vector<ttnn::Tensor>{beta, zc}, 1);
     }
 
     // q/k/v already TILE -> just reshape to per-chunk [BH, NC, C, D].
@@ -235,9 +261,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     ttnn::Tensor q_c = flat_qk ? q : to_chunks_tile(q, K);
     ttnn::Tensor k_c = flat_qk ? k : to_chunks_tile(k, K);
     ttnn::Tensor v_c = flat_v ? v : to_chunks_tile(v, V);
-    // g, beta -> [BH, NC, C, 1] TILE (already TILE; reshape only).
-    ttnn::Tensor g_c = ttnn::reshape(g, ttnn::Shape({BH, NC, C, 1}));
-    ttnn::Tensor beta_c = ttnn::reshape(beta, ttnn::Shape({BH, NC, C, 1}));
 
     // Constant tiles eye_C, tril_C, ones_C [1,1,C,C], masks [1,1,32,96]. Caller-supplied (built once
     // on the model/layer and passed in) so they're device-resident before trace capture and their
@@ -284,16 +307,19 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // Fused and mono are the two program factories of one device op (chunk_gdn_device_operation.hpp);
     // phased is the two prims of chunk_gdn_phased.hpp. The program config names the path, as a matmul
     // program config names its factory; without one the op chooses by the fused path's calibrated
-    // geometry cost model: fused iff a row-local geometry fits this grid AND its predicted time beats
-    // the phased reference (fused_pays). On QB2's 11x10 grid that is every BH <= 48 (BH=64 needs 128
-    // cores -> phased); the fused path is bit-exact vs phased and measured 1.2-1.9x faster at
-    // BH = 4..32. Every config field is hashed inside the device op's attributes (the factory choice
-    // included), so each path has its own program-cache entries.
+    // geometry cost model: fused iff a geometry (NP producers per head, or one producer pool) fits this
+    // grid AND its predicted time beats the phased reference (fused_pays). On QB2's 11x10 grid that is
+    // every BH <= 48 (BH=64 needs 128 cores -> phased); the fused path is bit-exact vs phased and
+    // measured 1.2-2.0x faster at BH = 4..48. Every config field is hashed inside the device op's
+    // attributes (the factory choice included), so each path has its own program-cache entries.
     const ChunkGdnProgramConfig cfg = program_config.has_value() ? *program_config : [&]() -> ChunkGdnProgramConfig {
         const auto grid = dev->compute_with_storage_grid_size();
         const auto choice = ttnn::prim::choose_fused_geometry(grid.x, grid.y, BH, NC, V / tt::constants::TILE_WIDTH);
         if (choice.nv >= 1 && choice.fused_pays) {
-            return ChunkGdnFusedProgramConfig{};  // geometry left free: the prim re-derives this same pick
+            // Geometry left free: the prim re-derives this same pick among the candidates of its kind.
+            ChunkGdnFusedProgramConfig fused{};
+            fused.producer_pool = choice.placement == 2;
+            return fused;
         }
         return ChunkGdnPhasedProgramConfig{};
     }();

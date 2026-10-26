@@ -1607,6 +1607,132 @@ TEST_F(TopologySolverTest, RelaxedSolveDoesNotMutatePreferredConstraints) {
     EXPECT_EQ(constraints.get_preferred_mappings(1), (std::set<TestGlobalNode>{10}));
 }
 
+// Zero-link tolerance (#56762): path a-b-c onto one linked pair plus two isolated nodes maps only with soft
+// edges, and the maximization realizes the one possible edge.
+TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_ZeroLinkMappingMaximizesRealizedEdges) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {1};
+    target_adj_map[1] = {0, 2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    // Hard edges (default): no valid mapping on either engine.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Dfs}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> hard;
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, hard, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        EXPECT_FALSE(result.success) << "hard target edges must not map onto a graph with one link";
+    }
+
+    // Soft edges (Auto routes to SAT): maps, realizing the one possible edge.
+    for (auto engine : {TopologyMappingSolverEngine::Sat, TopologyMappingSolverEngine::Auto}) {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        EXPECT_TRUE(soft.allow_unmatched_target_edges());
+        auto result = solve_topology_mapping(
+            target_graph, global_graph, soft, ConnectionValidationMode::RELAXED, /*quiet_mode=*/true, engine);
+        ASSERT_TRUE(result.success) << result.error_message;
+        ASSERT_EQ(result.target_to_global.size(), 3u);
+        EXPECT_TRUE(result.stats.used_sat);
+        const std::set<TestGlobalNode> linked{10, 11};
+        const auto on_link = [&](TestTargetNode t) { return linked.contains(result.target_to_global.at(t)); };
+        EXPECT_TRUE(on_link(1) && (on_link(0) || on_link(2)))
+            << "maximization must realize edge 0-1 or 1-2 on the linked pair, not leave both zero-link";
+        EXPECT_FALSE(result.warnings.empty()) << "the unrealized edge must be reported as a warning";
+    }
+
+    // Explicit DFS keeps edges hard.
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        auto result = solve_topology_mapping(
+            target_graph,
+            global_graph,
+            soft,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Dfs);
+        EXPECT_FALSE(result.success);
+    }
+}
+
+// Zero-link tolerance (#56762): a session started with soft edges flips to hard seams and back in place, with
+// no second encoding; a session started hard cannot be made soft.
+TEST_F(TopologySolverTest, AllowUnmatchedTargetEdges_InSessionToggleKeepsOneEncoding) {
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[0] = {1};
+    target_adj_map[1] = {0, 2};
+    target_adj_map[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[10] = {11};
+    global_adj_map[11] = {10};
+    global_adj_map[12] = {};
+    global_adj_map[13] = {};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+    const std::set<TestGlobalNode> linked{10, 11};
+
+    {
+        MappingConstraints<TestTargetNode, TestGlobalNode> soft;
+        soft.set_allow_unmatched_target_edges(true);
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session(
+            target_graph,
+            global_graph,
+            soft,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Sat);
+        ASSERT_TRUE(session.started());
+
+        // Hard seams on the live session: the path cannot be realized.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(false));
+        EXPECT_FALSE(session.next().success) << "hard seams must not map a path onto one link";
+
+        // Back to soft seams: a zero-link mapping with the one realizable edge.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(true));
+        auto result = session.next();
+        ASSERT_TRUE(result.success) << result.error_message;
+        const auto on_link = [&](TestTargetNode t) { return linked.contains(result.target_to_global.at(t)); };
+        EXPECT_TRUE(on_link(1) && (on_link(0) || on_link(2)));
+        EXPECT_FALSE(result.warnings.empty());
+
+        // Hard again after a soft model: still UNSAT, still the same encoding.
+        ASSERT_TRUE(session.set_allow_unmatched_target_edges(false));
+        EXPECT_FALSE(session.next().success);
+        EXPECT_EQ(session.sat_hard_constraint_encode_calls(), 1u) << "toggling seams must not re-encode";
+    }
+
+    {
+        // A hard-edge session on a solvable instance (path onto a path) cannot be relaxed in place.
+        AdjacencyGraph<TestGlobalNode>::AdjacencyMap path_adj_map;
+        path_adj_map[10] = {11};
+        path_adj_map[11] = {10, 12};
+        path_adj_map[12] = {11};
+        path_adj_map[13] = {};
+        AdjacencyGraph<TestGlobalNode> path_graph(path_adj_map);
+        MappingConstraints<TestTargetNode, TestGlobalNode> hard;
+        TopologyMappingEnumerationSession<TestTargetNode, TestGlobalNode> session(
+            target_graph,
+            path_graph,
+            hard,
+            ConnectionValidationMode::RELAXED,
+            /*quiet_mode=*/true,
+            TopologyMappingSolverEngine::Sat);
+        ASSERT_TRUE(session.started());
+        EXPECT_TRUE(session.next().success);
+        EXPECT_FALSE(session.set_allow_unmatched_target_edges(true))
+            << "a session encoded with hard edges cannot be relaxed in place";
+    }
+}
+
 TEST_F(TopologySolverTest, MappingValidatorSavesPartialMapping) {
     using namespace tt::tt_fabric::detail;
 

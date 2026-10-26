@@ -7,7 +7,8 @@ Sweep for the generalized Metal 2.0 / DataflowBuffer (DFB) no-broadcast slice of
 quasar binary ops. The DFB factory (binary_ng_metal_v2_factory.cpp) is a generic port of the
 descriptor factory's SubtileBroadcastType::NONE tiled path; matches_metal_v2_slice routes the whole
 no-broadcast tensor-tensor TILE slice to it — FPU and SFPU, interleaved and sharded, every dtype,
-full lhs/rhs/post activations.
+full lhs/rhs/post activations. On Quasar the native gate goes first and takes the cases it admits,
+unless TTNN_QSR_NATIVE=0, so this sweep runs both factories there.
 
 This sweep exercises the capabilities the ResNet residual-add canary (test_binary_ng_resnet_add.py)
 does not: the interleaved/DRAM path (TensorAccessor NoC reads + split_work_to_cores placement +
@@ -28,12 +29,17 @@ add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run)
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 """
 
+import itertools
+
 import pytest
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
+    _DIVIDE_NOT_NAN,
+    _SPECIAL,
     _on_quasar,
     _run,
+    _run_special,
     _run_mixed,
     _act,
     _height_sharded_config,
@@ -259,6 +265,31 @@ def test_no_bcast_activation_supported(device, act, position, layout):
     _run(device, "multiply", mem_config, ttnn.bfloat16, shape, **act_kwarg)
 
 
+# Special values: every pair of 1.5, -2, +0, -0, +inf, -inf and NaN, as production's test_div_fp32 checks them, so inf
+# and NaN must sit where torch puts them. Quasar only: Wormhole's bf16 has no NaN (a NaN operand comes out as inf or a
+# finite number), and its fp32 divide gives NaN for the pairs that Quasar's does not.
+_SPECIAL_SKIP = pytest.mark.skipif(not _on_quasar(), reason="Quasar's special values; Wormhole's bf16 has no NaN")
+
+
+@_SPECIAL_SKIP
+@pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide"])
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_special_values(device, op_name, dtype_tt):
+    pairs = [p for p in itertools.product(_SPECIAL, repeat=2) if op_name != "divide" or p not in _DIVIDE_NOT_NAN]
+    _run_special(device, op_name, dtype_tt, pairs)
+
+
+# Quasar's SFPU divide gives a number where IEEE gives NaN for these six pairs. Strict, so that the test fails as soon
+# as the divide gives NaN for them.
+@_SPECIAL_SKIP
+@pytest.mark.xfail(
+    strict=True, raises=AssertionError, reason="Quasar's divide gives a number, not NaN, for these pairs"
+)
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
+def test_no_bcast_divide_special_values_known_difference(device, dtype_tt):
+    _run_special(device, "divide", dtype_tt, _DIVIDE_NOT_NAN)
+
+
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("layout", ["interleaved", "height"])
 def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
@@ -277,41 +308,45 @@ def test_no_bcast_sfpu_divide(device, dtype_tt, layout):
 # (a_mem, b_mem, out_mem) permutations beyond the uniform III / SSS already covered by
 # test_no_bcast_interleaved / test_no_bcast_sharded. The id encodes the layout of each operand:
 #   I = DRAM-interleaved (NoC), IL1 = L1-interleaved (NoC), H/B/W = height/block/width sharded. The
-#   factory borrows ONLY when all three operands are L1-sharded with one memory config (the is_native
-#   case); any interleaved operand, or a different memory config, takes the all-NoC path where every
-#   operand (output included) is read/written via its own sharding-aware TensorAccessor.
+#   Metal 2.0 factory borrows ONLY when all three operands are L1-sharded with one memory config (the
+#   is_native case); any interleaved operand, or a different memory config, takes the all-NoC path where
+#   every operand (output included) is read/written via its own sharding-aware TensorAccessor. The native
+#   factory, the default on Quasar, borrows per operand instead, by its anchor, an L1 shard config or the L1
+#   banks; test_binary_ng_quasar_native.py checks where each mix runs.
 _MIXED_CASES = [
     # NOTE: the interleaved-OUTPUT mixed cases (H.I.I, I.H.I, H.H.I, W.I.I) live in _MIXED_INTERLEAVED_OUT_CASES
     # below -- they run on the full worker grid (not the output shard grid), so they need _BIG_SHAPE to reach
     # >=16 compute tiles/core. Every case in THIS list has a SHARDED output (op runs on that small grid).
-    # --- Hard tier: output SHARDED with an interleaved input => not all-sharded => all NoC. The output
-    #     is NoC-written and the inputs NoC-read via sharding-aware TensorAccessors over a linear
+    # --- Hard tier: output SHARDED with an interleaved input. Metal 2.0: not all-sharded => all NoC; the
+    #     output is NoC-written and the inputs NoC-read via sharding-aware TensorAccessors over a linear
     #     split_work_to_cores partition (nothing borrowed; HAS_SHARDING off). ---
-    pytest.param(_I, _MIXED_HEIGHT, _MIXED_HEIGHT, id="I.H.H"),  # a interleaved -> all NoC
-    pytest.param(_MIXED_HEIGHT, _I, _MIXED_HEIGHT, id="H.I.H"),  # b interleaved -> all NoC
-    pytest.param(_I, _I, _MIXED_HEIGHT, id="I.I.H"),  # both inputs interleaved -> all NoC into sharded out
-    pytest.param(_I, _I, _MIXED_BLOCK, id="I.I.B"),  # both inputs interleaved -> all NoC into BLOCK-sharded out
+    pytest.param(_I, _MIXED_HEIGHT, _MIXED_HEIGHT, id="I.H.H"),  # a interleaved -> Metal 2.0: all NoC
+    pytest.param(_MIXED_HEIGHT, _I, _MIXED_HEIGHT, id="H.I.H"),  # b interleaved -> Metal 2.0: all NoC
+    pytest.param(_I, _I, _MIXED_HEIGHT, id="I.I.H"),  # both inputs interleaved, sharded out
+    pytest.param(_I, _I, _MIXED_BLOCK, id="I.I.B"),  # both inputs interleaved, BLOCK-sharded out
     # --- L1-interleaved inputs (not DRAM): is_native_L1_sharding is true for IL1.IL1.<sharded> (equal
-    #     input configs + sharded output), but neither input has a shard spec, so the factory must take
-    #     the all-NoC path, NOT borrow -- a borrow-from-native gate would null-deref here. ---
-    pytest.param(_IL1, _IL1, _MIXED_HEIGHT, id="IL1.IL1.H"),  # both inputs L1-interleaved -> all NoC
-    pytest.param(_IL1, _IL1, _MIXED_BLOCK, id="IL1.IL1.B"),  # both inputs L1-interleaved -> all NoC
-    pytest.param(_IL1, _MIXED_HEIGHT, _MIXED_HEIGHT, id="IL1.H.H"),  # a L1-interleaved -> all NoC
+    #     input configs + sharded output), but neither input has a shard spec to borrow. The Metal 2.0
+    #     factory takes the all-NoC path; the native factory borrows the two input slices and writes the
+    #     output over the NoC in bank order. ---
+    pytest.param(_IL1, _IL1, _MIXED_HEIGHT, id="IL1.IL1.H"),  # both inputs L1-interleaved
+    pytest.param(_IL1, _IL1, _MIXED_BLOCK, id="IL1.IL1.B"),  # both inputs L1-interleaved
+    pytest.param(_IL1, _MIXED_HEIGHT, _MIXED_HEIGHT, id="IL1.H.H"),  # a L1-interleaved -> Metal 2.0: all NoC
     # --- Grid-mismatch: input-a sharded on a DIFFERENT grid than the sharded output => grids do not all
-    #     match (not is_native) => nothing borrowed, every operand NoC-read/written. ---
+    #     match (not is_native). Metal 2.0: nothing borrowed, every operand NoC-read/written. ---
     pytest.param(_MIXED_HEIGHT_ALT, _MIXED_HEIGHT, _MIXED_HEIGHT, id="Halt.H.H"),  # S(grid!=out).S.S
     # --- Same grid, different shard spec: height-sharded inputs into a width-sharded output on the same
-    #     column. The grids match but the specs do not, so nothing may be borrowed. ---
+    #     column. The grids match but the specs do not, so the output must not be borrowed with the inputs. ---
     pytest.param(_MIXED_HEIGHT, _MIXED_HEIGHT, _MIXED_WIDTH_ON_HEIGHT_GRID, id="H.H.W@same-grid"),
     # --- One shard spec, different layout: height-sharded inputs into a block-sharded output. The shard
-    #     specs compare equal, but the shards sit on different cores, so nothing may be borrowed. ---
+    #     specs compare equal, but the shards sit on different cores, so the output must not be borrowed with
+    #     the inputs. ---
     pytest.param(_SAME_SPEC_HEIGHT, _SAME_SPEC_HEIGHT, _SAME_SPEC_BLOCK, id="H.H.B@same-spec"),
     # --- One shard shape and grid, different core order: row-major inputs into a column-major output. ---
     pytest.param(_ORIENT_ROW, _ORIENT_ROW, _ORIENT_COL, id="H.H.Hcol@same-grid"),
-    # --- Width sharding: one uniform all-width case (borrowed) + mixed-width case (all NoC). The
-    #     interleaved-output W.I.I case is in _MIXED_INTERLEAVED_OUT_CASES (needs _BIG_SHAPE). ---
+    # --- Width sharding: one uniform all-width case (borrowed) + a mixed-width case. The interleaved-output
+    #     W.I.I case is in _MIXED_INTERLEAVED_OUT_CASES (needs _BIG_SHAPE). ---
     pytest.param(_MIXED_WIDTH, _MIXED_WIDTH, _MIXED_WIDTH, id="W.W.W"),  # uniform width, one grid (all borrowed)
-    pytest.param(_I, _MIXED_WIDTH, _MIXED_WIDTH, id="I.W.W"),  # a interleaved -> all NoC into width-out
+    pytest.param(_I, _MIXED_WIDTH, _MIXED_WIDTH, id="I.W.W"),  # a interleaved, width-out
 ]
 
 
@@ -327,7 +362,8 @@ def test_no_bcast_mixed_layout(device, op_name, a_mem, b_mem, out_mem):
 @pytest.mark.parametrize("op_name", ["add", "multiply"])
 def test_no_bcast_sharded_output_tensor_decides_borrowing(device, op_name):
     # memory_config matches the inputs, but the supplied output tensor is block-sharded with the same shard
-    # spec. The op must follow the output tensor's own config, so nothing may be borrowed.
+    # spec. The op must follow the output tensor's own config, so the output must not be borrowed with the
+    # inputs.
     pcc = 0.99 if op_name == "multiply" else None
     _run_mixed(
         device,
@@ -378,14 +414,16 @@ def test_no_bcast_mixed_strategy_and_grid(device, op_name, a_mem, b_mem, out_mem
 # FULL worker grid via split_work_to_cores. To reach >=16 compute tiles/core there each case runs at a big
 # shape (last param): _BIG_SHAPE (1280 tiles) for the single-sharded-input cases, _BIG_SHAPE_2SHARD (1024
 # tiles) for the two-sharded-input cases so both input shards co-reside in one Quasar L1 bank (see the
-# big-shape config block above). Routing is preserved exactly: an interleaved output means not-all-sharded,
-# so every operand (any sharded input included) is NoC-read/written -- nothing is borrowed.
+# big-shape config block above). Metal 2.0 routing: an interleaved output means not-all-sharded, so every
+# operand (any sharded input included) is NoC-read/written -- nothing is borrowed. The native factory borrows
+# nothing either: each input shard sits on 4 clusters, fewer than the 32 that the legacy binary_ng splits the
+# tiles over, so no shard is an anchor.
 _MIXED_INTERLEAVED_OUT_CASES = [
-    pytest.param(_BIG_HEIGHT, _I, _I, _BIG_SHAPE, id="H.I.I"),  # S.I.I: one height input -> all NoC into out
-    pytest.param(_I, _BIG_HEIGHT, _I, _BIG_SHAPE, id="I.H.I"),  # I.S.I: one height input -> all NoC into out
-    pytest.param(_BIG_WIDTH, _I, _I, _BIG_SHAPE, id="W.I.I"),  # one width input -> all NoC into out
+    pytest.param(_BIG_HEIGHT, _I, _I, _BIG_SHAPE, id="H.I.I"),  # S.I.I: one height input
+    pytest.param(_I, _BIG_HEIGHT, _I, _BIG_SHAPE, id="I.H.I"),  # I.S.I: one height input
+    pytest.param(_BIG_WIDTH, _I, _I, _BIG_SHAPE, id="W.I.I"),  # one width input
     # H.H.I: two height inputs on DISJOINT columns (x=0 and x=1); _BIG_SHAPE_2SHARD keeps each at 256
-    # tiles/core so both fit one Quasar L1 bank. all NoC into interleaved out.
+    # tiles/core so both fit one Quasar L1 bank.
     pytest.param(_BIG2_HEIGHT_A, _BIG2_HEIGHT_B, _I, _BIG_SHAPE_2SHARD, id="H.H.I"),  # S.S.I
     # Generality: distinct-grid AND distinct-strategy sharded inputs feeding an interleaved output. Height
     # on column x=4 and width on row y=1 are disjoint (x=4 not in 0..3); _BIG_SHAPE_2SHARD keeps each at 256

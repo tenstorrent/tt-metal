@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import comp_allclose_and_pcc
+from tt_py_test_utils_common.utility_functions import comp_allclose_and_pcc
 
 TEST_PADDING_VALUE = -42
 

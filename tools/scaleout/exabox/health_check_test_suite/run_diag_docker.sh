@@ -33,6 +33,8 @@ GH_TOKEN_VALUE="${GH_TOKEN:-}"
 BMC_IP_VALUE="${BMC_IP:-}"
 BMC_USER_VALUE="${BMC_USER:-}"
 BMC_PASSWORD_VALUE="${BMC_PASSWORD:-}"
+BMC_API_URL_VALUE="${TT_BMC_API_URL:-}"
+BMC_API_TOKEN_VALUE="${TT_BMC_API_TOKEN:-}"
 SKIP_QSFP=false
 SKIP_SYS_TRIAGE=false
 NEED_LSPCI=true
@@ -95,6 +97,14 @@ command line:
                          BMC password (default: \$BMC_PASSWORD, which is
                          preferred: a flag value is visible in this script's
                          own process list)
+
+BMC API (read by the QSFP phase's collector, which without it reads the FRU with
+ipmitool and collects no QSFP cages). Forwarded to the container as
+TT_BMC_API_URL / TT_BMC_API_TOKEN via the same 0600 --env-file, on every tier:
+      --bmc-api-url URL  BMC API address (default: \$TT_BMC_API_URL)
+      --bmc-api-token TOKEN
+                         BMC API token (default: \$TT_BMC_API_TOKEN, which is
+                         preferred, for the same reason as the password)
 
 Forwarded to run_diag.sh (see its --help, and diag_runner.py --help, for detail):
       --dry-run              Print intended subprocess calls without executing
@@ -181,6 +191,8 @@ while (( $# )); do
         --bmc-ip)        require_value "$1" "${2:-}"; BMC_IP_VALUE="$2"; shift 2 ;;
         --bmc-user)      require_value "$1" "${2:-}"; BMC_USER_VALUE="$2"; shift 2 ;;
         --bmc-password)  require_value "$1" "${2:-}"; BMC_PASSWORD_VALUE="$2"; shift 2 ;;
+        --bmc-api-url)   require_value "$1" "${2:-}"; BMC_API_URL_VALUE="$2"; shift 2 ;;
+        --bmc-api-token) require_value "$1" "${2:-}"; BMC_API_TOKEN_VALUE="$2"; shift 2 ;;
 
         # Forwarded, no value.
         --dry-run)
@@ -358,6 +370,8 @@ if ${WANT_SYS_TRIAGE}; then
     [[ -z ${BMC_USER_VALUE} ]]     || SECRETS+=("BMC_USER=${BMC_USER_VALUE}")
     [[ -z ${BMC_PASSWORD_VALUE} ]] || SECRETS+=("BMC_PASSWORD=${BMC_PASSWORD_VALUE}")
 fi
+[[ -z ${BMC_API_URL_VALUE} ]]   || SECRETS+=("TT_BMC_API_URL=${BMC_API_URL_VALUE}")
+[[ -z ${BMC_API_TOKEN_VALUE} ]] || SECRETS+=("TT_BMC_API_TOKEN=${BMC_API_TOKEN_VALUE}")
 if (( ${#SECRETS[@]} )); then
     for entry in "${SECRETS[@]}"; do
         [[ ${entry} != *$'\n'* ]] || die "${entry%%=*} contains a newline, which docker --env-file cannot carry"
@@ -603,6 +617,11 @@ if ${WANT_SYS_TRIAGE}; then
     else
         say "bmc:        (incomplete — the sys-triage phase will report SKIP; see --bmc-*)"
     fi
+fi
+if [[ -n ${BMC_API_URL_VALUE} && -n ${BMC_API_TOKEN_VALUE} ]]; then
+    say "bmc api:    ${BMC_API_URL_VALUE} (token set)"
+elif ! ${SKIP_QSFP} && [[ ${TIER} != light ]]; then
+    say "bmc api:    (incomplete — the QSFP collector will not read the cages; see --bmc-api-*)"
 fi
 say "forwarded:  ${FORWARD[*]:-(none)}"
 say ""
