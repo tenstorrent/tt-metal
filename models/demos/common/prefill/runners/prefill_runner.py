@@ -3,6 +3,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 
+import contextlib
 import json
 import os
 import signal
@@ -133,6 +134,7 @@ assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
 ), f"PREFILL_TP_SHARD_KV=1: model {ADAPTER.name!r} does not support a TP-deduped KV cache"
 SYNC_PER_CHUNK = os.environ.get("PREFILL_SYNC_PER_CHUNK", "0") == "1"
+CHUNK_TIMEOUT_SECONDS = float(os.environ.get("TT_PREFILL_CHUNK_TIMEOUT_SECONDS", 0))
 TIMING_DIR = os.environ.get("PREFILL_TIMING_DIR", "")
 # Env-overridable so re-bisecting does not need a rebuild. #54834's fix removed the AttnRes floor
 # that used to make this a narrow band; what is left is MLA's chunked-attention ceiling.
@@ -601,6 +603,19 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
         pass
 
 
+@contextlib.contextmanager
+def _with_hang_timeout():
+    if not CHUNK_TIMEOUT_SECONDS:
+        yield
+        return
+    saved = ttnn.device.GetOperationTimeoutSeconds()
+    ttnn.device.SetOperationTimeoutSeconds(CHUNK_TIMEOUT_SECONDS)
+    try:
+        yield
+    finally:
+        ttnn.device.SetOperationTimeoutSeconds(saved)
+
+
 def _compute_and_send(
     runtime,
     kv_caches,
@@ -626,18 +641,19 @@ def _compute_and_send(
     )
 
     mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
-    out = runtime.prefill_chunk(
-        inp,
-        kv_caches,
-        slot_id=meta["slot_id"],
-        actual_start=meta["actual_start"],
-        actual_end=meta["actual_end"],
-        request_id=c,
-        d2h_service=d2h_service,
-        metadata_msg=sockets.metadata,
-        **mtp_kwargs,
-        **({"indexer_indices": indices} if indices is not None else {}),
-    )
+    with _with_hang_timeout():
+        out = runtime.prefill_chunk(
+            inp,
+            kv_caches,
+            slot_id=meta["slot_id"],
+            actual_start=meta["actual_start"],
+            actual_end=meta["actual_end"],
+            request_id=c,
+            d2h_service=d2h_service,
+            metadata_msg=sockets.metadata,
+            **mtp_kwargs,
+            **({"indexer_indices": indices} if indices is not None else {}),
+        )
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
@@ -887,6 +903,9 @@ def main() -> None:
         l1_small_size=_L1_SMALL_SIZE,
         trace_region_size=_TRACE_REGION_SIZE,
     )
+
+    if CHUNK_TIMEOUT_SECONDS:
+        ttnn.device.SetOperationTimeoutSeconds(0)
 
     hf_config = ADAPTER.load_hf_config()
     hf_config.max_seq_len = MAX_SEQ_LEN
