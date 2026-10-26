@@ -287,12 +287,14 @@ def _cost_model_path(device, bh, nc):
     """The op's default path per its calibrated geometry cost model: fused iff its wave plan (one program,
     or several for the heads one program's core map cannot hold, each with the geometry — NP producers
     per head, or one producer pool — the model picks for its head count) is predicted faster than the
-    phased reference."""
+    phased reference, or, when BH exceeds the grid (phased needs one scan core per head, so it cannot run),
+    whenever a plan exists at all."""
     from ttnn._ttnn.operations import transformer as _t
 
     grid = device.compute_with_storage_grid_size()
     waves, t_f, t_ph, pays = _t.chunk_gdn_fused_wave_plan(grid.x, grid.y, bh, nc, VDIM // 32)
-    return "fused" if pays else "phased"
+    phased_fits = bh <= grid.x * grid.y
+    return "fused" if waves and (pays or not phased_fits) else "phased"
 
 
 def _wave_plan(device, bh, nc):
@@ -303,21 +305,25 @@ def _wave_plan(device, bh, nc):
 
 
 @pytest.mark.parametrize(
-    "num_k_heads, num_v_heads, nc",
+    "batch, num_k_heads, num_v_heads, nc",
     [
-        pytest.param(16, 48, 8, id="bh48-NC8"),  # BH=48: the single-device shape
-        pytest.param(16, 48, 64, id="bh48-NC64", marks=_hw_only),
-        pytest.param(4, 16, 8, id="bh16-NC8"),  # BH=16: the producer pool's shape
-        pytest.param(4, 16, 64, id="bh16-NC64", marks=_hw_only),
-        pytest.param(4, 12, 8, id="bh12-NC8"),  # BH=12: the 27B TP-4 shape
-        pytest.param(4, 12, 64, id="bh12-NC64"),  # the production chunk count; the one NC=64 case the simulator runs
-        pytest.param(1, 4, 8, id="bh4-NC8"),  # BH=4: chain-bound
-        pytest.param(1, 4, 64, id="bh4-NC64", marks=_hw_only),
-        pytest.param(16, 64, 8, id="bh64-NC8"),  # BH=64: no single program on a 110-core grid -> fused waves
-        pytest.param(16, 64, 64, id="bh64-NC64", marks=_hw_only),
+        pytest.param(1, 16, 48, 8, id="bh48-NC8"),  # BH=48: the single-device shape
+        pytest.param(1, 16, 48, 64, id="bh48-NC64", marks=_hw_only),
+        pytest.param(1, 4, 16, 8, id="bh16-NC8"),  # BH=16: the producer pool's shape
+        pytest.param(1, 4, 16, 64, id="bh16-NC64", marks=_hw_only),
+        pytest.param(1, 4, 12, 8, id="bh12-NC8"),  # BH=12: the 27B TP-4 shape
+        pytest.param(1, 4, 12, 64, id="bh12-NC64"),  # the production chunk count; the one NC=64 case the simulator runs
+        pytest.param(1, 1, 4, 8, id="bh4-NC8"),  # BH=4: chain-bound
+        pytest.param(1, 1, 4, 64, id="bh4-NC64", marks=_hw_only),
+        pytest.param(1, 16, 64, 8, id="bh64-NC8"),  # BH=64: no single program on a 110-core grid -> fused waves
+        pytest.param(1, 16, 64, 64, id="bh64-NC64", marks=_hw_only),
+        # Above a 110-core grid the phased scan cannot run (one core per head); at NC=1 the model still prices the
+        # waves above the phased reference, so these pin that the dispatch takes the waves regardless.
+        pytest.param(10, 4, 12, 1, id="bh120-NC1", marks=_hw_only),
+        pytest.param(16, 4, 12, 1, id="bh192-NC1", marks=_hw_only),  # 27B at TP-4, batch 16, a 32-token prefill
     ],
 )
-def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
+def test_fused_default_dispatch(device, batch, num_k_heads, num_v_heads, nc):
     """With NO program config, the dispatcher must pick what the calibrated cost model says: fused
     iff its wave plan beats the phased reference, each program at the geometry (NP producers per head, or
     one producer pool) the model picks for its head count. The choice depends on NC (the fill cost is
@@ -327,12 +333,12 @@ def test_fused_default_dispatch(device, num_k_heads, num_v_heads, nc):
     proof that the default took the expected path is a program-cache delta of ZERO after warming
     exactly that path with an explicit config (any other path would compile at least one new prim
     program)."""
-    B = 1
+    B = batch
     BH = B * num_v_heads
     grid = device.compute_with_storage_grid_size()
-    if BH > grid.x * grid.y:
-        pytest.skip(f"BH={BH} exceeds the {grid.x}x{grid.y} compute grid (scan needs a core per head)")
     expected_path = _cost_model_path(device, BH, nc)
+    if BH > grid.x * grid.y:
+        assert expected_path == "fused", f"BH={BH} exceeds the {grid.x}x{grid.y} grid and no fused plan exists either"
     explicit = _fused() if expected_path == "fused" else _phased()  # free: the prim re-derives the plan's picks
 
     _, tensors, s0 = _make_inputs(device, B, nc * CHUNK, num_k_heads, num_v_heads, True, seed=20260821)
@@ -1392,3 +1398,102 @@ def test_fused_waves_trace(device):
         assert torch.equal(ttnn.to_torch(o_tr), o_ref_t), "trace replay o differs from the eager run"
         assert torch.equal(ttnn.to_torch(fs_tr), fs_ref_t), "trace replay final_state differs from the eager run"
     ttnn.release_trace(device, trace_id)
+
+
+# ---------------------------------------------------------------------------
+# Batches above the grid, and the prim's head range on its own outputs.
+# ---------------------------------------------------------------------------
+
+
+@_hw_only
+def test_fused_waves_above_grid_bit_exact_per_row(device):
+    """A batch with more heads than the grid has cores (the 27B TP-4 shape at batch 16: 192 heads on 110 cores)
+    has no phased reference of the whole batch, so the waved default dispatch is checked one batch row at a
+    time: every head's scan is independent and fused == phased bit for bit at any geometry, so the 16-row
+    result must equal the 16 single-row phased runs of the same inputs, stacked."""
+    B, num_k_heads, num_v_heads = 16, 4, 12
+    nc = 8
+    BH = B * num_v_heads
+    grid = device.compute_with_storage_grid_size()
+    if BH <= grid.x * grid.y:
+        pytest.skip(f"BH={BH} fits the {grid.x}x{grid.y} grid; this check is for batches above it")
+    assert _cost_model_path(device, BH, nc) == "fused"
+    host, tensors, s0 = _make_inputs(device, B, nc * CHUNK, num_k_heads, num_v_heads, True, seed=20261026)
+    const_tiles = _const_tiles(device)
+    o_all, fs_all = _run_op(device, tensors, const_tiles, s0, None)  # the default dispatch: the plan's waves
+    q, k, v, g, beta, s0_host = host
+    dtypes = (ttnn.bfloat16, ttnn.bfloat16, ttnn.bfloat16, ttnn.float32, ttnn.float32)
+    for b in range(B):
+        row = tuple(
+            ttnn.from_torch(t[b : b + 1], dtype=dt, layout=ttnn.TILE_LAYOUT, device=device)
+            for t, dt in zip((q, k, v, g, beta), dtypes)
+        )
+        s0_row = ttnn.from_torch(s0_host[b : b + 1], dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        o_b, fs_b = _run_op(device, row, const_tiles, s0_row, _phased())
+        assert torch.equal(o_all[b : b + 1], o_b), f"batch row {b}: waved o differs from its single-row phased run"
+        assert torch.equal(fs_all[b : b + 1], fs_b), f"batch row {b}: waved final_state differs from its phased run"
+
+
+def _make_prim_inputs(device, rows, nc, seed):
+    """Head-major inputs of the fused prim, as the public op hands them over after its preprocessing: q/k
+    [rows, NC, C, K] bf16 L2-normalized (scale 1), v [rows, NC, C, V] bf16, the token-major gates as one batch
+    row of `rows` heads [1, T, rows], and initial_state [rows, K, V] fp32."""
+    torch.manual_seed(seed)
+    T = nc * CHUNK
+    q = F.normalize(torch.randn(rows, nc, CHUNK, KDIM), dim=-1).to(torch.bfloat16)
+    k = F.normalize(torch.randn(rows, nc, CHUNK, KDIM), dim=-1).to(torch.bfloat16)
+    v = (0.5 * torch.randn(rows, nc, CHUNK, VDIM)).to(torch.bfloat16)
+    beta = torch.sigmoid(torch.randn(1, T, rows))
+    g = -F.softplus(torch.randn(1, T, rows)) * 0.5
+    s0 = 0.05 * torch.randn(rows, KDIM, VDIM)
+
+    def dev(t, dtype):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    return (
+        dev(q, ttnn.bfloat16),
+        dev(k, ttnn.bfloat16),
+        dev(v, ttnn.bfloat16),
+        dev(g, ttnn.float32),
+        dev(beta, ttnn.float32),
+        dev(s0, ttnn.float32),
+    )
+
+
+def test_fused_prim_head_range_on_own_outputs(device):
+    """A fused prim call for heads [head_offset, head_offset + num_heads) WITHOUT preallocated outputs returns
+    compact [num_heads, ...] outputs holding exactly that head range at rows 0..num_heads-1: the inputs are read
+    at the global rows, the outputs written at the wave-local ones. Checked on a program-cache miss (the 8-head
+    program's first launch, at offset 0) and on a hit (offset 16 of the same program: head_offset is not part
+    of the cache key, so the writer's row is re-applied per launch) against one 24-head run of the same inputs."""
+    from ttnn._ttnn.operations import transformer as _t
+
+    rows, nc = 24, 8
+    _skip_unless_fused_fits(device, rows)
+    q, k, v, g, beta, s0 = _make_prim_inputs(device, rows, nc, seed=20261027)
+    eye, tril, ones, masks = _const_tiles(device)
+
+    def prim(num_heads, head_offset):
+        o, fs = _t.chunk_gdn_fused(
+            q, k, v, g, beta, eye, tril, ones, masks, s0, chunk_size=CHUNK, num_heads=num_heads, head_offset=head_offset
+        )
+        o_t, fs_t = ttnn.to_torch(o), ttnn.to_torch(fs)
+        ttnn.deallocate(o)
+        ttnn.deallocate(fs)
+        return o_t, fs_t
+
+    o_full, fs_full = prim(0, 0)  # every row, one program
+    assert tuple(o_full.shape) == (rows, nc, CHUNK, VDIM) and tuple(fs_full.shape) == (rows, KDIM, VDIM)
+
+    n0 = device.num_program_cache_entries()
+    o_lo, fs_lo = prim(8, 0)  # heads 0..7: the 8-head program's cache miss
+    n1 = device.num_program_cache_entries()
+    assert n1 - n0 == 1, f"the 8-head program compiled {n1 - n0} programs (expected 1)"
+    o_hi, fs_hi = prim(8, 16)  # heads 16..23: a cache hit of that program with a new head offset
+    n2 = device.num_program_cache_entries()
+    assert n2 - n1 == 0, f"the offset-16 launch compiled {n2 - n1} programs (expected a cache hit)"
+
+    assert tuple(o_lo.shape) == (8, nc, CHUNK, VDIM) and tuple(fs_lo.shape) == (8, KDIM, VDIM)
+    assert torch.equal(o_lo, o_full[0:8]) and torch.equal(fs_lo, fs_full[0:8]), "heads 0..7 differ from the full run"
+    assert torch.equal(o_hi, o_full[16:24]), "heads 16..23 (cache hit): o is not the full run's rows 16..23"
+    assert torch.equal(fs_hi, fs_full[16:24]), "heads 16..23 (cache hit): final_state is not rows 16..23"

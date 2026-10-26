@@ -21,6 +21,7 @@
 #pragma once
 
 #include "chunk_gdn_compute_config.hpp"
+#include "kernels/dataflow/chunk_gdn_fused_rt_args.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -125,7 +126,8 @@ struct ChunkGdnInputs {
     Tensor initial_state;  // [rows, K, V] fp32, REQUIRED: both programs read it unconditionally (zeros for a fresh
                            // sequence)
     // Fused only, both or neither: outputs o [rows, NC, C, V] fp32 and final_state [rows, K, V] fp32 that the
-    // program writes its head range into. Absent: [BH, ...] outputs are allocated.
+    // program writes its head range into. Absent: [BH, ...] outputs are allocated and the program writes them
+    // at rows 0..BH-1 (the inputs are still read at rows head_offset..head_offset+BH-1).
     std::optional<Tensor> o_out;
     std::optional<Tensor> final_state_out;
 };
@@ -144,13 +146,15 @@ struct ChunkGdnFusedProgramFactory {
 
 // The fused program's runtime args that carry head_offset, by kernel (the factory's push order) and
 // position; the factory emits them and get_dynamic_runtime_args re-applies them on cache hits.
+// The arg positions live in kernels/dataflow/chunk_gdn_fused_rt_args.hpp (global ::fused_rt), which the kernels
+// include too; they are pulled in here so the host addresses them by the same names.
 namespace fused_rt {
 constexpr uint32_t kPrepReaderKernel = 0;
 constexpr uint32_t kReceiverReaderKernel = 3;
 constexpr uint32_t kScanWriterKernel = 5;
-constexpr uint32_t kPrepReaderHeadOffsetArg = 19;  // head_offset, after the gates' tile sizes
-constexpr uint32_t kReceiverHeadOffsetArg = 11;    // head_offset, after the producer map
-constexpr uint32_t kScanWriterHeadArg = 0;         // head_offset + h
+using ::fused_rt::kPrepReaderHeadOffsetArg;
+using ::fused_rt::kReceiverHeadOffsetArg;
+using ::fused_rt::kScanWriterHeadArg;
 }  // namespace fused_rt
 
 struct ChunkGdnDeviceOperation {

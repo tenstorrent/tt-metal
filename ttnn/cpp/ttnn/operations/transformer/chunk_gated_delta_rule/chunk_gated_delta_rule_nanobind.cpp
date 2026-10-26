@@ -154,6 +154,62 @@ std::vector<ttnn::Tensor> chunk_gdn_scan_launch(
         force_serial);
 }
 
+std::vector<ttnn::Tensor> chunk_gdn_fused_launch(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    const ttnn::Tensor& eye,
+    const ttnn::Tensor& tril,
+    const ttnn::Tensor& ones,
+    const ttnn::Tensor& masks,
+    const ttnn::Tensor& initial_state,
+    uint32_t chunk_size,
+    bool output_final_state,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const ttnn::transformer::ChunkGdnFusedProgramConfig& program_config,
+    ttnn::transformer::ChunkGdnWyInverse wy_inverse,
+    bool v_flat,
+    uint32_t HV,
+    bool qk_norm,
+    float scale,
+    bool qk_flat,
+    uint32_t Hk,
+    uint32_t num_heads,
+    uint32_t head_offset,
+    const std::optional<ttnn::Tensor>& o_out,
+    const std::optional<ttnn::Tensor>& final_state_out) {
+    return ttnn::prim::chunk_gdn(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        eye,
+        tril,
+        ones,
+        masks,
+        initial_state,
+        chunk_size,
+        output_final_state,
+        memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
+        gdn_default_compute_kernel_config(q.device()->arch(), compute_kernel_config),
+        ttnn::prim::ChunkGdnDeviceProgramConfig{program_config},
+        wy_inverse,
+        v_flat,
+        HV,
+        qk_norm,
+        scale,
+        qk_flat,
+        Hk,
+        num_heads,
+        head_offset,
+        o_out,
+        final_state_out);
+}
+
 std::string py_bool(bool b) { return b ? "True" : "False"; }
 std::string py_opt(const std::optional<uint32_t>& v) { return v.has_value() ? std::to_string(*v) : "None"; }
 std::string py_opt(const std::optional<bool>& v) { return v.has_value() ? py_bool(*v) : "None"; }
@@ -403,7 +459,9 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         count of each program in launch order (empty: no fused geometry fits): one program up to 32 heads
         when a geometry fits, else the fewest waves of at most max_wave heads (0 = 24), sizes within one of
         each other, more waves only if a size does not fit; T_fused_us is the cost model's sum over them;
-        fixed_nv / fixed_np pin num_receivers / num_producers as in chunk_gdn_fused_geometry.)doc");
+        fixed_nv / fixed_np pin num_receivers / num_producers as in chunk_gdn_fused_geometry. The op's default
+        dispatch takes the fused path when fused_pays, and also whenever BH exceeds the compute grid (the
+        phased scan needs one core per head, so only the waves can run there) as long as waves is not empty.)doc");
     mod.def(
         "chunk_gdn_fused_row_local_feasible",
         &ttnn::prim::fused_row_local_feasible,
@@ -735,6 +793,53 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("force_serial") = false,
         nb::call_guard<nb::gil_scoped_release>(),
         scan_doc);
+
+    const auto* fused_doc =
+        R"doc(
+        Fused-GDN prim — testing/debug surface for ttnn::prim::chunk_gdn with the fused program factory, i.e.
+        ONE launch of the public op's fused path (the op launches it once per wave of heads). Takes the
+        preprocessed inputs the public op builds: head-major q/k/v [rows, NC, C, D] (q scaled, q/k L2-normalized)
+        or the flat token-major forms (v_flat / qk_flat, which the kernels normalize and scale), token-major
+        gates g/beta [B, T, HV] with B * HV == rows, the constant tiles, and initial_state [rows, K, V] fp32.
+
+        Computes heads [head_offset, head_offset + num_heads) of those rows (num_heads 0 = all rows). With
+        o_out / final_state_out (the full [rows, ...] fp32 outputs) it writes its head range into them; without,
+        it returns compact [num_heads, ...] outputs holding that range at rows 0..num_heads-1.
+
+        Returns [o [num_heads or rows, NC, C, V] fp32, final_state [.., K, V] fp32] (or the preallocated pair).
+        )doc";
+    mod.def(
+        "chunk_gdn_fused",
+        &chunk_gdn_fused_launch,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("g").noconvert(),
+        nb::arg("beta").noconvert(),
+        nb::arg("eye").noconvert(),
+        nb::arg("tril").noconvert(),
+        nb::arg("ones").noconvert(),
+        nb::arg("masks").noconvert(),
+        nb::arg("initial_state").noconvert(),
+        nb::kw_only(),
+        nb::arg("chunk_size") = 32,
+        nb::arg("output_final_state") = true,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = ttnn::transformer::ChunkGdnFusedProgramConfig{},
+        nb::arg("wy_inverse") = ttnn::transformer::ChunkGdnWyInverse::AUTO,
+        nb::arg("v_flat") = false,
+        nb::arg("HV") = 0,
+        nb::arg("qk_norm") = false,
+        nb::arg("scale") = 1.0f,
+        nb::arg("qk_flat") = false,
+        nb::arg("Hk") = 0,
+        nb::arg("num_heads") = 0,
+        nb::arg("head_offset") = 0,
+        nb::arg("o_out") = nb::none(),
+        nb::arg("final_state_out") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        fused_doc);
 }
 
 }  // namespace ttnn::operations::transformer

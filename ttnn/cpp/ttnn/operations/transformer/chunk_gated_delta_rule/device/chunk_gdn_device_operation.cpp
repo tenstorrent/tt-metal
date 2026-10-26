@@ -333,7 +333,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> ChunkGdnDeviceOperation::get_dynami
                 {.kernel_idx = fused_rt::kScanWriterKernel,
                  .core = rc,
                  .arg_idx = fused_rt::kScanWriterHeadArg,
-                 .value = h0 + h});
+                 .value = in.o_out.has_value() ? h0 + h : h});  // as the factory: wave-local into own outputs
         }
     }
     return args;

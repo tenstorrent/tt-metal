@@ -309,14 +309,17 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     // program config names its factory; without one the op chooses by the fused path's calibrated
     // geometry cost model: fused iff its plan — one program, or the BH heads in waves of a few dozen
     // heads each, one program per wave into shared outputs — is predicted faster than the phased
-    // reference (fused_pays); each program's geometry (NP producers per head, or one producer pool) is
-    // the model's pick for its head count, which the prim re-derives from a free config. The fused path
-    // is bit-exact vs phased. Every config field is hashed inside the device op's attributes (the
+    // reference (fused_pays), or whenever BH exceeds the compute grid (the phased scan takes one core per
+    // head, so there only the plan's waves can run); each program's geometry (NP producers per head, or one
+    // producer pool) is the model's pick for its head count, which the prim re-derives from a free config. The
+    // fused path is bit-exact vs phased. Every config field is hashed inside the device op's attributes (the
     // factory choice included), so each path has its own program-cache entries.
     const auto grid = dev->compute_with_storage_grid_size();
     const uint32_t Vt = V / tt::constants::TILE_WIDTH;
     const ChunkGdnProgramConfig cfg = program_config.has_value() ? *program_config : [&]() -> ChunkGdnProgramConfig {
-        if (ttnn::prim::plan_fused_waves(grid.x, grid.y, BH, NC, Vt).fused_pays) {
+        const auto plan = ttnn::prim::plan_fused_waves(grid.x, grid.y, BH, NC, Vt);
+        const bool phased_fits = BH <= grid.x * grid.y;
+        if (!plan.waves.empty() && (plan.fused_pays || !phased_fits)) {
             return ChunkGdnFusedProgramConfig{};  // geometry left free: the prim re-derives the plan's picks
         }
         return ChunkGdnPhasedProgramConfig{};
