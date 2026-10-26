@@ -37,7 +37,6 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _DIVIDE_NOT_NAN,
     _SPECIAL,
     _on_quasar,
     _run,
@@ -269,7 +268,7 @@ def test_no_bcast_activation_supported(device, act, position, layout):
 
 # Special values: every pair of 1.5, -2, +0, -0, +inf, -inf and NaN, as production's test_div_fp32 checks them, so inf
 # and NaN must sit where torch puts them. Quasar only: Wormhole's bf16 has no NaN (a NaN operand comes out as inf or a
-# finite number), and its fp32 divide gives NaN for the pairs that Quasar's does not.
+# finite number).
 _SPECIAL_SKIP = pytest.mark.skipif(not _on_quasar(), reason="Quasar's special values; Wormhole's bf16 has no NaN")
 
 
@@ -277,19 +276,7 @@ _SPECIAL_SKIP = pytest.mark.skipif(not _on_quasar(), reason="Quasar's special va
 @pytest.mark.parametrize("op_name", ["add", "subtract", "multiply", "divide"])
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
 def test_no_bcast_special_values(device, op_name, dtype_tt):
-    pairs = [p for p in itertools.product(_SPECIAL, repeat=2) if op_name != "divide" or p not in _DIVIDE_NOT_NAN]
-    _run_special(device, op_name, dtype_tt, pairs)
-
-
-# Quasar's SFPU divide gives a number where IEEE gives NaN for these six pairs. Strict, so that the test fails as soon
-# as the divide gives NaN for them.
-@_SPECIAL_SKIP
-@pytest.mark.xfail(
-    strict=True, raises=AssertionError, reason="Quasar's divide gives a number, not NaN, for these pairs"
-)
-@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])
-def test_no_bcast_divide_special_values_known_difference(device, dtype_tt):
-    _run_special(device, "divide", dtype_tt, _DIVIDE_NOT_NAN)
+    _run_special(device, op_name, dtype_tt, list(itertools.product(_SPECIAL, repeat=2)))
 
 
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16, ttnn.float32])

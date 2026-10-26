@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import struct
 from typing import List
 
@@ -122,7 +123,7 @@ def _run_sfpu_binary_llk_golden(
     ``prepare_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop)``
     returns ``(src_A, tile_cnt_A, src_B)``; both operands live in ``src_A`` at
     tiles ``src0_idx`` / ``src1_idx``. ``post_check(res_tensor)`` is an optional
-    extra assertion (e.g. div's x/x special-case lanes). ``broadcast_type``
+    extra assertion (e.g. div's NaN, ±inf, +0 and x/x special-case lanes). ``broadcast_type``
     broadcasts the ``src1_idx`` tile in the golden.
     """
     src0_idx, src1_idx, dst_idx = tile_indices
@@ -358,12 +359,33 @@ def test_eltwise_binary_sfpu_int_quasar(
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
 # Crafted lanes in face 0 exercising the div special-case branches.
+_INF = float("inf")
+_NAN = float("nan")
 _DIV_SPECIAL_CASE_LANES = [
     (0, 0.0, 0.0, "nan"),
     (1, 1.5, 0.0, "pos_inf"),
     (2, -1.5, 0.0, "neg_inf"),
     (3, 2.7, 2.7, "one"),
     (4, -3.3, -3.3, "one"),
+    (5, 0.0, -0.0, "nan"),
+    (6, -0.0, 0.0, "nan"),
+    (7, -0.0, -0.0, "nan"),
+    (8, _INF, _INF, "nan"),
+    (9, -_INF, -_INF, "nan"),
+    (10, _NAN, 0.0, "nan"),
+    (11, _INF, -_INF, "nan"),
+    (12, 1.5, _NAN, "nan"),
+    (13, _NAN, 1.5, "nan"),
+    (14, 1.5, -0.0, "neg_inf"),
+    (15, -1.5, -0.0, "pos_inf"),
+    (16, 1.5, _INF, "zero"),
+    (17, -1.5, -_INF, "zero"),
+    # Only these lanes reach the inf-dividend term of the inf/inf check, and the sign-set
+    # NaN relies on the magnitude mask; bit-identical NaN takes the x/x shortcut first.
+    (18, _INF, 1.5, "pos_inf"),
+    (19, _INF, 0.0, "pos_inf"),
+    (20, math.copysign(_NAN, -1.0), 0.0, "nan"),
+    (21, _NAN, _NAN, "nan"),
 ]
 
 
@@ -419,16 +441,24 @@ def _prepare_float_stimuli(formats, input_dimensions, src0_idx, src1_idx, mathop
     return src_A, tile_cnt_A, src_B
 
 
+_DIV_SPECIAL_CASE_CHECKS = {
+    "nan": lambda v: v != v,
+    "pos_inf": lambda v: v == _INF,
+    "neg_inf": lambda v: v == -_INF,
+    # The zero lanes are +0 under IEEE as well, so the sign is checked too.
+    "zero": lambda v: v == 0.0 and math.copysign(1.0, v) > 0,
+    # The x/x branch forces an exact 1.0 regardless of reciprocal rounding.
+    "one": lambda v: v == 1.0,
+}
+
+
 def _check_div_special_cases(res_tensor):
-    """The kernel's x/x branch forces an exact 1.0 regardless of reciprocal
-    rounding — verify the 'one' special-case lanes."""
-    for lane, _, _, kind in _DIV_SPECIAL_CASE_LANES:
-        if kind != "one":
-            continue
+    """Check each IEEE special-case lane exactly."""
+    for lane, dividend, divisor, kind in _DIV_SPECIAL_CASE_LANES:
         actual = res_tensor[lane].item()
-        assert (
-            actual == 1.0
-        ), f"x/x special case at lane {lane}: expected 1.0, got {actual}"
+        assert _DIV_SPECIAL_CASE_CHECKS[kind](
+            actual
+        ), f"{dividend} / {divisor} at lane {lane}: expected {kind}, got {actual}"
 
 
 _DIV_FP32_MAX_ULP = 4
