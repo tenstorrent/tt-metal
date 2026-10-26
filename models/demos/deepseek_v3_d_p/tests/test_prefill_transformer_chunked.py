@@ -27,6 +27,7 @@ import gc
 import json
 import os
 import statistics
+import sys
 import time
 from pathlib import Path
 
@@ -1906,6 +1907,39 @@ def _llama4_scale_buffer(transformer, chunk_size_global):
     return rope_setup.make_llama4_scale_buffer(chunk_size_global) if rope_setup is not None else None
 
 
+def _replay_watchdog():
+    """GLM_TEST_REPLAY_WATCHDOG_S=<s> (layout agent, hang triage): once the first chunk has run, exit the process with
+    rc 124 if no chunk completes for <s> seconds, logging the iteration / chunk in flight. Returns a progress callback
+    progress(where) (no-op when unset). os._exit: a hung device never returns from synchronize."""
+    limit = float(os.environ.get("GLM_TEST_REPLAY_WATCHDOG_S", "0") or 0)
+    if limit <= 0:
+        return lambda where: None
+    import threading
+
+    state = {"t": None, "where": "before the first chunk"}
+
+    def watch():
+        while True:
+            time.sleep(1.0)
+            t = state["t"]
+            if t is not None and time.time() - t > limit:
+                logger.error(f"[replay watchdog] no chunk completed for {limit:.0f} s; in flight: {state['where']}")
+                sys.stdout.flush()
+                sys.stderr.flush()
+                os._exit(124)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+    def progress(where):
+        state["where"] = where
+        if where.startswith("done"):
+            state["t"] = time.time()
+        elif where == "off":  # after the measured loop: teardown may legitimately take longer than the limit
+            state["t"] = None
+
+    return progress
+
+
 def run_chunked_transformer_updated(
     variant,
     config,
@@ -2510,6 +2544,7 @@ def run_chunked_transformer_updated(
     det_failures = []
 
     profiler.start("tt_forward")
+    _wd_progress = _replay_watchdog()
     for it in range(num_iters):
         # Unconditional. The carry is the one piece of state an iteration MUTATES, so iteration N
         # otherwise starts where N-1 finished: a false failure under determinism_check, and worse
@@ -2534,8 +2569,10 @@ def run_chunked_transformer_updated(
                     sp_axis=sp_axis,
                 )
                 chunk_start = time.time()
+                _wd_progress(f"replay iter={it} chunk={c} start={kv_actual}")
                 trace_controller.replay()
                 ttnn.synchronize_device(mesh_device)
+                _wd_progress(f"done iter={it} chunk={c}")
                 chunk_seconds = time.time() - chunk_start
                 chunk_times.append(chunk_seconds)
                 # Per-(iter, chunk) sample. print_duration_table only reports the median over
@@ -2628,6 +2665,7 @@ def run_chunked_transformer_updated(
         # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
         if it == 0:
             reset_block_timings()
+    _wd_progress("off")
     profiler.end("tt_forward")
 
     # Overlap A/B correctness surface: KV_CACHE_DUMP=<path> saves the final KVPE cache (natural order) so a run with an
