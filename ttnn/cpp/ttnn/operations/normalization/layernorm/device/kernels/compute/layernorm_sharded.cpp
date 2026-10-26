@@ -155,11 +155,11 @@ void kernel_main() {
 #endif
     DataflowBuffer dfb_xmm(dfb_xmm_id);
 #ifndef RMSNORM
-    const DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
+    DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex(dfb_ex_id);
     DataflowBuffer dfb_ex_external(dfb_ex_external_id);
 #endif
-    const DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
+    DataflowBuffer dfb_ex_partial2(dfb_ex_partial2_id);
     // The combined Var[x] goes into ex2_local on the cores that turn it into 1/sqrt(Var[x] + eps): they read
     // it back here, so it never leaves this kernel. With a two-stage reduce the other cores leave it in ex2 for
     // the reader, which hands it to the second-stage reduce; ex2 exists only then. A single object for whichever
@@ -287,8 +287,10 @@ void kernel_main() {
     dfb_mask_scratch.wait_front(num_tiles_per_block);
     reconfig_data_format_srcb(dfb_col_mask_packed_id, dfb_scaler_id);
     constexpr uint32_t dfb_ex_reduce_input = dfb_mask_scratch_id;
+    auto& dfb_ex_reduce_input_buf = dfb_mask_scratch;
 #else
     constexpr uint32_t dfb_ex_reduce_input = dfb_in_id;
+    auto& dfb_ex_reduce_input_buf = dfb_in;
 #endif
     // E[x],
     // Quasar: pack_reconfig_data_format only reprograms the packer format gasket; the packer's L1
@@ -305,6 +307,9 @@ void kernel_main() {
         dfb_ex_partial_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        dfb_ex_reduce_input_buf,
+        dfb_scaler,
+        dfb_ex_partial,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
 #ifdef DO_COL_MASK
@@ -478,6 +483,9 @@ void kernel_main() {
         dfb_ex_partial2_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
+        dfb_xmm2,
+        dfb_scaler,
+        dfb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
