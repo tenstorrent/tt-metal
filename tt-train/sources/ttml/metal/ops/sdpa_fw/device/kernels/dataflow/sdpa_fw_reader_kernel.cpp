@@ -59,8 +59,8 @@ void kernel_main() {
     const auto gate_address_generator = TensorAccessor(gate_args, gate_address);
 #endif
 
-    // Note: Tile generation (reduction_scaler, matmul_reduce, causal_mask) moved to writer kernel
-    // This allows reader to start DRAM reads immediately
+    // The constant tiles (reduction scaler, matmul reduce, causal mask) come from the writer, so the
+    // reader can start its DRAM reads at once.
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
