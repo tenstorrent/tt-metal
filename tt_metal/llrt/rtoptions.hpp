@@ -312,9 +312,6 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
     std::string emu_server;
     std::string emu_soc_desc_path;
-    // Parsed for compatibility. Gtest selection and emu INIT do not read this:
-    // attach always skips INIT, and each test follows the soc descriptor.
-    bool sival_emu_bringup = false;
     std::string grendel_jtag_server;
     std::string grendel_jtag_soc_desc_path;
     std::string grendel_jtag_transport = "jtag2axi_v2";
@@ -428,7 +425,8 @@ class RunTimeOptions {
     // Bypass FD CQ payload copies for simulator tensor preloads (TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1)
     bool simulator_direct_tensor_writes = false;
 
-    // Serve simulation devices over sockets for a debug tool to attach; enable with TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
+    // Serve simulation devices over sockets for a debug tool to attach; enable with
+    // TT_METAL_SIMULATOR_SERVE_OVER_SOCKETS=1.
     bool simulator_serve_over_sockets = false;
 
     // NOC API version for Quasar
@@ -855,7 +853,6 @@ public:
     bool is_qsr_s1_simulator() const { return get_simulator_name().starts_with("emu-qsr-s1"); }
     const std::string& get_emu_server() const { return emu_server; }
     const std::string& get_emu_soc_desc_path() const { return emu_soc_desc_path; }
-    bool get_sival_emu_bringup() const { return sival_emu_bringup; }
     const std::string& get_grendel_jtag_server() const { return grendel_jtag_server; }
     const std::string& get_grendel_jtag_soc_desc_path() const { return grendel_jtag_soc_desc_path; }
     const std::string& get_grendel_jtag_transport() const { return grendel_jtag_transport; }

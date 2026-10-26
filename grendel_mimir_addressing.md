@@ -19,7 +19,7 @@ The two current chippy paths, emulation and JTAG, already diverge from each othe
 
 Done in step 4. `GrendelTTDevice` is the device. It is built from a protocol (`TTDeviceModel`), a `GrendelNocAddressResolver` from `address_windows_for`, and a `FlatAddressTransport` chosen by the descriptor's address space. `MimirChippyMemoryMap` is the `mimir_local` implementation: it folds the flat address back to a chiplet-local AXI address on that Mimir's transport. The `full_package` implementation is one transport, and the flat address is the SPA. `EmuTTDevice` and `GrendelJtagTTDevice` only open the protocol. Their sockets are still chiplet-local, so they still require `address_space: mimir_local`. PCIe, and the FPGA equivalent, add a protocol rather than a device class.
 
-`RtlSimulationTTDevice` still installs its own resolver and is not this device. `TTDevice::create` still has no Grendel PCIe case (step 9).
+`RtlSimulationTTDevice` still installs its own resolver and is not this device. `TTDevice::create` still has no Grendel PCIe case (step 15).
 
 ### 2. CCE control is one implementation on the Mimir-local path
 
@@ -47,7 +47,7 @@ Done in step 7. `cce_gddr_*` and `cce_sram_*` read `CceSpaRoutes` immediately af
 
 Done in step 8. `TargetDevice::EmuAxi` and `TargetDevice::GrendelJtag` only select the transport. `tt_cluster.cpp` builds the matching `ClusterOptions` from `TT_METAL_EMU_*` and `TT_METAL_GRENDEL_JTAG_*`, including `emu_skip_init` so chippy's bring-up is kept. `rtoptions` turns those targets on from the same variables and leaves dispatch on `TT_METAL_SLOW_DISPATCH_MODE`.
 
-A global Tensix reset runs for every target except Mock and Emule. UMD skips it when the descriptor has no Tensix cores. After the cluster is open, a descriptor with no Tensix cores disables fast dispatch. `CreateDeviceMinimal` still skips the allocator when that package has no Tensix cores. A package with Tensix cores keeps fast dispatch and builds an allocator.
+A global Tensix reset runs for every target except Mock and Emule. UMD skips it when the descriptor has no Tensix cores. Dispatch mode stays with `TT_METAL_SLOW_DISPATCH_MODE`: set selects slow dispatch, and unset selects fast dispatch. `CreateDeviceMinimal` still skips the allocator when that package has no Tensix cores.
 
 The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave the uncore and the remap to bring-up, tear down with the uncore left released) stay keyed on the architecture. Worker firmware init already follows the Tensix grid size, so a full Grendel package initializes workers and a Mimir-only package does not.
 
@@ -55,9 +55,9 @@ The Quasar choices in `risc_firmware_initializer.cpp` (reset CCE harts, leave th
 
 ### 8. The tests are tied to the backend
 
-`tests/tt_metal/tt_metal/context/test_mimir_emu.cpp` mixes public APIs (`CreateDevice`, buffers, `ReadFromDeviceDRAMChannel`, programs) with internals: a raw `Cluster::write_core` at `MEM_CCE_L1_NOC_OFFSET`, `CreateDeviceMinimal`, and the view and slot helpers. It is gated on `TT_METAL_EMU_*` / `TT_METAL_GRENDEL_JTAG_*`, and it assumes one chip, two CCEs per Mimir, and the MMK cross-Mimir route.
+`tests/tt_metal/tt_metal/context/test_mimir_emu.cpp` once mixed public APIs with a direct `Device` open and raw DRAM-channel access. The contract now opens a unit mesh and reaches GDDR through its helpers. It is gated on `TT_METAL_EMU_*` / `TT_METAL_GRENDEL_JTAG_*`.
 
-`tt_metal/third_party/umd/tests/api/test_emu_tt_device.cpp` checks results by reading back through a raw chippy transport. That is a backend test, not the shared contract.
+`tt_metal/third_party/umd/tests/api/test_emu_tt_device.cpp` checks results through `EmuTTDevice`, including a flat read at the address `GrendelNocAddressResolver` names. It does not open a second chippy client.
 
 ## Address spaces in use
 
@@ -82,9 +82,10 @@ Each step should leave the current targets green before the next one starts. The
 - the chippy mock
 - a single-Mimir SiVal model
 - the MMK SiVal model
-- JTAG silicon, where a board is available
 - the UMD resolver golden tests (`tests/baremetal/test_grendel_noc_address_resolver.cpp`)
 - the Quasar ZeBu regression (`tests/scripts/quasar/quasar_regression_tests.yaml`)
+
+JTAG silicon is step 16. Boards are scarce, so it runs after PCIe, and only when a board is already up.
 
 ### Step 0. Baseline
 
@@ -96,7 +97,7 @@ Run the emulator baseline on both a single Mimir (`mimir_1x1.yaml`, `bringup_mim
 
 Done. The contract suite is `tests/tt_metal/tt_metal/context/test_mimir_emu.cpp`. Shared helpers are `mimir_contract.hpp`. Raw `Cluster` access is `test_mimir_backend.cpp`. Both are listed in `sources.cmake`.
 
-The contract suite uses `CreateDevice` / `CreateDeviceMinimal`, buffers, `ReadFromDeviceDRAMChannel` / `WriteToDeviceDRAMChannel`, programs, and `write_cce_sram` / `read_cce_sram`. It skips unless the selected package has programmable DRAM cores, and it sizes itself from the descriptor (how many CCEs, how many Mimirs, which pairs can reach each other).
+The contract suite uses a unit `MeshDevice`, its slow-dispatch helpers, buffers, programs, and `write_cce_sram` / `read_cce_sram`. It skips unless the selected package has programmable DRAM cores, and it sizes itself from the descriptor (how many CCEs, how many Mimirs, which pairs can reach each other).
 
 Gtest names are unchanged: `MimirEmu.*`, `MimirEmuSameMimirDirect.*`, `MimirEmuCrossMimirNoc.*`, plus the two Cluster cases now compiled from the backend file.
 
@@ -146,9 +147,69 @@ Done. `TargetDevice` stays a choice of transport. The `EmuAxi` and `GrendelJtag`
 
 Check: the contract suite on every target.
 
-### Step 9. Full Grendel over PCIe or the FPGA equivalent
+### Step 9. Give the emulator its own device model
+
+Done. `EmuTTDevice` has its own model, the same shape as `GrendelJtagTTDevice`. The protocol is the emu transport and is usable when the device is constructed. Data and registers still move on the shared flat-address path.
+
+Check: UMD `EmuTTDevice.*` on the mock and on SiVal, and the Metal contract suite on `mimir_1x1.yaml` and on MMK.
+
+### Step 10. The contract suite only uses the shared API
+
+Done. Every contract case opens a unit `MeshDevice`; none constructs a `Device` or initializes
+`MetalContext` directly. `write_gddr_view` and `read_gddr_view` use the mesh slow-dispatch API,
+and the tests keep calling those helpers. CCE and DRAM-view parameters come from the selected
+descriptor. `cce_gddr_address` traps on an instance outside `CCE_SPA_ROUTES_MAX_INSTANCES`.
+
+With no `mimir_channels`, CCE route setup uses the MMK wiring: Mimir 0 reaches other instances on
+D2D1 and every other Mimir uses D2D0. `TT_METAL_EMU_BRINGUP` is removed. Dispatch mode stays with
+`TT_METAL_SLOW_DISPATCH_MODE`.
+
+Both transports still open `target_devices = {0}`, and the backend tests still assert one chip. That stays until the PCIe step. The contract suite does not treat "one chip" as part of the API.
+
+Check: the contract suite on the single-Mimir model and on MMK.
+
+### Step 11. Skip fast dispatch on a Mimir-only package
+
+Done. `TT_METAL_SLOW_DISPATCH_MODE` still chooses the dispatch mode. On a package with programmable DRAM cores and no Tensix cores, `skip_unless_programmable_dram_package()` skips while that variable is unset. The skip happens before the mesh opens, so the suite does not reach `dispatch_core_manager`. A package with Tensix cores still opens in fast dispatch.
+
+Check: the contract suite on `mimir_1x1.yaml` with the variable unset skips, and with it set it runs. A Tensix package is unchanged.
+
+### Step 12. The contract suite names the package, not the transport
+
+Done. With a chippy server set, the suite reads that server's descriptor (`TT_METAL_EMU_SOC_DESC` or `TT_METAL_GRENDEL_JTAG_SOC_DESC`). With no server, `TT_METAL_SOC_DESC` names the package and is enough to open. A PCIe run sets that variable and does not set a chippy server. Unset everything still skips.
+
+Check: the contract suite on the emulator and on JTAG with their existing variables, and a run that sets only `TT_METAL_SOC_DESC` reaches device open.
+
+### Step 13. Emulator tests check through EmuTTDevice
+
+Done. `test_emu_tt_device.cpp` no longer opens a chippy transport or a `chippy::grendel::Mimir`. Writes are read back with `read_from_device` and with `read_flat_address` at the resolver's flat address. CCE reset, PF_CTRL, and the DMRISC remap are read at `cce_control_address`.
+
+Check: UMD `EmuTTDevice.*` on the mock and on SiVal.
+
+### Step 14. Keraunos on the Mimir-local path
+
+Flow 1 is Mimirs and Keraunos through chippy. `mimir_channels` only describes Mimir DRAM channels. Keraunos shows up as a chiplet to avoid: the emulator selects `m0` so a naked socket does not program `k0`, and the resolver skips the Keraunos column. Add Keraunos to the descriptor and reach it through the same Metal and UMD APIs. This is the last Mimir-local step before PCIe.
+
+Check: MMK, which has a Keraunos, through the emulator. A Mimir-only descriptor skips the Keraunos cases.
+
+### Step 15. Full Grendel over PCIe or the FPGA equivalent
 
 Add the Quasar / Grendel case to `TTDevice::create`, with a package descriptor and package addressing. Run the contract suite unchanged. Only the cases that depend on which Mimirs exist, and which routes exist, should skip.
+
+### Step 16. Run the same suite on JTAG
+
+This waits until step 15. Boards are scarce.
+
+The JTAG register path now shares the flat-address transport with emulation, and it has not been run on silicon since that change. Launch messages and CCE control need a board run.
+
+JTAG multi-chiplet is still incomplete:
+
+- `GrendelJtagProtocol` sends every core to the first chiplet's transport (`transports.front()`). Data goes through the per-Mimir flat transport, so that path is fine. Anything still on the protocol is chiplet 0 only.
+- The TAP number is the digits of the chiplet id (`stoul` of `chiplet.substr(1)`). That assumes `mN` is TAP N. It fails for `k0`, and it has not been checked on an MMK board.
+
+Fix those, then run the contract suite on JTAG. A one-Mimir board and an MMK board are both in scope. Keraunos on JTAG uses the descriptor work from step 14.
+
+Check: the contract suite on JTAG silicon.
 
 ## Decisions
 
@@ -164,7 +225,7 @@ Use this when moving a Mimir test onto the current tree. The contract tests and 
 
 ### Which file
 
-- A test that uses `CreateDevice` or `CreateDeviceMinimal`, buffers, programs, and `ReadFromDeviceDRAMChannel` / `WriteToDeviceDRAMChannel` goes in `tests/tt_metal/tt_metal/context/test_mimir_emu.cpp`.
+- A test that uses a unit `MeshDevice`, buffers, programs, and the helpers in `mimir_contract.hpp` goes in `tests/tt_metal/tt_metal/context/test_mimir_emu.cpp`.
 - A test that constructs `Cluster` (`llrt::RunTimeOptions` plus `Cluster`), or that calls `write_core` / `read_core` itself, goes in `tests/tt_metal/tt_metal/context/test_mimir_backend.cpp`.
 - Register a new `.cpp` in `tests/tt_metal/tt_metal/context/sources.cmake`, inside the `TT_UMD_BUILD_GRENDEL_JTAG` list. The binary is `./build/test/tt_metal/unit_tests_context`.
 - Coordinate math, the GDDR sweep, and the SRAM helper live in `tests/tt_metal/tt_metal/context/mimir_contract.hpp`, namespace `tt::tt_metal::mimir_contract`. Call them. Do not reimplement CCE-to-Mimir indexing in the test.
@@ -173,9 +234,9 @@ Use this when moving a Mimir test onto the current tree. The contract tests and 
 
 ### When the test runs
 
-Start the test body with `skip_unless_programmable_dram_package()`. It is a macro, and it has to be invoked directly in the test: `GTEST_SKIP` returns from the function that calls it, so wrapping it in another function does not skip the test. It skips when the selected package descriptor has no programmable DRAM cores. Do not skip only because `TT_METAL_EMU_SERVER` is unset, and do not use that variable as the identity of the suite.
+Start the test body with `skip_unless_programmable_dram_package()`. It is a macro, and it has to be invoked directly in the test: `GTEST_SKIP` returns from the function that calls it, so wrapping it in another function does not skip the test. It skips when the selected package descriptor has no programmable DRAM cores. It also skips a Mimir-only package while `TT_METAL_SLOW_DISPATCH_MODE` is unset. Do not skip only because `TT_METAL_EMU_SERVER` is unset, and do not use that variable as the identity of the suite.
 
-Opening the device still needs a descriptor and a transport: `TT_METAL_EMU_SOC_DESC` or `TT_METAL_GRENDEL_JTAG_SOC_DESC`, and the matching `*_SERVER`. The contract suite does not send INIT. Bring the model up with the chippy script first, then run the tests. `bringup_mimir_1x1.py` matches `mimir_1x1.yaml`. `bringup_two_mimir.py` matches `mimir_2x_package.yaml`. Leave `TT_UMD_EMU_INIT` unset on a live SiVal server.
+The descriptor is the one the runtime will open. A chippy server uses `TT_METAL_EMU_SOC_DESC` or `TT_METAL_GRENDEL_JTAG_SOC_DESC`. With no server, `TT_METAL_SOC_DESC` names the package. The contract suite does not send INIT. Bring the model up with the chippy script first, then run the tests. `bringup_mimir_1x1.py` matches `mimir_1x1.yaml`. `bringup_two_mimir.py` matches `mimir_2x_package.yaml`. Leave `TT_UMD_EMU_INIT` unset on a live SiVal server. Run a Mimir-only package with `TT_METAL_SLOW_DISPATCH_MODE=1`.
 
 Size the case from the descriptor:
 
@@ -186,9 +247,7 @@ Size the case from the descriptor:
 
 ### Host DRAM and CCE SRAM
 
-- Write and read GDDR through `write_gddr_view` / `read_gddr_view`, or through `detail::WriteToDeviceDRAMChannel` / `detail::ReadFromDeviceDRAMChannel`. The integer is the Metal view index. Do not call `cluster.write_dram_vec` or `cluster.read_dram_vec` from a contract test.
-- Those two DRAM-channel functions are deprecated internal APIs and are scheduled for removal after 2026-10-30. The contract suite calls them because a Mimir-only device has no allocator, so the buffer API is not the host path for these cases. When the functions are removed, change `write_gddr_view` and `read_gddr_view` in `mimir_contract.hpp`. Leave the tests calling the helpers.
-- `CreateDeviceMinimal` on a package with no Tensix cores does not build an allocator. `device->allocator()` is an empty pointer. Test the pointer. Do not dereference it.
+- Write and read GDDR through `write_gddr_view` / `read_gddr_view`. The integer is the Metal view index. Do not call `cluster.write_dram_vec` or `cluster.read_dram_vec` from a contract test.
 - A DRAM view may be 512 MiB (`dram_view_size` 536870912). `dram_bank_size` stays 8 GiB. The second half's `address_offset` is 4 GiB (4294967296). `gddr_sweep_from_soc` treats a positive view smaller than 1 GiB as one slot whose stride is the view size. Do not require the view to be a non-zero multiple of 1 GiB. Kernel slot math stays `(slot_base + slot) * slot_stride` in `uint64`. `slot_base` is the view's `address_offset` divided by the slot stride, so the 4 GiB half is slot 8 of a 512 MiB stride. Leave `kDramOffset` at `0x800`.
 - Host CCE SRAM goes through `write_cce_sram` and `read_cce_sram`. Pass a logical DRAM core and a HAL NOC address: `cce_sram_noc_addr(offset)` or `hal.get_dev_noc_addr(...)`. Do not form the chiplet-local AXI address `0x40000000 + cce_index * 0x400000`, and do not add `MEM_CCE_L1_NOC_OFFSET` in contract test code. The helper applies the HAL offset. Kernel-local SRAM stays 0.
 - Peer SRAM and peer GDDR in a CCE kernel still use `cce_gddr.h` (`cce_gddr_*`, `cce_sram_*`). Those functions read `CceSpaRoutes`, which `CreateDevice` writes after the CCE bank-to-NOC staging range from the package windows and `mimir_channels`. Do not put SPA bases back in the kernel. Do not move CCE kernels onto the dataflow API. Do not edit the kernels under `tests/tt_metal/tt_metal/test_kernels/misc/` as part of porting a host test.
@@ -205,4 +264,4 @@ Size the case from the descriptor:
 - `EmuTTDevice` tests attach to a live server without INIT. Set `TT_UMD_EMU_INIT=1` only against the chippy mock.
 - Set `TT_UMD_EMU_DRAM=1` only after GDDR bring-up.
 - A per-hart reset mask must release every hart only when the request is the full `RiscType::ALL_NEO_DMS` mask: `(risc_type & ALL_NEO_DMS) == ALL_NEO_DMS`. Any non-zero overlap is not enough. `RiscType::DM0` releases bit 1 only (`1 << 1`). `DM7` releases bit 8.
-- CCE control offsets are relative to one CCE: reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM-core coordinate selects the CCE. Do not add `0x04000000` per Mimir or `0x01000000` per CCE in test code, and do not call `cce_control_addr`. Writing `CCE_RESET_VECTOR_BASE` through `write_to_device_reg` on a DRAM core still programs that core's CCE. Reading the register back through a chippy accessor still works.
+- CCE control offsets are relative to one CCE: reset vector `0x02000000`, PF_CTRL `0x02200000`, DMRISC remap `0x02202000`. The DRAM-core coordinate selects the CCE. Do not add `0x04000000` per Mimir or `0x01000000` per CCE in test code, and do not call `cce_control_addr`. Writing `CCE_RESET_VECTOR_BASE` through `write_to_device_reg` on a DRAM core still programs that core's CCE. Read it back with `read_flat_address` at `cce_control_address`. Do not open a chippy transport from the test.
