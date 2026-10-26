@@ -29,7 +29,6 @@ Env: QWEN36_MM_SCRATCH (dir for the synthetic mp4, default /tmp).
 
 import os
 from types import SimpleNamespace
-from unittest import mock
 
 import pytest
 import torch
@@ -479,8 +478,7 @@ def test_vision_guard(mesh_device, reset_seeds, ensure_gc, expect_error, monkeyp
             )
         ),
     ):
-        with mock.patch("vllm.config.get_current_vllm_config", return_value=cfg):
-            assert Qwen36ForCausalLM._read_vllm_max_pixels() == 1048576
+        assert Qwen36ForCausalLM._read_vllm_max_pixels(cfg) == 1048576
     gen._vllm_mm_max_pixels = 1048576
     gen.warmup_vision()
     assert gen._vision_warmed_buckets == {2048, 4096, 6144, 8192}

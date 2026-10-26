@@ -17,6 +17,11 @@ These layer on top of the repo-root ``conftest.py`` (which provides ``device``,
 
 import pytest
 
+from models.common.tests.vllm_stubs import stub_vllm_if_missing
+
+# CI runners have no vLLM; stub the names the vLLM adapter imports at module scope before any test module loads it.
+stub_vllm_if_missing(pytest.MonkeyPatch())
+
 
 def pytest_addoption(parser):
     parser.addoption(
