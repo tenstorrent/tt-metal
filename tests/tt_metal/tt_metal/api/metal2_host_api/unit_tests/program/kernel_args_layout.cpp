@@ -39,6 +39,23 @@ using test_helpers::ProgramSpecTestGen1;
 // needed. Kernel-hash stability across shapes is in kernel_hash/tensor_spec_relaxations.cpp; the
 // loosened runtime spec match is in program_run_args/tensor_args.cpp.
 
+// CTA values lower into the kernel's named compile-time args as the implicit conversion of their
+// source to uint32_t (negative values wrap, floating point truncates, bools convert).
+TEST_F(ProgramSpecTestGen1, CPU_CompileTimeArgValuesLowerAsUint32Conversion) {
+    const int neg = -1;
+    const std::uint64_t wide = 0x1'0000'0005;
+    const double real = 2.9;
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.kernels[0].compile_time_args = {{"neg", neg}, {"wide", wide}, {"flag", true}, {"real", real}};
+    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+
+    const auto named = program.impl().get_kernel_by_spec_name("dm_kernel")->named_compile_time_args();
+    EXPECT_EQ(named.at("neg"), static_cast<uint32_t>(neg));
+    EXPECT_EQ(named.at("wide"), static_cast<uint32_t>(wide));
+    EXPECT_EQ(named.at("flag"), 1u);
+    EXPECT_EQ(named.at("real"), static_cast<uint32_t>(real));
+}
+
 TEST_F(ProgramSpecTestGen1, CPU_DynamicTensorShape_ShardedBindingTracksShapeCRTASlots) {
     // Sharded + dynamic_tensor_shape: the TensorBindingHandle's num_runtime_field_crta_words
     // should equal the BufferDistributionSpec's tensor_shape_in_pages rank (one CRTA word per

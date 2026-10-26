@@ -53,6 +53,9 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/scratchpad_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/tensor_parameter.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/tensor_spec_relaxations.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/name_and_value_types/accessor_name.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/name_and_value_types/api_idioms.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/name_and_value_types/arg_value.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/compute_config_lowering.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/graph_tracking.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_args_layout.cpp

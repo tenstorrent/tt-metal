@@ -14,6 +14,7 @@ Put a test elsewhere when:
 |---|---|
 | `invariant_tests/` | Which specs `MakeProgramFromSpec` accepts or rejects |
 | `kernel_hash/` | Which spec fields feed a kernel's JIT cache key |
+| `name_and_value_types/` | The `AccessorName` / `ArgName` and `ArgValue` types, and the API idioms they must keep compiling |
 | `program/` | What `MakeProgramFromSpec` produces from a valid spec |
 | `program_run_args/` | How a program behaves when runtime arguments are supplied or patched |
 | `tensor_spec_relaxations/` | The `TensorSpecRelaxations` match and hash relation |
