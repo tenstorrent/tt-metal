@@ -42,19 +42,28 @@ from models.experimental.tirex2_forecast.tests.golden.goldens import have_golden
 from models.experimental.tirex2_forecast.tests.pcc.helpers import host_weights
 from models.experimental.tirex2_forecast.tests.perf.test_forward_perf import shape_inputs
 
-ORDINARY_STEPS = df.NUM_TOKENS - 1  # 284 steps after t = 0
-PROFILED_STEPS = 71  # ORDINARY_STEPS / 4
 SLSTM_BLOCKS = df.NUM_BLOCKS // 2
-COUNTS = {
-    "embed": 1,
-    "layer_mlstm": df.NUM_BLOCKS // 2,
-    "slstm_pre": SLSTM_BLOCKS,
-    "slstm_first": SLSTM_BLOCKS,
-    "slstm_steps": SLSTM_BLOCKS * ORDINARY_STEPS // PROFILED_STEPS,
-    "slstm_post": SLSTM_BLOCKS,
-    "head": 1,
-}
 DRAIN_EVERY = 20
+
+
+def step_plan(cut: int) -> tuple[int, int]:
+    """``(ordinary steps after t = 0, profiled ordinary steps)``: a quarter of them (284 / 71 on the full path,
+    92 / 23 with the 192-token pad cut, where t = 0 starts from the cached pad state)."""
+    ordinary = df.NUM_TOKENS - cut - 1
+    return ordinary, ordinary // 4
+
+
+def counts(cut: int) -> dict:
+    ordinary, profiled = step_plan(cut)
+    return {
+        "embed": 1,
+        "layer_mlstm": df.NUM_BLOCKS // 2,
+        "slstm_pre": SLSTM_BLOCKS,
+        "slstm_first": SLSTM_BLOCKS,
+        "slstm_steps": SLSTM_BLOCKS * ordinary // profiled,
+        "slstm_post": SLSTM_BLOCKS,
+        "head": 1,
+    }
 
 
 @pytest.mark.skipif(not have_goldens(), reason="goldens not generated")
@@ -67,7 +76,6 @@ def test_profile_forward(device):
     from models.experimental.tirex2_forecast.tt.common import Precision
     from models.experimental.tirex2_forecast.tt.model import TtTiRex2
 
-    assert ORDINARY_STEPS % PROFILED_STEPS == 0
     shape = os.environ.get("MODEL_PROFILE_SHAPE", "paper")
     precision = os.environ.get("MODEL_PROFILE_PRECISION", "accuracy")
     _, ctx, horizon, gid, tm = shape_inputs(shape)
@@ -77,6 +85,10 @@ def test_profile_forward(device):
     mlstm_block, slstm_block = tt.weights.blocks
     prep = tt.prepare_inputs(ctx, horizon, gid, tm)
     inputs = tt.upload_inputs(prep)
+    ORDINARY_STEPS, PROFILED_STEPS = step_plan(prep.cut)
+    assert ORDINARY_STEPS % PROFILED_STEPS == 0
+    COUNTS = counts(prep.cut)
+    slstm_init = tt.pad_state(prep.cut, prep.device_rows, slstm_block) if prep.cut else None
 
     def forward(marked: bool):
         def mark(name):
@@ -106,7 +118,14 @@ def test_profile_forward(device):
         mark("slstm_pre_end")
         mark("slstm_first_start")
         ys, (c, n, m) = layers.slstm_recurrence(
-            device, WxT, slstm_block.cell.r, PROFILED_STEPS + 1, tt.consts, step_hook=hook, y_fp32=tt.precision.y_fp32
+            device,
+            WxT,
+            slstm_block.cell.r,
+            PROFILED_STEPS + 1,
+            tt.consts,
+            step_hook=hook,
+            y_fp32=tt.precision.y_fp32,
+            init=slstm_init,
         )
         mark("slstm_steps_end")
         ttnn.ReadDeviceProfiler(device)
@@ -121,7 +140,7 @@ def test_profile_forward(device):
             out = mixed
         mark("slstm_post_end")
         mark("head_start")
-        h = tt.head(out)
+        h = tt.head(out, prep.cut)
         mark("head_end")
         layers.free(out)
         return h
@@ -144,6 +163,7 @@ def test_profile_forward(device):
         "test": "forward",
         "window": ["MODEL_START", "MODEL_END"],
         "rows": prep.rows,
+        "pad_cut": prep.cut,
         "device_rows": prep.device_rows,
         "sections": list(COUNTS),
         "counts": COUNTS,
