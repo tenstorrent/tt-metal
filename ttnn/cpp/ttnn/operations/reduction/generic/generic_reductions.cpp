@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -103,9 +104,7 @@ float get_pad_value(
     // ops use bit_cast<uint32_t> on the INT32 branch to recover the original int32 bits.
     if (dtype == tt::tt_metal::DataType::INT32) {
         if (reduce_type == reduction_common::ReduceType::Max) {
-            // SFPU int32 MAX reduce can return an incorrect maximum when the INT32_MIN bit pattern (0x80000000)
-            // appears in padded lanes; use INT32_MIN + 1 instead.
-            return std::bit_cast<float>(static_cast<uint32_t>(0x80000001u));  // INT32_MIN + 1
+            return std::bit_cast<float>(static_cast<uint32_t>(0x80000000u));  // INT32_MIN
         }
         if (reduce_type == reduction_common::ReduceType::Min) {
             return std::bit_cast<float>(static_cast<uint32_t>(0x7FFFFFFFu));  // INT32_MAX
@@ -555,6 +554,25 @@ Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
     const std::optional<Layout>& output_layout) {
+    if constexpr (
+        reduce_type == reduction_common::ReduceType::Max || reduce_type == reduction_common::ReduceType::Min) {
+        const auto& lshape = input_tensor_arg.logical_shape();
+        if (input_tensor_arg.layout() == TILE_LAYOUT && input_tensor_arg.dtype() == DataType::BFLOAT8_B &&
+            lshape.rank() > 0 && lshape[-1] % tt::constants::FACE_WIDTH != 0) {
+            auto widened = reduce<reduce_type>(
+                ttnn::typecast(input_tensor_arg, DataType::BFLOAT16),
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout);
+            return ttnn::typecast(
+                ttnn::fill_implicit_tile_padding(widened, ttnn::PadValue{0.0f}), input_tensor_arg.dtype());
+        }
+    }
     // ttnn.mean does not support integer inputs. Remove once integer AVG is implemented.
     if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
         const auto dt = input_tensor_arg.dtype();
