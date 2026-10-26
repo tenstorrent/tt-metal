@@ -544,3 +544,36 @@ def test_reduce_uint32_sharded_and_sub_core_grids(device, op_name, input_config,
     assert output_tensor.memory_config().memory_layout == output_config.memory_layout
     assert output_tensor.memory_config().buffer_type == output_config.buffer_type
     assert_equal(torch_output_tensor, ttnn.to_torch(output_tensor).to(torch.int64))
+
+
+@pytest.mark.parametrize("output_grid", [_row_grid(4, 7), _row_grid(2, 5)])
+def test_reduce_h_width_sharded_output_on_other_grid(device, output_grid):
+    """The H reduce must give the right result when the output shard grid differs from the input shard grid."""
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randn((1, 1, 128, 256), dtype=torch.bfloat16)
+    torch_output_tensor = torch.sum(torch_input_tensor, dim=-2, keepdim=True)
+    input_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_row_grid(0, 3), (128, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(output_grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_config
+    )
+
+    output_tensor = ttnn.sum(input_tensor, dim=-2, keepdim=True, memory_config=output_config)
+
+    assert output_tensor.memory_config().shard_spec.grid == output_grid
+    assert_numeric_metrics(
+        torch_output_tensor,
+        ttnn.to_torch(output_tensor),
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.05,
+        frobenius_threshold=0.01,
+    )
