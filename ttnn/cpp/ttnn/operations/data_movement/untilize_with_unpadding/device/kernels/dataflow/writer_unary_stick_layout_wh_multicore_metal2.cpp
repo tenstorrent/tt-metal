@@ -54,10 +54,10 @@ void kernel_main() {
                 noc.async_write(
                     src, s, write_size, {.offset_bytes = 0}, {.page_id = size_2d + k, .offset_bytes = start_column_id});
 
-                noc.async_write_barrier();
-
                 l1_read_addr += width_size;
             }
+            // Every row reads its own part of the block, so one barrier before releasing it is enough.
+            noc.async_write_barrier();
         }
 
         dfb_out0.pop_front(single_block_size * has_rows);
