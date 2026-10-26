@@ -103,8 +103,9 @@ def test_dspark_drafter_rows_match_its_layer_completions():
     tail.drafter = SimpleNamespace(config=SimpleNamespace(num_hidden_layers=5))
     *_, k, v = tail.kv_migration_stages(_caches(72, 21))
     assert [(s.base_addr, s.first_layer, s.count) for s in (k, v)] == [(0x4000, 93, 5), (0x5000, 93, 5)]
-    layout = layer_completion_layout(SPLITS, 3, kv_slot_layer_ids=KimiK3Config.mla_layer_ids(), extra_layers=5)
-    assert layout.rank_layer_ids[-5:] == list(range(k.first_layer, k.first_layer + k.count))
+    layout = layer_completion_layout(SPLITS, 3, extra_layers=5)
+    records = range(layout.rank_first_record, layout.rank_first_record + layout.rank_record_count)
+    assert list(records[-5:]) == list(range(k.first_layer, k.first_layer + k.count))
 
     upstream = _runtime(0, 24, dflash=True)
     upstream._dflash_k_cache = None
