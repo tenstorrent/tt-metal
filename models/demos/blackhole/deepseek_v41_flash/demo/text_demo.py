@@ -188,6 +188,18 @@ SCENARIOS = [
         "gsm8k8shot_b16_m131072",
         instruct=True,
     ),
+    # bounded-replay study: 4 x 16 GSM8K 8-shot prompts (test questions 0..63), B=16 build, 256 new tokens
+    *[
+        _s(
+            f"/mnt/tt-data/ssinghal/dsv4-logs/replay_study/gsm64_p{k}.json",
+            16,
+            70000,
+            256,
+            f"gsm64_p{k}",
+            instruct=True,
+        )
+        for k in range(4)
+    ],
     _s(f"{PROMPTS}/input_data_long_256k_exact.json", 16, 270000, 64, "isl256k_b16"),
     _s(GSM, 32, 512, 384, "gsm8k_b32", instruct=True, stop_at_eos=True),
     _s(f"{LONG}/input_data_long_32k.json", 32, 40000, 64, "isl32k_b32"),

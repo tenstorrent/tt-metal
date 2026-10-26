@@ -1329,6 +1329,19 @@ class DSV41PrefillModel:
                 self.dyn_trace.end()
                 ov.seg = None
             elif rep:
+
+                def warm(
+                    part,
+                ):  # one more eager pass of the half right before ITS capture (same allocation state: no program may be compiled inside a capture)
+                    self._part = part
+                    self.forward_device(bufs, S, 0, C, dyn=True)
+                    ttnn.synchronize_device(self.md)
+                    if part == "back":
+                        for x in list(self.dyn_out[0]) + list(self.dyn_out[1]):
+                            ttnn.deallocate(x)
+                    self._part = None
+
+                warm("front")
                 tr0 = self._trace_region_mib()
                 _PS.CAPTURING[0] = True
                 self._part = "front"
@@ -1337,6 +1350,13 @@ class DSV41PrefillModel:
                 ttnn.end_trace_capture(self.md, self.dyn_trace, cq_id=0)
                 ttnn.synchronize_device(self.md)
                 self._log_chunk_trace(C, tr0)
+                _PS.CAPTURING[0] = False
+                self._part = None
+                warm("back")
+                for _, pl in self.layers:
+                    pl.pa.reset_dyn()
+                ttnn.synchronize_device(self.md)
+                _PS.CAPTURING[0] = True
                 tr0 = self._trace_region_mib()
                 self._part = "back"
                 self.dyn_trace_b = ttnn.begin_trace_capture(self.md, cq_id=0)
