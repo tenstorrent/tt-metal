@@ -719,3 +719,51 @@ TTFT, one user on one row (`profile_prefill.py --ttft --replicate-global-kv --us
 Left for later: merging the split planes on chip (saves the 3-5 ms and the ~38 MB DRAM tensor per call), K 512 if
 decode's L1 buffers shrink, the MoE expert matmul for short prompts, a traced prefill chunk, and batch > 1 on the new
 programs (written, not run on device).
+
+## 1M prefill on all 4 rows, 2026-10-26 (#61419, on `mimo-v2.6/dev`, MOPD)
+
+`tests/perf/long_1m.py` runs the standalone model on all 4 rows, built at `max_seq_len` 1M + 512, with chunks of 4096
+and the global K / V on both chips of a pair (`--replicate-global-kv`, vLLM's layout) unless noted.
+
+- `--mode capacity` logs DRAM per chip after the weights and with the KV caches, then runs the last 4K chunk of a 1M
+  prompt on row 0 (the earlier chunks only take their SWA blocks; the cache keeps zeros) and one decode step of every
+  user at position 1M - 1.
+- `--mode passkey` gives each user its own 1M passkey prompt (the filler and question of `test_model_long_tp8_dp4.py`).
+  The rows run at once, with their chunks enqueued round-robin; the users of a row run one after the other. TTFT is
+  from the start of the run and includes the first chunk's compile. Then 12 greedy tokens per user are decoded from
+  that cache, untraced, and each key must be in the text.
+
+DRAM per chip at 1M (34.18 GB per chip, weights 24.24 GB):
+
+| Users per row | Global K / V | Used | Free | Job |
+|---|---|---|---|---|
+| 1 | both chips of the pair | 27.52 GB | 6.66 GB | 714 |
+| 2 | both chips of the pair | 30.74 GB | 3.44 GB | 717 |
+| 4 | the pair splits the users | 30.71 GB | 3.47 GB | 714 |
+| 4 | both chips of the pair | out of memory allocating the global KV, 33.69 GB in use | | 715 |
+
+Used DRAM does not change after the last 4K chunk at 1M, after prefill or after decode (to 0.01 GB). The last 4K chunk at
+1M takes 1.46 s with the K / V on both chips (8 heads per chip) and 2.78 s when the pair splits the users (the owner
+runs all 16 heads). One untraced decode step at 1M - 1 on one row: 0.19 s with 1 or 4 users, 0.17 s with 2.
+
+1M passkey prompts:
+
+| | 1 user (row 0) | 4 users (1 per row) | 8 users (2 per row) |
+|---|---|---|---|
+| Job | 715 | 716 | 718 |
+| TTFT | 277.3 s | 476.5-477.4 s | slot 0 472.9-473.8 s, slot 1 946.3-947.2 s |
+| Pass key found (depths 10 / 35 / 65 / 90%) | 1 / 1 | 4 / 4 | 8 / 8, every depth twice |
+| Decode from the 1M cache | correct | correct on every row | correct in both slots of every row |
+| Decode step, untraced, logits read (not TPOT) | 163 ms | 653 ms | 654 ms |
+
+- One row alone matches the earlier 1M TTFT (272.5 s, second run of random tokens). With 4 rows each takes ~476 s: one
+  host thread dispatches every row's chunks, and a round over 4 rows takes longer than one chunk on the device. A
+  traced prefill chunk or one host thread per row should bring the 4 rows back to ~277 s.
+- 4 users per row at 1M does not fit with the K / V on both chips, so not under vLLM's layout. It fits when the pair
+  splits the users, but a later chunk then runs all 16 heads on the owner and discards the other chip's result: from the
+  last-chunk times, ~416 s per user, ~28 minutes for 4 users on one row.
+- #61419's step 1 is stale: the standalone SWA layers keep 9 blocks per user (`kv.SwaBlockTable`), and #61745 sizes
+  vLLM for 2 x 1M per lane (`MIMO_KV_GB_PER_CHIP=6.6`), the 8-user case above.
+
+Next: the 4-row prefill dispatch; prefilling a row's two users together; a 1M prompt through the vLLM server; traced
+decode TPOT at 1M from a real 1M cache.
