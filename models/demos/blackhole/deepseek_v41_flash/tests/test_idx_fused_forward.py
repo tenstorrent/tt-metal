@@ -5,8 +5,8 @@ import os
 
 import pytest
 import torch
-
 import ttnn
+
 from models.demos.blackhole.deepseek_v41_flash.tests.test_idx_lever_bench import traced_us
 from models.demos.blackhole.deepseek_v41_flash.tt import spec_paged as SP
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_paged import SpecIndexer
@@ -16,7 +16,7 @@ NS = [int(x) for x in os.environ.get("IDXB_N", "4128,32832,65568").split(",")]
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 200_000_000}], indirect=True)
-@pytest.mark.parametrize("U,n", [(1, 4), (1, 6), (4, 4)])
+@pytest.mark.parametrize("U,n", [(1, 1), (1, 2), (1, 4), (1, 6), (4, 4)])
 @torch.no_grad()
 def test_fwd(mesh_device, U, n):
     md = mesh_device
@@ -134,3 +134,59 @@ def test_bucket_independence(mesh_device, U, n):
         assert torch.equal(res[(True, 65568)], res[(False, 65568)])
         print(f"BUCKET fused vs chain identical: {torch.equal(res[(True, 65568)], res[(False, 65568)])}", flush=True)
         assert torch.equal(res[(False, 32800)], res[(False, 65568)])
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384, "trace_region_size": 200_000_000}], indirect=True)
+@pytest.mark.parametrize("n", [1, 4, 6])
+@torch.no_grad()
+def test_crossings(mesh_device, n):
+    """Chain vs fused ids (same ids, same ORDER) with the scanned valid length around 32768 / 65536 / 98304 entries (the length at which the top-k tie order changes)."""
+    md = mesh_device
+    U, R = 1, n
+    torch.manual_seed(4)
+    rep = ttnn.ReplicateTensorToMesh(md)
+    up = lambda t, dt, lay: ttnn.from_torch(t.contiguous(), device=md, dtype=dt, layout=lay, mesh_mapper=rep)
+    N = 98400
+    w = {"wq_b": torch.randn(4096, 1280) * 0.02, "weights_proj": torch.randn(32, 5120) * 0.02}
+    freqs = torch.polar(torch.ones(N * 2 + 64, 32), torch.rand(N * 2 + 64, 32))
+    for tie in (False, True):
+        idx = SpecIndexer(
+            md,
+            w,
+            freqs,
+            users_per_row=U,
+            n_alloc=N,
+            ratio=2,
+            key_dtype=ttnn.bfloat8_b,
+            fp4_q=True,
+            backend="matmul",
+            n=n,
+        )
+        keys = torch.randn(U, N - 32, 128)
+        if tie:
+            keys = torch.round(keys * 1.5) / 1.5
+        idx.load_keys(keys)
+        idx.nb = None
+        idx._arange_for(idx.n_score)
+        x = up(torch.randn(1, 1, R, 5120), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        qr = up(torch.randn(1, 1, R, 1280), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        for live in (32767, 32768, 32769, 32800, 65535, 65536, 65537, 65568, 98303, 98304, 98305):
+            nv = torch.tensor([live - (R - 1 - i) // 2 for i in range(R)], dtype=torch.float32)
+            st = {
+                "C": up(torch.ones(R, 1, 1, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                "S": up(torch.zeros(R, 1, 1, 128), ttnn.bfloat16, ttnn.TILE_LAYOUT),
+                "nvalid": up(nv.reshape(R, 1, 1, 1), ttnn.float32, ttnn.TILE_LAYOUT),
+                "valid": up(
+                    torch.full((1, 1, 1, 1), int(nv.max()), dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                ),
+            }
+            res = {}
+            for fused in (False, True):
+                SP._FUSED_SCORE = fused
+                res[fused] = ttnn.to_torch(idx.forward(x, qr, dict(st))).reshape(R, -1)
+            SP._FUSED_SCORE = True
+            same_set = all(set(res[False][r].tolist()) == set(res[True][r].tolist()) for r in range(R))
+            eq = torch.equal(res[False], res[True])
+            print(f"CROSS n={n} tie={tie} live={live}: ids+order identical {eq} (sets equal {same_set})", flush=True)
+            assert eq

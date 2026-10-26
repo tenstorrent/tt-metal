@@ -16,8 +16,8 @@ The block compression of ratio-2 layers (previous-token chain inside the block, 
 import os
 
 import torch
-
 import ttnn
+
 from models.demos.blackhole.deepseek_v41_flash.tt import paged_ops as P
 from models.demos.blackhole.deepseek_v41_flash.tt.attention import HEAD_DIM
 from models.demos.blackhole.deepseek_v41_flash.tt.indexer import _FP4_FUSED, DIM, HEADS, DSV41DecodeIndexer
@@ -30,6 +30,15 @@ from models.demos.blackhole.deepseek_v41_flash.tt.spec_attention import SpecComp
 from models.demos.blackhole.deepseek_v41_flash.tt.spec_attention import _PagedMixin as _SpecFinish
 
 _FUSED_SCORE = os.environ.get("DSV41_IDX_FUSED", "1") == "1"
+
+
+def _canonical_ids(ids):
+    """select() of the base tree post-processes the selected ids with indexer.canonical_ids when that exists (ascending id order); the fused path returns from SpecIndexer.forward without select(), so it applies the same pass."""
+    from models.demos.blackhole.deepseek_v41_flash.tt import indexer as _ix
+
+    f = getattr(_ix, "canonical_ids", None)
+    return f(ids) if f is not None else ids
+
 
 RING_SPEC = 160  # 128 + margin (k <= 5 needs 133; 160 keeps the ring a multiple of 32)
 
@@ -85,7 +94,10 @@ class SpecIndexer(DSV41DecodeIndexer):
                 q, self.k_cache, self._w_flat, self._nvalid_u32(st), self.n, self.n_score, valid=st["valid"]
             )
             ids = ttnn.experimental.topk_large_indices(sc, k=self.topk, valid_length_tensor=st["valid"])
-            return ids if ids.shape[0] == self.R else ttnn.reshape(ids, [self.R, 1, 1, self.topk])
+            ids = ids if ids.shape[0] == self.R else ttnn.reshape(ids, [self.R, 1, 1, self.topk])
+            return _canonical_ids(
+                ids
+            )  # the ascending-order pass of select() when the base has it (DSV41_IDX_SORT), else identity
         return super().forward(x, qr, st, return_scores)
 
     def score(self, q, w):
