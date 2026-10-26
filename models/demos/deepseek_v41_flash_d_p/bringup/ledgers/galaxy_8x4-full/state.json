@@ -353,7 +353,7 @@
   },
   "attempt": 2,
   "attempts": 0,
-  "duration_s": 19.1,
+  "duration_s": 19.8,
   "history": [
    {
     "attempt": 1,
@@ -385,9 +385,17 @@
     "role": "overseer",
     "status": "RESUMED",
     "t": "2026-10-26T17:41:37"
+   },
+   {
+    "reused": [
+     "W.1"
+    ],
+    "s": 19.8,
+    "status": "PASS",
+    "t": "2026-10-26T21:45:16"
    }
   ],
-  "last_run": "2026-10-26T16:51:44",
+  "last_run": "2026-10-26T21:45:16",
   "log": "/scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/logs/FIX.3.log",
   "metrics": {
    "all_gather_maxabs": 0.0,
@@ -464,12 +472,12 @@
     "W.1"
    ],
    "units": {
-    "B.1": "8bba69d044a38c29",
-    "W.1": "0269cbe19fe854b1"
+    "B.1": "1884ef858792f3c9",
+    "W.1": "067339b3e7b08087"
    }
   },
-  "started": "2026-10-26T16:51:25",
-  "status": "TODO",
+  "started": "2026-10-26T21:44:56",
+  "status": "PASS",
   "units": {
    "B.1": "PASS",
    "W.1": "PASS"

@@ -141,3 +141,17 @@ Slurm: job 153825 on this node (Prefill all-day slot), no time limit; release on
   (no agent): I fix its knowledge text, commit on reused units; (2) seed profile: test_profile.py on rung seed (layers
   0 1 2 3 14 20 21 24, chunk 5120 at 5120), BRINGUP_PROFILE_OPS=1, RT profiler (30 of 32 chips: 7 / 10 IOMMU), via a
   scratch pytest plugin (scratchpad/seedprof/run.sh), results outside the ledger; ~18 min load + profile; (3) resume -> M.1.
+- 18:31 FIX.2 PASS 9b8bf7c7d40 (attempt 2). Fork tests/unit on a Galaxy chip: 38 passed, 0 failed, 3 skipped (2x2-mesh
+  tests, one card). Cause of the 12: flat_schedule_defines asserted nsg == 1 for every plan (only the overlap consumer
+  needs it); assert moved to flat_combine_overlap. Time bands now per chip class (arch, grid): p150 11x10 unchanged,
+  Galaxy 12x10 measured here. W.1 passed on the new code. Accepted. QB re-verify (owner): FIX.1, FIX.2, W.1 fabric.
+- 18:33 FIX.3 knowledge text repointed at F194 by the overseer (owner: no agent for text): 3589c089004. FIX.3 is
+  classified framework: resume commits it on reused units, no agent.
+- 18:34 seed profile started (run still paused): scratchpad/seedprof/run.sh, log /scratch/dnijemcevic/seed_profile.log.
+- 18:37 INFRA: something removed this user's /tmp entries (/tmp/claude-4338 incl. the session scratchpad, /tmp/tmux-4338,
+  /tmp/tt-device-*.lock / .dirty); other users' /tmp untouched; cause unknown (no run of ours deletes /tmp). Effects: the
+  seed profile (shell in the scratchpad) killed at 4 min (SIGTERM, mid weight load); the tmux socket gone (restored:
+  mkdir -m 700 /tmp/tmux-4338 + SIGUSR1 to the tmux server); the next try segfaulted on an OpenMPI session dir created
+  without x (mode 0640, /tmp/ompi.<host>.4338): chmod 700, umask 022 added to the run scripts. Overseer files now live
+  in /scratch/dnijemcevic (seedprof/), not the /tmp scratchpad. 18:39 seed profile restarted (tmux seedprof).
+2026-10-26 19:36:47 node drained for scheduled maintenance (Retimer FW + BusBar test, vincentdu) at 19:05, rebooted 19:07; reservation 153825 lost; run paused before FIX.3, resumable; uncommitted ledger files backed up to /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/ledger_backup_20261026T1936
