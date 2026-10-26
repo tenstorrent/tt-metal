@@ -144,7 +144,10 @@
     -m "not disable_fast_runtime_mode"
   skus:
     wh_n300_civ2:
-      timeout: 10
+      # The 1470 tests run in ~4 min when every kernel compile hits the (read-only) kernel ccache and in
+      # ~10 min when none does, which is every merge-queue run of a PR that touches a header all kernels
+      # include (dev_msgs.h, noc_nonblocking_api.h, ...): the cache is only populated from main.
+      timeout: 15
   team: ttnn
   budget_type: merge_gate
   owner_id: U09BX3N0N95 # Mateusz Nowak
@@ -159,6 +162,21 @@
     tests/ttnn/unit_tests/operations/matmul
     tests/ttnn/unit_tests/operations/fused
     tests/ttnn/unit_tests/operations/reduce
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel
+
+# Moreh op coverage: every program factory plus small corner cases. The selection lives in the test files, as
+# @pytest.mark.merge_gate.
+- name: "ttnn moreh ops"
+  cmd: >-
+    pytest --timeout 60 -xv -m merge_gate
+    tests/ttnn/unit_tests/operations/moreh
   skus:
     wh_n150_civ2:
       timeout: 10

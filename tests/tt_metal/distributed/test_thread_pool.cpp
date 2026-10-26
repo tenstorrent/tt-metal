@@ -128,6 +128,31 @@ TEST(ThreadPoolTest, ParallelForUsesWorkers) {
     EXPECT_LT(on_caller, static_cast<int64_t>(ran_on.size()));
 }
 
+TEST(ThreadPoolTest, ParallelForOneWorkerRunsOnCaller) {
+    auto thread_pool = create_device_bound_thread_pool(DEFAULT_CONTEXT_ID, 2);
+    const auto caller_id = std::this_thread::get_id();
+    for (const std::vector<uint32_t>& device_ids : {std::vector<uint32_t>{1}, std::vector<uint32_t>{0, 0, 0}}) {
+        std::vector<size_t> calls;
+        thread_pool->parallel_for(device_ids, [&calls, caller_id](size_t call) {
+            EXPECT_EQ(std::this_thread::get_id(), caller_id);
+            calls.push_back(call);
+        });
+        EXPECT_EQ(calls.size(), device_ids.size());
+        EXPECT_TRUE(std::is_sorted(calls.begin(), calls.end()));
+    }
+    std::vector<uint32_t> device_ids = {0, 0, 0};
+    std::vector<size_t> calls;
+    EXPECT_THROW(
+        thread_pool->parallel_for(
+            device_ids,
+            [&calls](size_t call) {
+                calls.push_back(call);
+                TT_THROW("Failed");
+            }),
+        std::exception);
+    EXPECT_EQ(calls, (std::vector<size_t>{0, 1, 2}));
+}
+
 // Calls for the same device never overlap and run in index order.
 TEST(ThreadPoolTest, ParallelForSameDeviceInOrder) {
     auto thread_pool = create_pool_per_device();

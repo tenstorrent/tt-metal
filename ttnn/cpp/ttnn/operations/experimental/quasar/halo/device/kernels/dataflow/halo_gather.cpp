@@ -302,13 +302,12 @@ void kernel_main() {
 #ifdef SRC_PRODUCER
     // reader0 fake-pushes the borrowed SRC DFB: the input shard is already resident
     // (borrowed_from = IN), so we only need to advance the FIFO front pointer so the
-    // compute's wait_front(src) succeeds.  No data is moved.
-    {
-        constexpr uint32_t input_npages = get_arg(args::input_npages);
-        DataflowBuffer src_cb(dfb::src);
-        src_cb.reserve_back(static_cast<uint16_t>(input_npages));
-        src_cb.push_back(static_cast<uint16_t>(input_npages));
-    }
+    // compute's wait_front(src) succeeds.  No data is moved. src_cb lives to kernel exit: its destructor
+    // waits for the compute to pop the whole shard, which needs this reader to drain untilize_out first.
+    constexpr uint32_t input_npages = get_arg(args::input_npages);
+    DataflowBuffer src_cb(dfb::src);
+    src_cb.reserve_back(static_cast<uint16_t>(input_npages));
+    src_cb.push_back(static_cast<uint16_t>(input_npages));
 #endif
 
     // ----- Padding fill -----

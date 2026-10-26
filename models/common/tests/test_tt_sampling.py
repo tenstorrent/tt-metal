@@ -12,7 +12,7 @@ on-device sampling primitives ('TTSampling' + 'SamplingGenerator').
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +21,7 @@ import torch
 import ttnn
 from models.common.sampling.generator import SamplingGenerator, SamplingParams, format_sampling_params
 from models.common.sampling.tt_log_probs import LogProbsResult
+from models.common.sampling.tt_penalties import TTPenalties
 from models.common.sampling.tt_sampling import TTSampling
 
 # TEST NOTES:
@@ -1244,6 +1245,34 @@ class TestFrequencyPenaltyPerRequest:
         )
 
 
+class TestPenaltiesOnBlockFloatLogits:
+    @pytest.mark.parametrize("mesh_device", [1], indirect=True)
+    def test_bfloat8_b_logits_leave_other_tokens_unchanged(self, mesh_device):
+        torch.manual_seed(0)
+        vocab_size = 1024
+        penalized_token = 3
+        penalties = TTPenalties(mesh_device, SimpleNamespace(max_batch_size=BATCH_SIZE, vocab_size=vocab_size))
+        penalties.reset_params([0.0], [2.0], [1.0])
+        penalties.reset_output_tokens(torch.full((BATCH_SIZE, 32), penalized_token, dtype=torch.int64))
+
+        logits_tt = ttnn.from_torch(
+            torch.rand(1, 1, BATCH_SIZE, vocab_size) * 2 - 1,
+            device=mesh_device,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        logits_in = ttnn.to_torch(ttnn.get_device_tensors(logits_tt)[0]).float().reshape(BATCH_SIZE, vocab_size)
+
+        result_tt = penalties.apply(logits_tt)
+        result = ttnn.to_torch(ttnn.get_device_tensors(result_tt)[0]).float().reshape(BATCH_SIZE, vocab_size)
+
+        others = torch.ones(vocab_size, dtype=torch.bool)
+        others[penalized_token] = False
+        mismatched = (result[:, others] != logits_in[:, others]).sum().item()
+        assert mismatched == 0, f"{mismatched} logits of tokens that were not penalized changed"
+        assert torch.allclose(result[:, penalized_token], logits_in[:, penalized_token] - 64.0, atol=0.5)
+
+
 # --- Test: seed behavior ---
 class TestSeededSamplingPerRequest:
     @pytest.mark.parametrize("mesh_device", [1], indirect=True)
@@ -1906,6 +1935,44 @@ class TestSingleDeviceGreedyLogprobs:
             max_abs = (ref_lp - lp_host).abs().max().item()
             assert max_abs <= 5e-2, f"argmax-path logprob error {max_abs:.4f} exceeds bf16 tolerance"
         finally:
+            try:
+                sg.reset_trace()
+            except Exception:
+                pass
+            del sg
+            safe_sync(mesh_device)
+
+    def test_decode_force_argmax_fills_only_live_token_slots(self, mesh_device):
+        """With one real user, decode argmaxes row 0 into tt_out_tok and leaves token 0 in the padded slots."""
+        args = replace(make_sampling_args(mesh_device), max_batch_size=1)
+        self._enable_force_argmax(args)
+
+        torch.manual_seed(2024)
+        logits_host = torch.randn(1, 1, BATCH_SIZE, args.padded_vocab_size, dtype=torch.bfloat16)
+        expected = torch.argmax(logits_host[0, 0, 0, : args.vocab_size].float()).item()
+
+        sg = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
+        tt_out_tok = ttnn.from_torch(
+            torch.full((1, 1, 1, BATCH_SIZE), 7, dtype=torch.int32),
+            dtype=ttnn.uint32,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        tt_input = make_sharded_logits(logits_host, mesh_device, args)
+        try:
+            sg.reset_sampling_params(
+                format_sampling_params(SamplingParams(temperature=0.0, top_k=1, top_p=0.0), BATCH_SIZE)
+            )
+            sg.seed_manager.reset_seed(None, list(range(BATCH_SIZE)))
+            sg.seed_manager.get_new_values()
+            tt_tokens, _ = sg.sample(tt_input, tt_out_tok=tt_out_tok, enable_trace=False)
+            ttnn.synchronize_device(mesh_device)
+            assert sg.tt_sampling.force_argmax_sampling is True
+            tokens = extract_tokens(tt_tokens, BATCH_SIZE)
+            assert tokens[0] == expected, f"live row token {tokens[0]} != {expected}"
+            assert tokens[1:] == [0] * (BATCH_SIZE - 1), f"padded slots not zeroed: {tokens[1:4]}"
+        finally:
+            ttnn.deallocate(tt_input)
             try:
                 sg.reset_trace()
             except Exception:
