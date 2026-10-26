@@ -380,5 +380,12 @@ def test_spec_decode_lossless(mesh_device):
         f"SPEC mesh {MESH} layers {len(model.layers)} users {U} K {K}: {stats.summary()}; plain {n} steps {plain_s:.2f} s; "
         f"tokens identical to plain greedy per user: {matched} of {n} (n = all)"
     )
+    plain_tps, spec_tps = n / plain_s, n / stats.seconds if stats.seconds else float("nan")
+    logger.info(
+        f"PERF-SPEC mesh {MESH} layers {len(model.layers)} users {U} K {K}: plain {plain_tps:.1f} tok/s per user "
+        f"({plain_tps * U:.0f} aggregate, {1000 * plain_s / n:.1f} ms per token); spec {spec_tps:.1f} tok/s per user "
+        f"({spec_tps * U:.0f} aggregate, {1000 * stats.seconds / n:.1f} ms per token), x{spec_tps / plain_tps:.2f}, "
+        f"{stats.tokens_per_iteration / U:.2f} tokens per user per iteration"
+    )
     spec.release()
     ttnn.release_trace(mesh_device, trace_plain)
