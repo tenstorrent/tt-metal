@@ -24,8 +24,7 @@ void bind_stack(nb::module_& mod) {
 
         Args:
             * :attr:`input_tensors`: List of tensors to stack.
-            * :attr:`dim`: Position of the new dimension in the output, in the range [-(rank + 1), rank]
-              where rank is the rank of each input; -1 and rank both mean a new last dimension.
+            * :attr:`dim`: Position of the new dimension in the output, in [-(rank + 1), rank]; -1 and rank both mean a new last dimension.
 
         Equivalent pytorch code:
 
