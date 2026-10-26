@@ -4,6 +4,9 @@
 
 #include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
+#include "gmock/gmock.h"
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -12,6 +15,7 @@
 #include <cstddef>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -26,6 +30,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
@@ -42,6 +47,10 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/experimental/core_subset_write/mesh_command_queue.hpp>
+#include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
+#include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -67,6 +76,15 @@ static_assert(std::is_move_assignable_v<MeshBuffer>, "MeshBuffer should be move 
 using MeshBufferTest2x4 = MeshDevice2x4Fixture;
 using MeshBufferTest1x2 = MeshDevice1x2Fixture;
 using MeshBufferTestSuite = GenericMeshDeviceFixture;
+using MeshBufferViewTest = MeshDevice1x1Fixture;
+
+class MeshBufferViewBoundsTest : public MeshDeviceFixtureBase {
+protected:
+    // Reserve small SRAM and reduce worker capacity to exercise both allocator boundaries.
+    MeshBufferViewBoundsTest() :
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{1, 1}, .l1_small_size = 32 * 1024, .worker_l1_size = 512 * 1024}) {}
+};
 
 class MeshBufferTest1x2MultiCQ : public MeshDeviceFixtureBase {
 protected:
@@ -142,6 +160,213 @@ std::vector<uint32_t> expected_shard_host_layout_after_filtered_write(
         std::fill(expected.begin() + base, expected.begin() + base + words_per_page, v);
     }
     return expected;
+}
+
+// Reject incomplete, inconsistent and invalid addresses through the Metal API itself.
+TEST_F(MeshBufferViewTest, RejectsInvalidPlacements) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    // Leave room for unequal addresses so that case tests equality rather than SRAM bounds.
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 3}, .num_cores = {2, 1}, .page_shape = {1, 256}};
+    const DeviceLocalBufferConfig local{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    const ReplicatedBufferConfig replicated{.size = config.num_pages() * config.page_size()};
+    auto owner = MeshBuffer::create(replicated, local, mesh_device_.get());
+    const TensorSpec spec(
+        Shape{2, 64},
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
+    const DeviceAddr address = owner->address();
+    const MeshCoordinate coord(0, 0);
+    PerNodeMeshDeviceMemorySpan valid;
+    valid.per_device_spans[coord].per_node_spans = {
+        {CoreCoord(0, 0), {address, 256}}, {CoreCoord(1, 0), {address, 256}}};
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    EXPECT_EQ(create_sram_buffer_view(*mesh_device_, spec, valid).address(), address);
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, {}); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires addresses")));
+    auto invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.erase(CoreCoord(1, 0));
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("must cover every configured data core")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.emplace(CoreCoord(2, 0), NodeLocalSpan{address, 256});
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("core is not in the buffer configuration")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(1, 0)).address += 1;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("address must be aligned")));
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(1, 0)).address = address + 256;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("requires one address on every core")));
+    invalid = valid;
+    invalid.per_device_spans.emplace(MeshCoordinate(0, 1), valid.per_device_spans.at(coord));
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("device coordinate is outside the mesh")));
+    invalid = valid;
+    for (auto& [core, span] : invalid.per_device_spans.at(coord).per_node_spans) {
+        span.address = mesh_device_->get_device(coord)->l1_size_per_core();
+    }
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).address = 0;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).size = 255;
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("padded tensor footprint exceeds supplied span")));
+    invalid = valid;
+    invalid.per_device_spans.at(coord).per_node_spans.at(CoreCoord(0, 0)).size = std::numeric_limits<uint64_t>::max();
+    EXPECT_THAT(
+        [&] { create_sram_buffer_view(*mesh_device_, spec, invalid); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+}
+
+// Ordinary views and semaphores must not cross into reserved small SRAM, even when physically in bounds.
+TEST_F(MeshBufferViewBoundsTest, RespectsAllocatorRegions) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    using ::testing::HasSubstr;
+    using ::testing::ThrowsMessage;
+    const MeshCoordinate coord(0, 0);
+    auto* device = mesh_device_->get_device(coord);
+    const auto& allocator = device->allocator();
+    const DeviceAddr base = allocator->get_base_allocator_addr(HalMemType::L1);
+    const DeviceAddr end = base + allocator->get_bank_size(BufferType::L1);
+    const DeviceAddr alignment = allocator->get_alignment(BufferType::L1);
+    ASSERT_EQ(device->l1_size_per_core() - end, 32 * 1024);
+    ASSERT_GE(base, device->l1_size_per_core() - 512 * 1024);
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 1}, .num_cores = {1, 1}, .page_shape = {1, 256}};
+    const TensorSpec spec(
+        Shape{1, 64},
+        TensorLayout(
+            DataType::UINT32,
+            PageConfig(Layout::ROW_MAJOR),
+            MemoryConfig(
+                TensorMemoryLayout::HEIGHT_SHARDED,
+                BufferType::L1,
+                ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR))));
+    const auto footprint = spec.compute_consumed_memory_bytes_per_bank(alignment, 1);
+    // Describe the supplied bytes without claiming ownership or writing them.
+    const auto memory_at = [&](DeviceAddr address) {
+        PerNodeMeshDeviceMemorySpan memory;
+        memory.per_device_spans[coord].per_node_spans.emplace(CoreCoord(0, 0), NodeLocalSpan{address, footprint});
+        return memory;
+    };
+    // Boundary views carry metadata only; no writes occur without an owning allocation.
+    for (const DeviceAddr address : {base, end - footprint}) {
+        EXPECT_EQ(create_sram_buffer_view(*mesh_device_, spec, memory_at(address)).address(), address);
+    }
+    for (const DeviceAddr address : {base - alignment, end - alignment, end, end + 16 * 1024}) {
+        EXPECT_THAT(
+            [&] { create_sram_buffer_view(*mesh_device_, spec, memory_at(address)); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    }
+    const DeviceLocalBufferConfig small_config{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1_SMALL,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    auto small_owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = config.num_pages() * config.page_size()}, small_config, mesh_device_.get());
+    std::vector<uint32_t> expected(64, 91);
+    WriteShard(mesh_device_->mesh_command_queue(), small_owner, expected, coord, true);
+    EXPECT_THAT(
+        [&] {
+            tt::tt_metal::experimental::CreateGlobalSemaphore(
+                *mesh_device_, config.shard_grid(), 37, BufferType::L1, small_owner->address());
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    for (const DeviceAddr address : {end - alignment, DeviceAddr{device->l1_size_per_core()}}) {
+        EXPECT_THAT(
+            [&] {
+                tt::tt_metal::experimental::CreateGlobalSemaphore(
+                    *mesh_device_, config.shard_grid(), 37, BufferType::L1_SMALL, address);
+            },
+            ThrowsMessage<std::runtime_error>(HasSubstr("outside allocatable L1")));
+    }
+    std::vector<uint32_t> readback;
+    ReadShard(mesh_device_->mesh_command_queue(), readback, small_owner, coord);
+    EXPECT_EQ(readback, expected);
+    {
+        auto semaphore = tt::tt_metal::experimental::CreateGlobalSemaphore(
+            *mesh_device_, config.shard_grid(), 37, BufferType::L1_SMALL, small_owner->address());
+        EXPECT_EQ(semaphore.address(), small_owner->address());
+    }
+    ReadShard(mesh_device_->mesh_command_queue(), readback, small_owner, coord);
+    ASSERT_EQ(readback.size(), expected.size());
+    EXPECT_EQ(readback.front(), 37);
+    // Padding within the written word's alignment block is unspecified; neighboring blocks stay intact.
+    EXPECT_TRUE(std::equal(
+        readback.begin() + alignment / sizeof(uint32_t),
+        readback.end(),
+        expected.begin() + alignment / sizeof(uint32_t)));
+    // A null initializer checks the final valid word without writing unowned memory.
+    EXPECT_EQ(
+        tt::tt_metal::experimental::CreateGlobalSemaphore(
+            *mesh_device_, config.shard_grid(), std::nullopt, BufferType::L1, end - alignment)
+            .address(),
+        end - alignment);
+}
+
+// Different per-core addresses must survive transfers and view destruction without touching neighbors.
+TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
+    using namespace tt::tt_metal::experimental::per_core_allocation;
+    DeviceLocalShardedBufferTestConfig config{
+        .num_pages_per_core = {1, 3}, .num_cores = {2, 1}, .page_shape = {1, 256}};
+    DeviceLocalBufferConfig local{
+        .page_size = config.page_size(),
+        .buffer_type = BufferType::L1,
+        .sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config)};
+    auto owner = MeshBuffer::create(
+        ReplicatedBufferConfig{.size = config.num_pages() * config.page_size()}, local, mesh_device_.get());
+    const MeshCoordinate coord(0, 0);
+    std::vector<uint32_t> expected(384, 91);
+    WriteShard(mesh_device_->mesh_command_queue(), owner, expected, coord, true);
+    config.num_pages_per_core = {1, 1};
+    local.sharding_args = BufferShardingArgs(config.shard_parameters(), config.mem_config);
+    set_per_core_allocation(local.sharding_args, true);
+    MemoryConfig memory(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(config.shard_grid(), {1, 64}, ShardOrientation::ROW_MAJOR));
+    set_per_core_allocation(memory, true);
+    const TensorSpec spec(Shape{2, 64}, TensorLayout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), memory));
+    PerNodeMeshDeviceMemorySpan spans;
+    spans.per_device_spans[coord].per_node_spans = {
+        {CoreCoord(0, 0), {owner->address(), 256}}, {CoreCoord(1, 0), {owner->address() + 256, 256}}};
+    // These legacy transfer helpers require shared ownership; the view factory itself does not.
+    auto view = std::make_shared<MeshBuffer>(create_sram_buffer_view(*mesh_device_, spec, spans));
+    std::vector<uint32_t> values(128, 17);
+    std::fill(values.begin() + 64, values.end(), 29);
+    WriteShard(mesh_device_->mesh_command_queue(), view, values, coord, true);
+    std::vector<uint32_t> readback;
+    ReadShard(mesh_device_->mesh_command_queue(), readback, view, coord);
+    EXPECT_EQ(readback, values);
+    std::fill(expected.begin(), expected.begin() + 64, 17);
+    std::fill(expected.begin() + 256, expected.begin() + 320, 29);
+    view.reset();
+    ReadShard(mesh_device_->mesh_command_queue(), readback, owner, coord);
+    EXPECT_EQ(readback, expected);
 }
 
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {

@@ -1059,6 +1059,50 @@ def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwar
         ttnn_op(input_tensor, **extra_kwargs)
 
 
+@pytest.mark.parametrize(
+    "ttnn_op, extra_kwargs",
+    [
+        (ttnn.abs, {}),
+        (ttnn.neg, {}),
+        (ttnn.sign, {}),
+        (ttnn.relu, {}),
+        (ttnn.square, {}),
+        (ttnn.sqrt, {}),
+        (ttnn.sigmoid, {}),
+        (ttnn.exp, {}),
+        (ttnn.floor, {}),
+        (ttnn.eqz, {}),
+        (ttnn.bitwise_not, {}),
+        (ttnn.leaky_relu, {"negative_slope": 0.1}),
+        (ttnn.fill, {"fill_value": 7}),
+    ],
+)
+def test_unary_rejects_int8_input(ttnn_op, extra_kwargs, device, expect_error):
+    input_data = torch.zeros((1, 1, 32, 32), dtype=torch.int8)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn_op(input_tensor, **extra_kwargs)
+
+
+@pytest.mark.parametrize(
+    "ttnn_fn, golden_fn",
+    [
+        (ttnn.identity, lambda x: x),
+        (lambda t: ttnn.typecast(t, ttnn.int32), lambda x: x.to(torch.int32)),
+        (lambda t: ttnn.typecast(t, ttnn.float32), lambda x: x.to(torch.float32)),
+        (lambda t: ttnn.typecast(t, ttnn.bfloat16), lambda x: x.to(torch.bfloat16)),
+        (lambda t: ttnn.bitcast(t, ttnn.uint8), lambda x: x.view(torch.uint8)),
+    ],
+    ids=["identity", "typecast_int32", "typecast_float32", "typecast_bfloat16", "bitcast_uint8"],
+)
+def test_unary_int8_copy_ops(ttnn_fn, golden_fn, device):
+    torch_input = torch.arange(-128, 128, dtype=torch.int16).to(torch.int8).repeat(4).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = golden_fn(torch_input)
+    output = ttnn.to_torch(ttnn_fn(input_tensor))
+    assert torch.equal(output.to(expected.dtype), expected)
+
+
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])

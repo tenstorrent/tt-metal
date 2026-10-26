@@ -10,6 +10,24 @@ description: Centralized perf/accuracy targets for models CI.
 #   Accuracy on an active entry stays enforced.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  granite42-30b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - batch_size: 5
+            status: active
+            perf: {}
+            accuracy:
+              # First 10/198 GPQA Diamond questions; preserve the 6/10 release gate.
+              gpqa: 100
+              gpqa_tolerance: 0.4
+            owner_id: U08BGTAMU1W
+            team: models
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
   qwen-image-2.1-p150:
     skus:
       bh_p150:
@@ -38,6 +56,39 @@ targets:
               gpqa: 100
               gpqa_tolerance: 0.2
             owner_id: U03HY7MK4BT
+            team: models
+  gemma4-26b-a4b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - status: active
+            perf: {}
+            accuracy:
+              # First 10/198 Diamond questions, 32K output budget; minimum 80%.
+              gpqa: 100
+              gpqa_tolerance: 0.2
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
             team: models
   llama3.1-8b-qb2:
     skus:
@@ -2553,7 +2604,9 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.01396
+              # Scheduled runs 2026-10-20..22: 0.01579, 0.01601, 0.01616 (#57208 cut the per-run encoder reload).
+              # The previous 0.01396 came from one run on a slow-I/O runner.
+              fps: 0.0159
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models

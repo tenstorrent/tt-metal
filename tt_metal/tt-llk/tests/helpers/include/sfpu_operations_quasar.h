@@ -37,6 +37,7 @@
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_exp2.h"
 #include "llk_sfpu/ckernel_sfpu_expm1.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_hardmish.h"
@@ -64,13 +65,16 @@
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
 #include "llk_sfpu/ckernel_sfpu_rsub_int32.h"
 #include "llk_sfpu/ckernel_sfpu_selu.h"
+#include "llk_sfpu/ckernel_sfpu_sigmoid.h"
 #include "llk_sfpu/ckernel_sfpu_sigmoid_appx.h"
 #include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_signbit.h"
+#include "llk_sfpu/ckernel_sfpu_silu.h"
 #include "llk_sfpu/ckernel_sfpu_softcap.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
 #include "llk_sfpu/ckernel_sfpu_softshrink.h"
 #include "llk_sfpu/ckernel_sfpu_softsign.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
@@ -79,16 +83,12 @@
 #include "llk_sfpu/ckernel_sfpu_tiled_prod.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
+#include "llk_sfpu/ckernel_sfpu_typecast_fp32_to_uint16.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
 #include "llk_sfpu/ckernel_sfpu_unary_max_min.h"
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
-#include "sfpu/ckernel_sfpu_fill.h"
-#include "sfpu/ckernel_sfpu_sigmoid.h"
-#include "sfpu/ckernel_sfpu_silu.h"
-#include "sfpu/ckernel_sfpu_sqrt.h"
-#include "sfpu/ckernel_sfpu_typecast_fp32_to_uint16.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
 // selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
@@ -105,6 +105,7 @@
 #include "llk_sfpu/ckernel_sfpu_binary.h"           // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
 #include "llk_sfpu/ckernel_sfpu_binary_bcast.h"     // calculate_binary_bcast / init_binary_bcast (float add/sub/mul, row/col bcast)
 #include "llk_sfpu/ckernel_sfpu_binary_bitwise.h"   // calculate_sfpu_binary_bitwise (int32 and/or/xor)
+#include "llk_sfpu/ckernel_sfpu_binary_comp.h"      // calculate_binary_comp_int32 (int gt/lt/le/ge)
 #include "llk_sfpu/ckernel_sfpu_binary_fmod.h"      // calculate_sfpu_binary_fmod / calculate_fmod_int32
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h"   // calculate_binary_max_min / _init_binary_max_min_
 #include "llk_sfpu/ckernel_sfpu_binary_pow.h"       // calculate_sfpu_binary_pow / sfpu_binary_pow_init
@@ -121,12 +122,11 @@
 #include "llk_sfpu/ckernel_sfpu_logaddexp2.h"       // calculate_sfpu_logaddexp2 / calculate_sfpu_logaddexp2_init
 #include "llk_sfpu/ckernel_sfpu_logsigmoid.h"       // calculate_logsigmoid (x, exp(-x) -> logsigmoid(x))
 #include "llk_sfpu/ckernel_sfpu_mask.h"             // calculate_mask / calculate_mask_posinf / calculate_int_mask
+#include "llk_sfpu/ckernel_sfpu_mul_int32.h"        // _mul_int32_ (int mul)
 #include "llk_sfpu/ckernel_sfpu_quant.h"            // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/ckernel_sfpu_shift.h"            // calculate_binary_left_shift / right / logical right
 #include "llk_sfpu/ckernel_sfpu_situ_glu.h"         // calculate_situ_glu (softcapped gate * sigmoid(gate) * softcapped up)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
-#include "sfpu/ckernel_sfpu_mul_int32.h"   // _mul_int32_ (int mul)
 
 // Ternary SFPU op headers (consumed by the ternary dispatchers below).
 // To add a new Quasar ternary SFPU op:
@@ -1287,7 +1287,7 @@ void call_unary_sfpu_operation_quasar(
     }
     else if constexpr (OPERATION == SfpuType::tiled_prod)
     {
-        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tiled_prod, (APPROX, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tiled_prod, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom);
     }
     else if constexpr (OPERATION == SfpuType::identity)
     {

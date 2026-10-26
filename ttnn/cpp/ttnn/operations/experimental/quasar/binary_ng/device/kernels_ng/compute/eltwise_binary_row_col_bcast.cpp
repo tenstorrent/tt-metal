@@ -13,42 +13,49 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+template <
+    typename ExpCbRawOtherDFB,
+    typename ExpCbLlkPostDFB,
+    typename ExpCbPreLhsDFB,
+    typename ExpCbPostLhsDFB,
+    typename ExpCbPreRhsDFB,
+    typename ExpCbPostRhsDFB,
+    typename ExpCbOutDFB>
 ALWI void process_tile(
-    tt::CBIndex cb_pre_lhs,
-    tt::CBIndex cb_post_lhs,
-    tt::CBIndex cb_pre_rhs,
-    tt::CBIndex cb_post_rhs,
-    tt::CBIndex cb_out,
+    ExpCbRawOtherDFB& exp_cb_raw_other,
+    ExpCbLlkPostDFB& exp_cb_llk_post,
+    ExpCbPreLhsDFB& exp_cb_pre_lhs,
+    ExpCbPostLhsDFB& exp_cb_post_lhs,
+    ExpCbPreRhsDFB& exp_cb_pre_rhs,
+    ExpCbPostRhsDFB& exp_cb_post_rhs,
+    ExpCbOutDFB& exp_cb_out,
     uint32_t freq,
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-    DataflowBuffer exp_cb_out(cb_out);
+    const uint32_t cb_post_lhs = exp_cb_post_lhs.get_id();
+    const uint32_t cb_post_rhs = exp_cb_post_rhs.get_id();
+    const uint32_t cb_out = exp_cb_out.get_id();
 
 #if BCAST_INPUT  // ROW_A_COL_B
-#define CB_PRE_BCAST cb_pre_rhs
-#define CB_POST_BCAST cb_post_rhs
-#define CB_POST_OTHER cb_post_lhs
+#define EXP_CB_PRE_BCAST exp_cb_pre_rhs
+    auto& exp_cb_post_bcast = exp_cb_post_rhs;
+    auto& exp_cb_post_other = exp_cb_post_lhs;
     constexpr auto cb_raw_other = tt::CBIndex::c_0;
     constexpr auto cb_llk_post = tt::CBIndex::c_5;
     auto cb_left = cb_post_lhs;
     auto cb_right = cb_post_rhs;
 #else  // ROW_B_COL_A
-#define CB_PRE_BCAST cb_pre_lhs
-#define CB_POST_BCAST cb_post_lhs
-#define CB_POST_OTHER cb_post_rhs
+#define EXP_CB_PRE_BCAST exp_cb_pre_lhs
+    auto& exp_cb_post_bcast = exp_cb_post_lhs;
+    auto& exp_cb_post_other = exp_cb_post_rhs;
     constexpr auto cb_raw_other = tt::CBIndex::c_1;
     constexpr auto cb_llk_post = tt::CBIndex::c_6;
     auto cb_left = cb_post_lhs;
     auto cb_right = cb_post_rhs;
 #endif
 
-    DataflowBuffer exp_cb_raw_other(cb_raw_other);
-    DataflowBuffer exp_cb_llk_post(cb_llk_post);
-    DataflowBuffer exp_cb_post_bcast(CB_POST_BCAST);
-    DataflowBuffer exp_cb_post_other(CB_POST_OTHER);
-
-    PREPROCESS(BCAST_OP, DataflowBuffer(CB_PRE_BCAST), exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
+    PREPROCESS(BCAST_OP, EXP_CB_PRE_BCAST, exp_cb_post_bcast, exp_cb_out, num_tiles_per_cycle);
     exp_cb_post_bcast.wait_front(num_tiles_per_cycle);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
@@ -70,7 +77,7 @@ ALWI void process_tile(
         // unary_bcast_uninit<BroadcastType::ROW>(cb_raw_other);
         pack_reconfig_data_format(cb_llk_post, cb_out);
 
-        PREPROCESS(OTHER_OP, DataflowBuffer(cb_llk_post), exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
+        PREPROCESS(OTHER_OP, exp_cb_llk_post, exp_cb_post_other, exp_cb_out, num_tiles_per_cycle);
         exp_cb_post_other.wait_front(num_tiles_per_cycle);
 
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
@@ -105,17 +112,40 @@ void kernel_main() {
     constexpr auto cb_out = tt::CBIndex::c_2;
 
 #if BCAST_INPUT  // ROW_A_COL_B: A=row bcast, B=col bcast
+    constexpr auto cb_raw_other = tt::CBIndex::c_0;
     constexpr auto cb_llk_post = tt::CBIndex::c_5;
     constexpr auto cb_pre_lhs = cb_llk_post;
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_llk_post;
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : tt::CBIndex::c_1;
 #else  // ROW_B_COL_A: B=row bcast, A=col bcast
+    constexpr auto cb_raw_other = tt::CBIndex::c_1;
     constexpr auto cb_llk_post = tt::CBIndex::c_6;
     constexpr auto cb_pre_lhs = tt::CBIndex::c_0;
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : tt::CBIndex::c_0;
     constexpr auto cb_pre_rhs = cb_llk_post;
     constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_llk_post;
+#endif
+
+    DataflowBuffer exp_cb_out(cb_out);
+    DataflowBuffer exp_cb_raw_other(cb_raw_other);
+    DataflowBuffer exp_cb_llk_post(cb_llk_post);
+#if BCAST_INPUT
+    auto& exp_cb_pre_lhs = exp_cb_llk_post;
+    DataflowBuffer exp_cb_pre_rhs(cb_pre_rhs);
+#else
+    DataflowBuffer exp_cb_pre_lhs(cb_pre_lhs);
+    auto& exp_cb_pre_rhs = exp_cb_llk_post;
+#endif
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer exp_cb_post_lhs(cb_post_lhs);
+#else
+    auto& exp_cb_post_lhs = exp_cb_pre_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer exp_cb_post_rhs(cb_post_rhs);
+#else
+    auto& exp_cb_post_rhs = exp_cb_pre_rhs;
 #endif
 
     compute_kernel_hw_startup(cb_post_lhs, cb_post_rhs, cb_out);
@@ -128,16 +158,27 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         process_tile(
-            cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out, tile_freq, tile_start, num_tiles_per_cycle);
+            exp_cb_raw_other,
+            exp_cb_llk_post,
+            exp_cb_pre_lhs,
+            exp_cb_post_lhs,
+            exp_cb_pre_rhs,
+            exp_cb_post_rhs,
+            exp_cb_out,
+            tile_freq,
+            tile_start,
+            num_tiles_per_cycle);
     }
 
     if (remaining_iterations > 0) {
         process_tile(
-            cb_pre_lhs,
-            cb_post_lhs,
-            cb_pre_rhs,
-            cb_post_rhs,
-            cb_out,
+            exp_cb_raw_other,
+            exp_cb_llk_post,
+            exp_cb_pre_lhs,
+            exp_cb_post_lhs,
+            exp_cb_pre_rhs,
+            exp_cb_post_rhs,
+            exp_cb_out,
             remaining_iterations,
             tile_start,
             num_tiles_per_cycle);

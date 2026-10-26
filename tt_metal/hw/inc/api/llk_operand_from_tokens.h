@@ -6,9 +6,12 @@
 
 // Metal 2 BindingToken → ckernel::experimental::LLKOperand<Format, Shape>.
 
+#include <cstdint>
 #include <type_traits>
 
 #include "api/compute/experimental/2_0/llk_operand.h"
+#include "api/dataflow/dfb_binding_token.h"
+#include "api/scratchpad_binding_token.h"
 #include "api/tensor/tensor_binding_token.h"
 
 namespace binding_details {
@@ -32,17 +35,10 @@ struct LLKOperandExtractor {
     static_assert(
         binding_token_with_llk_metadata<TokenT>,
         "LLKOperandFrom requires a BindingToken with llk metadata (DFB / Scratchpad / Tensor)");
-    static_assert(
-        Token.llk_metadata_.format != binding_details::LLKMetadata::kNoFormat,
-        "LLKOperandFrom: this token has no data format. Did you forget to set data_format_metadata on ScratchpadSpec/ "
-        "DataflowBufferSpec?");
 
-    static constexpr DataFormat format = static_cast<DataFormat>(Token.llk_metadata_.format);
+    static constexpr DataFormat format = get_dataformat(Token);
     static constexpr ckernel::TensorShape shape{
-        Token.llk_metadata_.face_r_dim,
-        Token.llk_metadata_.face_c_dim,
-        Token.llk_metadata_.num_faces_r_dim,
-        Token.llk_metadata_.num_faces_c_dim};
+        get_face_r_dim(Token), get_face_c_dim(Token), get_num_faces_r_dim(Token), get_num_faces_c_dim(Token)};
 
     using OperandT = ckernel::experimental::LLKOperand<format, shape>;
 };
