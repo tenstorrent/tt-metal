@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/moreh/moreh_layer_norm/device/moreh_layer_norm_tile_mean.hpp"
 #include "moreh_group_norm_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -108,6 +109,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     const auto f_ht = static_cast<float>(origin_h) / static_cast<float>(TILE_HEIGHT);
     const auto f_wt = static_cast<float>(origin_w) / static_cast<float>(TILE_WIDTH);
     float scaler = 1.0f / (static_cast<float>(TILE_WIDTH) * std::sqrt(f_c * f_ht * f_wt));
+    const uint32_t tile_mean_bits = moreh_layer_norm::tile_mean_factor_bits(scaler, false, origin_h, origin_w);
 
     const bool gamma_has_value = gamma.has_value();
     const bool beta_has_value = beta.has_value();
@@ -146,6 +148,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     const uint32_t in4_t = beta_has_value ? block_size : 0;   // beta
     const uint32_t in5_t = do_mask_h ? 1 : 0;                 // mask_h
     const uint32_t in6_t = do_mask_w ? 1 : 0;                 // mask_w
+    uint32_t in7_t = 0;
 
     const uint32_t out0_t = block_size;              // output
     const uint32_t out1_t = mean_has_value ? 1 : 0;  // mean
@@ -159,12 +162,13 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     const uint32_t im5_t = 1;                                                         // 1.0/(sqrt(Var[x] + eps))
     const uint32_t im6_t = (gamma_has_value || beta_has_value) ? 2 * block_size : 0;  // x * gamm + beta
     const uint32_t im7_t = 2;                                                         // Sum[x]
+    const uint32_t im8_t = 1;
 
     const auto cb_data_format = datatype_to_dataformat_converter(input.dtype());
     const auto single_tile_size = tt::tile_size(cb_data_format);
 
     const auto cb_usage = (in0_t + in1_t + in2_t + in3_t + in4_t + in5_t + in6_t + out0_t + out1_t + out2_t + im0_t +
-                           im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t) *
+                           im1_t + im2_t + im3_t + im4_t + im5_t + im6_t + im7_t + im8_t) *
                           single_tile_size;
     const auto available_L1 = device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
     const bool use_large_algorithm = cb_usage >= available_L1;
@@ -174,6 +178,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         in0_t = block_size;
         im1_t = 2 * block_size;
         im2_t = 2 * block_size;
+        in7_t = 1;
     } else {
         log_info(LogTest, "Small moreh_group_norm algorithm is selected.");
     }
@@ -188,6 +193,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     push_cb_if_nonzero(desc, in4_t, all_cores, tt::CBIndex::c_4, cb_data_format, single_tile_size);    // beta
     push_cb_if_nonzero(desc, in5_t, all_cores, tt::CBIndex::c_5, cb_data_format, single_tile_size);    // mask_h
     push_cb_if_nonzero(desc, in6_t, all_cores, tt::CBIndex::c_6, cb_data_format, single_tile_size);    // mask_w
+    push_cb_if_nonzero(desc, in7_t, all_cores, tt::CBIndex::c_7, cb_data_format, single_tile_size);
     push_cb_if_nonzero(desc, out0_t, all_cores, tt::CBIndex::c_16, cb_data_format, single_tile_size);  // output
     push_cb_if_nonzero(desc, out1_t, all_cores, tt::CBIndex::c_17, cb_data_format, single_tile_size);  // mean
     push_cb_if_nonzero(desc, out2_t, all_cores, tt::CBIndex::c_18, cb_data_format, single_tile_size);  // rstd
@@ -200,6 +206,7 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     push_cb_if_nonzero(desc, im5_t, all_cores, tt::CBIndex::c_29, cb_data_format, single_tile_size);  // 1/sqrt(Var+eps)
     push_cb_if_nonzero(desc, im6_t, all_cores, tt::CBIndex::c_30, cb_data_format, single_tile_size);  // y*gamma+beta
     push_cb_if_nonzero(desc, im7_t, all_cores, tt::CBIndex::c_31, cb_data_format, single_tile_size);  // Sum[x]
+    push_cb_if_nonzero(desc, im8_t, all_cores, tt::CBIndex::c_8, cb_data_format, single_tile_size);   // zero tile
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -266,7 +273,8 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
         static_cast<uint32_t>(mean_has_value),
         static_cast<uint32_t>(rstd_has_value),
         static_cast<uint32_t>(is_lastdim_layernorm),
-        static_cast<uint32_t>(is_group_norm)};
+        static_cast<uint32_t>(is_group_norm),
+        tile_mean_bits};
     compute_desc_1.defines = compute_defines;
     compute_desc_1.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -292,7 +300,8 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
             static_cast<uint32_t>(mean_has_value),
             static_cast<uint32_t>(rstd_has_value),
             static_cast<uint32_t>(is_lastdim_layernorm),
-            static_cast<uint32_t>(is_group_norm)};
+            static_cast<uint32_t>(is_group_norm),
+            tile_mean_bits};
         compute_desc_2.defines = compute_defines;
         compute_desc_2.config = ComputeConfigDescriptor{
             .math_fidelity = math_fidelity,
