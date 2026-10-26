@@ -508,7 +508,10 @@ class TtKDA(LightweightModule):
             )
             tt_ccl = None
             if self.mesh.tp > 1:
-                from models.common.modules.tt_ccl import get_tt_ccl
+                try:  # tt-metal main keeps tt_ccl as models.common.tt_ccl (TTTv2 moved to tt-transformers)
+                    from models.common.tt_ccl import get_tt_ccl
+                except ImportError:  # the 2026-10 base still has it under models.common.modules
+                    from models.common.modules.tt_ccl import get_tt_ccl
 
                 tt_ccl = get_tt_ccl(self.device)  # ttKDA's TP reduce-scatter semaphores (one set per mesh)
             layer = ttKDA(
