@@ -18,6 +18,9 @@ void kernel_main() {
 
     uint32_t seed = get_arg(args::seed);
 
+    DataflowBuffer dfb_in0_obj(dfb::in0);
+    DataflowBuffer dfb_out_obj(dfb::out);
+
     compute_kernel_hw_startup(dfb::in0, dfb::out);
 
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
@@ -25,11 +28,11 @@ void kernel_main() {
         ckl::IterationShape::tiles(total_tiles).block_size(per_core_block_dim),
         ckl::CopyTile<
             ckl::input(dfb::in0, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D0>{},
+            ckl::Dst::D0>{dfb_in0_obj},
         ckl::Dropout<ckl::Dst::D0>{int_probability, int_scale_factor, seed},
         ckl::PackTile<ckl::output(
             dfb::out,
             ckl::ReservePolicy::PerBlockSize,
             ckl::PushPolicy::PerBlockSize,
-            ckl::DataFormatReconfig::Disabled)>{});
+            ckl::DataFormatReconfig::Disabled)>{dfb_out_obj});
 }

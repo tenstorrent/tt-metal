@@ -28,6 +28,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <filesystem>
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -69,7 +70,7 @@ protected:
         // and a hung core will fail that check. Tensix/DRAM cores don't need this.
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         for (auto& [device_id, device] : id_to_device_) {
-            for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+            for (const auto& logical_core : device->impl().get_devices()[0]->get_inactive_ethernet_cores()) {
                 CoreCoord virtual_core =
                     cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::ETH);
                 cluster.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::ALL);

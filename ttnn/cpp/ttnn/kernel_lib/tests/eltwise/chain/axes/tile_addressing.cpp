@@ -17,6 +17,9 @@ void kernel_main() {
     constexpr uint32_t n = get_compile_time_arg_val(0);
     const uint32_t base = get_arg_val<uint32_t>(0);
 
+    DataflowBuffer cb_in_obj(cb_in);
+    DataflowBuffer cb_out_obj(cb_out);
+
     compute_kernel_hw_startup(cb_in, cb_out);
 
     using namespace compute_kernel_lib;
@@ -30,6 +33,6 @@ void kernel_main() {
                 InputTileMapping::Block,
                 DataFormatReconfig::Enabled,
                 TileAddressing::Offset),
-            Dst::D0>{base},
-        PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{});
+            Dst::D0>{cb_in_obj, base},
+        PackTile<output(cb_out, ReservePolicy::Upfront, PushPolicy::AtEnd)>{cb_out_obj});
 }

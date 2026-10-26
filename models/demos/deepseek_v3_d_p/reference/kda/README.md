@@ -22,7 +22,11 @@ captured by tt-metal PR #51910 at prototype source revision
 
 Supported configurations require a four-tap convolution, positive dimensions
 and RMS epsilon, equal per-head query/key dimensions, and an optional gate
-lower bound in `[-5, 0)`. Reference arithmetic is accumulated in FP32.
+lower bound in `[-5, 0)`. Every function takes a keyword-only compute `dtype`:
+`torch.float32` (the default) is the reference the device tests use, and
+`torch.float64` is the accuracy golden. Inputs and weights are cast to `dtype`
+before any arithmetic, and every returned tensor, including the carried state, is
+in `dtype`.
 Operation tests choose and record their own PCC threshold; full-layer reference
 tests use `0.99999`, while exact state/metadata and determinism checks use
 value or bit identity.

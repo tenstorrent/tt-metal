@@ -108,8 +108,10 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
         zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
     ):
         rank, tp = divmod(index, tp_size)
-        assert_accurate(entries[rank], ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
-        assert_accurate(carry, ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
+        assert_accurate(
+            entries[rank], ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}", nrmse_threshold=0.025
+        )
+        assert_accurate(carry, ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}", nrmse_threshold=0.03)
         # Same arithmetic as the op-by-op chain, so the states match it bit for bit.
         assert_bit_identical(
             ttnn.to_torch(ttnn.get_device_tensors(op_by_op_entries[rank])[index]).reshape(_HEADS, _KEY, _VALUE),

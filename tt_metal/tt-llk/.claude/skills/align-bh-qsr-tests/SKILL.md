@@ -34,7 +34,7 @@ Script: `tests/python_tests/compare_test_and_perf.py`. Run from `tests/python_te
 
 **Flattening does not rename axes.** A dataclass on axis `formats` becomes `formats.input`. The same fields packed as `formats_dest_acc` become `formats_dest_acc.formats.input` and never meet. Tuples flatten to type names (`str`, `MathOperation`), which collides across ops. Unbundle the test axes; do not patch the comparer to special-case one dataclass.
 
-**Ignored axes:** measurement controls `run_types`, `loop_factor`, `iterations`, `is_perf`, plus `implied_math_format` on every compare. The format axis prints `[i]` and is not a measurement control. Everything else is coverage, including perf-only `approx_mode`. Do not add `implied_math_format` to BH or WH to make the axis exist on both sides.
+**Ignored axes:** measurement controls `run_types`, `loop_factor`, `iterations`, `is_perf`. Everything else is coverage, including perf-only `approx_mode`.
 
 **Import:** `--arch` sets one `CHIP_ARCH`. `--cross-arch` sets it per side and clears `helpers.chip_architecture._cached_chip_architecture` before each import, reloading a module that was already loaded. Pass Quasar paths as `quasar/test_*_quasar.py` (bare `test_*_quasar.py` fails import). A mixed `test_` + `perf_` pair with `--cross-arch` is an error; that compare stays on `--arch`.
 
@@ -49,7 +49,7 @@ Alignment:
 - [ ] Unbundle QSR composites onto BH axis names (constrained callables, not full cartesian)
 - [ ] Use shared MathOperation aliases where the kernel is the same
 - [ ] Pin perf approx_mode to No except kernels that read it (atan2)
-- [ ] Leave real ISA / datapath diffs visible; leave implied_math_format ignored
+- [ ] Leave real ISA / datapath diffs visible
 - [ ] QSR test vs perf
 - [ ] BH vs QSR perf, and BH vs QSR functional
 - [ ] Header gate; optional LLK perf YAML
@@ -66,8 +66,8 @@ Classify every mismatch:
 | Name pairing | One QSR perf vs six functional names | Split wrappers |
 | Axis packaging | `formats_dest_acc` vs `formats`+`dest_acc`; tuple `binary_op_mathop_approx` vs `mathop`+`approx_mode` | Unbundle to BH names |
 | Enum alias | QSR `SfpuElwmulInt` vs BH `SfpuMulInt32` | Keep the QSR member; the domain test maps it onto the WH/BH kernel |
-| Perf-only packaging | A functional sweep shared into perf grows by the run-type count | Opt out with a perf-only override such as `_PERF_EXCLUDED_MATHOPS` |
-| Real ISA | Quasar int sweep does not include shifts; BH int SUB; BH `bcast_dim` | Keep the diff. `RSHFT` / `LSHFT` / `LOGICAL_RSHFT` exist on Quasar. `implied_math_format` is ignored, not a gap |
+| Perf-only packaging | A functional sweep shared into perf grows by the run-type count | Opt out in the perf wrapper: copy the sweep and narrow the axis (e.g. filter `mathop`) |
+| Real ISA | Quasar int sweep does not include shifts; BH int SUB; BH `bcast_dim` | Keep the diff. `RSHFT` / `LSHFT` / `LOGICAL_RSHFT` exist on Quasar |
 | Family split | BH `div`/`atan2` are separate tests; QSR lumps them into `float` | Split QSR only if the kernel exists; do not invent BH families |
 
 ### 2. Align QSR test vs perf first
@@ -88,14 +88,13 @@ Do **not** put `approx_mode` on that global dict if any family already has a con
 ```python
 _FLOAT_PERF_SWEEP = {
     **_func.FLOAT_SWEEP,
-    "implied_math_format": [ImpliedMathFormat.Yes],
     "approx_mode": _perf_approx_modes,  # Yes/No only for atan2; No otherwise
 }
 ```
 
-Perf `approx_mode` is No except kernels that read it (atan2). Functional QSR DIV and atan2 still sweep Yes/No. A functional sweep dict shared into perf becomes perf cases, times the run types. A perf-only override such as `_PERF_EXCLUDED_MATHOPS` is the expected opt-out. Do not add a declared-count assertion.
+Perf `approx_mode` is No except kernels that read it (atan2). Functional QSR DIV and atan2 still sweep Yes/No. A functional sweep dict shared into perf becomes perf cases, times the run types. To keep a point functional-only, copy the sweep in the perf wrapper and narrow that axis, as above; do not edit the functional sweep. Do not add a declared-count assertion.
 
-Functional-only axes use `runtime(...)` (e.g. `tile_indices`) and stay off the perf wrapper. Expected test-vs-perf: coverage identical except those functional-only axes and ignored axes. `implied_math_format` is ignored, so a functional No+Yes versus a perf pin of Yes is not a coverage mismatch.
+Functional-only axes use `runtime(...)` (e.g. `tile_indices`) and stay off the perf wrapper. Expected test-vs-perf: coverage identical except those functional-only axes and ignored axes.
 
 ### 3. Unbundle onto BH names
 
@@ -120,7 +119,6 @@ FLOAT_SWEEP = dict(
     dest_acc=_dest_acc_for_float_formats,
     mathop=_MATHOPS,
     approx_mode=_approx_modes_for_mathop,
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],  # QSR-only; comparer ignores it
 )
 ```
 
@@ -139,7 +137,7 @@ Equalize only packaging. Typical remaining diffs after a good unbundle:
 - **DIFFERENT mathop**: intersection is the portable ops; extras are ISA
 - **one architecture only**: `bcast_dim`, `dest_sync`. The report tags these `[B]` or `[Q]`. `iterations` is `[i]`, an ignored measurement axis
 
-`implied_math_format` is `[i]`, not a QSR-only gap. Do not add a dummy `bcast_dim=[None_]` or a fake BH `implied_math_format`. Do not shrink both mathop lists to the intersection just to print `identical`. Do not add Bfp8_b to DIV perf: unpack expands it to BF16 before the SFPU, so the extra rows do not change the math kernel.
+Do not add a dummy `bcast_dim=[None_]`. Do not shrink both mathop lists to the intersection just to print `identical`. Do not add Bfp8_b to DIV perf: unpack expands it to BF16 before the SFPU, so the extra rows do not change the math kernel.
 
 Optional packaging: split a QSR lumped family so it pairs with an existing BH family name (`div`, `atan2`) when both have the kernel. That turns `mathop DIFFERENT` into `QSR subset` plus new matched pairs.
 
@@ -148,7 +146,10 @@ Optional packaging: split a QSR lumped family so it pairs with an existing BH fa
 Homogeneous CSV schema is per **module** name (`perf_eltwise_binary_sfpu`, `perf_eltwise_binary_sfpu_quasar`), not per family wrapper. Do not bump `helpers/perf/test_schemas.py` unless templates/runtimes grow a new column. After sweep-axis edits:
 
 ```bash
-cd tests && python3 -m pytest python_tests/test_perf_header_gate.py -q
+cd tests/python_tests
+LLK_HARDWARE_FREE=1 CHIP_ARCH=wormhole python3 -m pytest -c pytest.ini --rootdir=. --confcutdir=. \
+  -p helpers.llk_pytest_plugin \
+  ../hardware_free/perf/test_perf_header_gate.py -q
 ```
 
 ## Commands
@@ -195,7 +196,7 @@ gh workflow run "LLK perf" --ref <branch> -f architecture=all -f speed-of-light=
 - `[x]` both have the axis, sets differ
 - `[T]` / `[P]` functional-only / perf-only, on a same-arch compare
 - `[B]` / `[Q]` / `[W]` one architecture only, on a cross-arch compare
-- `[i]` ignored. Measurement controls are labeled as such. `implied_math_format` is ignored and is not a measurement control
+- `[i]` ignored. Measurement controls are labeled as such
 
 Success for test vs perf: coverage axes identical except documented functional-only (`tile_indices`, edge stimuli) and ignored axes. Perf `approx_mode` is No except atan2.
 
@@ -206,7 +207,7 @@ Success for BH vs QSR: shared packaging axes identical or an honest subset; rema
 - Flatten `QuasarSfpuVariant` in `compare_test_and_perf.py` instead of unbundling tests
 - Cartesian illegal format × dest_acc / approx_mode combinations
 - Add QSR mathops missing from `tt_llk_quasar/.../ckernel_defs.h` `BinaryOp`
-- Add BH `implied_math_format` or QSR `bcast_dim` without a kernel path
+- Add QSR `bcast_dim` without a kernel path
 - Rename QSR-only families (`quant`, `bf16_rne`, `max_min_*`) to BH names
 - Put `approx_mode` on QSR global `_PERF_AXES` when float already constrains it
 - Override a shared sweep with a keyword after `**FLOAT_SWEEP` (`TypeError`)

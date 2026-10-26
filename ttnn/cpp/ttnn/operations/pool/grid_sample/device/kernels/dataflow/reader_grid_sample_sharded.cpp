@@ -20,8 +20,8 @@
 // so we must push placeholder pages to keep reader and compute in sync.
 // The scalar page is zeroed so the interpolation weight is 0, making the
 // padded output harmless (written to the shard but masked by valid_sticks).
-template <uint32_t scalar_cb_index, uint32_t in_nblocks_c>
-ALWI void push_noop_sticks(Noc noc, DataflowBuffer input_dfb, DataflowBuffer scalar_dfb) {
+template <uint32_t scalar_cb_index, uint32_t in_nblocks_c, typename InputDFB, typename ScalarDFB>
+ALWI void push_noop_sticks(Noc noc, InputDFB input_dfb, ScalarDFB scalar_dfb) {
     for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
         input_dfb.reserve_back(1);
         input_dfb.push_back(1);

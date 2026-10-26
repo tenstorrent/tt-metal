@@ -37,8 +37,12 @@ device seed cannot reach the reserved value that skips reseeding.
 
 ## Run
 
-Build tt-metal and activate its Python environment. Install the current vLLM TT
-plugin with its `docs/install-vllm-tt.sh` script. Cache the gated Hugging Face
+Build tt-metal and activate its Python environment. Install the pinned
+tt-transformers package, which provides the LM head, with
+`uv pip install --no-deps -r models/demos/llama31_8b_qb2/requirements.txt`.
+`--no-deps` keeps the ttnn built from this tree; a resolving install would
+replace it. Install the current vLLM TT plugin with its
+`docs/install-vllm-tt.sh` script. Cache the gated Hugging Face
 checkpoint at revision `0e9e39f249a16976918f6564b8830bc894c89659`, or set
 `LLAMA_MODEL_PATH` to that local snapshot. The model opens its checkpoint
 offline. Compiled kernels are cached beneath `TT_METAL_CACHE`.

@@ -21,6 +21,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_transaction_id_tracker.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_link_transport.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_tmp_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
@@ -45,6 +46,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#include "tt_metal/impl/streaming_profiler/kernels/link_sync.hpp"
+#endif
 
 using namespace tt::tt_fabric;
 
@@ -514,10 +519,10 @@ FORCE_INLINE void send_next_data(
     }
 
     if constexpr (ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        while (SenderLinkTransport::is_busy()) {
         };
     }
-    internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
+    SenderLinkTransport::send_packet(src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
@@ -531,9 +536,9 @@ FORCE_INLINE void send_next_data(
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
-    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    while (SenderLinkTransport::is_busy()) {
     };
-    remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
+    SenderLinkTransport::remote_update_ptr_val<to_receiver_pkts_sent_id>(1U);
 }
 
 /////////////////////////////////////////////
@@ -1240,7 +1245,7 @@ FORCE_INLINE
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
+        can_send = can_send && !SenderLinkTransport::is_busy();
     }
     if (can_send) {
         did_something = true;
@@ -1383,7 +1388,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         bool pkts_received = pkts_received_since_last_check > 0;
         bool can_send_ack = pkts_received;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_ack = can_send_ack && !internal_::eth_txq_is_busy(receiver_txq_id);
+            can_send_ack = can_send_ack && !ReceiverLinkTransport::is_busy();
         }
         if (can_send_ack) {
             // currently only support processing one packet at a time, so we only decrement by 1
@@ -1575,7 +1580,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         bool unsent_completions = !completion_counter.is_caught_up_to(completion_counter, wr_flush_counter);
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            unsent_completions = unsent_completions && !internal_::eth_txq_is_busy(receiver_txq_id);
+            unsent_completions = unsent_completions && !ReceiverLinkTransport::is_busy();
         }
         if (unsent_completions) {
             // completion ptr incremented in callee
@@ -1595,7 +1600,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
-            can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
+            can_send_completion = can_send_completion && !ReceiverLinkTransport::is_busy();
         }
         if (can_send_completion) {
             uint8_t src_ch_id;
@@ -2282,6 +2287,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
+#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+            link_sync::RouterHook::step(fabric_heartbeat_counter);
+#endif
         }
 
         speedy_state_copy_out<super_speedy_mode, 0>(
@@ -2676,11 +2684,13 @@ void kernel_main() {
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
     if constexpr (receiver_txq_id != sender_txq_id) {
-        constexpr bool is_erisc_that_sets_up_second_txq = any_receiver_channel_serviced;
-        if constexpr (is_erisc_that_sets_up_second_txq) {
+        // Role selection is structural (2-erisc split), not workload-driven: use the untrimmed role
+        // flags, not the trimming-aware per-channel serviced bits (whose channel 0 can now be
+        // legitimately trimmed while a sibling channel of the same role stays active).
+        if constexpr (risc_services_receiver_channels) {
             initialize_state_for_txq1_active_mode();
         }
-        if constexpr (any_sender_channel_serviced) {
+        if constexpr (risc_services_sender_channels) {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
@@ -2874,6 +2884,7 @@ void kernel_main() {
                  // must be initialized here. This is the only time the router touches it.
                  auto* const producer_cursor =
                      reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]);
+#pragma GCC unroll 1
                  for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
                      producer_cursor[w] = 0;
                  }
@@ -3177,10 +3188,10 @@ void kernel_main() {
     // initialize the local sender channel buffers
     local_sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
-    // The initializer populates every sender interface. Channel trimming can leave a router with
-    // only a nonzero static sender (for example, transit traffic on channel 1), so channel 0 cannot
-    // be used as a proxy for whether initialization is needed.
-    if constexpr (any_sender_channel_serviced) {
+    // Interface construction is a structural sender-RISC obligation. Trimming can disable
+    // sender channel 0 while leaving static forwarding sender channels active, so channel 0
+    // cannot be used as a proxy for whether these interfaces must be initialized.
+    if constexpr (risc_services_sender_channels) {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
@@ -3321,30 +3332,33 @@ void kernel_main() {
 
     if constexpr (is_2d_fabric) {
         // Helper function to open downstream EDM connections, works for both VC0 and VC1
-        auto open_downstream_edm_connections =
-            [](auto& downstream_edm_noc_interfaces, uint32_t has_downstream_edm, int receiver_channel_idx) {
-                uint32_t edm_index = 0;
-                if (is_receiver_channel_serviced[receiver_channel_idx]) {
-                    while (has_downstream_edm) {
-                        if (has_downstream_edm & 0x1) {
-                            // open connections with available downstream edms
-                            downstream_edm_noc_interfaces[edm_index]
-                                .template open<
-                                    false,
-                                    use_posted_writes_for_connection_open,
-                                    tt::tt_fabric::worker_handshake_noc>();
-                        }
-                        edm_index++;
-                        has_downstream_edm >>= 1;
-                    }
+        auto open_downstream_edm_connections = [](auto& downstream_edm_noc_interfaces, uint32_t has_downstream_edm) {
+            uint32_t edm_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
+                    // open connections with available downstream edms
+                    downstream_edm_noc_interfaces[edm_index]
+                        .template open<
+                            false,
+                            use_posted_writes_for_connection_open,
+                            tt::tt_fabric::worker_handshake_noc>();
                 }
-            };
+                edm_index++;
+                has_downstream_edm >>= 1;
+            }
+        };
 
-        open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0xF, 0);
+        // Open gates are builder-resolved (trimming- and VC1-mode-aware): VC1 downstreams are
+        // consumed by receiver 0's crossover step on crossover routers, not by receiver 1.
+        if constexpr (open_downstream_vc0_connections) {
+            open_downstream_edm_connections(
+                downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0xF);
+        }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-        open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0xF, 1);
+        if constexpr (open_downstream_vc1_connections) {
+            open_downstream_edm_connections(
+                downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0xF);
+        }
 #endif
         if constexpr (udm_mode) {
             if (has_local_tensix_relay_connection) {
@@ -3372,7 +3386,7 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
 #endif
-    if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (open_downstream_vc0_connections and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
@@ -3393,7 +3407,7 @@ void kernel_main() {
         }
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    if constexpr (is_receiver_channel_serviced[1] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (open_downstream_vc1_connections and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the

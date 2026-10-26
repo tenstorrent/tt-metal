@@ -9,13 +9,14 @@
 
 namespace {
 
-FORCE_INLINE void zero_buffer(const Noc& noc, const DataflowBuffer& cb, uint32_t bytes) {
+template <typename DFB>
+FORCE_INLINE void zero_buffer(const Noc& noc, const DFB& cb, uint32_t bytes) {
     noc.async_write_zeros(cb, bytes);
     noc.write_zeros_l1_barrier();
 }
 
-template <typename input_number_t>
-FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(const Noc& noc, const DataflowBuffer& cb, uint32_t tile_size) {
+template <typename input_number_t, typename DFB>
+FORCE_INLINE void prepare_start_tile_for_cumsum_axis_2(const Noc& noc, const DFB& cb, uint32_t tile_size) {
     WriteCBGuard start_cb_guard{cb.get_id(), ONE_TILE};
 
     zero_buffer(noc, cb, tile_size * sizeof(input_number_t));

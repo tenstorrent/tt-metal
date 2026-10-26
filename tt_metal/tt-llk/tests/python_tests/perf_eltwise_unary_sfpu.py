@@ -5,6 +5,7 @@
 import pytest
 from conftest import skip_for_blackhole
 from helpers.constraints import distinct_dest_accumulation_modes
+from helpers.data_format_inference import unpacks_to_dest
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -113,12 +114,13 @@ def _get_stable_sort_modes(mathop):
 # here. Sorted so the parametrize ids are stable across runs.
 PERF_SWEEP_OPS = sorted(sfpu_unary_ops(), key=lambda op: op.name)
 
-# Five PerfRunTypes per variant, so all 97 registry ops against all 16 format pairs is
-# ~30k ELF builds and profiled runs on llk_perf_tests.yaml's five shards, against ~6.4k
-# before the reroute -- and it buys little, since an SFPU kernel's math cost is its
-# instruction sequence while the format pair moves unpack/pack cycles, which these ops
-# already characterise. So every op is still swept (with its own dest_acc / fast_mode /
-# stable_sort / approx_mode), but only the pre-reroute set carries the full 16-pair matrix.
+# Five PerfRunTypes per variant, so every registry op against every _FULL_FORMAT_PAIRS pair
+# would multiply the ELF builds and profiled runs on llk_perf_tests.yaml's five shards
+# (97 ops x 16 pairs was ~30k, against ~6.4k before the reroute) -- and it buys little,
+# since an SFPU kernel's math cost is its instruction sequence while the format pair moves
+# unpack/pack cycles, which these ops already characterise. So every op is still swept
+# (with its own dest_acc / fast_mode / stable_sort / approx_mode), but only the pre-reroute
+# set carries the full _FULL_FORMAT_PAIRS matrix.
 _FULL_FORMAT_MATRIX_OPS = frozenset(
     {
         MathOperation.Reciprocal,
@@ -136,7 +138,6 @@ _FULL_FORMAT_MATRIX_OPS = frozenset(
 
 _FULL_FORMATS = [
     DataFormat.Float32,
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -220,9 +221,7 @@ def test_perf_eltwise_unary_sfpu(
     # A 32-bit (fp32) input with dest_acc ON unpacks straight into the 32-bit Dest
     # register. With dest_acc OFF it goes through the source registers (converted to 16-bit)
     # and is copied into Dest for the SFPU op.
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
 
     configuration = PerfConfig(
         "sources/eltwise_unary_sfpu_perf.cpp",
@@ -400,9 +399,7 @@ def test_perf_eltwise_unary_sfpu_erfinv_fp32(
     perf_report, formats, mathop, input_dimensions
 ):
     dest_acc = DestAccumulation.Yes
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = unpacks_to_dest(formats.input_format, dest_acc)
     _extra_slice_config(
         formats, mathop, dest_acc, unpack_to_dest, input_dimensions
     ).run(perf_report)

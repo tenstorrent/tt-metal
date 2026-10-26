@@ -104,7 +104,9 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
         case POWER:
         case WHERE_TST:
         case WHERE_TTS:
-        case ISCLOSE: return true;
+        case ISCLOSE:
+        // Fused SFPU kernel only: there is no FPU form, so every float dtype routes here.
+        case SITU_GLU: return true;
         default: return false;
     }
     return false;
@@ -195,7 +197,7 @@ CoreRangeSet get_worker_grid(
 
     if (is_native_L1_sharding(
             input_tensor_a.tensor_spec(),
-            input_tensor_b ? std::optional<tt::tt_metal::TensorSpec>{input_tensor_b->tensor_spec()} : std::nullopt,
+            input_tensor_b ? &input_tensor_b->tensor_spec() : nullptr,
             memory_config_actual)) {
         for (const Tensor* input : {&input_tensor_a, input_tensor_b}) {
             if (input && input->is_sharded()) {
@@ -326,6 +328,20 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     } else {
         TT_FATAL(
             input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
+    }
+    if (attributes.binary_op_type == BinaryOpType::SITU_GLU) {
+        // situ_glu_tile builds on softcap and approx_recip, which only Blackhole and Quasar have.
+        const auto arch = input_tensor_a.device()->arch();
+        TT_FATAL(
+            arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::QUASAR,
+            "situ_glu: the fused SFPU kernel is Blackhole/Quasar only, got arch {}",
+            arch);
+        TT_FATAL(input_tensor_b.has_value(), "situ_glu: the up operand must be a tensor, not a scalar");
+        TT_FATAL(
+            input_tensor_a.dtype() == input_tensor_b->dtype(),
+            "situ_glu: gate and up must share a dtype, got {} and {}",
+            input_tensor_a.dtype(),
+            input_tensor_b->dtype());
     }
 
     TT_FATAL(
@@ -765,19 +781,29 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
-    const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
-    const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
-        input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec);
-    if (shard_volumes.has_value()) {
-        operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
-        operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
-        operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
-    } else {
-        // Accessor regime: the output is reached through the writer's TensorAccessor, so its shape in
-        // pages must enter the key -- attributes.memory_config carries the shard spec but not the shape.
-        operation_attributes.c_tensor_shape_in_pages =
-            output_tensor.has_value() ? operations::binary_ng::sharded_tensor_shape_in_pages(*output_tensor)
-                                      : operations::binary_ng::sharded_tensor_shape_in_pages(output_spec);
+    // With nothing sharded, get_shard_volumes() and the output's shape in pages are both nullopt, so the
+    // attributes stay as initialized. A preallocated output is tested on its own: mem_config_actual falls
+    // back to it only when no explicit memory_config was given, while compute_output_specs returns a
+    // supplied output's spec verbatim.
+    if (operations::binary_ng::any_memory_config_sharded(
+            {&input_tensor_a.memory_config(),
+             &input_tensor_b.memory_config(),
+             &mem_config_actual,
+             output_tensor.has_value() ? &output_tensor->memory_config() : nullptr})) {
+        const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
+        const auto shard_volumes = ttnn::operations::binary_ng::get_shard_volumes(
+            input_tensor_a.tensor_spec(), input_tensor_b.tensor_spec(), output_spec);
+        if (shard_volumes.has_value()) {
+            operation_attributes.a_shard_volume = shard_volumes->a_shard_volume;
+            operation_attributes.b_shard_volume = shard_volumes->b_shard_volume;
+            operation_attributes.c_shard_volume = shard_volumes->c_shard_volume;
+        } else {
+            // Accessor regime: the output is reached through the writer's TensorAccessor, so its shape in
+            // pages must enter the key -- attributes.memory_config carries the shard spec but not the shape.
+            operation_attributes.c_tensor_shape_in_pages =
+                output_tensor.has_value() ? operations::binary_ng::sharded_tensor_shape_in_pages(*output_tensor)
+                                          : operations::binary_ng::sharded_tensor_shape_in_pages(output_spec);
+        }
     }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
@@ -869,11 +895,13 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     }
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
-    // Skip the output-spec computation on the interleaved fast path. output_tensor is tested separately:
-    // mem_config_actual only falls back to it absent an explicit memory_config, but compute_output_specs
-    // returns a supplied output's spec verbatim, so interleaved config + sharded output must not skip.
-    if (input_tensor_a.memory_config().is_sharded() || mem_config_actual.is_sharded() ||
-        (output_tensor.has_value() && output_tensor->memory_config().is_sharded())) {
+    // Same predicate as the tensor-tensor overload. A preallocated output is tested on its own:
+    // mem_config_actual falls back to it only when no explicit memory_config was given, while
+    // compute_output_specs returns a supplied output's spec verbatim.
+    if (operations::binary_ng::any_memory_config_sharded(
+            {&input_tensor_a.memory_config(),
+             &mem_config_actual,
+             output_tensor.has_value() ? &output_tensor->memory_config() : nullptr})) {
         const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
         const auto shard_volumes =
             ttnn::operations::binary_ng::get_shard_volumes(input_tensor_a.tensor_spec(), std::nullopt, output_spec);

@@ -41,6 +41,16 @@ struct KvCacheLocation {
 };
 static_assert(sizeof(KvCacheLocation) == 16, "KvCacheLocation must be 16 bytes for cache-line packing");
 
+// What kind of cached tensor a config's chunks belong to. Each value maps 1:1 onto a TemporalPolicy
+// alternative (how the tensor's sequence coordinate is interpreted). Only the types the chunk map
+// can currently address are listed; new values are added as their TemporalPolicy gains support.
+// Values must match KvChunkTensorType in kv_chunk_address_table.proto.
+enum class KvChunkTensorType : uint8_t {
+    Kv = 0,        // temporal::Dense — full KV / MLA latent over [0, prefix_len)
+    Snapshot = 1,  // temporal::None  — fixed-size state keyed by the prefix_len it was snapshotted at
+                   //                   (no sequence axis; SSM / KDA state)
+};
+
 // Configuration for constructing a KvChunkAddressTable.
 struct KvChunkAddressTableConfig {
     uint32_t num_layers = 0;
@@ -48,6 +58,7 @@ struct KvChunkAddressTableConfig {
     uint32_t num_slots = 0;
     uint32_t chunk_n_tokens = 32;       // tokens per chunk (KV atomic block granularity)
     uint32_t chunk_size_bytes = 19584;  // physical size of one chunk in bytes (18 x 1088 bfp8 tiles)
+    KvChunkTensorType tensor_type = KvChunkTensorType::Kv;
 };
 
 // How a config's chunk map is represented in memory (and on the wire; values must match
