@@ -15,15 +15,15 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.forward_entries import SHUTDOWN_WORD as SHUTDOWN_METADATA_WORD
-from models.demos.common.prefill.forward_entries import WARMUP_WORD as WARMUP_METADATA_WORD
-from models.demos.common.prefill.forward_entries import (
+from models.demos.common.prefill.prefill_chunk import SHUTDOWN_WORD as SHUTDOWN_METADATA_WORD
+from models.demos.common.prefill.prefill_chunk import WARMUP_WORD as WARMUP_METADATA_WORD
+from models.demos.common.prefill.prefill_chunk import (
     check_packed_forward_support,
     decode_forward_metadata,
     forward_metadata_words,
     metadata_size_bytes,
     sentinel_words,
-    validate_forward_entries,
+    validate_chunks,
 )
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
@@ -111,9 +111,12 @@ _tp = int(os.environ.get("PREFILL_TP", 4))
 GLOBAL_MESH_SHAPE = (_sp, _tp)
 NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", MODEL_CFG.NUM_LAYERS))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-# Chunk entries per forward; metadata layout in forward_entries.
-FORWARD_CHUNKS = int(os.environ.get("PREFILL_FORWARD_CHUNKS", 1))
-FORWARD_TOKENS = FORWARD_CHUNKS * CHUNK_SIZE
+# Tokens per forward, a multiple of the chunk size: FORWARD_CHUNKS chunks per forward, metadata in prefill_chunk.
+FORWARD_TOKENS_BUDGET = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
+assert (
+    FORWARD_TOKENS_BUDGET >= CHUNK_SIZE and FORWARD_TOKENS_BUDGET % CHUNK_SIZE == 0
+), f"PREFILL_FORWARD_TOKENS_BUDGET={FORWARD_TOKENS_BUDGET} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
+FORWARD_CHUNKS = FORWARD_TOKENS_BUDGET // CHUNK_SIZE
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
@@ -194,10 +197,10 @@ def _handle_sigterm(signum, frame):
 
 
 def _meta_from_words(words) -> dict:
-    """Entry 0 as slot_id / actual_start / actual_end (sentinels, MTP, logs), plus all FORWARD_CHUNKS entries."""
-    entries = decode_forward_metadata(words, FORWARD_CHUNKS)
-    head = entries[0]
-    return {"slot_id": head.slot, "actual_start": head.start, "actual_end": head.end, "entries": entries}
+    """Chunk 0 as slot_id / actual_start / actual_end (sentinels, MTP, logs), plus all FORWARD_CHUNKS chunks."""
+    chunks = decode_forward_metadata(words, FORWARD_CHUNKS)
+    head = chunks[0]
+    return {"slot_id": head.slot_id, "actual_start": head.actual_start, "actual_end": head.actual_end, "chunks": chunks}
 
 
 def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = False) -> dict:
@@ -212,13 +215,13 @@ def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = Fal
 
 
 def _chunks_in(meta: dict) -> int:
-    return 1 if FORWARD_CHUNKS == 1 else sum(not e.is_empty for e in meta["entries"])
+    return 1 if FORWARD_CHUNKS == 1 else sum(not c.is_empty for c in meta["chunks"])
 
 
-def _entries_str(meta: dict) -> str:
+def _chunks_str(meta: dict) -> str:
     if FORWARD_CHUNKS == 1:
         return ""
-    return " entries=" + ",".join(f"{e.slot}:[{e.start},{e.end})" for e in meta["entries"])
+    return " chunks=" + ",".join(f"{c.slot_id}:[{c.actual_start},{c.actual_end})" for c in meta["chunks"])
 
 
 def mtp_provided_levels(mtp_tokens, meta: dict) -> int:
@@ -408,13 +411,13 @@ def _d2d_recv(inbound, sockets) -> tuple:
     else:
         act, sockets.metadata = _d2d_drain_op(inbound, sockets)
     meta = _decode_metadata(sockets.metadata, with_provided_levels=bool(MTP_LEVELS))
-    where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}{_entries_str(meta)}"
+    where = f"[{meta['actual_start']},{meta['actual_end']}) slot={meta['slot_id']}{_chunks_str(meta)}"
     logger.info(f"[pp] RECV-d2d {where} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms")
     return act, meta
 
 
 def _metadata_record_words(meta: dict) -> torch.Tensor:
-    words = forward_metadata_words(meta["entries"], FORWARD_CHUNKS)
+    words = forward_metadata_words(meta["chunks"], FORWARD_CHUNKS)
     if MTP_LEVELS:
         words.append(int(meta["provided_levels"]))
     return torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
@@ -650,12 +653,12 @@ def _compute_and_send(
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
         f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
-        f"provided={meta.get('provided_levels')}{_entries_str(meta)}"
+        f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
     if FORWARD_CHUNKS > 1:
         out = runtime.prefill_forward(
-            inp, kv_caches, meta["entries"], request_id=c, d2h_service=d2h_service, metadata_msg=sockets.metadata
+            inp, kv_caches, meta["chunks"], request_id=c, d2h_service=d2h_service, metadata_msg=sockets.metadata
         )
     else:
         mtp_kwargs = {"mtp_tokens": mtp_tokens, "provided_levels": meta["provided_levels"]} if MTP_LEVELS else {}
@@ -762,9 +765,9 @@ def run_request_loop(
             if cfg.is_first_rank:
                 inp, mtp_tokens, meta = _socket_next(h2d_service, sockets, NUM_MTP_TOKENS)
                 meta["provided_levels"] = 0 if _is_shutdown_sentinel(meta) else mtp_provided_levels(mtp_tokens, meta)
-                if FORWARD_CHUNKS > 1 and not meta["entries"][0].is_sentinel:
-                    validate_forward_entries(
-                        meta["entries"],
+                if FORWARD_CHUNKS > 1 and not meta["chunks"][0].is_sentinel:
+                    validate_chunks(
+                        meta["chunks"],
                         chunk_size=CHUNK_SIZE,
                         forward_chunks=FORWARD_CHUNKS,
                         num_users=NUM_USERS,
@@ -848,8 +851,8 @@ def _print_config() -> None:
         ("PREFILL_LAYER_ACK_D2H", os.environ.get("PREFILL_LAYER_ACK_D2H", "0")),
         ("PREFILL_CHUNK_SIZE", str(CHUNK_SIZE)),
         (
-            "PREFILL_FORWARD_CHUNKS",
-            f"{FORWARD_CHUNKS} (forward_tokens={FORWARD_TOKENS}, "
+            "PREFILL_FORWARD_TOKENS_BUDGET",
+            f"{FORWARD_TOKENS_BUDGET} (forward_chunks={FORWARD_CHUNKS}, "
             f"adapter.supports_packed_forward={ADAPTER.supports_packed_forward})",
         ),
         ("PREFILL_MAX_SEQ_LEN", str(MAX_SEQ_LEN)),
@@ -994,7 +997,7 @@ def main() -> None:
 
 
 def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ranks: int, is_first_rank: bool) -> None:
-    d2d_activation_rows = d2d_rows_for(FORWARD_TOKENS, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
+    d2d_activation_rows = d2d_rows_for(FORWARD_TOKENS_BUDGET, sp_factor=GLOBAL_MESH_SHAPE[0], mtp_levels=MTP_LEVELS)
     d2d_activation_width = d2d_width(hf_config.hidden_size, dflash=DFLASH_ENABLED)
     # Planes on dim 1 of the D2D payload, evaluated at BOTH edges of this rank's slice: what it
     # receives and what it sends on. Read off the runtime's own config rather than recomputing the
@@ -1024,7 +1027,7 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             return service
 
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS, MTP_LEVELS), service_id)
+        h2d_service = _open_h2d(make_h2d_spec(GLOBAL_MESH_SHAPE, FORWARD_TOKENS_BUDGET, MTP_LEVELS), service_id)
 
     d2d_in = d2d_out = idx_in = idx_out = None
     if num_ranks > 1:

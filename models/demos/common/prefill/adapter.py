@@ -90,8 +90,8 @@ class PrefillRunParams:
     mtp_levels: int = 0
     # Decode's MTP level count, 0 = mtp_levels. Levels past mtp_levels reuse its KV: table aliases + acks.
     mtp_decode_levels: int = 0
-    # Chunk entries per forward (PREFILL_FORWARD_CHUNKS). 1 = one chunk per prefill_chunk call; > 1 needs an
-    # adapter with supports_packed_forward and drives the runtime's prefill_forward.
+    # Chunks per forward, PREFILL_FORWARD_TOKENS_BUDGET // chunk_size. 1 = one chunk per prefill_chunk call; > 1
+    # needs an adapter with supports_packed_forward and drives the runtime's prefill_forward.
     forward_chunks: int = 1
 
     @property
@@ -150,8 +150,8 @@ class PrefillModelAdapter(ABC):
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
-    # Whether the runtime implements prefill_forward (several chunk entries per forward), so the runner may
-    # run with PREFILL_FORWARD_CHUNKS > 1. See docs/ADDING_A_PREFILL_MODEL.md.
+    # Whether the runtime implements prefill_forward (several chunks per forward), so the runner may run with
+    # PREFILL_FORWARD_TOKENS_BUDGET above the chunk size. See docs/ADDING_A_PREFILL_MODEL.md.
     supports_packed_forward: bool = False
 
     def fabric_payload_size(self) -> int:

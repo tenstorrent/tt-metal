@@ -109,7 +109,7 @@ from loguru import logger
 import ttnn
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
 from models.demos.minimax_m3.tt.moe import shared_overlap
-from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.utils.fabric_env import ccl_topology_from_env, fabric_config_from_env
 
 
