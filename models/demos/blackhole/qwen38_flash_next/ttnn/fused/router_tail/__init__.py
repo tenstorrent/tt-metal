@@ -5,15 +5,10 @@
 bf16 scores and uint16 indices ``[1, 1, rows, top_k]`` (DRAM); the chain ``softmax(numeric_stable) -> topk(k, largest,
 sorted) -> sum -> div -> typecast(bf16) -> to_layout(ROW_MAJOR) x2 -> typecast(uint16)`` of ``Qwen38TTNNMoE._route``.
 
-``rows`` 1..32, one tile; the compute kernel issues each replaced op's instruction sequence on CBs of that op's data
-format and unpack mode (``kernels/compute_router_tail.cpp``), so the values and the top-k tie order are the composed
-chain's: tolerance class BITWISE.  The top-k LLK sorts a tile's 32 token columns in four independent passes of eight
-tokens each (``kernels/topk_lanes.h``); one core per pass that holds a live token, every core running the whole
-softmax and the whole insertion chain but only its pass of every sort, and writing only its tokens.  Same
-instructions on the same DST rows for every live token as the LLK's four-pass sort, at a quarter of the sort work per
-core (one core and one pass for rows <= 8 -- the decode body); the long chunk and the slab keep the composed chain.
-``PASS_TOKENS`` (which tokens each pass holds: face by row half, pass by row parity) was measured on device: rows 1
-needs one core, rows 2..16 two, rows 17..32 four.
+``rows`` 1..32, one tile. The compute kernel issues each replaced op's instruction sequence on CBs of that op's data
+format and unpack mode, so the values and the top-k tie order are the chain's (BITWISE). The top-k LLK sorts a tile's
+32 token columns in four independent passes of eight tokens (``kernels/topk_lanes.h``); there is one core per pass
+that holds a live token, and each core runs only its pass of every sort and writes only its tokens.
 """
 
 from __future__ import annotations
@@ -34,22 +29,18 @@ STAGE_PAGES = 4  # 8 KB of bf16 tile pages for the writer's two 2 KB row stages 
 KERNELS = {name: fp.kernel_source(NAME, f"{name}_router_tail.cpp") for name in ("reader", "compute", "writer")}
 LANES_HEADER = fp.kernel_source(NAME, "topk_lanes.h")
 EXP_LIVE_HEADER = fp.kernel_source(NAME, "exp_live.h")
-# The core rectangle the top-k asks the placement helper for (placement.free_rectangle): 4 x 5 = the exact multi-core
-# form's 16 worker cores plus up to four lane cores (q38-router-topk-exact); the lane form takes the rectangle's first
-# row, so the top-k lands on the same cores standalone and hosted by the MoE dense composite.  Off row 0: today's
-# lane core (0, 0) was storage core 0 of the dense linears, which serialized the shared expert chain behind the top-k.
+# The rectangle the top-k asks placement.free_rectangle for; the lane form takes its first row, so the top-k lands on
+# the same cores standalone and hosted by the MoE dense composite.
 RECTANGLE = (4, 5)
 PASSES = 4  # the LLK local sort's (face, col) passes; pass p = bit p of the compute kernel's pass_mask
-# The eight token rows (of the untransposed tile) each sort pass covers: pass (face, col) = tokens of face `face`
-# (rows 0-15 / 16-31) with row parity `col`.  Measured on one Blackhole chip (the lane probe, 2026-09-18: with one
-# pass enabled exactly these rows stay bitwise against the chain; the four sets partition the tile).  A change here changes which core writes which row, nothing in the arithmetic.
+# The eight token rows each sort pass covers: pass (face, col) = rows of face `face` with row parity `col`; from a
+# device measurement. The four sets partition the tile; a change here moves rows between cores, not the arithmetic.
 PASS_TOKENS: tuple[frozenset[int], ...] = tuple(
     frozenset(range(16 * face + col, 16 * face + 16, 2)) for face in range(2) for col in range(2)
 )
 
-# Circular buffers: (name, index, dtype, pages).  The compute kernel unpacks cb_probs, cb_vals_t, cb_pad_reduce,
-# cb_pad_div and cb_denom straight into the 32-bit dest (as topk, the accurate fp32 reduce and binary_ng unpack their
-# fp32 operands); every other fp32 CB unpacks to the source registers (as softmax does).  Names are the kernels' named compile-time args.
+# Circular buffers: (name, index, dtype, pages); names are the kernels' named compile-time args. The CBs of
+# UNPACK_TO_DEST_FP32 unpack straight into the 32-bit dest as the chain's ops do; other fp32 CBs unpack to SrcA/B.
 CBS = (
     ("cb_in0", 0, ttnn.float32, WIDTH_TILES),
     ("cb_max_scaler", 1, ttnn.float32, 1),
@@ -103,9 +94,9 @@ _INDEX_TEMPLATES: dict[int, object] = {}
 
 
 def router_tail_prepare(mesh):
-    """The constant index tiles the top-k sorts alongside the values, pre-transposed: tile ``w`` holds ``w*32+k`` in
-    every column of row ``k`` (the transpose of the topk reader's ``w*32+c`` tile), as one uint32 TILE tensor
-    ``[1, 1, 32, 512]`` in DRAM, allocated once per mesh (call before trace capture)."""
+    """The pre-transposed index tiles the top-k sorts alongside the values: tile ``w`` holds ``w*32+k`` in row ``k``.
+
+    One uint32 TILE tensor ``[1, 1, 32, 512]`` in DRAM, allocated once per mesh (call before trace capture)."""
 
     key = id(mesh)
     if key not in _INDEX_TEMPLATES:
@@ -120,8 +111,7 @@ def router_tail_prepare(mesh):
 
 
 def lanes_plan(rows: int, pass_tokens=None) -> list[tuple[int, int]]:
-    """``(pass_mask, token_mask)`` per core of the lane form for ``rows`` live tokens: one core per sort pass that holds
-    a live token, in pass order.  ``pass_tokens`` defaults to the pinned ``PASS_TOKENS``."""
+    """``(pass_mask, token_mask)`` per core for ``rows`` live tokens: one core per sort pass holding a live token."""
 
     pass_tokens = PASS_TOKENS if pass_tokens is None else pass_tokens
     if not 1 <= rows <= fp.TILE:
@@ -152,10 +142,9 @@ def lane_cores(rectangle: "ttnn.CoreRange", count: int) -> list["ttnn.CoreCoord"
 def program_parts(
     logits, index_template, scores, indices, *, rows: int, top_k: int, rectangle=None, sem_base: int = 0
 ) -> tuple[list, list, list]:
-    """``(kernels, cbs, semaphores)`` of the top-k program on the lane cores of ``rectangle`` (default: the placement
-    helper's ``RECTANGLE`` for the logits' mesh), for a program that hosts them beside other kernel groups; the
-    standalone program is ``fp.program_descriptor(*program_parts(...))``.  ``sem_base`` is the first program-local
-    semaphore id the form may take in a hosting program; it declares none."""
+    """``(kernels, cbs, semaphores)`` of the top-k program on the lane cores of ``rectangle``, for a hosting program.
+
+    The standalone program is ``fp.program_descriptor(*program_parts(...))``; ``sem_base`` is unused (no semaphores)."""
 
     plan = _core_plan(rows)
     if rectangle is None:
@@ -230,10 +219,10 @@ def router_tail_program(
 
 
 def router_tail(logits, *, top_k: int = TOP_K, compute_kernel_config=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """``(scores, indices)`` ROW_MAJOR bf16 / uint16 ``[1, 1, rows, top_k]``; ``compute_kernel_config`` is the chain's
-    (HiFi4, fp32 dest) and is pinned inside the kernel.  ``logits`` are the fp32 tiles the chain drains, or the router
-    linear's bf16 L1 shard itself (the same values: a bf16 value is exact in the 19-bit source registers the softmax
-    unpacks fp32 into)."""
+    """``(scores, indices)`` ROW_MAJOR bf16 / uint16 ``[1, 1, rows, top_k]``; the chain's compute config is pinned.
+
+    ``logits`` may be the fp32 tiles or the router linear's bf16 L1 shard: a bf16 value is exact in the 19-bit source
+    registers the softmax unpacks fp32 into."""
 
     rows = _rows_of(logits)
     mesh = logits.device()
@@ -243,8 +232,7 @@ def router_tail(logits, *, top_k: int = TOP_K, compute_kernel_config=None, memor
 
 
 def router_tail_into(logits, scores, indices, *, top_k: int = TOP_K):
-    """``router_tail`` writing its ROW_MAJOR rows into the pre-allocated ``scores`` (bf16) and ``indices`` (uint16)
-    of ``rows x top_k`` rows in any layout (e.g. the drain-core L1 shards ``moe_compute`` reads); returns them."""
+    """``router_tail`` into pre-allocated ROW_MAJOR ``scores`` (bf16) and ``indices`` (uint16) in any memory layout."""
 
     rows = _rows_of(logits)
     if not 1 <= top_k <= 16:
@@ -262,9 +250,8 @@ def router_tail_into(logits, scores, indices, *, top_k: int = TOP_K):
             )
     index_template = router_tail_prepare(logits.device())
     plan = _core_plan(rows)
-    # every core streams the logits tile row (the fp32 tiles, or the router linear's bf16 L1 shard) and the index
-    # template; the scores and indices rows out; per token the softmax (max, exp, sum, reciprocal, scale), the
-    # bitonic top-k over the 16 width tiles and the sum / division / typecasts of the k scores
+    # every core streams the logits tile row and the index template; per token the softmax, the bitonic top-k over the
+    # 16 width tiles and the sum / division / typecasts of the k scores
     meta = fp.program_meta(
         NAME,
         "lanes",

@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The verify rows' commit under the fold: the state after `accepted + 1` rows is prefix slot `accepted`, so the
-// commit copies that slot into the layer's recurrent state -- data movement only, no arithmetic.  The accept count
-// is the pass's fp32 [1, 1, 1, 1] device scalar (element [0, 0] of one tile), read here so a traced replay follows the
-// rewritten value.  Per item (head, column tile): the four state tiles (kt, col) of the head.
+// The verify rows' commit under the fold: copies prefix slot `accepted` (the state after accepted + 1 rows) into the
+// recurrent state; data movement only. The accept count is the fp32 [1, 1, 1, 1] device scalar, read on device so a
+// traced replay follows the rewritten value. Per item (head, column tile): the four state tiles (kt, col).
 // Compile-time args: 0 ROWS; then TensorAccessorArgs of accepted, prefix, recurrent.  Runtime args: 0 accepted,
 // 1 prefix, 2 recurrent addresses, 3 items, then (head, col) pairs.
 

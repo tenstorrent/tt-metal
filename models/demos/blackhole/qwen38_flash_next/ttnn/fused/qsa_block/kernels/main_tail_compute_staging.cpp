@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // main_tail, staging core compute (fp32 dest): per lane the patched staging tiles times the ones tile on the SFPU
-// (the chain's one-hot select arithmetic: bf16 RNE store, zero rule), kept for the writer (TILE write-back) and
-// untilized into 32 row-major rows for the cache write (the chain's to_layout).  Runtime arg 0: this core's lane
-// count (one staging core per lane).
+// (matches the one-hot select: bf16 RNE store, zero rule), kept for the TILE write-back and untilized into 32
+// row-major rows for the cache write.  Runtime arg 0: this core's lane count.
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"

@@ -1,20 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The lanes form of gdn_rows_scan's reader: one (value head, lane) item per core, the whole head (VBT = HT = 4) per
-// core, and the compute kernel unchanged (its ROWS = the R rows of ONE lane).  The verify tile is lane-major: tile
-// row t = lane * R + j is lane u's row j.  Per item this reader feeds the compute exactly what the single form's
-// reader feeds it for a 32-row tile whose rows 0..R-1 are the real ones, with three differences:
-//   - the state tiles are lane u's ([B, 12, 128, 128] fp32: page (lane * 12 + head) * 16 + kt * 4 + vt);
-//   - the FIR history tile is lane u's ([1, B, 32, 2560] bf16: page lane * 80 + column tile), and after the whole-tile
-//     shifted-window assembly (slot i, row t = window row t + i, window = [history rows 0..2 | projection rows
-//     0..31]) lane u's first rows are PATCHED: slot with shift s = 3 - i, rows t = lane * R + j for j < min(s, R) take
-//     lane u's history rows 3 - s + j (the assembly gave them lane u-1's projection rows).  Lane 0 needs no patch;
-//   - the one-hot row masks and the replicated gate tiles are those of tile rows lane * R + j, at CB slots j.
-// FINITENESS RULE: every row of every assembled slot must hold a finite value.  The compute masks a row's delta by
-// MULTIPLICATION (delta = ((v - v_read) * M_row) * beta), and NaN * 0 = NaN reaches every element of S_new through
-// k^T delta; the pad rows past B * R and the other lanes' rows are therefore assembled from the projection and the
-// history tiles (real rows, or the chain's exact zero pads) and never left as stale L1.  The die test pins it.
+// The lanes form of gdn_rows_scan's reader: one (value head, lane) item per core, the whole head (VBT = HT = 4), and
+// the compute kernel unchanged (ROWS = the R rows of one lane). The verify tile is lane-major (tile row lane * R + j is
+// lane u's row j). It feeds the single form's inputs except that the state tiles ([B, 12, 128, 128] fp32) and the FIR
+// history tile ([1, B, 32, 2560] bf16) are lane u's, the masks and gate tiles are tile rows lane * R + j, and lane u's
+// first rows are patched with its own history rows after the assembly (lane 0 needs no patch).
+// FINITENESS RULE: every row of every assembled slot must hold a finite value. The compute masks a row's delta by
+// multiplication and NaN * 0 = NaN reaches all of S_new through k^T delta, so pad rows and other lanes' rows are
+// assembled from real projection / history rows, never left as stale L1.
 // Compile-time args: 0 ROWS (R, rows per lane), 1 VBT (= 4), 2 LANES (B); then TensorAccessorArgs of projected,
 // history, tap0..tap3, dtna, norm, state.  Runtime args: 0 projected, 1 history, 2-5 taps, 6 dtna, 7 norm, 8 state
 // addresses, 9 items, then (head, lane) pairs.
@@ -66,10 +60,8 @@ inline void fill_tile_words(uint32_t l1, uint32_t value) {
 inline void local_copy(uint32_t dst, uint32_t src, uint32_t bytes) { noc_async_read(get_noc_addr(src), dst, bytes); }
 
 // The single form's whole-tile assembly: slot_i (i = 0, 1, 2) of one column tile: rows s..31 (s = 3 - i) <-
-// projection rows 0..31-s, rows 0..s-1 <- history rows 3-s..2.  The history tile was read whole into slot 0 (its
-// rows 0..2 are already right there); slots 1 and 2 take their history rows from slot 0's rows, which the shift
-// below never overwrites.  Tile rows are 32-byte pieces in two faces per 16-row block, so a shift is six
-// contiguous copies per slot plus the history pieces.
+// projection rows 0..31-s, rows 0..s-1 <- history rows 3-s..2, taken from slot 0's rows 0..2 (never overwritten).
+// Tile rows are 32-byte pieces in two faces per 16-row block.
 inline void assemble_slots(uint32_t p_tile, uint32_t s0_tile) {
     for (uint32_t i = 0; i < HISTORY_ROWS; ++i) {
         const uint32_t s = HISTORY_ROWS - i;
@@ -101,11 +93,9 @@ inline void copy_row_bf16_between(uint32_t dst, uint32_t dst_row, uint32_t src, 
     }
 }
 
-// The lane patch, after the assembly has landed: slot i (shift s = 3 - i), rows t = row0 + j for j < min(s, R)
-// take lane u's history rows 3 - s + j = i + j, which sit in slot 0's rows 0..2 (never shifted).  RISC word copies
-// (16 words per row: two 32-byte face pieces), so no NoC write can race the assembly's.  Slot 0 is patched LAST:
-// its patch writes into the very tile the other slots read their history rows from (row0 + j may be 1 or 2 for
-// lane 1 at R <= 2), and within slot 0 every write lands at row0 + j >= R > j', past every row j' still to be read.
+// The lane patch, after the assembly has landed: slot i (shift s = 3 - i), rows row0 + j for j < min(s, R) take lane
+// u's history rows i + j from slot 0's rows 0..2. RISC word copies, so no NoC write races the assembly. Slot 0 is
+// patched last: the other slots read from it, and its own writes land at rows >= R, past every row still to be read.
 inline void patch_lane_rows(uint32_t s0_tile, uint32_t row0) {
     for (uint32_t k = 0; k < HISTORY_ROWS; ++k) {
         const uint32_t i = HISTORY_ROWS - 1 - k;  // slots 2, 1, then 0
@@ -179,9 +169,8 @@ void kernel_main() {
         for (uint32_t c = 0; c < VBT; ++c) {
             ids[QK_TILES + c] = V_TILE0 + head * HT + c;
         }
-        // The conv inputs go out per output tile t (P[t], the three slots' tile t at CB_S 3t.., the four taps' tile t
-        // at CB_T 4t..): the next tile's DRAM reads are in flight while this tile's slots are assembled, and the
-        // conv starts after the first group.
+        // The conv inputs go out per output tile t (CB_S 3t.., CB_T 4t..) so the next tile's DRAM reads overlap this
+        // tile's slot assembly.
         cb_reserve_back(CB_P, NT);
         cb_reserve_back(CB_S, 3 * NT);
         cb_reserve_back(CB_T, 4 * NT);
@@ -218,8 +207,7 @@ void kernel_main() {
             z_ids[c] = Z_TILE0 + head * HT + c;
         }
         read_tiles(CB_Z, p, z_ids, HT, BF16_TILE);
-        // the a and b tiles once: every tile row's gate scalars of every head (the compute's gates take all rows in
-        // one pass; this item uses rows row0 .. row0 + R - 1)
+        // the a and b tiles once: the compute's gates take every tile row in one pass; this item uses R from row0
         cb_reserve_back(CB_AB, 2);
         const uint32_t ab_l1 = get_write_ptr(CB_AB);
         noc_async_read_page(A_TILE, p, ab_l1);
@@ -247,9 +235,8 @@ void kernel_main() {
             }
         }
         cb_push_back(CB_MASK, ROWS);
-        // The gates: the compute's beta_all / decay_all fp32 tiles (CB_GALL: tile 0 beta, tile 1 decay; element
-        // (tile row, head) is that row's scalar) replicated into one full fp32 tile per lane row for the
-        // recurrence's element-wise multiplies -- exact 32-bit copies, pushed row by row so row 0 starts first.
+        // The gates: each lane row's element of CB_GALL (tile 0 beta, tile 1 decay) replicated into one full fp32 tile
+        // per row (exact 32-bit copies), pushed row by row so row 0 starts first.
         {
             cb_wait_front(CB_GALL, 2);
             const uint32_t gall = get_read_ptr(CB_GALL);

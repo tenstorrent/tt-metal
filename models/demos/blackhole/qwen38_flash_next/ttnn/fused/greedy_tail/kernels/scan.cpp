@@ -2,22 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Per core: the maximum of each valid row of a range of bf16 TILE pages of the local logits and the lowest id that
-// holds it (ttnn.argmax's tie rule).  ROWS = 1 (the decode step): row 0 of a tile is the first row of faces 0 and 1 (32
-// bytes each, at tile offsets 0 and 512); both are read with the 64-byte DRAM grain.  ROWS > 1 (the lanes, row r =
-// lane r): rows 0..15 are the first ROWS x 32 bytes of faces 0 and 1, rows 16.. the same of faces 2 and 3; each tile
-// is staged at its own 2 KB slot and every row is scanned in id order.  The pair (value as fp32 bits, id) of row r goes
-// to lanes 4c..4c+1 of row r of the fp32 pairs rows (16 bytes per core per row).  bf16 values compare through a
-// sign-magnitude key (zeros canonicalized to +0.0): the first strict maximum in id order is the lowest id.
-// With candidates > 0 (the decode step of a sampling server) each core also keeps its top `candidates` pairs in key
-// order, lowest id first among equal keys, and writes them as one fp32 ROW_MAJOR page [values | ids] of the lists
-// tensor (page = core); the argmax pair is the list's first entry, so the greedy outputs are unchanged.
-// LANE_SPLIT (rows > 1): one lane row per core, (row, tile range) work items over the grid: the core reads only row r
-// of its tiles (the two 64-byte grains that hold it, as the one-row path reads row 0) and writes its pair to pairs row
-// r, lane 4 g of its tile group g; the merge then compares the groups of each row in group order (increasing id
-// ranges), so every lane meets the one-row path's rule: bitwise the per-core all-rows scan below it. Named compile-time
-// args: cb_stage, lanes_per_tile, rows, candidates, lane_split.  Compile-time args: TensorAccessorArgs(logits),
-// (pairs), (lists when candidates > 0).  Runtime args: 0 logits addr, 1 pairs addr, 2 first tile, 3 tile count,
-// 4 core index (the tile group), 5 lists addr (candidates > 0), 6 row (lane_split).
+// holds it (ttnn.argmax's tie rule).  Rows 0..15 sit in faces 0 and 1, rows 16.. in faces 2 and 3; ROWS = 1 reads
+// row 0 with the 64-byte DRAM grain.  The pair (value as fp32 bits, id) of row r goes to lanes 4c..4c+1 of row r of
+// the fp32 pairs rows.  bf16 values compare through a sign-magnitude key (zeros canonicalized to +0.0), so the first
+// strict maximum in id order is the lowest id.
+// With candidates > 0 each core also writes its top `candidates` pairs (key order, lowest id first among equal keys)
+// as one fp32 ROW_MAJOR page [values | ids] of the lists tensor (page = core); entry 0 is the argmax pair.
+// LANE_SPLIT (rows > 1): each core reads only row r of its tiles and writes its pair to pairs row r, lane 4 g of its
+// tile group g; the merge compares the groups in increasing id order, so the result is bitwise the all-rows scan's.
+// Named compile-time args: cb_stage, lanes_per_tile, rows, candidates, lane_split.  Compile-time args:
+// TensorAccessorArgs(logits), (pairs), (lists when candidates > 0).  Runtime args: 0 logits addr, 1 pairs addr,
+// 2 first tile, 3 tile count, 4 core index (the tile group), 5 lists addr (candidates > 0), 6 row (lane_split).
 
 #include <cstdint>
 

@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// index_tail, rope core writer (one core pair per lane): the rotated query tiles 0, 1 into the index query (the first
-// pair); per lane of this pair row 0 of the rotated key tiles into the lane's compressed cache row (P // 4), columns
-// 0..63.
+// index_tail, rope core writer: the rotated query tiles 0, 1 into the index query (first pair only); per lane row 0 of
+// the rotated key tiles into the lane's compressed cache row (P // 4), columns 0..63.
 // Compile-time args: TensorAccessorArgs index_query, cache, kv_block_start, kv_row_hit.
 // Runtime args: 0 index_query, 1 cache, 2 kv_block_start, 3 kv_row_hit addresses, 4 rows, 5 lane tile rows,
 // 6 lane_first, 7 lane_count, 8 do_query.

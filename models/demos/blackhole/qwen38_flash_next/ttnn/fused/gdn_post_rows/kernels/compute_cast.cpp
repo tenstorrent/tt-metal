@@ -1,13 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// ``post_cast`` compute: ``ttnn.typecast(o fp32 -> bf16)`` call for call.  The op's own kernel
-// (operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp) is one tile per DST acquire:
-// ``copy_tile`` of the fp32 input (its CB unpacked straight to DST, ``preserve_fp32_precision`` on an fp32 input:
-// typecast.cpp:33-38), then the format-selected LLK pair, then one pack.  fp32 -> bf16 is
-// ``calculate_typecast_fp32_to_fp16b`` (the explicit round-to-nearest-even of typecast.h), so the kernel runs with
-// ``fp32_dest_acc_en`` (the op sets it from ``preserve_fp32_precision``) and APPROX = false (the op's compute config
-// is Precise: typecast_program_factory.cpp:73).  Both are the Python side's compute-kernel settings.
+// ``post_cast`` compute: ``ttnn.typecast(o fp32 -> bf16)`` call for call, as the op's eltwise_typecast.cpp does it:
+// one tile per DST acquire, ``copy_tile`` of the fp32 input (its CB unpacked straight to DST), the explicit RNE of
+// ``calculate_typecast_fp32_to_fp16b``, one pack.  Must run with ``fp32_dest_acc_en`` and APPROX = false, as the op's
+// compute config does (set on the Python side).
 // CBs: CB_IN (0, fp32), CB_OUT (16, bf16).  Runtime args: 0 groups on this core.
 
 #include <cstdint>

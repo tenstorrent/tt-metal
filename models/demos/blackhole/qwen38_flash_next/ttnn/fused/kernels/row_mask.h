@@ -4,7 +4,7 @@
 // Row helpers for the fused programs that work on a subset of one 32-row tile's rows (the MTP verify rows, the
 // lanes): the byte offsets of a tile row in the 16 x 16 face layout and the one-hot row mask tile the recurrence
 // kernels multiply with to keep an outer product's contraction to one row.  Data-movement kernels only (RISC word
-// stores); bf16 tiles.  The verify-rows family (gdn_rows_scan, a future qsa_rows) shares this header.
+// stores); bf16 tiles.
 #pragma once
 
 #include <cstdint>

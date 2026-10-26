@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// qsa_rows program 5 (qsa_rows_post_attention) reader, one core per (local head h, tile column t): the head's gate
-// tile t (the second 256 columns of its 512 in the qg projection: tile qg_first + 16 h + 8 + t) and the head's
-// attention rows' 32-column window t placed into one tile (the chain's slice to the local heads + tilize), row by
-// row from the ROW_MAJOR [1, 32 heads, rows, 256] sparse output.  CBs: 0 gate (1 tile), 1 attention (1 tile),
-// 3 row scratch (64 B per lane, one tile of room).
+// qsa_rows program 5 reader, one core per (local head h, tile column t): the head's gate tile t (tile
+// qg_first + 16 h + 8 + t of the qg projection) and the head's attention rows' 32-column window t placed into one
+// tile, row by row from the ROW_MAJOR [1, 32 heads, rows, 256] sparse output.  CBs: 0 gate (1 tile), 1 attention
+// (1 tile), 3 row scratch (64 B per lane, one tile of room).
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
 #include "../../qsa_block/kernels/tile_rows.h"
@@ -33,7 +32,7 @@ void kernel_main() {
     const uint32_t gate_l1 = get_write_ptr(CB_GATE), att_l1 = get_write_ptr(CB_ATT), row_l1 = get_write_ptr(CB_ROW);
     {
         noc_async_read_page(qg_first + 2 * HEAD_TILES * head + GATE_FIRST + column, qg, gate_l1);
-        tile_rows::fill_words(att_l1, TILE_BYTES / 4, 0);  // rows past the sparse output's are the chain's zero pad
+        tile_rows::fill_words(att_l1, TILE_BYTES / 4, 0);  // rows past the sparse output's are zero padding
     }
     {
         // every lane's 64-byte window of the head's row lands in the scratch (64-byte aligned), then the RISC places

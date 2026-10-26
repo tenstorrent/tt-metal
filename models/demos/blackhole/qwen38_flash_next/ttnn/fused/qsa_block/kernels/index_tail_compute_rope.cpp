@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// index_tail, rope core compute (16-bit dest, the op's own): RoPE of the normalized query's first two tiles (the first
-// pair), then per lane of this pair RoPE of the pooled key's first two tiles with the lane's block-start rows.
+// index_tail, rope core compute (16-bit dest, the op's own): RoPE of the normalized query's first two tiles (first
+// pair only), then per lane RoPE of the pooled key's first two tiles with the lane's block-start rows.
 // Runtime args: 0 lane_count, 1 do_query.
 
 #include "rope_mirror.h"

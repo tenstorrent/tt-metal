@@ -1,26 +1,16 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``sampler_tail``: the on-device sampler (``ttnn/device_sampler.py``'s composite of 57 ttnn calls / 76 programs)
-as one program on one core.
+"""``sampler_tail``: the on-device sampler (``ttnn/device_sampler.py``'s composite) as one program on one core.
 
-The candidate rows (fp32 ROW_MAJOR ``[1,1,rows,256]``: per shard its 32 values then its 32 global ids), the greedy
-token tile, the request's policy row, the rows' draws, the temperature table and the rows' presence history feed one
-data-movement kernel that reproduces the composite's arithmetic on the RISC (``kernels/sample.cpp``): the presence
-penalty on the ids the row has emitted (fp32 subtract, as the host sampler's), the order value descending / global id
-ascending, the table weights, the exact integer prefix sums, the two fp32 products (soft-float, round to nearest even,
-as the SFPU's), the kept prefix and the inverse CDF as the composite counts them.  The token is lane r of the fp32 TILE
-token row (the lanes greedy resolve's layout: rows 1..5, one per verify position later); the greedy flag copies the
-greedy tile.  Tolerance class BITWISE against the composite (:func:`device_sampler_reference` is the host model of
-both; the presence penalty extends it).  The guard row's lane 0 holds the rows' guard mask (bit r: row r's draw could
-depend on a token it did not read, ``device_sampler_reference``'s ``guard``): the host samples such a row over the full
-vocabulary instead.
+One data-movement kernel reproduces the composite's arithmetic on the RISC bit for bit (``kernels/sample.cpp``), plus
+the presence penalty on the ids each row has emitted; :func:`device_sampler_reference` is the host model. The token is
+lane r of the fp32 TILE token row. The guard row's lane 0 holds the rows' guard mask (bit r: row r's draw could depend
+on a token it did not read); the host samples such a row over the full vocabulary instead.
 
 The history is a per-row bit array over the vocabulary (uint32 ROW_MAJOR ``[1,1,rows,HIST_WORDS]``) in an L1 shard on
-the program's core: the kernel sets the bit of the token it draws, the host zeroes the rows at request start and
-rewrites the image at the two steps whose emitted token is not the device's draw (a forced ``</think>``, a first-token
-rewrite), as the host loop's history does.  The card profiles use a presence penalty only; a frequency penalty needs
-counts and the repetition penalty a multiplicative rule: both keep the host loop (``Qwen38DeviceSamplerPolicy``).
+the program's core: the kernel sets the bit of the token it draws; the host zeroes it at request start and rewrites it
+when the emitted token is not the device's draw. Frequency and repetition penalties keep the host loop.
 """
 
 from __future__ import annotations
@@ -46,7 +36,7 @@ from ..registry import BITWISE, FusedKernel, register
 NAME = "sampler_tail"
 KERNEL = fp.kernel_source(NAME, "sample.cpp")
 CB_STAGE = 0
-MAX_ROWS = 5  # the decode step's row, or the MTP verify rows (k + 1) later
+MAX_ROWS = 5  # the decode step's row, or the MTP verify rows (k + 1)
 LANES = 128  # candidates per row: four shards of 32 (device_sampler.LANES)
 MAX_TOP_K = 32  # device_sampler.MAX_TOP_K
 TABLE_SIZE = 65536  # device_sampler.TABLE_SIZE
@@ -81,8 +71,7 @@ def _shape(tensor) -> tuple[int, ...]:
 
 
 def stage_bytes(rows: int) -> int:
-    """The kernel's L1 stage: the token tile, the rows, the two scalar pages, the table chunks, the guard page, the
-    working arrays."""
+    """The kernel's L1 stage size; must match sample.cpp's STAGE_BYTES."""
 
     work_words = 3 * LANES + 5 * MAX_TOP_K
     return TILE_BYTES + rows * ROW_LANES * 4 + 3 * GRAIN + MAX_TOP_K * GRAIN + work_words * 4
@@ -125,11 +114,7 @@ def _rows_of(row) -> int:
 
 @dataclass
 class Qwen38TTNNSamplerTailConstants:
-    """The program's replicated device tensors: the policy row and the draws (host-written), the temperature table
-    (host-written when the temperature changes), the rows' history bits (an L1 shard on the program's core: the kernel
-    writes it, the host zeroes it at request start), the guard row (kernel-written by every call).  The composite's
-    interface (``write_policy``, ``write_uniform``, ``mark_corruptible``, ``release``, ``resident_policy``) so the
-    sampling chain extension holds either."""
+    """The program's replicated device tensors, behind the composite's interface so callers can hold either."""
 
     rows: int
     policy_row: Any  # fp32 ROW_MAJOR [1,1,1,16]: top_k, top_p, min_weight, greedy_flag, presence_penalty
@@ -219,8 +204,9 @@ class Qwen38TTNNSamplerTailConstants:
         ttnn.copy_host_to_device_tensor(image, getattr(self, name))
 
     def write_policy(self, policy) -> dict[str, Any]:
-        """Request start: the policy row and, when the temperature changes, the table; eager writes ordered before the
-        request's first TAIL.  Returns what was written (the ledger)."""
+        """Request start: the policy row and, when the temperature changes, the table; returns what was written.
+
+        Eager writes, ordered before the request's first TAIL."""
 
         ds = _device_sampler()
         if not isinstance(policy, ds.Qwen38DeviceSamplerPolicy):
@@ -332,9 +318,7 @@ def sampler_tail(row: Any, greedy_token_row: Any, constants: "Qwen38TTNNSamplerT
         named={"cb_stage": CB_STAGE, "rows": rows, "lanes": LANES, "table_size": TABLE_SIZE, "hist_words": HIST_WORDS},
     )
     pages = -(-stage_bytes(rows) // TILE_BYTES)
-    # the candidate rows, the greedy tile and the two scalar pages in, the table's top-k weight chunks (64-byte
-    # grains), the history words of the candidates (L1) and the bit it sets, the token tile and the guard row out;
-    # per row the penalty, order, weights, prefix sums and the two products over the 128 candidates
+    # flops: per row the penalty, order, weights, prefix sums and the two products over the 128 candidates
     meta = fp.program_meta(
         NAME,
         "sample",

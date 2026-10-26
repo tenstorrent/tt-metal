@@ -1,20 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``position_derive``: the decode step's position-derived tensors as one program.  From the uint32 position ``P``
-(``[1,1,1,1]`` ROW_MAJOR) and the uint32 rotary shift ``S`` (``[1,1,1,1]``; 0 for text, the images' accumulated
-shift otherwise, ``S <= P`` by the host's check): the two uint32 index rows (``P`` and ``P & ~3`` in 32 lanes), the
-four RoPE rows (cos/sin table rows ``P - S`` and ``(P & ~3) - S``) and the nine QSA inputs of
-``derive_qsa_position_inputs`` -- the chain's 42 programs (two uint32 row ops, two uint32 subtracts, four ``embedding``
-gathers, 33 integer / 0-1 mask ops).
+"""``position_derive``: the decode step's position-derived tensors as one program.
 
-Every output is a step function of ``P``: the kernel (``kernels/derive.cpp``, one data-movement RISC, no compute)
-assembles each row in L1 from constant template rows (zeros | MASK, zeros | ALL_ONES, a zero tile and a ones-column
-tile, uploaded once per mesh) by NoC reads cut at the 64-byte DRAM read grain, stores the few boundary lanes, and
-writes each output page once.  Integer and copy work only: tolerance class BITWISE against the chain and the torch
-oracle ``emulate_qsa_position_inputs``.  Tile padding: the one-hot tiles carry zeros outside column 0 (the chain's
-padding columns hold ``eq(0, P % n)``; every consumer broadcasts column 0) and the RoPE tiles carry the table row in
-row 0 only (the chain repeats it over the 32 rows; every consumer is elementwise on the one logical row).
+From the uint32 position ``P`` and rotary shift ``S`` (``[1,1,1,1]`` ROW_MAJOR, ``S <= P`` by the host's check): the
+index rows, the four RoPE rows (table rows ``P - S`` and ``(P & ~3) - S``) and the QSA inputs of
+``derive_qsa_position_inputs``. The kernel assembles each row in L1 from constant template rows by NoC reads (integer
+and copy work only, so bitwise). Tile padding differs from the op chain: the one-hot tiles are zero outside column 0
+and the RoPE tiles hold the table row in row 0 only; every consumer reads only column 0 / the one logical row.
 """
 
 from __future__ import annotations
@@ -29,7 +22,7 @@ TILE = fp.TILE
 ROPE_DIM = 64
 KERNEL = fp.kernel_source(NAME, "derive.cpp")
 LANES_KERNEL = fp.kernel_source(NAME, "derive_lanes.cpp")
-LANE_COLUMNS = 8  # lane u's core: column u % 8, core row u // 8 (32 lanes on 4 core rows)
+LANE_COLUMNS = 8  # lane u's core: column u % 8, core row u // 8
 CB_STAGE = 0
 STAGE_PAGE_BYTES = 2048
 STAGE_PAGES = 24  # >= the kernel's STAGE_BYTES (bf16 row 16 KB + uint32 row 8.3 KB + 2 tiles + rows + scalars)
@@ -100,7 +93,8 @@ def _contracts():
 
 
 def prepare(mesh, blocks: int):
-    """The constant templates for ``blocks`` allocated compressed blocks, uploaded once per mesh (before trace capture):
+    """The constant templates for ``blocks`` compressed blocks, uploaded once per mesh before trace capture.
+
     bf16 ``[1,1,1,2*blocks]`` = zeros | INDEXER_MASK_VALUE, uint32 ``[1,1,1,2*slots]`` = zeros | ALL_ONES, bf16 TILE
     ``[1,1,32,64]`` = a zero tile then a tile with 1.0 in column 0."""
 
@@ -136,7 +130,7 @@ def _expect(tensor, shape, dtype, layout, label):
 
 
 def outputs(mesh, blocks: int, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> dict:
-    """Fresh output tensors in the chain's shapes, dtypes and layouts."""
+    """Fresh output tensors in the op chain's shapes, dtypes and layouts."""
 
     slots = _qsa().SPARSE_INDEX_CAPACITY
     rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
@@ -200,8 +194,7 @@ def position_derive(
     compile_args = [a for t in tensors for a in fp.accessor_args(t)]
     reader = fp.reader_kernel(KERNEL, grid, compile_args, [(core, [t.buffer_address() for t in tensors])], named=named)
     cbs = [fp.cb_descriptor(CB_STAGE, ttnn.bfloat16, STAGE_PAGE_BYTES, STAGE_PAGES, grid)]
-    # the position, the templates and the four table rows (two 128-byte rows per table) in, every output page out;
-    # integer and copy work only
+    # dram_bytes: the four table rows
     meta = fp.program_meta(
         NAME,
         "derive",
@@ -217,8 +210,7 @@ def position_derive(
 
 
 def lanes_outputs(mesh, blocks: int, lanes: int, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> dict:
-    """Fresh output tensors of the lane derive in the lane chain's shapes, dtypes and layouts (32 lane rows; the
-    kv_row_hit tiles of the ``lanes`` active lanes)."""
+    """Fresh lane-derive output tensors: 32 lane rows, and kv_row_hit tiles for the ``lanes`` active lanes."""
 
     slots = _qsa().SPARSE_INDEX_CAPACITY
     rm, tile = ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT
@@ -251,13 +243,10 @@ def position_derive_lanes(
     rope_shift_row,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ) -> dict:
-    """The lane body's position-derived tensors from the uint32 position row ``[1,1,1,32]`` (lane u = P_u; the idle
-    lanes at the row's residue, as the chain derives them too): one program, one core per lane row.  Row u of every
-    row tensor is the 1-row derive at P_u (the fill's tail ids carry ``lane_offsets[u]``, lane u's KV region start, as
-    the chain's ``block_offsets_lanes`` / ``arange_slots_lanes`` do); the four RoPE tiles hold the table rows P_u and
-    P_u & ~3, each less lane u's rotary shift ``rope_shift_row[u]``, in row u; ``kv_row_hit`` is the ``lanes``
-    active lanes' one-hot tiles; the index row, the block-start row and ``kv_block_start`` are the 32-lane rows.  By
-    name (``LANES_OUTPUT_ARGS``)."""
+    """The lane body's position-derived tensors from the uint32 position row ``[1,1,1,32]``, one core per lane row.
+
+    Row u of every row tensor is the 1-row derive at P_u, with lane u's KV region start ``lane_offsets[u]`` in the
+    fill's tail ids; the RoPE tiles hold row u at P_u - S_u. Returned by name (``LANES_OUTPUT_ARGS``)."""
 
     qsa, contracts = _qsa(), _contracts()
     lanes = contracts.require_lane_count(lanes, label="position derive lanes")
@@ -304,7 +293,6 @@ def position_derive_lanes(
         named=named,
     )
     cbs = [fp.cb_descriptor(CB_STAGE, ttnn.bfloat16, STAGE_PAGE_BYTES, LANES_STAGE_PAGES, grid_set)]
-    # per lane core: the position and offsets rows, the templates and its four table rows in; every output page out
     meta = fp.program_meta(
         NAME,
         "derive_lanes",
@@ -328,8 +316,7 @@ def position_derive_lanes(
 
 
 def derive_lanes_fused(model, state):
-    """The lane body's position derive on the fused program: ``(Qwen38TTNNRoPEInputs, Qwen38TTNNQSAFusedLaneInputs)``
-    -- the fused QSA lane body's inputs (the chain-only selection tiles and scalars are not derived)."""
+    """The lane body's fused position derive: ``(Qwen38TTNNRoPEInputs, Qwen38TTNNQSAFusedLaneInputs)``."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
     from models.demos.blackhole.qwen38_flash_next.ttnn.model import Qwen38TTNNRoPEInputs
@@ -353,8 +340,7 @@ def derive_lanes_fused(model, state):
 
 
 def derive_lanes_composed(model, state):
-    """The lane body's chain (model.py forward_decode_lanes: the index rows, the RoPE row tiles,
-    ``derive_qsa_lane_inputs``)."""
+    """The lane body's unfused op chain (model.py ``forward_decode_lanes``)."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.model import _deallocate_unique
 
@@ -372,8 +358,7 @@ _COMPOSED_CONSTANTS: dict[tuple[int, int], tuple] = {}
 
 
 def composed_constants(mesh, blocks: int):
-    """The chain's resident constants (``Qwen38TTNNDevicePosition`` rows, ``Qwen38TTNNQSAPositionConstants``) for one
-    chip, uploaded once per mesh so the composed chain is trace-capturable like the model's."""
+    """The op chain's resident constants, uploaded once per mesh so the composed chain is trace-capturable."""
 
     from types import SimpleNamespace
 
@@ -406,9 +391,7 @@ def composed_constants(mesh, blocks: int):
 def position_derive_composed(
     position, cos_table, sin_table, *, blocks: int, rope_shift, memory_config=ttnn.DRAM_MEMORY_CONFIG
 ) -> dict:
-    """The chain op for op (``Qwen38DevicePosition.index_row`` / ``block_start_index_row`` / ``rope_index_row`` /
-    ``rope_block_start_index_row``, ``Qwen38TTNNRoPETable.rows``, ``derive_qsa_position_inputs``) on the same tensors,
-    with resident constants (``composed_constants``)."""
+    """The unfused op chain on the same tensors, with resident constants (``composed_constants``)."""
 
     qsa = _qsa()
     dram = ttnn.DRAM_MEMORY_CONFIG
@@ -442,7 +425,7 @@ def position_derive_composed(
 
 
 def derive_fused(model, state):
-    """The decode body's position derive on the fused program: ``(Qwen38TTNNRoPEInputs, Qwen38TTNNQSAPositionInputs)``."""
+    """The decode body's fused position derive: ``(Qwen38TTNNRoPEInputs, Qwen38TTNNQSAPositionInputs)``."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
     from models.demos.blackhole.qwen38_flash_next.ttnn.model import Qwen38TTNNRoPEInputs
@@ -473,7 +456,7 @@ def derive_fused(model, state):
 
 
 def derive_composed(model, state):
-    """The decode body's chain (model.py: index rows, RoPE rows, ``derive_qsa_position_inputs``)."""
+    """The decode body's unfused op chain (model.py)."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.model import _deallocate_unique
 
@@ -493,6 +476,6 @@ register(
         tolerance=BITWISE,
         fused=derive_fused,
         composed=derive_composed,
-        gate=None,  # the P-sweep device test against the chain and emulate_qsa_position_inputs is the component gate
+        gate=None,  # the device test against emulate_qsa_position_inputs is the component gate
     )
 )

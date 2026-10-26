@@ -1,16 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// One core: the four devices' packed [value | local id] fp32 pairs (the all_gather of merge.cpp's rows) -> the greedy
-// token row: per row r, owner d's value lowered by owner_tie_break[d] (fp32 subtract, as the chain's SFPU fp32
-// subtract), the first maximum in owner order (ttnn.argmax's lowest index), the owner's id plus
-// lm_head_vocab_starts[owner] (fp32 add, exact below 2^24), written as lane r of row 0 of an fp32 TILE [1,1,1,32]
-// whose other lanes are 0.0 (the chain's unit_column multiply for one row; lane u = row u for the lanes, lanes past
-// the row count zero as the lanes chain's zero pad).  STRIDE = the fp32 lanes per device in a packed row: 2 (the
-// decode step's [value | id]) or 16 (the lanes' 64-byte rows); gathered row r is page r.  The RISC's soft-float
-// subtract and add are IEEE round-to-nearest-even, as the SFPU's.
-// With copy_into = 1 the same tile is also written to a second TOKEN_ROW tensor (the server's persistent token row:
-// the chain's ttnn.copy(token_row, token_row_io) after the resolve, as one more 4 KB write of this program).
+// One core: the devices' gathered packed [value | local id] fp32 pairs (merge.cpp's rows) -> the greedy token row.
+// Per row r: owner d's value minus owner_tie_break[d], the first maximum in owner order (ttnn.argmax's lowest index),
+// and the owner's id plus lm_head_vocab_starts[owner] (exact below 2^24), written as lane r of row 0 of an fp32 TILE
+// [1,1,1,32] whose other lanes are 0.0.  The RISC's soft-float subtract and add are IEEE round-to-nearest-even, as the
+// SFPU's.  STRIDE = the fp32 lanes per device in a packed row (2 or 16); gathered row r is page r.
+// With copy_into = 1 the same tile is also written to a second TOKEN_ROW tensor.
 // Named compile-time args: cb_stage, devices, copy_into, rows, stride.  Compile-time args:
 // TensorAccessorArgs(gathered), (tie_break), (vocab_starts), (zero fp32 tile), (token_row), (into).  Runtime args: the
 // six buffer addresses in that order (into repeats token_row when copy_into = 0).

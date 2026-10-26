@@ -1,16 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The lanes form of gdn_rows_scan's writer: one (value head, lane) item per core, the whole head per core (VBT = HT),
-// the compute kernel unchanged (its rows r = 0 .. R-1 are lane u's rows at tile rows t = lane * R + r).  Row r's o
-// tiles arrive from the compute (CB_OBF, four tiles; the q S matmul is over the whole tile, so the row that matters
-// is tile row t) and row t of each is copied into the head's assembled o-rows tiles (CB_OROWS, zeroed first: every
-// other lane's rows and the pad rows stay exactly zero through the gated norm); the state after r + 1 rows arrives
-// as CB_OUTS and goes to PREFIX SLOT t (the lanes prefix [B * R, 12, 128, 128]: slot lane * R + r = lane u after r + 1
-// rows, so the page formula is the single form's with r -> t); after the last row the o-rows tiles go to the
-// compute's gated norm and ONLY lane u's rows of the head's four gated column tiles are written to the output (8 R
-// row pieces of 32 B by page + offset; the other lanes' cores write theirs, and the cores of the last lane write the
-// pad rows B * R .. 31 as exact zeros).  No cross-core exchange: one core owns one lane of one head.
+// The lanes form of gdn_rows_scan's writer: one (value head, lane) item per core, the whole head (VBT = HT), the
+// compute kernel unchanged (row r is tile row t = lane * R + r). Row t of each o tile goes into the zeroed o-rows
+// tiles, the state after r + 1 rows to prefix slot t, and only lane u's rows of the gated output are written; the
+// last lane's cores also write the pad rows B * R .. 31 as exact zeros. One core owns one lane of one head.
 // Compile-time args: 0 ROWS (R, rows per lane), 1 VBT (= 4), 2 LANES (B); then TensorAccessorArgs of prefix
 // ([B * R, 12, 128, 128] fp32) and out ([1, 1, 32, 1536] bf16).  Runtime args: 0 prefix, 1 out addresses, 2 items,
 // then (head, lane) pairs.

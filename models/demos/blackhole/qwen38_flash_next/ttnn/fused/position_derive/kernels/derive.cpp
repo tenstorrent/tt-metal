@@ -167,7 +167,7 @@ void kernel_main() {
         write_bytes(noc, stage, o_irow, 128, STAGE_INDEX, 0, 0);
         write_bytes(noc, stage, o_brow, 128, STAGE_INDEX + 128, 0, 0);
 
-        // indexer_neg_mask: MASK everywhere, +0.0 for blocks below complete_blocks (the chain's 0 * MASK is +0.0)
+        // indexer_neg_mask: MASK everywhere, +0.0 for blocks below complete_blocks (matches 0 * MASK = +0.0)
         {
             const uint32_t zero_bytes = complete_blocks * 2;
             const uint32_t bulk = zero_bytes & ~(DRAM_READ_GRAIN - 1);

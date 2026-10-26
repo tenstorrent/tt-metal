@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE stage 3 writer, one core: the Vt gated tiles (CB 16, bf16) -> pages 0..Vt-1 of the output; with debug, the
+// PLE gate writer, one core: the Vt gated tiles (CB 16, bf16) -> pages 0..Vt-1 of the output; with debug, the
 // fp32 sum tile (CB 17) and coefficient tile (CB 18) -> page 0 of two fp32 tile tensors.
 // Compile-time args: 0 Vt, 1 debug, then TensorAccessorArgs(out), (debug sum), (debug coefficient).
 // Runtime args: 0 out addr, 1 debug sum addr, 2 debug coefficient addr, 3 the first output tile (the lane's Vt block; 0

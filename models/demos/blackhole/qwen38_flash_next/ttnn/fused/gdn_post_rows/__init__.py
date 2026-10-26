@@ -3,25 +3,15 @@
 
 """``gdn_post_rows``: the GDN rows chain after the chunk scan, as two ``generic_op`` programs.
 
-The chain it mirrors is ``_gate_and_project_rows`` (``ttnn/gdn.py``) from the scan's output to the gate, plus the
-history tile ``commit_rows_full`` builds for the next pass: ``typecast(o fp32 -> bf16)``, ``rms_norm(weight=norm,
-epsilon=1e-6)``, the twelve head slices and the width concat, ``multiply(normalized, sigmoid_bf16)``, and the last
-tile row's q|k|v rows 29..31 moved into a fresh 32-row tile.  The z sigmoid is NOT here: it does not depend on the
-scan, so ``gdn_pre_rows`` produces it into the persistent ``sig`` buffer and this program takes it as an input.
-``gdn_rows_wrap`` runs both programs on the 32-row verify tile, ``post_norm`` without the history tile; the device
-test also runs 128 rows and the history tile.
+Mirrors ``_gate_and_project_rows`` (``ttnn/gdn.py``) from the scan's output to the gate, plus the history tile
+``commit_rows_full`` builds for the next pass. The z sigmoid does not depend on the scan, so ``gdn_pre_rows`` produces
+it into the persistent ``sig`` buffer and this program takes it as an input.
 
-Two programs, because a compute kernel has one destination width and the chain's two arithmetic ops disagree:
-
-* ``post_cast`` runs ``ttnn.typecast(fp32 -> bf16)``, which the op runs in a 32-bit destination with the input
-  unpacked straight to it (``preserve_fp32_precision`` is set for an fp32 input);
-* ``post_norm`` runs the weighted RMSNorm and the gate, which the ops run in a 16-bit destination (the rms_norm
-  default compute config is ``math_approx_mode=True``, ``fp32_dest_acc_en=False``).
-
-Both compute kernels are the ops' own LLK call sequences with the ops' operand order and one pack per op, so the
-class is bitwise by construction; the head fold, the row mask and the history tile are data movement.  The gate's
-proof is the device test's ``chain_on_device`` (the chain's ttnn ops on the same inputs), not torch: ``reference``
-below is the structural bound only.
+Two programs, because a compute kernel has one destination width: ``post_cast`` runs ``ttnn.typecast(fp32 -> bf16)``
+in a 32-bit destination with the input unpacked straight to it; ``post_norm`` runs the weighted RMSNorm and the gate
+in a 16-bit destination, as the ops' default configs do. Both kernels are the ops' own LLK sequences in the ops'
+operand order with one pack per op, so the class is bitwise; ``chain_on_device`` is the bitwise oracle and
+``reference`` only a structural bound.
 
 Page maps (per device local shapes; T = 32 * NC):
 
@@ -34,9 +24,8 @@ tensor               shape                     page of a tile
 ``history_next``     ``[1, 1, 32, 2560]``      ``column``
 ===================  ========================  =========================================
 
-A work unit of both programs is one (value head, tile row) = the four column tiles of one head's 128 columns, and
-unit ``u = h * NC + c`` so a core's run is contiguous in the head-major order and the ten history units (the last
-tile row, heads 0..9) land on ten different cores.
+A work unit is one (value head, tile row) = four column tiles, unit ``u = h * NC + c``, so a core's run is contiguous
+in head-major order and the ten history units (the last tile row, heads 0..9) land on ten different cores.
 """
 
 from __future__ import annotations
@@ -168,14 +157,10 @@ def _bf16_of_bits(bits: int) -> torch.Tensor:
 
 
 def scalar_tiles(eps: float = RMS_NORM_EPS) -> torch.Tensor:
-    """The two constant tiles the layernorm reader generates, as one ``[1, 1, 32, 64]`` bf16 host tensor: tile 0 the
-    SUM / REDUCE_ROW scaler, tile 1 the eps tile.
+    """The two constant tiles the layernorm reader generates, as one ``[1, 1, 32, 64]`` bf16 host tensor.
 
-    ``calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>`` (reduce_helpers_dataflow.inl) zeroes the tile and writes
-    an exact 1.0 into row 0 of every face, which is rows 0 and 16 of the whole tile across all 32 columns.
-    ``generate_bcast_col_scalar`` (generate_bcast_scalar_metal2.hpp) writes ``bits(eps) >> 16`` -- a TRUNCATION to
-    bf16, not a rounding -- into column 0 of every row.  Both are read by this program from DRAM instead of being
-    generated on the RISC, so the values are pinned by a test rather than by a second copy of the fill loops."""
+    Tile 0 must match ``calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>`` (an exact 1.0 in row 0 of every face);
+    tile 1 must match ``generate_bcast_col_scalar`` (``bits(eps) >> 16``, a truncation to bf16, in column 0)."""
 
     scaler = torch.zeros(TILE, TILE, dtype=torch.bfloat16)
     scaler[0] = 1.0
@@ -216,9 +201,8 @@ def _require(condition: bool, message: str) -> None:
 
 
 def allocate_outputs(mesh, chunks: int, *, history: bool = True, gated_memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """The programs' three output buffers for ``T = 32 * chunks`` rows: ``o16`` (post_cast's output and post_norm's
-    input), ``gated`` and, with ``history``, ``history_next``: the device test's (``gdn_rows_wrap`` allocates its
-    ``o16`` and ``gated`` per call)."""
+    """The programs' output buffers for ``T = 32 * chunks`` rows: ``o16``, ``gated`` and, with ``history``,
+    ``history_next``."""
 
     rows = chunks * TILE
     return {
@@ -268,8 +252,7 @@ def post_cast(o, o16):
         approx=False,
         unpack_to_dest_fp32=CAST_FP32_COPY_CBS,
     )
-    # every page of o read and of o16 written once; the typecast's explicit round-to-nearest-even is one
-    # operation per element
+    # every page of o read and of o16 written once; one rounding operation per element
     meta = fp.program_meta(
         NAME,
         "cast_verify" if chunks == 1 else "cast",
@@ -285,12 +268,9 @@ def post_cast(o, o16):
 def post_norm(o16, sig, norm, scalars, projected, gated, history_next=None, *, rows=None, history=True):
     """The weighted RMSNorm, the head fold and the sigmoid gate, plus the next pass's history tile.
 
-    ``o16`` ``[12, T, 128]`` bf16 (post_cast's output), ``sig`` ``[1, 1, T, 1536]`` bf16 (the pre program's
-    ``bf16(sigmoid(fp32 z))``, token-major), ``norm`` ``[1, 1, 1, 128]`` bf16 (the gamma row), ``scalars`` from
-    ``scalar_tensor``, ``projected`` ``[1, 1, T, 4160]`` bf16 (only the last tile row's q|k|v column tiles are read,
-    and only when ``history``).  Writes ``gated`` ``[1, 1, T, 1536]`` bf16 token-major and, with ``history``,
-    ``history_next`` ``[1, 1, 32, 2560]`` bf16.  ``rows`` (default all of T) is the MTP verify form's valid row
-    count: the rest of the partial tile row is written as exact zeros, as the chain's row-mask multiply leaves it."""
+    ``sig`` is the pre program's token-major ``bf16(sigmoid(fp32 z))``; ``projected`` is read only for the history
+    tile. ``rows`` (default all of T) is the MTP verify form's valid row count: the rest of the partial tile row is
+    written as exact zeros, as the chain's row-mask multiply leaves it."""
 
     chunks = _chunks_of(o16, "post_norm o16")
     _require(
@@ -328,8 +308,7 @@ def post_norm(o16, sig, norm, scalars, projected, gated, history_next=None, *, r
     _require(1 <= rows <= chunks * TILE, f"rows must be in [1, {chunks * TILE}], got {rows}")
 
     mesh = o16.device()
-    # With history off there is no second output to bind: the slot repeats the gated tensor and the kernels never
-    # touch it (the flag is 0), the way the stream reader's unused accessor slots repeat a used tensor's.
+    # With history off the second output slot repeats the gated tensor; the kernels never touch it (the flag is 0).
     hist_out = history_next if history else gated
     work = fp.split_work(HEADS * chunks, mesh)
     cores = fp.core_rectangle(work, mesh)
@@ -373,10 +352,8 @@ def post_norm(o16, sig, norm, scalars, projected, gated, history_next=None, *, r
     io = [o16, sig, norm, scalars, projected, gated]
     if history:
         io.append(history_next)
-    # o16, sig and gated a page per unit (each exactly once), the four gamma tiles and the scaler and eps tiles
-    # once per core, and, with the history on, the eighty q|k|v column tiles of the last tile row of the
-    # projection and the eighty pages of history_next.  One operation per element for the norm's square, row sum,
-    # rsqrt multiply and gamma multiply and for the gate's multiply.
+    # o16, sig and gated a page per unit, gamma and the constant tiles once per core, with history the projection's
+    # last-row q|k|v tiles and history_next; one operation per element per norm step and for the gate
     meta = fp.program_meta(
         NAME,
         "norm" if history else "norm_verify",
@@ -398,11 +375,9 @@ def post_norm(o16, sig, norm, scalars, projected, gated, history_next=None, *, r
 def reference(o, z_or_sig, norm, projected, rows=None, history=True, *, sigmoid_applied=False, rounding=None):
     """The two programs in torch: ``gdn_rows_reference.post_reference`` plus ``history_next`` and the row mask.
 
-    ``o`` ``[12, T, 128]`` fp32, ``z_or_sig`` ``[T, 1536]`` bf16 (the raw z, or the pre program's ``sig`` with
-    ``sigmoid_applied``), ``norm`` ``[128]`` or ``[1, 128]`` bf16, ``projected`` ``[T, 4160]`` bf16.  Returns
-    ``{"gated": [T, 1536] bf16, "history_next": [32, 2560] bf16 or None}``.  STRUCTURAL: the norm's device chain is
-    a 16-bit-destination LLK sequence no torch expression reproduces (see ``rms_norm_bf16``), so this bounds the
-    kernels to a few bf16 ulps; the bitwise oracle is ``chain_on_device``."""
+    ``z_or_sig`` is the raw z, or the pre program's ``sig`` with ``sigmoid_applied``. STRUCTURAL: no torch expression
+    reproduces the norm's 16-bit-destination LLK sequence (see ``rms_norm_bf16``); the bitwise oracle is
+    ``chain_on_device``."""
 
     rounding = DEFAULT_ROUNDING if rounding is None else rounding
     total = o.shape[1]
@@ -422,12 +397,10 @@ def reference(o, z_or_sig, norm, projected, rows=None, history=True, *, sigmoid_
 
 
 def chain_on_device(mesh, o, z, norm, projected, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """Today's chain on the device, op for op: ``_gate_and_project_rows``' slab branch (``ttnn/gdn.py``) from the
-    scan's output to the gated rows, and ``commit_rows_full``'s history tile.
+    """The chain on the device, op for op: ``_gate_and_project_rows``' slab branch (``ttnn/gdn.py``) from the scan's
+    output to the gated rows, and ``commit_rows_full``'s history tile.
 
-    Returns ``(gated [1, 1, T, 1536], history [1, 1, 32, 2560], sigmoid_bf16 [1, 1, T, 1536])``.  The sigmoid is
-    returned because ``gdn_post_rows`` takes it as an input (the pre program owns it), so the two arms must be fed
-    the same bits.  The mesh-topology retags of the chain are bookkeeping, not arithmetic, and are left out."""
+    Returns ``(gated, history, sigmoid_bf16)``; the sigmoid is returned so both arms are fed the same bits."""
 
     tile_rows = o.shape[-2]
     head_rows = ttnn.reshape(o, (1, HEADS, tile_rows, HEAD_DIM))

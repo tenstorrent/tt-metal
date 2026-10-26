@@ -4,31 +4,21 @@
 """``moe_dense``: the MoE block's router top-k co-scheduled with the shared expert chain and the routed dispatch
 untilize as ONE program on disjoint core groups.
 
-Today the block runs, per layer, the router top-k (``router_tail``, one lane core, 51 us) and then the shared expert's
-eltwise program (5 cores, 4.6 us), its down linear (6.9 us) and the routed dispatch untilize (1.9 us) one after another,
-although the four depend on nothing but the gathered hidden and the linears before them (programs never overlap:
-the census of record's kernel time plus its launch gaps is the step; the top-k's lane core was also storage core 0 of
-the shared linear).  This program hosts the four as kernel groups on disjoint cores, so the 13.4 us of shared work run
-under the top-k and three launch boundaries disappear:
+The four depend only on the gathered hidden and the linears before them, so they run as kernel groups on disjoint
+cores:
 
   G1  the top-k: ``router_tail.program_parts`` unchanged, on the placement helper's 4 x 5 rectangle (its first row);
   G2  the shared eltwise: ``shared_expert``'s reader and compute unchanged on the five storage cores ``(0..4, 0)``;
       its writer is gr_read's multicast writer, which multicasts the core's intermediate tile into the down workers'
       in0 CB and raises their semaphore (and writes the sigmoid tile from core 0);
   G3  the down linear: 16 worker cores (a NoC-contiguous rectangle), each streaming five weight columns while the
-      eltwise computes, then gr_read's streaming-matmul kernel per column (``kernels/down_compute.cpp``: fp32 dest,
-      the DRAM-sharded matmul's spill/reload after every K tile since its in0_block_w is 1 for K = 160 over five
-      storage cores, packed bf16 into the partial's five-core width shard);
+      eltwise computes, then ``kernels/down_compute.cpp`` per column (fp32 dest, the DRAM-sharded matmul's
+      spill/reload after every K tile), packed bf16 into the partial's five-core width shard;
   G4  the dispatch untilize: ``untilize_rows``' kernels (the stock interleaved reader, ``writer_rows.cpp``) on eight
       cores, the gathered hidden's 80 tiles as ROW_MAJOR rows for ``moe_compute``.
 
-Outputs and their consumers are unchanged: the routing rows land where the caller allocated them (the drain-core L1
-shards or DRAM rows), the ungated partial in the five-core width shard and the sigmoid tile go to ``moe_post``, the
-rows to ``moe_compute``.  Tolerance class BITWISE: G1, G2 and G4 are the existing kernels by path (G4 pure data
-movement), G3 reproduces ``ttnn.linear``'s arithmetic order (the gr_read DOWN precedent) and is proven against it on
-the device at both weight formats (the device test and the audit-capture microtest: rows 1/5/32, bf16 and bf8, both
-routing placements, 2026-09-25).  Rows 1..32 (one tile); the MTP verify rows (5) are two lane cores of G1.  Serves by
-default since 2026-09-26; ``QWEN38_FUSED_OFF=moe_dense`` restores the four programs.
+Each output lands where the four separate programs put it. BITWISE: G1, G2 and G4 are the existing kernels, and G3
+reproduces ``ttnn.linear``'s arithmetic order. Rows 1..32 (one tile).
 """
 
 from __future__ import annotations
@@ -55,14 +45,13 @@ K_TILES = se.LOCAL_INTERMEDIATE // fp.TILE  # 5: the down linear's K
 N_TILES = HIDDEN // fp.TILE  # 80 output column tiles
 DOWN_WORKERS = 16
 N_PER_WORKER = N_TILES // DOWN_WORKERS  # 5
-# The multicast reader streams its WHOLE weight stream into CB_IN1 before it waits for the eltwise cores' semaphore
-# and the compute waits for the whole in0 row: a CB smaller than its stream would block the reader on a compute that
-# is itself blocked (a hang on the partition), so the CB page counts and the stream lengths share these constants.
+# The multicast reader streams its whole weight stream into CB_IN1 before it waits for the eltwise cores' semaphore,
+# so CB_IN1 must hold the whole stream or the reader and compute deadlock; page counts and stream lengths share these.
 DOWN_STREAM_TILES = N_PER_WORKER * K_TILES  # weight tiles per worker = CB_IN1 pages
 DOWN_SHAPES = ((4, 4), (8, 2), (2, 8), (16, 1))  # the worker rectangle shapes tried, in order
 UNTILIZE_SHAPE = (4, 2)
-# The DRAM-sharded down linear's K block is one tile (decode_matmul: in0_block_w = the largest divisor <= 8 of the K
-# tiles per storage core, 160 / (32 x 5) = 1), so it spills and reloads its fp32 partial after every K tile.
+# Must match the DRAM-sharded down linear: its K block is one tile (in0_block_w = 1 for K = 160 over five storage
+# cores), so it spills and reloads its fp32 partial after every K tile.
 DOWN_SPILL = 1
 DOWN_BLK = 1
 DOWN = fp.kernel_source(NAME, "down_compute.cpp")
@@ -105,9 +94,10 @@ def _noc_rectangle(noc, rect) -> tuple[int, int, int, int] | None:
 
 
 def plan_for(mesh) -> DensePlan:
-    """The placement on ``mesh`` (memoized; the NoC map probe and the reserved-core reads run once, before any
-    capture): the top-k's rectangle first (the same call the standalone top-k makes), then the down workers as the
-    first free shape of ``DOWN_SHAPES`` that is a contiguous NoC rectangle, then the untilize cores."""
+    """The placement on ``mesh``, memoized (call before any capture).
+
+    The top-k's rectangle first (the same call the standalone top-k makes), then the down workers as the first free
+    shape of ``DOWN_SHAPES`` that is a contiguous NoC rectangle, then the untilize cores."""
 
     key = id(mesh)
     if key not in _PLANS:
@@ -132,9 +122,10 @@ def plan_for(mesh) -> DensePlan:
 
 
 def _fidelity_of(compute_kernel_config):
-    """The down linear's fidelity from the model's compute kernel config; the rest of that config must be what the
-    kernel hard-codes (fp32 dest accumulation, no packer L1 accumulation, no approximations), or the stock linear's
-    spill format and accumulation would differ from the composite's."""
+    """The down linear's fidelity from the model's compute kernel config.
+
+    The rest of that config must match what the kernel hard-codes (fp32 dest accumulation, no packer L1 accumulation,
+    no approximations), or the stock linear's spill format and accumulation would differ."""
 
     fidelity = getattr(compute_kernel_config, "math_fidelity", None)
     if fidelity is None:
@@ -318,11 +309,11 @@ def moe_dense(
     partial_memory_config,
     **_composed_only,
 ):
-    """One program: the top-k of ``logits`` (fp32 TILE ``[1, 1, rows, 512]``) into the pre-allocated ROW_MAJOR
-    ``scores`` / ``indices``; the shared eltwise on the ``[gate | up | scalar]`` linear's shard and its down linear
-    (``down`` DRAM width-sharded ``[160, 2560]``; the fidelity of ``compute_kernel_config``) into the ungated
-    ``partial`` (``partial_memory_config``: the five-core width shard) and the sigmoid tile; the gathered hidden's rows
-    as ``sparse_rows`` (ROW_MAJOR bf16, DRAM).  Returns ``(scores, indices, partial, sigmoid, sparse_rows)``."""
+    """One program for the top-k, the shared eltwise + down linear and the dispatch untilize.
+
+    Returns ``(scores, indices, partial, sigmoid, sparse_rows)``: the top-k of ``logits`` in the pre-allocated
+    ROW_MAJOR ``scores`` / ``indices``, the ungated ``partial`` in ``partial_memory_config`` with the sigmoid tile, and
+    the gathered hidden's rows (ROW_MAJOR bf16, DRAM). ``down`` is DRAM width-sharded ``[160, 2560]``."""
 
     rows = _check(logits, gate_up_scalar_ws, down, full_hidden, scores, indices, top_k)
     mesh = logits.device()
@@ -333,10 +324,8 @@ def moe_dense(
     sparse_rows = fp.allocate((1, 1, rows, HIDDEN), BF16, ttnn.ROW_MAJOR_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG)
     fidelity = _fidelity_of(compute_kernel_config)
     lanes = len(rt.lane_cores(plan.topk, len(rt._core_plan(rows))))
-    # G1 as router_tail states it (every lane core streams the logits and the index template); G2 the [gate | up |
-    # scalar] shard once and its multicast of the intermediate into the 16 workers; G3 the down weight once (each
-    # worker its five columns) and the partial out; G4 the hidden shard once and the rows out.  FLOPs: the top-k's
-    # softmax + sort + normalization, the eltwise's silu / product / sigmoid, the down matmul 2 x rows x K x N.
+    # G1 as router_tail states it; G2 and G3 stream their shards and the down weight once; FLOPs: the top-k, the
+    # eltwise's silu / product / sigmoid and the down matmul 2 x rows x K x N.
     meta = fp.program_meta(
         NAME,
         "composite",
@@ -374,9 +363,8 @@ def moe_dense(
         ),
         meta=meta,
     )
-    # generic_op rewrites the mesh topology of the io tensor it returns (the last one) from its inputs: with the
-    # width-sharded down weight among them the rows came back [Replicate, Shard] and the served model's replicated
-    # contract refused them (the first served run, 2026-09-26).  Every output keeps the gathered hidden's replicated topology.
+    # generic_op derives the returned tensor's topology from its inputs, which include the width-sharded down weight;
+    # every output keeps the gathered hidden's replicated topology.
     for tensor in (scores, indices, partial, sigmoid, sparse_rows):
         fp.stamp_topology(tensor, full_hidden)
     return scores, indices, partial, sigmoid, sparse_rows
@@ -396,7 +384,7 @@ def moe_dense_composed(
     intermediate_memory_config,
     **_fused_only,
 ):
-    """The four programs as the model issues them today: ``router_tail_into``, the shared eltwise program, the down
+    """The four programs as the model issues them: ``router_tail_into``, the shared eltwise program, the down
     ``ttnn.linear`` and ``ttnn.to_layout`` of the gathered hidden.  Same returns as ``moe_dense``."""
 
     rows = _check(logits, gate_up_scalar_ws, down, full_hidden, scores, indices, top_k)
@@ -468,9 +456,8 @@ def configs(mesh, weight_dtype=BF16) -> dict:
 
 
 def _gate_inputs(mesh, capture, positions, layer):
-    """The captured router logits and MoE input rows of ``positions`` at ``layer``; deterministic bf16 shared weights
-    (the class is bitwise between the two forms); the ``[gate | up | scalar]`` linear run on the device; DRAM routing
-    rows pre-allocated for both forms."""
+    """The captured router logits and MoE input rows of ``positions`` at ``layer``, deterministic bf16 shared weights
+    and DRAM routing rows pre-allocated for both forms."""
 
     index = [capture["positions"].index(p) for p in positions]
     rows = len(positions)

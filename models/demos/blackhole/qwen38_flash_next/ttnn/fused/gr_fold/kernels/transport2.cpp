@@ -3,10 +3,9 @@
 //
 // Two gather phases in sequence on one connection per RISC (transport_phase.h): the fused read's front gathers the
 // stats (phase A, then it releases the norm cores through their gate semaphore) and the partials (phase B) with the
-// same transport core per link, so the program holds one open sender per link per direction.  Both arrives go out at
-// kernel start; phase B's wait, after phase A, finds its counter complete long before the partial tiles exist.  Both
-// phases take their tiles from producer cores of the program (SOURCE 1): the go/done handshake that orders the reuse
-// of `go` across the phases needs `done`, which SOURCE 0 does not raise.
+// same transport core per link, so the program holds one open sender per link per direction.  Both phases take their
+// tiles from producer cores (SOURCE 1): the handshake that orders the reuse of `go` across phases needs `done`, which
+// SOURCE 0 does not raise.
 // Compile-time args: 0 go semaphore id, 1 RING, 2 done semaphore id, 3 TILE_FIRST, 4 TILE_STEP, 5-10 phase A
 //   (scratch cb, TILES, SOURCE, scratch semaphore id, PAGE_TILE_STRIDE, PAGE_RANK_STRIDE), 11-16 phase B, 17.. four
 //   TensorAccessorArgs sets (A gathered, A local, B gathered, B local).

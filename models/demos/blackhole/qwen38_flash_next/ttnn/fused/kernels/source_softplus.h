@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
-// Source arithmetic from Samuel Jett (sjettTT, sjett@tenstorrent.com), frozen
-// cd9a11771107ea2c27da3303a0556ff7343e4af5. Preserve the observed SFPI 7.74
-// rounding boundaries with the supported current compiler, local to this model.
-// All coefficients, branches, iterations and fused +1/polynomial terms are kept.
+// The source model's softplus, kept local to this model: it preserves the SFPI 7.74 rounding boundaries under the
+// current compiler. All coefficients, branches, iterations and fused +1/polynomial terms are kept.
 #include "api/compute/eltwise_unary/softplus.h"
 #ifdef TRISC_MATH
 namespace ckernel::sfpu {

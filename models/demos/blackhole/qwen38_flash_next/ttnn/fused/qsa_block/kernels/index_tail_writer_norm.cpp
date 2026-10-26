@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// index_tail, norm core writer (one core pair per lane): the first pair hands the normalized query's RoPE tiles (0, 1
-// and swapped) to its rope core and writes tiles 2, 3 of the index query; per lane of this core drains the canonical
-// ring to DRAM, hands the pooled key's RoPE tiles over once the rope core has room, and writes row 0 of the pooled
-// key's tiles 2, 3 into the compressed cache row (P // 4) of the lane.
+// index_tail, norm core writer: the first pair hands the normalized query's RoPE tiles (0, 1 and swapped) to its rope
+// core and writes tiles 2, 3 of the index query; per lane drains the ring to DRAM, hands the pooled key's RoPE tiles
+// over once the rope core has room, and writes row 0 of the pooled key's tiles 2, 3 into compressed cache row P // 4.
 // Compile-time args: TensorAccessorArgs index_query, ring, cache, kv_block_start, kv_row_hit.
 // Runtime args: 0 index_query, 1 ring, 2 cache, 3 kv_block_start, 4 kv_row_hit addresses, 5 rows, 6 lane tile rows, 7
 // peer x, 8 peer y, 9 lane_first, 10 lane_count, 11 do_query.

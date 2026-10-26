@@ -4,17 +4,12 @@
 // ``post_norm`` compute: ``ttnn.rms_norm(o16 [1, 12, T, 128] bf16, weight=norm, epsilon=1e-6)`` followed by
 // ``ttnn.multiply(normalized, sigmoid_bf16)``, call for call, on the four column tiles of one (value head, tile row).
 //
-// The norm is layernorm.cpp's RMSNORM + FUSE_GAMMA path at the op's DEFAULT compute config (rmsnorm.cpp:16-20:
-// HiFi4, math_approx_mode = TRUE, fp32_dest_acc_en = FALSE), so this kernel runs in a 16-bit DEST with bf16
-// intermediates and block_size 8 (layernorm_op_multi_core.cpp:239) -- Wt = 4 is one block.  The op reserves and
-// pushes the block's full 8 slots for those 4 tiles (blocked_range's remainder bookkeeping); this kernel reserves
-// 4, which changes no operand of the four mul_tiles or the four reduce_tile calls.  The kernel itself
-// compiles APPROX = false (the gate's ``mul_binary_tile`` is binary_ng's, whose config is Precise), so the norm's
-// two SFPU calls are written through the LLK macros with APPROX = true spelled out: the API wrappers
-// ``mul_unary_tile`` / ``rsqrt_tile`` would hand the kernel's own APPROX to the ckernel functions.
+// The norm is layernorm.cpp's RMSNORM + FUSE_GAMMA path at the op's default compute config (HiFi4, math_approx_mode
+// true, fp32_dest_acc_en false): a 16-bit DEST, bf16 intermediates, Wt = 4 in one block (the op reserves 8 CB slots
+// per block; reserving 4 changes no operand).  The kernel compiles APPROX = false for the gate (binary_ng's Precise
+// config), so the norm's two SFPU calls go through the LLK macros with APPROX = true spelled out.
 //
-// The gate is binary_ng's eltwise_binary_sfpu_no_bcast.cpp: copy both operands to DST, ``mul_binary_tile``
-// (the fp32 product with a software RNE narrowing and the ``0 * x -> +0`` clamp), one pack.
+// The gate is binary_ng's eltwise_binary_sfpu_no_bcast.cpp: copy both operands to DST, ``mul_binary_tile``, one pack.
 //
 // CBs: CB_X (0, bf16, the o16 tiles), CB_SIG (1), CB_SCALER (2), CB_EPS (3), CB_GAMMA (4), CB_XMM2 (6),
 // CB_EX2 (7), CB_EX2PE (8), CB_FUSION (9), CB_NRM (10), CB_OUT (16); CB_PROJ (5) and CB_HIST (17) are the
@@ -94,12 +89,8 @@ void kernel_main() {
             // (scale_dest) runs after it, still inside the same tile_regs_acquire
             reduce_uninit();
             reconfig_data_format(CB_XMM2, CB_SCALER);
-            // numeric.h's scale_dest = binop_with_scalar_tile_init() + mul_unary_tile(dst0, 1/W).
-            // binop_with_scalar.h:60-68 substitutes the KERNEL's APPROX into the template tuple of
-            // SFPU_UNARY_CALL (llk_math_eltwise_unary_sfpu_macros.h:41-47), and there is no
-            // llk_math_eltwise_unary_sfpu_binop_with_scalar free function outside tt_metal/hw/ckernels/quasar/,
-            // so the op's own call with true written in place of APPROX IS the explicit form:
-            // ckernel::sfpu::calculate_binop_with_scalar<true, MUL_UNARY, 8, false>.
+            // numeric.h's scale_dest = binop_with_scalar_tile_init() + mul_unary_tile(dst0, 1/W), with APPROX = true
+            // in place of the kernel's: calculate_binop_with_scalar<true, MUL_UNARY, 8, false>.
             binop_with_scalar_tile_init();
             MATH(SFPU_UNARY_CALL(
                 DST_SYNC_MODE,
@@ -125,12 +116,8 @@ void kernel_main() {
             tile_regs_acquire();
             add_init(CB_EX2, CB_EPS);
             add_tiles(CB_EX2, CB_EPS, 0, 0, dst0);
-            // rsqrt_tile_init() / rsqrt_tile(dst0) as layernorm.cpp calls them, with the op's
-            // APPROX = true written in place of the kernel's: rsqrt.h:18-20 and :37-43 pass APPROX into
-            // sfpu::rsqrt_init and
-            // sfpu::calculate_rsqrt through SFPU_UNARY_INIT_FN / SFPU_UNARY_CALL, so these two lines instantiate
-            // ckernel::sfpu::rsqrt_init<true> and ckernel::sfpu::calculate_rsqrt<true, 8, false, false>
-            // (ckernel_sfpu_rsqrt.h:19-32) -- the 10-bit table the op's math_approx_mode = TRUE selects.
+            // rsqrt_tile_init() / rsqrt_tile(dst0) as layernorm.cpp calls them, with APPROX = true in place of the
+            // kernel's: rsqrt_init<true> and calculate_rsqrt<true, 8, false, false>, as math_approx_mode selects.
             MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */)));
             MATH(SFPU_UNARY_CALL(
                 DST_SYNC_MODE,

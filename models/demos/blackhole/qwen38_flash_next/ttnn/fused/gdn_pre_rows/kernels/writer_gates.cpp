@@ -2,19 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Group B writer.
-//
-//   * A z unit (kind 1..12, value head kind - 1) writes the four bf16 tiles of CB_SIG to `sig` [1, 1, T, 1536]
-//     token-major, page c * 48 + 4 hv + d -- the same flat page map as `v`.  sig takes NO row mask: the chain's
-//     z sigmoid (_gate_and_project_rows) has none.
-//   * The a/b unit (kind 0) turns the fp32 beta and g tiles -- 32 tokens down the rows, the 12 value heads across
-//     the columns, columns 12..31 never read -- into the prims' [12, NC, 32, 1] form: head h's 32 values are copied
-//     into COLUMN 0 of a zeroed 4 KB tile and written to page h * NC + c (the prep reader's g/beta address
-//     hc * Ct at Ct = 1).  That is data movement, so it is bitwise; the scratch tile is CB_COL, zeroed once and
-//     restored after each page, so a head costs 64 word stores instead of a full 1024-word clear.
-//
-// Rows at or past `rows` are left as exact zeros in beta and g: the chain multiplies those rows by the 0.0 of its
-// fp32 row mask, whose product the die pins at +0.  That falls out of the zeroed scratch (only rows below `rows`
-// are copied into column 0).
+//   * A z unit (kind 1..12, value head kind - 1) writes CB_SIG's four bf16 tiles to `sig` [1, 1, T, 1536]
+//     token-major, page c * 48 + 4 hv + d (the same page map as `v`); sig takes no row mask, as in the chain.
+//   * The a/b unit (kind 0) turns the fp32 beta and g tiles (tokens down the rows, heads across the columns) into the
+//     prims' [12, NC, 32, 1] form: head h's 32 values go into column 0 of a zeroed scratch tile (CB_COL, restored
+//     after each page) written to page h * NC + c. Rows at or past `rows` stay exact zeros, the +0 of the chain's
+//     fp32 row-mask multiply.
 //
 // Compile-time args: 0 chunks (NC); then TensorAccessorArgs of beta_c, g_c, sig.  Runtime args: 0 beta_c, 1 g_c,
 // 2 sig addresses, 3 rows, 4 units, then (tile row, kind) pairs.
@@ -91,8 +84,7 @@ void kernel_main() {
         } else {
             const uint32_t head = kind - 1;
             cb_wait_front(CB_SIG, HEAD_TILES);
-            // sig carries NO row mask: _gate_and_project_rows applies none to the z sigmoid (only q/k/v/beta/g are
-            // masked, in _make_chunk_inputs), so every row of every tile row is written as computed
+            // sig carries no row mask: the chain's z sigmoid has none
             const uint32_t l1 = get_read_ptr(CB_SIG);
             for (uint32_t d = 0; d < HEAD_TILES; ++d) {
                 noc_async_write_page(chunk * VALUE_TILES + head * HEAD_TILES + d, sig, l1 + d * BF16_TILE);

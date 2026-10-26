@@ -4,25 +4,12 @@
 
 // Router tail: the precise exp over the live SFPU vectors of a tile only.
 //
-// `exp_tile<false>(idst)` (api/compute/eltwise_unary/exp.h) runs `calculate_exponential<false, fp32_dest>` under
-// VectorMode::RC: four faces, and per face eight SFPU vectors of 32 datums, each `dst_reg[0] = exp(dst_reg[0]);
-// dst_reg++` (the DST address advances by 2).  Blackhole's SFPLOAD addressing in the 32-bit dest (documented in
-// tt-llk's ckernel_sfpu_binary_bcast.h and ckernel_sfpu_rope.h): one vector is 4 dest rows x 8 columns of a face,
-// address bits >= 2 select the 4-row group and bit 1 the column half, so vectors 2p and 2p + 1 together are the
-// face's rows 4p..4p + 3 at all 16 columns.  Faces 0 and 1 hold token rows 0-15 (experts 0-15 / 16-31 of the tile),
-// faces 2 and 3 token rows 16-31, so the vector PAIR p of face f holds token rows (f >> 1) * 16 + 4p .. + 3.  A token
-// row the core never produces is never compared with a live column (the sort runs inside a token column of the
-// transposed tile), never summed with a live row (the reductions are row-wise) and never written, so its exp is
-// unobservable.  `exp_tile_live(idst, pair_mask)` issues the same instructions as `exp_tile<false>` on the pairs
-// whose bit is set (bit p for faces 0/1, bit 4 + p for faces 2/3) and only the address increment on the others: a
-// live row computes bit for bit what the full call computes, at the same DST address.  The pair is the unit because
-// a single vector holds only half of its four rows' experts (measured 2026-09-25 on one Blackhole chip before the
-// layout was read: the LLK's own loop at ITERATIONS = 1 leaves the live row wrong and at 4 right; a per-vector guard
-// at {0, 1} right, at {0} or {0, 1, 2} wrong on the odd vector).  The loop ends at the last live pair: the face step
-// (`_llk_math_eltwise_sfpu_inc_dst_face_addr_`, a carriage-return SETRWC) places the next face from the CR base
-// whatever the vector counter reached, exactly as `exp_tile`'s own `iterations` template argument relies on, so the
-// vectors after the last live pair cost nothing (measured: the per-vector increments of 28 skipped vectors were ~3 us
-// per call).  tests/test_fused_router_tail_static.py regenerates the guarded loop from the LLK source and pins it.
+// `exp_tile_live(idst, pair_mask)` issues `exp_tile<false>`'s instructions on the SFPU vector pairs whose bit is set
+// and only the address increment on the others, so a live row is bit for bit the full call's. In the 32-bit dest,
+// vector pair p of face f holds token rows (f >> 1) * 16 + 4p .. + 3 at all 16 columns; one vector holds only half of
+// its rows' experts, so the pair is the unit. A row the core never produces is never read. The loop may stop at the
+// last live pair because the face step (a carriage-return SETRWC) places the next face from the CR base.
+// tests/test_fused_router_tail_static.py regenerates the guarded loop from the LLK source and pins it.
 
 #pragma once
 

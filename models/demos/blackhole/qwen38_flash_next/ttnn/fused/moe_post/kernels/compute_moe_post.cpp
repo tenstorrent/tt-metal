@@ -12,9 +12,8 @@
 //   binary_ng eltwise_binary_no_bcast (ttnn.add defaults fast_and_approximate_mode=True): FPU add_tiles of the
 //     routed and the shared tile = routed + shared                                          -> cb_out
 // The kernel runs with the 32-bit dest the MAC needs.  The SFPU multiply takes the 16-bit-dest template argument, so
-// its software rounding to bf16 is the chain's and the pack of the bf16-valued fp32 is exact.  The chain's FPU add
-// rounds its sum to bf16 on the 16-bit dest write; here the exact sum of two bf16 values (at most 24 significant
-// bits) lands in the 32-bit dest and the packer rounds it to bf16 with the same rule.
+// its rounding to bf16 is the chain's.  The exact sum of two bf16 values lands in the 32-bit dest and the packer
+// rounds it to bf16 with the same rule the chain's 16-bit dest write uses.
 
 #include <cstdint>
 

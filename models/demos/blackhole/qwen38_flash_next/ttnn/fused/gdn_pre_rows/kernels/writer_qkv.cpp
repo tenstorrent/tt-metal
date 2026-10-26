@@ -1,14 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Group A writer.  Per (column group, tile row) unit it takes the four finished bf16 tiles from CB_OUT, zeroes the
-// rows at or past `rows` for q and k (v was masked by its own chain op in the compute kernel), and writes them:
-//
-//   * a v group (column group 8..19, value head g - 8) -> `v` [1, 1, T, 1536] token-major, page
-//     c * 48 + 4 hv + d: the prep reader's flat-v address (c * Ct + rt) * HV * Vt + hv * Vt + ct at Ct = 1;
-//   * a q or k group (key head g or g - 4) -> the three value heads 3 kh .. 3 kh + 2 of `q_c` / `k_c`
-//     [12, NC, 32, 128], page (hv * NC + c) * 4 + d: the prep reader's head-major address hc * Ct * Kt + t.  The
-//     GQA expand is this copy (the chain's exact 0/1 qk_expand matmul), so one unit writes 12 pages.
+// Group A writer. Per (column group, tile row) unit: takes CB_OUT's four bf16 tiles, zeroes rows at or past `rows`
+// for q and k (v was masked by its chain op in the compute kernel), and writes them:
+//   * a v group (8..19, value head g - 8) -> `v` [1, 1, T, 1536] token-major, page c * 48 + 4 hv + d;
+//   * a q or k group (key head g or g - 4) -> value heads 3 kh .. 3 kh + 2 of `q_c` / `k_c` [12, NC, 32, 128], page
+//     (hv * NC + c) * 4 + d. This copy is the GQA expand, so one unit writes 12 pages.
 //
 // Compile-time args: 0 chunks (NC); then TensorAccessorArgs of q_c, k_c, v.  Runtime args: 0 q_c, 1 k_c, 2 v
 // addresses, 3 rows, 4 units, then (column group, tile row) pairs.
@@ -64,10 +61,8 @@ void kernel_main() {
 
         cb_wait_front(CB_OUT, HEAD_TILES);
         const uint32_t l1 = get_read_ptr(CB_OUT);
-        // q and k take their rows mask here: the chain multiplies the whole [1, T, 32, 128] tile of a masked token
-        // by 0.0 (row_mask_bf16 broadcasts over the head and dim axes), and the bf16 multiply's clamp makes that
-        // +0 in every element -- the same bits as zeroing the tile.  v is already masked: its own chain op, the
-        // column-broadcast multiply by row_mask_bf16_col, ran in the compute kernel.
+        // q and k take their rows mask here: the chain's whole-tile multiply by 0.0 gives +0 in every element under
+        // the bf16 clamp, the same bits as zeroing. v was masked in the compute kernel.
         if (group < QK_GROUPS) {
             if (chunk > last_chunk) {
                 for (uint32_t d = 0; d < HEAD_TILES; ++d) {

@@ -3,50 +3,17 @@
 
 """``gdn_pre_rows``: the GDN rows chain from the projection to the chunk prims' inputs, one program.
 
-Replaces the rows chain's landing slices, its FIR row shifts (the 0/1 selection matmuls of the 32-row tile,
-``_shifted_rows_slab`` on a slab), ``_causal_conv_rows`` (multiply + three ``mac`` + SiLU), ``_make_chunk_inputs``
-(the GQA expand, both q/k rms_norms and scales, the v row mask, the beta and log-decay gates) and the composite's
-own q scale and head-major relayout, plus the z sigmoid the gated epilogue no longer has to wait for the scan to
-compute.  Every arithmetic step is the chain op's own LLK sequence in the chain op's DEST width with one pack per
-op, so the outputs are the chain's bits; the row shifts, the GQA copy, the page maps and the beta/g column transposes
-are data movement.
+Covers the landing slices, the FIR row shifts, ``_causal_conv_rows``, ``_make_chunk_inputs`` and the composite's q scale
+and head-major relayout, plus the z sigmoid of the gated epilogue. Every arithmetic step is the chain op's own LLK
+sequence in its DEST width with one pack per op, so the outputs are the chain's bits; the row shifts, the GQA copy, the
+page maps and the beta/g column transposes are data movement.
 
-One program, two core groups on disjoint core rectangles, six kernels:
+Two core groups on disjoint rectangles: group A (``*_qkv`` kernels, 16-bit DEST) runs the conv, SiLU and q/k norms and
+scales per (column group, tile row) unit; group B (``*_gates`` kernels, fp32 DEST) runs the beta / log-decay gates and
+the z sigmoid. Kernel constants are ``DF_BF16`` / ``DF_FP32`` because the JIT defines ``BF16`` / ``FP32`` macros.
 
-* **group A** (``reader_qkv`` / ``compute_qkv`` / ``writer_qkv``, ``fp32_dest=False``, ``approx=False``, HiFi4): the
-  20 column groups of four tiles (q key heads 0..3, k key heads 0..3, v value heads 0..11) x the tile rows.  Per
-  unit: the three shifted taps by exact 0/1 selection matmuls, the conv mirror (``mul_binary_tile`` then three
-  ``mac_tile<Float16_b>`` against the materialised row-broadcast tap tiles), ``silu_tile``; for q/k the
-  ``ttnn.rms_norm`` mirror in the 16-bit DEST and the ``x 128^-0.5`` scale (twice for q: the chain's and the
-  composite's).  A core's units are consecutive tile rows of one column group, which is what lets the four tap
-  tiles be read and broadcast once per group; the reader hands the compute one whole window per unit (the previous
-  tile row, then this one), pushed and popped as one block so it is always contiguous in the CB.  A q unit costs
-  more than a k unit and a k unit more than a v one (the norm and the scale passes), so the runs are cut by
-  measured COST, not by unit count: ``UNIT_COST`` and :func:`_run_counts`.
-* **group B** (``reader_gates`` / ``compute_gates`` / ``writer_gates``, ``fp32_dest=True``, ``INP_FLOAT32``,
-  ``unpack_to_dest_fp32`` on the fp32 constant CB): per tile row the a/b gate unit (beta and the log decay, fp32
-  throughout) and the 12 z units (``bf16(sigmoid(fp32(z)))``).
-
-Per-core L1 (the CB table below; a Blackhole Tensix has 1.5 MB): **group A 190,464 B (186 KB)**, **group B 61,440 B
-(60 KB)**.  Group A's three largest CBs are the 16 tap tiles, the 16 materialised broadcast tap tiles (both rebuilt
-only when a core's run crosses a column group) and the 12-deep input window.
-
-Circular-buffer indices are per program, so group A's 0..14 and group B's 20..26 only have to be disjoint from each
-other (they are); ``gdn_post_rows``' own buffers are a different ``generic_op`` call and never coexist with these on a
-core.  Kernel-side constant names avoid a bare ``BF16`` / ``FP32``: the JIT injects macros of those names on
-Blackhole and a template argument spelled with them fails to parse (the sibling program hit it), so the data-format
-constants here are ``DF_BF16`` / ``DF_FP32``.
-
-What this module does NOT do: the history tile of the next pass (``commit_rows_full`` keeps it), the scan, and the
-gated epilogue (``gdn_post_rows``).  No registry entry of its own: ``gdn_rows_wrap`` runs it on the 32-row verify
-tile; the device test also runs 128 rows.
-
-``v`` runs the chain's own row-mask multiply (``ttnn.multiply(v_slice, row_mask_bf16_col)``, binary_ng's
-column-broadcast SFPU kernel) rather than being written as the SiLU left it: that op carries the rows mask AND the
-bf16 multiply's ``0 * x = +0`` clamp, so a ``v`` element the SiLU leaves at ``-0.0`` gets the chain's ``+0.0``.
-q and k take their rows mask in the writer instead, because their chain mask multiplies a whole padded
-``[1, T, 32, 128]`` token tile by ``0.0``, which the same clamp makes ``+0`` in every element -- the same bits as
-zeroing the tile.  ``sig`` takes no mask at all: the chain's z sigmoid has none.
+``v`` keeps the chain's row-mask multiply because its ``0 * x = +0`` clamp turns a SiLU ``-0.0`` into ``+0.0``; the
+writers zero q and k (the same bits as the chain's whole-tile ``x * 0.0``); ``sig`` takes no mask, as in the chain.
 """
 
 from __future__ import annotations
@@ -107,11 +74,8 @@ SCALAR_TILES = 3
 CONST_DT_BIAS, CONST_NEG_EXP_A = 0, 1
 CONST_TILES = 2
 
-# Default: group B takes the last two grid columns and group A every column before them.  Measured on one chip at
-# T = 2048 (the lane's perf tool, a dev tool: traced us per call, the outputs bitwise the chain at every point): one column
-# 608.9 us, two 389.3, three 413.3, four 484.2, five 557.7, six 650.8.  At two columns group A alone is 388.5 and
-# group B alone 317.2, so A is the critical path there and at every wider split while B is the critical path at one
-# column: two is the minimum of the two curves, and the program is max(A, B) to within a microsecond.
+# Grid columns group B takes (group A takes every column before them): the split that minimizes max(A, B), from a
+# device measurement.
 GROUP_B_COLUMNS = 2
 
 
@@ -250,13 +214,9 @@ def select_index(kind: int, shift: int) -> int:
 def selection_tiles() -> torch.Tensor:
     """The nine 0/1 selection tiles ``[9, 32, 32]`` bf16, ``select_index``-ordered.
 
-    ``shifted_s`` -- the FIR input shifted down by s rows, from which tap 0 is ``shifted_3``, tap 1 ``shifted_2``,
-    tap 2 ``shifted_1`` and tap 3 the rows themselves -- is ``Sel_prev(s) @ previous + Sel_cur(s) @ current`` for one
-    column tile, two matmuls into one DEST tile.  Row r of the result is row ``32 c + r - s`` of the FIR input, which
-    is row ``r - s`` of the current tile when ``r >= s`` (``Sel_cur``), row ``32 - s + r`` of the previous tile row
-    when ``r < s`` (``Sel_prev``), and -- at tile row 0, where the previous tile is the history tile whose rows 0..2
-    are the three rows before row 0 -- history row ``3 - s + r`` (``Sel_hist``).  Exactly one 1.0 per output element,
-    so the HiFi4 fp32-accumulated matmul returns that bf16 value unchanged.
+    ``shifted_s`` (the FIR input shifted down by s rows) is ``Sel_prev(s) @ previous + Sel_cur(s) @ current`` for one
+    column tile; at tile row 0 the previous tile is the history tile (``Sel_hist``). Exactly one 1.0 per output
+    element, so the HiFi4 fp32-accumulated matmul returns that bf16 value unchanged.
     """
 
     tiles = torch.zeros(SELECT_TILES, TILE, TILE)
@@ -278,16 +238,13 @@ def _bf16_of_bits(pattern: torch.Tensor) -> torch.Tensor:
 
 
 def scalar_tiles(eps_bits: int = EPS_BITS, scale_bits: int = SCALE_BF16_BITS) -> torch.Tensor:
-    """The three small bf16 tiles ``[3, 32, 32]`` the norm and the scale need, each filled exactly as the op's own
-    dataflow kernel fills it.
+    """The three small bf16 tiles ``[3, 32, 32]`` the norm and the scale need, filled as the op's own dataflow kernel
+    fills them.
 
-    * ``SCALAR_REDUCE``: the layernorm reader's ``calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>`` on a zeroed
-      tile fills row 0 of each of the four faces with 1.0 (``fill_each_face_row0``: 8 u32 words per face), which in
-      (row, column) terms is rows 0 and 16, all 32 columns.  Every other element stays zero.
-    * ``SCALAR_EPS``: ``generate_bcast_col_scalar(eps)`` writes ``bits >> 16`` -- the epsilon TRUNCATED to bf16, not
-      rounded -- into column 0 of all 32 rows (u16 indices 16j and 512 + 16j).
-    * ``SCALAR_SCALE``: binary_ng's scalar writer ``fill_with_val_bfloat16`` fills every element with the host's
-      ``bfloat16(128 ** -0.5)`` = 0x3DB5 (RNE on the host, so NOT the fp32 0x3DB504F3).
+    * ``SCALAR_REDUCE``: 1.0 in row 0 of each face (rows 0 and 16, all columns), as
+      ``calculate_and_prepare_reduce_scaler<SUM, REDUCE_ROW>`` fills it.
+    * ``SCALAR_EPS``: the epsilon TRUNCATED to bf16 in column 0 of all rows (``generate_bcast_col_scalar``).
+    * ``SCALAR_SCALE``: the host's RNE ``bfloat16(128 ** -0.5)`` = 0x3DB5 in every element (binary_ng's scalar).
     """
 
     pattern = torch.zeros(SCALAR_TILES, TILE, TILE, dtype=torch.int64)
@@ -302,11 +259,8 @@ def constant_row_tiles(dt_bias: torch.Tensor, neg_exp_A: torch.Tensor) -> torch.
     """The two full fp32 constant tiles ``[2, 32, 32]``: the row ``[dt_bias[0..11], 0 x 20]`` in all 32 rows, and the
     same for ``neg_exp_A``.
 
-    The chain's ``ttnn.add(a_fp32, dt_bias)`` and ``ttnn.multiply(neg_exp_A, softplus)`` are binary_ng ROW-broadcast
-    ops whose Blackhole reader fills the tile with ``fill_tile_with_first_row`` (a bit copy of row 0 into 32 rows)
-    because the fp32 operands force ``fp32_dest_acc_en`` and with it ``use_llk_bcast = false``; both operands then
-    reach the SFPU through ``UnpackToDestFp32``, exactly.  Building the same tile on the host is the same bits and
-    keeps the constant off the RISC's critical path.
+    These are the tiles binary_ng's row-broadcast reader builds for the chain's fp32 ``add`` / ``multiply`` (a bit copy
+    of row 0), so building them on the host gives the same bits.
     """
 
     tiles = torch.zeros(CONST_TILES, TILE, TILE, dtype=torch.float32)
@@ -334,8 +288,7 @@ def _upload(host: torch.Tensor, dtype, mesh, *, per_device: bool):
 
 def constant_tiles(mesh, dt_bias, neg_exp_A):
     """The per-device ``constants`` tensor ``[1, 2, 32, 32]`` fp32 from the layer's device ``dt_bias`` and
-    ``neg_exp_A`` ``[1, 1, 1, 12]`` fp32 (the gdn_step pattern: one upload per layer, cached and resident before a
-    trace capture)."""
+    ``neg_exp_A`` ``[1, 1, 1, 12]`` fp32 (one upload per layer, resident before a trace capture)."""
 
     def per_device(tensor):
         return [ttnn.to_torch(local).float().reshape(-1)[:HEADS] for local in ttnn.get_device_tensors(tensor)]
@@ -390,12 +343,8 @@ def _column_work(units: int, grid, first_column: int, cores: int) -> list[fp.Cor
     return work
 
 
-# The core time of one group A unit by the kind of its column group, in hundredths of a microsecond.  MEASURED on
-# one chip at T = 2048 with the lane's perf tool (``--probe``: the program with group A's unit list made of a single
-# kind and group B idle, over the 15 units a core then holds -- all q 393.20 us, all k 350.39, all v 315.49).  A q
-# unit runs the rms_norm mirror and two scale passes, a k unit the norm and one, a v unit neither but the row-mask
-# multiply, and the three costs are flat in NC because a unit is always one tile row of one column group.  Only the
-# RATIO matters to the split below; whole numbers keep the cut exact and identical on every host.
+# Relative core time of one group A unit by column-group kind, from a device measurement. Only the ratio matters to
+# the split; whole numbers keep the cut exact and identical on every host.
 UNIT_COST = {"q": 2621, "k": 2336, "v": 2103}
 
 
@@ -445,16 +394,12 @@ def _runs_needed(blocks, limit: int) -> int:
 
 
 def _run_counts(blocks, cores: int) -> list[int]:
-    """The unit counts of ``cores`` CONSECUTIVE runs over the units of ``blocks`` whose heaviest run is as light as
+    """The unit counts of ``cores`` consecutive runs over the units of ``blocks`` whose heaviest run is as light as
     a consecutive cut can make it.
 
-    The linear partition: binary-search the smallest limit a greedy fill meets in ``cores`` runs, then lay the runs
-    out under it.  The search is over whole numbers between the two bounds it cannot beat -- the heaviest unit and
-    the mean run, neither of which any cut undercuts -- and the mean plus the heaviest unit, which greedy always
-    meets (every run but the last is loaded past ``limit - heaviest``, so ``cores`` of them hold more than the
-    total).  Every core gets a unit: splitting a run only lowers the maximum, so spending the rest of the grid is
-    free, and the kernels take a core whose run crosses a column group anyway (they rebuild the tap tiles at every
-    change, not only at the first unit).
+    Binary-searches the smallest limit a greedy fill meets in ``cores`` runs, between the heaviest unit / the mean run
+    and the mean plus the heaviest unit (which greedy always meets), then lays the runs out under it. Every core gets a
+    unit: splitting a run only lowers the maximum.
     """
 
     units = sum(count for _weight, count in blocks)
@@ -535,15 +480,8 @@ def split_units(mesh, chunks: int, group_b_cores: int | None = None) -> Split:
     """The program's work split for ``chunks`` tile rows: group A takes the leading grid columns and group B the
     trailing ``ceil(group_b_cores / grid.y)`` ones, so the two kernel groups sit on disjoint rectangles.
 
-    ``group_b_cores`` defaults to ``GROUP_B_COLUMNS`` whole columns, the measured crossing of the two groups'
-    core-time at T = 2048; only whole columns move group A's core count, so the values between two multiples of
-    ``grid.y`` buy nothing for group A and every core they leave out costs group B.
-
-    Group A's runs are cut by ``UNIT_COST``, not by unit count: its units are the same unit list in the same
-    column-major order, but a run ends where the core's accumulated cost reaches its share, so the q cores stop
-    being the ones the program waits for.  MEASURED at T = 2048 on 90 cores: the heaviest run goes from 393.2 to
-    336.5 hundredths-of-a-microsecond of modelled core time.  Group B's units are split by count (its z units are
-    each other's equals and it is not the critical path).
+    ``group_b_cores`` defaults to ``GROUP_B_COLUMNS`` whole columns. Group A's runs are cut by ``UNIT_COST``, not by
+    unit count, so the q cores are not the critical path; group B's units are split by count.
     """
 
     if chunks < 1:
@@ -723,15 +661,9 @@ def run(
         ),
     ]
     io = [projected, history, *taps, constants, selects, scalars, q_c, k_c, v, beta_c, g_c, sig]
-    # What the program addresses and issues, by construction from the two unit lists.  Group A reads one whole
-    # window per unit (the previous tile row's four column tiles and this one's), the four tap tiles once per
-    # column-group run, and the nine selection and three scalar tiles once per core; group B reads the a/b pair or
-    # one z head per unit and the two constant tiles once per core.  The history tile and all six outputs are read
-    # or written exactly once -- the GQA expand writes each page of q_c and k_c once.  The arithmetic is the six
-    # exact selection matmuls at 2 M N K plus one operation per element of every pass: the conv's multiply and
-    # three macs (two each), the SiLU, the norm's square, row sum and column-broadcast multiply, q's two scale
-    # passes and k's one, v's row-mask multiply, and group B's sigmoid, add + softplus + multiply and z sigmoid
-    # with its typecast.
+    # Bytes and flops by construction from the two unit lists: group A reads one window per unit, the taps once per
+    # column-group run and the selection / scalar tiles once per core; group B reads one a/b pair or z head per unit.
+    # Flops: the six exact selection matmuls plus one operation per element of every pass.
     tile, fp32_tile = fp.TILE_BYTES[BF16], fp.TILE_BYTES[FP32]
     tap_runs = sum(len({split.a_units[i][0] for i in range(w.start, w.start + w.count)}) for w in split.a_work)
     unit_elements = HEAD_TILES * TILE * TILE
@@ -764,12 +696,10 @@ def run(
 
 
 def mask_rows(outputs: dict, rows: int, rows_total: int) -> dict:
-    """Zero every row at or past ``rows`` of q_c, k_c, v, beta_c and g_c, in each output's own layout: what the
-    writers do and what the chain's ``x * row_mask`` multiplies do (``x * 1.0`` is exact, ``x * 0.0`` is ``+0`` --
-    the bf16 multiply clamps it and the die pins the fp32 one at ``+0`` too).
+    """Zero every row at or past ``rows`` of q_c, k_c, v, beta_c and g_c, in each output's own layout, as the writers
+    and the chain's ``x * row_mask`` multiplies do (``x * 0.0`` is ``+0``).
 
-    ``sig`` is NOT masked: the chain's z sigmoid (``_gate_and_project_rows``) carries no row mask; only the five
-    inputs the scan reads are masked (``_make_chunk_inputs``)."""
+    ``sig`` is not masked: the chain's z sigmoid carries no row mask."""
 
     if not 1 <= int(rows) <= rows_total:
         raise ValueError(f"rows must be in [1, {rows_total}], got {rows}")
@@ -794,13 +724,11 @@ def mask_rows(outputs: dict, rows: int, rows_total: int) -> dict:
 
 
 def reference(projected, history, conv_weights, dt_bias, neg_exp_A, *, rows=None, rounding=ref.DEFAULT) -> dict:
-    """The six outputs in their device layouts from ``gdn_rows_reference.pre_reference``, plus the z sigmoid the
-    post chain's first three ops produce.
+    """The six outputs in their device layouts from ``gdn_rows_reference.pre_reference``, plus the z sigmoid.
 
     Host shapes: ``projected`` ``[T, 4160]`` bf16, ``history`` ``[32, 2560]`` bf16, ``conv_weights`` ``[4, 2560]``
-    bf16, ``dt_bias`` / ``neg_exp_A`` ``[12]`` fp32.  STRUCTURAL, not bitwise: the reference's SiLU, sigmoid,
-    softplus and rms_norm are torch expressions, not the SFPU's polynomials (the device test's oracle is
-    :func:`chain_on_device`, never this).
+    bf16, ``dt_bias`` / ``neg_exp_A`` ``[12]`` fp32. Structural, not bitwise: the SiLU, sigmoid, softplus and rms_norm
+    are torch expressions (the device test's bitwise oracle is :func:`chain_on_device`).
     """
 
     out = ref.pre_reference(projected, history, conv_weights, dt_bias, neg_exp_A, rounding)
@@ -829,26 +757,17 @@ def _qk_expand_matrix() -> torch.Tensor:
 
 
 def chain_on_device(mesh, projected, history, taps, dt_bias, neg_exp_A, *, rows: int | None = None):
-    """Today's chain, op for op, on the same device tensors ``run`` takes -- the bitwise oracle of the device test.
+    """The chain, op for op, on the same device tensors ``run`` takes: the bitwise oracle of the device test.
 
-    Transcribed from ``ttnn/gdn.py``: ``_shifted_rows_slab`` 2544-2571 (the FIR taps by untilize / slice / concat /
-    tilize), ``_causal_conv_rows`` 2573-2598, ``_make_chunk_inputs`` 2600-2684 (the q/k GQA expand, ``rms_norm``,
-    scale and row masks; the v row mask; the beta and log-decay gates), the composite's ``head_split_tile`` +
-    ``q * scale`` + ``to_chunks_tile`` (``chunk_gated_delta_rule.cpp`` 35-58, 204-206, 227-236) reproduced here as
-    ``ttnn.permute`` + ``ttnn.reshape``, and the z sigmoid of ``_gate_and_project_rows`` 2774-2778.  Argument order,
-    dtypes, broadcast forms, memory configs and the absence of compute configs follow the chain; the only compute
-    config is the chain's own ``self.compute_config`` (HiFi4, no approximations, fp32 accumulation) on the two
-    exact 0/1 matmuls.  ``ttnn.multiply(..., output_tensor=buffer)`` of the chain is the same program as
-    ``ttnn.multiply(..., memory_config=...)``; the buffer only names where it lands.
-
-    ``rows`` (default: all of them) takes the chain's masked branch: the extra ``x * row_mask`` multiply per output.
-    Returns ``(q_c, k_c, v, beta_c, g_c, sig)`` in ``run``'s layouts.
+    Transcribed from ``ttnn/gdn.py`` (``_shifted_rows_slab``, ``_causal_conv_rows``, ``_make_chunk_inputs`` and the z
+    sigmoid of ``_gate_and_project_rows``) and the composite's ``head_split_tile`` + ``q * scale`` + ``to_chunks_tile``
+    as ``ttnn.permute`` + ``ttnn.reshape``. Argument order, dtypes, broadcast forms and compute configs follow the
+    chain. ``rows`` (default: all of them) takes the chain's masked branch. Returns ``(q_c, k_c, v, beta_c, g_c,
+    sig)`` in ``run``'s layouts.
     """
 
-    # The chain's own memory configs are L1 for most intermediates; at 2048 rows those are 10.5 MB tensors that do
-    # not fit beside this program's circular buffers on one die, and an interleaved L1 tensor and an interleaved
-    # DRAM tensor take the same program factory for every op below, so the oracle runs entirely in DRAM: the
-    # arithmetic, the operand order and the rounding points are the chain's either way.
+    # The oracle runs in DRAM: the chain's L1 intermediates do not fit beside the program's CBs at large T, and
+    # interleaved L1 and DRAM take the same program factory, so the arithmetic is the chain's either way.
     dram = ttnn.DRAM_MEMORY_CONFIG
     l1 = dram
     rows_total = int(projected.shape[-2])
@@ -891,8 +810,8 @@ def chain_on_device(mesh, projected, history, taps, dt_bias, neg_exp_A, *, rows:
     # P1: the landing slices of _project_rows.
     qkv = ttnn.slice(projected, (0, 0, 0, 0), (1, 1, rows_total, QKV_WIDTH), memory_config=dram)
     z = ttnn.slice(projected, (0, 0, 0, QKV_WIDTH), (1, 1, rows_total, A_COLUMN), memory_config=dram)
-    # gdn.py slices a and b to the twelve valid head columns (_project_rows 2484-2495), not to the tile width: the
-    # broadcast add of dt_bias and the neg_exp_A multiply are [1, 1, T, 12] ops.
+    # gdn.py slices a and b to the twelve valid head columns, not to the tile width: the broadcast add of dt_bias and
+    # the neg_exp_A multiply are [1, 1, T, 12] ops.
     a = ttnn.slice(projected, (0, 0, 0, A_COLUMN), (1, 1, rows_total, A_COLUMN + HEADS), memory_config=dram)
     b = ttnn.slice(projected, (0, 0, 0, B_COLUMN), (1, 1, rows_total, B_COLUMN + HEADS), memory_config=dram)
 
@@ -955,7 +874,7 @@ def chain_on_device(mesh, projected, history, taps, dt_bias, neg_exp_A, *, rows:
     k_out = to_chunks_qk(k_rows, scale=False)
     beta_out, g_out = to_chunks_vec(beta), to_chunks_vec(g)
 
-    # E1's first three ops on z: the fp32 sigmoid packed back to bf16 (moved here: it never waits for the scan).
+    # E1's first three ops on z: the fp32 sigmoid packed back to bf16 (it does not depend on the scan).
     z_fp32 = ttnn.typecast(z, ttnn.float32, memory_config=l1)
     sig = ttnn.typecast(ttnn.sigmoid(z_fp32, memory_config=l1), ttnn.bfloat16, memory_config=dram)
     return q_out, k_out, v, beta_out, g_out, sig

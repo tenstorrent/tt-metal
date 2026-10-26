@@ -115,8 +115,7 @@ void kernel_main() {
         }
         noc_async_write_barrier();  // the previous item's newest-slot writes have left the CB_P slot
         // The conv inputs go out per output tile t (P[t], the three slots' tile t at CB_S 3t.., the four taps' tile t
-        // at CB_T 4t..) with one group of reads in flight ahead of each barrier, so the conv starts after the first
-        // group instead of after all 96 tiles (the same tiles, the same per-element operands: bitwise).
+        // at CB_T 4t..) with one group of reads in flight ahead of each barrier, so the conv starts after one group.
         cb_reserve_back(CB_P, QKV_TILES);
         cb_reserve_back(CB_S, 3 * QKV_TILES);
         cb_reserve_back(CB_T, 4 * QKV_TILES);

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The rms_norm mirror alone (the LLK pin tool): CBs as rms_norm_mirror.h with in 0, scaler 1, eps 2, gamma 3,
-// x^2 4, var 5, rsqrt 6, unit 7, out 16.  Compile-time args: 0 Wt, 1 W.  Runtime arg 0: rows.
+// The rms_norm mirror alone: CBs as rms_norm_mirror.h with in 0, scaler 1, eps 2, gamma 3, x^2 4, var 5, rsqrt 6,
+// unit 7, out 16.  Compile-time args: 0 Wt, 1 W.  Runtime arg 0: rows.
 
 #include "rms_norm_mirror.h"
 

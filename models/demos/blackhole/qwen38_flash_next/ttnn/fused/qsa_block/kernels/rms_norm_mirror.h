@@ -3,7 +3,7 @@
 //
 // ttnn.rms_norm(x bf16, weight bf16, eps) under an fp32 dest, call for call: layernorm.cpp's RMSNORM + FUSE_GAMMA
 // path (x*x on the FPU packed fp32, SUM reduce against the 1.0 scaler then the SFPU 1/W, + eps, rsqrt, x * rsqrt
-// packed fp32, * gamma packed bf16) on the same CB formats.  Bitwise against the op (fused_qsa_llk_pins, 2026-09-14).
+// packed fp32, * gamma packed bf16) on the same CB formats, so it is bitwise against the op.
 // CBs: c_in x (bf16, Wt), c_scaler (bf16, 1, never popped), c_eps (bf16, 1, never popped), c_gamma (bf16, Wt, never
 // popped), c_xmm2 (fp32, Wt), c_ex2 (fp32, 1), c_ex2pe (fp32, 1), c_fusion (fp32, 2*block), c_out (bf16, Wt).
 // The caller runs compute_kernel_hw_startup once; the kernel must be compiled with fp32_dest_acc_en.

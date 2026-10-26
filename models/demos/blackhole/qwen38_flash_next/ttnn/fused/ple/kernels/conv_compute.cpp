@@ -1,26 +1,20 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE stage 5 (`_convolve` + the delta add), one core per column block of T tiles (20 cores x 1 tile), 16-bit dest
-// (every op's output is bf16, so the chain's programs run without fp32_dest_acc): per column tile t of the [1,1,4,640]
-// row-block
-//   acc = multiply(conv[0], tap0)            binary_ng bf16 x bf16 -> the SFPU mul_binary_tile, packed bf16
-//   acc = mac(row_k, tap_k, acc), k = 1..3   ttnn.mac on bf16 is the SFPU ternary kernel (ternary_addc_ops_sfpu.cpp
-//   with
-//                                            the MAC defines; the factory's is_fpu is computed for ADDCMUL/ADDCDIV
-//                                            only): a -> dst 0, b -> dst 1, c -> dst 2, mac_tile_init<Float16_b>(),
-//                                            mac_tile<Float16_b>(0, 1, 2, 0) = a*b + c in the 16-bit dest, packed bf16
-//                                            -- MAC_FORM 0.  MAC_FORM 1 keeps the FPU addc sequence (mul_tiles +
-//                                            add_reuse_dest) for reference; it differs on ~18% of lanes.
-//   conv = silu(acc)                         unary silu on bf16 (silu_tile<false>)
-//   delta = add(gated, conv)                 binary_ng bf16 add (fast_and_approximate default) -> FPU add_tiles
+// PLE `_convolve` + the delta add, one core per column block of T tiles, 16-bit dest (every op's output is bf16).
+// Per column tile of the [1,1,4,640] row-block, each step is the LLK the chain's op runs:
+//   acc = multiply(conv[0], tap0)            binary_ng bf16 x bf16 -> SFPU mul_binary_tile, packed bf16
+//   acc = mac(row_k, tap_k, acc), k = 1..3   ttnn.mac on bf16 -> SFPU mac_tile<Float16_b> = a*b + c (MAC_FORM 0);
+//                                            MAC_FORM 1 is the FPU sequence mul_tiles + add_reuse_dest
+//   conv = silu(acc)                         silu_tile<false>
+//   delta = add(gated, conv)                 binary_ng bf16 add -> FPU add_tiles
 // The rows: conv[0], conv[3], conv[6] (state) and normalized (tap 3).
 // CBs: 0 conv0, 1 conv3, 2 conv6, 3 normalized, 4-7 taps 0-3, 8 gated (bf16, T each), 9 / 10 acc ping-pong (bf16, 1),
-// 11 silu (bf16, 1), 16 delta (bf16, T).  With INJECT (the layer glue, one tile per core): 18 the delta's four rows as
-// four row-0 tiles (built by the writer RISC), 19 the four residual block tiles, 20 the four injected tiles =
-// add_tiles(residual_b, delta_row_b) (the layer's add(residual, delta), FPU, 16-bit dest).
+// 11 silu (bf16, 1), 16 delta (bf16, T).  With INJECT (one tile per core): 18 the delta's four rows as four row-0
+// tiles (built by the writer), 19 the four residual block tiles, 20 the four injected tiles =
+// add_tiles(residual_b, delta_row_b).
 // Compile-time args: 0 T, 1 MAC_FORM, 2 DEBUG_STAGE (0 = the delta; 1 = the tap-0 product; 2 = the accumulator after
-// the three macs; 3 = the silu: packed to CB 16 instead, for the stage test), 3 INJECT.
+// the three macs; 3 = the silu: packed to CB 16 instead), 3 INJECT.
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -73,7 +67,7 @@ void kernel_main() {
         }
         tile_regs_release();
         acc0.push_back(1);
-        // taps 1..3: the ternary MAC FPU kernel
+        // taps 1..3: acc = row_k * tap_k + acc
         for (uint32_t k = 1; k < 4; ++k) {
             DataflowBuffer& acc_in = (k & 1) ? acc0 : acc1;
             DataflowBuffer& acc_out = (k & 1) ? acc1 : acc0;

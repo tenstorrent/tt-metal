@@ -1,18 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
 """``mtp_accept``: the MTP pass's point-mass acceptance on the device, one program on one core.
 
-The split sampled pass today reads the verify head (the rows' candidate rows), decides on the host
-(``accept_point_mass`` over each row's distribution) and writes four decision buffers back before the tail.  This
-program decides on the device under the device sampler's law (``fused/sampler_tail``: the temperature table's integer
-weights, exact prefix sums, one fp32 multiply per decision, no division anywhere): row ``j`` accepts ``d_{j+1}`` iff
-``fl32(u_j * S_j) < w_j(d_{j+1})`` (``S_j`` the row's kept total, ``w_j(d)`` the kept weight of ``d``, 0 when ``d`` is
-not kept; a tie rejects); the first rejection draws ``x*`` from that row with ``d`` skipped in the prefix sums, using
-the second uniform ``v``; with every draft accepted ``x*`` is the bonus row's draw with ``v``.  The outputs are the
-split verify's decision buffers exactly as ``write_verify_decision`` writes them (the accept tile and index, the next
-token, the alignment lanes ``[d_1 .. d_a*, x*, sentinel ...]``) plus a 16-lane statistics row for the ledger.
-
-The host mirror is :func:`accept_reference` (the arithmetic of ``device_sampler_reference`` row by row); the device
-test proves the program bitwise against it.  The constants are the sampler tail's (policy row, uniforms row, the
-temperature table) built with ``rows = k + 1``: the uniforms row holds ``[u_0 .. u_{k-1}, v]``.
+The device sampler's law (``sampler_tail``: integer table weights, exact prefix sums, one fp32 multiply per decision,
+no division): row ``j`` accepts ``d_{j+1}`` iff ``fl32(u_j * S_j) < w_j(d_{j+1})`` (``S_j`` the row's kept total,
+``w_j(d)`` the kept weight of ``d``, 0 when not kept; a tie rejects). The first rejection draws ``x*`` from that row
+with ``d`` skipped in the prefix sums, using the second uniform ``v``; with every draft accepted ``x*`` is the bonus
+row's draw with ``v``. The outputs are the split verify's decision buffers exactly as ``write_verify_decision`` writes
+them, plus a 16-lane statistics row. The host mirror is :func:`accept_reference`. The constants are the sampler
+tail's built with ``rows = k + 1``: the uniforms row holds ``[u_0 .. u_{k-1}, v]``.
 """
 
 from __future__ import annotations
@@ -56,8 +53,7 @@ TILE_BYTES = 4096
 
 
 def stage_bytes(rows: int) -> int:
-    """The kernel's L1 stage (accept.cpp's STAGE_BYTES): the tile, the rows, the three 32-lane rows, the policy, index
-    and next-token grains, the statistics, the table chunks, the working arrays."""
+    """The kernel's L1 stage size; must match accept.cpp's STAGE_BYTES."""
 
     work_words = 3 * LANES + 5 * MAX_TOP_K
     return (
@@ -106,9 +102,9 @@ def _order_key(values: torch.Tensor) -> torch.Tensor:
 
 
 def row_kept_set(values: torch.Tensor, ids: torch.Tensor, policy, table: torch.Tensor) -> RowKeptSet:
-    """The device sampler's kept set of one candidate row (``device_sampler_reference`` up to its draw), plus the
-    kernel's guard: ``values`` fp32 ``[128]``, ``ids`` int64 ``[128]`` in lane order, ``policy`` a
-    ``Qwen38DeviceSamplerPolicy`` with no presence penalty, ``table`` the policy's temperature table."""
+    """The device sampler's kept set of one candidate row, plus the kernel's guard.
+
+    ``values`` fp32 ``[128]`` and ``ids`` int64 ``[128]`` in lane order; ``policy`` has no presence penalty."""
 
     if tuple(values.shape) != (LANES,) or values.dtype != torch.float32:
         raise ValueError(f"values must be fp32 [{LANES}], got {values.dtype} {tuple(values.shape)}")
@@ -143,9 +139,10 @@ def row_kept_set(values: torch.Tensor, ids: torch.Tensor, policy, table: torch.T
 
 
 def theta_draw(row: RowKeptSet, uniform: float, *, skip: int | None = None) -> tuple[int, float]:
-    """The theta rule: ``fl32(u * total)`` against the exact prefix sums of the kept lanes (lane ``skip`` left out of
-    the sums and the choice), the lane whose prefix first exceeds theta, capped at the last lane.  Returns the
-    token and theta."""
+    """The theta rule; returns (token, theta).
+
+    The token is the kept lane whose exact prefix sum first exceeds ``fl32(u * total)``, capped at the last lane; lane
+    ``skip`` is left out of the sums and the choice."""
 
     lanes = [i for i in range(row.kept) if i != skip]
     total = sum(row.weights[i] for i in lanes)
@@ -202,9 +199,10 @@ def accept_reference(
     table=None,
     sentinel: int,
 ) -> AcceptReference:
-    """The kernel's decision on the host: ``candidate_rows`` fp32 ``[k + 1, 256]`` (per shard 32 values then 32 ids),
-    ``drafts`` ``[d_1 .. d_k]``, ``uniforms`` ``[u_0 .. u_{k-1}, v]`` (multiples of ``2**-24``), ``sentinel`` the
-    zero-embedding token the alignment lanes past ``a*`` hold."""
+    """The kernel's decision on the host.
+
+    ``candidate_rows`` fp32 ``[k + 1, 256]`` (per shard 32 values then 32 ids), ``uniforms`` ``[u_0 .. u_{k-1}, v]``
+    (multiples of ``2**-24``), ``sentinel`` the token the alignment lanes past ``a*`` hold."""
 
     k = len(drafts)
     if not MIN_DRAFTS <= k <= MAX_DRAFTS:
@@ -275,10 +273,10 @@ def mtp_accept(
     alignment_tokens: Any,
     statistics: Any,
 ):
-    """The decision program: ``candidate_rows`` fp32 ROW_MAJOR ``[1,1,k+1,256]`` (the split's candidates readback),
-    ``draft_lanes`` fp32 ROW_MAJOR ``[1,1,1,32]`` (``[d_1 .. d_k, sentinel ...]``), ``constants`` the sampler tail's
-    (policy row, uniforms row ``[u_0 .. u_{k-1}, v, ...]``, temperature table); the four decision buffers are written
-    in place (the split's persistent tensors) and ``statistics`` (:func:`allocate_statistics`) is returned."""
+    """The decision program; writes the four decision buffers in place and returns ``statistics``.
+
+    ``candidate_rows`` fp32 ROW_MAJOR ``[1,1,k+1,256]``, ``draft_lanes`` fp32 ROW_MAJOR ``[1,1,1,32]``
+    (``[d_1 .. d_k, sentinel ...]``), ``constants`` the sampler tail's."""
 
     rows = _shape(candidate_rows)[2] if len(_shape(candidate_rows)) == 4 else 0
     if not MIN_DRAFTS + 1 <= rows <= MAX_DRAFTS + 1:
@@ -308,11 +306,7 @@ def mtp_accept(
         named={"cb_stage": CB_STAGE, "rows": rows, "lanes": LANES, "table_size": TABLE_SIZE},
     )
     pages = -(-stage_bytes(rows) // TILE_BYTES)
-    # the candidate rows and the draft lanes in, the policy grain, the uniforms row and the table's kept-weight chunks
-    # (64-byte grains, top_k per evaluated row at its bound) at the bytes the kernel reads, the accept tile, index,
-    # next token, alignment lanes and statistics row out; per evaluated row (at its bound, k + 1) the sampler tail's
-    # six passes over the 128 lanes (the key, the order, the weights, the prefix sums, the two kept counts) and one
-    # more for the decision's product and the draw's prefix compares
+    # flops: per evaluated row the sampler tail's six passes over the lanes, plus one for the decision and the draw
     meta = fp.program_meta(
         NAME,
         "accept",
@@ -336,8 +330,7 @@ def mtp_accept(
 
 
 def decide_on_host_composed(*args, **kwargs):
-    """There is no ttnn composite: the composed form is the host pass decision (``qwen38_sampling_step.accept_pass``),
-    which the chain runs when this program is off."""
+    """No ttnn composite: with this program off, the host decides (``qwen38_sampling_step.accept_pass``)."""
 
     raise RuntimeError("mtp_accept has no composed device form: the chain decides the pass on the host when it is off")
 

@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// main_tail_rows, the KV core's writer (one core): the current block's 32 row-major rows (CB_BLOCK, the read-back block
-// with this pass's rows placed) to the cache at P & ~31 (page = row), then, unless single_row, the next block's 32 rows
-// (CB_NEXT: zeros with the crossing rows) at (P & ~31) + 32 -- the chain's update_padded_kv_cache of `staged` and of
-// `placed_next`.  Every row of both blocks is rewritten, as the chain rewrites them.
+// main_tail_rows, the KV core's writer (one core): the current block's 32 row-major rows (CB_BLOCK) to the cache at
+// P & ~31 (page = row), then, unless single_row, the next block's 32 rows (CB_NEXT) at (P & ~31) + 32.  Every row of
+// both blocks is rewritten, as the op chain rewrites them.
 // Compile-time args: TensorAccessorArgs cache.  Runtime args: 0 cache address, 1 single_row.
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"

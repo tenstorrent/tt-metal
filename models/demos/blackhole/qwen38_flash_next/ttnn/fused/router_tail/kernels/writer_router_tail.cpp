@@ -5,7 +5,7 @@
 // Router tail, writer: the top-k of one 32-row tile as ROW_MAJOR rows of top_k bf16 scores and top_k uint16
 // indices (the untilize + uint16 typecast of the composed chain).  The scores tile is [token, k]; the index tile
 // is the sort's transposed [k, token] uint32 tile.  Rows are staged at a 64-byte pitch before the NoC write.
-// Runtime arg 4 (token_mask) names the rows this core writes (the lane form gives each core eight tokens).
+// Runtime arg 4 (token_mask) names the rows this core writes.
 
 #include <cstdint>
 

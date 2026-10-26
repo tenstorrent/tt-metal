@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// widen_partial compute (fp32 dest): each bf16 tile through the dest and packed fp32 (exact widening = the chain's
-// typecast).  CBs: 0 in (bf16), 16 out (fp32).  Runtime arg 0: tiles.
+// widen_partial compute (fp32 dest): each bf16 tile through the dest and packed fp32 (exact widening, as typecast).
+// CBs: 0 in (bf16), 16 out (fp32).  Runtime arg 0: tiles.
 
 #include "api/compute/common.h"
 #include "api/compute/cb_api.h"

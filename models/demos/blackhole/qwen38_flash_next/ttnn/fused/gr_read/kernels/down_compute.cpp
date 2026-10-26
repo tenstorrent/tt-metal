@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // GR read stage 2b, one output column tile per core: the normalized row (Kt tiles) times the core's weight column,
-// accumulated in the 32-bit dest in K order 0..Kt-1, packed fp32.  The running partial is packed to the fp32
-// intermediate CB and reloaded through SrcA every `spill` K tiles, as the DRAM-sharded matmul does between its K
-// blocks (the intermediate CB carries no UnpackToDestFp32 there, so each reload rounds the partial).
+// accumulated in the 32-bit dest in K order, packed fp32.  Every `spill` K tiles the partial is packed to the fp32
+// intermediate CB and reloaded through SrcA (which rounds it), as the DRAM-sharded matmul does between K blocks.
 // CBs: in0 normalized row (bf16, Kt), in1 weight column (bf16, 2 x blk), interm (fp32, 1), out partial (fp32, 1).
 // Compile-time args: 0 Kt, 1 blk (weight tiles per push, divides Kt), 2-4 the cbs (row, weight, partial), 5 spill,
 // 6 the intermediate cb.

@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// index_tail, rope core reader (one core pair per lane): the -1 scalar tile, the query cos/sin tiles (the first pair),
-// then the hand-offs from its norm core: the query's RoPE tiles once (the first pair), and per lane of this pair the
-// pooled key's RoPE tiles (after signalling room for them) with block-start cos/sin tiles whose row 0 is the lane's
-// row.
+// index_tail, rope core reader: the -1 scalar tile, the query cos/sin tiles and the query's RoPE tiles (first pair
+// only), then per lane the pooled key's RoPE tiles from the norm core (after signalling room) with block-start cos/sin
+// tiles whose row 0 is the lane's row.
 // Compile-time args: TensorAccessorArgs cos, sin, block_cos, block_sin.
 // Runtime args: 0 cos, 1 sin, 2 block_cos, 3 block_sin addresses, 4 rows, 5 peer x, 6 peer y, 7 lane_first,
 // 8 lane_count, 9 do_query.

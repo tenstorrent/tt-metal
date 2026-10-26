@@ -3,14 +3,11 @@
 
 """``moe_post``: everything after ``moe_compute`` in one program per layer.
 
-The composed chain (``Qwen38TTNNMoE._routed_partial`` and the partial add in ``forward``): ``fill`` of the local
-combine buffer, ``unsqueeze`` + ``to_layout(TILE)`` of the ``[10, rows, 2560]`` ROW_MAJOR pages,
-``deepseek_moe_fast_reduce_nc_fused`` (the score-weighted sum over the ten slots, the slots this device does not own
-scored 0), then ``ttnn.add`` of the routed and the shared partial -- with the shared expert's ``x sigmoid`` multiply
-folded in when the shared partial arrives ungated.  One program of 80 cores (one output column tile each): the reader
-zeroes the activation pages with the NoC and gathers only the owned ``(row, slot)`` fragments of the pages, the compute kernel issues the chain's MAC, multiply
-and add instruction sequences (``kernels/compute_moe_post.cpp``), so the output is the chain's bit for bit
-(tolerance class BITWISE).  Rows 1..32 (one row tile).
+Replaces ``Qwen38TTNNMoE._routed_partial`` and the partial add: the fill and tilize of the ``[10, rows, 2560]``
+combine buffer, ``deepseek_moe_fast_reduce_nc_fused`` (unowned slots scored 0), and ``ttnn.add`` of the routed and
+shared partials, with the shared expert's ``x sigmoid`` folded in when it arrives ungated. One core per output column
+tile: the reader gathers only the owned ``(row, slot)`` fragments onto zero tiles, and the compute kernel issues the
+chain's MAC, multiply and add instruction sequences, so the output is the chain's bit for bit. Rows 1..32.
 """
 
 from __future__ import annotations
@@ -106,8 +103,8 @@ def _check_inputs(pages, scores, indices, owner, shared, sigmoid) -> int:
 
 
 def route_contiguous(scores, indices) -> int:
-    """1 when both routing tensors are one L1 shard on one core (moe_compute's drain-core shard: the rows lie at the
-    shard's page pitch and the reader takes each tensor in one read), else 0 (one page read per row)."""
+    """1 when both routing tensors are one L1 shard on one core (one read per tensor at the shard's page pitch), else
+    0 (one page read per row)."""
 
     for tensor in (scores, indices):
         config = tensor.memory_config()
@@ -181,10 +178,9 @@ def moe_post_program(pages, scores, indices, owner, shared, sigmoid, out, *, row
 
 def moe_post(pages, scores, indices, owner, shared, *, sigmoid=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):
     """The layer's local MoE sum ``[1, 1, rows, 2560]`` bf16 TILE: the score-weighted sum of the owned slots of
-    ``pages`` (``moe_compute``'s ``[10, rows, 2560]`` ROW_MAJOR local combine buffer; unowned slots are never read)
-    plus ``shared`` (TILE ``[1, 1, rows, 2560]``: the gated shared partial, or the ungated down-linear shard when
-    ``sigmoid`` -- its column-broadcast sigmoid tile -- is given).  ``scores`` / ``indices`` are the ROW_MAJOR routing
-    rows, ``owner`` this device's ``[1, 512]`` uint16 expert owner row."""
+    ``pages`` (``moe_compute``'s ``[10, rows, 2560]`` ROW_MAJOR combine buffer; unowned slots are never read) plus
+    ``shared``. ``shared`` is the gated shared partial, or the ungated down-linear shard when ``sigmoid`` (its
+    column-broadcast sigmoid tile) is given; ``owner`` is this device's ``[1, 512]`` uint16 expert owner row."""
 
     rows = _check_inputs(pages, scores, indices, owner, shared, sigmoid)
     mesh = pages.device()
@@ -199,11 +195,9 @@ def moe_post(pages, scores, indices, owner, shared, *, sigmoid=None, memory_conf
 
 
 def moe_post_meta(pages, scores, indices, owner, shared, sigmoid, out, *, rows: int) -> "fp.FusedProgramMeta":
-    """What the program moves and issues, by construction (the census's model): the owned fragments of the pages at
-    their bound (every slot owned: the whole ``[10, rows, 2560]``), the routing rows and the owner row once per core
-    (the routing rows from the drain core's L1 shard when they are sharded there), the shared partial and the sigmoid
-    tile once (each core its column), the sum out; per element of the ``rows x 2560`` output the ten-slot MAC, the
-    shared add and, with the sigmoid, its multiply."""
+    """What the program moves and issues: the owned fragments at their bound (every slot owned), the routing and owner
+    rows once per core, the shared partial and sigmoid once, the sum out; per output element the ten-slot MAC, the add
+    and, with the sigmoid, its multiply."""
 
     cores = HIDDEN_TILES
     routing = fp.tensor_bytes(scores) + fp.tensor_bytes(indices)
@@ -234,11 +228,10 @@ def _compute_config(mesh):
 
 
 def moe_post_composed(pages, scores, indices, owner, shared, *, sigmoid=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """The composed chain on one chip, op for op as the model issues it: tilize of the pages,
-    ``deepseek_moe_fast_reduce_nc_fused`` with this device's ownership (the model's reader keeps the scores of the
-    experts whose owner is on its cluster axis; on one chip ``cluster_axis=1`` keeps expert ``e`` when the mapping
-    row says owner 0, so the mapping is ``1 - owner``), the shared expert's ``x sigmoid`` multiply and the add.  The
-    chain reads every slot: the caller hands in pages whose unowned slots are +0.0 (the fill's state)."""
+    """The composed chain on one chip, op for op as the model issues it.
+
+    On one chip ``cluster_axis=1`` keeps expert ``e`` when the mapping row says owner 0, so the mapping is
+    ``1 - owner``. The chain reads every slot: the caller hands in pages whose unowned slots are +0.0."""
 
     rows = _check_inputs(pages, scores, indices, owner, shared, sigmoid)
     mesh = pages.device()
@@ -277,8 +270,8 @@ _ONES_ROWS: dict[int, object] = {}
 
 
 def _chain_mapping(owner):
-    """``1 - owner`` as the chain's ``[1, 512]`` uint16 mapping row, computed on device (a ones row per mesh, built
-    once; no host read, so the replica runs inside a trace capture too)."""
+    """``1 - owner`` as the chain's ``[1, 512]`` uint16 mapping row, computed on device (no host read, so it can run
+    inside a trace capture)."""
 
     key = id(owner.device())
     if key not in _ONES_ROWS:
@@ -299,9 +292,8 @@ def local_sum_rows(result) -> torch.Tensor:
 
 
 def _gate_inputs(mesh, capture, positions, layer):
-    """The capture's ``moe_pages`` (the ten slots' expert outputs, every slot filled by its owner), routing and device
-    0's gated shared partial as the chain's inputs; the pages of the slots device 0 does not own are zeroed as the fill
-    leaves them."""
+    """The capture's ``moe_pages``, routing and device 0's gated shared partial as the chain's inputs; the slots device
+    0 does not own are zeroed as the fill leaves them."""
 
     index = [capture["positions"].index(p) for p in positions]
     rows = len(positions)

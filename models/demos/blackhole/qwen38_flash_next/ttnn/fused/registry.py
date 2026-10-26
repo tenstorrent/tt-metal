@@ -3,15 +3,10 @@
 
 """The fused decode kernels by name and the ``QWEN38_FUSED`` / ``QWEN38_FUSED_OFF`` switches.
 
-Every fused kernel stands in for one named chain of existing ttnn ops.  The kernels in ``DEFAULT_ON`` (the one list
-below: proven bitwise against their chains and at the model level -- or, for a COMPONENT-class kernel such as
-``gdn_step``, against the tt/ oracle at the component gate -- and faster than the record in their own timing
-slot) serve by default; ``QWEN38_FUSED_OFF`` (comma-separated names, or ``all``) falls back to the composed chains,
-``QWEN38_FUSED`` switches an opt-in kernel on.  A name that is not registered raises in either variable and in
-``DEFAULT_ON``, so a typo cannot silently change what runs.  Callers resolve once at construction and keep the choice
-through trace capture: ``run = resolve("router_tail")``.  A kernel that declares its input contract (``admits``)
-is resolved with ``resolve_admitted``: the fused program serves the calls that satisfy the contract and the composed
-chain the others, so a production default never raises on inputs its program was not written for.
+Every fused kernel stands in for one named chain of existing ttnn ops. ``DEFAULT_ON`` kernels serve by default;
+``QWEN38_FUSED_OFF`` (comma-separated names, or ``all``) falls back to the composed chains and ``QWEN38_FUSED`` switches
+an opt-in kernel on. An unregistered name raises, so a typo cannot silently change what runs. Callers resolve once at
+construction and keep the choice through trace capture.
 """
 
 from __future__ import annotations
@@ -24,15 +19,12 @@ from typing import Any, Callable, Mapping
 ENV = "QWEN38_FUSED"
 OFF_ENV = "QWEN38_FUSED_OFF"
 ALL = "all"
-# Tolerance classes of the component gate (fused_component_gate, dev tools): BITWISE where the arithmetic order is preserved (pure data
-# movement, integer work, the same ops in the same order); ULP where the same math is re-associated or fused
-# (an eltwise chain in one pass, a reduction in another order); COMPONENT where the chain's precision points move
-# (fp32 state kept, a rounding removed) and only the tt/ oracle can judge the component.
+# Tolerance classes: BITWISE keeps the chain's arithmetic order; ULP re-associates or fuses the same math; COMPONENT
+# moves the chain's precision points (e.g. fp32 state kept), so only the tt/ oracle can judge it.
 BITWISE, ULP, COMPONENT = "bitwise", "ulp", "component"
 TOLERANCE_CLASSES = (BITWISE, ULP, COMPONENT)
 _NAME = re.compile(r"^[a-z][a-z0-9_]*$")
-# The kernels that serve by default: bitwise against their chains, the acceptance tables unchanged, and a 200-step
-# traced wall under the record in their own slot (the FUSION-DEFAULTS notes).  Flipping a kernel is this one list.
+# The kernels that serve by default.
 DEFAULT_ON: frozenset[str] = frozenset(
     {
         "gdn_rows_wrap",
@@ -64,12 +56,10 @@ DEFAULT_ON: frozenset[str] = frozenset(
 
 @dataclass(frozen=True)
 class GateSpec:
-    """How the component gate feeds a kernel captured real inputs (``numerics_audit_device.py`` records).
+    """How the component gate feeds a kernel captured real inputs.
 
-    ``inputs(mesh, capture, positions, layer)`` returns the keyword arguments both callables take, as device tensors
-    built from the capture's positions (one tile row per position); ``output(result)`` returns the call's result as a
-    host tensor ``[rows, ...]``; ``reference(oracle, positions, layer)`` returns the oracle's value of the same
-    quantity (or None when the oracle keeps none).  ``topk`` names the ranking width when the output is a ranking.
+    ``inputs`` returns the keyword arguments both callables take (one tile row per position); ``output`` returns the
+    result as a host tensor ``[rows, ...]``; ``reference`` returns the oracle's value of the same quantity, or None.
     """
 
     inputs: Callable[[Any, Mapping[str, Any], tuple[int, ...], int], dict[str, Any]]
@@ -87,12 +77,10 @@ class FusedKernel:
     fused: Callable[..., Any]
     composed: Callable[..., Any]
     gate: GateSpec | None = None
-    # A COMPONENT-class kernel may serve by default only with this recorded component-gate proof (the numbers of the
-    # probe against the tt/ oracle); BITWISE defaults need none.
+    # Required for a COMPONENT-class kernel in DEFAULT_ON; BITWISE defaults need none.
     component_proof: str | None = None
-    # The kernel's input contract as a predicate over the call's arguments (what its program asserts before it
-    # builds): a production default runs the fused program only when it holds and the composed chain otherwise
-    # (``resolve_admitted``).  None: the fused callable serves every call.
+    # Input contract over the call's arguments: ``resolve_admitted`` runs the fused program only when it holds and the
+    # composed chain otherwise. None: the fused callable serves every call.
     admits: Callable[..., bool] | None = None
 
     @property
@@ -157,8 +145,7 @@ def default_names() -> frozenset[str]:
 
 
 def enabled_names(environ: Mapping[str, str] = os.environ) -> frozenset[str]:
-    """The kernels that run: ``DEFAULT_ON`` plus ``QWEN38_FUSED``, less ``QWEN38_FUSED_OFF``; every name in either
-    variable must be registered."""
+    """The kernels that run: ``DEFAULT_ON`` plus ``QWEN38_FUSED``, less ``QWEN38_FUSED_OFF``."""
 
     return (default_names() | _names(environ, ENV)) - _names(environ, OFF_ENV)
 
@@ -176,9 +163,9 @@ def resolve(name: str, environ: Mapping[str, str] = os.environ) -> Callable[...,
 
 
 class AdmittedStep:
-    """A kernel that runs, dispatched per call: the fused program when ``kernel.admits`` holds for the call's
-    arguments, the composed chain otherwise.  The test is a few shape reads, and a traced capture keeps whichever branch
-    its real tensors took (the served tensors satisfy the contract; host fakes outside it take the chain)."""
+    """Per-call dispatch: the fused program when ``kernel.admits`` holds, the composed chain otherwise.
+
+    A traced capture keeps whichever branch its real tensors took."""
 
     def __init__(self, entry: FusedKernel) -> None:
         if entry.admits is None:
@@ -195,9 +182,7 @@ class AdmittedStep:
 
 
 def resolve_admitted(name: str, environ: Mapping[str, str] = os.environ) -> Callable[..., Any]:
-    """``resolve`` with the kernel's admission: the composed chain when the kernel is off; the fused callable when it
-    runs and declares no ``admits``; an ``AdmittedStep`` (fused within the input contract, composed outside it) when it
-    does.  The production default's site resolves here."""
+    """``resolve`` with the kernel's admission: an ``AdmittedStep`` when the kernel runs and declares ``admits``."""
 
     entry = kernel(name)
     if name not in enabled_names(environ):

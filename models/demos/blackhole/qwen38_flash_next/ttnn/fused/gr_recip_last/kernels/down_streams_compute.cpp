@@ -3,12 +3,10 @@
 //
 // The down worker of the GR read with the rsqrt applied LAST (ttnn/fused/gr_recip_last), one output column tile:
 //   1. matmul: the multicast u row (Kt tiles = B streams x Kb tiles each) times the core's weight column, K tile k
-//      accumulated into dest tile k / Kb, so the B streams' partials P_b stay apart (fp32 dest, no spill: the
-//      chain's DRAM-sharded spill/reload is a rounding this class does not reproduce).
-//   2. scale: P_b * recip_b on the FPU (mul_tiles_bcast_cols: the chain's x*rsqrt instruction, here on the fp32
-//      partial; recip_b is the norm core's rsqrt tile, column 0 broadcast), packed fp32.
+//      accumulated into dest tile k / Kb, so the B streams' partials P_b stay apart (fp32 dest, no spill).
+//   2. scale: P_b * recip_b on the FPU (mul_tiles_bcast_cols, recip_b column 0 broadcast), packed fp32.
 //   3. sum over the B streams in stream order with the zero tile (lowrank_compute.cpp's fold), packed fp32: the
-//      device's partial tile for the line gather, the same page the chain's partial takes.
+//      device's partial tile for the line gather, on the chain's partial page.
 // CBs (compile-time): 3 in0 u row (bf16, Kt), 4 in1 weight column (bf16, Kt, pushed blk at a time), 5 interm (fp32,
 // B), 6 recip (fp32, B), 7 products (fp32, B), 8 zero (fp32, 1), 9 out (fp32, 1).
 // Compile-time args: 0 Kt, 1 blk (weight tiles per push, divides Kt), 2 Kb (K tiles per stream), 3-9 the CBs, 10 B.

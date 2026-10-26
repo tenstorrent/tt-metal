@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The RoPE mirror alone (the LLK pin tool): CBs as rope_mirror.h with in 0, rotated 1, cos 2, sin 3, scalar 4,
-// rotated*(-1) 5, x*cos 6, rotated*sin 7, out 16.  Under an fp32 dest ROUND_RNE narrows every FPU result to bf16 on
-// the SFPU before the pack (the candidate reproduction the pin refuted).  Runtime arg 0: rows.
+// The RoPE mirror alone: CBs as rope_mirror.h with in 0, rotated 1, cos 2, sin 3, scalar 4, rotated*(-1) 5, x*cos 6,
+// rotated*sin 7, out 16.  Under an fp32 dest ROUND_RNE narrows every FPU result to bf16 on the SFPU before the pack.
+// Runtime arg 0: rows.
 
 #include "rope_mirror.h"
 #ifdef ROUND_RNE
@@ -17,7 +17,7 @@ void kernel_main() {
     scalar_cb.wait_front(1);
     compute_kernel_hw_startup(1, 4, 5);
 #ifdef ROUND_RNE
-    // the pin's fp32-dest candidate: the same sequence with an RNE narrowing in the dest before each pack
+    // fp32 dest: the same sequence with an RNE narrowing in the dest before each pack
     CircularBuffer in_cb(0), rot_cb(1), cos_cb(2), sin_cb(3), rot_neg_cb(5), xcos_cb(6), rsin_cb(7), out_cb(16);
     for (uint32_t r = 0; r < rows; ++r) {
         for (uint32_t j = 0; j < 2; ++j) {

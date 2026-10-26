@@ -1,14 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Per (value head, state column block) item: row r's o tiles arrive from the compute (CB_OBF, VBT tiles) and row r
-// of each is copied into the head's assembled o-rows tiles (CB_OROWS, four bf16 tiles; the item's own tiles are
-// zeroed first, so rows >= ROWS stay exactly zero); the state after r + 1 rows arrives as CB_OUTS (ST fp32 tiles) and
-// goes to prefix slot r; after the last row the o-rows tiles are handed to the compute's gated norm and the item's
-// gated tiles are written to the output.  In the column-block form (VBT = 1) the four cores of one head first
-// exchange their o-rows tiles through L1: each writes its tile into the peers' CB_OROWS slot (the same L1 address on
-// every core of the program), then increments the peers' semaphore and waits for the three increments of its own, so
-// every core runs the gated norm on the same four tiles in the same order and writes only its own column tile.
+// Per (value head, state column block) item: copies row r of each o tile into the head's assembled o-rows tiles
+// (zeroed first, so rows >= ROWS stay exactly zero), drains the state after r + 1 rows to prefix slot r, then writes
+// the gated-norm output. With VBT = 1 the four cores of a head exchange o-rows tiles at the same L1 address on every
+// core, synchronized by a semaphore, so every core runs the gated norm on identical tiles and writes its own column.
 // Compile-time args: 0 ROWS, 1 VBT; then TensorAccessorArgs of prefix ([ROWS, 12, 128, 128] fp32) and out
 // ([1, 1, 32, 1536] bf16).  Runtime args: 0 prefix, 1 out addresses, 2 items, then per item (head, vb) and the PEERS
 // peers' (noc x, noc y).  Semaphore 0: the exchange counter.

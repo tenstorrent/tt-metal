@@ -1,16 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// index_tail, norm core reader (one core pair per lane; the first pair also takes the index query tile): the constant
-// tiles (1.0 and 0.25 reduce scalers, eps, ones), the gamma rows, the index query tile row (do_query), then for this
-// core's lanes (lane_first .. lane_first + lane_count - 1) the lane's raw-key ring with row (P % 4) replaced by the
-// lane's raw key (-0 -> +0 as the chain's SFPU one-hot select does).
+// index_tail, norm core reader: the constant tiles (1.0 and 0.25 reduce scalers, eps, ones), the gamma rows, the index
+// query tile row (do_query), then per lane the raw-key ring with row (P % 4) replaced by the lane's raw key (-0 -> +0,
+// as the SFPU one-hot select does).
 // Compile-time args: 0 eps bits, then TensorAccessorArgs: index_q, raw_key, kv_block_start, gamma_q, gamma_k, ring,
 // kv_row_hit. Runtime args: 0 index_q, 1 raw_key, 2 kv_block_start, 3 gamma_q, 4 gamma_k, 5 ring, 6 kv_row_hit
-// addresses, 7 rows, 8 first tile of the index query in index_q, 9 first tile of the raw key in raw_key (0 for the
-// separate projection shards; the windows' first tiles when both are the merged projection shard), 10 lane_first,
-// 11 lane_count (this core pair's lanes), 12 do_query (the first pair also takes the index query tile: its rows are all
-// the lanes' rows).
+// addresses, 7 rows, 8 first tile of the index query in index_q, 9 first tile of the raw key in raw_key, 10 lane_first,
+// 11 lane_count, 12 do_query.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"

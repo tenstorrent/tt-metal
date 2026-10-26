@@ -3,21 +3,8 @@
 
 """``qsa_rows``: the QSA verify-form glue on the 32-row tile at R real rows, as fused programs.
 
-``Qwen38TTNNQSA.forward_verify_generic`` runs the R rows P .. P + R - 1 of one pass on one 32-row tile (R = k + 1 the
-MTP verify rows of the twelve backbone layers, R = 1 the MTP layer's draft row padded in place); its glue around the
-kept kernels (the all-gather of the hidden rows, the six linears, the indexer, the top-k, sparse_sdpa, the out linear
-and its reduce-scatter) is ~62 small programs per layer.  This family replaces them program by program, each bitwise
-against the chain it stands for on the rows the tile carries (rows past R are not zero on the verify tile: every
-program masks or ignores them exactly as its chain does).  Opt-in as one name, ``QWEN38_FUSED=qsa_rows``.
-
-Program 1, ``score_blocks_rows``: the indexer scores' all-reduce and mask add.  The chain is ``ttnn.all_reduce`` (its
-composite: the all-broadcast, a concat, tilize, ``moreh_sum`` over the device dim, untilize) and ``ttnn.add`` of the
-per-row block mask, six programs and ~130 us per layer at 32 rows.  Here, as the decode chain's ``qsa_score_merge``
-does for one row: the local rows as 2 KB pages, one ``all_gather`` (device d's page c of row r lands at page
-``(d * rows + r) * chunks + c``), then ``qsa_block.score_merge`` (the composite's moreh_sum order, then the mask add)
-over all 32 rows of the tile at once -- that program's device test holds it bitwise against the chain per row at 1, 2,
-5 and 32 rows; the mask is the chunk's ``[1, 1, 32, blocks]`` row mask, so the rows past R are masked as the chain
-masks them.
+Each program is bitwise against the op chain it replaces on the rows the tile carries. Rows past R are not zero on the
+verify tile; every program masks or ignores them exactly as its chain does.
 """
 
 from __future__ import annotations
@@ -54,9 +41,10 @@ def _score_rows_shape(score_rows, mask):
 
 
 def score_blocks_rows(score_rows, mask, *, cluster_axis: int):
-    """The local partial block scores ``[1, 1, rows, blocks]`` bf16 ROW_MAJOR of the tile's rows, summed over the
-    ``cluster_axis`` devices and masked with ``mask`` (the same shape): the pages all-gathered, the fused merge over
-    the rows.  Returns the masked scores ``[1, 1, rows, blocks]`` bf16 ROW_MAJOR (the top-k's input)."""
+    """Program 1: the local block scores ``[1, 1, rows, blocks]`` bf16 ROW_MAJOR summed over the devices, then masked.
+
+    The rows are all-gathered as 1024-column pages and merged by ``qsa_block.score_merge``; ``mask`` has the same
+    shape and masks the rows past R as the chain does."""
 
     rows, blocks = _score_rows_shape(score_rows, mask)
     pages = blocks // PAGE
@@ -74,7 +62,7 @@ def score_blocks_rows(score_rows, mask, *, cluster_axis: int):
 
 
 def score_blocks_rows_composed(score_rows, mask, *, cluster_axis: int, topology=None):
-    """The chain: ``ttnn.all_reduce`` over the devices, then the mask add (``fast_and_approximate_mode=False``)."""
+    """The unfused op chain: ``ttnn.all_reduce`` over the devices, then the mask add."""
 
     _score_rows_shape(score_rows, mask)
     dram = ttnn.DRAM_MEMORY_CONFIG
@@ -86,10 +74,10 @@ def score_blocks_rows_composed(score_rows, mask, *, cluster_axis: int, topology=
 
 
 def selection_rows(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, row_fill):
-    """Program 3: the verify tile's sparse-attention rows of token ids [1, 1, 32, 2080] uint32 from the top-k block ids
-    [1, 1, 32, 512] and the pass's keep / fill rows -- the decode ``qsa_selection_row`` program on the 32 rows (its
-    per-row integer chain: shift, repeat, offset add, sentinel concat, keep and, fill or, exact), with the module's
-    one-row ``sentinel_pad`` and the chunk constants' per-row ``block_offsets_rows`` [1, 1, 32, 2048]."""
+    """Program 3: the verify tile's sparse-attention token-id rows [1, 1, 32, 2080] uint32 from the top-k block ids.
+
+    The decode ``qsa_selection_row`` program on the 32 rows, with a one-row ``sentinel_pad`` and per-row
+    ``block_offsets_rows`` [1, 1, 32, 2048]."""
 
     shape = tuple(block_ids.shape)
     if shape != (1, 1, fp.TILE, qsa_block.BLOCK_IDS):
@@ -100,8 +88,7 @@ def selection_rows(block_ids, sentinel_pad, block_offsets_rows, row_keep_bits, r
 
 
 def selection_rows_composed(block_ids, sentinel_pad_rows, block_offsets_rows, row_keep_bits, row_fill):
-    """The chain (ttnn/qsa.py ``_materialize_rows_chunk`` after ``topk_large_indices``) on the 32-row tile, with the
-    chunk constants' per-row ``sentinel_pad_rows`` [1, 1, 32, 32]."""
+    """The unfused op chain (ttnn/qsa.py ``_materialize_rows_chunk``); ``sentinel_pad_rows`` is [1, 1, 32, 32]."""
 
     dram = ttnn.DRAM_MEMORY_CONFIG
     starts = ttnn.bitwise_left_shift(block_ids, 2, memory_config=dram)
@@ -126,16 +113,16 @@ register(
         tolerance=BITWISE,
         fused=score_blocks_rows,
         composed=score_blocks_rows_composed,
-        gate=None,  # the rows micro-test and the pass pair (the MTP lead's gate) stand for the family
+        gate=None,  # the family's device tests are the component gate
     )
 )
 
-# program 2: the main tail with the verify rows' KV stage (the family's attribute is the function; the module stays
-# importable as ttnn.fused.qsa_rows.main_tail_rows through sys.modules)
+# program 2: the main tail with the verify rows' KV stage (the attribute is the function; the module stays importable
+# through sys.modules)
 from .main_tail_rows import kv_stage, main_tail_rows, main_tail_rows_composed  # noqa: E402
 
-# program 5: the post-attention glue on the tile as one 48-core program (default, qsa_rows_post_attention); the
-# kernels, the input contract and the composed chain live in post_attention_rows.py, the launch here
+# program 5: the post-attention glue as one 48-core program; kernels, input contract and composed chain live in
+# post_attention_rows.py, the launch here
 from .post_attention_rows import (  # noqa: E402
     ITEMS as PA_ITEMS,
     PA_COMPUTE,
@@ -148,9 +135,8 @@ from .post_attention_rows import (  # noqa: E402
 
 
 def post_attention_rows_admits(attention, qg_ws, qg_first: int = 0) -> bool:
-    """Program 5's input contract as a predicate: the qg projection as one row tile ``[1, 1, 1..32, 3072]`` (the verify
-    tile; the one-row draft) and sparse_sdpa's ROW_MAJOR ``[1, 32, rows, 256]``; the chunk body's six-branch gate
-    ``[1, 6, rows, 256]``, the 128-row chunk and the slab keep the chain."""
+    """Program 5's input contract: the qg projection as one row tile ``[1, 1, 1..32, 3072]`` and sparse_sdpa's
+    ROW_MAJOR ``[1, 32, rows, 256]``; any other form keeps the op chain."""
 
     if not (fp.is_row_tile(qg_ws) and fp.is_tile_width(qg_ws) and qg_ws.layout == ttnn.TILE_LAYOUT):
         return False  # the linear's tile shard, one row tile wide enough for the qg window
@@ -164,10 +150,10 @@ def post_attention_rows_admits(attention, qg_ws, qg_first: int = 0) -> bool:
 
 
 def post_attention_rows(attention, qg_ws, *, memory_config=None, qg_first: int = 0):
-    """sigmoid(gate) x attention for the six local heads over the tile's rows -> the head-major ``[1, 1, rows, 1536]``
-    bf16 TILE row in ``memory_config`` (the out-projection's activation shard).  ``attention`` is sparse_sdpa's
-    ROW_MAJOR ``[1, 32, rows, 256]``; the gates are the second 256 columns of each head's 512 in ``qg_ws`` from tile
-    ``qg_first``.  One core per (head, tile column)."""
+    """sigmoid(gate) x attention for the six local heads -> the head-major ``[1, 1, rows, 1536]`` bf16 TILE row.
+
+    ``attention`` is sparse_sdpa's ROW_MAJOR ``[1, 32, rows, 256]``; the gates are the second 256 columns of each head's
+    512 in ``qg_ws`` from tile ``qg_first``. One core per (head, tile column)."""
 
     rows = _pa_inputs(attention, qg_ws, qg_first)
     mesh = qg_ws.device()
@@ -204,7 +190,7 @@ def post_attention_rows(attention, qg_ws, *, memory_config=None, qg_first: int =
             for w in work
         ],
     )
-    # the six local heads' attention rows and gate tiles in, the head-major row out (head-sharded on dim 3)
+    # the output is head-sharded on dim 3
     meta = fp.program_meta(
         NAME,
         "post_attention_rows",
@@ -233,9 +219,6 @@ register(
         fused=post_attention_rows,
         composed=post_attention_rows_composed,
         admits=post_attention_rows_admits,
-        # the device test (bitwise the chain on the 1x4 line) is the gate.  Number of record, the pass pair of 2026-09-26
-        # on the 1x4 p150 line (greedy fused, json / prose / chat560): verify replay -0.35 / -0.38 / -0.36 ms and draft
-        # replay -0.10 ms per pass, pass wall -0.36 / -0.44 / -0.31 ms, tokens per pass identical; default since.
         gate=None,
     )
 )

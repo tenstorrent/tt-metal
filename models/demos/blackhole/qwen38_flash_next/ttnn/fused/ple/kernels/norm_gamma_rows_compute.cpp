@@ -1,12 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE group norm, one row-block of Wt tiles on one core: gr_read's norm_compute.cpp (the gathered stats reduced
-// against the AVG scaler, + eps, rsqrt, x * rsqrt packed bf16 = rmsnorm_post_allgather_metal2.cpp's unit) followed by
-// that kernel's FUSE_GAMMA stage instead of gr_read's separate SFPU multiply: the unit packed fp32 (the op's
-// intermediates carry the dest's format: fp32 under fp32_dest_acc_en) times the fp32 gamma tile on the FPU with
-// mul_tiles_bcast_rows (gamma through SrcB; the LLK broadcasts the gamma tile's ROW 0 over
-// the 32 rows -- the chain applies its weight's first row to every branch row), 32-bit dest, packed bf16.
+// PLE group norm, one row-block of Wt tiles on one core: gr_read's norm_compute.cpp unit (rmsnorm_post_allgather's
+// stats reduce, + eps, rsqrt, x * rsqrt), packed fp32 as the op's fp32-dest intermediates are, then the op's
+// FUSE_GAMMA stage: mul_tiles_bcast_rows with the fp32 gamma through SrcB (its row 0 over every row), packed bf16.
 // CBs: 0 x (bf16, Wt), 1 stats (bf16, S), 2 scaler (bf16 or fp32, 1), 3 eps (bf16, 1), 4 gamma (fp32, Wt),
 // 5 var (fp32, 1), 6 rsqrt (fp32, 1), 7 unit (fp32, Wt), 16 normalized (bf16, Wt).
 // Compile-time args: 0 Wt, 1 S (stats tiles), 2 blk (tiles per block, divides Wt), 3 the output cb.

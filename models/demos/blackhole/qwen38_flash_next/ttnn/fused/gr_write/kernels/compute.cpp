@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// residual + bf16(block * coefficient) per tile, the GR write's two binary_ng programs in one 16-bit-dest kernel:
-// ttnn.multiply (fast_and_approximate_mode False -> SFPU: copy lhs, broadcast the coefficient column, mul_binary_tile
-// = fp32 product, software RNE, 0 * x = 0, pack bf16) then ttnn.add (fast_and_approximate_mode True, the binding's
-// default -> FPU add_tiles(residual, update) from the two bf16 CBs, pack).  Operands sit in the chain's slots/order.
+// residual + bf16(block * coefficient) per tile. Matches ttnn.multiply (SFPU product, RNE to bf16) followed by
+// ttnn.add (FPU add_tiles); operands keep the unfused programs' slot order.
 // Named compile-time args: cb_block, cb_res, cb_coef, cb_upd, cb_out.  Runtime args: 0 units.
 
 #include <cstdint>

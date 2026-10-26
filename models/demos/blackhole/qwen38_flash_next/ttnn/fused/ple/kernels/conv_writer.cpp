@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE stage 5 writer, one core per column block: the T delta tiles (CB 16) -> the output pages first..first+T-1 (the
+// PLE conv writer, one core per column block: the T delta tiles (CB 16) -> the output pages first..first+T-1 (the
 // state shift is the reader's).  With INJECT (T = 1): the delta tile's rows 0-3 become four row-0 tiles in CB 18 (zero
 // elsewhere: the layer's permute of the delta into the branch-major layout), the compute adds the residual blocks,
 // and the four injected tiles (CB 20) go to pages b * 20 + first of the injected residual instead of the delta.

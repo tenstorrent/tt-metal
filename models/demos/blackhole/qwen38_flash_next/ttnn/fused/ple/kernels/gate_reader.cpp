@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE stage 3 reader, one core: the key and query global norms (bf16 TILE [1,1,4,2560], Wt tiles each) into CBs 0 / 1,
+// PLE gate reader, one core: the key and query global norms (bf16 TILE [1,1,4,2560], Wt tiles each) into CBs 0 / 1,
 // the scale tile (fp32, every element 2560^-0.5, the chain's scalar-filled operand) into CB 5, the value row (bf16
 // TILE [1,1,1,640], Vt tiles; row 0 valid) repeated over the four branch rows into CB 9 (the chain's ttnn.repeat: rows
 // 0-3 = row 0, the rest 0 -- each tile a NoC copy of the bf16 zero tile, then row 0's two face rows (32 bytes each)
@@ -66,9 +66,8 @@ void kernel_main() {
         query_dfb.push_back(Wt);
         scale_dfb.push_back(1);
     }
-    // row 0 of value tile t -> a 64-byte staging read per face row would overlap the zero copies: read the whole
-    // value tiles into the scaler CB's neighbourhood instead? Simpler: read value tile t into row block 0 directly
-    // (the zero copy has landed), then duplicate its row 0 into rows 1-3 on the RISC.
+    // row 0 of value tile t into row 0 of its zeroed tile (the zero copies have landed), then duplicated into rows
+    // 1-3 on the RISC
     {
         for (uint32_t t = 0; t < Vt; ++t) {
             noc.async_read(

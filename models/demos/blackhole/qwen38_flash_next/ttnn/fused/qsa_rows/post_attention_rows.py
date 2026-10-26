@@ -1,23 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""qsa_rows program 5 (``qsa_rows_post_attention``): the verify tile's post-attention glue as one 48-core program
-(the kernels, the input contract and the composed chain; the launch and the registry entry sit in the family's
-``__init__``, where the program-meta static reads them).
+"""qsa_rows program 5 (``qsa_rows_post_attention``): the kernels, input contract and composed chain.
 
-After ``sparse_sdpa`` the chain runs twelve programs per attention layer on the 32-row tile: the gate's copy of the qg
-projection to DRAM, six head slices and their concat (``_main_tail_rows_step``), the slice of the local heads out of the
-sparse output, its tilize, the sigmoid, the multiply, six head slices, their concat into the head-major
-``[1, 1, 32, 1536]`` row and its move into the out-projection's activation shard (``_sparse_value_attention_rows`` /
-``_project_output_rows``).  The decode's ``qsa_post_attention`` program does the same for one row on six cores (one per
-head, a serial row placement), and on the 32-row tile it measured slower than the chain (0.087 against 0.059 ms per
-call, 2026-09-26).  This form puts one core on every (head, tile column) of the output -- 48 cores, one tile each: the
-reader takes the head's gate tile straight from the qg shard and places the head's rows' 32-column window into one
-tile (the chain's slice + tilize, zero rows past the tile's), the compute runs the decode kernel's two ops on that tile
-(the SFPU sigmoid packed bf16, then the SFPU product with the bf16-dest rounding: the chain's unary sigmoid and
-binary_ng multiply), and the writer lands the tile in the activation shard.  Every element sees the chain's operations
-in the chain's order, so the program is BITWISE against the composed chain; the family's device test holds it on the
-1x4 line.  Opt-in (``QWEN38_FUSED=qsa_rows_post_attention``) until its pass pair."""
+One core per (head, tile column) of the head-major ``[1, 1, 32, 1536]`` output, one tile each: the reader takes the
+head's gate tile from the qg shard and places the head's 32-column attention window into one tile, the compute runs
+the decode post-attention ops (SFPU sigmoid packed bf16, then the SFPU product with bf16-dest rounding), and the writer
+lands the tile in the activation shard. Every element sees the chain's operations in its order, so it is bitwise.
+The launch and the registry entry are in the family's ``__init__``."""
 
 from __future__ import annotations
 
@@ -59,8 +49,7 @@ def _check_inputs(attention, qg_ws, qg_first: int) -> int:
 
 
 def post_attention_rows_composed(attention, qg_ws, *, memory_config=None):
-    """The chain on the tile, op for op as ttnn/qsa.py runs it (``_main_tail_rows_step``'s gate,
-    ``_sparse_value_attention_rows`` after sparse_sdpa, ``_project_output_rows``'s activation move)."""
+    """The unfused op chain on the tile, op for op as ttnn/qsa.py runs it."""
 
     rows = _check_inputs(attention, qg_ws, 0)
     dram = ttnn.DRAM_MEMORY_CONFIG

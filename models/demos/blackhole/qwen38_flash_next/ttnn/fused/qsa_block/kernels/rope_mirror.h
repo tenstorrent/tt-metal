@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // rotary_embedding_hf.cpp for 64-wide row tiles (Wt 2, half_Wt 1): rotated * (-1) [bcast scalar], * sin, x * cos,
-// add; FPU ops, each packed to a bf16 CB.  Bitwise against the op only under the op's own 16-bit dest (the FPU
-// rounds into a 16-bit dest by a rule no fp32-dest reproduction matched: fused_qsa_llk_pins, 2026-09-14), so the
-// kernel must be compiled with fp32_dest_acc_en off.  The rotated input is the two tiles in swapped order.
+// add; FPU ops, each packed to a bf16 CB.  Bitwise against the op only under the op's own 16-bit dest (no fp32-dest
+// sequence reproduces the FPU's 16-bit-dest rounding), so the kernel must be compiled with fp32_dest_acc_en off.  The
+// rotated input is the two tiles in swapped order.
 // CBs: c_in x (bf16, 2), c_rot rotated x (bf16, 2), c_cos, c_sin (bf16, 2 each, popped), c_scalar (bf16, 1, never
 // popped; element [0,0] = -1), c_rot_neg, c_xcos, c_rsin (bf16, 1 each), c_out (bf16, 2).  The caller runs
 // compute_kernel_hw_startup(c_rot, c_scalar, c_rot_neg) once and waits on c_scalar.

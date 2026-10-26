@@ -5,13 +5,11 @@
 // (Kt tiles, multicast into cb_in0 by the eltwise cores) times each of this core's weight columns, accumulated in the
 // 32-bit dest in K order 0..Kt-1 and packed bf16.  With spill > 0 the running partial is packed to the fp32
 // intermediate CB and reloaded through SrcA every `spill` K tiles, as the DRAM-sharded matmul does between its K
-// blocks (in0_block_w = 1 for K = 160 over five storage cores: one K tile per block, a spill/reload after each; the
-// intermediate CB carries no UnpackToDestFp32 there, so each reload rounds the partial).
-// gr_read/kernels/down_compute.cpp (one output tile per core, proven bitwise against ttnn.linear in chain mode) with
-// the output-tile loop; the packer is reconfigured back to the intermediate format at every tile because the previous
-// tile left it on the output's. CBs: in0 intermediate row (bf16, Kt), in1 weight column tiles (the weight's format,
-// n_tiles x Kt pushed blk at a time), interm (fp32, 1), out (bf16, 2). Compile-time args: 0 Kt, 1 blk (weight tiles per
-// push, divides Kt), 2-4 the cbs (row, weight, out), 5 spill, 6 the intermediate cb, 7 n_tiles (output tiles per core).
+// blocks (its intermediate CB has no UnpackToDestFp32, so each reload rounds the partial).
+// gr_read/kernels/down_compute.cpp with an output-tile loop.
+// CBs: in0 intermediate row (bf16, Kt), in1 weight column tiles (the weight's format, n_tiles x Kt pushed blk at a
+// time), interm (fp32, 1), out (bf16, 2). Compile-time args: 0 Kt, 1 blk (weight tiles per push, divides Kt), 2-4 the
+// cbs (row, weight, out), 5 spill, 6 the intermediate cb, 7 n_tiles (output tiles per core).
 
 #include <cstdint>
 

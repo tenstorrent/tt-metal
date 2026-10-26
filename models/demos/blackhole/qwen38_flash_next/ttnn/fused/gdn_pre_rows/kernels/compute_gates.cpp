@@ -1,20 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Group B compute: the gates and the z sigmoid, in a 32-BIT DEST (fp32_dest_acc_en = true) with APPROX = false --
-// the chain's configuration for every op here.  Every fp32 CB this kernel reads with copy_tile is listed in the
-// program's unpack_to_dest_fp32, so an fp32 operand arrives exactly instead of through the FPU's 19-bit source path.
-//
-// Unit kind 0 (the a/b tile of the tile row):
-//   beta = ttnn.sigmoid(ttnn.typecast(b, fp32)): the typecast is a copy_tile (the packer does bf16 -> fp32), then
-//     sigmoid_tile<VectorMode::RC, false> -- in a 32-bit DEST that is the accurate exp and the two-iteration
-//     reciprocal, chosen by the DEST width and not by a flag;
-//   g = ttnn.multiply(neg_exp_A, ttnn.softplus(ttnn.add(a_fp32, dt_bias), beta = 1, threshold = 20)): the SFPU add
-//     against the full dt_bias tile, softplus with the op's own packed parameters, then the SFPU multiply by the
-//     full neg_exp_A tile.  The chain packs fp32 between these ops, which is lossless, so fusing them in the
-//     32-bit DEST is bitwise; the fp32 SFPU multiply has neither the bf16 RNE nor the 0 * x clamp.
-// Unit kind 1..12 (one z value head): bf16(sigmoid(fp32(z))) -- copy_tile (the exact bf16 -> fp32 typecast),
-//   the fp32 sigmoid, then the explicit RNE of typecast_tile<Float32, Float16_b>, packed bf16.
+// Group B compute: the gates and the z sigmoid in a 32-bit DEST with APPROX = false, the chain's configuration for
+// every op here. Every fp32 CB read with copy_tile is in the program's unpack_to_dest_fp32, so fp32 operands arrive
+// exactly instead of through the FPU's 19-bit source path.
+// Unit kind 0 (the a/b tile): beta = sigmoid(fp32(b)); g = neg_exp_A * softplus(fp32(a) + dt_bias, beta = 1,
+// threshold = 20). The chain packs fp32 between these ops, which is lossless, so fusing them in DEST is bitwise.
+// Unit kind 1..12 (one z value head): bf16(sigmoid(fp32(z))) with the explicit RNE of typecast_tile.
 //
 // CBs: ab 20, z 21, const 22 (dt_bias tile 0, neg_exp_A tile 1), beta 23, g 24, sig 25.
 // Compile-time args: none (the page maps live in the reader and the writer).  Runtime args: 0 units, then

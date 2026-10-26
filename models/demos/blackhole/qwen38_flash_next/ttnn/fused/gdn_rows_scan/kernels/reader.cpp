@@ -1,17 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Per (value head, state column block) item of the verify rows: the item's conv tiles of the 32-row projection
-// (q and k of key head h/3, its v tiles) with the three FIR slots assembled as full shifted windows in L1 (slot i,
-// row j = window row j + i; window = [history rows 0..2 | projection rows 0..31], so every row is finite and rows
-// >= ROWS are the chain's own padding rows, masked downstream), the four taps' tiles (tile-major CBs pushed per
-// tile, as gdn_step's reader), the head's z tiles, the a and b tiles once, the head's dt_bias / neg_exp_A tiles, the
-// item's state tiles (S at pass start, read once), the ROWS one-hot row masks, and then -- from the compute's all-rows
-// gate tiles -- one replicated fp32 beta and decay tile per row (the gates' exact 32-bit fan-out).  Tile ids of the
-// [1,1,32,4160] projection: q 4(h/3)+c, k 16+4(h/3)+c, v 32+4h+c, z 80+4h+c, a 128, b 129; the history tile ids are the
-// q|k|v column tiles' (0..79); state tile (kt, vt) of head h at page h*16 + kt*4 + vt. Compile-time args: 0 ROWS, 1
-// VBT; then TensorAccessorArgs of projected, history, tap0..tap3, dtna, norm, state. Runtime args: 0 projected, 1
-// history, 2-5 taps, 6 dtna, 7 norm, 8 state addresses, 9 items, then (head, vb) pairs.
+// Per (value head, state column block) item of the verify rows: the conv tiles with the three FIR slots assembled as
+// shifted windows of [history rows 0..2 | projection rows 0..31] in L1 (slot i, row j = window row j + i; rows >= ROWS
+// are padding, masked downstream), then the taps, z, a / b, dt_bias / neg_exp_A, state tiles, row masks and per-row
+// replicated gate tiles. Tile ids of the [1,1,32,4160] projection: q 4(h/3)+c, k 16+4(h/3)+c, v 32+4h+c, z 80+4h+c,
+// a 128, b 129; history tile ids are the q|k|v column tiles' (0..79); state tile (kt, vt) of head h at page
+// h*16 + kt*4 + vt. Compile-time args: 0 ROWS, 1 VBT; then TensorAccessorArgs of projected, history, tap0..tap3, dtna,
+// norm, state. Runtime args: 0 projected, 1 history, 2-5 taps, 6 dtna, 7 norm, 8 state addresses, 9 items, then
+// (head, vb) pairs.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -56,9 +53,8 @@ inline void fill_tile_words(uint32_t l1, uint32_t value) {
 inline void local_copy(uint32_t dst, uint32_t src, uint32_t bytes) { noc_async_read(get_noc_addr(src), dst, bytes); }
 
 // slot_i (i = 0, 1, 2) of one column tile: rows s..31 (s = 3 - i) <- projection rows 0..31-s, rows 0..s-1 <- history
-// rows 3-s..2.  The history tile was read whole into slot 0 (its rows 0..2 are already right there); slots 1 and 2
-// take their history rows from slot 0's rows, which the shift below never overwrites.  Tile rows are 32-byte pieces
-// in two faces per 16-row block, so a shift is six contiguous copies per slot plus the history pieces.
+// rows 3-s..2. The history tile is read whole into slot 0; slots 1 and 2 take their history rows from slot 0's rows
+// 0..2, which the shift never overwrites. Tile rows are 32-byte pieces in two faces per 16-row block.
 inline void assemble_slots(uint32_t p_tile, uint32_t s0_tile) {
     for (uint32_t i = 0; i < HISTORY_ROWS; ++i) {
         const uint32_t s = HISTORY_ROWS - i;
@@ -137,9 +133,8 @@ void kernel_main() {
         for (uint32_t c = 0; c < VBT; ++c) {
             ids[QK_TILES + c] = V_TILE0 + head * HT + vb * VBT + c;
         }
-        // The conv inputs go out per output tile t (P[t], the three slots' tile t at CB_S 3t.., the four taps' tile t
-        // at CB_T 4t..): the next tile's DRAM reads are in flight while this tile's slots are assembled, and the
-        // conv starts after the first group.
+        // The conv inputs go out per output tile t (CB_S 3t.., CB_T 4t..) so the next tile's DRAM reads overlap this
+        // tile's slot assembly.
         cb_reserve_back(CB_P, NT);
         cb_reserve_back(CB_S, 3 * NT);
         cb_reserve_back(CB_T, 4 * NT);
@@ -172,8 +167,7 @@ void kernel_main() {
             z_ids[c] = Z_TILE0 + head * HT + c;
         }
         read_tiles(CB_Z, p, z_ids, HT, BF16_TILE);
-        // the a and b tiles once: every row's gate scalars of every head (the compute's gates take all rows in one
-        // pass)
+        // the a and b tiles once: the compute's gates take every row of every head in one pass
         cb_reserve_back(CB_AB, 2);
         const uint32_t ab_l1 = get_write_ptr(CB_AB);
         noc_async_read_page(A_TILE, p, ab_l1);
@@ -201,9 +195,8 @@ void kernel_main() {
             }
         }
         cb_push_back(CB_MASK, ROWS);
-        // The gates: the compute's beta_all / decay_all fp32 tiles (CB_GALL: tile 0 beta, tile 1 decay; element
-        // (row, head) is this item's row `row` scalar) replicated into one full fp32 tile per row for the
-        // recurrence's element-wise multiplies -- exact 32-bit copies, pushed row by row so row 0 starts first.
+        // The gates: each row's element of CB_GALL (tile 0 beta, tile 1 decay) replicated into one full fp32 tile per
+        // row (exact 32-bit copies), pushed row by row so row 0 starts first.
         {
             cb_wait_front(CB_GALL, 2);
             const uint32_t gall = get_read_ptr(CB_GALL);

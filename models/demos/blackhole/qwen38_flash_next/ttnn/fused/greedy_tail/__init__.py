@@ -3,19 +3,12 @@
 
 """``greedy_tail``: the greedy epilogue's candidates and resolve as three data-movement programs around one gather.
 
-Candidates (``Qwen38TTNNLMHead.greedy_candidates``, 9 programs: untilize, argmax, pad, reshape, max, reshape, max):
-``scan`` on 40 cores reads row 0 of the local bf16 logits tiles and keeps each core's maximum with its lowest id;
-``merge`` on one core picks the local maximum (lowest id on ties, ttnn.argmax's rule) and writes ``local_values``
-(bf16 TILE ``[1,1,1,1]``), ``local_indices`` (uint32 ``[1,1,1]``) and the packed fp32 ROW_MAJOR row ``[value | id]``.
-Resolve (``resolve_greedy_on_device``, 15 programs: two all_gathers with their relayouts, tie-break, argmax, rebase,
-gather, splat, tilize): ONE ``all_gather`` of the packed rows, then ``resolve`` on one core: ``value_d -
-owner_tie_break[d]`` in fp32, the first maximum in owner order, ``id + lm_head_vocab_starts[owner]`` in fp32, written
-as lane 0 of the fp32 TILE token row.  Integer / exact-fp32 work on the RISC (IEEE round-to-nearest, as the SFPU's
-fp32 ops): tolerance class BITWISE on the token id and on both candidate tensors.  Rows = 1 is the decode step; the
-batched lanes (``Qwen38TTNNLMHead.greedy_candidates_lanes`` / ``resolve_greedy_lanes_on_device``, rows = 1..32, row u =
-lane u) run the same three programs over the rows: the scan reads every lane row of its tiles, the merge writes one
-packed 64-byte row per lane ([1,1,rows,16]), ONE all_gather of those rows, and the resolve writes lane u of the token
-row (lanes past the row count zero, as the lanes chain's zero pad).  The MTP rows path keeps the chain.
+``scan`` keeps each core's maximum of the local bf16 logits with its lowest id; ``merge`` on one core picks the local
+maximum (lowest id on ties, as ttnn.argmax) and writes the candidate tensors and a packed fp32 row ``[value | id]``.
+After one ``all_gather`` of the packed rows, ``resolve`` on one core takes the first maximum of ``value_d -
+owner_tie_break[d]`` in owner order and writes ``id + lm_head_vocab_starts[owner]`` (fp32) into the token row. The RISC
+integer / fp32 work rounds to nearest as the SFPU's fp32 ops do (BITWISE). Lanes (rows 1..32, row u = lane u) run the
+same three programs over 64-byte packed rows; the MTP rows path keeps the chain.
 """
 
 from __future__ import annotations
@@ -32,7 +25,7 @@ TILE = fp.TILE
 KERNELS = {name: fp.kernel_source(NAME, f"{name}.cpp") for name in ("scan", "merge", "resolve")}
 CB_STAGE = 0
 SCAN_CORES = 40  # the one-row scan's cores
-LANE_SPLIT_ENV = "QWEN38_FUSED_GREEDY_TAIL_LANE_SPLIT"  # dev knob: 0 runs the lanes' per-core all-rows scan
+LANE_SPLIT_ENV = "QWEN38_FUSED_GREEDY_TAIL_LANE_SPLIT"  # 0 runs the lanes' per-core all-rows scan
 LANE_SPLIT_CORES = 128  # (row, tile-group) items over at most this many cores
 
 
@@ -80,8 +73,7 @@ def _embedding():
 
 
 def prepare(mesh):
-    """One zero bf16 tile and one zero fp32 tile ``[1,1,32,32]`` per mesh (the merge's value tile and the resolve's token
-    tile start from them), uploaded once (before trace capture)."""
+    """One zero bf16 tile and one zero fp32 tile ``[1,1,32,32]`` per mesh, uploaded once (before trace capture)."""
 
     import torch
 
@@ -135,13 +127,10 @@ def greedy_candidates(
     vocab_start=None,
 ) -> tuple:
     """``(local_values bf16 TILE [1,1,rows,1], local_indices uint32 [1,1,rows], packed fp32 ROW_MAJOR
-    [1,1,rows,packed_lanes])`` of the ``rows`` valid rows (1 = the decode step, whose packed row is [value | id];
-    the lanes pass ``PACKED_LANES_ROWS`` for 64-byte rows).  Row r's lane of the value tile is (r, 0).
+    [1,1,rows,packed_lanes])`` of the ``rows`` valid rows; row r's lane of the value tile is (r, 0).
 
-    ``candidates`` = ``CANDIDATES`` (rows = 1, the sampling server): the same two programs also produce the shard's
-    candidate row, fp32 ROW_MAJOR ``[1,1,1,2 * candidates]`` = [values | global ids] (the ids rebased by
-    ``vocab_start``, the shard's fp32 TILE ``[1,1,1,1]`` first global id), returned as a fourth tensor: each scan core
-    keeps its sorted top ``candidates`` behind the argmax's compare, the merge takes the shard's from the lists."""
+    With ``candidates`` (rows = 1) the same programs also return the shard's candidate row, fp32 ROW_MAJOR
+    ``[1,1,1,2 * candidates]`` = [values | global ids], the ids rebased by ``vocab_start``."""
 
     rows = _rows_of(logits)
     if not 1 <= rows <= TILE:
@@ -160,7 +149,7 @@ def greedy_candidates(
     grid = mesh.compute_with_storage_grid_size()
     split = rows > 1 and lane_split()
     if split:
-        # (row, tile group) items: G groups of tiles, rows x G cores in linear core order (core r * G + g takes row r, group g)
+        # (row, tile group) items in linear core order: core r * G + g takes row r, tile group g
         groups = max(1, min(LANE_SPLIT_CORES // rows, tiles, grid.x * grid.y // rows))
         ranges = fp.split_work(tiles, mesh, cores=groups)
         cores = fp.split_work(rows * len(ranges), mesh, cores=rows * len(ranges))
@@ -288,8 +277,7 @@ def greedy_candidates(
 
 
 def greedy_candidates_composed(logits, *, memory_config=ttnn.DRAM_MEMORY_CONFIG) -> tuple:
-    """The chain op for op (the grid-reduce form of ``Qwen38TTNNLMHead.greedy_candidates``); ``packed`` is built from
-    its two outputs with the chain's own widening ops so the resolve's input can be compared too."""
+    """The chain op for op; ``packed`` is built from its two outputs with the chain's widening ops for comparison."""
 
     rows = _rows_of(logits)
     row_major = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
@@ -316,9 +304,8 @@ def greedy_candidates_composed(logits, *, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
 def resolve(gathered, tie_break, vocab_starts, *, into=None, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """The token row (fp32 TILE ``[1,1,1,32]``, lane r = row r's global id, the other lanes 0.0) from the gathered
-    packed rows ``[1,1,rows,devices*stride]`` (stride 2: the decode step's [value | id]; 16: the lanes' 64-byte rows);
-    ``into`` (a resident TOKEN_ROW) receives the same tile from the same program (the chain's ``ttnn.copy`` after it).
+    """The token row (fp32 TILE ``[1,1,1,32]``, lane r = row r's global id, other lanes 0.0) from the gathered packed
+    rows ``[1,1,rows,devices*stride]``; ``into`` (a resident TOKEN_ROW) receives the same tile from the same program.
     """
 
     embedding = _embedding()
@@ -404,9 +391,8 @@ def resolve_composed(
 def resolve_lanes_composed(
     gathered_values, gathered_indices, tie_break, vocab_starts, *, memory_config=ttnn.DRAM_MEMORY_CONFIG
 ):
-    """The lanes chain's post-gather ops (``embedding.resolve_greedy_lanes_on_device``, as written) on the gathered bf16
-    TILE values ``[1,1,rows,devices]`` and uint32 ROW_MAJOR indices ``[1,1,rows,devices]``: the token row with lane u =
-    row u's id, the lanes past the row count zero."""
+    """The lanes chain's post-gather ops on the gathered bf16 TILE values ``[1,1,rows,devices]`` and uint32 ROW_MAJOR
+    indices ``[1,1,rows,devices]``."""
 
     embedding = _embedding()
     rows = int(gathered_values.shape[2])
@@ -446,8 +432,7 @@ def resolve_lanes_composed(
 
 
 def greedy_candidates_lanes_fused(lm_head, logits):
-    """``Qwen38TTNNLMHead.greedy_candidates_lanes`` on the fused programs: the lanes' rows (1..32) in one scan / merge
-    pair, the packed rows ``[1,1,rows,16]`` the lanes' resolve gathers."""
+    """``Qwen38TTNNLMHead.greedy_candidates_lanes`` on the fused programs, producing packed rows ``[1,1,rows,16]``."""
 
     embedding = _embedding()
     rows = lm_head._validate_logits(logits)
@@ -466,9 +451,8 @@ def greedy_candidates_lanes_fused(lm_head, logits):
 
 
 def resolve_greedy_lanes_on_device_fused(lm_head, candidates):
-    """``Qwen38TTNNLMHead.resolve_greedy_lanes_on_device`` with one gather of the packed lane rows and the resolve
-    program (lane u of the token row = row u's id, the lanes past the row count 0.0); candidates without a packed row
-    (the chain's) take the chain."""
+    """``Qwen38TTNNLMHead.resolve_greedy_lanes_on_device`` with one gather and the resolve program; candidates without
+    a packed row take the chain."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
 
@@ -497,16 +481,15 @@ def resolve_greedy_lanes_on_device_fused(lm_head, candidates):
 def greedy_candidates_fused(lm_head, logits, *, values_by_gather: bool = False, candidate_row=None):
     """``Qwen38TTNNLMHead.greedy_candidates`` on the fused programs for one row; other rows keep the chain.
 
-    ``candidate_row`` (the sampling chain's ``Qwen38TTNNSamplingCandidateConstants``): the one-row programs also produce
-    the shard's candidate row (``shard_row``, ``sampling_candidates_fused`` gathers it); other rows keep the chain and
-    leave it ``None``."""
+    With ``candidate_row`` the programs also produce the shard's candidate row (``shard_row``) for
+    ``sampling_candidates_fused``."""
 
     embedding = _embedding()
     rows = lm_head._validate_logits(logits)
     if rows != 1:
         return type(lm_head).greedy_candidates(lm_head, logits, values_by_gather=values_by_gather)
-    # the 64-byte packed row: an 8-byte row is padded to the 64-byte alignment and its all_gather falls back to the
-    # slower composite ("input rows (8 B) are padded to the 64 B memory alignment"); the row's content is unchanged
+    # the 64-byte packed row: an 8-byte row would be padded to the 64-byte alignment and take all_gather's slower
+    # composite path
     if candidate_row is None:
         values, indices, packed = greedy_candidates(logits.tensor, packed_lanes=PACKED_LANES_ROWS)
         row = None
@@ -535,10 +518,8 @@ def greedy_candidates_fused(lm_head, logits, *, values_by_gather: bool = False, 
 
 
 def sampling_candidates_fused(lm_head, logits, constants, *, into=None, candidates=None):
-    """``Qwen38TTNNLMHead.sampling_candidates`` from the scan's shard row: one all_gather of the four shards' [values |
-    global ids] rows into the replicated candidate row, copied into ``into`` (``constants.readback_row`` by default).
-    Callers without the scan's row (``candidates`` is ``None`` or has none: the verify rows, tools that build the row
-    on its own) take the chain."""
+    """``Qwen38TTNNLMHead.sampling_candidates`` from the scan's shard row: one all_gather into the replicated candidate
+    row, copied into ``into`` (``constants.readback_row`` by default). Callers without the scan's row take the chain."""
 
     embedding = _embedding()
     if candidates is None or getattr(candidates, "shard_row", None) is None:
@@ -573,9 +554,8 @@ def sampling_candidates_chain(lm_head, logits, constants, *, into=None, candidat
 
 
 def resolve_greedy_on_device_fused(lm_head, candidates, *, into=None):
-    """``Qwen38TTNNLMHead.resolve_greedy_on_device`` with one gather of the packed rows and the resolve program (which
-    also writes ``into``, the server's persistent token row, instead of a ttnn.copy); candidates without a packed row
-    (the chain's) take the chain."""
+    """``Qwen38TTNNLMHead.resolve_greedy_on_device`` with one gather and the resolve program, which also writes
+    ``into``; candidates without a packed row take the chain."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
 

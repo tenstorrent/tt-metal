@@ -1,17 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gr_write``: the gated-residual write as one program.  ``residual [1, 4, rows, 640] + block_output [1, 1, rows,
-640] * injection [1, 1, rows, 4]`` (bf16 TILE) in place of the chain ``reshape / permute -> multiply -> add`` of
-``Qwen38TTNNGatedResidual.write`` / ``write_rows`` (3 programs per write, 96 writes per decode step).
+"""``gr_write``: the gated-residual write as one program.
 
-The compute kernel issues the chain's two binary_ng programs on the same operands in the same order
-(``kernels/compute.cpp``): ``ttnn.multiply`` = SFPU (``fast_and_approximate_mode`` defaults to False for multiply):
-the coefficient column broadcast (the chain's SCALAR / COL broadcast, exact), ``mul_binary_tile`` (fp32 product,
-software RNE to bf16, 0 * x = 0), pack bf16; ``ttnn.add`` = FPU (the binding's default is True for add):
-``add_tiles(residual, update)`` in the 16-bit dest, pack.  Tolerance class BITWISE.  Rows 1..32 = one tile row (decode,
-lanes, the MTP verify body, the 32-row chunk); the 128-row chunk keeps the chain.  One output tile per core (80 cores,
-one core rectangle).
+``residual [1, 4, rows, 640] + block_output [1, 1, rows, 640] * injection [1, 1, rows, 4]`` (bf16 TILE), bitwise equal
+to the ``reshape / permute -> multiply -> add`` chain of ``Qwen38TTNNGatedResidual.write`` / ``write_rows``. Rows 1..32
+(one tile row) only; more rows keep the chain. One output tile per core.
 """
 
 from __future__ import annotations
@@ -106,8 +100,7 @@ def gr_write(block_output, residual, injection, *, memory_config=ttnn.DRAM_MEMOR
     output = fp.allocate((1, BRANCHES, rows, LOCAL_HIDDEN), ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh, memory_config)
     grid = mesh.compute_with_storage_grid_size()
     cores = min(UNITS, grid.x * grid.y)
-    # the block output once per branch tile, the residual and the coefficient tile once per core, the residual out;
-    # the multiply and the add per element of the four branches
+    # the block output is read once per branch tile and the injection once per core; a multiply and an add per element
     meta = fp.program_meta(
         NAME,
         "write",
@@ -128,8 +121,7 @@ def gr_write(block_output, residual, injection, *, memory_config=ttnn.DRAM_MEMOR
 
 
 def gr_write_composed(block_output, residual, injection, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """The chain op for op: ``write`` (reshape, one scalar per branch tile) at rows = 1, ``write_rows`` (permute, one
-    column per branch tile) at rows > 1."""
+    """The unfused chain: ``write`` (one scalar per branch tile) at rows = 1, ``write_rows`` (one column) above."""
 
     rows = rows_of(block_output, residual, injection)
     if rows == 1:
@@ -187,8 +179,7 @@ def _oracle(layer: int):
 
 
 def _gate_inputs(mesh, capture, positions, layer):
-    """Device slice 0 of layer ``layer``'s attention write: the captured residual entering the layer, the captured
-    attention output, and the injection the CPU oracle derives from that residual."""
+    """Device slice 0 of layer ``layer``'s attention write: captured residual and attention output, oracle injection."""
 
     import torch
 

@@ -1,24 +1,12 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Group A compute: one (column group, tile row) unit per loop, in a 16-BIT DEST (fp32_dest_acc_en = false) with
-// APPROX = false, HiFi4 -- the chain's own configuration for every op here except the two SFPU calls inside
-// ttnn.rms_norm, which the layernorm op compiles with math_approx_mode = true and which are therefore written out
-// through their macros with `true` in place of APPROX (see the two comments below).
-//
-// Per unit, each phase is one chain op's LLK sequence with that op's pack:
-//   1. the three shifted FIR taps: two matmul_tiles of a 0/1 selection tile into one DEST tile (exact: one 1.0 term
-//      per element), packed bf16 -- the mirror of _shifted_rows_slab's row shifts;
-//   2. the conv: ttnn.multiply(tap0, w0) as binary_ng's SFPU row-broadcast kernel (the tap row materialised once per
-//      column group by unary_bcast<ROW>, then copy / copy / mul_binary_tile) and three ttnn.mac as the ternary SFPU
-//      kernel (copy a / copy the broadcast row / copy the accumulator, then mac_tile<Float16_b> IMMEDIATELY after its
-//      init: the init records the replay slots and any SFPU op in between invalidates them); five bf16 packs;
-//   3. ttnn.silu as the unary SFPU kernel;
-//   4. for q/k: the ttnn.rms_norm mirror (layernorm.cpp's RMSNORM path, no gamma, W = 128 so Wt = 4 in one block)
-//      and then the scale ttnn.multiply(x, 128^-0.5) as binary_ng's scalar kernel against the host-rounded bf16
-//      scalar tile -- twice for q (the chain's, then the composite's chunk_gated_delta_rule q * scale);
-//   5. for v: ttnn.multiply(v_slice, row_mask_bf16_col) as binary_ng's column-broadcast kernel, which carries the
-//      rows mask and the bf16 multiply's zero clamp.
+// Group A compute: one (column group, tile row) unit per loop in a 16-bit DEST with APPROX = false and HiFi4, the
+// chain's configuration, except the two SFPU calls inside ttnn.rms_norm: the layernorm op compiles them with
+// math_approx_mode = true, so they are written out through their macros with `true` in place of APPROX.
+// Each phase is one chain op's LLK sequence with that op's pack: the three shifted FIR taps (exact 0/1 selection
+// matmuls), the conv (multiply + three mac), silu, for q/k the rms_norm mirror and the bf16 scale (twice for q), and
+// for v the row-mask multiply.
 //
 // CBs: in 0, sel 1, tap 2, tapfull 3, shift 4, conv 5, x 6, xmm2 7, scaler 8, eps 9, scale 10, ex2 11, ex2pe 12,
 // unit 13, out 14, mask 15, maskfull 16.  CB_IN is the reader's window: the previous tile row at 0..3, this
@@ -67,9 +55,8 @@ constexpr uint32_t dst0 = 0, dst1 = 1, dst2 = 2;
 
 constexpr uint32_t select_index(uint32_t kind, uint32_t shift) { return (shift - 1) * SELECT_KINDS + kind; }
 
-// The four tap rows of this column group as full tiles: binary_ng's and the ternary kernel's `unary_bcast<ROW>` of a
-// [1, 1, 1, 2560] operand, materialised once per group instead of once per output tile (the same bits: the broadcast
-// is a pure function of the tap tile, and the pack that follows it is lossless bf16 -> bf16).
+// The four tap rows of this column group broadcast to full tiles (unary_bcast<ROW>) once per group instead of once
+// per output tile: the same bits, since the broadcast is pure and the bf16 -> bf16 pack is lossless.
 ALWI void build_tap_tiles() {
     cb_wait_front(CB_TAP, TAP_TILES);
     cb_reserve_back(CB_TAPFULL, TAP_TILES);
@@ -212,11 +199,9 @@ ALWI void rms_norm_unit() {
     cb_pop_front(CB_XMM2, HEAD_TILES);
     reduce_uninit();
     reconfig_data_format(CB_XMM2, CB_SCALER);
-    // numeric.h detail::scale_dest = binop_with_scalar_tile_init() + mul_unary_tile(dst, 1/W).  The layernorm op is
-    // compiled math_approx_mode = true (rmsnorm.cpp:16-20) while this kernel is APPROX = false, so the call is
-    // written out through the same macro (blackhole llk_math_eltwise_unary_sfpu_macros.h:41-47) with `true` in place
-    // of APPROX; the init (binop_with_scalar.h:145-151) does not depend on APPROX.  The 16-bit DEST stores this
-    // product by TRUNCATION (ckernel_sfpu_binop_with_unary.h: only RSUB re-rounds).
+    // numeric.h's scale_dest: mul_unary_tile(dst, 1/W). The layernorm op compiles it with math_approx_mode = true, so
+    // the call goes through the same macro with `true` in place of APPROX. The 16-bit DEST stores the product by
+    // truncation.
     binop_with_scalar_tile_init();
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -241,9 +226,8 @@ ALWI void rms_norm_unit() {
     tile_regs_acquire();
     add_init(CB_EX2, CB_EPS);
     add_tiles(CB_EX2, CB_EPS, 0, 0, dst0);
-    // rsqrt_tile_init() / rsqrt_tile() of layernorm.cpp, again with the op's APPROX = true written out
-    // through the macros (rsqrt.h:18-20 init, :37-43 call; SFPU_UNARY_INIT_FN at macros.h:78-80): the 10-bit
-    // approximate reciprocal square root, not the accurate one this kernel's APPROX = false would select.
+    // layernorm's rsqrt_tile with the op's APPROX = true written out through the macros: the 10-bit approximate
+    // reciprocal square root, not the accurate one APPROX = false would select.
     MATH(SFPU_UNARY_INIT_FN(rsqrt, sfpu::rsqrt_init, (true /* APPROX */)));
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
@@ -282,11 +266,9 @@ ALWI void rms_norm_unit() {
     cb_pop_front(CB_X, HEAD_TILES);
 }
 
-// ttnn.multiply(v_slice, row_mask_bf16_col): binary_ng's eltwise_binary_sfpu_col_bcast.cpp -- the mask column
-// materialised once per tile row by unary_bcast<COL> and packed, then copy lhs / copy the broadcast tile /
-// mul_binary_tile per tile.  This is what masks a v row past `rows` (x * 0.0), and its zero clamp is also what
-// canonicalises a -0.0 that the SiLU may have produced: the chain runs this op on every v row, so the mirror must
-// too.  CB_X -> CB_OUT.
+// ttnn.multiply(v_slice, row_mask_bf16_col) as binary_ng's column-broadcast SFPU kernel. It masks v rows past `rows`
+// and its zero clamp turns a SiLU -0.0 into +0.0, so the mirror runs it on every v row, as the chain does.
+// CB_X -> CB_OUT.
 ALWI void v_row_mask() {
     cb_wait_front(CB_MASK, 1);
     cb_reserve_back(CB_MASKFULL, 1);

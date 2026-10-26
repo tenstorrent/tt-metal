@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Router tail, reader: the 16 fp32 logits tiles of one 32-row tile row, the reduce scaler tiles the softmax and the
-// top-k sum expect, the 16 pre-transposed uint32 index tiles (a constant tensor: row k of tile w holds w*32+k), and
-// the two in-place transforms the composed chain does as device ops: the zero fill of the top-k tile's padding
-// (fill_implicit_tile_padding) on the values tile and the column-0 broadcast of the denominator (binary_ng's
-// col-bcast reader) on the sums tile, each signalled to the compute kernel through a one-entry token CB.  Runtime
-// arg 4 (token_mask) names the rows this core produces (the lane form gives each core eight tokens).
+// Router tail, reader: the 16 fp32 logits tiles of one tile row, the reduce scalers, the 16 pre-transposed uint32
+// index tiles (row k of tile w holds w*32+k), and the chain's two in-place transforms (the top-k padding zero fill and
+// the sums' column-0 broadcast), each signalled to compute through a one-entry token CB.
+// Runtime arg 4 (token_mask) names the rows this core produces.
 
 #include <cstdint>
 
@@ -77,9 +75,8 @@ void kernel_main() {
         index.push_back(Wt);
     }
 
-    // fill_implicit_tile_padding(scores, 0) in place: columns >= top_k (faces 1 and 3 whole; columns top_k..15 of
-    // faces 0 and 2) and rows >= rows_in_tile of the [token, k] tile (and the rows this core does not produce, like
-    // padding); the compute kernel pops the tile after its sum
+    // fill_implicit_tile_padding(scores, 0) in place: columns >= top_k, and rows >= rows_in_tile or not produced by
+    // this core; the compute kernel pops the tile after its sum
     {
         DataflowBuffer vals(cb_vals);
         DataflowBuffer vals_ready(cb_vals_ready);

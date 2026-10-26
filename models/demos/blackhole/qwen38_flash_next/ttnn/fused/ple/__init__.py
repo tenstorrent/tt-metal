@@ -1,14 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``ple``: the parallel-lookup-embedding layer's device body (``Qwen38TTNNPLE.forward_prepared``, layer 1, once per
-step: 53 programs + 6 collectives) as fused programs.  Built in stages; this module holds the stage builders and the
-model hook grows with them.
+"""``ple``: the parallel-lookup-embedding layer's device body (``Qwen38TTNNPLE.forward_prepared``) as fused programs.
 
-Stage 3, ``gate``: everything of ``_gate`` after the key/query norm all_gathers -- typecasts, the fp32 product, the
-fp32 sum (the accurate SFPU fold), the scalar chain (2560^-0.5 scale, abs, clamp 1e-6, sqrt, sign, product, sigmoid),
-the value row repeated over the branch rows and gated (bf16) -- as one program on one core, each op the chain's LLK
-in the chain's order (docs in kernels/gate_compute.cpp).  Chain: 12 programs -> 1."""
+Each stage issues the chain's LLK calls in the chain's order around the chain's collectives; ``gate`` runs everything
+of ``_gate`` after the key/query norm all_gathers as one program on one core (see kernels/gate_compute.cpp)."""
 
 from __future__ import annotations
 
@@ -37,7 +33,7 @@ CONV_READER = fp.kernel_source(NAME, "conv_reader.cpp")
 CONV_WRITER = fp.kernel_source(NAME, "conv_writer.cpp")
 CONV_STATE_LENGTH = 9
 CONV_TAPS = 4
-MAC_FORM = 0  # 0: mac(row, tap, acc) = row * tap + acc (the golden); 1: tap * acc + row (the factory's literal binding)
+MAC_FORM = 0  # 0: mac(row, tap, acc) = row * tap + acc; 1: tap * acc + row
 GATE_COMPUTE = fp.kernel_source(NAME, "gate_compute.cpp")
 GATE_READER = fp.kernel_source(NAME, "gate_reader.cpp")
 GATE_WRITER = fp.kernel_source(NAME, "gate_writer.cpp")
@@ -45,8 +41,8 @@ _CONSTANTS: dict[int, tuple] = {}
 
 
 def constants(mesh):
-    """Per mesh, uploaded once: the fp32 tile filled with 2560^-0.5 (binary_ng's scalar operand as its reader fills it)
-    and the bf16 zero tile (the repeat's padding rows)."""
+    """Per mesh, uploaded once: the fp32 tile filled with 2560^-0.5 (binary_ng's scalar operand) and the bf16 zero
+    tile (the repeat's padding rows)."""
 
     key = id(mesh)
     if key not in _CONSTANTS:
@@ -75,8 +71,8 @@ def _one_core(mesh):
 
 
 def stats(x):
-    """``rms_norm_pre_all_gather`` of one ``[1,1,4,640]`` bf16 row-block -> its stats tile ``[1,1,4,32]`` bf16 (F2's
-    STATS kernel on one core; the chain's reshape to (1,1,4,32) is this shape)."""
+    """``rms_norm_pre_all_gather`` of one ``[1,1,4,640]`` bf16 row-block -> its stats tile ``[1,1,4,32]`` bf16 on one
+    core."""
 
     from .. import gr_read as gr
 
@@ -102,8 +98,9 @@ def stats(x):
 
 
 def normalize(x, gathered_stats, weight):
-    """``rms_norm_post_all_gather(x, gathered, eps, weight=)`` of one row-block: F2's unit path, then the chain's
-    FUSE_GAMMA FPU multiply (the weight's row 0 over every row).  ``weight`` fp32 TILE ``[1,1,4,640]``."""
+    """``rms_norm_post_all_gather(x, gathered, eps, weight=)`` of one row-block, then the chain's FUSE_GAMMA multiply.
+
+    ``weight`` fp32 TILE ``[1,1,4,640]``; its row 0 scales every row."""
 
     from .. import gr_read as gr
 
@@ -179,8 +176,9 @@ def stats_composed(x, compute_config, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
 
 def gate(key_global, query_global, value, *, debug: bool = False):
     """``_gate`` after its all_gathers: ``(key_global, query_global)`` bf16 TILE ``[1,1,4,2560]`` (replicated), ``value``
-    bf16 TILE ``[1,1,1,640]`` -> gated bf16 ``[1,1,4,640]``.  ``debug`` also returns the fp32 gate tile (the scaled
-    sum, column 0 rows 0-3) and the fp32 coefficient tile as ``[1,1,32,32]`` tensors."""
+    bf16 TILE ``[1,1,1,640]`` -> gated bf16 ``[1,1,4,640]``.
+
+    ``debug`` also returns the fp32 gate tile and the fp32 coefficient tile as ``[1,1,32,32]`` tensors."""
 
     _expect(key_global, (1, 1, BRANCHES, HIDDEN), BF16, "PLE key global norm")
     _expect(query_global, (1, 1, BRANCHES, HIDDEN), BF16, "PLE query global norm")
@@ -289,10 +287,10 @@ def conv(
     debug_stage: int = 0,
     inject_residual=None,
 ):
-    """``_convolve`` + the delta add of one row-block: ``state_rows`` = the nine bf16 conv rows (fixed addresses),
-    ``normalized`` the norm_conv output, ``taps`` the four bf16 tap tensors, ``gated`` the gate output -> the delta
-    bf16 ``[1,1,4,640]``; with ``shift`` the reader performs the chain's nine in-place state copies while the compute
-    runs (its inputs are already in the CBs)."""
+    """``_convolve`` + the delta add of one row-block -> the delta bf16 ``[1,1,4,640]``.
+
+    ``state_rows`` are the nine bf16 conv rows at fixed addresses; with ``shift`` the reader performs the chain's nine
+    in-place state copies once the compute's inputs are in the CBs."""
 
     if len(state_rows) != CONV_STATE_LENGTH or len(taps) != CONV_TAPS:
         raise ValueError("PLE conv takes nine state rows and four taps")
@@ -342,10 +340,8 @@ def conv(
         [(w.core, [out.buffer_address(), w.start, injected.buffer_address()]) for w in work],
     )
     io = list(inputs) + others + ([inject_residual, out, injected] if inject else [out])  # each buffer once
-    # the four conv rows, the gate output (and the layer residual) in, the taps once (each core its column tile of
-    # every tap), the delta (or the
-    # injected residual) out, and with ``shift`` the nine state copies (eight rows read, nine written); per element
-    # the multiply, three macs, the silu and the add (and the residual add)
+    # with ``shift`` the nine state copies (eight rows read, nine written); per element the multiply, three macs, the
+    # silu and the add (and the residual add)
     meta = fp.program_meta(
         NAME,
         "conv_inject" if inject else "conv",
@@ -408,9 +404,10 @@ def _group_norm(module, x, weight):
 
 
 def _body(module, residual_rows, prepared, state, *, inject_residual=None):
-    """The fused stages of ``forward_prepared`` on the PLE-layout residual ``[1,1,4,640]``; with ``inject_residual`` (the
-    layer's branch-major residual) the conv program also performs the layer's ``add(residual, delta)`` and returns the
-    injected residual instead of the delta."""
+    """The fused stages of ``forward_prepared`` on the PLE-layout residual ``[1,1,4,640]``.
+
+    With ``inject_residual`` (the layer's branch-major residual) the conv program also performs the layer's
+    ``add(residual, delta)`` and returns the injected residual instead of the delta."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
 
@@ -442,9 +439,7 @@ def _body(module, residual_rows, prepared, state, *, inject_residual=None):
 
 
 def ple_fused(module, residual, prepared, state):
-    """``Qwen38TTNNPLE.forward_prepared`` on the fused programs: the chain's validations, tilize and ``_project`` (the
-    embedding gather and the two linears), then the fused group norms, gate and convolution around the chain's
-    collectives; the state shift happens in the conv program's writer."""
+    """``Qwen38TTNNPLE.forward_prepared`` on the fused programs; the state shift happens in the conv program."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn import ple as pm
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
@@ -464,9 +459,8 @@ def ple_fused(module, residual, prepared, state):
 
 
 def ple_layer_fused(layer, residual, state, *, token_id=None, prepared_ple=None, release_input: bool = True):
-    """``Qwen38TTNNDecoderLayer._apply_ple`` on the fused body: the chain's input permute stays; the output permute and
-    the ``add(residual, delta)`` happen inside the conv program.  The eager host-token branch (no prepared row) and the
-    layers without a PLE take the chain."""
+    """``Qwen38TTNNDecoderLayer._apply_ple`` on the fused body; the output permute and residual add run in the conv
+    program. The eager host-token branch and the layers without a PLE take the chain."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn import ple as pm
 
@@ -498,11 +492,8 @@ def ple_composed(module, residual, prepared, state):
 
 
 # ---------------------------------------------------------------------------------------------- the lanes (B row-blocks)
-# forward_prepared_lanes runs the same stages on [1, B, 4, 640] tensors (lane u = dim-1 index u, its own 20-tile
-# row-block); every stage is per row-block or per element, so the lane forms run the 1-row programs' kernels with one
-# core per lane (stats, normalize, gate: the lane's pages) or per column block over the B x 20 tiles (conv: a block
-# never spans two lanes, so its tap tiles are the block's columns).  The layer's inject_lanes keeps its permutes and
-# the residual add (a lane's delta rows land in every branch tile: not a per-core write).
+# forward_prepared_lanes runs the same stages on [1, B, 4, 640] tensors (lane u = dim-1 index u): the 1-row kernels
+# with one core per lane (stats, normalize, gate) or one column block per core (conv: a block never spans two lanes).
 
 LANE_COLUMNS = 8
 
@@ -526,8 +517,8 @@ def _expect_lanes(tensor, lanes: int, width: int, dtype, label: str) -> None:
 
 
 def stats_lanes(x, lanes: int):
-    """``rms_norm_pre_all_gather`` of the B row-blocks ``[1,B,4,640]`` -> their stats tiles ``[1,B,4,32]`` (the chain's
-    reshape to (1, B, 4, 32) is this shape); one core per lane."""
+    """``rms_norm_pre_all_gather`` of the B row-blocks ``[1,B,4,640]`` -> their stats tiles ``[1,B,4,32]``; one core
+    per lane."""
 
     from .. import gr_read as gr
 
@@ -621,8 +612,7 @@ def normalize_lanes(x, gathered_stats, weight, lanes: int):
 
 def gate_lanes(key_global, query_global, value, lanes: int):
     """``_gate_rows`` after its all_gathers on B lanes: ``key_global`` / ``query_global`` bf16 TILE ``[1,B,4,2560]``,
-    ``value`` bf16 TILE ``[1,B,1,640]`` -> gated bf16 ``[1,B,4,640]``; one core per lane (the 1-row gate program on
-    the lane's pages)."""
+    ``value`` bf16 TILE ``[1,B,1,640]`` -> gated bf16 ``[1,B,4,640]``; one core per lane."""
 
     _expect_lanes(key_global, lanes, HIDDEN, BF16, "PLE lanes key global norm")
     _expect_lanes(query_global, lanes, HIDDEN, BF16, "PLE lanes query global norm")
@@ -680,10 +670,10 @@ def gate_lanes(key_global, query_global, value, lanes: int):
 
 
 def conv_lanes(state_rows, normalized, taps, gated, lanes: int, *, mac_form: int = MAC_FORM, shift: bool = True):
-    """``_convolve_lanes`` + the delta add on the B row-blocks: ``state_rows`` = the nine bf16 ``[1,B,4,640]`` slots
-    (fixed addresses, shifted in place by the reader), ``normalized`` / ``gated`` ``[1,B,4,640]``, ``taps`` the four
-    bf16 ``[1,1,4,640]`` tap tensors -> the delta ``[1,B,4,640]``.  The B x 20 tiles in column blocks of T tiles (T
-    divides 20: a block stays inside one lane, its tap tiles are the block's columns), one block per core."""
+    """``_convolve_lanes`` + the delta add on the B row-blocks -> the delta ``[1,B,4,640]``.
+
+    ``state_rows`` are the nine bf16 ``[1,B,4,640]`` slots, shifted in place by the reader. One block of T tiles per
+    core, with T dividing 20 so a block stays inside one lane."""
 
     if len(state_rows) != CONV_STATE_LENGTH or len(taps) != CONV_TAPS:
         raise ValueError("PLE conv takes nine state rows and four taps")
@@ -764,9 +754,8 @@ def _group_norm_lanes(module, x, weight, lanes: int):
 
 
 def ple_lanes_fused(module, residual_lanes, prepared, lanes_state):
-    """``Qwen38TTNNPLE.forward_prepared_lanes`` on the fused lane programs: the chain's validations, tilize and
-    ``_project_rows`` (the embedding gather and the two linears), then the fused group norms, gate and convolution
-    around the chain's collectives (the state shift happens in the conv program's reader); the contexts advance."""
+    """``Qwen38TTNNPLE.forward_prepared_lanes`` on the fused lane programs; the state shift happens in the conv
+    program's reader."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn import ple as pm
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement

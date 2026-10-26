@@ -3,14 +3,11 @@
 
 """``shared_expert``: the MoE shared expert's nine programs per layer as three.
 
-The composed chain (``Qwen38TTNNMoE._shared_partial``): the gate, up and scalar-gate DRAM-sharded linears on the
-five-core hidden shard, ``silu``, ``mul``, the down linear, the scalar's drain to DRAM, ``sigmoid`` and the partial
-``x sigmoid`` multiply.  Fused: ONE DRAM-sharded linear over the concatenated ``[gate | up | scalar | 0]`` weight
-(every output column keeps its K sequence and K-block reload points, so each column is the separate linear's column
-bit for bit), one eltwise program on the five storage cores (``kernels/compute_shared_eltwise.cpp``: silu, the
-product into the down linear's input shard, and the sigmoid plus its column broadcast on one core) and the down
-linear.  The ``x sigmoid`` multiply and the add of the routed partial run in ``moe_post``, so the fused form returns
-the ungated down-linear shard and the broadcast sigmoid tile.  Tolerance class BITWISE.  Rows 1..32.
+Replaces ``Qwen38TTNNMoE._shared_partial`` with one DRAM-sharded linear over the concatenated
+``[gate | up | scalar | 0]`` weight (each output column keeps its K sequence and K-block reload points, so it is the
+separate linear's column bit for bit), one eltwise program on the five storage cores, and the down linear. The
+``x sigmoid`` multiply runs in ``moe_post``, so the fused form returns the ungated down-linear shard and the broadcast
+sigmoid tile.  BITWISE.  Rows 1..32.
 """
 
 from __future__ import annotations
@@ -51,9 +48,9 @@ WRITER_ARGS = ("intermediate", "sigmoid", "tile", "has_scalar")
 def concat_shared_weights(
     gate_t: torch.Tensor, up_t: torch.Tensor, scalar_t: torch.Tensor, devices: int = DEVICES
 ) -> torch.Tensor:
-    """``[K, devices * 352]``: per device ``d`` the block ``[gate_t[:, 160d:160d+160] | up_t[:, ...] | scalar_t | 0 x 31]``
-    (``gate_t`` / ``up_t`` the ``[K, 640]`` transposed linears, ``scalar_t`` the ``[K, 1]`` transposed scalar gate), so a
-    width shard over ``devices`` hands each device its own concatenated weight."""
+    """``[K, devices * 352]``: per device ``d`` the block ``[gate_t[:, 160d:160d+160] | up_t[:, ...] | scalar_t | 0]``.
+
+    A width shard over ``devices`` hands each device its own concatenated weight."""
 
     k = gate_t.shape[0]
     local = gate_t.shape[1] // devices
@@ -227,9 +224,7 @@ def shared_expert_composed(
 
 
 def gate_partial(partial, sigmoid, rows: int):
-    """The chain's ``x sigmoid`` multiply on the fused pair: the sigmoid tile's first column (row ``r``'s gate)
-    broadcast over the ``rows`` rows of the ungated partial; a new DRAM tensor (``moe_post`` runs the same multiply
-    inside its program)."""
+    """The chain's ``x sigmoid`` multiply on the fused pair, into a new DRAM tensor (``moe_post`` fuses it)."""
 
     gate = ttnn.slice(sigmoid, (0, 0, 0, 0), (1, 1, rows, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
     gated = ttnn.mul(partial, gate, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -271,9 +266,8 @@ def gate_configs(mesh) -> dict:
 
 
 def upload_weights(mesh, gate_t, up_t, scalar_t, down_t, *, device: int = 0) -> dict:
-    """Device ``device``'s shared weights on one chip: the separate ``gate`` / ``up`` / ``scalar`` / ``down`` and the
-    concatenated ``gate_up_scalar``, DRAM width-sharded as the model uploads them (``gate_t`` / ``up_t`` ``[K, 640]``,
-    ``scalar_t`` ``[K, 1]``, ``down_t`` ``[640, N]``: the transposed checkpoint linears)."""
+    """Device ``device``'s shared weights on one chip, separate and concatenated, DRAM width-sharded as the model
+    uploads them."""
 
     def upload(value, k, n):
         return ttnn.from_torch(
@@ -296,8 +290,7 @@ def upload_weights(mesh, gate_t, up_t, scalar_t, down_t, *, device: int = 0) -> 
 
 
 def _gate_inputs(mesh, capture, positions, layer):
-    """The captured MoE input rows in the five-core hidden shard with deterministic bf16 weights (seeded by the layer;
-    the class is bitwise between the two forms, so the values are free)."""
+    """The captured MoE input rows in the five-core hidden shard with deterministic bf16 weights seeded by the layer."""
 
     index = [capture["positions"].index(p) for p in positions]
     rows = len(positions)

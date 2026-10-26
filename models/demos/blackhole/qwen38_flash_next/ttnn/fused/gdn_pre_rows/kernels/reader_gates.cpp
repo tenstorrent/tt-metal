@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Group B reader.  Once per core: the two full fp32 constant tiles (dt_bias and neg_exp_A, each the row
-// [c[0..11], 0 x 20] repeated in all 32 rows -- the bits the Blackhole binary_ng ROW-broadcast reader would build
-// with fill_tile_with_first_row, built on the host instead so the RISC stays off the compute's critical path).
-// Per unit of tile row c: kind 0 reads the a and b column tiles (projection pages c * 130 + 128 and + 129) into
-// CB_AB; kind 1..12 reads value head kind - 1 of z (pages c * 130 + 80 + 4 hv + d) into CB_Z.
+// Group B reader. Once per core: the two full fp32 constant tiles (the dt_bias and neg_exp_A rows repeated in all 32
+// rows, host-built with the same bits as binary_ng's row-broadcast reader). Per unit of tile row c: kind 0 reads the
+// a and b column tiles (pages c * 130 + 128 and + 129) into CB_AB; kind 1..12 reads value head kind - 1 of z (pages
+// c * 130 + 80 + 4 hv + d) into CB_Z.
 //
 // Compile-time args: TensorAccessorArgs of projected, constants (no chunk count).  Runtime args: 0 projected,
 // 1 constants addresses, 2 units, then (tile row, kind) pairs.

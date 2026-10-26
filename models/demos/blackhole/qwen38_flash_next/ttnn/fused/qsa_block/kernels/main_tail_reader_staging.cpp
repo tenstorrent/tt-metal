@@ -1,13 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// main_tail, staging core reader (one staging core per lane): the ones tile, the positions, the value tiles into pack
-// tiles 0..7 (the key's rotated tiles 8, 9 and normalized tiles 10..15 arrive from the key cores); for this core's
-// lanes (lane_first .. lane_first + lane_count - 1) the lane's KV staging tiles with row (P % 32) replaced by the
-// lane's packed row [v | k] (-0 -> +0 as the chain's SFPU one-hot select does).
+// main_tail, staging core reader: the ones tile, the positions, the value tiles into pack tiles 0..7 (the key's
+// rotated tiles 8, 9 and normalized tiles 10..15 arrive from the key cores); per lane the KV staging tiles with row
+// (P % 32) replaced by the lane's packed row [v | k] (-0 -> +0, as the SFPU one-hot select does).
 // Compile-time args: TensorAccessorArgs staging, v, kv_block_start, kv_row_hit.  Runtime args: 0 staging, 1 v, 2
-// kv_block_start, 3 kv_row_hit, 4 rows, 5 first tile of the value in v (0 for the separate projection shard; the v
-// window's first tile in the merged projection shard), 6 lane_first, 7 lane_count (this staging core's lanes).
+// kv_block_start, 3 kv_row_hit, 4 rows, 5 first tile of the value in v, 6 lane_first, 7 lane_count.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

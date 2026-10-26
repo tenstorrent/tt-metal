@@ -8,8 +8,7 @@
 //   the count; then it is reset: a producer of the same program signals that the stream's pages are complete),
 //   15.. four TensorAccessorArgs sets, chained (unused slots repeat a used tensor's).  Const kinds: 1 reduce scaler
 //   (row 0 of every face, the CB's format), 2 broadcast column scalar (column 0, bf16 upper half of the bits), 3 zero
-//   tile. Tiles are streamed as they are: a one-row operand of a row-broadcast op is stored row-repeated on the host
-//   side (copying tile row 0 into 31 rows on the RISC cost 175 us for the 20 gamma tiles of one read).
+//   tile. Tiles are streamed as they are: a one-row operand of a row-broadcast op is stored row-repeated on the host.
 // Runtime args: per stream 7 (addr, outer, inner, first, inner_stride, outer_stride, batch), then per const 1 (bits).
 
 #include "api/dataflow/dataflow_api.h"

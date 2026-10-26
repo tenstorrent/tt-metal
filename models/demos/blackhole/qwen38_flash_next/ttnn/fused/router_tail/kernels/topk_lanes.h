@@ -4,18 +4,13 @@
 
 // Router tail: the single-core topk LLK's local sort with a pass mask.
 //
-// `_bitonic_topk_phases_steps` (tt_metal/tt-llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_topk.h) sorts the 64
-// rows of the two DST value tiles (with their index tiles) in four passes, (face, col) = (0, 0), (0, 1), (1, 0),
-// (1, 1) at DST address offsets 0, 2, 16 and 18.  Each pass is the complete bitonic network for eight of the tile's
-// 32 columns (the tokens of the untransposed row tile); the passes touch disjoint DST rows and share nothing but the
-// replay buffer.  Skipping a pass leaves its eight columns unsorted and every other column bit for bit as the
-// four-pass sort leaves it, so a caller that needs only some tokens runs only their passes: the same instructions on
-// the same DST rows in the same order for every live token.
+// `_bitonic_topk_phases_steps` (ckernel_sfpu_topk.h) sorts the two DST value tiles in four passes (face, col), each
+// the complete bitonic network for eight of the tile's 32 token columns on disjoint DST rows. Skipping a pass leaves
+// its columns unsorted and every other column bit for bit as the four-pass sort leaves it.
 //
 // `_bitonic_topk_phases_steps_lanes` is the LLK function copied verbatim plus the guard
 // `if (pass_mask & (1u << (face * 2 + col)))` around each pass's phase loop (bit p = pass p = face p / 2, col p % 2).
-// tests/test_fused_router_tail_static.py regenerates the copy from the LLK source and pins it, so an LLK change shows
-// up as a test failure, not as a silent divergence.  `topk_local_sort_lanes` is `topk_local_sort` with the mask.
+// tests/test_fused_router_tail_static.py regenerates the copy from the LLK source and pins it.
 
 #pragma once
 
@@ -267,8 +262,7 @@ inline void calculate_bitonic_topk_phases_steps_lanes(
 #endif  // TRISC_MATH
 
 // topk_local_sort (compute_kernel_api.h) with the pass mask: bit p sorts pass p's eight token columns.  The phase /
-// step window (i_start_phase, i_end_step, i_start_step) is the LLK's, defaulted as topk_local_sort defaults it; the
-// kernel's timing knob narrows it.
+// step window (i_start_phase, i_end_step, i_start_step) is the LLK's, defaulted as topk_local_sort defaults it.
 template <bool stable_sort = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void topk_local_sort_lanes(
     uint32_t idst,

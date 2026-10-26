@@ -4,8 +4,7 @@
 // score_merge compute (16-bit dest, moreh_sum's default): per row chunk the four device chunks accumulated into the
 // dest with moreh_sum_nc.cpp's add_tiles(in, zero, acc_to_dest) sequence and packed bf16, then the mask added on the
 // SFPU with binary_ng's add_binary_tile<NearestEven>.  Elementwise throughout, so the 2 KB ROW_MAJOR chunks stand in
-// for tiles.  CBs: 0 device chunks, 1 zero, 2 mask, 3 sum, 16 out (bf16).  Runtime args: 0 rows, 1 chunks on this core
-// (the reader streams the core's chunks one after another, rows within a chunk).
+// for tiles.  CBs: 0 device chunks, 1 zero, 2 mask, 3 sum, 16 out (bf16).  Runtime args: 0 rows, 1 chunks on this core.
 
 #include "api/compute/common.h"
 #include "api/compute/cb_api.h"

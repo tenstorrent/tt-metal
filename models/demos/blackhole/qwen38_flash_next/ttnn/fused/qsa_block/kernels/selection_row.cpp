@@ -3,13 +3,12 @@
 //
 // selection_row (data movement only, one core per 256-column slice; the last slice also takes the 32 sentinel
 // columns): sparse[i] = (((ids[i >> 2] << 2) + offsets[r][i]) & keep[i]) | fill[i] for i < 2048, (sentinel[i - 2048] &
-// keep[i]) | fill[i] after, per row r.  uint32 ROW_MAJOR rows: ids [rows, 512], offsets [1, 2048] (one row for every
-// row: the decode step) or [>= rows, 2048] (row r for row r: the lanes, row u = offsets + lane u's KV region start),
-// sentinel [1, 32], keep / fill [>= rows, 2080] (rows 0 .. rows-1 read), out [rows, 2080].  CB 0: scratch (one 8 KB
-// page).
+// keep[i]) | fill[i] after, per row r.  uint32 ROW_MAJOR rows: ids [rows, 512], offsets [1, 2048] (shared by every
+// row) or [>= rows, 2048] (row r for row r), sentinel [1, 32], keep / fill [>= rows, 2080], out [rows, 2080].
+// CB 0: scratch (one 8 KB page).
 // Compile-time args: TensorAccessorArgs ids, offsets, sentinel, keep, fill, out.
 // Runtime args: 0-5 those addresses, 6 rows, 7 slice, 8 offset rows (1 or >= rows), 9 row_first, 10 row_step (this
-// core's rows: row_first, row_first + row_step, ... below rows; the lanes spread their rows over row groups of cores).
+// core's rows: row_first, row_first + row_step, ... below rows).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -60,7 +59,7 @@ void kernel_main() {
     }
     for (uint32_t r = row_first; r < rows; r += row_step) {
         if (offset_rows != 1) {
-            noc_async_read(off.get_noc_addr(r, col0 * 4), l1 + 256, COLS * 4);  // row r's offsets (the lanes)
+            noc_async_read(off.get_noc_addr(r, col0 * 4), l1 + 256, COLS * 4);  // row r's offsets
         }
         noc_async_read(ids.get_noc_addr(r, slice * IDS * 4), l1, IDS * 4);
         noc_async_read(keep.get_noc_addr(r, col0 * 4), l1 + 256 + 1024 + 128, cols * 4);

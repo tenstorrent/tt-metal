@@ -10,14 +10,11 @@
 //   transpose_and_pack of the values                                        -> cb_vals + cb_pad_div ([token, k])
 //   reduce.cpp SUM REDUCE_ROW, accurate fp32 SFPU path, on cb_vals once the reader zeroed its padding -> cb_sums
 //   eltwise_binary_sfpu.cpp DIV (in0 * recip(in1)) then typecast fp32->bf16 -> cb_scores
-// The index tiles arrive pre-transposed (row k of tile w = w*32+k) and are copied into DST: the same DST content
-// the kernel's transpose produces, without the transpose.
+// The index tiles arrive pre-transposed and are copied into DST: the same DST content the kernel's transpose produces.
 //
-// Runtime arg 0, pass_mask: bits 0..3 run only those passes of the LLK's four-pass local sort (topk_lanes.h), each
-// pass being the complete sort of eight token columns.  Every core runs one pass and the eight tokens it holds; the
+// Runtime arg 0, pass_mask: bits 0..3 run only those passes of the LLK's four-pass local sort (topk_lanes.h); the
 // other columns are left unsorted and never read.
-// Runtime arg 1, token_mask: the token rows this core produces; the precise exp runs over the SFPU vector pairs that
-// hold them only (exp_live.h; the other rows' exps are never read).
+// Runtime arg 1, token_mask: the token rows this core produces; the precise exp runs only on their vector pairs.
 
 #include <cstdint>
 

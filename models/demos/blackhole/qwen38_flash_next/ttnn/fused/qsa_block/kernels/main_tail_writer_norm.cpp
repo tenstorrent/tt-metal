@@ -4,7 +4,7 @@
 // main_tail, norm core writer: hands the normalized row's RoPE tiles (0, 1 and swapped) to its rope core.  A query
 // head (ROLE 0) then writes, per lane, the head's sparse-query row: 512 zero bytes, the normalized tiles 2..7 at
 // bytes 640..1023 (the rope core fills 512..639), and zero rows for the heads 6, 12, .. of its residue class.  The
-// key (ROLE 1) hands its tiles 2..7 to every staging core instead (one staging core per lane).
+// key (ROLE 1) hands its tiles 2..7 to every staging core instead.
 // Compile-time args: 0 ROLE, then TensorAccessorArgs query.
 // Runtime args: 0 query address, 1 rows, 2 head, 3 rope core x, 4 rope core y, 5 staging core count, then the staging
 // cores' (x, y) pairs.

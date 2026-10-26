@@ -1,11 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Public-op adapter for the merged owner prerequisite 96cc4a7937.
+"""Public ``chunk_gated_delta_rule`` adapter for the model's pre-normalized, pre-scaled head-major producer.
 
-The input contract is Samuel Jett's pre-normalized, pre-scaled head-major
-producer at cd9a11771107ea2c27da3303a0556ff7343e4af5. Keep rank four for q/k:
-the public rank-three form normalizes raw q/k inside the kernel.
+Keep rank four for q/k: the public rank-three form normalizes raw q/k inside the kernel.
 """
 
 import ttnn

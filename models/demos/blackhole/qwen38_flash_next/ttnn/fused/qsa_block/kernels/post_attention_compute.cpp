@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// post_attention compute (fp32 dest): the bf16-dest SFPU sigmoid of each gate tile packed bf16 (the chain's unary
-// sigmoid), then the SFPU product attention x sigmoid with the bf16-dest rounding and zero rule (the chain's
-// binary_ng multiply), packed bf16.  CBs: 0 gate, 1 attention, 2 sigmoid, 16 out (bf16, 8 each).
+// post_attention compute (fp32 dest): the bf16-dest SFPU sigmoid of each gate tile packed bf16 (matches unary
+// sigmoid), then the SFPU product attention x sigmoid with the bf16-dest rounding and zero rule (matches binary_ng
+// multiply), packed bf16.  CBs: 0 gate, 1 attention, 2 sigmoid, 16 out (bf16, 8 each).
 
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/eltwise_binary.h"

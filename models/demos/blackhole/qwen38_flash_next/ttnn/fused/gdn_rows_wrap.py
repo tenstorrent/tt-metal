@@ -3,15 +3,9 @@
 
 """GDN verify rows with fused input preparation and gated output programs.
 
-The recurrence is the public chunk_gated_delta_rule on the normalized and
-scaled producer buffers (gdn_public_adapter). Forward and masked commits share it.
-Persistent buffers belong to the rows state; the body releases only its own
-intermediates. QWEN38_FUSED_OFF=gdn_rows_wrap restores the composed control.
-
-The source's September2026 direct-phase timings and program counts describe
-its historical implementation; public relayout and upstream path selection
-must be measured separately. The numerical policy of the surrounding fused
-producer and epilogue stays unchanged.
+The recurrence is the public chunk_gated_delta_rule on the normalized, scaled producer buffers (gdn_public_adapter);
+forward and masked commits share it. Persistent buffers belong to the rows state; the body releases only its own
+intermediates.
 """
 
 from __future__ import annotations
@@ -51,11 +45,8 @@ def _release(*tensors) -> None:
 class Buffers:
     """The wrap's per-layer tensors, allocated with the rows state and freed with it.
 
-    The five prim-layout outputs of ``gdn_pre_rows`` that are not already rows-state buffers (its ``v`` output IS
-    ``rows_state.v``, the composite's flat-v form both paths use), and the per-layer constants of the two programs.
-    They are persistent because the commit's masked re-run reads ``q_c`` / ``k_c`` / ``beta_c`` / ``g_c`` in a
-    DIFFERENT trace from the forward pass that wrote them; ``o16`` and the gated tile do not outlive one body and are
-    allocated per call, as the fused ``gdn_step`` allocates its output.
+    Persistent because the commit's masked re-run reads ``q_c`` / ``k_c`` / ``beta_c`` / ``g_c`` in a different trace
+    from the forward pass that wrote them. ``gdn_pre_rows``'s ``v`` output is ``rows_state.v``.
     """
 
     __slots__ = (
@@ -96,36 +87,31 @@ class Buffers:
 
 
 def qualifies(rows_state) -> bool:
-    """Whether a rows state is the form this wrap serves: the 32-row verify tile in the head-major layouts, not a
-    shared slab body.  Shapes only, read once when the state is allocated."""
+    """Whether a rows state is the 32-row verify tile in head-major layouts (not a shared slab body); shapes only."""
 
     constants = getattr(rows_state, "constants", None)
     if constants is None or not getattr(rows_state, "owns_body", True):
         return False
-    # The two programs read every input by ``buffer_address()``: a rows state whose tensors have none is a host fake
-    # (the no-device tests' torch-backed tensors) and keeps the chain, whatever the switch says.
+    # The programs read inputs by ``buffer_address()``; host fakes (torch-backed test tensors) have none and keep the
+    # chain.
     if not callable(getattr(getattr(rows_state, "v", None), "buffer_address", None)):
         return False
     return getattr(constants, "tile_rows", 0) == TILE and 1 <= getattr(constants, "rows", 0) <= TILE
 
 
 def attach(gdn, rows_state, environ=None) -> Buffers | None:
-    """Allocate the wrap's buffers onto a newly allocated rows state and return them, or None when the wrap is switched
-    off (``QWEN38_FUSED_OFF=gdn_rows_wrap``) or the state is not the form it serves (another row count, a slab, a
-    host fake).
+    """Allocate the wrap's buffers onto a new rows state; None when the wrap is off or the state does not qualify.
 
-    Called from ``allocate_rows_state``, so whether a rows state runs the wrap is fixed before the warm pass: the
-    warm rounds and the capture take the same branch, and the commit that reads these buffers cannot find itself on
-    the other side of the switch from the forward pass that wrote them.
+    Called from ``allocate_rows_state`` so the warm pass, the capture and the commit take the same branch as the
+    forward pass that wrote the buffers.
     """
 
     environ = os.environ if environ is None else environ
     if not enabled(NAME, environ) or not qualifies(rows_state):
         return None
     mesh = gdn.mesh_device
-    # The six output buffers of the pre program at one tile row, allocated by the program's own helper so the shapes,
-    # dtypes and memory configs are the ones its writers were proven against; its ``v`` is dropped for the rows
-    # state's own ``v``, which is the same tensor spec and already carries the mesh contract's head-shard tag.
+    # The pre program's own helper allocates its outputs so specs match its writers; its ``v`` is replaced by the rows
+    # state's ``v`` (same spec, already head-shard tagged).
     q_c, k_c, spare_v, beta_c, g_c, sig = pre.allocate_outputs(mesh, TILE)
     _release(spare_v)
     constants, selects, scalars = pre.upload_constants(mesh, gdn.weights.dt_bias, gdn.weights.neg_exp_A)
@@ -157,8 +143,7 @@ def buffers_of(rows_state) -> Buffers | None:
 def chunk(gdn, rows_state, buffers, initial_state, committed_mask_c=None):
     """Run the public recurrence on the producer's pages, masking beta and decay for a commit.
 
-    The producer already includes normalization and both query scale folds.
-    Only temporary masks are released; persistent producers/constants survive.
+    The producer already applies normalization and both query scale folds. Only the temporary masks are released.
     """
     beta_c, g_c, masked = buffers.beta_c, buffers.g_c, ()
     if committed_mask_c is not None:
@@ -186,9 +171,7 @@ def chunk(gdn, rows_state, buffers, initial_state, committed_mask_c=None):
 
 
 def rows_body_composed(gdn, full_hidden, rows_state, state, *, full_tile: bool = False):
-    """Today's rows body: the landing slices and the z/a/b slices, the FIR conv, the chunk inputs, the recurrence and
-    the gated epilogue with the out-projection (``ttnn/gdn.py``).  The registry's composed chain, and the body every
-    row count outside the wrap's admission takes."""
+    """The composed rows body from ``ttnn/gdn.py``; every row count the wrap does not admit takes it."""
 
     z, a, b = gdn._project_rows(full_hidden, rows_state)
     conv = gdn._causal_conv_rows(rows_state)
@@ -199,12 +182,9 @@ def rows_body_composed(gdn, full_hidden, rows_state, state, *, full_tile: bool =
 
 
 def rows_body_wrap(gdn, full_hidden, rows_state, state, *, full_tile: bool = False):
-    """The wrapped body: the projection's linear and S2I, the qkv landing the history advance reads, the pre program
-    at ``rows`` real rows, the two prims, the cast and the gated norm, then the chain's own out-projection.
+    """The fused rows body: projection, qkv landing, pre program, the two prims, cast, gated norm, out-projection.
 
-    Every program after the S2I and before the out-projection is one of the four this form runs; ``rows_state.q`` /
-    ``k`` / ``beta`` / ``g`` stay untouched (the prim layouts are the wrap's buffers) and ``rows_state.v``,
-    ``rows_state.qkv`` and ``rows_state.history`` are the chain's own tensors.
+    ``rows_state.q`` / ``k`` / ``beta`` / ``g`` stay untouched; the prim layouts live in the wrap's buffers.
     """
 
     buffers = buffers_of(rows_state)
@@ -226,8 +206,7 @@ def rows_body_wrap(gdn, full_hidden, rows_state, state, *, full_tile: bool = Fal
         buffers.sig,
         rows=rows,
     )
-    # through the layer's own ``_chunk_rows``: it dispatches straight back here (the rows state carries the wrap's
-    # buffers) and applies the head-shard tags and the shape checks both rows forms return with.
+    # Through ``_chunk_rows``: it dispatches back here and applies the head-shard tags and shape checks of both forms.
     recurrent_output, final_state = gdn._chunk_rows(rows_state, initial_state=state.recurrent)
     o16 = fp.allocate((HEADS, TILE, HEAD_DIM), BF16, ttnn.TILE_LAYOUT, gdn.mesh_device)
     post.post_cast(recurrent_output, o16)
@@ -252,9 +231,9 @@ def rows_body_wrap(gdn, full_hidden, rows_state, state, *, full_tile: bool = Fal
 
 
 def admits(gdn, full_hidden, rows_state, state, *, full_tile: bool = False) -> bool:
-    """The wrap's input contract for one ``forward_rows`` body: the rows state carries the wrap's buffers (which
-    ``attach`` gives only the 32-row verify form, and only when the kernel is on) and the call's state is the
-    single-lane fp32 recurrent tensor.  Shapes only: host fakes and every other row count take the chain."""
+    """Whether the rows state carries the wrap's buffers and the state is the single-lane fp32 recurrent tensor.
+
+    Shapes only; host fakes and every other row count take the composed chain."""
 
     if buffers_of(rows_state) is None or not qualifies(rows_state):
         return False
@@ -276,8 +255,6 @@ register(
         fused=rows_body_wrap,
         composed=rows_body_composed,
         admits=admits,
-        # The original producer/epilogue proof is preserved. Public recurrence compatibility
-        # requires the adapter and real-model before/after tests on the selected native build.
         gate=None,
     )
 )

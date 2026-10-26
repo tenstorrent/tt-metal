@@ -1,12 +1,10 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// PLE stage 5 reader, one core per column block of T tiles (tiles first..first+T-1 of every tensor): nine bf16 TILE
-// [1,1,4,640] tensors into CBs 0-8 in order: conv[0],
-// conv[3], conv[6], normalized, taps 0-3, gated.  Then, with SHIFT, the chain's nine in-place state copies
-// (conv[k] <- conv[k+1] for k = 0..7, conv[8] <- normalized) while the compute runs: every input the compute needs is
-// already in its CBs, so the state rows may be overwritten; each row moves as T tiles through the staging CB with
-// one read barrier and one write barrier (the writer's tile-by-tile form cost 165 us).
+// PLE conv reader, one core per column block of T tiles (tiles first..first+T-1 of every tensor): nine bf16 TILE
+// [1,1,4,640] tensors into CBs 0-8 in order: conv[0], conv[3], conv[6], normalized, taps 0-3, gated.  Then, with
+// SHIFT, the chain's nine in-place state copies (conv[k] <- conv[k+1] for k = 0..7, conv[8] <- normalized): every
+// input the compute needs is already in its CBs, so the state rows may be overwritten.
 // Compile-time args: 0 T, 1 SHIFT, then TensorAccessorArgs for conv[0], conv[3], conv[6], normalized, taps 0-3,
 // gated, conv[1], conv[2], conv[4], conv[5], conv[7], conv[8], and the branch-major residual [1,4,1,640] (sixteen,
 // chained; the six state rows only for the shift, the residual only with INJECT: its four block tiles b * 20 + first

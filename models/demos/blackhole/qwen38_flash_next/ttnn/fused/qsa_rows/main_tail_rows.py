@@ -1,25 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""qsa_rows program 2, ``main_tail_rows``: the verify tile's main tail as ONE program.
+"""qsa_rows program 2, ``main_tail_rows``: the verify tile's main tail as one program.
 
-The chain (``Qwen38TTNNQSA._main_projection_rows`` after its linears, ``_write_packed_kv_verify``, the query build of
-``_sparse_value_attention_rows``): the head split of qg (12 slices, 2 concats), rms_norm of q and k, their partial
-RoPE, the packed row [v | k], the current KV block read back (the kv row lookup), its rows from P % 32 on zeroed
-(stage_keep) and the new rows placed (stage_a_select, a one-hot matmul), the sum written back as the block; the next
-block written as the one-hot placement of the rows crossing the block edge (stage_b_select) into zero rows -- every
-pass, unless ``single_row`` -- and the sparse query [zeros(256) | q] per head padded to 32 heads, ROW_MAJOR.
-
-Here: the decode ``qsa_block.main_tail`` program with its KV stage replaced (``qsa_block.KVStage``).  Its norm, RoPE,
-head-split and query kernels run unchanged on the tile's 32 rows (they are per tile row; the chain's rms_norm and
-RoPE also run over the whole tile), so the sparse query is the decode program's proven output at rows = 32.  The new
-KV core (``kernels/rows_kv_reader.cpp`` / ``rows_kv_writer.cpp``) reads the current block's 32 row-major rows back,
+The decode ``qsa_block.main_tail`` program with its KV stage replaced (``qsa_block.KVStage``); the norm, RoPE and
+query kernels are per tile row, so they run unchanged on the tile's 32 rows. The KV core reads the current block back,
 scatters row j < R of the packed tiles into slot (P + j) & 31 of that block or of the next block's zero rows, zeroes
-the current block's rows past them as the chain leaves them, and writes both blocks -- the same rows the chain rewrites.  Bitwise by construction where the chain's arithmetic is exact
-(a one-hot bf16 placement in fp32 accumulate copies a row, 1.0 * x keeps it); a placed or kept -0 reads +0 in the chain
-(its zero terms add +0) and the kernel canonicalizes a placed -0 to +0 the same way; a kept -0 in the resident block
-would read +0 in the chain and -0 here (numerically inert for the attention it feeds; the device test's random rows
-carry no exact zeros).  Rows past R are the tile's stale rows and are never read for the KV write.
+the current block's rows past them, and writes both blocks, the same rows the op chain rewrites. A placed -0 is
+canonicalized to +0 as in the chain; a kept -0 in the resident block stays -0 here where the chain reads +0
+(numerically inert). Rows past R are stale and never read for the KV write.
 """
 
 from __future__ import annotations
@@ -53,11 +42,10 @@ def _expect_rows_tile(tensor, width: int, label: str) -> None:
 
 
 def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, core=None) -> qsa_block.KVStage:
-    """The verify rows' KV stage on one core: reads the current block back, scatters the R packed rows, writes the
-    current and (unless ``single_row``) the next block.  ``position`` is the pass's uint32 ROW_MAJOR [1, 1, 1, 1] scalar
-    P (the tile's first position; the block start P & ~31 is derived on the core), ``rows`` the same form's row count R
-    (the verify form's constant k + 1, the commit form's accepted count a*: one program for both; read on the core,
-    clamped to 32); ``kv_cache`` the packed KV cache [1, 1, C, 512] bf16 ROW_MAJOR."""
+    """The verify rows' KV stage on one core: writes the current and (unless ``single_row``) the next KV block.
+
+    ``position`` / ``rows`` are uint32 ROW_MAJOR [1, 1, 1, 1] device scalars P (the tile's first position) and R (read
+    on the core, clamped to 32); ``kv_cache`` is the packed KV cache [1, 1, C, 512] bf16 ROW_MAJOR."""
 
     for label, scalar in (("position", position), ("rows", rows)):
         shape = tuple(scalar.shape)
@@ -73,7 +61,7 @@ def kv_stage(position, rows, kv_cache, *, single_row: bool, v_ws, v_first: int, 
         or kv_cache.layout != ttnn.ROW_MAJOR_LAYOUT
     ):
         raise ValueError(f"KV cache must be ROW_MAJOR bf16 [1, 1, C, 512] with C a multiple of 32, got {cache_shape}")
-    core = ttnn.CoreCoord(0, 2) if core is None else core  # the first lane's staging core position of the decode form
+    core = ttnn.CoreCoord(0, 2) if core is None else core  # the decode form's first staging core
     acc = fp.accessor_args
 
     def cb_descriptors(all_set):
@@ -141,10 +129,10 @@ def main_tail_rows(
     k_first: int = 0,
     v_first: int = 0,
 ):
-    """The verify tile's main tail: ``qg_ws`` / ``k_ws`` / ``v_ws`` the projections as 32-row TILE row tiles (rows
-    past R stale), ``position`` / ``rows`` uint32 ROW_MAJOR [1, 1, 1, 1] = P / R (device scalars), the norm weights [1, 1, 1, 256], the RoPE tables
-    [1, 1, 32, 64] (row j at P + j), the packed KV cache [1, 1, C, 512] ROW_MAJOR updated in place (the block at
-    P & ~31 and, unless ``single_row``, the next block).  Returns the sparse query [1, 32, 32, 512] bf16 ROW_MAJOR."""
+    """The verify tile's main tail; returns the sparse query [1, 32, 32, 512] bf16 ROW_MAJOR.
+
+    ``qg_ws`` / ``k_ws`` / ``v_ws`` are 32-row TILE row tiles (rows past R stale), ``position`` / ``rows`` device
+    scalars P / R, the RoPE tables [1, 1, 32, 64] hold row j at P + j; ``kv_cache`` is updated in place."""
 
     for tensor, width, label in (
         (qg_ws, 2 * LOCAL_HEADS * HEAD_DIM, "qg"),
@@ -193,13 +181,11 @@ def main_tail_rows_composed(
     eps: float = qsa_block.EPS,
     zero_value_half=None,
 ):
-    """The chain on the 32-row tile (ttnn/qsa.py ``_main_projection_rows`` after its linears, ``_write_packed_kv_verify``
-    and the query build of ``_sparse_value_attention_rows``), with the verify inputs as the chain derives them:
-    ``kv_read_indices`` uint32 [1, 32] (the current block's rows), ``stage_keep`` bf16 TILE [1, 1, 32, 1] (0 at this
-    pass's slots), ``stage_a_select`` / ``stage_b_select`` bf16 TILE [1, 1, 32, 32] (row r of the block <- packed row j),
-    ``slot_zero`` / ``kv_block_start`` / ``kv_block_start_next`` uint32 ROW_MAJOR [1, 1, 1, 1]; ``zero_value_half`` the
-    chain's constant zero tile [1, 6, 32, 256] bf16 TILE (uploaded here when None: then not traceable).  Returns the
-    sparse query [1, 32, 32, 512] ROW_MAJOR and the gate [1, 6, 32, 256] TILE."""
+    """The unfused op chain on the 32-row tile; returns (sparse query [1, 32, 32, 512] ROW_MAJOR, gate [1, 6, 32, 256]).
+
+    ``kv_read_indices`` uint32 [1, 32] are the current block's rows, ``stage_keep`` bf16 TILE [1, 1, 32, 1] is 0 at
+    this pass's slots, ``stage_a_select`` / ``stage_b_select`` bf16 TILE [1, 1, 32, 32] place packed row j at block
+    row r. ``zero_value_half`` is uploaded here when None, which is not traceable."""
 
     import torch
 

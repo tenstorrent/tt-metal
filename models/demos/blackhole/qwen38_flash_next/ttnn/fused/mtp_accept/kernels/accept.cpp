@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The MTP pass's point-mass acceptance on one core, the device sampler's law (fused/sampler_tail/kernels/sample.cpp:
-// the same table weights, exact integer prefix sums and the single fp32 multiply per decision, no division anywhere).
+// The MTP pass's point-mass acceptance on one core, the device sampler's law (must match sampler_tail's sample.cpp:
+// the same table weights, exact integer prefix sums and one fp32 multiply per decision, no division anywhere).
 // Rows 0 .. k-1 are the verify rows facing drafts d_1 .. d_k, row k the bonus row.  Row j accepts d_{j+1} iff
 // fl32(u_j * S_j) < w_j(d_{j+1}) with S_j the kept total of row j and w_j(d) the kept weight of d (0 when d is not
 // kept; a tie rejects).  At the first rejection x* is drawn from row j without d (its weight skipped in the prefix
 // sums) with the second uniform v; with every draft accepted x* is drawn from the bonus row with v.  Outputs are the
 // split verify's decision buffers as write_verify_decision writes them (accept tile, accept index, next token, the
-// alignment lanes [d_1 .. d_a*, x*, sentinel ...]) and a statistics row for the ledger.
+// alignment lanes [d_1 .. d_a*, x*, sentinel ...]) and a statistics row.
 // Named compile-time args: cb_stage, rows (k + 1), lanes (128), table_size.  Compile-time args: TensorAccessorArgs of
 // rows, drafts, policy, uniforms, table, accept_tile, accept_index, next_token, alignment, stats.  Runtime args: the
 // ten addresses in that order.

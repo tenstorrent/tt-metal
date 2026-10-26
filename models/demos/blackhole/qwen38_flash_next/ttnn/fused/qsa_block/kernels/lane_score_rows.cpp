@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // lane_score_rows (data movement only, one core per output row): row `out_row` of the local block scores [1, 1, rows,
-// blocks] bf16 ROW_MAJOR = lane `lane`'s window of the wide indexer's scores [1, 1, 32, lanes * cache_rows] (row
-// out_row, columns lane * cache_rows .. + blocks): the lane chain's slices and concat as row copies (bytes at the
-// 64-byte DRAM grain: cache_rows and blocks are multiples of 32 elements).  The plain lane body passes out_row = lane
-// = u; the MTP lanes verify passes lane_of(out_row) for its lane-major rows.  CB 0: the row scratch (blocks * 2 bytes).
+// blocks] bf16 ROW_MAJOR = row out_row, columns lane * cache_rows .. + blocks of the wide indexer's scores
+// [1, 1, 32, lanes * cache_rows]. Row copies at the 64-byte DRAM grain (cache_rows and blocks are multiples of 32
+// elements).  CB 0: the row scratch (blocks * 2 bytes).
 // Compile-time args: TensorAccessorArgs scores, out.  Runtime args: 0 scores, 1 out addresses, 2 out_row, 3 lane,
 // 4 cache rows per lane, 5 blocks.
 

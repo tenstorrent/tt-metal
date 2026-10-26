@@ -1,19 +1,13 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Group A reader.  Once per core: the nine 0/1 selection tiles (CB_SEL), the reduce scaler, the epsilon tile and the
-// bf16 scale tile (CB_SCALER / CB_EPS / CB_SCALE), all host-built and never popped.  Per (column group, tile row)
-// unit: the four conv taps' four column tiles of the group (CB_TAP, index 4 d + t, re-read only when the column
-// group changes) and one whole CB_IN window -- the PREVIOUS tile row's four column tiles (the history tile's when
-// the tile row is 0) at 0..3, then this tile row's four at 4..7.
-//
+// Group A reader. Once per core: the nine 0/1 selection tiles, the reduce scaler, the epsilon tile and the bf16
+// scale tile, host-built and never popped. Per (column group, tile row) unit: the group's four taps (CB_TAP index
+// 4 d + t, re-read only when the column group changes) and one CB_IN window: the previous tile row's four column tiles
+// (the history tile's at tile row 0) at 0..3, then this tile row's at 4..7. A v group also gets the chain's row-mask
+// tile (CB_MASK).
 // Column tiles of group g: q key head g at 4 g, k key head g - 4 at 16 + 4 (g - 4), v value head g - 8 at
-// 32 + 4 (g - 8).  Projection page of tile row c = c * 130 + column tile; the history and the taps are one tile row
-// (page = column tile).
-//
-// A v group also gets the chain's row-mask tile for its tile row (CB_MASK): 1.0 in column 0 of the rows below
-// `rows`, which the compute broadcasts across the columns and multiplies in, exactly as
-// ttnn.multiply(v_slice, row_mask_bf16_col) does.
+// 32 + 4 (g - 8). Projection page of tile row c = c * 130 + column tile; the history and the taps are one tile row.
 //
 // Compile-time args: TensorAccessorArgs of projected, history, tap0..tap3, selects, scalars (no chunk count:
 // a projection page is c * 130 + column tile, whose stride does not depend on NC).
@@ -136,11 +130,9 @@ void kernel_main() {
             cb_push_back(CB_TAP, CONV_KERNEL * HEAD_TILES);
         }
 
-        // One whole window per unit: the previous tile row (the history tile at tile row 0) then this one.  The
-        // window is pushed and popped as one block of WINDOW tiles on a CB of 2 * WINDOW pages, so the compute's
-        // WINDOW-tile read never straddles the buffer's end and every cycle of pushes and pops sums to the CB size
-        // (cb_api.h's contract).  The previous tile row is re-read from DRAM rather than carried across the pop:
-        // one extra read per unit, and the only form in which the window is a single contiguous block.
+        // One whole window per unit, pushed and popped as one block of WINDOW tiles on a 2 * WINDOW page CB, so the
+        // compute's read never straddles the buffer's end (cb_api.h's contract). The previous tile row is re-read from
+        // DRAM rather than carried across the pop, the only way the window stays one contiguous block.
         {
             cb_reserve_back(CB_IN, WINDOW);
             const uint32_t l1 = get_write_ptr(CB_IN);

@@ -3,22 +3,10 @@
 
 """``gr_read``: the TP4 gated-residual read as three compute programs around the chain's two collectives.
 
-The composed chain (``Qwen38TTNNGatedResidual._read_composed``) is 18 programs per read: FillPad,
-rms_norm_pre_all_gather, all_gather, rms_norm_post_all_gather, multiply (gamma), linear (down+inject, fp32),
-to_memory_config, all_gather_async, fast_reduce_nc, typecast, slice, silu, linear (up), to_memory_config, sigmoid,
-multiply (gate), fast_reduce_nc, multiply (2 sigmoid).  Here the same arithmetic runs as ``stats`` -> all_gather ->
-``normalize_down`` -> all_gather_async -> ``low_rank_gate``; every phase is the chain kernel's LLK sequence on the
-same tiles, so the output is bitwise against the chain.  Rows 1..32:
-the residual ``[1, 4, rows, 640]`` is four branch row-blocks of one row tile each; every program works on whole tiles.
-
-The program builders take device tensors only (no module), so a single chip can run the four device slices in turn
-with host gathers between them; ``gr_read_fused`` is the model-level read (the module supplies the weights, the mesh
-contract and the TT-CCL collectives).
-
-The post-norm AVG scaler tile is the chain's: bf16 1/2560 written by truncation (0x39CC = 1/2569.6,
-layernorm_post_all_gather_program_factory.cpp ``calculate_and_prepare_reduce_scaler`` ->
-reduce_helpers_dataflow.inl ``float_to_scaler_bits<Float16_b>``); ``AVG_SCALER_BITS`` are the fp32 bits the readers'
-reduce-scaler generator truncates the same way.
+``stats`` -> all_gather -> ``normalize_down`` -> all_gather_async -> ``low_rank_gate`` repeat the LLK sequence of
+``Qwen38TTNNGatedResidual._read_composed`` on the same tiles, so the output is bitwise equal to the chain. Rows 1..32:
+the residual ``[1, 4, rows, 640]`` is four branch row-blocks of one row tile each. The builders take device tensors
+only, so one chip can run the four device slices in turn with host gathers between them.
 """
 
 from __future__ import annotations
@@ -61,9 +49,8 @@ MCAST_READER = fp.kernel_source(NAME, "mcast_reader.cpp")
 NOC_PROBE = fp.kernel_source(NAME, "noc_probe.cpp")
 _NOC_MAPS: dict[int, dict[tuple[int, int], tuple[int, int]]] = {}
 NONE_CB = 0xFF
-# The chain's DRAM-sharded linears spill the fp32 running partial to an intermediate CB between K blocks (8 tiles for
-# down+inject, 6 for up) and reload it through SrcA, which rounds it (the factory marks no UnpackToDestFp32 there); the
-# kernels reproduce that (bitwise).
+# The chain's DRAM-sharded linears spill the fp32 partial to a CB between K blocks (8 tiles for down+inject, 6 for up)
+# and reload it through SrcA, which rounds it; the kernels reproduce that to stay bitwise.
 DOWN_SPILL, UP_SPILL = 8, 6
 CONST_SCALER, CONST_COL_SCALAR, CONST_ZERO = 1, 2, 3
 
@@ -72,7 +59,7 @@ def _bits(value: float) -> int:
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
-AVG_SCALER_BITS = _bits(1.0 / FLAT_WIDTH)  # 0x39CCCCCD, truncated to the bf16 scaler tile 0x39CC
+AVG_SCALER_BITS = _bits(1.0 / FLAT_WIDTH)  # 0x39CCCCCD; truncated to the bf16 scaler 0x39CC like the chain's
 
 
 def residual_rows(residual) -> int:
@@ -183,15 +170,13 @@ def stats(residual):
 
 
 class NocMapMismatch(RuntimeError):
-    """The mesh's devices map logical cores to different NoC coordinates: one program descriptor (one runtime-argument
-    set, replicated to every device) cannot carry the multicast rectangles, so no multicast program can run on it."""
+    """The devices map logical cores to different NoC coordinates; one replicated descriptor cannot multicast."""
 
 
 def noc_map(mesh) -> dict[tuple[int, int], tuple[int, int]]:
-    """Logical compute core -> its NoC-0 coordinates, measured once per mesh by a probe program (Python has no
-    logical-to-NoC binding; the dispatcher's coordinate virtualization decides the mapping).  Every device of the mesh
-    runs the probe; the maps must agree (the 4-chip acceptance ON run at 10cdff7d8a failed here on ttnn.to_torch of the
-    mesh tensor, which needs a per-device readback)."""
+    """Logical compute core -> NoC-0 coordinates, read once per mesh by a probe program (Python has no such binding).
+
+    Every device runs the probe; the maps must agree."""
 
     key = id(mesh)
     if key not in _NOC_MAPS:
@@ -365,8 +350,7 @@ def normalize_down(residual, gathered_stats, norm_scale, down_inject):
     )
     down = fp.compute_kernel(DOWN, w_set, [FLAT_TILES, 8, 8, 9, 17, DOWN_SPILL, 10], fp32_dest=True)
     writer = _writer(w_set, [(partial, 17)], [(core, [(1, w, 1, 1)]) for w, core in enumerate(workers)])
-    # the norm operands and the weight once, the flat row and the partial out; the flat row multicast into the twelve
-    # down cores' CB (L1); the norm's four passes per element, then the down+inject matmul
+    # l1_bytes: the flat row multicast to the down cores; flops: the norm's four passes, then the down+inject matmul
     meta = fp.program_meta(
         NAME,
         "normalize_down",
@@ -404,8 +388,8 @@ def low_rank_gate(gathered_partials, normalized, up):
     t = LOW_RANK_TILES_PER_CORE
     inject_core, inject_local = divmod(INJECT_TILE, t)
     n_tiles = _tiles_wide(up)
-    # 5 x 4, not 10 x 2: the harvested p150's contiguous virtual column span is 7 wide (x 0..6 -> 1..7, then a gap),
-    # and a multicast needs one NoC rectangle; the consumers' order (x-major) is all the runtime args depend on.
+    # 5 x 4, not 10 x 2: a multicast needs one NoC rectangle and the harvested p150's contiguous virtual column span
+    # is 7 wide; the runtime args depend only on the consumers' order (x-major).
     workers, producers, rect = _rectangle(mesh, 5, 4, rows_above=LOW_RANK_CORES)
     plain = [c for i, c in enumerate(producers) if i != inject_core]
     inject = [producers[inject_core]]
@@ -484,9 +468,7 @@ def low_rank_gate(gathered_partials, normalized, up):
         unpack_to_dest_fp32=(10, 12, 13),
     )
     writer = _writer(w_set, [(block, 18)], [(core, [(1, j, 1, 1)]) for j, core in enumerate(workers)])
-    # the partials, the flat row and the up weight once, the block and the injection out; the low-rank row multicast
-    # into the twenty gate cores' CB (L1); the fold, typecast, silu and 2 sigmoid, the up matmul, sigmoid, gate
-    # multiply and branch sum
+    # l1_bytes: the low-rank row multicast to the gate cores; flops: the fold, the up matmul, the gate and branch sum
     meta = fp.program_meta(
         NAME,
         "low_rank_gate",
@@ -512,8 +494,9 @@ def low_rank_gate(gathered_partials, normalized, up):
 
 def gr_read_fused(module, residual, *, read_front=None):
     """The model-level read: the fused programs around the chain's two collectives; returns (block input, state).
-    ``read_front(residual, gamma_rows, down_inject)`` replaces stats, all_gather, normalize_down and all_gather_async
-    with one program and returns ``(normalized, gathered_partials)``."""
+
+    ``read_front(residual, gamma_rows, down_inject)``, if given, replaces everything before ``low_rank_gate`` and
+    returns ``(normalized, gathered_partials)``."""
 
     from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import TensorPlacement
     from models.demos.blackhole.qwen38_flash_next.ttnn.gr import Qwen38TTNNGatedResidualState
@@ -575,6 +558,6 @@ register(
         tolerance=BITWISE,
         fused=gr_read_fused,
         composed=gr_read_composed,
-        gate=None,  # needs the TP4 collectives: component gate = the single-chip replica tool (one chip, four slices in turn), model gate = the acceptance table
+        gate=None,  # needs the TP4 collectives; checked by the single-chip four-slice replica and the model gate
     )
 )

@@ -2,11 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // post_attention, one core per local head: the head's gate tiles (the second 256 columns of its 512 in the qg
-// projection) and the head's attention rows placed into an otherwise zero tile row (the chain's slice + tilize with
-// zero padding).  CBs: 0 gate (bf16, 8), 1 attention (bf16, 8), 3 row scratch (bf16, 1).
+// projection) and the head's attention rows placed into an otherwise zero tile row (slice + tilize with zero padding).
+// CBs: 0 gate (bf16, 8), 1 attention (bf16, 8), 3 row scratch (bf16, 1).
 // Compile-time args: TensorAccessorArgs attention (ROW_MAJOR [1, 32, rows, 256]), qg.
-// Runtime args: 0 attention, 1 qg addresses, 2 rows, 3 head, 4 first tile of the qg projection in qg (0 for the
-// separate qg shard; the qg window's first tile in the merged projection shard).
+// Runtime args: 0 attention, 1 qg addresses, 2 rows, 3 head, 4 first tile of the qg projection in qg.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"

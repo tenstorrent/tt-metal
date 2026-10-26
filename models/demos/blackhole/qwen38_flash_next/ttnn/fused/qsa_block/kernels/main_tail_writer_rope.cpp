@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // main_tail, rope core writer: a query head (ROLE 0) writes, per lane, the rotated tiles' row into bytes 512..639 of
-// the head's sparse-query row; the key (ROLE 1) hands its rotated tiles to every staging core (pack tiles 8, 9; one
-// staging core per lane).
+// the head's sparse-query row; the key (ROLE 1) hands its rotated tiles to every staging core (pack tiles 8, 9).
 // Compile-time args: 0 ROLE, then TensorAccessorArgs query.
 // Runtime args: 0 query address, 1 rows, 2 head, 3 staging core count, then the staging cores' (x, y) pairs.
 

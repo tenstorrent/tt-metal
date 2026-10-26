@@ -1,20 +1,15 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// One core: the on-device sampler of ttnn/device_sampler.py as one program.  Per row r of the replicated candidate
-// rows (fp32 ROW_MAJOR [1,1,rows,256]: shard d's 32 values then its 32 global ids at lanes 64 d ..), the composite's
-// arithmetic on the RISC, bit for bit: the presence penalty on the ids the row's history bit array marks (fp32
-// subtract), the lanes ordered by value descending and global id ascending (sign-magnitude integer keys, -0.0 as
-// +0.0; the top top_k lanes selected), the temperature table indexed by floor(1024 (s_max - s_j)) (fp32 subtract and
-// an exact power-of-two multiply; the table entries gathered from DRAM), the exact integer prefix sums, the two fp32
-// products tau = top_p * S_k and theta = u * S (the RISC's soft-float multiply is IEEE round-to-nearest-even, as the
-// SFPU's), the kept prefix and the inverse CDF over all 128 lanes as the composite counts them, the chosen id into
-// lane r of the fp32 token tile, and the id's bit set in the row's history.  The greedy flag copies the greedy tile
-// (the composite's greedy_row * 1 + splat * 0).  The history is the row-major uint32 bit array of the L1 shard on
-// this core (rows x hist_words words, bit id of row r at word r * hist_words + (id >> 5)).  Bit r of the guard page's
-// lane 0 (fp32) is set when a token row r did not read could change its draw: the kept minimum does not clear the
-// shard floor (the largest shard minimum of the raw values) or the top-k minimum lies below it (only the presence
-// penalty can cause that); 0 under the greedy flag.
+// One core: the on-device sampler of ttnn/device_sampler.py, bit for bit on the RISC.  Per row r of the candidate rows
+// (fp32 ROW_MAJOR [1,1,rows,256]: shard d's 32 values then its 32 global ids at lanes 64 d ..): the presence penalty on
+// the ids the row's history marks (fp32 subtract), the top_k lanes by value descending and global id ascending (-0.0 as
+// +0.0), the temperature table at floor(1024 (s_max - s_j)), exact integer prefix sums, tau = top_p * S_k and
+// theta = u * S (soft-float RNE, as the SFPU's), and the kept prefix and inverse CDF as the composite counts them; the
+// chosen id goes to lane r of the fp32 token tile and its bit into the row's history.  The greedy flag copies the
+// greedy tile.  History: rows x hist_words uint32 words in this core's L1 shard, bit id of row r at word
+// r * hist_words + (id >> 5).  Bit r of the guard page's lane 0 (fp32) is set when a token row r did not read could
+// change its draw (the kept or top-k minimum below the shard floor, the largest shard minimum); 0 under greedy.
 // Named compile-time args: cb_stage, rows, lanes (128), table_size, hist_words.  Compile-time args: TensorAccessorArgs
 // of row, greedy, policy, uniforms, table, token, guard.  Runtime args: 0 row, 1 greedy, 2 policy, 3 uniforms, 4 table,
 // 5 history (this core's L1 address), 6 token, 7 guard addresses.

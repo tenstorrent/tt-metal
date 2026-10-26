@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// score_merge reader, one core per 1024-column chunk: the zero tile, then per row the four devices' 2 KB chunks
-// of the gathered score rows and the mask chunk.  CBs: 0 device chunks (bf16, 4), 1 zero (bf16, 1), 2 mask (bf16, 1).
+// score_merge reader: the zero tile, then per chunk of this core and per row the four devices' 2 KB chunks of the
+// gathered score rows and the mask chunk.  CBs: 0 device chunks (bf16, 4), 1 zero (bf16, 1), 2 mask (bf16, 1).
 // Compile-time args: TensorAccessorArgs gathered ([1, 1, 4 * rows, W] ROW_MAJOR), mask ([1, 1, rows, W]).
-// Runtime args: 0 gathered, 1 mask addresses, 2 rows, 3 first chunk, 4 chunks on this core (one after another),
-// 5 total chunks (the gathered tensor holds the rows as 1024-column pages: device d row r chunk c at page (d * rows +
-// r) * total + c).
+// Runtime args: 0 gathered, 1 mask addresses, 2 rows, 3 first chunk, 4 chunks on this core, 5 total chunks (device d
+// row r chunk c at page (d * rows + r) * total + c).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"

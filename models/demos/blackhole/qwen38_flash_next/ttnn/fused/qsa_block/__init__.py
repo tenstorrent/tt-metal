@@ -1,19 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``qsa_block``: the QSA decode layer's glue around its kept kernels as a handful of ``generic_op`` programs.
+"""``qsa_block``: the QSA decode layer's norms, RoPE, cache updates and selection glue as ``generic_op`` programs.
 
-The chain (``Qwen38TTNNQSA.forward_decode_generic``) is 78 programs per layer; the collectives, the six DRAM-sharded
-linears, the indexer, the top-k and sparse_sdpa stay, and the norms, RoPE, one-hot cache/ring updates, layout moves and
-integer selection glue become six programs (work/FUSION-WAVE2-SCOPING-20260914.md section 2).  Two chain kernels
-decide whether those programs are bitwise: ``ttnn.rms_norm`` (layernorm.cpp's RMSNORM path in an fp32 dest) and
-``rotary_embedding_hf`` (FPU multiplies and an add in the op's 16-bit dest).  ``rms_norm_rows`` and ``rope64`` below
-are their call-for-call mirrors on the foundation's stream reader/writer; the dev tool fused_qsa_llk_pins runs them
-against the ops on a chip.
-
-The served decode path computes the five K = 2560 projections as one linear (ttnn/qsa.py ``_project_merged``): the
-tail programs take the first tile of each projection's window in the tensor they are handed (``index_q_first``,
-``qg_first``, ...), 0 for a separate projection shard, the window's tile for the merged shard passed in every slot.
+``rms_norm_rows`` and ``rope64`` mirror ``ttnn.rms_norm`` (fp32 dest) and ``rotary_embedding_hf`` (16-bit dest) call
+for call, which keeps the programs bitwise. The tail programs take the first tile of each projection's window in the
+tensor they are handed (``index_q_first``, ``qg_first``, ...): 0 for a separate projection shard, the window's tile
+for the merged projection shard passed in every slot.
 """
 
 from __future__ import annotations
@@ -77,9 +70,9 @@ def _row_tiles(tensor, width: int, label: str) -> int:
 
 
 def rms_norm_rows(x, weight, *, eps: float = EPS):
-    """``ttnn.rms_norm(x, epsilon=eps, weight=weight)`` on ``x`` [1, n, rows, W] bf16 TILE (every row of every tile
-    normalized over W) with the bf16 weight row [1, 1, 1, W]; one core per tile row.  The mirror of the chain's
-    fp32-dest LayerNorm program on the same CB formats."""
+    """``ttnn.rms_norm(x, epsilon=eps, weight=weight)`` on ``x`` [1, n, rows, W] bf16 TILE, one core per tile row.
+
+    Mirrors the op's fp32-dest LayerNorm program on the same CB formats; ``weight`` is the bf16 row [1, 1, 1, W]."""
 
     width = x.shape[-1]
     n = _row_tiles(x, width, "rms_norm input")
@@ -118,7 +111,7 @@ def rms_norm_rows(x, weight, *, eps: float = EPS):
     )
     compute = fp.compute_kernel(RMS_NORM, cores, [wt, width], [(w.core, [w.count]) for w in work], fp32_dest=True)
     writer = _writer(cores, [(out, 16)], [(w.core, [(w.count * wt, w.start * wt, 1, wt)]) for w in work])
-    meta = fp.program_meta(  # the tiles in, the weight once per core, the tiles out; four passes per element
+    meta = fp.program_meta(  # four passes per element
         NAME,
         "rms_norm_rows",
         1,
@@ -132,10 +125,10 @@ def rms_norm_rows(x, weight, *, eps: float = EPS):
 
 
 def rope64(x, cos, sin, *, dest: str = "dest16"):
-    """``rotary_embedding_hf(x, cos, sin, is_decode_mode=False)`` on ``x`` [1, n, rows, 64] bf16 TILE with the
-    cos/sin row tiles [1, 1, rows, 64]; one core per tile row.  ``dest16`` = the op's own compute config (a 16-bit
-    dest), ``dest32_pack`` = the same LLK calls under an fp32 dest with the packer narrowing to bf16, ``dest32_rne`` =
-    fp32 dest with an SFPU RNE narrowing before every pack."""
+    """``rotary_embedding_hf(x, cos, sin, is_decode_mode=False)`` on ``x`` [1, n, rows, 64] bf16 TILE.
+
+    One core per tile row. ``dest16`` is the op's own 16-bit dest; ``dest32_pack`` runs the same calls in an fp32 dest
+    with the packer narrowing to bf16; ``dest32_rne`` narrows with an SFPU RNE before every pack."""
 
     if dest not in ROPE_DEST_MODES:
         raise ValueError(f"dest must be one of {ROPE_DEST_MODES}, got {dest!r}")
@@ -182,7 +175,7 @@ def rope64(x, cos, sin, *, dest: str = "dest16"):
         fp32_dest=dest != "dest16",
     )
     writer = _writer(cores, [(out, 16)], [(w.core, [(ROPE_TILES, w.start * ROPE_TILES, 1, ROPE_TILES)]) for w in work])
-    meta = fp.program_meta(  # the tiles twice (the row and its rotated half), cos / sin once per core, the tiles out
+    meta = fp.program_meta(  # x is read twice: the row and its rotated half
         NAME,
         "rope64",
         1,
@@ -196,13 +189,9 @@ def rope64(x, cos, sin, *, dest: str = "dest16"):
 
 
 # ----------------------------------------------------------------------------------------------- program A: index tail
-# One program for the index projection's tail and the compressed-index write (chain programs 510-527, 18 per layer):
-# index_q rms_norm + partial RoPE -> the indexer's query tile; the raw-key ring's one-hot slot update, the 0.25-scaled
-# row sum, index_k rms_norm + block-start RoPE -> one row of the compressed index cache.  One core pair per lane: the
-# norm core (fp32 dest: rms_norm, ring, sum) hands the RoPE tiles to its rope core (the op's 16-bit dest) over the
-# NoC; the first pair also takes the index query tile.  Rows are lanes: row r of the query/raw-key tiles belongs to
-# lane r, whose ring is tile row r of ``ring`` and whose compressed cache is batch r of ``compressed_cache``;
-# ``positions`` holds P_r.  CB indices: index_tail_cbs.h.
+# The index projection's tail and the compressed-index write. One core pair per lane: the norm core (fp32 dest) hands
+# the RoPE tiles to its rope core (16-bit dest) over the NoC. Row r of the query/raw-key tiles is lane r: tile row r of
+# ``ring``, batch r of ``compressed_cache``, position P_r. CB indices: index_tail_cbs.h.
 
 INDEX_HEAD_DIM = 128
 INDEX_TILES = INDEX_HEAD_DIM // fp.TILE
@@ -246,8 +235,7 @@ _NOC_COORDS: dict[int, dict[tuple[int, int], tuple[int, int]]] = {}
 
 
 def noc_coords(mesh, cores) -> dict[tuple[int, int], tuple[int, int]]:
-    """Logical core -> NoC-0 (x, y), measured once per mesh by the probe kernel (every device of the mesh must
-    agree; Python has no logical-to-NoC binding)."""
+    """Logical core -> NoC-0 (x, y), read once per mesh by the probe kernel; every device of the mesh must agree."""
 
     key = id(mesh)
     wanted = {(c.x, c.y) for c in cores}
@@ -263,7 +251,7 @@ def noc_coords(mesh, cores) -> dict[tuple[int, int], tuple[int, int]]:
     fp.run_program(
         [out, out],
         fp.program_descriptor([probe], cbs=[fp.cb_descriptor(0, ttnn.uint32, fp.TILE_BYTES[ttnn.uint32], 1, core_set)]),
-        meta=fp.program_meta(NAME, "noc_probe", 1, writes=(out,), cores=len(probed)),  # once per mesh
+        meta=fp.program_meta(NAME, "noc_probe", 1, writes=(out,), cores=len(probed)),
     )
     per_device = [
         ttnn.to_torch(local).reshape(fp.TILE, len(probed), fp.TILE)[0] for local in ttnn.get_device_tensors(out)
@@ -301,8 +289,8 @@ def _require_grid(mesh, x: int, y: int, label: str) -> None:
 
 
 def _position_inputs(position, rows: int):
-    """The chain's ``kv_block_start`` (uint32 ROW_MAJOR [1, 1, 1, >= rows], lane u's P & ~31) and ``kv_row_hit`` (bf16
-    TILE [1, rows, 32, 1], lane u's one-hot column of P % 32); the kernels read P_u = start + hit row from them."""
+    """``kv_block_start`` (uint32 ROW_MAJOR [1, 1, 1, >= rows], lane u's P & ~31) and ``kv_row_hit`` (bf16 TILE
+    [1, rows, 32, 1], lane u's one-hot column of P % 32); the kernels read P_u = start + hit row."""
 
     block_start, row_hit = position.kv_block_start, position.kv_row_hit
     bshape, hshape = tuple(block_start.shape), tuple(row_hit.shape)
@@ -340,8 +328,7 @@ def _window(tensor, first_tile: int, width: int, label: str) -> None:
 
 
 def _io(*tensors) -> list:
-    """generic_op's io list, inputs first and the output last, each tensor once (the tails take the merged projection
-    shard in several projection slots)."""
+    """generic_op's io list: inputs first, the output last, each tensor once (the merged shard fills several slots)."""
 
     kept = []
     for tensor in tensors:
@@ -367,11 +354,10 @@ def index_tail(
     index_q_first: int = 0,
     index_k_first: int = 0,
 ):
-    """The fused index tail on ``rows`` lanes; returns the rotated index query [1, 1, rows, 128] bf16 TILE and
-    updates ``ring`` [1, rows, 32, 128] and ``compressed_cache`` [rows, 1, H, 128] in place.  ``position`` carries the
-    chain's ``kv_block_start`` and ``kv_row_hit`` (see ``_position_inputs``).  ``index_q_ws`` / ``raw_key_ws`` hold
-    the index query / raw key from tile ``index_q_first`` / ``index_k_first``: the separate projection shards at 0,
-    or both the merged projection shard with its windows' first tiles."""
+    """The fused index tail on ``rows`` lanes; returns the rotated index query [1, 1, rows, 128] bf16 TILE.
+
+    Updates ``ring`` [1, rows, 32, 128] and ``compressed_cache`` [rows, 1, H, 128] in place. ``position`` carries
+    ``kv_block_start`` and ``kv_row_hit`` (see ``_position_inputs``)."""
 
     rows = fp.rows_of(index_q_ws)
     if fp.rows_of(raw_key_ws) != rows:
@@ -398,8 +384,7 @@ def index_tail(
     lane_tile_rows = cache_shape[2] // fp.TILE
     mesh = index_q_ws.device()
     out = fp.allocate((1, 1, rows, INDEX_HEAD_DIM), BF16, ttnn.TILE_LAYOUT, mesh)
-    # one core pair per lane: lane u's norm core on row 2 * (u // 8), its rope core on the row below; the first pair also
-    # takes the index query tile (its rows are all the lanes' rows)
+    # lane u's norm core on row 2 * (u // 8), its rope core on the row below; the first pair also takes the query tile
     pair_rows = -(-rows // LANE_COLUMNS)
     _require_grid(mesh, min(rows, LANE_COLUMNS), 2 * pair_rows, "index_tail lanes")
     norm_cores, rope_cores = _lane_cores(rows, 0, 2), _lane_cores(rows, 1, 2)
@@ -554,9 +539,7 @@ def index_tail(
         compressed_cache,
         out,
     )
-    # per lane: the index query and raw key windows (four tiles each, from the projection shard), the position
-    # inputs, the two norm weights and the four RoPE tiles, the ring read and written, one compressed row written,
-    # the rotated query out; the two rms_norms, the two partial RoPEs, the ring one-hot update and its 0.25 sum
+    # flops per lane: two rms_norms, two partial RoPEs, the ring one-hot update and its 0.25 sum
     meta = fp.program_meta(
         "qsa_index_tail",
         "index_tail",
@@ -589,9 +572,9 @@ def index_tail_composed(
     *,
     eps: float = EPS,
 ):
-    """Today's chain for one lane (ttnn/qsa.py ``_index_projection`` after its linears + ``_write_compressed_index_generic``):
-    the same tensors, ``position`` carrying the chain's one-hots ``ring_hit`` / ``ring_keep`` [1, 1, 32, 1] bf16 TILE
-    and ``block_index_i32`` int32 [1]."""
+    """The unfused op chain for one lane (ttnn/qsa.py ``_index_projection`` and ``_write_compressed_index_generic``).
+
+    ``position`` carries the one-hots ``ring_hit`` / ``ring_keep`` [1, 1, 32, 1] bf16 TILE and ``block_index_i32``."""
 
     from models.demos.blackhole.qwen36.tt.attention.rope_tp import apply_partial_rope_prefill
 
@@ -645,19 +628,16 @@ register(
         tolerance=BITWISE,
         fused=index_tail,
         composed=index_tail_composed,
-        gate=None,  # stateful: the dev tool fused_qsa_block_probe compares consecutive decode steps against the chain
+        gate=None,  # stateful: updates the ring and the compressed cache in place
     )
 )
 
 
 # ----------------------------------------------------------------------------------------------- program C: main tail
-# One program for the main projection's tail, the packed-KV write and the sparse query (chain programs 548-572, 25 per
-# layer): per query head rms_norm + partial RoPE (six norm cores, six rope cores), k rms_norm + RoPE (one norm core,
-# one rope core), the KV staging one-hot row update, its write-back and its untilized 32-row block into the KV cache
-# (one staging core per lane), and the 32-head ROW_MAJOR sparse query [zeros | q_h] with zero rows for the 26 absent
-# heads.
-# Rows are lanes: row r of the q/k/v tiles is lane r, whose staging is tile row r of ``staging`` and whose KV rows
-# start at r * lane_rows in ``kv_cache``; ``positions`` holds P_r.  CB indices: main_tail_cbs.h.
+# The main projection's tail, the packed-KV write and the sparse query: a norm and a rope core per query head and for
+# k, one staging core per lane, and the 32-head ROW_MAJOR sparse query [zeros | q_h] with zero rows for absent heads.
+# Row r of the q/k/v tiles is lane r: tile row r of ``staging``, KV rows from r * lane_rows in ``kv_cache``, position
+# P_r. CB indices: main_tail_cbs.h.
 
 HEAD_DIM = 256
 HEAD_TILES = HEAD_DIM // fp.TILE
@@ -695,16 +675,16 @@ CB_STGC, CB_STGW, CB_MT_POS_R, CB_MT_POS_W, CB_MT_POSCR, CB_MT_POSCW = 21, 22, 2
 
 
 def _rect(x0: int, y0: int, x1: int, y1: int) -> ttnn.CoreRangeSet:
-    """One rectangular core range (one kernel group; a range per core costs ~0.25 us of dispatch each)."""
+    """One rectangular core range, so one kernel group (each extra range adds dispatch time)."""
 
     return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))])
 
 
 class KVStage:
-    """A replacement for main_tail's staging cores (the verify rows form, ttnn/fused/qsa_rows): the key cores hand the
-    rotated and normalized key tiles to ``cores`` (CB_PACK slots 8..15, SEM_KROT / SEM_KNORM as for the staging cores);
-    the stage brings its own CBs (``cb_descriptors(all_set)``), kernels (``kernels(ctx)`` with ``ctx`` the builder's
-    accessor helper, the core sets and the noc coordinates), io tensors and program-meta parts."""
+    """A replacement for main_tail's staging cores (the verify rows form in qsa_rows).
+
+    The key cores hand the rotated and normalized key tiles to ``cores`` (CB_PACK slots 8..15, SEM_KROT / SEM_KNORM);
+    the stage brings its own CBs, kernels (``kernels(ctx)``), io tensors and program-meta parts."""
 
     def __init__(
         self, *, cores, cb_descriptors, kernels, io, reads=(), writes=(), partial=(), flops=0, name="main_tail"
@@ -741,12 +721,10 @@ def main_tail(
     v_first: int = 0,
     kv_stage: KVStage | None = None,
 ):
-    """The fused main tail on ``rows`` lanes; returns the sparse query [1, 32, rows, 512] bf16 ROW_MAJOR and updates
-    ``staging`` [1, rows, 32, 512] (TILE) and ``kv_cache`` [1, 1, C, 512] (ROW_MAJOR, lane r's block at
-    r * lane_rows + (P_r & ~31)) in place.  The gate halves stay in ``qg_ws`` for the post-attention program.
-    ``qg_ws`` / ``k_ws`` / ``v_ws`` hold their projections from tile ``qg_first`` / ``k_first`` / ``v_first``: the
-    separate projection shards at 0, or the merged projection shard in all three slots with its windows' first
-    tiles."""
+    """The fused main tail on ``rows`` lanes; returns the sparse query [1, 32, rows, 512] bf16 ROW_MAJOR.
+
+    Updates ``staging`` [1, rows, 32, 512] TILE and ``kv_cache`` [1, 1, C, 512] ROW_MAJOR (lane r's block at
+    r * lane_rows + (P_r & ~31)) in place. The gate halves stay in ``qg_ws`` for the post-attention program."""
 
     rows = fp.rows_of(qg_ws)
     if fp.rows_of(k_ws) != rows or fp.rows_of(v_ws) != rows:
@@ -779,14 +757,14 @@ def main_tail(
     q_norm_cores = [ttnn.CoreCoord(h, 0) for h in range(LOCAL_HEADS)]
     q_rope_cores = [ttnn.CoreCoord(h, 1) for h in range(LOCAL_HEADS)]
     k_norm_core, k_rope_core = ttnn.CoreCoord(LOCAL_HEADS, 0), ttnn.CoreCoord(LOCAL_HEADS, 1)
-    # one staging core per lane on the core rows below the head and key cores; the key cores hand their tiles to each
+    # one staging core per lane on the core rows below the head and key cores
     staging_cores = _lane_cores(rows, 2) if kv_stage is None else kv_stage.cores
     staging_rows = -(-rows // LANE_COLUMNS) if kv_stage is None else max(c.y for c in staging_cores) - 1
     _require_grid(mesh, LOCAL_HEADS + 2, 2 + staging_rows, "main_tail lanes")
     every = [*q_norm_cores, *q_rope_cores, k_norm_core, k_rope_core, *staging_cores]
     coords = noc_coords(mesh, every)
     xy = lambda c: coords[(c.x, c.y)]
-    all_set = _rect(0, 0, LOCAL_HEADS + 1, 1 + staging_rows)  # the bounding rectangle (idle corners run no kernel)
+    all_set = _rect(0, 0, LOCAL_HEADS + 1, 1 + staging_rows)  # bounding rectangle; idle corners run no kernel
     staging_xy = [len(staging_cores)] + [v for c in staging_cores for v in xy(c)]
     cbs = [
         fp.cb_descriptor(index, dtype, fp.TILE_BYTES[dtype], pages, all_set) for index, dtype, pages in _MAIN_TAIL_CBS
@@ -865,7 +843,7 @@ def main_tail(
         ),
     ]
 
-    def staging_kernels():  # the decode stage's three kernels; their tensors are None under a KV stage
+    def staging_kernels():  # their tensors are None under a KV stage
         return [
             fp.reader_kernel(
                 MAIN_TAIL["reader_staging"],
@@ -923,9 +901,7 @@ def main_tail(
             qg_ws, k_ws, v_ws, q_norm, k_norm, cos, sin, *kv_stage.io, query
         )  # the query last: run_program returns it
     semaphores = [fp.semaphore_descriptor(i, all_set) for i in range(3)]
-    # the qg, k and v windows (from the projection shards), the position inputs, the two norm weights and the RoPE
-    # tiles in, the staging read and written, one 32-row KV block per lane written, the sparse query out; the seven
-    # rms_norms and partial RoPEs, the staging one-hot update
+    # flops per lane: seven rms_norms and partial RoPEs, the staging one-hot update
     windows = (
         (qg_ws, 2 * LOCAL_HEADS * HEAD_TILES * TILE_BF16),
         (k_ws, HEAD_TILES * TILE_BF16),
@@ -943,7 +919,7 @@ def main_tail(
             cores=2 * (LOCAL_HEADS + 1) + rows,
         )
     else:
-        meta = fp.program_meta(  # the verify rows form (ttnn/fused/qsa_rows main_tail_rows), the family's one KV stage
+        meta = fp.program_meta(  # the verify rows form (qsa_rows main_tail_rows)
             "qsa_rows",
             "main_tail_rows",
             rows,
@@ -977,10 +953,10 @@ def _zero_value_half(mesh):
 def main_tail_composed(
     qg_ws, k_ws, v_ws, position, q_norm, k_norm, cos, sin, staging, kv_cache, *, lane_rows: int = 0, eps: float = EPS
 ):
-    """Today's chain for one lane (ttnn/qsa.py ``_main_projection`` after its linears, ``_write_packed_kv_generic`` and
-    the query build of ``_sparse_value_attention``); ``position`` carries the chain's ``kv_row_hit`` / ``kv_row_keep``
-    [1, 1, 32, 1] bf16 TILE, ``kv_block_start`` and ``slot_zero`` uint32 ROW_MAJOR [1, 1, 1, 1].  Returns (sparse
-    query [1, 32, 1, 512] ROW_MAJOR, gate [1, 6, 1, 256] TILE)."""
+    """The unfused op chain for one lane; returns (sparse query [1, 32, 1, 512] ROW_MAJOR, gate [1, 6, 1, 256] TILE).
+
+    ``position`` carries ``kv_row_hit`` / ``kv_row_keep`` [1, 1, 32, 1] bf16 TILE, ``kv_block_start`` and
+    ``slot_zero`` uint32 ROW_MAJOR [1, 1, 1, 1]."""
 
     import torch
 
@@ -1057,12 +1033,9 @@ register(
 )
 
 
-# -------------------------------------------------------------------------------- programs D, E, B2: post-attention, widen, selection
-# D replaces chain programs 574-579 (slice of the 6 local heads, tilize with zero padding, sigmoid, multiply, head
-# fold, interleaved_to_sharded into the out-projection's 16-core activation shard): one core per head, the gate read
-# straight from the qg L1 shard.  E replaces 581-582 (sharded_to_interleaved + typecast to fp32 before the
-# reduce_scatter): 16 cores, 5 tiles each.  B2 replaces 537-544 (shift, repeat_interleave, offsets add, sentinel
-# concat, keep-mask and, fill or): 8 cores of 256 columns, integer work on the data-movement RISC.
+# ---------------------------------------------------------------- programs D, E, B2: post-attention, widen, selection
+# D: one core per head, the gate read straight from the qg L1 shard. E: 16 cores of 5 tiles. B2: 8 cores of 256
+# columns, integer work on the data-movement RISC.
 
 OUT_WIDTH = LOCAL_HEADS * HEAD_DIM  # 1536
 PARTIAL_WIDTH = 2560
@@ -1074,10 +1047,10 @@ SELECTION_ROW_GROUPS = 8  # the lanes' rows spread over up to 8 core rows (row r
 
 
 def post_attention(attention, qg_ws, *, memory_config=None, qg_first: int = 0):
-    """sigmoid(gate) x attention for the 6 local heads -> the head-major [1, 1, rows, 1536] bf16 TILE row in
-    ``memory_config`` (the out-projection's activation shard in the model).  ``attention`` is sparse_sdpa's
-    ROW_MAJOR [1, 32, rows, 256]; the gates are the second 256 columns of each head's 512 in ``qg_ws`` from tile
-    ``qg_first`` (0 for the separate qg shard, the qg window's first tile for the merged projection shard)."""
+    """sigmoid(gate) x attention for the 6 local heads -> the head-major [1, 1, rows, 1536] bf16 TILE row.
+
+    ``attention`` is sparse_sdpa's ROW_MAJOR [1, 32, rows, 256]; the gates are the second 256 columns of each head's
+    512 in ``qg_ws``."""
 
     rows = fp.rows_of(qg_ws)
     _window(qg_ws, qg_first, QG_WIDTH, "qg")
@@ -1109,7 +1082,7 @@ def post_attention(attention, qg_ws, *, memory_config=None, qg_first: int = 0):
     writer = _writer(
         cores, [(out, 16)], [(c, [(HEAD_TILES, h * HEAD_TILES, 1, HEAD_TILES)]) for h, c in enumerate(head_cores)]
     )
-    meta = fp.program_meta(  # the six local heads' attention rows and gate tiles in, the head-major row out
+    meta = fp.program_meta(
         "qsa_post_attention",
         "post_attention",
         rows,
@@ -1122,8 +1095,7 @@ def post_attention(attention, qg_ws, *, memory_config=None, qg_first: int = 0):
 
 
 def post_attention_composed(attention, qg_ws, *, memory_config=None):
-    """Today's chain for one row (ttnn/qsa.py ``_sparse_value_attention`` after sparse_sdpa, the gate from
-    ``_main_projection``'s reshape + slice, then ``_project_output``'s to_memory_config)."""
+    """The unfused op chain for one row (ttnn/qsa.py ``_sparse_value_attention`` after sparse_sdpa)."""
 
     if fp.rows_of(qg_ws) != 1:
         raise ValueError("the composed post-attention is the one-row chain")
@@ -1145,8 +1117,7 @@ def post_attention_composed(attention, qg_ws, *, memory_config=None):
 
 
 def widen_partial(out_ws):
-    """The out-projection's bf16 row tile (the matmul's 16-core L1 shard) as fp32 [1, 1, rows, 2560] TILE in DRAM, the
-    reduce_scatter's input (the chain's sharded_to_interleaved + typecast)."""
+    """The out-projection's bf16 L1 shard as fp32 [1, 1, rows, 2560] TILE in DRAM, the reduce_scatter's input."""
 
     rows = fp.rows_of(out_ws)
     if fp.tile_width_of(out_ws) != PARTIAL_WIDTH:
@@ -1170,7 +1141,7 @@ def widen_partial(out_ws):
     writer = _writer(
         cores, [(out, 16)], [(c, [(per_core, i * per_core, 1, per_core)]) for i, c in enumerate(core_list)]
     )
-    meta = fp.program_meta(  # the bf16 shard in (L1), the fp32 row out; the typecast per element
+    meta = fp.program_meta(
         "qsa_widen_partial",
         "widen_partial",
         rows,
@@ -1190,8 +1161,7 @@ def widen_partial_composed(out_ws):
 
 
 def _rows_at_least(tensor, rows: int, width: int, label: str) -> None:
-    """A uint32 ROW_MAJOR [1, 1, >= rows, width] row tensor whose first ``rows`` rows the kernel reads (the 1-row
-    inputs have one row; the lanes pass their 32-row inputs and read rows 0 .. B-1)."""
+    """A uint32 ROW_MAJOR [1, 1, >= rows, width] row tensor whose first ``rows`` rows the kernel reads."""
 
     shape = tuple(tensor.shape)
     if (
@@ -1206,11 +1176,10 @@ def _rows_at_least(tensor, rows: int, width: int, label: str) -> None:
 
 
 def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill):
-    """The sparse-attention row of token ids [1, 1, rows, 2080] uint32 ROW_MAJOR from the top-k block ids
-    [1, 1, rows, 512] and the position-derived keep / fill rows (rows 0 .. rows-1 of [1, 1, >= rows, 2080] tensors)
-    with the module's constant rows ``sentinel_pad`` [1, 1, 1, 32] and ``block_offsets``: one row [1, 1, 1, 2048]
-    shared by every row (the decode step), or per-row offsets [1, 1, >= rows, 2048] (the lanes: row u = the offsets
-    + lane u's KV region start, the chain's ``block_offsets_lanes``)."""
+    """The sparse-attention row of token ids [1, 1, rows, 2080] uint32 ROW_MAJOR from the top-k block ids.
+
+    ``block_offsets`` is one row [1, 1, 1, 2048] shared by every row, or per-row offsets [1, 1, >= rows, 2048] (row u
+    includes lane u's KV region start); keep / fill rows are rows 0 .. rows-1 of [1, 1, >= rows, 2080] tensors."""
 
     shape = tuple(block_ids.shape)
     if (
@@ -1249,7 +1218,7 @@ def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fil
         ],
     )
     cbs = [fp.cb_descriptor(0, ttnn.uint32, 8192, 1, cores)]
-    meta = fp.program_meta(  # the block ids, offsets and sentinel rows, the rows' keep / fill rows in, the row out
+    meta = fp.program_meta(
         "qsa_selection_row",
         "selection_row",
         rows,
@@ -1263,7 +1232,7 @@ def selection_row(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fil
 
 
 def selection_row_composed(block_ids, sentinel_pad, block_offsets, row_keep_bits, row_fill):
-    """Today's chain (ttnn/qsa.py ``_materialize_row_generic`` after topk_large_indices) for one row."""
+    """The unfused op chain for one row (ttnn/qsa.py ``_materialize_row_generic``)."""
 
     if tuple(block_ids.shape)[2] != 1:
         raise ValueError("the composed selection row is the one-row chain")
@@ -1312,11 +1281,10 @@ register(
 
 
 def lane_score_rows_of(local_scores, lanes_of_rows, lanes: int, cache_rows: int, blocks: int):
-    """Row r of the local block scores [1, 1, len(lanes_of_rows), blocks] bf16 ROW_MAJOR = lane ``lanes_of_rows[r]``'s
-    window (row r, columns lane * cache_rows .. + blocks) of the wide indexer's scores [1, 1, 32, lanes * cache_rows],
-    one core per output row (row copies at the 64-byte grain): the lane decode's rows ``0 .. B - 1`` and the MTP lanes
-    verify's lane-major rows (row u*R + j reads lane u's columns).  The model runs it with ``qsa_score_merge`` on, in
-    place of the chain's slices and concat (``ttnn/qsa.py`` ``_lane_score_rows_of_composed``)."""
+    """Row r of the local block scores [1, 1, len(lanes_of_rows), blocks] bf16 ROW_MAJOR, one core per output row.
+
+    Row r copies row r, columns ``lane * cache_rows`` .. ``+ blocks`` of the wide indexer's scores
+    [1, 1, 32, lanes * cache_rows], with ``lane = lanes_of_rows[r]``."""
 
     rows = len(lanes_of_rows)
     shape = tuple(local_scores.shape)
@@ -1349,28 +1317,25 @@ def lane_score_rows_of(local_scores, lanes_of_rows, lanes: int, cache_rows: int,
         ],
     )
     cbs = [fp.cb_descriptor(0, BF16, blocks * 2, 1, core_set)]
-    meta = fp.program_meta(  # each row's window of the wide scores in, the rows out; data movement
+    meta = fp.program_meta(
         NAME, "lane_score_rows", rows, writes=(out,), partial=((local_scores, rows * blocks * 2),), cores=rows
     )
     return fp.run_program([local_scores, out], fp.program_descriptor([kernel], cbs=cbs), meta=meta)
 
 
 # ------------------------------------------------------------------------------------------- program B1: score merge
-# Replaces chain programs 532-535 (tilize, moreh_sum over the four devices, untilize, the mask add) after the
-# all-gather of the local score rows: eight cores of 1024 columns, moreh_sum's 16-bit-dest add_tiles accumulation in
-# device order then binary_ng's SFPU add of the mask (NearestEven).  Elementwise work, so the ROW_MAJOR chunks are
-# processed as tiles.  The collective stays a runtime op: the model gathers the rows with ttnn.all_gather (dim 2).
+# After the all-gather of the local score rows: moreh_sum's 16-bit-dest add_tiles accumulation in device order, then
+# binary_ng's SFPU add of the mask (NearestEven). Elementwise, so the ROW_MAJOR chunks are processed as tiles.
 
 SCORE_CHUNK = 1024
 DEVICES = 4
 
 
 def score_merge(gathered, mask):
-    """The gathered score rows as 2 KB pages, ``[1, 1, 4 * rows * chunks, 1024]`` bf16 ROW_MAJOR (device d's row r,
-    chunk c at page ``(d * rows + r) * chunks + c``: the all_gather of the rows reshaped to ``[1, 1, rows * chunks, 1024]``,
-    the page form ttnn.all_gather takes at every context), + mask ``[1, 1, >= rows, W]`` (rows 0 .. rows-1 read: the
-    one-row chain passes its row, the lanes pass their 32-row mask) -> the masked block scores ``[1, 1, rows, W]``
-    bf16 ROW_MAJOR for the top-k."""
+    """Gathered score pages + mask -> the masked block scores ``[1, 1, rows, W]`` bf16 ROW_MAJOR for the top-k.
+
+    ``gathered`` is ``[1, 1, 4 * rows * chunks, 1024]`` bf16 ROW_MAJOR with device d's row r, chunk c at page
+    ``(d * rows + r) * chunks + c``; ``mask`` is ``[1, 1, >= rows, W]``, rows 0 .. rows-1 read."""
 
     shape, mshape = tuple(gathered.shape), tuple(mask.shape)
     if (
@@ -1422,7 +1387,7 @@ def score_merge(gathered, mask):
         fp.accessor_args(out),
         [(w.core, [out.buffer_address(), rows, w.start, w.count]) for w in work],
     )
-    meta = fp.program_meta(  # the four devices' score pages and the rows' mask in, the merged rows out; 3 adds + mask
+    meta = fp.program_meta(  # 3 adds + mask per element
         "qsa_score_merge",
         "score_merge",
         rows,
@@ -1436,12 +1401,9 @@ def score_merge(gathered, mask):
 
 
 def score_merge_work(width: int, grid) -> list[fp.CoreWork]:
-    """The merge's ``width // SCORE_CHUNK`` chunks (1024 columns each: one tile row of bf16 per row) over the compute
-    grid in ``fp.split_work``'s order, at most one core per chunk and never more cores than the grid has; a core with
-    several chunks runs them one after another.  Every output element is one chunk's row of the same four device
-    tiles summed in the same order plus its mask element, whatever core carries the chunk, so the placement does not
-    enter the bits.  (The first form put chunk c on core (c, 0): at 65536 tokens of context, 16 chunks, that row runs
-    past the 11- or 12-column compute grid of a p150 onto a dispatch core: "Illegal kernel placement".)"""
+    """The merge's ``width // SCORE_CHUNK`` chunks over the compute grid in ``fp.split_work``'s order.
+
+    Every output element sums the same four device tiles in the same order, so placement does not change the bits."""
 
     chunks = width // SCORE_CHUNK
     if chunks < 1:
@@ -1460,8 +1422,7 @@ class _Grid:
 
 
 def score_merge_composed(gathered, mask):
-    """The all_reduce composite's local reduce (all_reduce_async.cpp local_sum: to TILE, moreh_sum over the device
-    dim, back to ROW_MAJOR) and the chain's masked add, for one row; ``gathered`` in the merge's page form."""
+    """The all_reduce composite's local reduce and the masked add for one row; ``gathered`` in the merge's page form."""
 
     width = int(mask.shape[3])
     if tuple(gathered.shape) != (1, 1, DEVICES * (width // SCORE_CHUNK), SCORE_CHUNK):

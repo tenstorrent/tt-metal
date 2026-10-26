@@ -3,11 +3,9 @@
 
 """Fused decode kernels over ``ttnn.generic_op``.
 
-``program`` builds and runs one program from Python (kernels, CBs, semaphores, the rows contract); ``registry`` names
-each fused kernel with the composed ttnn chain it replaces; the proven kernels serve by default (``QWEN38_FUSED_OFF``
-falls back to the chains, ``QWEN38_FUSED`` switches an opt-in kernel on).  Each kernel is a sub-package ``<name>/``
-with its ``kernels/*.cpp`` and registers itself on import; a few sub-packages only hold kernels that other kernels
-run.  Add new ones to the import list below.
+``program`` builds and runs one program from Python; ``registry`` names each fused kernel with the composed ttnn chain
+it replaces. Each kernel is a sub-package ``<name>/`` with its ``kernels/*.cpp`` and registers itself on import; add
+new ones to the import list below.
 """
 
 from . import program

@@ -2,17 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// MoE post program, reader (one output column tile per core): the routing rows (top_k uint16 indices and bf16
-// scores per token), the device's expert owner row, the top_k score tiles the fused weighted reduce's reader builds
-// (column 0, row j = the bf16 score when this device owns the slot's expert, else +0.0; padding rows +0.0), the top_k
-// activation tiles of this column (every page starts as the constant zero tile; the owned (row, slot) 64-byte
-// ROW_MAJOR fragments of moe_compute's local combine buffer then land in the tile's two faces), the shared partial
-// tile and, when the shared expert arrives ungated, its column-broadcast sigmoid tile.  Pages of slots this device
-// does not own are never read, so the fill the composed chain needs is gone.  The zero seeds (the activation
-// tiles, the score tiles) are the NoC's zero write from the firmware's zero block (no DRAM traffic: 80 cores
-// reading one DRAM tile page cost 30 us).  Routing rows that are one shard on one core (moe_compute's drain-core
-// L1 shard, the served form) come in one read per tensor at the shard's page pitch: 2 x rows page reads from one
-// core's L1 by all 80 cores were the served step's hot spot (measured 2026-09-25).
+// MoE post program, reader (one output column tile per core): the routing rows, the device's expert owner row, the
+// top_k score tiles the fused weighted reduce's reader builds (column 0, row j = the bf16 score when this device owns
+// the slot's expert, else +0.0), the top_k activation tiles of this column (zero tiles plus the owned (row, slot)
+// 64-byte fragments of moe_compute's combine buffer), the shared partial tile and, when the shared expert arrives
+// ungated, its column-broadcast sigmoid tile.  Unowned slots are never read.  Zero seeds come from the NoC's zero
+// write, not DRAM; routing rows sharded on one core come in one read per tensor to avoid an L1 hot spot.
 
 #include <cstdint>
 

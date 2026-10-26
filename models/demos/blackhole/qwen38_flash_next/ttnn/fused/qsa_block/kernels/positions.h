@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// Data-movement kernels only (NoC reads): the lanes' positions from the chain's position inputs.
+// Data-movement kernels only (NoC reads): the lanes' positions from the position inputs.
 
 #pragma once
 
@@ -11,9 +11,9 @@
 #include "tile_rows.h"
 
 namespace tile_rows {
-// P of every lane from the chain's position inputs: kv_block_start (uint32 ROW_MAJOR row, element u = P_u & ~31) and
-// kv_row_hit (bf16 TILE, tile u = the one-hot column of P_u % 32).  scratch: >= 128 + rows * 2048 bytes; the result
-// lands in positions[0 .. rows).  Reads are issued and waited here (a legacy-API caller).
+// P of every lane from kv_block_start (uint32 ROW_MAJOR row, element u = P_u & ~31) and kv_row_hit (bf16 TILE, tile u
+// = the one-hot column of P_u % 32).  scratch: >= 128 + rows * 2048 bytes; the result lands in positions[0 .. rows).
+// Reads are issued and waited here.
 template <typename BlockStartAccessor, typename HitAccessor>
 inline void read_positions(
     volatile tt_l1_ptr uint32_t* positions,

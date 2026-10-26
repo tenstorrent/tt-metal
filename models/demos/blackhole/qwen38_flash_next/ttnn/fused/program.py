@@ -4,20 +4,14 @@
 """Thin layer over ``ttnn.generic_op`` for this model's fused decode kernels.
 
 A fused kernel is one program: kernel sources under ``ttnn/fused/<name>/kernels/*.cpp`` (paths relative to the
-repository root, which the launchers make ``TT_METAL_HOME`` / ``TT_METAL_KERNEL_PATH``), circular buffers, semaphores
-and per-core runtime args described from Python, run with ``run_program``.  No runtime rebuild: a change to a kernel
-or a descriptor is picked up by the JIT.
+repository root), circular buffers, semaphores and per-core runtime args described from Python, run with
+``run_program``.
 
 Rows contract: every decode activation is one 32-row tile with ``rows`` valid rows (1 for decode, up to 32 for lanes
 and MTP verify); ``rows_of`` reads and checks it.  A kernel takes the padded tile and produces only the valid rows.
 
-Legibility: the device profiler and tt-perf-report see every fused program as ``GenericOp`` with ``runtime_id=N`` for
-its attributes (generic_op's operation attributes are the descriptor, which the profiler cannot reflect), so each
-builder states what its program is with ``run_program(io, descriptor, meta=program_meta(...))``: the kernel, the
-program form, the rows, the DRAM and L1 bytes the descriptor addresses and the arithmetic it issues, by construction
-from the builder's shapes.  With recording on (``record_program_meta``; the census switches it on around its
-captures, the served process never pays for it) every launch is recorded in call order with the device operation id it
-took -- the program's runtime id, the census's ``base`` -- and the census joins its per-program rows to the records.
+The profiler sees every fused program as ``GenericOp``, so each builder passes ``meta=program_meta(...)`` stating its
+kernel, form, rows, bytes and FLOPs; with ``record_program_meta`` on, launches are recorded with their device op ids.
 """
 
 from __future__ import annotations
@@ -37,9 +31,7 @@ CB_COUNT = (
 )
 REPO_ROOT = Path(__file__).resolve().parents[6]
 KERNEL_ROOT = "models/demos/blackhole/qwen38_flash_next/ttnn/fused"
-# The data-movement descriptors' processors and NoCs (tt_metal/impl/kernels/kernel_types.cpp: Reader = RISCV_1 +
-# preferred_noc_for_dram_read = NOC_0, Writer = RISCV_0 + preferred_noc_for_dram_write = NOC_1, on every arch per
-# tt_metal/api/tt-metalium/kernel_types.hpp).  A NOC_1 multicast takes the bottom-right corner as its start.
+# Must match tt-metal's ReaderConfig / WriterConfig default NoCs. A NOC_1 multicast starts at the bottom-right corner.
 READER_NOC = 0
 WRITER_NOC = 1
 ELEMENT_BYTES = {ttnn.bfloat16: 2, ttnn.uint16: 2, ttnn.float32: 4, ttnn.uint32: 4, ttnn.int32: 4}
@@ -55,10 +47,10 @@ TILE_BYTES = {
 
 
 def multicast_corners(x0: int, y0: int, x1: int, y1: int, *, noc: int) -> tuple[int, int, int, int]:
-    """The (start_x, start_y, end_x, end_y) a multicast on ``noc`` needs for the NoC rectangle whose top-left is
-    (x0, y0) and bottom-right (x1, y1) in NoC-0 coordinates: NOC_0 starts top-left, NOC_1 bottom-right (the
-    DRAM-sharded matmul factory swaps the corners the same way).  A kernel that swaps on ``noc_index`` itself
-    (gr_read/kernels/mcast_writer.cpp) must be given the top-left-first rectangle instead, never both."""
+    """The (start_x, start_y, end_x, end_y) a multicast on ``noc`` needs for a NoC-0 rectangle (x0, y0)..(x1, y1).
+
+    NOC_0 starts top-left, NOC_1 bottom-right. A kernel that swaps on ``noc_index`` itself must be given the
+    top-left-first rectangle instead, never both."""
 
     if noc not in (READER_NOC, WRITER_NOC):
         raise ValueError(f"noc must be 0 or 1, got {noc}")
@@ -81,9 +73,10 @@ def _padded_shape(tensor) -> tuple[int, ...]:
 
 
 def is_row_tile(tensor) -> bool:
-    """Whether ``tensor`` is one row tile ``[1, 1, rows, W]`` with ``1 <= rows <= ROWS_MAX`` padded to ``TILE`` rows:
-    the fused programs' input contract as a predicate, so a dispatcher can take the composed chain instead of raising
-    (a host fake whose padded shape is its logical shape is outside it)."""
+    """Whether ``tensor`` is one row tile ``[1, 1, rows, W]`` with ``1 <= rows <= ROWS_MAX`` padded to ``TILE`` rows.
+
+    The fused programs' input contract as a predicate, so a dispatcher can take the composed chain instead of
+    raising."""
 
     shape, padded = tuple(tensor.shape), _padded_shape(tensor)
     return len(shape) == 4 and shape[:2] == (1, 1) and 1 <= shape[-2] <= ROWS_MAX and padded[-2] == TILE
@@ -123,8 +116,9 @@ class CoreWork:
 
 
 def split_work(units: int, mesh, cores: int | None = None) -> list[CoreWork]:
-    """``units`` work items over the compute grid in linear core order, as evenly as possible; cores with work only
-    (``cores`` caps the count below one unit per core)."""
+    """``units`` work items over the compute grid in linear core order, as evenly as possible; cores with work only.
+
+    ``cores`` caps the core count below one unit per core."""
 
     grid = mesh.compute_with_storage_grid_size()
     if units <= 0:
@@ -147,11 +141,10 @@ def core_set(work: Iterable[CoreWork]) -> ttnn.CoreRangeSet:
 
 
 def core_rectangle(work: Sequence[CoreWork], mesh=None) -> ttnn.CoreRangeSet:
-    """The cores of ``work`` as few CoreRanges: one range when they fill a rectangle; with ``mesh``, the
-    ``split_work`` order (grid columns filled top to bottom) as the whole columns plus the partial one (two ranges);
-    otherwise the per-core set.  One range = one kernel group: the dispatcher multicasts the binaries once per range
-    instead of once per core (80 single-core ranges cost 52 us per launch against 24 for one rectangle; 15-20 us of
-    dispatch per program on 80 cores)."""
+    """The cores of ``work`` as few CoreRanges: one range when they fill a rectangle; with ``mesh``, the whole columns
+    plus the partial one; otherwise the per-core set.
+
+    Dispatch multicasts the binaries once per range, so fewer ranges launch faster."""
 
     cores = {(w.core.x, w.core.y) for w in work}
     xs, ys = sorted({x for x, _ in cores}), sorted({y for _, y in cores})
@@ -225,8 +218,7 @@ def compute_kernel(
     bfp8_pack_precise: bool = False,
     unpack_to_dest_fp32: Sequence[int] = (),
 ) -> ttnn.KernelDescriptor:
-    """``unpack_to_dest_fp32`` = the CB indices unpacked to DST as exact fp32 (fp32 intermediates; the other CBs keep
-    the default), set on the config before it is copied into the descriptor."""
+    """``unpack_to_dest_fp32`` = the CB indices unpacked to DST as exact fp32; the other CBs keep the default."""
 
     config = ttnn.ComputeConfigDescriptor(
         math_fidelity=fidelity,
@@ -259,9 +251,9 @@ def allocate(shape: Sequence[int], dtype, layout, mesh, memory_config=ttnn.DRAM_
 
 
 def stamp_topology(tensor, reference, shard_dim: int | None = None):
-    """Give a program's output (``allocate`` leaves the allocation's topology) the distributed topology the chain's op
-    would have produced: ``reference``'s mesh and coordinates, replicated (or sharded on ``shard_dim``); a collective
-    or a mesh contract check downstream reads it.  Returns ``tensor``."""
+    """Give a program's output the topology the chain's op would have produced; returns ``tensor``.
+
+    ``reference``'s mesh and coordinates, replicated or sharded on ``shard_dim``; downstream collectives read it."""
 
     topology = reference.tensor_topology()
     placements = [
@@ -274,21 +266,16 @@ def stamp_topology(tensor, reference, shard_dim: int | None = None):
     return tensor
 
 
-# ---------------------------------------------------------------- what a program is and what it moves (the census's legibility)
+# ---------------------------------------------------------------- program metadata
 
 
 @dataclass(frozen=True)
 class FusedProgramMeta:
-    """One fused program as its builder states it, by construction from the shapes the descriptor was built from.
+    """One fused program as its builder states it, computed from the shapes the descriptor was built from.
 
-    ``kernel`` is the registry name the program serves (the module's ``NAME``; the QSA block's helpers that are not a
-    registered kernel of their own say ``qsa_block``), ``variant`` the program form (one name per builder), ``rows``
-    the valid rows served (1 = the decode step).  ``dram_bytes`` = the DRAM bytes the descriptor addresses, reads and
-    writes (an operand every core streams counts once per core; a data-dependent partial read counts at its bound);
-    ``l1_bytes`` = the bytes moved through L1 besides that: L1-resident operands read or written, multicasts and
-    core-to-core hand-offs; ``flops`` = the arithmetic issued (a matmul 2MNK, a reduction or an elementwise pass one
-    operation per element; 0 for data movement).  OUR model of the program, not the profiler's: the census divides
-    these by the measured kernel time for achieved GB/s and TFLOPs."""
+    ``kernel`` is the registry name, ``variant`` the program form, ``rows`` the valid rows served. ``dram_bytes`` counts
+    an operand every core streams once per core and a data-dependent partial read at its bound; ``l1_bytes`` counts
+    other bytes moved through L1; ``flops`` is the arithmetic issued (a matmul 2MNK, 0 for data movement)."""
 
     kernel: str
     variant: str
@@ -297,17 +284,14 @@ class FusedProgramMeta:
     l1_bytes: int
     flops: int
     cores: int = 0  # the cores the program runs on (0 = not stated)
-    # the buffers the launch writes with their declared mesh placement, ``(tensor, placement)`` pairs: ``None`` replicated,
-    # an int the sharded dim (the second axis of the 1x4 mesh), a tensor "as that tensor's".  ``run_program`` stamps them
-    # after the launch (``generic_op`` leaves the allocation's default placement: PlacementShard(0) on the line, which
-    # a collective or a mesh-contract check downstream misreads; a 1x1 device test cannot see it -- 2026-09-26).
+    # ``(tensor, placement)`` pairs for the written buffers: ``None`` replicated, an int the sharded dim, a tensor "as
+    # that tensor's". ``run_program`` stamps them; generic_op leaves the allocation's default placement.
     outputs: tuple = ()
 
 
 @dataclass(frozen=True)
 class FusedProgramRecord:
-    """One recorded launch: the device operation ids ``[first_id, end_id)`` the launch spanned (``first_id`` is the
-    program's runtime id, the census's ``base``) and its meta."""
+    """One recorded launch: the device operation ids ``[first_id, end_id)`` it spanned and its meta."""
 
     first_id: int
     end_id: int
@@ -355,10 +339,8 @@ def program_meta(
     cores: int = 0,
     outputs: Iterable = (),
 ) -> FusedProgramMeta:
-    """The meta of one program: every tensor of ``reads`` and ``writes`` once and every ``(tensor, bytes)`` of
-    ``partial`` (a window of a tensor) at those bytes, to ``dram_bytes`` or ``l1_bytes`` by where the tensor's buffer
-    lives, plus the explicit bytes (per-core re-reads of an operand, multicasts) and the FLOPs the builder states;
-    ``outputs`` the written buffers' declared placements (``FusedProgramMeta.outputs``), stamped after the launch."""
+    """The meta of one program: each tensor of ``reads`` / ``writes`` once and each ``(tensor, bytes)`` of ``partial``,
+    to ``dram_bytes`` or ``l1_bytes`` by where its buffer lives, plus the explicit bytes and FLOPs."""
 
     dram, l1 = int(dram_bytes), int(l1_bytes)
     declared = []
@@ -381,7 +363,7 @@ def program_meta(
 
 
 def record_program_meta(enabled: bool = True) -> None:
-    """Switch the recording of launches on (the census, around its captures) or off (the default: no host cost)."""
+    """Switch the recording of launches on or off (the default: no host cost)."""
 
     global _META_RECORDING
     _META_RECORDING = bool(enabled)
@@ -406,9 +388,9 @@ def _device_operation_id() -> int:
 
 
 def restamp_outputs(outputs, io_tensors: Sequence, result=None) -> None:
-    """Give the launch's written buffers their declared placements (``FusedProgramMeta.outputs``): the mesh (its
-    distribution shape and coordinates) is the first io tensor's; ``result`` (the launch's returned handle) is stamped
-    with the output it shares a buffer with."""
+    """Give the launch's written buffers their declared placements on the first io tensor's mesh.
+
+    ``result`` (the launch's returned handle) is stamped with the output it shares a buffer with."""
 
     if not outputs:
         return
@@ -426,9 +408,10 @@ def restamp_outputs(outputs, io_tensors: Sequence, result=None) -> None:
 
 
 def run_program(io_tensors: Sequence, descriptor, *, meta: FusedProgramMeta | None = None):
-    """Inputs first, pre-allocated outputs last; returns the last tensor.  ``descriptor`` is a ProgramDescriptor or a
-    MeshProgramDescriptor; ``meta`` (``program_meta``) is recorded with the launch's device operation ids while
-    recording is on, and its ``outputs`` are stamped with their declared placements after the launch."""
+    """Inputs first, pre-allocated outputs last; returns the last tensor.
+
+    ``descriptor`` is a ProgramDescriptor or a MeshProgramDescriptor; ``meta`` is recorded while recording is on and its
+    ``outputs`` are stamped with their declared placements after the launch."""
 
     if not _META_RECORDING or meta is None:
         result = ttnn.generic_op(list(io_tensors), descriptor)
@@ -442,10 +425,10 @@ def run_program(io_tensors: Sequence, descriptor, *, meta: FusedProgramMeta | No
 
 
 def traced_us_per_call(mesh, call, *, calls: int = 20, replays: int = 10, release=None) -> float:
-    """Host wall per call of ``call()`` captured ``calls`` times in one trace and replayed ``replays`` times (the
-    first replay warms and is not timed).  ``call`` runs once eagerly BEFORE the capture: a program that is not in
-    the program cache cannot be loaded during trace capture (mesh_workload.cpp: "Warm up before capturing a trace").
-    ``release(result)`` frees what ``call`` returns (default: deallocate a tensor or every tensor of a tuple)."""
+    """Host wall per call of ``call()`` captured ``calls`` times in one trace and replayed ``replays`` times.
+
+    ``call`` runs once eagerly before the capture, since a program not in the program cache cannot load during trace
+    capture; the first replay is untimed. ``release(result)`` frees what ``call`` returns."""
 
     import time
 

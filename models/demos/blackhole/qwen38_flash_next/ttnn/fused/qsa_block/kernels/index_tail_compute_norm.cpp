@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// index_tail, norm core compute (fp32 dest): rms_norm of the index query tile row (index_q_norm; the first pair only),
-// then per lane of this core the patched ring times the ones tile on the SFPU (the chain's one-hot select arithmetic:
-// bf16 RNE store, zero rule), the 0.25-scaled column sum (reduce.cpp's helper call), and rms_norm of the pooled row
-// (index_k_norm).  Runtime args: 0 lane_count, 1 do_query.
+// index_tail, norm core compute (fp32 dest): rms_norm of the index query tile row (first pair only), then per lane the
+// patched ring times the ones tile on the SFPU (matches the one-hot select: bf16 RNE store, zero rule), the 0.25-scaled
+// column sum and rms_norm of the pooled row.  Runtime args: 0 lane_count, 1 do_query.
 
 #include "rms_norm_mirror.h"
 #include "api/compute/eltwise_binary_sfpu.h"

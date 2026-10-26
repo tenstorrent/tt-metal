@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Three multicast phases in sequence on one norm core of ttnn/fused/gr_recip_last (gr_read/kernels/mcast_phase.h
-// each): A hands the stats tile to the transport core (its scratch slot + the device's own gathered page), then the
-// core raises its OWN gate semaphore (the own-page write is complete at phase A's barrier; mcast_phase raises the
-// transport's scratch semaphore before it writes the page, so inside one program only this signal keeps the core's
-// reader from streaming its own gathered page early); B multicasts the u row into the down workers' CB; C multicasts
-// the recip tile into the workers' recip CB and, as its extra stream, writes the normalized' row to the normalized
-// tensor for the gate.
+// each): A hands the stats tile to the transport core (its scratch slot + the device's own gathered page), then raises
+// the core's OWN gate semaphore: mcast_phase signals the transport before the own-page write lands, so only this
+// signal keeps the core's reader from streaming its own gathered page early. B multicasts the u row into the down
+// workers' CB; C multicasts the recip tile into the workers' recip CB and writes the normalized' row for the gate.
 // Compile-time args: 0-5 phase A (src cb, dst cb, tiles, write tiles, extra cb, semaphore id), 6-11 phase B, 12-17
 // phase C, 18 gate semaphore id (0xFF none), 19.. six TensorAccessorArgs sets (A tiles, A extra, B tiles, B extra,
 // C tiles, C extra; unused slots repeat).  Runtime args: 0-12 phase A, 13-25 phase B, 26-38 phase C

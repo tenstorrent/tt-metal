@@ -1,14 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The verify rows' GDN recurrence as gdn_step's compute body in a row loop: for one (value head, state column
-// block) item, conv + SiLU and both l2 norms once over the 32-row tile, then rows r = 0 .. ROWS-1 through the SAME
-// per-row calls as gdn_step (S' = S * decay; v_read = k S'; delta_b = ((v - v_read) * M_r) * beta;
-// S = S' + k^T delta_b; o_r = (q S) * 128^-0.5) with the gate scalars of every row computed in one pass before them
-// (gates_all; the reader replicates them into per-row tiles), the state carried row to row in L1 and every prefix
-// state handed to the writer, and the gated RMSNorm once on the assembled o rows.  Rounding points, LLK calls, DST
-// accumulation orders and CB discipline are gdn_step's call for call: the row loop is bitwise ROWS sequential gdn_step
-// calls. Compile-time args: 0 ROWS (real rows of the tile), 1 VBT (state column tiles per item: 4 = whole head, 1 = one
+// The verify rows' GDN recurrence: gdn_step's compute body in a row loop over one (value head, state column block)
+// item. Conv + SiLU and both l2 norms run once over the 32-row tile, the gates of all rows in one pass, and the state
+// carries row to row in L1. Rounding points, LLK calls, DST accumulation order and CB discipline match gdn_step call
+// for call, so the loop is bitwise ROWS sequential gdn_step calls.
+// Compile-time args: 0 ROWS (real rows of the tile), 1 VBT (state column tiles per item: 4 = whole head, 1 = one
 // of four blocks).  Runtime args: 0 items on this core.
 
 #include <cstdint>
@@ -42,8 +39,8 @@ constexpr uint32_t CB_MASK = 8, CB_SCALER = 9, CB_CONVSUM = 10, CB_QKV = 11, CB_
 constexpr uint32_t CB_QROW = 15, CB_KROW = 16, CB_KCOL = 17, CB_BETA = 18, CB_DECAY = 19, CB_SDEC = 20, CB_SDECC = 21;
 constexpr uint32_t CB_VREAD = 22, CB_DELTAB = 23, CB_SNEW = 24, CB_OUTS = 25, CB_OUTG = 26, CB_RS = 27;
 constexpr uint32_t CB_DBG = 28, CB_OROWS = 29, CB_SNEWC = 30, CB_OBF = 31;
-// phase-E reuse of phase-D buffers (same format and depth).  CB_OBF (each row's o, to the writer) is its own buffer:
-// gdn_step aliases it with CB_CONVSUM, which only the compute consumes; here the writer pops it.
+// The gated norm reuses recurrence buffers of the same format and depth. CB_OBF (each row's o) is not aliased with
+// CB_CONVSUM as in gdn_step, because here the writer pops it.
 constexpr uint32_t CB_NRMW = CB_SQ, CB_NRM = CB_UNIT, CB_SIG = CB_VREAD, CB_SQO = CB_DELTAB;
 
 constexpr uint32_t ROWS = get_compile_time_arg_val(0);
@@ -236,14 +233,10 @@ ALWI void k_columns() {
     cb_push_back(CB_KCOL, HT);
 }
 
-// beta_all = bf16(sigmoid(b)) and decay_all = exp(neg_exp_A * softplus(a + dt_bias)) for EVERY element of the
-// projection's a / b tiles (CB_AB: tile 0 = a, tile 1 = b; element (row, head) is row `row`'s scalar of head `head`)
-// in one SFPU pass each -- the same element-wise LLK calls gdn_step runs on its one scalar (the scalar-broadcast
-// unpack there and the plain bf16 copy here both land the exact bf16 value in DST; sigmoid / softplus / exp / the
-// binary ops are lane-wise), so element (row, head) holds bit for bit the value gdn_step's chain gives that row.  The
-// two results go to the reader as fp32 tiles (CB_GALL), which replicates each row's element into the full fp32 tiles
-// the recurrence multiplies (CB_BETA / CB_DECAY, exact 32-bit copies); beta keeps its bf16 pack round trip before
-// that.  dt_bias / neg_exp_A stay full tiles (an fp32 broadcast through the source registers would truncate them).
+// beta_all = bf16(sigmoid(b)) and decay_all = exp(neg_exp_A * softplus(a + dt_bias)) over every element of the a / b
+// tiles (CB_AB: tile 0 = a, tile 1 = b; element (row, head)) in one SFPU pass each. The ops are lane-wise, so each
+// element is bitwise gdn_step's value for that row; the reader replicates it into full fp32 tiles (CB_BETA / CB_DECAY).
+// dt_bias / neg_exp_A stay full tiles: an fp32 broadcast through the source registers would truncate them.
 ALWI void gates_all() {
     cb_wait_front(CB_AB, 2);
     cb_wait_front(CB_DTNA, 2);

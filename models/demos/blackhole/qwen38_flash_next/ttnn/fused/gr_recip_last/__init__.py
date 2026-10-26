@@ -1,27 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The GR read's front with the rsqrt applied LAST (``gr_recip_last``): stats, both gathers and the down projection
-as one program on the line transports (``gr_fold``), re-associated so that nothing waits on the statistics exchange.
+"""``gr_recip_last``: the GR read's front with the rsqrt applied last, as one program on ``gr_fold``'s line transports.
 
-With the rsqrt first, the front chains stats -> line gather -> rsqrt -> normalize -> multicast -> down matmul -> line
-gather, and at 5 rows 22 of its 44 us sit between the two gathers waiting on rsqrt(mean): the norm compute, the
-80-tile multicast into the workers and the matmul all need the gathered stats.
-Here the norm cores compute u_b = bf16(x_b * gamma_b/4) right after the stats (no statistics needed) and multicast
-it at once; the workers run the same 80 matmul blocks into four dest tiles, one per residual stream, while the stats
-round trip is in flight; the norm cores turn the gathered stats into recip_b = rsqrt(mean_b + eps) (the chain's
-reduce / eps / rsqrt, bitwise that far) and multicast the four fp32 recip tiles to the workers, which scale each
-stream's partial and sum the four (P = sum_b P_b * recip_b) into the partial tile the partials gather carries as
-today.  The gate's operand normalized' = bf16(u_b * recip_b) is written by the norm cores off the critical path.
-The partials payload and ``low_rank_gate`` are gr_read's unchanged.
-
-Rounding points that move against the chain (``docs/NUMERICS.md``): chain = bf16(bf16(x * rsqrt) * gamma/4) into
-the matmul, the DRAM-sharded matmul's spill/reload every 8 K tiles, then the device sum; here bf16(x * gamma/4)
-into the matmul (no spill), rsqrt onto the fp32 partial, then the unchanged device sum -> bf16 -> silu; the gate's
-operand has one bf16 rounding where the chain has two.  COMPONENT class, on by default since 2026-09-27 with the
-component proof recorded in its registry entry (the 1x4 replica against the tt/ oracle, a dev tool, and the paired served
-sample; ``docs/NUMERICS.md``); it needs ``gr_read``; ``QWEN38_FUSED_OFF=gr_recip_last`` restores gr_read's
-``gr_read_fused`` (stats, the stock all-gathers, normalize_down).
+The norm cores multicast u_b = bf16(x_b * gamma_b/4) right after the stats, so the workers' down matmul (one dest tile
+per residual stream) runs while the stats exchange is in flight; they then multicast recip_b = rsqrt(mean_b + eps)
+(bitwise the chain's) and the workers form P = sum_b P_b * recip_b. The matmul has no spill and the gate's operand
+bf16(u_b * recip_b) one bf16 rounding where the chain has two (``docs/NUMERICS.md``), hence COMPONENT class. Needs
+``gr_read``; ``QWEN38_FUSED_OFF=gr_recip_last`` restores ``gr_read_fused``.
 """
 
 from __future__ import annotations
@@ -44,7 +30,7 @@ KERNELS = {
     "mcast_reader2": MCAST_READER2,
     "mcast_writer3": MCAST_WRITER3,
 }
-RECIP_READY = 6  # program-local semaphore on the workers (and the producers that raise it): the four recip tiles landed
+RECIP_READY = 6  # program-local semaphore on the workers: the four recip tiles landed
 # the norm cores' CBs: gr_read.normalize_down's 0-7 (0 residual, 1 gathered stats, 2 scaler, 3 eps, 4 gamma, 5 var,
 # 6 recip, 7 the kept u) plus these
 CB_U = 16  # u row, the multicast source (bf16, 20)
@@ -76,10 +62,9 @@ def _mcast_reader2(cores, streams, runtime, *, recv, recv2, zero_cb=gr_read.NONE
 
 
 def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | None = None):
-    """The front as ONE program on normalize_down's cores and gr_fold's transports (the norm cores on row 2, the 6x2
-    down workers, the transport pair): stats -> u multicast -> per-stream matmul -> recip multicast -> scale and sum ->
-    partials gather.  Returns ``(gathered_stats, normalized', gathered_partials)`` in the chain's gathered shapes and
-    pages."""
+    """The front as one program on normalize_down's cores and gr_fold's transports.
+
+    Returns ``(gathered_stats, normalized', gathered_partials)`` in the chain's gathered shapes and pages."""
 
     rows = gr_read.residual_rows(residual)
     gr_read._expect(
@@ -262,10 +247,8 @@ def stats_recip_down_gather(residual, norm_scale, down_inject, *, links: int | N
             page_strides=(1, PT),
         ),
     ]
-    # the residual once, gamma and the weight in, normalized' out, every device's stats and partial tiles landing in
-    # the two gathered tensors' pages; the u row multicast to the twelve workers, the recip tiles to them, the stats /
-    # partial tiles handed to the transport cores (L1); the stats' two passes, the u product, the recip's reduce and
-    # rsqrt, the four-stream matmul, the scale and sum, the gate's normalized' product
+    # dram_bytes: every device's stats and partial tiles landing in the gathered tensors; l1_bytes: the u row and recip
+    # multicasts and the tiles handed to the transport cores
     meta = fp.program_meta(
         NAME,
         "stats_recip_down_gather",
@@ -311,7 +294,7 @@ register(
         tolerance=COMPONENT,
         fused=gr_read_recip_last,
         composed=gr_read.gr_read_fused,
-        gate=None,  # the collectives need the TP4 line: the component gate is the mesh replica with the oracle (dev tools)
+        gate=None,  # needs the TP4 line; checked by the mesh replica against the oracle
         component_proof="the 1x4 replica against the CPU oracle on captured residual rows (layers 2/12/47 x rows "
         "1/5/32, the checkpoint's attention-block weights), 2026-09-27: block-input rms_rel 0.0036-0.0045 where the "
         "composed read reads 0.0038-0.0045 (inside 1.10x + 1e-3 on every row), |bias| <= 1.9e-4, ULP p99 8-16 against "

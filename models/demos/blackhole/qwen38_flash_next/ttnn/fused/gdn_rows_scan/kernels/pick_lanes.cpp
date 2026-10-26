@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The lanes commit under the fold: lane u's committed count c_u = (a_u + 1) * active_u (the pass's fp32 [1, B, 1, 1]
-// device tensor: page u, element [0, 0]) picks prefix slot lane * R + c_u - 1 (lane u's state after c_u rows) into
-// lane u's recurrent state; c_u = 0 (an inactive lane, or one seeded and not yet verified) writes NOTHING, so that
-// lane's state stays bitwise -- data movement only, no arithmetic.  The counts are read on the device so a traced
-// replay follows the rewritten values.  Per item (lane, head, column tile): the four state tiles (kt, col) of the
-// head.  Compile-time args: 0 ROWS (R), 1 LANES (B); then TensorAccessorArgs of counts, prefix, recurrent.
+// The lanes commit under the fold: lane u's committed count c_u (fp32 [1, B, 1, 1] device tensor, page u) picks
+// prefix slot lane * R + c_u - 1 into lane u's recurrent state; c_u = 0 writes nothing, so that lane's state is kept.
+// Data movement only; the counts are read on device so a traced replay follows the rewritten values.
+// Per item (lane, head, column tile): the four state tiles (kt, col).
+// Compile-time args: 0 ROWS (R), 1 LANES (B); then TensorAccessorArgs of counts, prefix, recurrent.
 // Runtime args: 0 counts, 1 prefix, 2 recurrent addresses, 3 items, then (lane, head, col) triples.
 
 #include "api/dataflow/dataflow_api.h"

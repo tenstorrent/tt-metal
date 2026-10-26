@@ -9,7 +9,7 @@
 // The history (``commit_rows_full``): the units of the last tile row with head < 10 each take eight of the
 // projection's 80 q|k|v column tiles (columns 8h .. 8h + 7) from CB_PROJ, copy their rows 29..31 into rows 0..2 of a
 // zeroed tile and write it to page col of ``history_next`` [1, 1, 32, 2560].  A bf16 tile row r is two 32-byte
-// segments: face (r >> 4) * 2 + {0, 1} at element offset (r & 15) * 16.  Data movement: bitwise.
+// segments: face (r >> 4) * 2 + {0, 1} at element offset (r & 15) * 16.
 // CBs: CB_PROJ (5, the projection tiles), CB_OUT (16, the gated tiles), CB_HIST (17, the history scratch).
 // Compile-time args: TensorAccessorArgs of gated, history_next, chained from 0.  Runtime args: 0 gated address,
 // 1 history_next address, 2 chunks (NC), 3 rows, 4 history, 5 units on this core, 6 first unit.

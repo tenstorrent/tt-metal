@@ -1,9 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// main_tail, staging core writer (one staging core per lane): for this core's lanes the canonical staging tiles back
-// to DRAM (in place) and the 32 untilized rows into the lane's KV cache block at lane * lane_rows + (P & ~31) (page =
-// row).
+// main_tail, staging core writer: per lane the staging tiles back to DRAM in place and the 32 untilized rows into the
+// lane's KV cache block at lane * lane_rows + (P & ~31) (page = row).
 // Compile-time args: TensorAccessorArgs staging, cache, kv_block_start, kv_row_hit.
 // Runtime args: 0 staging, 1 cache, 2 kv_block_start, 3 kv_row_hit addresses, 4 rows, 5 lane rows (cache rows per
 // lane), 6 lane_first, 7 lane_count.

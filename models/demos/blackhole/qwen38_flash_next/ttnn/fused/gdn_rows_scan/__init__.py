@@ -1,45 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gdn_rows_scan``: the MTP verify rows' GDN body as ONE program per layer -- the serial fp32 recurrence of the
-fused decode step ``gdn_step``, row after row over the k + 1 verify rows, with every prefix state kept.
+"""``gdn_rows_scan``: the MTP verify rows' GDN body as one program per layer.
 
-Stage B of the verify-rows scan design (the fold).  One GDN layer's verify body becomes
-
-    projection linear + S2I -> qkv landing slice -> gdn_rows_scan -> out-projection linear + reduce-scatter
-
-where the wrap (``gdn_rows_wrap``, today's default) runs six programs between the S2I and the out-projection
-(``gdn_pre_rows`` -> ``chunk_gdn_prep`` -> ``chunk_gdn_scan`` -> ``post_cast`` -> ``post_norm`` on the chunk / WY form
-at TF32 operand precision) and the chain 53.  The program runs gdn_step's compute body in a row loop: conv + SiLU and
-both l2 norms once over the 32-row tile, the gate scalars of every row in one SFPU pass over the a / b tiles (element
-(row, head) of beta_all / decay_all, which the reader replicates into one exact fp32 tile per row), then per row
-``S' = S * exp(g)``, ``v_read = k S'``, ``delta = (v - v_read) * beta`` on that row alone (the one-hot row mask), ``S =
-S' + k^T delta`` and ``o = (q S) * 128^-0.5``, the state carried row to row in L1; then the gated RMSNorm once on the
-assembled o rows.  Every LLK call, rounding point and DST accumulation order is gdn_step's (the gate ops are
-lane-wise, so a whole-tile pass gives each element the bits the per-row scalar chain gave it), so the program is
-BITWISE with ``rows`` sequential fused ``gdn_step`` calls from the same state (the die proof), and its numerics class against today's MTP stream (the chunk
-form) is COMPONENT.
-
-Outputs per layer: the gated tile ``[1, 1, 32, 1536]`` bf16 straight into the out-projection's activation shard (rows
->= ``rows`` exact zeros) and the PREFIX STATES ``prefix[a]`` = the state after ``a + 1`` rows, ``a = 0 .. rows-1``,
-``[rows, 12, 128, 128]`` fp32, persistent with the rows state.  Row 0 (the base token) is always committed, so slot
-``a`` is exactly the committed state for ``accepted = a``: the commit becomes one data-movement program (``pick``:
-read the pass's device accept count, copy that slot into ``state.recurrent``) plus the chain's own history advance,
-instead of the wrap's masked re-run of the two prims (its TF32-class passthrough disappears).  ``forward_rows``
-under the fold returns ``final_state=None``: the state after all rows is prefix slot ``rows - 1``, owned by the rows
-state, and the verify body only frees the result's final state.
-
-On by default since 2026-09-26 (class COMPONENT with its component-gate record: the probe's rows column against the
-CPU oracle; ``QWEN38_FUSED_OFF=gdn_rows_scan`` restores the wrap, and the served stream's pins are this kernel's:
-plain decode's divergence on 12 of 12 records).  Admission is a property of the rows state, decided when it is
-allocated (``attach``): the 32-row verify form with ``1 <= rows <= MAX_ROWS``, its own body, device tensors.  With
-the fold attached the wrap is not; ``QWEN38_FUSED_OFF`` semantics are unchanged.
-
-Work items: ``SPLIT`` state column blocks per value head -- 1 (12 items, one head per core; the bring-up form) or 4
-(48 items, one 32-column block of the head's state per core; every per-tile op of the recurrence touches only its
-own column block, so the split changes which tiles a core computes and never the order inside a tile; the four cores
-of a head exchange their o-row tiles before the gated norm).  ``reference_rows`` is the claim in torch: ``rows``
-sequential ``gdn_step.reference_step`` calls with the FIR ring emulated from the history rows.
+The program is ``gdn_step``'s serial fp32 recurrence in a row loop over the k + 1 verify rows, with the same LLK calls,
+rounding points and DST accumulation order, so it is bitwise ``rows`` sequential ``gdn_step`` calls. Besides the gated
+tile it writes the prefix states ``prefix[a]`` (the state after ``a + 1`` rows, ``[rows, 12, 128, 128]`` fp32), so the
+commit copies slot ``accepted`` into ``state.recurrent`` (``pick``) and ``forward_rows`` returns ``final_state=None``.
+Admission is fixed when the rows state is allocated (``attach``).
 """
 
 from __future__ import annotations
@@ -80,19 +48,17 @@ PICK_LANES = fp.kernel_source(NAME, "pick_lanes.cpp")
 TILE = fp.TILE  # the verify tile: 32 rows
 HT = HEAD_DIM // TILE  # 4 column tiles per head
 HISTORY_ROWS = 3  # the FIR history rows before row 0
-# State column blocks per value head: 1 = one head per core (12 items), 4 = one 32-column block per core (48 items).
-# The served form is 4 (MEASURED on one p150 die at R = 5, traced: 113 us per call against 160 us for the 12-item form,
-# both bitwise the sequential gdn_step calls); ``run(..., split=1)`` keeps the 12-item form for the device test.
+# State column blocks per value head: 1 = one head per core (12 items), 4 = one 32-column block per core (48 items,
+# the faster form on device); ``run(..., split=1)`` keeps the 12-item form for the device test.
 SPLIT = 4
 # The most verify rows the fold admits (k + 1; the prefix states are rows x 786 KB per layer per device).
 MAX_ROWS = 8
-# The lanes form: B lanes x R rows (R = k + 1 <= MAX_ROWS) lane-major in one tile, B * R <= 32, one (value head,
-# lane) item per core (12 B cores, the whole head per core), the state [B, 12, 128, 128] and the prefix states
-# [B * R, 12, 128, 128] (slot u * R + j = lane u after j + 1 rows; the single form's tensor with rows = B * R).
+# The lanes form: B lanes x R rows (R = k + 1 <= MAX_ROWS) lane-major in one tile (B * R <= 32), one (value head,
+# lane) item per core; prefix slot u * R + j is lane u after j + 1 rows.
 MAX_LANES = 8
 # The layer's verify segment with the fold on: the all-gather, the projection linear, its S2I, the qkv landing slice,
-# this program, the out-projection linear, the reduce-scatter (the wrap runs 11, the chain 58); the commit: the pick,
-# the history concat and its select matmul (the wrap runs 5).
+# this program, the out-projection linear, the reduce-scatter; the commit: the pick, the history concat and its select
+# matmul.
 PROGRAMS_PER_LAYER = 7
 COMMIT_PROGRAMS_PER_LAYER = 3
 
@@ -166,13 +132,13 @@ def debug_tiles(rows: int) -> int:
 
 
 def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, split: int | None = None, debug=None):
-    """The scan program on explicit tensors (local shapes): ``projected`` [1,1,32,4160] bf16 TILE (the rows past the
-    real ones may hold anything finite); ``history`` [1,1,32,2560] bf16 (rows 0..2 valid); ``taps`` 4 x [1,1,1,2560]
-    bf16; ``constants`` from ``gdn_step.constant_tiles``; ``norm`` [1,1,1,128] bf16; ``recurrent`` [1,12,128,128]
-    fp32 (read only); ``prefix`` [rows,12,128,128] fp32 (written: slot a = the state after a + 1 rows); ``out``
-    [1,1,32,1536] bf16 (any memory layout the TensorAccessor addresses; rows >= rows exact zeros).  ``split`` overrides
-    the module's ``SPLIT`` (the device test measures both forms); ``debug`` an optional ``[items, debug_tiles(rows), 32,
-    32]`` fp32 tensor that receives the DEBUG_TAPS build's intermediates."""
+    """The scan program on explicit tensors (local shapes).
+
+    ``projected`` [1,1,32,4160] bf16 TILE (rows past the real ones finite); ``history`` [1,1,32,2560] bf16 (rows 0..2
+    valid); ``taps`` 4 x [1,1,1,2560] bf16; ``constants`` from ``gdn_step.constant_tiles``; ``norm`` [1,1,1,128] bf16;
+    ``recurrent`` [1,12,128,128] fp32 (read only); ``prefix`` [rows,12,128,128] fp32 (slot a = the state after a + 1
+    rows); ``out`` [1,1,32,1536] bf16 (rows >= rows exact zeros). ``split`` overrides ``SPLIT``; ``debug`` is an
+    optional ``[items, debug_tiles(rows), 32, 32]`` fp32 tensor for a DEBUG_TAPS build's intermediates."""
 
     rows = int(prefix.shape[0])
     split = SPLIT if split is None else int(split)
@@ -204,7 +170,7 @@ def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, sp
         return [value for item in items[w.start : w.start + w.count] for value in item]
 
     # The column-block form: the four cores of a head exchange their o-row tiles through L1, so each item's writer
-    # takes its three peers' NoC coordinates (measured once per mesh: the logical -> NoC map is not linear).
+    # takes its three peers' NoC coordinates (read from the mesh: the logical -> NoC map is not linear).
     peers_of = {}
     if split > 1:
         noc = gr_read.noc_map(mesh)
@@ -271,10 +237,8 @@ def run(projected, history, taps, constants, norm, recurrent, prefix, out, *, sp
         unpack_to_dest_fp32=FP32_COPY_CBS,
     )
     io = [projected, history, *taps, constants, norm, recurrent, *([debug] if debug is not None else []), prefix, out]
-    # the projection's q/k/v/z/a/b tiles and the history once per item (the q/k tiles once per item of a key head),
-    # the taps, the fp32 state once, the prefix states and the gated tile written; the 4-tap conv and the two l2
-    # norms over the 32-row tile, per row the fp32 delta-rule update and read-out on 12 heads of 128 x 128, the gated
-    # norm over the tile
+    # flops: the 4-tap conv and two l2 norms over the 32-row tile, per row the fp32 delta-rule update and read-out on
+    # 12 heads of 128 x 128, and the gated norm
     meta = fp.program_meta(
         NAME,
         "verify_rows",
@@ -339,8 +303,7 @@ def run_pick(accepted, prefix, recurrent):
 
 
 def lanes_admitted(lanes: int, rows: int) -> bool:
-    """Whether ``lanes`` x ``rows`` is a shape the lanes form runs: 1..MAX_LANES lanes of 1..MAX_ROWS rows, B * R rows
-    in one tile.  (The lane body itself runs 2..8 lanes; one lane is the die test's degenerate case.)"""
+    """Whether ``lanes`` x ``rows`` fits the lanes form: 1..MAX_LANES lanes of 1..MAX_ROWS rows in one tile."""
 
     return 1 <= lanes <= MAX_LANES and 1 <= rows <= MAX_ROWS and lanes * rows <= TILE
 
@@ -361,13 +324,12 @@ def _lane_items(lanes: int) -> list[tuple[int, int]]:
 
 
 def run_lanes(projected, history, taps, constants, norm, recurrent, prefix, out, *, lanes: int, rows: int):
-    """The scan program's lanes form on explicit tensors (local shapes): ``projected`` [1,1,32,4160] bf16 TILE, the
-    lane-major verify tile (tile row u * rows + j = lane u's row j; every row finite); ``history`` [1,lanes,32,2560] bf16
-    (rows 0..2 of every lane valid, the rest finite); ``taps`` 4 x [1,1,1,2560] bf16; ``constants`` from
-    ``gdn_step.constant_tiles``; ``norm`` [1,1,1,128] bf16; ``recurrent`` [lanes,12,128,128] fp32 (read only);
-    ``prefix`` [lanes*rows,12,128,128] fp32 (written: slot u*rows + j = lane u's state after j + 1 rows); ``out``
-    [1,1,32,1536] bf16 (rows >= lanes*rows exact zeros).  One (value head, lane) item per core: 12 * lanes cores, the
-    whole head per core; the compute kernel is the single form's with ROWS = ``rows`` (one lane's rows)."""
+    """The scan program's lanes form on explicit tensors (local shapes); one (value head, lane) item per core.
+
+    ``projected`` [1,1,32,4160] bf16 TILE is lane-major (tile row u * rows + j = lane u's row j; every row finite);
+    ``history`` [1,lanes,32,2560] bf16 (rows 0..2 of every lane valid, the rest finite); ``recurrent``
+    [lanes,12,128,128] fp32 (read only); ``prefix`` [lanes*rows,12,128,128] fp32 (slot u*rows + j = lane u's state
+    after j + 1 rows); ``out`` [1,1,32,1536] bf16 (rows >= lanes*rows exact zeros). Other arguments as ``run``."""
 
     lanes, rows = int(lanes), int(rows)
     if not lanes_admitted(lanes, rows):
@@ -444,9 +406,8 @@ def run_lanes(projected, history, taps, constants, norm, recurrent, prefix, out,
         unpack_to_dest_fp32=FP32_COPY_CBS,
     )
     io = [projected, history, *taps, constants, norm, recurrent, prefix, out]
-    # per item the projection's q/k/v/z/a/b tiles and the lane's history tiles, the taps, the lane's fp32 state once;
-    # the prefix states and the gated rows written; per item the 4-tap conv and the two l2 norms over the 32-row
-    # tile, per lane row the fp32 delta-rule update and read-out on one head of 128 x 128, the gated norm over the tile
+    # flops per item: the 4-tap conv and two l2 norms over the 32-row tile, per lane row the fp32 delta-rule update
+    # and read-out on one head of 128 x 128, and the gated norm
     meta = fp.program_meta(
         NAME,
         "verify_rows_lanes",
@@ -466,11 +427,10 @@ def run_lanes(projected, history, taps, constants, norm, recurrent, prefix, out,
 
 
 def run_pick_lanes(counts, prefix, recurrent, *, lanes: int, rows: int):
-    """The lanes commit under the fold: for every lane u with ``c_u >= 1``, ``recurrent[u] = prefix[u * rows + c_u - 1]``
-    (lane u's state after ``c_u`` committed rows); ``c_u == 0`` writes nothing (the lane keeps its state bitwise).
-    ``counts`` is the pass's fp32 TILE ``[1, lanes, 1, 1]`` committed-rows tensor (the lane selectors' ``(a_u + 1) *
-    active_u``; the kernel clamps to ``rows``), read on the device.  One data-movement program, (lane, head, column)
-    items over the grid."""
+    """The lanes commit: ``recurrent[u] = prefix[u * rows + c_u - 1]`` for every lane with ``c_u >= 1``.
+
+    ``c_u == 0`` keeps the lane's state. ``counts`` is the pass's fp32 TILE ``[1, lanes, 1, 1]`` committed-rows tensor,
+    read on device (the kernel clamps to ``rows``)."""
 
     lanes, rows = int(lanes), int(rows)
     if not lanes_admitted(lanes, rows):
@@ -523,9 +483,9 @@ def run_pick_lanes(counts, prefix, recurrent, *, lanes: int, rows: int):
 
 
 class Buffers:
-    """The fold's per-layer tensors, allocated with the rows state and freed with it: the prefix states, and the
-    program's constants (gdn_step's dt_bias / neg_exp_A full tiles, shared with the decode step through the layer's
-    own cache and not owned here).  The gated tile does not outlive one body and is allocated per call."""
+    """The fold's per-layer tensors, allocated with the rows state and freed with it.
+
+    ``constants`` are gdn_step's dt_bias / neg_exp_A tiles from the layer's own cache, not owned here."""
 
     __slots__ = ("prefix", "constants", "gated_memory_config")
 
@@ -541,8 +501,8 @@ class Buffers:
 
 
 def qualifies(rows_state) -> bool:
-    """Whether a rows state is the form the fold serves: the 32-row verify tile with its own body, up to MAX_ROWS real
-    rows, device tensors.  Shapes only, read once when the state is allocated."""
+    """Whether a rows state is the fold's form: the 32-row verify tile with its own body, up to MAX_ROWS real rows,
+    device tensors. Shapes only."""
 
     constants = getattr(rows_state, "constants", None)
     if constants is None or not getattr(rows_state, "owns_body", True):
@@ -553,10 +513,10 @@ def qualifies(rows_state) -> bool:
 
 
 def attach(gdn, rows_state, environ=None) -> Buffers | None:
-    """Allocate the fold's buffers onto a newly allocated rows state and return them, or None when the fold is off
-    (not named by ``QWEN38_FUSED``, or named by ``QWEN38_FUSED_OFF``) or the state is not the form it serves.  Called
-    from ``allocate_rows_state`` before the wrap's ``attach``, so the form is fixed before the warm pass and the
-    commit that reads the prefix states cannot find itself on the other side of the switch from the forward pass."""
+    """Allocate the fold's buffers onto a new rows state; None when the fold is off or the state does not qualify.
+
+    Called from ``allocate_rows_state`` before the wrap's ``attach``, so the form is fixed before the warm pass and the
+    commit sees the same form as the forward pass."""
 
     environ = os.environ if environ is None else environ
     if not enabled(NAME, environ) or not qualifies(rows_state):
@@ -578,9 +538,9 @@ def buffers_of(rows_state) -> Buffers | None:
 
 
 class LaneBuffers:
-    """The lanes form's per-layer tensors, allocated with the lane rows state and freed with it: the prefix states
-    ``[B * R, 12, 128, 128]`` fp32 (slot u * R + j = lane u after j + 1 rows) and the program's constants (shared with
-    the decode step, not owned here)."""
+    """The lanes form's per-layer tensors, allocated with the lane rows state and freed with it.
+
+    ``prefix`` is ``[B * R, 12, 128, 128]`` fp32; ``constants`` are shared with the decode step, not owned here."""
 
     __slots__ = ("prefix", "constants", "gated_memory_config", "lanes", "rows")
 
@@ -593,8 +553,8 @@ class LaneBuffers:
 
 
 def qualifies_lanes(rows_state) -> bool:
-    """Whether a lane rows state is the form the lanes fold serves: the 32-row lane-major verify tile, ``lanes`` x
-    ``rows`` within the admission, device tensors.  Shapes only, read once when the state is allocated."""
+    """Whether a lane rows state is the lanes fold's form: the 32-row lane-major verify tile within the admission,
+    device tensors. Shapes only."""
 
     constants = getattr(rows_state, "constants", None)
     lane_constants = getattr(rows_state, "lane_constants", None)
@@ -609,10 +569,8 @@ def qualifies_lanes(rows_state) -> bool:
 
 
 def attach_lanes(gdn, rows_state, environ=None) -> LaneBuffers | None:
-    """Allocate the lanes form's buffers onto a newly allocated lane rows state and return them, or None when the fold
-    is off (the same switch as the single form: ``QWEN38_FUSED_OFF=gdn_rows_scan``) or the state is not the form it
-    serves.  Called from ``allocate_lane_rows_state``: the form is fixed before the warm pass and the capture, and the
-    commit that picks the prefix states cannot find itself on the other side of the switch from the forward pass."""
+    """Allocate the lanes form's buffers onto a new lane rows state; None when the fold is off or the state does not
+    qualify. Called from ``allocate_lane_rows_state``, so the form is fixed before the warm pass and the capture."""
 
     environ = os.environ if environ is None else environ
     if not enabled(NAME, environ) or not qualifies_lanes(rows_state):
@@ -643,10 +601,10 @@ def lane_buffers_of(rows_state) -> LaneBuffers | None:
 
 
 def rows_body_scan(gdn, full_hidden, rows_state, state, *, full_tile: bool = False):
-    """The folded body: the projection's linear and S2I, the qkv landing the history advance reads, the scan program
-    (the gated tile into the out-projection's activation shard, the prefix states into the rows state's buffer),
-    then the chain's own out-projection.  Returns ``(output, None)``: the state after all rows is prefix slot
-    ``rows - 1``.  On a lane rows state that carries the lanes buffers, the lanes form (``rows_body_scan_lanes``)."""
+    """The folded body: projection linear and S2I, qkv landing, the scan program, then the out-projection.
+
+    Returns ``(output, None)``: the state after all rows is prefix slot ``rows - 1``. A lane rows state with lanes
+    buffers runs ``rows_body_scan_lanes``."""
 
     if lane_buffers_of(rows_state) is not None:
         return rows_body_scan_lanes(gdn, full_hidden, rows_state, state)
@@ -672,9 +630,7 @@ def rows_body_scan(gdn, full_hidden, rows_state, state, *, full_tile: bool = Fal
 
 
 def rows_body_fallback(gdn, full_hidden, rows_state, state, *, full_tile: bool = False):
-    """Today's stream where the fold does not serve: the wrap on a rows state that carries its buffers, the chain
-    otherwise (the layer's resolved wrap-or-chain body); on a lane rows state, the lanes chain (the single stream's
-    recurrence once per lane)."""
+    """Where the fold does not serve: the layer's wrap-or-chain body, or the lanes chain on a lane rows state."""
 
     if is_lane_rows_state(rows_state):
         return gdn._rows_body_lanes_chain(full_hidden, rows_state, state)
@@ -682,17 +638,14 @@ def rows_body_fallback(gdn, full_hidden, rows_state, state, *, full_tile: bool =
 
 
 def is_lane_rows_state(rows_state) -> bool:
-    """Whether ``rows_state`` is the lane rows form (B lanes lane-major; ``Qwen38TTNNGDNLaneRowsState``): it carries
-    a lane count and the lane constants; the single stream's rows state carries neither."""
+    """Whether ``rows_state`` is the lane rows form: it carries a lane count and the lane constants."""
 
     return getattr(rows_state, "lane_constants", None) is not None and getattr(rows_state, "lanes", None) is not None
 
 
 def admits(gdn, full_hidden, rows_state, state, *, full_tile: bool = False) -> bool:
-    """The fold's input contract for one ``forward_rows`` body: the rows state carries the fold's buffers (which
-    ``attach`` gives only the admitted verify form, and only when the kernel is on) and the call's state is the
-    single-lane fp32 recurrent tensor.  Shapes only: host fakes and every other form take today's stream.  A lane
-    rows state is admitted by the lanes form's contract (``admits_lanes``), the same registry step serving both."""
+    """The fold's input contract: the rows state carries the fold's buffers and the state is the single-lane fp32
+    recurrent tensor; a lane rows state uses ``admits_lanes``. Shapes only."""
 
     if is_lane_rows_state(rows_state):
         return admits_lanes(rows_state, state)
@@ -731,9 +684,8 @@ def commit_all_rows(buffers, state) -> None:
 
 
 def admits_lanes(rows_state, state) -> bool:
-    """The lanes form's input contract for one ``forward_rows_lanes`` body: the lane rows state carries the lanes
-    buffers (which ``attach_lanes`` gives only the admitted form, and only when the kernel is on) and the call's state
-    is the ``[B, 12, 128, 128]`` fp32 lane recurrent tensor."""
+    """The lanes form's input contract: the lane rows state carries the lanes buffers and the state is the
+    ``[B, 12, 128, 128]`` fp32 lane recurrent tensor."""
 
     buffers = lane_buffers_of(rows_state)
     if buffers is None or not qualifies_lanes(rows_state):
@@ -748,11 +700,10 @@ def admits_lanes(rows_state, state) -> bool:
 
 
 def rows_body_scan_lanes(gdn, full_hidden, rows_state, state):
-    """The folded lane body: the projection's linear and S2I, the q|k|v landing and its per-lane expand (the commit's
-    history advance reads both), the lanes scan program (the gated tile into the out-projection's activation shard,
-    the prefix states into the lane rows state's buffer), then the chain's own out-projection.  Returns ``(output,
-    None)``: lane u's state after all rows is prefix slot ``u * R + R - 1``.  The state must be the lane state the
-    buffers were attached for (``admits_lanes``); anything else is a wiring error, not a fallback."""
+    """The folded lane body: projection linear and S2I, q|k|v landing and per-lane expand, the lanes scan program, then
+    the out-projection. Returns ``(output, None)``: lane u's final state is prefix slot ``u * R + R - 1``.
+
+    The state must be the lane state the buffers were attached for; anything else raises (a wiring error)."""
 
     buffers = lane_buffers_of(rows_state)
     if buffers is None or not admits_lanes(rows_state, state):
@@ -788,9 +739,9 @@ def rows_body_scan_lanes(gdn, full_hidden, rows_state, state):
 
 
 def commit_lanes(gdn, rows_state, buffers, state, selectors) -> None:
-    """The lanes commit under the fold: lane u's prefix slot ``u * R + c_u - 1`` into ``state.recurrent[u]`` by the
-    lanes pick program (``c_u == 0`` keeps the lane's state).  The counts are the selectors' committed-rows tensor
-    (``build_rows_selectors_lanes`` keeps it)."""
+    """The lanes commit under the fold: lane u's prefix slot ``u * R + c_u - 1`` into ``state.recurrent[u]``.
+
+    ``c_u == 0`` keeps the lane's state; the counts come from ``build_rows_selectors_lanes``."""
 
     counts = getattr(selectors, "committed_counts", None)
     if counts is None:
@@ -805,8 +756,8 @@ def commit_lanes(gdn, rows_state, buffers, state, selectors) -> None:
 
 
 def reference_rows(projected, history, taps, dt_bias, neg_exp_A, norm, state, rows: int):
-    """The program's claim in torch: ``rows`` sequential ``gdn_step.reference_step`` calls (tt/gdn.py's arithmetic per
-    row) with the FIR ring emulated from the history rows.  ``projected`` [32, 4160] bf16 (rows >= ``rows`` unused),
+    """The program in torch: ``rows`` sequential ``gdn_step.reference_step`` calls with the FIR ring emulated from the
+    history rows.  ``projected`` [32, 4160] bf16 (rows >= ``rows`` unused),
     ``history`` [32, 2560] bf16 (rows 0..2), ``taps`` 4 x [2560] bf16, ``dt_bias`` / ``neg_exp_A`` [12] fp32, ``norm``
     [128] bf16, ``state`` [12, 128, 128] fp32.  Returns (prefix [rows, 12, 128, 128] fp32: slot a = the state after
     a + 1 rows; gated [rows, 1536] bf16)."""
@@ -851,9 +802,7 @@ register(
         fused=rows_body_scan,
         composed=rows_body_fallback,
         admits=admits,
-        # COMPONENT against the wrap's stream (the chunk form); the component gate is the fused GDN step probe's rows
-        # column (fused_gdn_step_probe --rows 5): the fold's slots against the CPU oracle, and bitwise the fused step
-        # run sequentially in every window (the die proof's identity on real inputs)
+        # COMPONENT against the wrap's chunk form; component_proof records the gate run against the CPU oracle.
         component_proof=(
             "the fused GDN step probe's rows column against the CPU oracle, one p150 die, 2026-09-26 (run "
             "probe-rows5-8edcaf9279c-162454, --rows 5, 64 steps): state error 0.0048 and gated output 0.0098 for "

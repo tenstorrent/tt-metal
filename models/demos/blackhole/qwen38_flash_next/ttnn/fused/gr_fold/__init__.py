@@ -1,16 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The line transports the fused GR read's front (``gr_recip_last``) runs its two gathers on.
+"""``gr_fold``: the line transports the fused GR read's front (``gr_recip_last``) runs its two gathers on.
 
-One transport core per fabric link sends this device's tiles to the other devices of the TP4 line over the 1D fabric
-(``ttnn.setup_fabric_connection`` hands a generic_op kernel a fabric connection; the kernel is a line multicast by hop
-count on the 1D linear API); the tiles land in the DRAM pages the chain's all-gather writes, behind a per-call
-barrier.  An all-gather is data movement, so a gather phase is bitwise by construction: the slot order (page
-``4b + d`` for the stats, ``12d + t`` for the partials) and every consumer's loop order are the chain's.
-``kernels/transport_phase.h`` states the semaphore protocol.  ``transport_mesh_program`` adds the two gather phases
-(``Transport``) to a program's own kernels; ``line`` and ``line_semaphores`` are the per-mesh fabric geometry and
-global semaphores, created once before any trace capture.
+One transport core per fabric link sends this device's tiles to the other devices of the TP4 line over the 1D fabric,
+into the DRAM pages the chain's all-gather writes (page ``4b + d`` for the stats, ``12d + t`` for the partials), so a
+gather phase is bitwise by construction. ``kernels/transport_phase.h`` states the semaphore protocol; ``line`` and
+``line_semaphores`` are per mesh and must be created before any trace capture.
 """
 
 from __future__ import annotations
@@ -40,9 +36,8 @@ PARTIALS_SCRATCH_CB = 11  # beside normalize_down's CBs 0-10, 16, 17
 # the transport cores, one per link: clear of normalize_down's 6x2 worker rectangle and its producers on row 2
 TRANSPORT = {"partials": (ttnn.CoreCoord(6, 0), ttnn.CoreCoord(7, 0))}
 PARTIALS_SEMAPHORES = (1, 2, 3)  # normalize_down's in0 multicast owns program semaphore 0
-# the front's one program (stats + normalize_down): the partials transport cores run both phases on one connection
-# per link (kernels/transport2.cpp; a link's worker sender channel is one per direction), the stats phase with its own
-# scratch semaphore; the gate is the norm cores' semaphore their reader waits on before streaming the gathered stats
+# the front's one program: the transport cores run both phases on one connection per link (kernels/transport2.cpp),
+# the stats phase with its own scratch semaphore; the norm cores' reader waits on FRONT_STATS_READY
 TRANSPORT2_KERNEL = fp.kernel_source(NAME, "transport2.cpp")
 FRONT_STATS_SCRATCH_SEM = 4  # on the transport cores, beside the partials' (go, scratch, done) = 1, 2, 3
 FRONT_STATS_READY = 5  # on the norm cores, beside the in0 multicast's 0
@@ -84,10 +79,10 @@ def line_semaphores(mesh) -> LineSemaphores:
 
 
 class Line:
-    """The TP line as the fabric sees it: rank r -> (mesh coordinate, fabric node id), checked once per mesh: the
-    mesh is the model's ``(1, 4)`` with the line along axis 1, every neighbour pair is one hop in a direction
-    consistent along the line (forward one way, backward the other), the degree histogram is {1: 2, 2: 2}, and the
-    link indices usable towards each neighbour are recorded (``links`` = the count every pair offers)."""
+    """The TP line as the fabric sees it: rank r -> (mesh coordinate, fabric node id), checked once per mesh.
+
+    The mesh must be the model's ``(1, 4)`` line along axis 1 with one hop per neighbour pair in a consistent
+    direction; ``links`` is the link count every neighbour pair offers."""
 
     def __init__(self, mesh) -> None:
         shape = tuple(int(v) for v in mesh.shape)
@@ -144,7 +139,7 @@ class Transport:
     land in ``out`` at page ``t * page_strides[0] + rank * page_strides[1]``, moved by ``cores[:links]`` (one per
     link, tiles dealt round robin) with the program-local semaphore ids (go, scratch, done); the transport cores
     raise ``consumer_sem`` on each of ``consumers`` (NoC x, y) once every peer's tile has landed; ``delays`` = {rank:
-    (before_arrive, after_reset)} spin cycles for the skew soak (the first transport's, in a two-phase program)."""
+    (before_arrive, after_reset)} spin cycles for skew testing (the first transport's, in a two-phase program)."""
 
     out: Any
     local: Any
@@ -163,16 +158,13 @@ class Transport:
 def transport_mesh_program(
     mesh, transports, *, semaphores, cbs, kernels=lambda rank: [], links: int = 1
 ) -> "ttnn.MeshProgramDescriptor":
-    """One ProgramDescriptor per mesh coordinate: ``kernels(rank)`` plus, per link, the transport core's reader (NCRISC,
-    backward) and writer (BRISC, forward) with the device's rank and fabric connections.  The two ``Transport`` phases
-    run ``kernels/transport2.cpp`` on the SAME cores, both phases on one connection per RISC (a fabric link's worker
-    sender channel is one per direction, so a program holds at most one open sender per link per direction); they
-    share ``go`` and ``done`` and have distinct scratch semaphores and phases.  The program's own semaphores
-    (``semaphores``, fixed ids) are in the descriptor before ``setup_fabric_connection`` adds a connection's two,
-    always in the order backward then forward, so the ids are the same on every build (ends: 2 connection
-    semaphores, middles: 4); ``setup_fabric_connection`` mutates the descriptor it is given and returns the
-    kernel's runtime args, so the transport kernels are built twice: once to seed the descriptor, once with
-    the args."""
+    """One ProgramDescriptor per mesh coordinate: ``kernels(rank)`` plus each link's transport reader (NCRISC,
+    backward) and writer (BRISC, forward).
+
+    Both ``Transport`` phases run ``kernels/transport2.cpp`` on the same cores and connection (a link has one worker
+    sender channel per direction). The program's own ``semaphores`` (fixed ids) precede the connection semaphores
+    ``setup_fabric_connection`` adds (backward, then forward), so ids are stable across builds; that call mutates the
+    descriptor and returns the runtime args, so the transport kernels are built twice."""
 
     geometry = line(mesh)
     if len(transports) != 2:

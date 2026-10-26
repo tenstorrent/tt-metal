@@ -1,43 +1,26 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// The line transport of the fused GR read: a transport core per fabric link moves this device's tiles to the other
-// devices of the TP4 line over the 1D fabric from inside the program, so the chain's collective is not a program of
-// its own.  A phase is the all-gather of TILES local tiles (the stats: one per branch; the partials: one per down
-// worker) into the gathered tensor at page t * PAGE_TILE_STRIDE + rank * PAGE_RANK_STRIDE, exactly the pages the
-// chain's all-gather writes; this core carries the tiles t = TILE_FIRST + i * TILE_STEP (one core per link, the tiles
-// dealt round robin).  SOURCE selects where they come from: 0 = a local tensor this kernel reads (the standalone
-// gather of the smoke tool; NCRISC also copies them into the device's own pages), 1 = producer cores of the same
-// program write them into this core's scratch CB and into the device's own pages themselves and raise the scratch
-// semaphore once per tile.  transport2.cpp runs two phases in sequence on the same connection (the fused read's
-// front: the stats phase, then the partials phase), because a fabric link's worker sender channel is one per direction
-// (fabric.cpp: sender_channel 0; the open handshake does not queue), so one program keeps at most one open sender per
-// link per direction.
+// The line transport of the fused GR read: one transport core per fabric link all-gathers TILES local tiles over the
+// TP4 line's 1D fabric from inside the program, into page t * PAGE_TILE_STRIDE + rank * PAGE_RANK_STRIDE of the
+// gathered tensor (the chain's all-gather pages); this core carries tiles t = TILE_FIRST + i * TILE_STEP.  SOURCE 0: a
+// local tensor this kernel reads (NCRISC also copies it into the device's own pages); SOURCE 1: producer cores of the
+// program write the tiles into this core's scratch CB and the device's own pages and raise the scratch semaphore once
+// per tile.  A fabric link has one worker sender channel per direction and the open handshake does not queue, so a
+// program keeps at most one open sender per link per direction (transport2.cpp runs two phases on one connection).
 //
-// Both data-movement RISCs run these bodies.  NCRISC (reader config, NOC_0) sends backward (the ranks below); BRISC
-// (writer config, NOC_1) sends forward (the ranks above) and owns the waits.  Both connections are opened at kernel
-// start (LineSender::open) and closed after this RISC's last send.  Cross-device protocol per phase per call (the
-// three facts it stands on are marked FACT below):
-//   1. barrier (LineSender::arrive): every device raises the phase's barrier semaphore of every peer by one (one line
-//      multicast per direction: FACT 1, exactly RING - 1 arrivals per counter per call, every peer once); BRISC waits
-//      for RING - 1, resets the counter with a plain L1 store and only then releases NCRISC through the program-local
-//      `go` semaphore (FACT 2: the reset is program-ordered on BRISC before the release, and every data send of either
-//      RISC is program-ordered after it: BRISC's by program order, NCRISC's by its `go` wait).
-//   2. data: each tile goes out as one fused write + atomic-increment packet (the payload lands in the peer's tensor
-//      page, then the peer's data semaphore steps by one); BRISC waits for (RING - 1) x this core's tiles (FACT 3: the
-//      full count from all peers, so no device leaves a phase with partial data) and resets.
-// The barrier and data semaphores are global semaphores (one address on every device), a pair per phase.  No launch
-// resets a semaphore, so every semaphore raised here is reset by its owner before the program ends: BRISC resets the
-// barrier and data counters; NCRISC resets `go`; with SOURCE 1, NCRISC raises `done` once its sends are issued and
-// BRISC, last, resets `done` and the producers' scratch semaphore.  A packet header is rewritten only after
-// noc_async_writes_flushed().  Two phases on one core reuse `go` and `done`: BRISC's phase-B `go.set(1)` follows its
-// phase-A `done.wait(1)`, which follows NCRISC's phase-A `done.set(1)`, which follows NCRISC's phase-A `go.set(0)` in
-// NCRISC program order, so a phase's release is never mistaken for the previous phase's.  Both arrives of a two-phase
-// kernel go out at kernel start (the phase-B wait comes after phase A); the barrier argument holds per counter.
-// Consumers: once a phase's gathered pages are complete (after the data wait and its reset) BRISC raises the
-// consumer semaphore of every listed consumer core by one, so consumers of the same program may read the pages.
-// The two delay arguments (cycles) exist for the skew soak: a spin before the barrier arrive, a spin between the reset
-// and the release of the sends; both 0 in the model.
+// NCRISC (NOC_0) sends backward (the ranks below); BRISC (NOC_1) sends forward and owns the waits.  Per phase per call:
+//   1. barrier: every device raises the phase's barrier semaphore on every peer once (FACT 1: exactly RING - 1
+//      arrivals per counter per call); BRISC waits for RING - 1, resets it with a plain L1 store and only then
+//      releases NCRISC through `go` (FACT 2: the reset precedes every data send of either RISC).
+//   2. data: each tile is one fused write + atomic-increment packet; BRISC waits for (RING - 1) x this core's tiles
+//      (FACT 3: no device leaves a phase with partial data) and resets.
+// No launch resets a semaphore, so each is reset by its owner before the program ends (BRISC: barrier, data and, with
+// SOURCE 1, `done` and the producers' scratch semaphore; NCRISC: `go`).  A packet header is rewritten only after
+// noc_async_writes_flushed().  Two phases reuse `go` and `done`: BRISC's phase-B `go.set(1)` is ordered after NCRISC's
+// phase-A `go.set(0)` through `done`, so a release is never mistaken for the previous phase's; both arrives go out at
+// kernel start, and the barrier argument holds per counter.  After the data wait BRISC raises each listed consumer's
+// semaphore once.  The two delay arguments (spin cycles) are for skew testing; both 0 in the model.
 //
 // Runtime block of a phase at `rt`: 0 gathered tensor address, 1 local tensor address, 2 barrier semaphore address,
 // 3 data semaphore address, 4 consumer count N, 5 consumer semaphore id, 6..6+2N the consumers' NoC (x, y).

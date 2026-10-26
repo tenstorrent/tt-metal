@@ -3,14 +3,12 @@
 
 """``gdn_step``: one GDN decode step from the fused projection to the gated output, one program per layer.
 
-Replaces programs 4-52 of the GDN block (the slice into the conv ring slot, the z/a/b slices, conv + SiLU, the head
-split, the decay and write gates, both l2 norms, the fp32 delta-rule state update, the read-out, the gated RMSNorm
-and the sigmoid gate: 49 programs, 119 us kernel / 213 us occupancy per layer in the 2026-09-12 census).  One core
-per (lane, value head) item; the state stays fp32 and is updated in place; the newest ring slot is written from the
-projection.  The 1-row body runs it at rows = 1 and the batched-lanes body at rows = B (``_forward_decode_lanes_fused``
-in ttnn/gdn.py: lane u = state slot u and ring row u, so B independent users are 12 B items of one program).
-Rounding follows tt/gdn.py (the oracle), not today's chain, so the tolerance class is COMPONENT (note
-work/FUSE-GDN-STEP-20260913.md section 1).  ``reference_step`` is the kernel's arithmetic in torch for the tests.
+Covers the conv ring slot write, the z/a/b slices, conv + SiLU, the head split, the decay and write gates, both l2
+norms, the fp32 delta-rule state update, the read-out, the gated RMSNorm and the sigmoid gate. One core per (lane,
+value head) item; the state stays fp32 and is updated in place. The 1-row body runs it at rows = 1 and the
+batched-lanes body (``_forward_decode_lanes_fused`` in ttnn/gdn.py) at rows = B, lane u = state slot u and ring row u.
+Rounding follows tt/gdn.py (the oracle), not the chain, so the tolerance class is COMPONENT; ``reference_step`` is the
+kernel's arithmetic in torch.
 """
 
 from __future__ import annotations
@@ -202,10 +200,8 @@ def run(projected, older, newest, taps, constants, norm, recurrent, out, *, debu
     io = [projected, *older, *taps, constants, norm, recurrent, newest]
     if debug is not None:
         io.append(debug)
-    # the projection, the ring slots and the taps once (each core its head's columns), the fp32 state read and
-    # written in place, the newest slot and the output written, the constant tiles once per core; per lane: the
-    # 4-tap conv, the two l2 norms, the fp32 delta-rule update (outer products, decay, delta) and read-out on 12
-    # heads of 128 x 128, the gated norm
+    # dram_bytes: the constant tiles once per core; flops per lane: the conv, the l2 norms, the delta-rule update and
+    # read-out on 12 heads of 128 x 128, and the gated norm
     meta = fp.program_meta(
         NAME,
         "step",
@@ -246,10 +242,9 @@ def gdn_step(gdn, projected, window, state):
 
 
 def admits(gdn, projected, window, state) -> bool:
-    """The fused step's input contract for one call, as ``run`` asserts it before building the program: ``projected``
-    one row tile of the projection width, the ring window's four slots, the state's fp32 recurrent tensor with one
-    lane per row.  The served decode tensors satisfy it; host fakes whose padded shape is their logical shape do not
-    and take the composed chain (``registry.resolve_admitted``)."""
+    """The fused step's input contract for one call, as ``run`` asserts it: ``projected`` one row tile of the
+    projection width, four ring slots, and the fp32 recurrent state with one lane per row. Host fakes whose padded
+    shape is their logical shape fail it and take the composed chain (``registry.resolve_admitted``)."""
 
     if not (fp.is_row_tile(projected) and fp.is_tile_width(projected, PROJECTION_WIDTH)):
         return False
@@ -267,7 +262,7 @@ def admits(gdn, projected, window, state) -> bool:
 
 
 def gdn_step_composed(gdn, projected, window, state):
-    """Today's chain from the projection to the gated output (ttnn/gdn.py)."""
+    """The chain from the projection to the gated output (ttnn/gdn.py)."""
 
     z, a, b = gdn._split_projection(projected, window[3])
     conv = gdn._causal_conv_decode(window)
@@ -325,8 +320,7 @@ register(
         admits=admits,
         component_proof="the fused GDN step probe against the CPU oracle, four p150, 2026-09-25: state error 0.0048 and "
         "gated output 0.0098 for the fused step, 0.0081 and 0.0234 for the composed chain",
-        # The audit capture holds no GDN recurrent state; the component gate is the real-input probe of the dev tools
-        # (fused_gdn_step_probe: layer-0 inputs, the oracle state, 64 consecutive steps, per-component taps).
+        # the audit capture holds no GDN recurrent state; checked by the real-input step probe against the oracle
         gate=None,
     )
 )

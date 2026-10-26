@@ -1,11 +1,9 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 //
-// GR read stage 3b, one hidden column tile per core: the low-rank row (Kt tiles) times the B branch weight columns
-// accumulated in the 32-bit dest in K order (packed bf16 by the packer as the up matmul does), the bf16-dest
-// sigmoid of each packed tile (unary sigmoid, vector mode RC), the SFPU product with the normalized tile of the same
-// branch (bf16-dest rounding and zero rule), and the B branch products summed with the zero tile in branch order
-// (reduce_nc.cpp), packed bf16.
+// GR read stage 3b, one hidden column tile per core: the low-rank row (Kt tiles) times the B branch weight columns in
+// the 32-bit dest in K order, packed bf16; the bf16-dest sigmoid of each tile; the SFPU product with the branch's
+// normalized tile; the B products summed with the zero tile in branch order as reduce_nc.cpp does; packed bf16.
 // CBs: 0 low rank (bf16, Kt), 1 weight (bf16, B x Kt, K-minor), 2 normalized (bf16, B), 3 zero (bf16, 1),
 // 4 up (bf16, B), 5 gate (bf16, B), 6 gated (bf16, B), 16 block (bf16, 1).  Compile-time args: 0 Kt, 1 B (even),
 // 2-9 the cbs (low rank, weight, normalized, zero, up, gate, gated, block), 10 spill, 11 the intermediate cb.
