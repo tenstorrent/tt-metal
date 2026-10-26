@@ -50,9 +50,7 @@ void TensorAttributes::update_tensor_topology(const TensorTopology& tensor_topol
             [&](HostStorage& host_storage) {
                 tt::tt_metal::update_tensor_topology(host_storage.host_tensor(), tensor_topology);
             },
-            [&](DeviceStorage& device_storage) {
-                tt::tt_metal::update_tensor_topology(device_storage.get_mesh_tensor(), tensor_topology);
-            },
+            [&](DeviceStorage& device_storage) { device_storage.update_tensor_topology(tensor_topology); },
         },
         storage_);
 }
