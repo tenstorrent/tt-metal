@@ -354,62 +354,50 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 // Split units. A sender packs its running state, per row [max, unreduced sum, output tiles], into
 // cb_partial_out (fp32) for the writer; a merger folds such a partial into its own running state, like
 // one more K/V step: m = max(m_own, m_p), alpha_x = exp(scale * (m_x - m)), sum = sum_own * alpha_own +
-// sum_p * alpha_p, O = O_own * alpha_own + O_p * alpha_p. One row per DST pass; splits are rare. The
-// helpers are kept out of line: every inlined LLK init costs kernel text, and the program has a budget.
+// sum_p * alpha_p, O = O_own * alpha_own + O_p * alpha_p. The partials stream through the CBs one row
+// (Wt + 2 tiles) at a time. Every unpacker/packer re-init costs more than the math here, so each pass
+// touches as few CBs as it can and the scaled sums use FPU broadcast multiplies straight from the CBs.
 #ifdef SPLIT_UNITS
-__attribute__((noinline, noclone)) void copy_cb_tile_to_dst(uint32_t cb, uint32_t tile, uint32_t dst) {
-    reconfig_data_format(cb, cb);
-    copy_init(cb);
-    copy_tile(cb, tile, dst);
-}
-
-__attribute__((noinline, noclone)) void bcast_col_to_dst(uint32_t cb, uint32_t row, uint32_t dst) {
-    init_unary_bcast_col(cb);
-    unary_bcast<BroadcastType::COL>(cb, row, dst);
-}
-
-__attribute__((noinline, noclone)) void pack_dst_to(uint32_t dst, uint32_t cb, uint32_t offset) {
-    pack_reconfig_data_format(cb);
-    pack_tile</* out_of_order */ true>(dst, cb, offset);
-}
-
-// DST[0] = DST[0] * bcast(alpha_a[row]) + DST[2] * bcast(alpha_b[row])
-__attribute__((noinline, noclone)) void scale_and_add_dst(uint32_t cb_alpha_a, uint32_t cb_alpha_b, uint32_t row) {
-    bcast_col_to_dst(cb_alpha_a, row, 1);
-    bcast_col_to_dst(cb_alpha_b, row, 3);
-    mul_binary_tile_init();
-    mul_binary_tile(0, 1, 0);
-    mul_binary_tile(2, 3, 2);
-    add_binary_tile_init();
-    add_binary_tile(0, 2, 0);
-}
-
-__attribute__((noinline, noclone)) void pack_dst_inorder(uint32_t dst, uint32_t cb) {
-    pack_reconfig_data_format(cb);
-    pack_tile(dst, cb);
-}
-
-// Partials are streamed one row at a time: the CBs hold two rows of (Wt + 2) tiles.
 template <uint32_t rows>
 void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_sum_exp, uint32_t cb_partial_out) {
     const uint32_t tiles_per_row = Wt + 2U;
     cb_wait_front(cb_mm_out, rows * Wt);
     cb_wait_front(cb_max, rows);
     cb_wait_front(cb_sum_exp, rows);
+    pack_reconfig_data_format(cb_partial_out);
     for (uint32_t r = 0; r < rows; ++r) {
         cb_reserve_back(cb_partial_out, tiles_per_row);
-        for (uint32_t t = 0; t < tiles_per_row; ++t) {
+        // [max, sum, O_0, O_1], then the remaining O tiles four at a time
+        tile_regs_acquire();
+        reconfig_data_format_srca(cb_max);
+        copy_init(cb_max);
+        copy_tile(cb_max, r, 0);
+        reconfig_data_format_srca(cb_sum_exp);
+        copy_init(cb_sum_exp);
+        copy_tile(cb_sum_exp, r, 1);
+        copy_init(cb_mm_out);
+        const uint32_t first = (Wt < 2U) ? Wt : 2U;
+        for (uint32_t t = 0; t < first; ++t) {
+            copy_tile(cb_mm_out, r * Wt + t, 2U + t);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < 2U + first; ++i) {
+            pack_tile(i, cb_partial_out);
+        }
+        tile_regs_release();
+        for (uint32_t t0 = first; t0 < Wt; t0 += 4U) {
+            const uint32_t n = (Wt - t0 < 4U) ? (Wt - t0) : 4U;
             tile_regs_acquire();
-            if (t == 0U) {
-                copy_cb_tile_to_dst(cb_max, r, 0);
-            } else if (t == 1U) {
-                copy_cb_tile_to_dst(cb_sum_exp, r, 0);
-            } else {
-                copy_cb_tile_to_dst(cb_mm_out, r * Wt + t - 2U, 0);
+            copy_init(cb_mm_out);
+            for (uint32_t i = 0; i < n; ++i) {
+                copy_tile(cb_mm_out, r * Wt + t0 + i, i);
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_dst_inorder(0, cb_partial_out);
+            for (uint32_t i = 0; i < n; ++i) {
+                pack_tile(i, cb_partial_out);
+            }
             tile_regs_release();
         }
         cb_push_back(cb_partial_out, tiles_per_row);
@@ -440,54 +428,71 @@ void merge_partial(
     for (uint32_t r = 0; r < rows; ++r) {
         cb_wait_front(cb_partial_in, tiles_per_row);
 
-        // (1) m = max(m_own, m_p); alpha_own = exp(scale * (m_own - m)); alpha_p = exp(scale * (m_p - m)).
-        //     The maxes are column vectors, so the exp runs on the first column only. Each result goes to
-        //     its CB one tile at a time, so it is visible to the next pass.
+        // (1) DST: 0 = m_own, 1 = m_p, 2 = m_p. m = max(0, 1) -> 1; alpha_own = exp(0 - 1) -> 0;
+        //     alpha_p = exp(2 - 1) -> 2. Column vectors, so the exp runs on the first column only.
         tile_regs_acquire();
-        copy_cb_tile_to_dst(cb_prev_max, r, 0);
-        copy_cb_tile_to_dst(cb_partial_in, 0, 1);
-        copy_cb_tile_to_dst(cb_prev_max, r, 2);
-        copy_cb_tile_to_dst(cb_partial_in, 0, 3);
+        reconfig_data_format_srca(cb_prev_max);
+        copy_init(cb_prev_max);
+        copy_tile(cb_prev_max, r, 0);
+        reconfig_data_format_srca(cb_partial_in);
+        copy_init(cb_partial_in);
+        copy_tile(cb_partial_in, 0, 1);
+        copy_tile(cb_partial_in, 0, 2);
         binary_max_tile_init();
-        binary_max_tile(0, 1, 0, VectorMode::C);
+        binary_max_tile(0, 1, 1, VectorMode::C);
         sub_binary_tile_init();
-        sub_binary_tile(2, 0, 2);
-        sub_binary_tile(3, 0, 3);
+        sub_binary_tile(0, 1, 0);
+        sub_binary_tile(2, 1, 2);
+        sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(0);
         sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(2);
-        sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(3);
         tile_regs_commit();
         tile_regs_wait();
         cb_reserve_back(cb_cur_max, 1);
-        pack_dst_inorder(0, cb_cur_max);
+        pack_reconfig_data_format(cb_cur_max);
+        pack_tile(1, cb_cur_max);
         cb_push_back(cb_cur_max, 1);
         cb_reserve_back(cb_alpha_own, 1);
-        pack_dst_inorder(2, cb_alpha_own);
-        cb_push_back(cb_alpha_own, 1);
         cb_reserve_back(cb_alpha_p, 1);
-        pack_dst_inorder(3, cb_alpha_p);
+        pack_reconfig_data_format(cb_alpha_own);
+        pack_tile(0, cb_alpha_own);
+        pack_tile(2, cb_alpha_p);
+        cb_push_back(cb_alpha_own, 1);
         cb_push_back(cb_alpha_p, 1);
         tile_regs_release();
         cb_wait_front(cb_alpha_own, r + 1U);
         cb_wait_front(cb_alpha_p, r + 1U);
 
-        // (2) sum = sum_own * alpha_own + sum_p * alpha_p, then the same per output tile
-        for (uint32_t t = 0; t < Wt + 1U; ++t) {  // t == 0: the sums; t > 0: output tile t - 1
+        // (2) x = x_own * alpha_own + x_p * alpha_p for the sum and every output tile, two per pass:
+        //     FPU broadcast multiplies from the CBs into DST, SFPU add. All four CBs are fp32.
+        reconfig_data_format(cb_prev_sum_exp, cb_alpha_own);
+        mul_bcast_cols_init(cb_prev_sum_exp, cb_alpha_own);
+        pack_reconfig_data_format(cb_cur_sum_exp);
+        for (uint32_t t0 = 0; t0 < Wt + 1U; t0 += 2U) {  // t == 0: the sums; t > 0: output tile t - 1
+            const uint32_t n = (Wt + 1U - t0 < 2U) ? (Wt + 1U - t0) : 2U;
             tile_regs_acquire();
-            if (t == 0U) {
-                copy_cb_tile_to_dst(cb_prev_sum_exp, r, 0);
-            } else {
-                copy_cb_tile_to_dst(cb_prev_mm_out, r * Wt + t - 1U, 0);
+            for (uint32_t i = 0; i < n; ++i) {
+                const uint32_t t = t0 + i;
+                if (t == 0U) {
+                    mul_tiles_bcast_cols(cb_prev_sum_exp, cb_alpha_own, r, r, 2U * i);
+                } else {
+                    mul_tiles_bcast_cols(cb_prev_mm_out, cb_alpha_own, r * Wt + t - 1U, r, 2U * i);
+                }
+                mul_tiles_bcast_cols(cb_partial_in, cb_alpha_p, 1U + t, r, 2U * i + 1U);
             }
-            copy_cb_tile_to_dst(cb_partial_in, 1U + t, 2);
-            scale_and_add_dst(cb_alpha_own, cb_alpha_p, r);
+            add_binary_tile_init();
+            for (uint32_t i = 0; i < n; ++i) {
+                add_binary_tile(2U * i, 2U * i + 1U, 2U * i);
+            }
             tile_regs_commit();
             tile_regs_wait();
-            if (t == 0U) {
-                cb_reserve_back(cb_cur_sum_exp, 1);
-                pack_dst_inorder(0, cb_cur_sum_exp);
-                cb_push_back(cb_cur_sum_exp, 1);
-            } else {
-                pack_dst_inorder(0, cb_cur_mm_out);
+            for (uint32_t i = 0; i < n; ++i) {
+                if (t0 + i == 0U) {
+                    cb_reserve_back(cb_cur_sum_exp, 1);
+                    pack_tile(0, cb_cur_sum_exp);
+                    cb_push_back(cb_cur_sum_exp, 1);
+                } else {
+                    pack_tile(2U * i, cb_cur_mm_out);
+                }
             }
             tile_regs_release();
         }

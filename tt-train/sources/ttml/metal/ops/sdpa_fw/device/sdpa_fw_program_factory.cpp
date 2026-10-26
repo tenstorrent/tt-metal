@@ -503,7 +503,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         std::vector<tt::tt_metal::UnpackToDestMode> mode(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
         mode[kPrevMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         mode[kCurMmOutCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
-        mode[kPartialInCbIndex] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         return mode;
     };
 
