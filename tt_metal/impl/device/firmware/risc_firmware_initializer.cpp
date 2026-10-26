@@ -1444,7 +1444,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 tt_cxy_pair(device_id, virtual_core),
                 fw_shared_globals_ready_addr);
 
-            // Write reset PC (register address, no L1 NOC offset needed).
+            // Write reset PC (register address, no L1 NOC offset needed)
             cluster_.write_reg(
                 &jit_build_config.fw_launch_addr_value,
                 tt_cxy_pair(device_id, virtual_core),
@@ -1462,7 +1462,11 @@ void RiscFirmwareInitializer::initialize_firmware(
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
                         hal_.set_iram_text_size(
-                            launch_msg, core_type, static_cast<HalProcessorClassType>(processor_class), dm_id, fw_size);
+                            launch_msg,
+                            core_type,
+                            static_cast<HalProcessorClassType>(processor_class),
+                            dm_id,
+                            fw_size);
                         llrt::test_load_write_read_risc_binary(
                             descriptor_->env_impl(),
                             binary_mem,
@@ -1716,8 +1720,7 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
     }
 
     if (!dispatch_not_done_cores.empty()) {
-        log_info(
-            LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
+        log_info(LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
         try {
             llrt::internal_::wait_until_cores_done(
                 descriptor_->metal_context(), device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, timeout_ms);

@@ -157,9 +157,8 @@ void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
         rtoptions.get_simulator_name());
 }
 
-// Quasar CCE / DRAM-core firmware is opt-in per dram_view.programmable in the SoC YAML.
-// Missing programmable means false so today's Tensix Quasar chips stay GDDR-only; a future
-// default of true requires every non-CCE descriptor to set programmable: false first.
+// Quasar CCE / DRAM-core firmware is opt-in per dram_view.programmable in the SoC YAML, so
+// Tensix Quasar descriptors without the key stay GDDR-only.
 bool should_enable_cce_programmable_cores(const Cluster& cluster) {
     if (cluster.arch() != tt::ARCH::QUASAR) {
         return false;

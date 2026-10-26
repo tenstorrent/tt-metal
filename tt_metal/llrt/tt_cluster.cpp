@@ -100,6 +100,23 @@ bool is_in_core_memory(
     return (addr < memory_size) && (size <= (memory_size - addr));
 }
 
+std::pair<std::string, uint32_t> parse_host_port(const std::string& endpoint, const char* env_var) {
+    const size_t colon = endpoint.rfind(':');
+    TT_FATAL(
+        colon != std::string::npos && colon != 0 && colon + 1 < endpoint.size(),
+        "{} must be host:port, got '{}'",
+        env_var,
+        endpoint);
+    unsigned long port = 0;
+    try {
+        port = std::stoul(endpoint.substr(colon + 1));
+    } catch (const std::exception& e) {
+        TT_THROW("Invalid {} '{}': {}", env_var, endpoint, e.what());
+    }
+    TT_FATAL(port > 0 && port <= 65535, "Invalid port in {} '{}'", env_var, endpoint);
+    return {endpoint.substr(0, colon), static_cast<uint32_t>(port)};
+}
+
 }  // namespace
 namespace tt {
 
@@ -260,8 +277,6 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     auto& cluster_desc = (*(this->driver_->get_cluster_description()));
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
-    // Mock and emule have no register-backed reset. Every other target asks UMD to reset.
-    // UMD skips the reset when the descriptor has no Tensix cores.
     if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
         this->assert_risc_reset();
     }
@@ -312,7 +327,6 @@ void Cluster::generate_cluster_descriptor() {
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
-    // Simulator, mock, and emule carry no Blackhole firmware version to check.
     if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock ||
         this->target_type_ == TargetDevice::Emule) {
         return;
@@ -546,21 +560,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
         TT_FATAL(false, "TargetDevice::Emule requires building with TT_METAL_USE_EMULE=ON");
 #endif
     } else if (this->target_type_ == TargetDevice::EmuAxi) {
-        const std::string& endpoint = rtoptions_.get_emu_server();
-        const size_t colon = endpoint.rfind(':');
-        TT_FATAL(
-            colon != std::string::npos && colon != 0 && colon + 1 < endpoint.size(),
-            "TT_METAL_EMU_SERVER must be host:port, got '{}'",
-            endpoint);
-        const std::string host = endpoint.substr(0, colon);
-        uint32_t port = 0;
-        try {
-            const unsigned long parsed = std::stoul(endpoint.substr(colon + 1));
-            TT_FATAL(parsed > 0 && parsed <= 65535, "Invalid emu_axi port in '{}'", endpoint);
-            port = static_cast<uint32_t>(parsed);
-        } catch (const std::exception& e) {
-            TT_THROW("Invalid TT_METAL_EMU_SERVER '{}': {}", endpoint, e.what());
-        }
+        const auto [host, port] = parse_host_port(rtoptions_.get_emu_server(), "TT_METAL_EMU_SERVER");
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::EMU_AXI,
             .num_host_mem_ch_per_mmio_device = 0,
@@ -574,21 +574,7 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
             .emu_skip_init = true,
         });
     } else if (this->target_type_ == TargetDevice::GrendelJtag) {
-        const std::string& endpoint = rtoptions_.get_grendel_jtag_server();
-        const size_t colon = endpoint.rfind(':');
-        TT_FATAL(
-            colon != std::string::npos && colon != 0 && colon + 1 < endpoint.size(),
-            "TT_METAL_GRENDEL_JTAG_SERVER must be host:port, got '{}'",
-            endpoint);
-        const std::string host = endpoint.substr(0, colon);
-        uint32_t port = 0;
-        try {
-            const unsigned long parsed = std::stoul(endpoint.substr(colon + 1));
-            TT_FATAL(parsed > 0 && parsed <= 65535, "Invalid OpenOCD TCL port in '{}'", endpoint);
-            port = static_cast<uint32_t>(parsed);
-        } catch (const std::exception& e) {
-            TT_THROW("Invalid TT_METAL_GRENDEL_JTAG_SERVER '{}': {}", endpoint, e.what());
-        }
+        const auto [host, port] = parse_host_port(rtoptions_.get_grendel_jtag_server(), "TT_METAL_GRENDEL_JTAG_SERVER");
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::GRENDEL_JTAG,
             .num_host_mem_ch_per_mmio_device = 0,

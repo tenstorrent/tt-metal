@@ -117,8 +117,7 @@ inline bool package_has_tensix_cores() {
 }
 
 // GTEST_SKIP returns from the function that invokes it, so this has to be a macro. Contract tests
-// run for any selected package that declares programmable DRAM cores. A transport is still required
-// to open the device.
+// run for any selected package that declares programmable DRAM cores and has a transport to open it.
 #define skip_unless_programmable_dram_package()                                                                     \
     do {                                                                                                            \
         if (!::tt::tt_metal::mimir_contract::package_has_programmable_dram()) {                                     \
@@ -255,6 +254,10 @@ inline const std::vector<CcePartition>& cce_partition_params() {
         return built;
     }();
     return params;
+}
+
+inline std::string cce_param_name(const ::testing::TestParamInfo<uint32_t>& info) {
+    return fmt::format("Cce{}", info.param);
 }
 
 inline std::string cce_partition_name(const ::testing::TestParamInfo<CcePartition>& info) {

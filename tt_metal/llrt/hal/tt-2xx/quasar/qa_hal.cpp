@@ -94,7 +94,6 @@ namespace tt::tt_metal {
 class HalJitBuildQueryQuasar : public hal_2xx::HalJitBuildQueryBase {
 public:
     using HalJitBuildQueryBase::HalJitBuildQueryBase;
-
     std::string linker_flags(const Params& params) const override {
         std::string flags;
         // Quasar XIP (QuasarDataMovementKernel::read_binaries -> ElfFile::Impl::XIPify) pairs each
@@ -111,28 +110,21 @@ public:
             if (params.is_fw) {
                 flags += fmt::format("-Wl,--defsym=__fw_text={} ", cce_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_FIRMWARE_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
-                flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_CCE_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
             } else {
                 const DeviceAddr cce_kn_text =
                     MEM_CCE_SRAM_LOCAL_BASE + MEM_CCE_KERNEL_BASE + params.processor_id * MEM_CCE_KERNEL_SIZE;
                 flags += fmt::format("-Wl,--defsym=__kn_text={} ", cce_kn_text);
                 flags += fmt::format("-Wl,--defsym=__text_size={} ", MEM_CCE_KERNEL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
                 flags += fmt::format(
                     "-Wl,--defsym=__kn_data={} ", cce_data + MEM_CCE_GLOBAL_SIZE * (1 + params.processor_id));
-                flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
-                flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_CCE_STACK_MIN_SIZE);
-                flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
             }
+            flags += fmt::format("-Wl,--defsym=__fw_data={} ", cce_data);
+            flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_CCE_GLOBAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__fw_tls={} ", cce_tls);
+            flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_CCE_LOCAL_SIZE);
+            flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_CCE_STACK_MIN_SIZE);
+            flags += fmt::format("-Wl,--defsym=__local_base={} ", cce_tls);
+            flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_CCE_LOCAL_SIZE);
         } else if (params.processor_class == HalProcessorClassType::DM) {
             const DeviceAddr dm_global_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                   ? MEM_DISPATCH_DM_GLOBAL_BASE
@@ -356,6 +348,7 @@ public:
             log_info(LogMetal, "Using variant: {} with the base Quasar register map", variant);
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
         } else {
+            log_info(LogMetal, "Using variant: Quasar");
             includes.push_back("tt_metal/hw/inc/internal/tt-2xx/tt-2.0.0/meta");
         }
         includes.push_back("tt_metal/tt-llk/tt_llk_quasar/common/inc");

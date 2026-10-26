@@ -862,7 +862,8 @@ static KernelHandle CreateDramKernel(
     TT_FATAL(arch != ARCH::WORMHOLE_B0, "DramKernel is not supported on Wormhole.");
     TT_FATAL(
         metal_context.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
-        "DRAM programmable cores are not enabled.");
+        "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0 and on "
+        "Quasar when the SoC descriptor marks a dram_view programmable.");
     TT_FATAL(
         ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
             metal_context.hal().get_num_risc_processors(HalProgrammableCoreType::DRAM),

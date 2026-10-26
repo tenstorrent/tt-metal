@@ -228,8 +228,7 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
                     static_cast<uint32_t>(cleared.size()),
                     target.num_slots,
                     target.slot_stride,
-                    target.slot_base,
-                    mimir_index_for_cce(cce_index)}});
+                    target.slot_base}});
 
         LaunchProgram(*mesh_device, program);
 
@@ -252,86 +251,9 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
     }
 }
 
-class CopiesGddrThroughAllocatedBuffer : public ::testing::TestWithParam<CcePartition> {};
+class CopiesGddrWithRuntimeArgs : public ::testing::TestWithParam<CcePartition> {};
 
-TEST_P(CopiesGddrThroughAllocatedBuffer, RoundTrip) {
-    skip_unless_programmable_dram_package();
-    const CcePartition param = GetParam();
-    const uint32_t cce_index = param.cce_index;
-    const bool cross = is_cross_mimir_case();
-    if (!cce_partition_case_applies(param, cross)) {
-        GTEST_SKIP() << "Configured descriptor does not expose CCE " << cce_index << " partition " << param.partition
-                     << (cross ? " as a remote partition." : " as a local partition.");
-    }
-    auto mesh_device = open_unit_mesh();
-    IDevice* device = physical_device(*mesh_device);
-    ASSERT_NE(device, nullptr);
-    ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
-    const GddrSweep sweep = gddr_sweep_from_soc(device);
-    ASSERT_NE(sweep.num_slots, 0u) << "dram_view_size must hold at least one GDDR slot";
-    const std::vector<GddrTarget> targets = {gddr_target_for_view(soc_desc, param.partition, sweep)};
-    GddrBackingScope gddr_backing;
-
-    const auto& hal = MetalContext::instance().hal();
-    const uint32_t transfer_size = hal.get_alignment(HalMemType::DRAM);
-    const uint32_t src_dram_offset = hal.get_dev_addr(HalDramMemAddrType::UNRESERVED);
-    const uint32_t dst_dram_offset = src_dram_offset + transfer_size;
-    const uint32_t staging_dev_addr = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-    const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
-    std::vector<uint32_t> cleared(transfer_size / sizeof(uint32_t), 0);
-
-    for (const GddrTarget& target : targets) {
-        std::vector<std::vector<uint32_t>> inputs(
-            target.num_slots, std::vector<uint32_t>(transfer_size / sizeof(uint32_t)));
-        for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
-            for (std::size_t i = 0; i < inputs[slot].size(); ++i) {
-                inputs[slot][i] = 0xC0FE0000u | (cce_index << 12) | (target.mimir_index << 8) | (target.location << 4) |
-                                  static_cast<uint32_t>(i);
-            }
-            const uint64_t slot_offset = host_slot_offset(target, slot);
-            write_gddr_view(*mesh_device, device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
-            write_gddr_view(*mesh_device, device, target.host_view, dst_dram_offset + slot_offset, cleared);
-        }
-
-        Program program = CreateProgram();
-        CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/dram_gddr_round_trip.cpp",
-            logical_dram_core,
-            DramConfig{
-                .noc = NOC::NOC_0,
-                .compile_args = {
-                    src_dram_offset,
-                    dst_dram_offset,
-                    target.mimir_index,
-                    staging_dev_addr,
-                    static_cast<uint32_t>(cleared.size()),
-                    target.num_slots,
-                    target.slot_stride,
-                    target.slot_base,
-                    mimir_index_for_cce(cce_index)}});
-
-        LaunchProgram(*mesh_device, program);
-
-        for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
-            std::vector<uint32_t> output;
-            read_gddr_view(
-                *mesh_device,
-                device,
-                target.host_view,
-                dst_dram_offset + host_slot_offset(target, slot),
-                transfer_size,
-                output);
-            EXPECT_EQ(output, inputs[slot])
-                << "mimir " << target.mimir_index << " location " << target.location << " slot " << slot;
-        }
-    }
-}
-
-class CopiesAllocatedBufferWithRuntimeArgs : public ::testing::TestWithParam<CcePartition> {};
-
-TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
+TEST_P(CopiesGddrWithRuntimeArgs, RoundTrip) {
     skip_unless_programmable_dram_package();
     const CcePartition param = GetParam();
     const uint32_t cce_index = param.cce_index;
@@ -388,8 +310,7 @@ TEST_P(CopiesAllocatedBufferWithRuntimeArgs, RoundTrip) {
              static_cast<uint32_t>(cleared.size()),
              target.num_slots,
              target.slot_stride,
-             target.slot_base,
-             mimir_index_for_cce(cce_index)});
+             target.slot_base});
 
         LaunchProgram(*mesh_device, program);
 
@@ -501,12 +422,7 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
         program,
         kernel,
         logical_dram_core,
-        {src_dram_offset,
-         dst_dram_offset,
-         num_mimirs,
-         staging_dev_addr,
-         static_cast<uint32_t>(cleared.size()),
-         mimir_index_for_cce(cce_index)});
+        {src_dram_offset, dst_dram_offset, num_mimirs, staging_dev_addr, static_cast<uint32_t>(cleared.size())});
 
     LaunchProgram(*mesh_device, program);
 
@@ -517,9 +433,9 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
     }
 }
 
-class CopiesAllocatedBufferLargerThanAlignment : public ::testing::TestWithParam<CcePartition> {};
+class CopiesGddrLargerThanAlignment : public ::testing::TestWithParam<CcePartition> {};
 
-TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
+TEST_P(CopiesGddrLargerThanAlignment, RoundTrip) {
     skip_unless_programmable_dram_package();
     const CcePartition param = GetParam();
     const uint32_t cce_index = param.cce_index;
@@ -578,8 +494,7 @@ TEST_P(CopiesAllocatedBufferLargerThanAlignment, RoundTrip) {
              static_cast<uint32_t>(cleared.size()),
              target.num_slots,
              target.slot_stride,
-             target.slot_base,
-             mimir_index_for_cce(cce_index)});
+             target.slot_base});
 
         LaunchProgram(*mesh_device, program);
 
@@ -648,8 +563,7 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
              static_cast<uint32_t>(cleared.size()),
              1u,
              sweep.slot_stride,
-             local.slot_base,
-             local.mimir_index});
+             local.slot_base});
     }
 
     LaunchProgram(*mesh_device, program);
@@ -803,9 +717,9 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
     }
 }
 
-class AllHartsWriteAllocatedBuffer : public ::testing::TestWithParam<CcePartition> {};
+class AllHartsWriteGddr : public ::testing::TestWithParam<CcePartition> {};
 
-TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
+TEST_P(AllHartsWriteGddr, WritesMagic) {
     skip_unless_programmable_dram_package();
     const CcePartition param = GetParam();
     const uint32_t cce_index = param.cce_index;
@@ -858,8 +772,7 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
                         staging_dev_base + hart * static_cast<uint32_t>(sizeof(uint32_t)),
                         target.num_slots,
                         target.slot_stride,
-                        target.slot_base,
-                        mimir_index_for_cce(cce_index)}});
+                        target.slot_base}});
         }
 
         LaunchProgram(*mesh_device, program);
@@ -879,25 +792,11 @@ TEST_P(AllHartsWriteAllocatedBuffer, WritesMagic) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    MimirEmu,
-    CceSramRoundTripThroughUnitMesh,
-    ::testing::ValuesIn(cce_indices()),
-    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
+INSTANTIATE_TEST_SUITE_P(MimirEmu, CceSramRoundTripThroughUnitMesh, ::testing::ValuesIn(cce_indices()), cce_param_name);
 
-INSTANTIATE_TEST_SUITE_P(
-    MimirEmu,
-    HartZeroRunsDramKernel,
-    ::testing::ValuesIn(cce_indices()),
-    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
+INSTANTIATE_TEST_SUITE_P(MimirEmu, HartZeroRunsDramKernel, ::testing::ValuesIn(cce_indices()), cce_param_name);
 
-INSTANTIATE_TEST_SUITE_P(
-    MimirEmu,
-    AllHartsRunDramKernel,
-    ::testing::ValuesIn(cce_indices()),
-    [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
-
-std::string cce_param_name(const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); }
+INSTANTIATE_TEST_SUITE_P(MimirEmu, AllHartsRunDramKernel, ::testing::ValuesIn(cce_indices()), cce_param_name);
 
 INSTANTIATE_TEST_SUITE_P(MimirEmu, WritesCrossMimirCceSram, ::testing::ValuesIn(cce_indices()), cce_param_name);
 
@@ -917,18 +816,6 @@ INSTANTIATE_TEST_SUITE_P(
     cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(
-    MimirEmuSameMimirDirect,
-    CopiesGddrThroughAllocatedBuffer,
-    ::testing::ValuesIn(cce_partition_params()),
-    cce_partition_name);
-
-INSTANTIATE_TEST_SUITE_P(
-    MimirEmuCrossMimirNoc,
-    CopiesGddrThroughAllocatedBuffer,
-    ::testing::ValuesIn(cce_partition_params()),
-    cce_partition_name);
-
-INSTANTIATE_TEST_SUITE_P(
     MimirEmu,
     AllocatedDramBufferHostLoopback,
     ::testing::ValuesIn(dram_view_indices()),
@@ -936,41 +823,32 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuSameMimirDirect,
-    CopiesAllocatedBufferWithRuntimeArgs,
+    CopiesGddrWithRuntimeArgs,
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(
-    MimirEmuCrossMimirNoc,
-    CopiesAllocatedBufferWithRuntimeArgs,
-    ::testing::ValuesIn(cce_partition_params()),
-    cce_partition_name);
+    MimirEmuCrossMimirNoc, CopiesGddrWithRuntimeArgs, ::testing::ValuesIn(cce_partition_params()), cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(MimirEmu, CopiesEveryMimirBlock, ::testing::ValuesIn(cce_indices()), cce_param_name);
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuSameMimirDirect,
-    CopiesAllocatedBufferLargerThanAlignment,
+    CopiesGddrLargerThanAlignment,
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(
     MimirEmuCrossMimirNoc,
-    CopiesAllocatedBufferLargerThanAlignment,
+    CopiesGddrLargerThanAlignment,
     ::testing::ValuesIn(cce_partition_params()),
     cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(
-    MimirEmuSameMimirDirect,
-    AllHartsWriteAllocatedBuffer,
-    ::testing::ValuesIn(cce_partition_params()),
-    cce_partition_name);
+    MimirEmuSameMimirDirect, AllHartsWriteGddr, ::testing::ValuesIn(cce_partition_params()), cce_partition_name);
 
 INSTANTIATE_TEST_SUITE_P(
-    MimirEmuCrossMimirNoc,
-    AllHartsWriteAllocatedBuffer,
-    ::testing::ValuesIn(cce_partition_params()),
-    cce_partition_name);
+    MimirEmuCrossMimirNoc, AllHartsWriteGddr, ::testing::ValuesIn(cce_partition_params()), cce_partition_name);
 
 class DramChannelsDoNotAliasThroughPublicDeviceApi : public ::testing::TestWithParam<uint32_t> {};
 
@@ -990,19 +868,22 @@ TEST_P(DramChannelsDoNotAliasThroughPublicDeviceApi, RoundTrip) {
     }
     GddrBackingScope gddr_backing;
     const uint32_t other_partition = (dram_partition + num_partitions / 2) % num_partitions;
-    gddr_backing.tracker.note(dram_partition, kDramOffset, sizeof(uint32_t));
-    gddr_backing.tracker.note(other_partition, kDramOffset, sizeof(uint32_t));
+    // WriteToDRAMChannel rejects the firmware-reserved region below the allocator base.
+    const uint32_t dram_offset =
+        static_cast<uint32_t>(device->allocator()->get_base_allocator_addr(HalMemType::DRAM)) + kDramOffset;
+    gddr_backing.tracker.note(dram_partition, dram_offset, sizeof(uint32_t));
+    gddr_backing.tracker.note(other_partition, dram_offset, sizeof(uint32_t));
     std::vector<uint32_t> written{0xAAAA1111 + dram_partition};
     std::vector<uint32_t> other_written{0xBBBB2222 + other_partition};
-    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(*mesh_device, other_partition, kDramOffset, other_written));
-    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(*mesh_device, dram_partition, kDramOffset, written));
+    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(*mesh_device, other_partition, dram_offset, other_written));
+    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(*mesh_device, dram_partition, dram_offset, written));
 
     std::vector<uint32_t> read_back;
     std::vector<uint32_t> other_read_back;
     ASSERT_TRUE(
-        slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_partition, kDramOffset, sizeof(uint32_t), read_back));
+        slow_dispatch::ReadFromDRAMChannel(*mesh_device, dram_partition, dram_offset, sizeof(uint32_t), read_back));
     ASSERT_TRUE(slow_dispatch::ReadFromDRAMChannel(
-        *mesh_device, other_partition, kDramOffset, sizeof(uint32_t), other_read_back));
+        *mesh_device, other_partition, dram_offset, sizeof(uint32_t), other_read_back));
 
     EXPECT_EQ(read_back, written);
     EXPECT_EQ(other_read_back, other_written);

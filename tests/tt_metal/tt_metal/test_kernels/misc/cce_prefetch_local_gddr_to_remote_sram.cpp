@@ -19,7 +19,7 @@ void kernel_main() {
     const uint32_t staging_uncached_address = staging_l1_address + MEM_L1_UNCACHED_BASE;
     const uint64_t gddr_address = src_gddr_address + static_cast<uint64_t>(gddr_base_slots) * gddr_slot_stride;
 
-    experimental::cce_gddr_read(local_mimir, local_mimir, gddr_address, staging_uncached_address, num_words);
+    experimental::cce_gddr_read(local_mimir, gddr_address, staging_uncached_address, num_words);
     experimental::cce_sram_write(dst0, sram_offset, staging_uncached_address, num_words);
     experimental::cce_sram_write(dst1, sram_offset, staging_uncached_address, num_words);
 }

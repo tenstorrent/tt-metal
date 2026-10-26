@@ -1338,7 +1338,7 @@ bool DramKernel::configure(
 
     const auto dram_core_index = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
-    int riscv_id = enchantum::to_underlying(this->config_.processor);
+    int riscv_id = static_cast<std::underlying_type_t<DataMovementProcessor>>(this->config_.processor);
     tt::llrt::test_load_write_read_risc_binary(
         env, binary_mem, device_id, dram_core, dram_core_index, dm_class_idx, riscv_id);
 

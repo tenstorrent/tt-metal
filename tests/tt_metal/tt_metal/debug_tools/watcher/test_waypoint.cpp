@@ -25,7 +25,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"

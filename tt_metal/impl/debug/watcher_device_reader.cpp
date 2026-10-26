@@ -688,7 +688,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     // Quasar Tensix/dispatch MPSC heads live in a semaphore register rather than the mailbox. CCE
     // harts share a coherent data cache and atomically update the head in their mailbox instead.
     uint32_t sem_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled() && programmable_core_type != HalProgrammableCoreType::DRAM) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled() &&
+        programmable_core_type != HalProgrammableCoreType::DRAM) {
         reader.env.get_cluster().read_core(
             &sem_head,
             sizeof(sem_head),

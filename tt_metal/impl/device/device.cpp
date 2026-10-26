@@ -573,14 +573,6 @@ bool Device::initialize(
     MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
     using_fast_dispatch_ = env_impl.get_rtoptions().get_fast_dispatch();
     num_hw_cqs_ = num_hw_cqs;
-
-    // A minimal management-only device is used for direct host access to packages such as a
-    // standalone Mimir. It has no worker L1 to partition and does not require an allocator.
-    // Keep normal Quasar initialization unchanged once compute cores exist.
-    if (minimal && env_impl.get_cluster().get_soc_desc(id_).get_cores(CoreType::TENSIX).empty()) {
-        return true;
-    }
-
     const auto& hal = env_impl.get_hal();
     if (worker_l1_size == 0) {
         worker_l1_size = hal.get_dev_size(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
@@ -855,13 +847,8 @@ uint32_t Device::get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl() const { return default_allocator_; }
 
 const std::unique_ptr<Allocator>& Device::allocator() const {
-    // CreateDeviceMinimal on a package with no Tensix cores never builds an allocator. Callers
-    // such as WriteToDeviceDRAMChannel test this pointer before using it.
-    if (!default_allocator_) {
-        static const std::unique_ptr<Allocator> empty;
-        return empty;
-    }
-    return default_allocator_->view();
+    const auto& allocator{this->allocator_impl()};
+    return allocator->view();
 }
 
 const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId /*sub_device_id*/) const {
@@ -869,10 +856,8 @@ const std::unique_ptr<AllocatorImpl>& Device::allocator_impl(SubDeviceId /*sub_d
 }
 
 const std::unique_ptr<Allocator>& Device::allocator(SubDeviceId sub_device_id) const {
-    if (!default_allocator_) {
-        return this->allocator();
-    }
-    return this->allocator_impl(sub_device_id)->view();
+    const auto& allocator{this->allocator_impl(sub_device_id)};
+    return allocator->view();
 }
 
 uint32_t Device::num_sub_devices() const { return 1U; }

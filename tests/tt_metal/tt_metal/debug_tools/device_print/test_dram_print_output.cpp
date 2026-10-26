@@ -166,10 +166,7 @@ TEST_F(DevicePrintDramFixture, PrintConcurrentDriscCores) {
         ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
         std::vector<int> counts(iterations_count, 0);
         std::string line;
-        for (;;) {
-            if (!getline(log_file, line)) {
-                break;
-            }
+        while (getline(log_file, line)) {
             int iter = -1;
             if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 &&
                 iter < static_cast<int>(counts.size())) {
