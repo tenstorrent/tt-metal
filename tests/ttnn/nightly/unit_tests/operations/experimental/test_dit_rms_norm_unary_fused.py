@@ -46,10 +46,14 @@ def rms_norm_golden(input_tensor, epsilon, weight, bias, activation):
             output = torch.nn.functional.silu(output)
         elif activation == "gelu" or activation == ttnn.UnaryOpType.GELU:
             output = torch.nn.functional.gelu(output)
+        elif activation == "hardmish" or activation == ttnn.UnaryOpType.HARDMISH:
+            # hardmish(x) = x * clamp(x / 2 + 1, 0, 1), the same golden ttnn.hardmish uses.
+            output = output * torch.clamp(output * 0.5 + 1.0, min=0.0, max=1.0)
         elif activation is not None:
             raise ValueError(
                 f"Unsupported activation: {activation!r}. "
-                "Supported: 'silu', 'gelu', ttnn.UnaryOpType.SILU, ttnn.UnaryOpType.GELU, or None."
+                "Supported: 'silu', 'gelu', 'hardmish', ttnn.UnaryOpType.SILU, ttnn.UnaryOpType.GELU, "
+                "ttnn.UnaryOpType.HARDMISH, or None."
             )
 
     return output
@@ -159,11 +163,17 @@ def run_dit_rms_norm_unary_fused_test(
     return measure_quality(torch_expected, tt_output_torch)
 
 
-@pytest.mark.parametrize("activation", [None, "silu", ttnn.UnaryOpType.SILU], ids=["none", "silu", "UnaryOpType.SILU"])
+# "hardmish" is the string form of a parameterless activation: it exercises the host's
+# string-to-op parser and the non-parameterized kernel text generator together.
+@pytest.mark.parametrize(
+    "activation",
+    [None, "silu", ttnn.UnaryOpType.SILU, "hardmish"],
+    ids=["none", "silu", "UnaryOpType.SILU", "hardmish"],
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile", "row_major"])
 def test_dit_rms_norm_unary_fused_silu_unary_op_type(device, dtype, activation, layout):
-    """Test with SiLU activation passed as ttnn.UnaryOpType."""
+    """Test with the activation passed as a string or as ttnn.UnaryOpType."""
     check_result = run_dit_rms_norm_unary_fused_test(
         device=device,
         shape=(1, 4096),
