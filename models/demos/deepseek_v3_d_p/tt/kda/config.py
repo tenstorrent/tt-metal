@@ -106,6 +106,8 @@ class KDAProgramConfig:
     gated_rms_output_dtype: ttnn.DataType = ttnn.float32
     input_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
     output_projection_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi4
+    # Weight dtype of the input (q, k, v, f_a, f_b, g, b) and output projections.
+    projection_dtype: ttnn.DataType = ttnn.bfloat16
     # Use the projection matmul schedules tuned at _TUNED_PROJECTION_ROWS; False keeps the
     # auto-selected ttnn.linear configs.
     tuned_projection_matmuls: bool = False
@@ -177,6 +179,11 @@ def tuned_projection_matmul_configs(
     return input_projection, output_projection
 
 
+# tt-blaze decode keeps the K3 input projections in bfloat4_b after layer 0, which costs ~0.025
+# layer-output PCC; bfloat8_b matches decode's layer 0 and output projection.
+KIMI_K3_PROJECTION_DTYPE = ttnn.bfloat8_b
+
+
 def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.Topology) -> KDAProgramConfig:
     """Return the production K3 program configuration with caller-owned per-axis CCL topology."""
     # Fixed production/proxy geometries; native worker capacity is validated by
@@ -199,6 +206,7 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
         output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
     )

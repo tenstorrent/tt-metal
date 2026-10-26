@@ -5,6 +5,7 @@
 import ttnn
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
+from ..prefill_chunk import PrefillChunk
 from ..residual import use_sharded_residual
 from .config import AttentionConfig, ProgramConfig
 from .dense_sp import dense_sp_attention, dense_sp_attention_nocache
@@ -39,17 +40,15 @@ def attention_forward(
     transformation_mat,
     position_idx,
     ccl_manager,
-    user_id=0,
-    batch_size=1,
     layer_idx=0,
-    cached_len=0,
     indexed_rope=False,
+    chunks=None,
 ):
     """
     Prefill forward pass - optimized for sequence processing (seq_len>1).
 
     Args:
-        hidden_states: Input tensor [batch, seq_len, hidden_size]
+        hidden_states: Input tensor [1, 1, seq_len, hidden_size]
         rope_mats: Tuple of (cos, sin) matrices for RoPE
         weights: Attention weights
         kv_cache: Externally-owned MiniMaxKVCache (packed K/V/index_k)
@@ -60,18 +59,19 @@ def attention_forward(
         transformation_mat: Transformation matrix for RoPE
         position_idx: Position indices (unused in prefill)
         ccl_manager: Communication manager
-        user_id: cache slot index for the per-layer cache write
         layer_idx: this layer's index, for the per-layer cache write
-        cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
-            >0 selects the cache-read attention paths (current chunk attends the accumulated prefix).
+        chunks: the forward's PrefillChunks (tt/prefill_chunk.py), one equal block of rows each; None = one
+            chunk in slot 0 at position 0. Projections run once on all rows; the attention core runs per non-empty
+            chunk against its slot_id at its actual_start (>0 selects the cache-read paths). Empty chunks (the
+            tail) get zero rows. A partial chunk's pad rows follow its real rows, so causality keeps them out of
+            the real rows' attention; their K/V land past the slot's valid prefix, which later chunks overwrite.
 
     Returns:
-        Attention output [batch, seq_len, hidden_size]
+        Attention output [1, 1, seq_len, hidden_size]
     """
     activation_dtype = ttnn.bfloat16
-    total_seq_len = hidden_states.shape[-2]
+    seq_len = hidden_states.shape[-2]
     hidden_size = hidden_states.shape[-1]
-    seq_len = total_seq_len // batch_size  # Per-user sequence length
     if seq_len > 32 * 1024:
         activation_dtype = ttnn.bfloat8_b
     else:
@@ -92,10 +92,75 @@ def attention_forward(
     # head_dim (qk_norm_type="per_head"). See the post-split block below (matches
     # transformers minimax_m3_vl: view-to-heads → q_norm/k_norm → RoPE).
 
-    # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
-    if batch_size > 1:
-        xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len, -1])
+    def core(xqkv, hidden, chunk, rows):
+        return _attention_core(
+            xqkv,
+            hidden,
+            rope_mats,
+            weights,
+            kv_cache,
+            config,
+            mesh_config,
+            mesh_device,
+            program_config,
+            transformation_mat,
+            ccl_manager,
+            slot_id=chunk.slot_id,
+            layer_idx=layer_idx,
+            cached_len=chunk.actual_start,
+            indexed_rope=indexed_rope,
+            seq_len=rows,
+        )
 
+    chunks = chunks or [PrefillChunk(slot_id=0, actual_start=0, actual_end=seq_len)]
+    if len(chunks) == 1:
+        tt_sdpa_out = core(xqkv_fused, hidden_states, chunks[0], seq_len)
+    else:
+        assert indexed_rope, "a packed forward needs the whole-cache indexed RoPE"
+        rows = seq_len // len(chunks)
+        real = [c for c in chunks if not c.is_empty]
+
+        def chunk_rows(t, k):
+            return ttnn.slice(t, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, t.shape[-1]))
+
+        outs = [
+            core(chunk_rows(xqkv_fused, k), chunk_rows(hidden_states, k) if config.is_sparse else None, c, rows)
+            for k, c in enumerate(real)
+        ]
+        xqkv_fused.deallocate(True)
+        if config.is_sparse:
+            hidden_states.deallocate(True)
+        # Empty chunks (the tail) get zero rows; concatenating all chunks keeps one concat program per forward width.
+        empties = len(chunks) - len(real)
+        zeros = ttnn.zeros_like(outs[0]) if empties else None
+        tt_sdpa_out = ttnn.concat(outs + [zeros] * empties, dim=2)
+        for o in outs + ([zeros] if empties else []):
+            o.deallocate(True)
+
+    return _output_projection(tt_sdpa_out, weights, mesh_config, ccl_manager, hidden_size, activation_dtype)
+
+
+def _attention_core(
+    xqkv_fused,
+    hidden_states,
+    rope_mats,
+    weights,
+    kv_cache,
+    config,
+    mesh_config,
+    mesh_device,
+    program_config,
+    transformation_mat,
+    ccl_manager,
+    slot_id,
+    layer_idx,
+    cached_len,
+    indexed_rope,
+    seq_len,
+):
+    """One chunk's rows, slot ``slot_id`` at position ``cached_len`` (the chunk's actual_start: the prefix already
+    cached): split heads -> QK-norm -> RoPE -> KV write -> attention -> concat heads. Consumes xqkv_fused (and
+    hidden_states on MSA layers)."""
     # Split into Q, K, V heads
     num_local_heads = mesh_config.shard_size(config.num_heads)
     num_local_kv_heads = mesh_config.shard_size(config.num_kv_heads)
@@ -117,20 +182,15 @@ def attention_forward(
 
     # Apply RoPE. indexed_rope: rope_mats are the WHOLE-cache block-cyclic SP-sharded cos/sin (built once
     # by the runtime); the indexed op derives this chunk's per-chip start from kv_actual_global=cached_len +
-    # the device's cluster_axis coord on-device (no per-chunk host reshard). The per-user seq_len slice only
-    # applies to the non-indexed multi-user path (indexed rope carries the whole cache, never sliced here).
+    # the device's cluster_axis coord on-device (no per-chunk host reshard).
     rope_kv_actual = cached_len if indexed_rope else None
     rope_cluster_axis = mesh_config.sp_axis if indexed_rope else None
-    if batch_size > 1 and not indexed_rope:
-        rope_mats_sliced = [rope_mats[0][:, :, :seq_len, :], rope_mats[1][:, :, :seq_len, :]]
-    else:
-        rope_mats_sliced = rope_mats
     tt_q_orig = tt_q
     tt_k_orig = tt_k
     with zone("rope", FINE):
         tt_q = apply_rope(
             tt_q,
-            rope_mats_sliced,
+            rope_mats,
             transformation_mat,
             is_decode_mode=False,
             kv_actual_global=rope_kv_actual,
@@ -138,7 +198,7 @@ def attention_forward(
         )
         tt_k = apply_rope(
             tt_k,
-            rope_mats_sliced,
+            rope_mats,
             transformation_mat,
             is_decode_mode=False,
             kv_actual_global=rope_kv_actual,
@@ -156,7 +216,7 @@ def attention_forward(
                 kv_cache,
                 tt_k,
                 tt_v,
-                slot_idx=user_id,
+                slot_id=slot_id,
                 layer_idx=layer_idx,
                 kv_actual=cached_len,
                 sp_axis=mesh_config.sp_axis,
@@ -175,7 +235,7 @@ def attention_forward(
             tt_iq, tt_ik = index_branch_forward(
                 hidden_states,
                 weights,
-                rope_mats_sliced,
+                rope_mats,
                 transformation_mat,
                 index_dim=config.msa_index_dim,
                 rms_norm_eps=config.rms_norm_eps,
@@ -190,7 +250,7 @@ def attention_forward(
                 write_index_k_chunk(
                     kv_cache,
                     tt_ik,
-                    slot_idx=user_id,
+                    slot_id=slot_id,
                     layer_idx=layer_idx,
                     kv_actual=cached_len,
                     sp_axis=mesh_config.sp_axis,
@@ -205,14 +265,14 @@ def attention_forward(
                 f"(a cold chunk reads it when shorter than the {topk_window}-token top-k window)"
             )
             # Cache-read: the current chunk attends the accumulated prefix, gathered across SP straight
-            # from this (user, layer) slot of the packed cache (msa_sp_attention_cache_read). cached_len may be
+            # from this (slot_id, layer) row of the packed cache (msa_sp_attention_cache_read). cached_len may be
             # mid-slab (a 32-aligned multi-turn resume); the read sizes the gather for the fullest rank.
-            slot = user_id * kv_cache.num_layers + layer_idx
+            cache_row = slot_id * kv_cache.num_layers + layer_idx
             tt_sdpa_out = msa_sp_attention_cache_read(
                 tt_q,
                 tt_iq,
                 kv_cache,
-                slot=slot,
+                cache_row=cache_row,
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
                 cached_len=cached_len,
@@ -267,12 +327,9 @@ def attention_forward(
                     kv_actual=cached_len,
                     logical_n=logical_n,
                     n_kv=config.num_kv_heads,
-                    # Ring-gather output buffer must span the FULL cache capacity: ring_joint gathers the
-                    # entire per-device cache shard (seq_local = max_seq_len/sp rows -> x sp across the ring =
-                    # max_seq_len), independent of the valid prefix (logical_n/kv_actual_isl drive causal
-                    # masking of the not-yet-written tail). Sizing it to logical_n only worked for the 2-chunk
-                    # case where the last chunk's logical_n == max_seq_len; any run with >2 chunks (e.g. 50k /
-                    # 11 chunks) fails "gather dim 2 too small: got <logical_n>, expected >= max_seq_len".
+                    # The ring-gather output buffer is sized for the full cache capacity (max_seq_len): the op
+                    # checks it against the cache shard ("gather dim 2 too small"), although it only moves the
+                    # valid prefix (logical_n / kv_actual drive that and the causal mask).
                     cache_global=kv_cache.max_seq_len,
                     head_dim=config.head_dim,
                     mesh_device=mesh_device,
@@ -281,7 +338,7 @@ def attention_forward(
                     compute_kernel_config=sp_kcfg,
                     scale=config.head_dim**-0.5,
                     cluster_axis=mesh_config.sp_axis,
-                    slot_idx=user_id,
+                    slot_idx=slot_id,
                     layer_idx=layer_idx,
                     num_layers=kv_cache.num_layers,
                     write_chunk=False,
@@ -320,11 +377,10 @@ def attention_forward(
     with zone("concat_heads", FINE):
         tt_sdpa_out = concat_heads(tt_sdpa_out)
     tt_sdpa_out_pre_concat.deallocate(True)
+    return tt_sdpa_out
 
-    # Flatten back for output projection: [B, 1, S, H] -> [1, 1, B*S, H]
-    if batch_size > 1:
-        tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
+def _output_projection(tt_sdpa_out, weights, mesh_config, ccl_manager, hidden_size, activation_dtype):
     # Output projection + the closing TP collective. Under a SHARDED residual the collective is a
     # reduce-scatter only (o_proj is row-parallel, so the RS both completes the partial sums and lands
     # the result already in the residual's emb/tp layout); under the replicated residual it must be a

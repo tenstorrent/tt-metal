@@ -26,7 +26,6 @@
 namespace ttnn::experimental::prim {
 
 struct RingAttentionAllGatherAsyncParams {
-    std::vector<IDevice*> devices;
     int32_t dim = 0;
     uint32_t num_links = 1;
     uint32_t ring_size = 0;
@@ -43,7 +42,6 @@ struct RingAttentionAllGatherAsyncParams {
     std::optional<uint64_t> route_plan_hash;
 
     RingAttentionAllGatherAsyncParams(
-        std::vector<IDevice*> devices,
         int32_t dim,
         uint32_t num_links,
         uint32_t ring_size,
@@ -58,7 +56,6 @@ struct RingAttentionAllGatherAsyncParams {
         uint32_t mesh_rows = 0,
         uint32_t mesh_cols = 0,
         std::optional<uint64_t> route_plan_hash = std::nullopt) :
-        devices(std::move(devices)),
         dim(dim),
         num_links(num_links),
         ring_size(ring_size),
@@ -75,10 +72,10 @@ struct RingAttentionAllGatherAsyncParams {
         route_plan_hash(route_plan_hash) {}
 
     // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
-    // Excludes runtime-only `devices` (raw IDevice* pointers), `semaphore` (GlobalSemaphore objects
-    // whose addresses are passed to runtime args), and `core_allocation_strategy` (effectively
-    // constant; not part of the historical custom hash). `sub_device_id` is the structural source of
-    // the worker-core range set the previous custom hash encoded.
+    // Excludes `semaphore` (GlobalSemaphore objects whose addresses are passed to runtime args) and
+    // `core_allocation_strategy` (effectively constant; not part of the historical custom hash).
+    // `sub_device_id` is the structural source of the worker-core range set the previous custom hash
+    // encoded.
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim",
         "num_links",

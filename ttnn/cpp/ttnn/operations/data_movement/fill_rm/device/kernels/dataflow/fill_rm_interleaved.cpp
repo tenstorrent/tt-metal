@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/scratchpad.h"
+#include "internal/local_mem/address_access.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -49,8 +50,12 @@ void kernel_main() {
     // so the NoC writes see the fills. No-op on WH/BH (CPU stores are coherent to the NoC there and
     // flush_l2_cache_range is tt-2xx-only). #51763 fixed this for the tt_memmove fallback but not for
     // direct scratchpad stores like these.
-    flush_l2_cache_range(static_cast<uintptr_t>(in0.get_base_address()), static_cast<size_t>(W << 1));
-    flush_l2_cache_range(static_cast<uintptr_t>(in1.get_base_address()), static_cast<size_t>(W << 1));
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(in0.local_mem())),
+        static_cast<size_t>(W << 1));
+    flush_l2_cache_range(
+        static_cast<uintptr_t>(local_mem::detail::AddressAccess::address(in1.local_mem())),
+        static_cast<size_t>(W << 1));
 #endif
 
     Noc noc;

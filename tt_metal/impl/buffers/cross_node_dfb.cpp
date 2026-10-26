@@ -21,6 +21,7 @@
 #include "hostdev/remote_dfb_config_layout.h"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -81,7 +82,7 @@ bool is_compatible_borrowed_device(distributed::MeshDevice* expected, IDevice* b
     if (expected == buffer_device) {
         return true;
     }
-    for (IDevice* local : expected->get_devices()) {
+    for (auto* local : expected->impl().get_devices()) {
         if (local == buffer_device) {
             return true;
         }
