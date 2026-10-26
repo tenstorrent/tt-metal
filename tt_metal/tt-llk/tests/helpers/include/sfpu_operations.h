@@ -1367,8 +1367,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         }
         else
         {
+#ifdef SFPU_ZERO_COMP_LLK
+            // The tt-llk float entry point (no production caller) instead of the metal calculate_comp.
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_zero_comp_, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode, 0u /* exponent_size_8 */);
+#else
             // Float (bf16 / fp32 / bfp8) comparison-to-zero: NaN-aware metal calculate_comp.
             SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_comp, (APPROX_MODE, OPERATION, ITERATIONS), dst_index, vector_mode);
+#endif
         }
     }
     else if constexpr (
