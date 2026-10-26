@@ -119,9 +119,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     uint32_t batch_scale_factor = per_core_M > M ? per_core_M / M : 1;
     uint32_t per_core_M_per_batch = per_core_M > M ? M : per_core_M;
     uint32_t num_blocks = (K / in0_block_w);
-    // Honor packer_l1_acc whenever partials are kept between K blocks, except when a core holds several batches and
-    // the partials would be drained between K blocks. The partials CB takes the output format without it, which
-    // rounds partial sums through a block-float output (e.g. two K blocks).
+    // Honor packer_l1_acc while partials are kept between K blocks, unless they are drained across a core's batches.
+    // The partials CB takes the output format without it.
     bool packer_l1_acc_en =
         packer_l1_acc && num_blocks > 1 &&
         (batch_scale_factor == 1 || (num_blocks == 2 && !tensor_args.optional_input_tensors.at(0).has_value()));
