@@ -299,12 +299,23 @@ class MuseGlimmerModel:
         a = self.args
         x = self.embed(tokens_tt)
         rope = self.rope.decode(rope_idx_tt, memory_config=heads_memcfg(DECODE_B_PAD, self.args.head_dim))
+        sb = min(a.max_batch_size, DECODE_B_PAD)
+        if sb < DECODE_B_PAD:  # SDPA decode splits its cores over all user slots
+            sdpa_inputs = (
+                ttnn.slice(current_pos_tt, [0], [sb]),
+                ttnn.slice(page_table_tt, [0, 0], [sb, page_table_tt.shape[1]]),
+            )
+        else:
+            sdpa_inputs = None
         for i, layer in enumerate(self.layers):
             nx = layer.forward_decode(
-                x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt
+                x, current_pos_tt, rope if a.uses_rope(i) else None, self.kv_caches[i], page_table_tt, sdpa_inputs
             )
             ttnn.deallocate(x)
             x = nx
+        if sdpa_inputs is not None:
+            for t in sdpa_inputs:
+                ttnn.deallocate(t)
         logits = self.head(x)
         ttnn.deallocate(x)
         return logits

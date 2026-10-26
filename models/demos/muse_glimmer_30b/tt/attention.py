@@ -312,7 +312,7 @@ class MuseGlimmerAttention:
         sdpa.deallocate(True)
         return self._gate_oproj(attn, gate)
 
-    def forward_decode(self, x, current_pos, rope, kv_cache, page_table):
+    def forward_decode(self, x, current_pos, rope, kv_cache, page_table, sdpa_inputs=None):
         a = self.args
         k_cache, v_cache = kv_cache
         heads_mem = heads_memcfg(x.shape[-2], a.head_dim)
@@ -376,9 +376,25 @@ class MuseGlimmerAttention:
         k.deallocate(True)
         v.deallocate(True)
 
-        q = ttnn.to_memory_config(
-            q, ttnn.DRAM_MEMORY_CONFIG
-        )  # paged SDPA decode mis-reads height-sharded q past the first core row
+        # SDPA decode splits its cores over all user slots, so run it on the first `sb` only.
+        sb = min(a.max_batch_size, batch)
+        sdpa_pos, sdpa_pt, own = current_pos, page_table, ()
+        if sb < batch:
+            if sdpa_inputs is not None:
+                sdpa_pos, sdpa_pt = sdpa_inputs
+            else:
+                sdpa_pos = ttnn.slice(current_pos, [0], [sb])
+                sdpa_pt = None if page_table is None else ttnn.slice(page_table, [0, 0], [sb, page_table.shape[1]])
+                own = (sdpa_pos,) if sdpa_pt is None else (sdpa_pos, sdpa_pt)
+            q_full = q
+            q = ttnn.slice(
+                q_full, [0, 0, 0, 0], [1, sb, q_full.shape[2], q_full.shape[3]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            q_full.deallocate(True)
+        else:
+            q = ttnn.to_memory_config(
+                q, ttnn.DRAM_MEMORY_CONFIG
+            )  # paged SDPA decode mis-reads height-sharded q past the first core row
         grid = self.mesh_device.compute_with_storage_grid_size()
         # k_chunk measured on QB2: 256 for the 2048-token window, 512 for full-context layers.
         program_config = ttnn.SDPAProgramConfig(
@@ -388,7 +404,7 @@ class MuseGlimmerAttention:
             exp_approx_mode=False,
         )
         sdpa_kwargs = dict(
-            cur_pos_tensor=current_pos,
+            cur_pos_tensor=sdpa_pos,
             scale=a.sdpa_scale,
             sliding_window_size=self.sliding_window,
             program_config=program_config,
@@ -397,16 +413,18 @@ class MuseGlimmerAttention:
         )
         if page_table is not None:
             sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
-                q, k_cache, v_cache, page_table_tensor=page_table, **sdpa_kwargs
+                q, k_cache, v_cache, page_table_tensor=sdpa_pt, **sdpa_kwargs
             )
         else:
             sdpa = ttnn.transformer.scaled_dot_product_attention_decode(q, k_cache, v_cache, **sdpa_kwargs)
         q.deallocate(True)
+        for t in own:
+            t.deallocate(True)
 
         attn = ttnn.experimental.nlp_concat_heads_decode(
-            ttnn.to_memory_config(sdpa, heads_mem), num_heads=a.q_heads_local
-        )  # [1,1,B,ql*128] L1 width-sharded
-        if attn.shape[2] != batch:  # the concat output is padded to 32 rows
+            ttnn.to_memory_config(sdpa, heads_memcfg(sb, a.head_dim)), num_heads=a.q_heads_local
+        )  # [1,1,32,ql*128] L1 width-sharded
+        if attn.shape[2] != batch:  # the concat output has 32 rows; rows past the SDPA users are unused
             w = attn.shape[-1]
             attn = ttnn.reshape(attn, ttnn.Shape([1, 1, batch, w]), ttnn.Shape([1, 1, 32, w]))
         sdpa.deallocate(True)
