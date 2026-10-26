@@ -5,25 +5,38 @@ against `summary.json` and `bench.json`; the read-only analyst subagent's report
 
 ## Round 0 evidence
 
+**G1 re-raise (D1): the accuracy policy now uses fp32 dest accumulation** on every matmul and both SDPAs (sweep
+variant A1, `accumulation_sweep.md`), and the performance policy is bf8 except the FFN (bf16) + LoFi + fp32
+accumulation (P2a). Round 0 was re-measured on HEAD 81ad9734042 (job 536); the first round 0 (HiFi2 without fp32
+accumulation, job 497) is kept below for reference. The op-level evidence and the proposals are unchanged except
+where noted (the matmul rows moved: QKV 16.41 -> 22.11 ms, the 1280^2 matmuls 4.4-4.6 -> 3.07-3.09 ms,
+W_o 5.02 -> 3.41 ms; the layer total is the same, 67.85 ms).
+
 **Headline** (target `forward`, `paper` = 1024 x 2048 -> 64, `accuracy`; realistic bench goldens, chip
-61C0BD39B27E9772, job 497): device **1370.5 ms**, steady wall **1988.8 ms** (prepare 369.4, upload 311.0,
-postprocess 19.3 ms; the host split doubled against the first round-0 run, job 453: 161.7 / 140.3 / 9.0 ms,
-under CPU contention from the fleet). Reduced-layer estimate 1370.4 ms (embed 11.08 + 20 x 67.86 + head 2.15),
-**-0.0 %** against measured: no reconciliation gap.
+61C0BD39B27E9772, job 536): device **1372.0 ms**, steady wall **1971.5 ms** (prepare 348.1, upload 201.6,
+postprocess 21.5 ms; the host split is contention-sensitive across jobs). Reduced-layer estimate 1368.4 ms
+(embed 9.37 + 20 x 67.85 + head 2.15), **-0.3 %** against measured. Every gate holds on every case
+(`bench.json` `floor_ok`).
 
-| case | device ms | wall ms | pcc_normalized | pcc_spread | row p01 / min | active-row p01 / min | pcc_final / final_spread |
+| case | device ms | wall ms | pcc_normalized / spread | row p01 / min | active-row p01 / min | spread ratio p01 / p99 (min / max) | pcc_final / final_spread |
 |---|---|---|---|---|---|---|---|
-| paper / accuracy (target) | 1370.5 | 1988.8 | 0.99987 | 0.99963 | 0.698 / 0.329 | 0.993 / 0.949 | 0.99999 / 0.99965 |
-| paper / performance | 1369.7 | 1832.7 | 0.99788 | 0.99381 | -0.549 / -0.589 | 0.531 / -0.034 | 0.99994 / 0.99333 |
-| long_context / accuracy | 180.8 | 253.4 | 0.99991 | 0.99972 | 0.746 / 0.735 | 0.999 / 0.999 | 0.99999 / 0.99970 |
-| multivariate / accuracy | 4998.1 | 5903.3 | 0.99988 | 0.99968 | 0.995 / 0.978 | 0.995 / 0.986 | 1.00000 / 0.99967 |
+| paper / accuracy (target) | 1372.0 | 1971.5 | 0.99993 / 0.99988 | 0.830 / 0.688 | 0.9985 / 0.9926 | 0.930 / 1.033 (0.689 / 1.115) | 0.999997 / 0.99993 |
+| paper / performance | 1114.7 | 1785.9 | 0.99971 / 0.99916 | 0.206 / 0.139 | 0.977 / 0.823 | 0.890 / 1.065 (0.297 / 1.115) | 0.99999 / 0.99922 |
+| long_context / accuracy | 232.0 | 367.2 | 0.99996 / 0.99992 | 0.864 / 0.856 | 0.9995 / 0.9995 | 0.990 / 1.016 (0.990 / 1.017) | 0.999996 / 0.99995 |
+| multivariate / accuracy | 5110.0 | 5880.6 | 0.99994 / 0.99992 | 0.999 / 0.995 | 0.9992 / 0.9971 | 0.978 / 1.030 (0.840 / 1.051) | 1.000000 / 0.99992 |
 
-**Category split** (full model, scaled by the layer counts): matmuls 707.0 ms (51.6 %) at a weighted 22.4 %
-FLOPs (`summary.json` `matmul_weighted_flops_percent`, the number of record); non-matmul 663.2 ms (48.4 %),
+First round 0 (superseded; HiFi2 without fp32 accumulation, bf8 + LoFi performance; job 497): paper 1370.5 ms,
+pcc_normalized 0.99987, active-row min 0.949, spread ratio min 0.397 (rows 458 / 483 at 0.40 / 0.48);
+performance 1369.7 ms with negative per-row PCC; long_context 180.8 ms; multivariate 4998.1 ms. The policy change
+costs long_context +28 % and multivariate +2.2 % under the default 1D configs (fp32 accumulation halves DST);
+R1-4 re-tunes blocks and subblocks for it. Both guards are re-baselined.
+
+**Category split** (first round 0, scaled by the layer counts; the re-measured profile has 23.4 % weighted matmul
+FLOPs, `summary.json`): matmuls 707.0 ms (51.6 %) at a weighted 22.4 % FLOPs; non-matmul 663.2 ms (48.4 %),
 which already runs at ~70 % of its DRAM floor (465.8 ms) except RoPE (149.9 ms against a 47.2 ms floor).
 Exit criteria (matmul > 65 % FLOPs and non-matmul < 15 %): not met.
 
-**Op-to-op map, one layer (67.86 ms, `sections/layer.csv`; IDs from `perf_report.txt`)**, all ops on 110
+**Op-to-op map, one layer (first round 0: 67.86 ms; IDs from `perf_report.txt`)**, all ops on 110
 cores, DRAM interleaved, bf16. 32 of the 96 slots are dead (30 tile padding + the 2 never-read horizon tokens),
 and 16 of 96 head lanes are zero:
 
@@ -64,8 +77,10 @@ device time (1369.7 vs 1370.5 ms): the matmuls are limited by the default 1D dat
   pcc_spread 0.9933 -> 0.9989 and row p01 -0.54 -> +0.24 on paper[:256]; bf16 tokenizer, QKV, W_o or W_ov
   alone change nothing, and bf8 + HiFi2 is as bad as bf8 + LoFi (bf16 + LoFi: spread 0.9992).
 
-Savings overlap and are not additive. Gates: the PCC suite (56 tests), every gate metric at its floor, target
-device improvement >= 2 %, no guard regression > 3 % on device time.
+Savings overlap and are not additive. Gates: the PCC suite (57 tests), every gate of `golden_io.GATES` and the
+drift band (`tests/perf/check_gates.py`), target device improvement >= 2 %, no guard regression > 3 % on device
+time. **Order approved in D2** (effective when G1 passes): R1-1, R1-2 + R1-3, R1-4, R1-7, R1-5, R1-6; R1-8 deferred
+until a multivariate profile gives op IDs.
 
 | # | Proposal | Finding | Est. savings (target, device) | Confidence | Risk / complexity |
 |---|---|---|---|---|---|
@@ -75,7 +90,7 @@ device improvement >= 2 %, no guard regression > 3 % on device time.
 | R1-4 | matmul program configs per role (2D multicast / minimal_matmul), ReLU fused | 1D default configs at 23 % FLOPs | 240-520 ms after R1-1 | medium-high | medium (sweep first) |
 | R1-5 | last-layer cut: layer 20 runs only the read-out queries after K/V | dead work | 20-38 ms | medium-high | medium |
 | R1-6 | RoPE on a leading-dim view that avoids the reload path | 3x cos/sin re-reads | 25-37 ms | low-medium | low (micro-benchmark first) |
-| R1-7 | performance policy: bf16 FFN weights (documented per-role exception) | per-row metrics fail | guard accuracy; device cost to measure | high (accuracy) | low |
+| R1-7 | performance policy: the cheapest variant passing the performance gates, after R1-4 (interim: P2a) | per-row metrics (bf8 FFN) | guard accuracy; device cost after R1-4 | high (accuracy) | low |
 | R1-8 | multivariate variate attention without the 4x tile inflation (guard) | V = 8 padded to 32 rows, 2 permutes | >= 40 ms / layer on the guard | medium | medium (micro-benchmark first) |
 
 ## R1-1: drop the 2 trailing horizon tokens
