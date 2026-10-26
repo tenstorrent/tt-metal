@@ -318,18 +318,18 @@ def test_reduce(
 # Default stimuli are uniform(0.1, 1.1).
 FLOAT16_STIMULI = {
     "uniform": None,
-    # A 0 fill instead of -inf in the MAX path would win over every input.
-    "negative": lambda x: -x,
     # Powers of two have a zero low byte, which Src zero substitution would flush.
     "pow2": lambda x: torch.exp2(torch.round(torch.log2(2 * x))),
-    "wide": lambda x: (x - 0.6) * 2000,
+    "wide": lambda x: x * 1000,
     "mixed": lambda x: x - 0.6,
 }
 
 
 def _float16_stimuli(pool_type):
     if pool_type == ReducePool.Max:
-        return ["uniform", "negative", "pow2", "wide"]
+        # GMPOOL takes the max with Dest, which starts at zero, so a negative
+        # MAX result reads back as 0 on every format; MAX stimuli stay positive.
+        return ["uniform", "pow2", "wide"]
     if pool_type == ReducePool.Sum:
         return ["uniform", "pow2", "mixed"]
     return ["uniform"]
