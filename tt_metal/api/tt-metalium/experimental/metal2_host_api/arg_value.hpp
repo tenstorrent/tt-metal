@@ -37,14 +37,12 @@ public:
     ArgValue() = default;
 
     // Implicit construction from uint32_t (or any implicitly convertible type)
-    // (Taken by const reference and converted by assignment, so it accepts exactly what assigning
+    // (Taken by const reference and converted implicitly, so it accepts exactly what assigning
     //  to a uint32_t accepts, with the same result: non-copyable sources like std::atomic and
     //  bit-fields work, and an explicit conversion operator is never chosen.)
     template <typename T>
         requires std::is_convertible_v<const T&, std::uint32_t>
-    ArgValue(const T& value) {
-        u32_ = value;
-    }
+    ArgValue(const T& value) : u32_(implicitly_converted(value)) {}
 
     // Get the arg value as a uint32_t (static_cast<uint32_t>(original value))
     std::uint32_t to_uint32() const { return u32_; }
@@ -63,6 +61,10 @@ private:
     //  - to_uint32() is a conversion, not a view of the representation. It must keep meaning
     //    static_cast<uint32_t>(original value), even where that isn't the word sent to the device.
     std::uint32_t u32_ = 0;
+
+    // Passing a value as this parameter applies only implicit conversions, as assignment does.
+    // (Initializing u32_ directly, or a static_cast, could choose an explicit conversion operator.)
+    static std::uint32_t implicitly_converted(std::uint32_t value) { return value; }
 };
 
 }  // namespace tt::tt_metal::experimental
