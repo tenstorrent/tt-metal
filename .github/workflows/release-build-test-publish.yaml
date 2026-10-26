@@ -110,8 +110,7 @@ jobs:
 
   release-demo-tests:
     needs: [check-harbor, build-artifact, determine-test-skus]
-    # TEMP: disabled so only fabric-exabox-tests runs
-    if: ${{ false && inputs.tag-version != '' }}
+    if: ${{ inputs.tag-version != '' }}
     # id-token: write is required by the nested exabox multihost job (multihost-ci runner chart).
     # Job-level permissions replace inherited defaults, so restate the reads the container legs need too.
     permissions:
@@ -132,8 +131,7 @@ jobs:
 
   runtime-sanity-tests:
     needs: [build-artifact]
-    # TEMP: disabled so only fabric-exabox-tests runs
-    if: ${{ false && inputs.tag-version != '' }}
+    if: ${{ inputs.tag-version != '' }}
     permissions:
       contents: read
       packages: read
@@ -147,8 +145,7 @@ jobs:
 
   ttnn-ops-unit-tests:
     needs: [build-artifact]
-    # TEMP: disabled so only fabric-exabox-tests runs
-    if: ${{ false && inputs.tag-version != '' && inputs.platform == inputs.main-platform }}
+    if: ${{ inputs.tag-version != '' && inputs.platform == inputs.main-platform }}
     permissions:
       contents: read
       packages: read
