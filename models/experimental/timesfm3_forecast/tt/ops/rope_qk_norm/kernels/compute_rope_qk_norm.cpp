@@ -8,7 +8,8 @@
 // x @ T is exact in bf16 (T permutes with signs); y, y^2 and y * rstd stay fp32, so out is the only rounding.
 // Units run in the reader's order; cos / sin change with the seq tile.
 //
-// Compile-time args: Wt, RH, inv_w (fp32 bits), eps (fp32 bits). Runtime: num_units, start_unit.
+// Compile-time args: Wt, RH, inv_w (fp32 bits), eps (fp32 bits), from_qkv (v units are skipped: the writer
+// copies them). Runtime: num_units, start_unit.
 
 #include <cstdint>
 
@@ -27,6 +28,7 @@ constexpr uint32_t Wt = get_compile_time_arg_val(0);
 constexpr uint32_t RH = get_compile_time_arg_val(1);
 constexpr uint32_t inv_w = get_compile_time_arg_val(2);
 constexpr uint32_t eps = get_compile_time_arg_val(3);
+constexpr uint32_t G = get_compile_time_arg_val(4) != 0 ? 3 : 2;
 
 constexpr uint32_t x_cb = tt::CBIndex::c_0;
 constexpr uint32_t cos_cb = tt::CBIndex::c_1;
@@ -68,8 +70,12 @@ void kernel_main() {
 
     uint32_t cur_st = 0xFFFFFFFF;
     for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
-        const uint32_t st = u / (2 * RH);
-        const uint32_t g0 = (u % (2 * RH)) < RH ? 0 : Wt;
+        const uint32_t st = u / (G * RH);
+        const uint32_t bh = u % (G * RH);
+        if (bh >= 2 * RH) {
+            continue;
+        }
+        const uint32_t g0 = bh < RH ? 0 : Wt;
         if (st != cur_st) {
             if (cur_st != 0xFFFFFFFF) {
                 cb_cos.pop_front(Wt);

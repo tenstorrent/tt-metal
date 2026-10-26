@@ -338,6 +338,45 @@ def test_rope_qk_norm(device, rows, seq, control):
     assert ok != control
 
 
+@pytest.mark.parametrize("rows, seq", [(4, 64), (3, 96)])
+@pytest.mark.parametrize("control", [False, True])
+def test_rope_qk_norm_qkv(device, rows, seq, control):
+    """R3-5: the head split folded into the fused op, alone: (qn, kn, v) from the QKV output must equal
+    split_query_key_value_and_split_heads followed by ``rope_qk_norm`` (same kernel math, so bitwise). The control
+    compares against the split of a QKV whose q heads are rolled by one, which must differ."""
+    import ttnn
+
+    from models.experimental.timesfm3_forecast.common.decomposition import HEAD_DIM_PAD, rope_tables
+    from models.experimental.timesfm3_forecast.tt.common import upload
+    from models.experimental.timesfm3_forecast.tt.model import NUM_HEADS, QK_EPS
+    from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm, rope_qk_norm_qkv
+
+    tt = _model(device)
+    w = tt.layers[0]["seq"]
+    gen = torch.Generator().manual_seed(12)
+    qkv = torch.randn(1, 1, rows * seq, 3 * NUM_HEADS * HEAD_DIM_PAD, generator=gen) * 4.0
+    ref_qkv = qkv.clone()
+    if control:
+        q_part = ref_qkv[..., : NUM_HEADS * HEAD_DIM_PAD].reshape(1, 1, rows * seq, NUM_HEADS, HEAD_DIM_PAD)
+        ref_qkv[..., : NUM_HEADS * HEAD_DIM_PAD] = q_part.roll(1, dims=3).reshape(1, 1, rows * seq, -1)
+    cos, sin = (upload(device, t.reshape(1, 1, seq, HEAD_DIM_PAD)) for t in rope_tables(seq, torch.float32))
+    dev_qkv, dev_ref = upload(device, qkv), upload(device, ref_qkv)
+    got = rope_qk_norm_qkv(dev_qkv, rows, NUM_HEADS, cos, sin, tt.rope_trans, w["q_gain"], w["k_gain"], epsilon=QK_EPS)
+    q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+        ttnn.reshape(dev_ref, (rows, seq, dev_ref.shape[-1])), num_heads=NUM_HEADS, transpose_key=False
+    )
+    qn, kn = rope_qk_norm(q, k, cos, sin, tt.rope_trans, w["q_gain"], w["k_gain"], epsilon=QK_EPS)
+    pairs = [(ttnn.to_torch(a).float(), ttnn.to_torch(b).float()) for a, b in zip(got, (qn, kn, v))]
+    for t in (*got, q, k, v, qn, kn, cos, sin, dev_qkv, dev_ref):
+        ttnn.deallocate(t)
+    diffs = [(a - b).abs().max().item() for a, b in pairs]
+    print(f"[rope_qk_norm_qkv] R={rows} S={seq} control={control}: max |diff| q, k, v {diffs}")
+    if control:
+        assert diffs[0] > 0.5 and diffs[1] == 0 and diffs[2] == 0
+    else:
+        assert diffs == [0.0, 0.0, 0.0]
+
+
 @pytest.mark.parametrize("rows", [16384, 65536 + 32 * 3])
 def test_post_add_norm(device, rows):
     """R2-4: the fused post-norm + residual + pre-norm kernel against the 3-op chain it replaces (the op output

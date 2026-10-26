@@ -364,20 +364,20 @@ class TtTimesFM3:
         xn = self._pre(x)
         qkv = linear(xn, w["wqkv"], p)
         ttnn.deallocate(xn)
+        if self.fuse_rope_norm:
+            # R3-2 + R3-5: head split, RoPE and the QK norm in one pass from the QKV output (iter_02/r3_2: split +
+            # 2 RoPE + 2 norms 8.0 -> 4.3 ms per layer).
+            from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm_qkv
+
+            qn, kn, v = rope_qk_norm_qkv(
+                qkv, r, NUM_HEADS, inputs.cos, inputs.sin, self.rope_trans, w["q_gain"], w["k_gain"], epsilon=QK_EPS
+            )
+            ttnn.deallocate(qkv)
+            return self._seq_attention_rest(qn, kn, v, x, w, inputs, cut)
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             to_rows(qkv, r, s), num_heads=NUM_HEADS, transpose_key=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv)
-        if self.fuse_rope_norm:
-            # R3-2: RoPE and the QK norm in one pass over q and k (iter_02/r3_2: 4.94 -> 2.11 ms per layer).
-            from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm
-
-            qn, kn = rope_qk_norm(
-                q, k, inputs.cos, inputs.sin, self.rope_trans, w["q_gain"], w["k_gain"], epsilon=QK_EPS
-            )
-            ttnn.deallocate(q)
-            ttnn.deallocate(k)
-            return self._seq_attention_rest(qn, kn, v, x, w, inputs, cut)
         # R2-1: RoPE on a free (R * 8, 2, S, 96) leading-dim view (iter_00/r1_6: 2.56 vs 3.78 ms/call, bitwise equal).
         g = ROPE_VIEW_GROUPS
         rope = lambda t: ttnn.reshape(  # noqa: E731

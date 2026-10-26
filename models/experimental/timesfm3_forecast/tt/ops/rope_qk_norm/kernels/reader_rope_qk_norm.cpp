@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for the fused RoPE + QK RMSNorm. Units run seq-tile-major (u = st * BH + bh, bh over the q heads then the
-// k heads), so a core re-reads cos / sin only when its seq tile changes.
-// Compile-time args: Wt, St, RH (rows * heads of one tensor), accessor args of q, k, cos, sin, trans, gq, gk.
+// Reader for the fused RoPE + QK RMSNorm. Units run seq-tile-major (u = st * G * RH + bh, bh over the q heads, the
+// k heads and, from a fused QKV tensor, the v heads), so a core re-reads cos / sin only when its seq tile changes.
+// With from_qkv (R3-5), q / k / v head tiles are read straight from the (R * S, 3 * H * Wt) QKV matmul output (q and
+// k accessors both point at it) and the v heads go to a pass-through buffer for the writer.
+// Compile-time args: Wt, St, RH (rows * heads of one tensor), H, from_qkv, accessor args of q, k, cos, sin, trans, gq, gk.
 // Runtime: q, k, cos, sin, trans, gq, gk addresses, num_units, start_unit.
 
 #include <stdint.h>
@@ -39,7 +41,10 @@ void kernel_main() {
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
     constexpr uint32_t St = get_compile_time_arg_val(1);
     constexpr uint32_t RH = get_compile_time_arg_val(2);
-    constexpr auto q_args = TensorAccessorArgs<3>();
+    constexpr uint32_t H = get_compile_time_arg_val(3);
+    constexpr bool from_qkv = get_compile_time_arg_val(4) != 0;
+    constexpr uint32_t G = from_qkv ? 3 : 2;
+    constexpr auto q_args = TensorAccessorArgs<5>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto c_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto s_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
@@ -54,6 +59,7 @@ void kernel_main() {
     CircularBuffer cb_trans(tt::CBIndex::c_3);
     CircularBuffer cb_scaler(tt::CBIndex::c_4);
     CircularBuffer cb_g(tt::CBIndex::c_5);
+    CircularBuffer cb_v(tt::CBIndex::c_6);
     const uint32_t bytes = get_tile_size(tt::CBIndex::c_0);
     const auto q = TensorAccessor(q_args, q_addr);
     const auto k = TensorAccessor(k_args, k_addr);
@@ -86,8 +92,24 @@ void kernel_main() {
 
     uint32_t cur_st = 0xFFFFFFFF;
     for (uint32_t u = start_unit; u < start_unit + num_units; ++u) {
-        const uint32_t st = u / (2 * RH);
-        const uint32_t bh = u % (2 * RH);
+        const uint32_t st = u / (G * RH);
+        const uint32_t bh = u % (G * RH);
+        const uint32_t part = bh / RH;
+        if (from_qkv) {
+            const uint32_t rh = bh % RH;
+            const uint32_t page = ((rh / H) * St + st) * (3 * H * Wt) + (part * H + rh % H) * Wt;
+            if (part == 2) {
+                read_tiles(noc, cb_v, q, bytes, page, Wt);
+                continue;
+            }
+            if (st != cur_st) {
+                read_tiles(noc, cb_cos, cos, bytes, st * Wt, Wt);
+                read_tiles(noc, cb_sin, sin, bytes, st * Wt, Wt);
+                cur_st = st;
+            }
+            read_tiles(noc, cb_x, q, bytes, page, Wt);
+            continue;
+        }
         if (st != cur_st) {
             read_tiles(noc, cb_cos, cos, bytes, st * Wt, Wt);
             read_tiles(noc, cb_sin, sin, bytes, st * Wt, Wt);

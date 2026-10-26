@@ -24,7 +24,7 @@ from models.experimental.timesfm3_forecast.common.decomposition import (
 )
 from models.experimental.timesfm3_forecast.tt.common import TILE, TtPrecision, upload
 from models.experimental.timesfm3_forecast.tt.model import QK_EPS, ROPE_VIEW_GROUPS
-from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm
+from models.experimental.timesfm3_forecast.tt.ops.rope_qk_norm.op import rope_qk_norm, rope_qk_norm_qkv
 
 H, ITERS = 16, 20
 
@@ -94,6 +94,44 @@ def main(out=None):
 
             def fused():
                 return list(rope_qk_norm(q, k, cos, sin, trans, gq, gk, epsilon=QK_EPS))
+
+            qkv = upload(dev, torch.randn(1, 1, r * s, 3 * H * HEAD_DIM_PAD, generator=gen) * 4.0)
+
+            def split_fused():  # R3-5 baseline: head split, then the fused op
+                q3, k3, v3 = ttnn.transformer.split_query_key_value_and_split_heads(
+                    ttnn.reshape(qkv, (r, s, qkv.shape[-1])),
+                    num_heads=H,
+                    transpose_key=False,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                qn, kn = rope_qk_norm(q3, k3, cos, sin, trans, gq, gk, epsilon=QK_EPS)
+                ttnn.deallocate(q3)
+                ttnn.deallocate(k3)
+                return [qn, kn, v3]
+
+            def from_qkv():
+                return list(rope_qk_norm_qkv(qkv, r, H, cos, sin, trans, gq, gk, epsilon=QK_EPS))
+
+            outs = {}
+            for name, fn in (("split_fused", split_fused), ("from_qkv", from_qkv)):
+                for _ in range(3):
+                    for t in fn():
+                        ttnn.deallocate(t)
+                ttnn.synchronize_device(dev)
+                t0 = time.perf_counter()
+                for _ in range(ITERS):
+                    for t in fn():
+                        ttnn.deallocate(t)
+                ttnn.synchronize_device(dev)
+                res[f"{name}@{r}x{s}"] = {"ms_per_call": (time.perf_counter() - t0) / ITERS * 1e3}
+                outs[name] = [ttnn.to_torch(t).float() for t in fn()]
+            res[f"from_qkv@{r}x{s}"]["max_diff_vs_split"] = max(
+                float((a - b).abs().max()) for a, b in zip(outs["from_qkv"], outs["split_fused"])
+            )
+            print(
+                f"[ROPE_QK_NORM_QKV] R={r} S={s}: {res[f'split_fused@{r}x{s}']} {res[f'from_qkv@{r}x{s}']}", flush=True
+            )
+            ttnn.deallocate(qkv)
 
             outs = {}
             for name, fn in (("chain", chain), ("fused", fused)):
