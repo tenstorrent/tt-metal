@@ -168,6 +168,16 @@ CoreCoord flat_drisc_physical(IDevice* device, uint32_t r, uint32_t banks) {
     return noc0_of(device, flat_drisc_logical(device, r, banks), tt::CoreType::DRAM);
 }
 
+// the tile that sends slot r on the calls with small counts (switch mode: a bank's second slot from its other Metal
+// tile, on NOC0) and that tile's NoC; else flat_drisc_physical / flat_drisc_noc
+std::pair<CoreCoord, uint32_t> flat_drisc_sender(IDevice* device, uint32_t r, uint32_t banks, bool reader_down) {
+    const auto [alt, job] = flat_drisc_alt(device, r, banks);
+    if (job != ~0u) {
+        return {noc0_of(device, alt, tt::CoreType::DRAM), 0u};
+    }
+    return {flat_drisc_physical(device, r, banks), flat_drisc_noc(device, r, banks, reader_down)};
+}
+
 uint32_t flat_drisc_noc(IDevice* device, uint32_t r, uint32_t banks, bool reader_down) {
     const FlatProbes pr = FlatProbes::from_env();
     // one tile per bank: its first slot on NOC1, the second on NOC0; two tiles: the non-endpoint tile's slot on NOC1

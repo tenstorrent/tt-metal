@@ -1848,3 +1848,30 @@ is its last expert's three 64-row sub-blocks re-running the x passes after its w
 stalls behind the weight ring at experts 4-6 (backpressure: the ring holds two experts, the compute falls behind).
 K3 / K2.7 pay mostly in the stream (per-expert switch gaps x 28, slot skew 31-53 us).
 Logs / scripts: /localdev/mstaletovic/fixed_cost/ (fc_*.log the sweep, fit.py, pz_* / pz2_* + csv, pieces.py).
+
+### Two attempts at each fixed cost (2026-10-26, one chip bh-lb-09, Galaxy loads; A/B = /localdev/mstaletovic/fc_ab/ab.sh)
+Every attempt: GLM-5.3 E 8 M 160 / GLM-Flash E 9 M 142 / K3 E 28 M 91 / K2.7 E 12 M 107, us a call (median of 10),
+plus a zones run (pieces.py) for the targeted piece, y at M 128 vs the base (bit-exact on every kept change). Base
+525 / 382 / 1232 / 808. No hang in any run. Corrections to the fixed-cost table above, from the new marks: the head is
+the launcher's job post (schedule load 1.4 us, then 4 us of descriptor building + one barrier for all 16 slots), and
+the first math waits for x (first x block med 15.7, max 22.8 us), not the weights; the per-expert switch gap is
+~0.5-1.3 us above a core's normal block spacing (2.0-2.6 us), the rest of the "gaps" was backpressure; K2.7's slot skew
+is tile 1 (all job-1 slots, the NOC1-endpoint tiles, finish ~45 us after the job-0 slots: the x reads' port).
+| fixed cost | attempt | GLM-5.3 | GLM-Flash | K3 | K2.7 | targeted piece | kept? | why |
+|---|---|---|---|---|---|---|---|---|
+| startup | 1a each slot's job count right behind its own descriptor (no barrier over all 16) | 523 | 382 | 1233 | 807 | first weight block -1.3..-1.7 us (med), -1.7..-3.1 (min) | yes | free; the start is x-bound (first x ~16 / 23 us), so the total does not move |
+| startup | 1b 16-tile super-blocks (shorter x head, MIMO_FL_SBT=16) | 565 | 411 | (16 already) | 797 | first x block -1.5 us | no | the head shrinks but GLM-5.3 / Flash lose 30-40 us steady state (more, smaller x reads); K2.7 -11 |
+| expert switch | 2a non-blocking grant refresh in the DRISC loop | 524 | 383 | 1234 | 806 | K2.7 gap 2.57 -> 2.36 us, others same | no | the refresh is rarely on the path (the gaps are backpressure, not the DRISC) |
+| expert switch | 2b 3-expert weight ring (GU_NREG 3 + DRING 3, MT 2) | 539 | 392 | 1245 | 827 | backpressure gaps gone (GLM-5.3 13 / 35 -> 3 us) | no | +12-19 us everywhere: the bigger ring costs more than the stalls it removes |
+| slot skew | 3a slots' cores by hops from the tile that really sends (switch mode: job 1 from the NOC1 endpoint), nearest pairs first | 522 | 381 | 1216 | 808 | GLM-5.3 skew 10 -> 4, K3 30 -> 27, K2.7 55 -> 55 | yes (default) | job 1 was planned from the free tile (10.7 real vs 6.8 believed hops, last slots 15-21); M 256-1024 unchanged / -1% |
+| slot skew | 3b x reads on NOC0 (off tile 1's port), on top of 3a | 548 | 418 | 1295 | 820 | skew gone (K2.7 55 -> 15, K3 -> 6) | no | the skew was tile 1's x port, but x on NOC0 costs more than the skew everywhere |
+| last-expert tail | 4a experts by sub-blocks, most first (uniform: no change) | 522 | 381 | 1234 | 806 | reversed zipf (biggest last) 560 / 412 / 1316 / 849 -> 527 / 398 / 1295 / 825 | yes (default) | the tail is the last expert's sub-blocks after its weights: put the smallest last |
+| last-expert tail | 4b 32-row sub-blocks (MT 1) | 572 | 458 | 1239 | 821 | GLM-5.3 gate/up tail 56 -> 83 us | no | the tail is compute-bound per pass (~13 us a pass at 1 row tile, rp 1): more, smaller sub-blocks cost more |
+| drain | 5a 16 h chains to the down cores (MIMO_FL_DCH=16) | 524 | 380 | 1251 | 805 | drain -2 us on the pair plans | no | within noise on GLM-5.3 / Flash / K2.7, K3 (units, 4 chains) +19 |
+| drain | 5b 48 down cores (smaller final down block, MIMO_FL_ND=48) | 527 | 389 | 1242 | 807 | drain unchanged / +4 | no | the drain is the last h + one row tile of down, not the down width |
+Kept together: 522 / 380 / 1216 / 807 (base 525 / 382 / 1232 / 808), y bit-exact at M 128 on all four, test_closeout_flat
+9/9, test_closeout_plans, the fused flat + combine closeout (2x4) pass; 20k-call soaks of GLM-5.3 / K3 / K2.7 at their
+Galaxy loads pass. (1a relies on the NoC rule the DRISC already uses: a write that has left the NIU is followed on the
+same static VC and route by the atomic.) New probes: MIMO_FL_SBT (super-block width), MIMO_FL_DRISC_PLACE=0 (the old
+round-robin). tt-npe could not model the placement: this install aborts on any workload, its own example included.
+Logs: /localdev/mstaletovic/fc_ab/ (p1a..p5b, *z zones + csv, zbase / zr* zipf, final, soak_*).

@@ -10,6 +10,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "se_drisc_post.hpp"
+#ifdef SE_ZONES
+#include "tools/profiler/kernel_profiler.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t num_e = get_compile_time_arg_val(0);
@@ -17,6 +20,11 @@ void kernel_main() {
     SeDyn dyn;
     se_dyn_load<num_e>(dyn, se_drisc_post_nargs(0), scratch, 1);
     // (SE_DRISC_X: the x args after the post and the se_dyn.hpp args)
-    se_drisc_post(dyn, 0, scratch, 2 * SE_DYN_HALF, se_drisc_post_nargs(0) + SE_DYN_NARGS);
-    noc_async_full_barrier();
+    {
+#ifdef SE_ZONES
+        DeviceZoneScopedN("DRISC_POST");
+#endif
+        se_drisc_post(dyn, 0, scratch, 2 * SE_DYN_HALF, se_drisc_post_nargs(0) + SE_DYN_NARGS);
+        noc_async_full_barrier();
+    }
 }

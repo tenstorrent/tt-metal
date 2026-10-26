@@ -186,6 +186,8 @@ struct FlatProbes {
     std::optional<std::string> xsolo_seq;           // MIMO_FL_XSOLO_SEQ
     std::optional<std::string> x_resident;          // MIMO_FL_X_RESIDENT
     std::optional<std::string> x_slots_max;         // MIMO_FL_X_SLOTS_MAX
+    std::optional<std::string> sbt;                 // MIMO_FL_SBT
+    std::optional<std::string> drisc_place;         // MIMO_FL_DRISC_PLACE
     std::optional<std::string> yrm_nowrite;         // MIMO_FL_YRM_NOWRITE
     std::optional<std::string> yrm_packtile;        // MIMO_FL_YRM_PACKTILE
     std::optional<std::string> yrm_self;            // MIMO_FL_YRM_SELF

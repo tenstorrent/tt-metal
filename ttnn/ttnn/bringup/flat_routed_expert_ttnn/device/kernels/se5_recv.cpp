@@ -313,7 +313,7 @@ void kernel_main() {
             if (!no_partner) {
                 noc_semaphore_inc(partner_avail, 1);  // the forwarder's write is acknowledged before DATA moves
             }
-            if (pushed % 8 == 0) {
+            if (pushed % 64 == 0) {  // (sparse: the profiler buffer keeps the call's tail)
                 SE_MARK("W_LANDED");
             }
 #if defined(SE_ZONES) && defined(SE_DYN)  // (each expert's first / last gate/up block landed: the stream's gaps)
@@ -347,7 +347,7 @@ void kernel_main() {
         while (arrived > x_pub) {
             cb_push_back(x_cb, x_blk);
             ++x_pub;
-            if (x_pub % 8 == 0) {
+            if (x_pub % 64 == 0) {
                 SE_MARK("X_ARR");
             }
             if (x_pub == 1) {

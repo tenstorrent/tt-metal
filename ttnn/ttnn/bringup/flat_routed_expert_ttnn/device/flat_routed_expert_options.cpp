@@ -148,6 +148,8 @@ FlatProbes FlatProbes::from_env() {
     p.xsolo_seq = read("MIMO_FL_XSOLO_SEQ");
     p.x_resident = read("MIMO_FL_X_RESIDENT");
     p.x_slots_max = read("MIMO_FL_X_SLOTS_MAX");
+    p.sbt = read("MIMO_FL_SBT");
+    p.drisc_place = read("MIMO_FL_DRISC_PLACE");
     p.yrm_nowrite = read("MIMO_FL_YRM_NOWRITE");
     p.yrm_packtile = read("MIMO_FL_YRM_PACKTILE");
     p.yrm_self = read("MIMO_FL_YRM_SELF");

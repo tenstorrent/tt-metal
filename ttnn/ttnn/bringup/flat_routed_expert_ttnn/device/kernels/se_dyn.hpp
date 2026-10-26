@@ -302,6 +302,27 @@ inline void se_dyn_build(
         d.max_cnt = c > d.max_cnt ? c : d.max_cnt;
     }
     d.n_load = d.n_act;
+    // the experts by sub-blocks, most first (ties: slot order): the last expert's sub-blocks after its weights have
+    // landed are the call's tail, so the one with the fewest goes last (the biggest of a reversed zipf last: GLM-5.3 /
+    // GLM-Flash / K3 / K2.7 560 / 412 / 1316 / 849 -> 527 / 398 / 1295 / 825 us; uniform unchanged). Every role and
+    // every op that rebuilds the schedule (se_dyn_from_counts) gets the same order.
+    for (uint32_t a = 1; a < d.n_act; ++a) {
+        for (uint32_t b = a; b > 0 && d.subs[b] > d.subs[b - 1]; --b) {
+            const uint32_t o = d.off[b], c = d.cnt[b];
+            const uint16_t sb = d.subs[b];
+            const uint8_t e = d.eid[b];
+            d.off[b] = d.off[b - 1];
+            d.cnt[b] = d.cnt[b - 1];
+            d.subs[b] = d.subs[b - 1];
+            d.eid[b] = d.eid[b - 1];
+            d.load_eid[b] = d.eid[b];
+            d.off[b - 1] = o;
+            d.cnt[b - 1] = c;
+            d.subs[b - 1] = sb;
+            d.eid[b - 1] = e;
+            d.load_eid[b - 1] = e;
+        }
+    }
 }
 
 // The order the local experts finish in (order[0..num_e)): experts with no entry first (they are done at once), in

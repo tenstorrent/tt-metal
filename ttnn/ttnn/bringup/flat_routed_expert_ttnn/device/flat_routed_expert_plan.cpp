@@ -14,6 +14,7 @@
 #include <iterator>
 #include <optional>
 #include <set>
+#include <tuple>
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -1089,7 +1090,40 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
     }
     auto rect_of0 = [&](const Core& c) { return p.rect_of(c); };
     std::vector<std::vector<uint32_t>> per_reader(n_rd);
-    for (uint32_t j = 0; j < p.r_; ++j) {
+    // every slot on DRISC, one rectangle: each slot's cores by the hops from the tile that actually sends it on small
+    // counts (switch mode: a bank's second slot from its NOC1-endpoint tile, on NOC0; the round-robin below measured
+    // it from the free tile), all pairs (slot, core) taken nearest first rather than round-robin nearest (which left
+    // the last slots 15-21 hops). Galaxy loads GLM-5.3 / GLM-Flash / K3 / K2.7 525 / 382 / 1232 / 808 -> 522 / 381 /
+    // 1216 / 808 us. (perf probe MIMO_FL_DRISC_PLACE=0: the round-robin)
+    bool placed = false;
+    const char* pl = cstr(pr.drisc_place);
+    if ((!pl || std::atoi(pl) != 0) && !p.group_rect && p.nsg == 1) {
+        bool all_drisc = !p.dual;
+        for (uint32_t r = 0; r < n_rd; ++r) {
+            all_drisc = all_drisc && p.drisc_slot(r);
+        }
+        if (all_drisc) {
+            std::vector<std::tuple<int, uint32_t, uint32_t>> pairs;  // (hops, slot, core)
+            for (uint32_t r = 0; r < n_rd; ++r) {
+                const auto [sp, snoc] = flat_drisc_sender(device, r, p.banks, p.rdown);
+                for (uint32_t ci : left) {
+                    pairs.emplace_back(
+                        noc_hops(Core(sp), Core(flat_worker_noc0(device, gu_all[ci])), int(snoc)), r, ci);
+                }
+            }
+            std::sort(pairs.begin(), pairs.end());
+            std::vector<bool> taken(gu_all.size(), false);
+            for (const auto& [h, r, ci] : pairs) {
+                if (!taken[ci] && per_reader[r].size() < p.r_of(r)) {
+                    per_reader[r].push_back(ci);
+                    taken[ci] = true;
+                }
+            }
+            left.erase(std::remove_if(left.begin(), left.end(), [&](uint32_t ci) { return taken[ci]; }), left.end());
+            placed = true;
+        }
+    }
+    for (uint32_t j = 0; j < p.r_ && !placed; ++j) {
         for (uint32_t r = 0; r < n_rd; ++r) {
             if (j >= p.r_of(r)) {  // (uneven: this reader's pair-sets are done)
                 continue;
@@ -1220,6 +1254,12 @@ FlatRoutedExpertPlan make_flat_routed_expert_plan(tt::tt_metal::IDevice* device,
             p.sbt = t;
             break;
         }
+    }
+    if (const char* sb = cstr(pr.sbt)) {  // (probe: a narrower super-block, e.g. a shorter x head)
+        const uint32_t t = static_cast<uint32_t>(std::atoi(sb));
+        TT_FATAL(
+            p.Ht % t == 0 && t % KBLK == 0 && t <= 32, "MIMO_FL_SBT={}: must divide Ht and be a K-block multiple", t);
+        p.sbt = t;
     }
     p.seg = p.sbt * 64;
     p.nsb = p.Ht / p.sbt;

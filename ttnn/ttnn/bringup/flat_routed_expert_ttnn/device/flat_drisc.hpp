@@ -46,6 +46,9 @@ uint32_t flat_drisc_mpfe(bool reader_down);
 uint32_t flat_drisc_job(uint32_t r, uint32_t banks);
 // NOC0 (physical) coordinates of that tile / of a worker core
 tt::tt_metal::CoreCoord flat_drisc_physical(tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks);
+// slot r's sending tile (NOC0 coordinates) and NoC on the calls with small counts (switch mode: the alternate tile)
+std::pair<tt::tt_metal::CoreCoord, uint32_t> flat_drisc_sender(
+    tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks, bool reader_down);
 // the NoC slot r's sender writes on (0 or 1)
 uint32_t flat_drisc_noc(tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks, bool reader_down);
 tt::tt_metal::CoreCoord flat_worker_noc0(tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical);

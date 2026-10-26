@@ -97,7 +97,6 @@ inline void se_drisc_post(
     const uint32_t n_load = dyn.n_load;
     const uint32_t bytes = ((SD_LOADS + n_load) * 4 + 15) / 16 * 16;
     const bool batched = ns * bytes <= scratch_bytes;
-    uint32_t tgt_xy[16], tgt_job[16];
     for (uint32_t s = 0; s < ns; ++s) {
         const uint32_t sa = 13 + SE_DRISC_SLOT_ARGS * s;
         uint32_t dxy = arg(sa), job = arg(sa + 1);
@@ -160,15 +159,14 @@ inline void se_drisc_post(
             noc_async_write_barrier();  // (landed before the job count moves; and the buffer is reused)
             se_drisc_inc(dxy, base + se_drisc_jobs(job), 1);
         } else {
-            tgt_xy[s] = dxy;
-            tgt_job[s] = job;
+            // each slot's job count right behind its descriptor: once the write has left this NIU, the increment on
+            // the same static VC and route lands after it, so the slot's DRISC starts without waiting for the other
+            // slots' descriptors (one barrier for all of them cost ~4.5 us of every call's start)
+            while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
+            }
+            se_drisc_inc(dxy, base + se_drisc_jobs(job), 1);
         }
     }
-    if (batched) {
-        noc_async_write_barrier();  // (every descriptor landed before any job count moves)
-        for (uint32_t s = 0; s < ns; ++s) {
-            se_drisc_inc(tgt_xy[s], base + se_drisc_jobs(tgt_job[s]), 1);
-        }
-    }
+    noc_async_write_barrier();
     noc_async_atomic_barrier();
 }
