@@ -2071,3 +2071,13 @@ multicast delivery (one multicaster into both rectangles), which wedged NOC0 bes
   1280 experts + combine 1206 -> 1170 us; GLM-Flash 1231 -> 1231 (that program is not flat-bound).
 - Checks: test_closeout_flat 9/9, test_closeout_plans; 20k-call soaks at the four Galaxy loads, no hang; block PCC
   tests pass. Logs: /localdev/mstaletovic/x1/ (g*, val*, lm_*, soak_*, blk*), /localdev/mstaletovic/fc_ab/x1j_*.
+- Why it loses above 320 rows (GLM-5.3 E 8 M 512, zones, x once forced on vs off): not the sub-block refill - the
+  final row pass already pops x block by block and se5_recv publishes XCONS a block at a time, so the next sub-block
+  streams in during it. Gate/up compute time rises along the joined snake: rectangle 0's columns 922 -> 950 us, then
+  rectangle 1's cores ~1050 (x read twice: 900-920 everywhere); the primary waits on the chain's credits (XMC_CRED 72
+  vs 18 us). The limit is the joining hop - rectangle 0's tail (column 6) to rectangle 1's head (column 13), 7 NOC0
+  hops east through the down-core / DRAM-column middle - carrying ~27 GB/s of 34.8 KB blocks at M 512 (20 GB/s at M
+  160). Deeper forwarding makes it worse (contention, not round trips): x once, forward depth 3 / 6 / 12, M 160 /
+  512 / 1024: 490 / 1102 / 2056 ; 514 / 1146 / 2138 ; 510 / 1139 / 2109 (x twice, depth 12: 521 / 962 / 1688). The
+  default stays rows_hint <= 320. To go further: a short joining hop (gate/up rectangles adjacent in the plan) or
+  the crossing off the congested NOC0 row.
