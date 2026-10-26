@@ -1038,6 +1038,23 @@ Defaults flipped: `GLM53_MHC_NORM=sharded`. Pending their re-runs: `GLM53_TP_ALL
 scope), `GLM53_PREFILL_ABLOCK=2048` (selection bit-identity), `GLM53_DSA_DECODE_STATE=1` (the pool-block diagnostic),
 `GLM53_MHC_PRE_BLOCK=1` (the 8x4 logits gate). Follow-up runner: `sched_validate_followups.sh` + `followups.queue`.
 
+### 2026-10-26 evening: roofline program, follow-up results, the wedge
+
+Follow-up runs (frozen snapshots once the live tree was under agent edits): knob-off 8x4 twin 79.75 ms / TTFT 297 ms (sharded
+norm default); gather all-reduce + prefill scope 80.57 / 298 (the gather gives no decode gain at 4 users/row: stays off); single
+norm 83.06 / 266 = the 10-22 reference bit-for-bit, so the sharded norm = -3.3 ms decode and +31 ms of 128-token TTFT (16-row
+prefill slabs take the fast mHC path) -> decode-only norm selection (mHC agent, committed). 64 K needle with the DSA state
+knob: 32/32, 90.9 vs 92.1 ms. Roofline model (`roofline.md`, `tt/roofline.py`): current-graph floor 32.3 ms at 32 users (31
+tok/s/u) vs 80.6 measured; 25.2 ms with the fused pre-block, B5 and bfp4 gate|up; ranked actions E0 stream experts in decode
+-13.9, A1 -10.4, H2 -4.7, E1 -4.2, A4 -4.0, H1 -2.9, C12 -2.9, B5 -1.6, B8 -1.5, P1 -1.3, K3 -1.2. Agents (device-free):
+KDA v2 (`GLM53_KDA_DECODE_V2`, est. -0.25 / -1.4 ms at 32 / 256 users; the fused KDA path was already 7 ops with qkv at the
+DRAM roofline), mHC (`GLM53_MHC_PRE_SINKHORN=fused`, `GLM53_MHC_{PRE,POST}_SPLIT=extras`, `GLM53_MHC_KSUM=fast`; D13 not a
+win after A1), MoE (in progress). Incidents: a live-tree B=32 run compiled a half-edited KDA kernel (ct arg 11 of 11) ->
+device stages now run from frozen worktrees; the batch-1 run hung after its model build (19:10; live tree or the sharded
+norm at T=1, both untested) and the second `tt-smi -r` of the day FAILED (warm_reset.cpp:337, PCIe AER non-fatal errors,
+"Query mappings failed on device 0: No such device") -> host recovery needed; queue preserved (30 entries, T=1 mHC A/B
+first), restart recipe in the memory note.
+
 ## 2026-10-22 device-free deliveries (machine in use elsewhere; nothing run on chips)
 
 | track | delivered | default | device validation (`_logs/mesh/sched_validate_devicefree_work.sh`, starts only on `touch GO_VALIDATE`) |
