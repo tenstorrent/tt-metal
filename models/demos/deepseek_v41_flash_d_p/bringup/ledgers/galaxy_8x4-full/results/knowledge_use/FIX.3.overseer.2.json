@@ -1,0 +1,43 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "A host with mixed IOMMU domains (some TT cards identity, the rest DMA-FQ) breaks the real-time profiler on the identity cards: Metal caches the first MMIO chip's IOMMU state (tt_cluster.cpp). Now DS41-120.",
+  "ttnn.device.IsProgramRealtimeProfilerActive() is True when ONE chip runs it; the framework's profiler.require_rt should check every mesh chip (tt/rt_profiler_check.py:profiled_chips is the model-side form).",
+  "scripts/tt-probe.sh writes its probe under tests/ttnn/unit_tests/operations/<name>/probes/, outside a step's allowed paths."
+ ],
+ "overseer": [
+  {
+   "id": "FIX.3",
+   "answer": "done",
+   "evidence": "Root cause found with evidence (DS41-120): /dev/tenstorrent/7 (0000:08:00.0) and /10 (0000:43:00.0) are in 'identity' IOMMU groups, the other 30 in DMA-FQ (re-enumerated after the boot-only tt-iommu-domains.service); Metal caches chip 0's IOMMU state, UMD pins 7/10 with TT_DMA_FLAG_CONTIGUOUS -> EINVAL. Hugepage exhaustion ruled out (anonymous mmap, not hugetlb). Probe on 8x4 FABRIC_2D: RT records from 30/32 chips, missing [7, 10]. Check added (tt/rt_profiler_check.py, hooks device_params + device_model, Setting RT_PROFILER_CHECK). Partial: the fix at the cause is a root host action (`sudo systemctl restart tt-iommu-domains`; no sudo here) and a tt_metal per-chip IOMMU change outside this step's paths, so the profiler still runs on 30/32 chips until the host owner acts."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "No kernel or fork limit involved; nothing padded or inflated."
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.3",
+  "role": "overseer",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-26T17:30:30",
+  "head": "7fd0e51f4ee",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.3.overseer.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/rt_profiler_check.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

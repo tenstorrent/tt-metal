@@ -106,16 +106,19 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7) (the same 
   36 tiles, tests/unit/test_flat_widths.py). Small I at large H (It <= 32, H 5120) plans on one subgrid (the 2 / 3
   subgrids have no gate/up split there) with the uneven pair split, np 1: one gate/up core per tile column.
 - Galaxy cards (12 x 10 grid, physical column 1 harvested on some): run since FIX.2 (the SE_DYN_PULL leader is found
-  by its logical coordinate; it hung before on plans without reader tails, DS41-119). tests/unit/ on one Galaxy chip:
-  24 pass; the 12 TP2 / TP4 `p.nsg == 1` failures as on the QuietBox, and the mimo / k2 `indexed_perf` bands (QuietBox
-  timings) run 0.05-0.9 % past their upper bounds there.
+  by its logical coordinate; it hung before on plans without reader tails, DS41-119). tests/unit/ on one Galaxy chip
+  (FIX.2 reopened, 2026-10-26): 34 pass, 0 fail (the 3 tests that need a 2x2 mesh skip on one card).
 - x: ROW_MAJOR bf16 DRAM interleaved; page width a multiple of 1 KB (or wide rows with `hidden`). counts / regions:
   [1, NG] uint32 RM DRAM. y_bf16 and y_row_major are exclusive.
 - `x_bf16` / `h_bf16` must match the plan the weights were laid out with.
-- Known unit failures: 13 in tests/unit/ with options off (19 pass / 13 fail, 2026-10-18): 12 TP2 / TP4 subgrid cases
-  TT_FATAL `p.nsg == 1`, and the MiMo `indexed_perf` band (runs faster than its lower bound, 1710341 ns vs 1720090)
-  (CHANGELOG.md; known_issues.md DS41-63). After the e4d239c6d81 sync: 26 passed / 13 failed, the same 13 (7 of the
-  passes were the since-deleted test_ds41_h_options); FIX.9 (CHANGELOG.md): see "Removed: the DeepSeek-V4.1 h options".
+- Subgrid plans (2 / 3 subgrids: TP4 / TP2 at H 7168) run in the plain op; `flat_combine_overlap` takes one-subgrid
+  plans only (its combine readers rebuild the schedule without SE_SG; TT_FATAL at its call site). Until FIX.2 (reopened)
+  `flat_schedule_defines` refused every subgrid plan for the plain op too (the 12 TP2 / TP4 TT_FATAL `p.nsg == 1`
+  failures since the import, DS41-63; CHANGELOG.md).
+- Perf bands (tests/unit/test_flat_expert_indexed_shapes.py `_PERF_EXPECTED_NS`) are per chip class (arch, compute
+  grid): BH 11 x 10 (QuietBox / LoudBox p150, 2026-10-09) and BH 12 x 10 (Galaxy p150b, 2026-10-26). A class with no
+  table skips the perf test with "no baseline". The 11 x 10 mimo flat band was seen failing fast on the 2x2 QuietBox
+  (1710341 ns vs lower 1720090, 2026-10-18): recalibrate that class from its RT-CAL lines when run there.
 - flat_combine_overlap carries no weights_nk / hidden; flat_routed_expert_with_program has math_fidelity and
   weights_nk only (no hidden).
 - With the combine_rf L1 hand-off, rows wider than SPC_PIECE (default 7168 B) hang unless SPC_PIECE >= row bytes

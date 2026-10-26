@@ -3238,3 +3238,43 @@ deleted). A 2x2 sub-mesh of the Galaxy fails the fabric handshake; use the 8x4 m
 Re-run: `PYTHONPATH=$PWD scripts/run_safe_pytest.sh --device auto --run-all
 ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/`; gate `PYTHONPATH=$PWD python -m models.demos.common.bringup
 gate FIX.2 --spec models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## FIX.3 (overseer, attempt 2): real-time profiler off on chips 7 and 10 (DS41-120)
+
+- Attempt 1 left nothing in the tree (its commit 5b1a3ec2106 passed on reused units with no change).
+- Cause, measured: 30 TT cards are in a DMA-FQ IOMMU domain, `/dev/tenstorrent/7` (08:00.0) and `/10` (43:00.0) in
+  `identity` (iommu=pt host; tt-iommu-domains.service converts the cards once at boot; these two were re-enumerated
+  after it ran, 2026-10-22 10:34 and 2026-10-25 16:56). Metal caches chip 0's IOMMU state -> pinned-memory D2H for all;
+  UMD pins 7 / 10 with CONTIGUOUS (0x4) -> EINVAL on the 2 MB + 4 KB anonymous mmap. Hugepages are not involved.
+- Probe (8x4 FABRIC_2D, one add per chip, RT callback): records from 30 / 32 chips, missing [7, 10];
+  IsProgramRealtimeProfilerActive() True. Saved outside the repo: runs/galaxy_8x4-full/run1/probes/FIX.3_rt_profiler_check.py.
+- Not fixed at the cause: it needs root (`sudo systemctl restart tt-iommu-domains`; sudo asks a password here) and
+  tt_metal (per-chip IOMMU state) is outside this step's paths. Owner / host action.
+- Added: tt/rt_profiler_check.py; hooks.device_params logs the host mismatch (sysfs) before every mesh open;
+  hooks.device_model runs the device check at build (one 32x32 add, <= 3 s settle when chips are missing) and warns
+  (Setting RT_PROFILER_CHECK warn / raise / off; DS41_RT_PROFILER_CHECK=raise for a perf run that must have all chips).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.3 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## FIX.2 (overseer, reopened, attempt 2): flat fork tests/unit/ all pass on a Galaxy chip
+
+- (a) 12 x TT_FATAL `p.nsg == 1` (TP4 / TP2 subgrid cases, since the import; DS41-63): the op was wrong, not the
+  tests. Upstream c485d15bbae moved the plain program's schedule defines (SE_RPS / SE_MAX_E / SE_GU_NREG / pin) into
+  `flat_schedule_defines` so flat_combine_overlap's combine could rebuild the schedule, and put the overlap's
+  one-subgrid assert inside it; `FlatRoutedExpertProgramFactory::create` calls it for every plan, so every subgrid plan
+  the planner builds died at program build. Fix: the assert now sits at flat_combine_overlap's call site
+  (device/flat_combine_overlap_device_operation.cpp); flat_schedule_defines returns what create set inline before
+  c485d15bbae, for any nsg. The model's calls are one-subgrid (DS41-115): same defines, same programs.
+- (b) Perf bands: `_PERF_EXPECTED_NS` (tests/unit/test_flat_expert_indexed_shapes.py) keyed by chip class
+  `(arch, grid x, grid y)`: the QuietBox p150 table as BLACKHOLE 11 x 10; a BLACKHOLE 12 x 10 table measured on this
+  Galaxy chip (RT-CAL, median of 3, 2026-10-26): mimo flat 1834370 (11 x 10: 1773289, +3.4 %), k2 indexed_rm 1578919
+  (+3.4 %), tp4 flat 928769 (+0.6 %), tp2 flat 1452958 (+4.3 %), tp2 indexed_rm 1706179 (+17 % over its flat; equal on
+  11 x 10, worth a look in a perf pick). Margin stays 3 %. The 11 x 10 mimo flat band failed fast on the seed QuietBox
+  (DS41-63, 1710341): recalibrate that class there.
+- Result (one Galaxy chip, tests/unit/, --run-all): before the 12 x 10 table 34 passed / 0 failed / 7 skipped (4 perf
+  "no baseline", 3 need a 2x2 mesh: not applicable on one card); with it 38 passed / 0 failed / 3 skipped (the 2x2-mesh
+  tests only); a second run sits within -0.9 .. +0.6 % of every 12 x 10 baseline (tp2 indexed_rm again 1705894).
+  Full gate: W.1 PASS (all err_layer / err_state within limits, host_transfers_per_layer 0), FIX.2 PASS.
+- Fork docs: CHANGELOG.md entry, README.md Limits, INDEX.md entry; DS41-63 rewritten.
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.2 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.

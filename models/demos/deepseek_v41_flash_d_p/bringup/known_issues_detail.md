@@ -254,3 +254,32 @@ CPU only, layer 2, golden inputs (script /tmp/fix10diag/idx_ties.py; framework's
 - Not from P.21 or FIX.10: P.21 did not touch tt/indexer.py (last changed P.19 066340ecb1c); the device's flips match
   what bf16 scores alone give, so no indexer change since 2026-10-17 is needed to explain them.
 - enc_source_engram_17 also hits pytest-timeout (300 s) in the same run.
+
+## DS41-120: real-time profiler off on chips 7 and 10 (8x4 Galaxy, FIX.3)
+
+- Host: kernel cmdline `iommu=pt` (Weka's NIC needs passthrough); `/etc/systemd/system/tt-iommu-domains.service`
+  (`/usr/local/sbin/tt-iommu-domains.sh apply`, oneshot at boot, 2026-10-22 10:16) unbinds each TT card, writes
+  `DMA-FQ` to its `/sys/kernel/iommu_groups/<g>/type`, rebinds. Domain type is runtime only.
+- 30 cards are `DMA-FQ`; `/dev/tenstorrent/7` = 0000:08:00.0 (group 79) and `/dev/tenstorrent/10` = 0000:43:00.0
+  (group 103) are `identity`. Their PCI device / group directories were re-created after the service ran (08:00.0 at
+  2026-10-25 16:56:07, group 79 at 16:56:48; group 103 at 2026-10-22 10:34:48): the functions were re-enumerated (board
+  reset / PCI rescan) and came back in the boot default domain, which the boot-only service never fixes.
+- Metal: `Cluster::iommu_enabled_` is read from the FIRST MMIO chip only (tt_metal/llrt/tt_cluster.cpp, "Cache IOMMU
+  status"), so `d2h_uses_hugepage_fallback` is false (system_memory_manager.cpp) and the eligibility check passes
+  (Blackhole needs IOMMU for 64-bit PCIe addressing) for every chip. `D2HSocket::init_host_buffer` (d2h_socket.cpp)
+  mmaps an anonymous 2 MB + 4 KB buffer (fifo + bytes_sent + connector state, page aligned) and pins it.
+- UMD per chip: `PCIDevice::detect_iommu` reads `iommu_group/type` (identity -> disabled); `map_for_dma` then pins with
+  `TT_DMA_FLAG_CONTIGUOUS` (0x4), which the KMD refuses (EINVAL) because 4 KB anonymous pages are not physically
+  contiguous. UMD also logs "IOMMU state mismatch for chip 7: expected enabled, got disabled" at open.
+- The brief's hypothesis, tested: "contiguous needed" holds only for these two chips (their domain); "hugepages run out"
+  does not: the D2H buffer is never hugetlb (HugePages_Free 0 while a mesh is open is the dispatch sysmem).
+- Probe (FIX.3, 8x4 FABRIC_2D, one ttnn.add on every chip with a real-time callback): records from 30 chips, none from
+  7 and 10; `IsProgramRealtimeProfilerActive()` True (it means "at least one chip"), so the framework's require_rt
+  passes and a profile silently has no device time for 2 of 32 chips.
+- Fix at the cause needs root: `sudo systemctl restart tt-iommu-domains` (idempotent; converts only the two cards).
+  Durable: the service should also run on a TT device add (udev), the host owner's change. Metal side (outside this
+  model's paths): take the IOMMU state per chip (or refuse a mixed cluster loudly), and expose which chips run the
+  real-time profiler. Model side: tt/rt_profiler_check.py, called at device_params (host, sysfs) and device_model
+  (device, records per chip), Setting RT_PROFILER_CHECK warn / raise / off.
+- Other effect of the mismatch, not measured: chips 7 / 10 run dispatch over hugepage sysmem (identity), the other 30
+  over IOMMU-mapped sysmem.
