@@ -2,12 +2,10 @@
 
 This model port originates from **Samuel Jett** ([sjettTT](https://github.com/sjettTT), sjett@tenstorrent.com),
 source commit `cd9a11771107ea2c27da3303a0556ff7343e4af5`. See [PROVENANCE.md](PROVENANCE.md) for
-source attribution and integration revisions. The original MoE prerequisites
+source attribution and integration revisions. The port runs on tt-metal main: its MoE prerequisites
 [#57448](https://github.com/tenstorrent/tt-metal/pull/57448) and
-[#57564](https://github.com/tenstorrent/tt-metal/pull/57564) are merged. This integration uses Samuel Jett's
-packed routing [#60469](https://github.com/tenstorrent/tt-metal/pull/60469) and expert rows
-[#59945](https://github.com/tenstorrent/tt-metal/pull/59945); their normal reviews and the integrated native
-qualification remain outstanding. The model uses the public extent-one local-output API.
+[#57564](https://github.com/tenstorrent/tt-metal/pull/57564) are merged, and its `moe_compute` calls use the public
+extent-one local-output API.
 
 The implementation uses four Blackhole devices as a 1x4 mesh, BF4 routed experts, BF8 dense weights, and a host
 PLE table mapped from the checkpoint. The publication validation targets one request at a time and a 32,768-token
@@ -21,10 +19,9 @@ separate gates. Never substitute a standalone MTP rate for vLLM throughput.
 
 ## Build and checkpoint
 
-Build this tt-metal checkout using the standard [build instructions](../../../../README.md). The port requires the
-native prerequisites described in PROVENANCE.md; a Python import alone does not validate that build. Use clang-20
-and the supported default SFPI toolchain. Install the repository Python environment, then Transformers 5.16.1 for
-this checkpoint's `qwen4_exp` configuration.
+Build this tt-metal checkout using the standard [build instructions](../../../../README.md); a Python import alone
+does not validate that build. Use clang-20 and the supported default SFPI toolchain. Install the repository Python
+environment, then Transformers 5.16.1 for this checkpoint's `qwen4_exp` configuration.
 
 ```bash
 ./build_metal.sh --build-ttnn-tests

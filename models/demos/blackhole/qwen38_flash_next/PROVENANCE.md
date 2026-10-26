@@ -13,23 +13,18 @@ records both Author and Committer as `Codex <codex@openai.com>`. This export
 attribution is distinct from Samuel Jett's source maintenance, subsequent
 optimizations and original operation commits retained below.
 
-The current integration starts from tt-metal `3407283c1ca1998d95cf576c8f6130a8b8f9d5cc`.
+The current integration builds on tt-metal main and calls only operations main has.
 Samuel Jett's compact packing [#57564](https://github.com/tenstorrent/tt-metal/pull/57564)
 and extent-one local output [#57448](https://github.com/tenstorrent/tt-metal/pull/57448)
-are merged upstream. His replacement packed routing [#60469](https://github.com/tenstorrent/tt-metal/pull/60469)
-at `07dc40e532e51fc74a8caba37852d3d208543494` and expert rows
-[#59945](https://github.com/tenstorrent/tt-metal/pull/59945) at
-`70f967df3c8d221be5ef79d979cd3d9f986d0bed` retain their original author history.
-The retired pipeline [#58476](https://github.com/tenstorrent/tt-metal/pull/58476) is closed;
-its kernels and launch switches are not part of this integration.
+are merged upstream. The retired pipeline [#58476](https://github.com/tenstorrent/tt-metal/pull/58476)
+is closed; its kernels and launch switches are not part of this integration.
 
-The model selects the public local-output path with `cluster_axis=0` on its 1x4 mesh.
-That path writes owned expert rows into the caller's persistent output. The model's
-existing fill or owner-masked reduction controls unowned rows. Expert-row placement
-currently requires the fused combine, so the integration keeps SingleCluster calls
-on the ring writer; it does not reinterpret them as single-device fused calls.
-This compatibility choice is not a measured performance result. Build and native
-qualification of the integrated revision remain required.
+The model selects the public local-output path with `cluster_axis=0` on its 1x4 mesh,
+which runs the ring program and writes owned expert rows into the caller's persistent
+output. The model's existing fill or owner-masked reduction controls unowned rows.
+Main's `moe_compute` caps one such call at 128 tokens for this model, so the model refuses
+`--prefill-slab` at start-up there and serves the chunked prefill; packed routing
+[#60469](https://github.com/tenstorrent/tt-metal/pull/60469) lifts that cap.
 
 Applicable public GDN callers reuse Izajasz Wrosz's merged upstream
 [PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440), commit
