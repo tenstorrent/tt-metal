@@ -2813,17 +2813,22 @@ class Qwen38TTNNGDN:
         beta_rows = ttnn.reshape(beta, (1, tile_rows, VALUE_HEADS_PER_DEVICE))
         g_rows = ttnn.reshape(g, (1, tile_rows, VALUE_HEADS_PER_DEVICE))
         v_rows = ttnn.reshape(rows_state.v, (1, tile_rows, VALUE_WIDTH_PER_DEVICE))
-        # The source recurrence on the normalized rows; these q still take the HEAD_DIM**-0.5 fold.
-        output, final_state = fused.gdn_source_chunk.chunk_token_major(
+        # The public recurrence (#57440) on the normalized rank-four rows; these q still take the HEAD_DIM**-0.5 fold.
+        output, final_state = ttnn.transformer.chunk_gated_delta_rule(
             rows_state.q,
             rows_state.k,
             v_rows,
             g_rows,
             beta_rows,
-            initial_state,
-            (constants.eye, constants.tril, constants.ones, constants.masks),
-            rows_total=constants.tile_rows,
             scale=HEAD_DIM**-0.5,
+            initial_state=initial_state,
+            output_final_state=True,
+            chunk_size=CHUNK_SIZE,
+            output_head_major=True,
+            eye=constants.eye,
+            tril=constants.tril,
+            ones=constants.ones,
+            masks=constants.masks,
         )
         _deallocate(*masked)
         return self._validate_chunk_rows(output, final_state, rows_state, initial_state, tile_rows)
@@ -3448,7 +3453,7 @@ class Qwen38TTNNGDN:
 
     def _chunk_rows_lanes(self, rows_state: Qwen38TTNNGDNLaneRowsState, initial_state, committed_mask=None):
         """The B lanes' recurrence from ``initial_state`` ``[B,12,128,128]`` (read only): per lane, on that lane's
-        slices, ``gdn_source_chunk.chunk_token_major`` with ``_chunk_rows``' arguments (the single stream's
+        slices, ``ttnn.transformer.chunk_gated_delta_rule`` with ``_chunk_rows``' arguments (the single stream's
         recurrence); head-major output ``[B*12,32,128]`` and the FP32 final states ``[B,12,128,128]`` in new buffers;
         with ``committed_mask`` ``[1,B,32,1]`` beta and g of the rows past each lane's committed prefix are zeroed
         first."""
@@ -3465,16 +3470,21 @@ class Qwen38TTNNGDN:
         for lane in range(lanes):
             q, k, state = (_lane_slice(tensor, 0, lane) for tensor in (rows_state.q, rows_state.k, initial_state))
             v, beta_lane, g_lane = (_lane_slice(tensor, 1, lane) for tensor in (rows_state.v, beta, g))
-            output, final_state = fused.gdn_source_chunk.chunk_token_major(
+            output, final_state = ttnn.transformer.chunk_gated_delta_rule(
                 q,
                 k,
                 ttnn.reshape(v, (1, CHUNK_SIZE, VALUE_WIDTH_PER_DEVICE)),
                 ttnn.reshape(g_lane, (1, CHUNK_SIZE, VALUE_HEADS_PER_DEVICE)),
                 ttnn.reshape(beta_lane, (1, CHUNK_SIZE, VALUE_HEADS_PER_DEVICE)),
-                state,
-                (constants.eye, constants.tril, constants.ones, constants.masks),
-                rows_total=CHUNK_SIZE,
                 scale=HEAD_DIM**-0.5,
+                initial_state=state,
+                output_final_state=True,
+                chunk_size=CHUNK_SIZE,
+                output_head_major=True,
+                eye=constants.eye,
+                tril=constants.tril,
+                ones=constants.ones,
+                masks=constants.masks,
             )
             _deallocate(q, k, v, beta_lane, g_lane, state)
             outputs.append(output)

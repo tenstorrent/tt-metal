@@ -33,23 +33,13 @@ matched their chains bitwise, `sparse_sdpa_tiled` to tolerance. The `QWEN38_FUSE
 and `QWEN38_FUSED_OFF` names that `docs/` gives for them are not registered, so a
 run that sets one stops at start-up.
 
-Applicable public GDN callers reuse Izajasz Wrosz's merged upstream
-[PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440), commit
-`96cc4a7937f19ee205717577fcf4d10269d043b4`. The port does not add another public
-prep/scan binding. Raw flat query/key and multi-lane inputs retain that public
-route and their existing scale contract.
-
-The frozen model's normalized prefill producers instead use the model-owned
-`gdn_source_chunk` policy through the public `ttnn.generic_op` API. Its six
-kernels retain Samuel Jett's exact source bytes and original preparation,
-packing, readout and state-update sequence. The shared GDN operation passes
-independent numerical controls, but its combined arithmetic changes words
-required by the frozen source gate. The model policy keeps the admitted query
-scale and normalization without changing shared operation defaults or kernels.
-Its source-word and independent reference controls cover complete 32-row
-chunks at 32, 128, 2048 and 4096 rows, zero/nonzero states and masked commits.
-These operator results do not qualify whole-model source trajectories, serving,
-task quality or another hardware topology.
+Every GDN chunk recurrence (the 32- and 128-row prefill chunks, the verify-rows wrap
+and the lanes with the fold off) calls Izajasz Wrosz's merged upstream
+[PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440) operation,
+`ttnn.transformer.chunk_gated_delta_rule`, on the model's normalized rank-four q/k
+with the model's query scale. The port adds no prep/scan binding. That operation's
+arithmetic differs from the frozen source's in the last bits, so the model's greedy
+streams are not the source's word for word.
 
 Port adaptations preserve the model's numerical policy while using current
 trace-allocation APIs and the current native build. The native operation selects its supported implementation; the model does not

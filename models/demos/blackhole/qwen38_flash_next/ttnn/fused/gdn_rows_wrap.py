@@ -3,8 +3,8 @@
 
 """GDN verify rows with fused input preparation and gated output programs.
 
-The recurrence retains Samuel Jett's source numerical sequence on normalized
-and scaled producer buffers. Forward and masked commits share that sequence.
+The recurrence is the public chunk_gated_delta_rule on the normalized and
+scaled producer buffers (gdn_public_adapter). Forward and masked commits share it.
 Persistent buffers belong to the rows state; the body releases only its own
 intermediates. QWEN38_FUSED_OFF=gdn_rows_wrap restores the composed control.
 
@@ -23,7 +23,7 @@ import ttnn
 from . import gdn_post_rows as post
 from . import gdn_pre_rows as pre
 from . import program as fp
-from .gdn_source_chunk import chunk_source
+from .gdn_public_adapter import chunk_public
 from .registry import BITWISE, FusedKernel, enabled, register
 
 NAME = "gdn_rows_wrap"
@@ -155,7 +155,7 @@ def buffers_of(rows_state) -> Buffers | None:
 
 
 def chunk(gdn, rows_state, buffers, initial_state, committed_mask_c=None):
-    """Run the source numerical sequence, masking beta and decay for a commit.
+    """Run the public recurrence on the producer's pages, masking beta and decay for a commit.
 
     The producer already includes normalization and both query scale folds.
     Only temporary masks are released; persistent producers/constants survive.
@@ -168,7 +168,7 @@ def chunk(gdn, rows_state, buffers, initial_state, committed_mask_c=None):
         masked = (beta_c, g_c)
     constants = rows_state.constants
     try:
-        return chunk_source(
+        return chunk_public(
             buffers.q_c,
             buffers.k_c,
             rows_state.v,
@@ -270,7 +270,7 @@ def admits(gdn, full_hidden, rows_state, state, *, full_tile: bool = False) -> b
 register(
     FusedKernel(
         name=NAME,
-        replaces="the GDN verify-rows preparation and epilogue with gdn_pre_rows, source chunk numerical policy, "
+        replaces="the GDN verify-rows preparation and epilogue with gdn_pre_rows, the public chunk recurrence, "
         "post_cast and post_norm",
         tolerance=BITWISE,
         fused=rows_body_wrap,
