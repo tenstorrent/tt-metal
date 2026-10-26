@@ -99,5 +99,9 @@ void kernel_main() {
 #endif
     };
 
-    for_each_work_item(work_list_arg_idx, write_q_chunk);
+    for_each_work_unit(work_list_arg_idx, [&](const WorkUnit& unit) {
+        for (uint32_t item = unit.item; item < unit.item + unit.num_items; ++item) {
+            write_q_chunk(item);
+        }
+    });
 }
