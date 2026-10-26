@@ -212,6 +212,39 @@ def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, 
     assert_equal(result, torch_input)
 
 
+@pytest.mark.parametrize(
+    "height, num_cores",
+    [
+        (256, 4),  # 2 tiles per core: fewer than one batch of 8 tiles
+        (1280, 4),  # 10 tiles per core: one batch of 8 tiles and 2 more
+    ],
+)
+def test_untilize_with_unpadding_height_sharded_to_height_sharded_width_16(device, height, num_cores):
+    """HEIGHT_SHARDED input -> HEIGHT_SHARDED output of width 16 with a tile-aligned height.
+
+    This shape takes the sharded factory's width-16 path, which copies the two left faces of each
+    tile straight into the output shard instead of untilizing the whole tile.
+    """
+    torch.manual_seed(0)
+    width = 16
+    torch_input = torch.rand((1, 1, height, width), dtype=torch.bfloat16)
+
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, num_cores - 1))})
+    # The tiled input is padded to one tile in width.
+    shard_spec = ttnn.ShardSpec(shard_core_grid, (height // num_cores, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    tile_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, output_tensor_end=[0, 0, height - 1, width - 1], memory_config=memory_config
+    )
+    assert untilized.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    assert_equal(ttnn.to_torch(untilized), torch_input)
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("output_width", [30, 31, 32])
 def test_untilize_with_unpadding_interleaved_to_height_sharded_unaligned_row(device, dtype, output_width):
