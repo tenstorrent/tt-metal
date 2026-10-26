@@ -120,6 +120,7 @@
 // PERMANENT per-stage device-profiler instrumentation (never remove; free when
 // the profiler is off -- see the header's durability contract).
 #include "perf_instrumentation.hpp"
+#include "../../common/chain_buffers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 // ckl::Square -- the DEST-only SFPU square Lamp L-RES-FUSE's fused pass-A chain
 // applies to the residual sum without unpacking it back out of cb_x_sum.
@@ -1324,8 +1325,8 @@ void kernel_main() {
             MaybeDeviceZoneScope("compute_residual_add");
             ckl::eltwise_chain(
                 ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
-                ckl::PackTile<X_SUM_OUT>{});
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{bringup_chain::dfb(R_X_IN), bringup_chain::dfb(R_R_IN)},
+                ckl::PackTile<X_SUM_OUT>{bringup_chain::dfb(X_SUM_OUT)});
         }
     };
 #ifdef RMS_RESIDUAL_OUT
@@ -1349,9 +1350,9 @@ void kernel_main() {
         MaybeDeviceZoneScope("compute_residual_add");
         ckl::eltwise_chain(
             ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
-            ckl::PackTile<X_SUM_OUT>{},
-            ckl::PackTile<T_SUM_OUT>{});
+            ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{bringup_chain::dfb(R_X_IN), bringup_chain::dfb(R_R_IN)},
+            ckl::PackTile<X_SUM_OUT>{bringup_chain::dfb(X_SUM_OUT)},
+            ckl::PackTile<T_SUM_OUT>{bringup_chain::dfb(T_SUM_OUT)});
     };
 #endif
 
@@ -1390,9 +1391,9 @@ void kernel_main() {
                 MaybeDeviceZoneScope("compute_res_square");
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(rows, WT_CHUNK).block_size(SQ_BLK),
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{},
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Add, R_X_IN, R_R_IN>{bringup_chain::dfb(R_X_IN), bringup_chain::dfb(R_R_IN)},
                     ckl::Square<>{},
-                    ckl::PackTile<SQ_OUT>{});
+                    ckl::PackTile<SQ_OUT>{bringup_chain::dfb(SQ_OUT)});
             } else {
                 // t = x + r, materialized into the CB the rest of the kernel reads.
 #ifdef RMS_RESIDUAL_OUT
@@ -1432,13 +1433,13 @@ void kernel_main() {
                     false;
 #endif
                 if constexpr (SQ_STUB) {
-                    ckl::eltwise_chain(sq_shape, ckl::CopyTile<X_IN_A>{hold_base}, ckl::PackTile<SQ_OUT>{});
+                    ckl::eltwise_chain(sq_shape, ckl::CopyTile<X_IN_A>{bringup_chain::dfb(X_IN_A), hold_base}, ckl::PackTile<SQ_OUT>{bringup_chain::dfb(SQ_OUT)});
                 } else {
                     ckl::eltwise_chain(
                         sq_shape,
-                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{
+                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_A, X_IN_A, ckl::Dst::D0, SQ_OUT.dest_accumulation>{bringup_chain::dfb(X_IN_A), bringup_chain::dfb(X_IN_A), 
                             hold_base, hold_base},
-                        ckl::PackTile<SQ_OUT>{});
+                        ckl::PackTile<SQ_OUT>{bringup_chain::dfb(SQ_OUT)});
                 }
             }
 
@@ -2048,7 +2049,7 @@ void kernel_main() {
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_PC_BLK),
 #ifdef RMS_ABLATE_COMPUTE
-                    ckl::CopyTile<X_IN_B>{hold_base},
+                    ckl::CopyTile<X_IN_B>{bringup_chain::dfb(X_IN_B), hold_base},
 #else
                     ckl::BinaryFpu<
                         ckl::BinaryFpuOp::Mul,
@@ -2058,12 +2059,17 @@ void kernel_main() {
                             ckl::BroadcastDim::Col,
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::None,
-                            ckl::InputTileMapping::Col)>{hold_base},
+                            ckl::InputTileMapping::Col)>{bringup_chain::dfb(X_IN_B), bringup_chain::dfb(ckl::input(
+                            CB_STAT_B,
+                            ckl::BroadcastDim::Col,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::None,
+                            ckl::InputTileMapping::Col)), hold_base},
 #endif
-                    ckl::Optional<HAS_G, ckl::UnaryBcast<ckl::BroadcastDim::Row, G_IN, ckl::Dst::D1>>{pc_base},
-                    ckl::Optional<HAS_B, ckl::UnaryBcast<ckl::BroadcastDim::Row, B_IN, PC_B_SLOT>>{pc_base},
+                    ckl::Optional<HAS_G, ckl::UnaryBcast<ckl::BroadcastDim::Row, G_IN, ckl::Dst::D1>>{bringup_chain::dfb(G_IN), pc_base},
+                    ckl::Optional<HAS_B, ckl::UnaryBcast<ckl::BroadcastDim::Row, B_IN, PC_B_SLOT>>{bringup_chain::dfb(B_IN), pc_base},
                     PcRowBcast<HAS_G, HAS_B, ckl::Dst::D0, ckl::Dst::D1, PC_B_SLOT>{},
-                    ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                    ckl::PackTile<PASS_B_OUT_GAMMA>{bringup_chain::dfb(PASS_B_OUT_GAMMA)});
             } else if constexpr (!HAS_G || !CROSS_CORE) {
                 // ---- the shipped order: scale, then gamma ----
                 // x * (1/rms). The stat is a REDUCE_ROW result: column-shaped, so it
@@ -2075,8 +2081,8 @@ void kernel_main() {
 #ifdef RMS_ABLATE_COMPUTE
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                        ckl::CopyTile<X_IN_B>{hold_base},
-                        ckl::PackTile<PASS_B_OUT_NORM>{});
+                        ckl::CopyTile<X_IN_B>{bringup_chain::dfb(X_IN_B), hold_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{bringup_chain::dfb(PASS_B_OUT_NORM)});
 #else
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
@@ -2088,8 +2094,13 @@ void kernel_main() {
                                 ckl::BroadcastDim::Col,
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::None,
-                                ckl::InputTileMapping::Col)>{hold_base},
-                        ckl::PackTile<PASS_B_OUT_NORM>{});
+                                ckl::InputTileMapping::Col)>{bringup_chain::dfb(X_IN_B), bringup_chain::dfb(ckl::input(
+                                CB_STAT_B,
+                                ckl::BroadcastDim::Col,
+                                ckl::WaitPolicy::Upfront,
+                                ckl::PopPolicy::None,
+                                ckl::InputTileMapping::Col)), hold_base},
+                        ckl::PackTile<PASS_B_OUT_NORM>{bringup_chain::dfb(PASS_B_OUT_NORM)});
 #endif
                 }
 
@@ -2130,9 +2141,14 @@ void kernel_main() {
                                     ckl::WaitPolicy::PerBlockSize,
                                     ckl::PopPolicy::PerBlockSize,
                                     ckl::InputTileMapping::Block),
-                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
+                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{bringup_chain::dfb(ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::PerBlockSize,
+                                    ckl::PopPolicy::PerBlockSize,
+                                    ckl::InputTileMapping::Block)), bringup_chain::dfb(ckl::input(G_IN, ckl::BroadcastDim::Row)), 0u, pc_base},
                             ckl::PackTile<ckl::output(
-                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{bringup_chain::dfb(ckl::output(
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize))});
                     } else {
                         ckl::eltwise_chain(
                             ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
@@ -2143,8 +2159,12 @@ void kernel_main() {
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::AtEnd,
                                     ckl::InputTileMapping::Block),
-                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
-                            ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                                ckl::input(G_IN, ckl::BroadcastDim::Row)>{bringup_chain::dfb(ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::AtEnd,
+                                    ckl::InputTileMapping::Block)), bringup_chain::dfb(ckl::input(G_IN, ckl::BroadcastDim::Row)), 0u, pc_base},
+                            ckl::PackTile<PASS_B_OUT_GAMMA>{bringup_chain::dfb(PASS_B_OUT_GAMMA)});
                     }
                 }
             } else {
@@ -2153,9 +2173,9 @@ void kernel_main() {
                     MaybeDeviceZoneScope("compute_gamma_mul");
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
-                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_B, ckl::input(G_IN, ckl::BroadcastDim::Row)>{
+                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, X_IN_B, ckl::input(G_IN, ckl::BroadcastDim::Row)>{bringup_chain::dfb(X_IN_B), bringup_chain::dfb(ckl::input(G_IN, ckl::BroadcastDim::Row)), 
                             hold_base, pc_base},
-                        ckl::PackTile<PASS_B_OUT_NORM>{});
+                        ckl::PackTile<PASS_B_OUT_NORM>{bringup_chain::dfb(PASS_B_OUT_NORM)});
                 }
                 {
                     // The scale is now the SECOND stage, so it inherits the lifecycle the
@@ -2174,7 +2194,11 @@ void kernel_main() {
                                 cb_normalized,
                                 ckl::WaitPolicy::PerBlockSize,
                                 ckl::PopPolicy::PerBlockSize,
-                                ckl::InputTileMapping::Block)>{0u},
+                                ckl::InputTileMapping::Block)>{bringup_chain::dfb(ckl::input(
+                                cb_normalized,
+                                ckl::WaitPolicy::PerBlockSize,
+                                ckl::PopPolicy::PerBlockSize,
+                                ckl::InputTileMapping::Block)), 0u},
 #else
                             ckl::BinaryFpu<
                                 ckl::BinaryFpuOp::Mul,
@@ -2188,10 +2212,20 @@ void kernel_main() {
                                     ckl::BroadcastDim::Col,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Col)>{0u, 0u},
+                                    ckl::InputTileMapping::Col)>{bringup_chain::dfb(ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::PerBlockSize,
+                                    ckl::PopPolicy::PerBlockSize,
+                                    ckl::InputTileMapping::Block)), bringup_chain::dfb(ckl::input(
+                                    CB_STAT_B,
+                                    ckl::BroadcastDim::Col,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::None,
+                                    ckl::InputTileMapping::Col)), 0u, 0u},
 #endif
                             ckl::PackTile<ckl::output(
-                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{});
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>{bringup_chain::dfb(ckl::output(
+                                cb_normalized, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize))});
                     } else {
                         ckl::eltwise_chain(
                             ckl::IterationShape::grid(rows, WT_CHUNK).block_size(PASS_B_BLK),
@@ -2200,7 +2234,11 @@ void kernel_main() {
                                 cb_normalized,
                                 ckl::WaitPolicy::Upfront,
                                 ckl::PopPolicy::AtEnd,
-                                ckl::InputTileMapping::Block)>{0u},
+                                ckl::InputTileMapping::Block)>{bringup_chain::dfb(ckl::input(
+                                cb_normalized,
+                                ckl::WaitPolicy::Upfront,
+                                ckl::PopPolicy::AtEnd,
+                                ckl::InputTileMapping::Block)), 0u},
 #else
                             ckl::BinaryFpu<
                                 ckl::BinaryFpuOp::Mul,
@@ -2214,9 +2252,18 @@ void kernel_main() {
                                     ckl::BroadcastDim::Col,
                                     ckl::WaitPolicy::Upfront,
                                     ckl::PopPolicy::None,
-                                    ckl::InputTileMapping::Col)>{0u, 0u},
+                                    ckl::InputTileMapping::Col)>{bringup_chain::dfb(ckl::input(
+                                    cb_normalized,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::AtEnd,
+                                    ckl::InputTileMapping::Block)), bringup_chain::dfb(ckl::input(
+                                    CB_STAT_B,
+                                    ckl::BroadcastDim::Col,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::None,
+                                    ckl::InputTileMapping::Col)), 0u, 0u},
 #endif
-                            ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                            ckl::PackTile<PASS_B_OUT_GAMMA>{bringup_chain::dfb(PASS_B_OUT_GAMMA)});
                     }
                 }
             }
@@ -2243,8 +2290,12 @@ void kernel_main() {
                             ckl::WaitPolicy::Upfront,
                             ckl::PopPolicy::AtEnd,
                             ckl::InputTileMapping::Block),
-                        ckl::input(B_IN, ckl::BroadcastDim::Row)>{0u, pc_base},
-                    ckl::PackTile<PASS_B_OUT_GAMMA>{});
+                        ckl::input(B_IN, ckl::BroadcastDim::Row)>{bringup_chain::dfb(ckl::input(
+                            cb_normalized,
+                            ckl::WaitPolicy::Upfront,
+                            ckl::PopPolicy::AtEnd,
+                            ckl::InputTileMapping::Block)), bringup_chain::dfb(ckl::input(B_IN, ckl::BroadcastDim::Row)), 0u, pc_base},
+                    ckl::PackTile<PASS_B_OUT_GAMMA>{bringup_chain::dfb(PASS_B_OUT_GAMMA)});
             }
 
             if constexpr (RM) {

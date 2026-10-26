@@ -78,6 +78,7 @@
 #include <stdint.h>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/pack.h"
@@ -132,6 +133,13 @@ constexpr uint32_t cb_coef_keep = get_compile_time_arg_val(9);
 constexpr uint32_t cb_comb_coef = get_compile_time_arg_val(11);
 constexpr uint32_t cb_pre_cols = get_compile_time_arg_val(12);
 constexpr uint32_t cb_y_out = get_compile_time_arg_val(13);
+// The chains' DataflowBuffers (main's #60306: elements bind them by reference; they outlive every chain call) -
+// created at kernel_main's start, reached from the chain builders through these.
+DataflowBuffer* dfb_bound[4];
+ALWI DataflowBuffer& dfb_x_resident() { return *dfb_bound[0]; }
+ALWI DataflowBuffer& dfb_sq_acc() { return *dfb_bound[1]; }
+ALWI DataflowBuffer& dfb_pre_cols() { return *dfb_bound[2]; }
+ALWI DataflowBuffer& dfb_y_out() { return *dfb_bound[3]; }
 constexpr uint32_t n_streams = get_compile_time_arg_val(14);
 constexpr uint32_t block_token_tiles = get_compile_time_arg_val(15);
 constexpr uint32_t core_k_tiles_max = get_compile_time_arg_val(16);
@@ -1200,14 +1208,14 @@ ALWI void sumsq_row(uint32_t core_k_tiles, uint32_t base) {
             input(cb_x_resident, WAIT, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Enabled, ADDR),
             input(cb_x_resident, WAIT, PopPolicy::None, InputTileMapping::Block, DataFormatReconfig::Enabled, ADDR),
             Dst::D0,
-            DestAccumulation::WholeShape>{base, base},
+            DestAccumulation::WholeShape>{dfb_x_resident(), dfb_x_resident(), base, base},
         PackTile<output(
             cb_sq_acc,
             ReservePolicy::OneUpfront,
             PushPolicy::OneAtEnd,
             DataFormatReconfig::Enabled,
             TileAddressing::Direct,
-            DestAccumulation::WholeShape)>{});
+            DestAccumulation::WholeShape)>{dfb_sq_acc()});
 }
 
 // project_sumsq_streamed (bf16 X, fp32 W pieces): per token row, per K chunk [k0, k0 + kc) (waited cumulatively,
@@ -1310,6 +1318,11 @@ ALWI void project_sumsq_streamed(uint32_t extent, uint32_t core_k_tiles, XView v
 }
 
 void kernel_main() {
+    DataflowBuffer x_resident_buf(cb_x_resident), sq_acc_buf(cb_sq_acc), pre_cols_buf(cb_pre_cols), y_out_buf(cb_y_out);
+    dfb_bound[0] = &x_resident_buf;
+    dfb_bound[1] = &sq_acc_buf;
+    dfb_bound[2] = &pre_cols_buf;
+    dfb_bound[3] = &y_out_buf;
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t core_token_tiles = get_arg_val<uint32_t>(1);
     const uint32_t core_c_tiles = get_arg_val<uint32_t>(2);
@@ -1560,14 +1573,14 @@ void kernel_main() {
                                 TileAddressing::Offset),
                             BroadcastDim::Col),
                         Dst::D0,
-                        DestAccumulation::PerRow>{t * core_k_tiles, t * n_streams},
+                        DestAccumulation::PerRow>{dfb_x_resident(), dfb_pre_cols(), t * core_k_tiles, t * n_streams},
                     PackTile<output(
                         cb_y_out,
                         ReservePolicy::PerOuter,
                         PushPolicy::PerOuter,
                         DataFormatReconfig::Enabled,
                         TileAddressing::Direct,
-                        DestAccumulation::PerRow)>{});
+                        DestAccumulation::PerRow)>{dfb_y_out()});
             }
         }
         cb_pop_front(cb_pre_cols, n_streams * extent);

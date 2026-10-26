@@ -32,6 +32,7 @@
 #include <utility>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/ternary/ternary.hpp"
 #include "perf_instrumentation.hpp"
@@ -48,6 +49,14 @@ constexpr uint32_t cb_sublayer_tiles = get_compile_time_arg_val(3);
 constexpr uint32_t cb_residual_tiles = get_compile_time_arg_val(4);
 constexpr uint32_t cb_coef_bcast = get_compile_time_arg_val(5);
 constexpr uint32_t cb_output_tiles = get_compile_time_arg_val(6);
+
+// The kernel's DataflowBuffers, one a CB: chain elements bind them by reference (main's #60306) and they must outlive
+// every chain call - created at kernel_main's start, reached from the element builders through these.
+DataflowBuffer* dfb_bound[4];
+ALWI DataflowBuffer& dfb_sublayer() { return *dfb_bound[0]; }
+ALWI DataflowBuffer& dfb_residual() { return *dfb_bound[1]; }
+ALWI DataflowBuffer& dfb_coef() { return *dfb_bound[2]; }
+ALWI DataflowBuffer& dfb_output() { return *dfb_bound[3]; }
 constexpr uint32_t coef_tiles_per_stream = get_compile_time_arg_val(7);  // P = ceil((n+1)/2)
 
 // ---- DEST window layout (single source: DEST_AUTO_LIMIT) ----
@@ -171,7 +180,7 @@ ALWI void fit_packs(uint32_t out_tile0, Es... elts) {
     if constexpr (C == K) {
         eltwise_chain(IterationShape::one_tile(), elts...);
     } else {
-        fit_packs<K, C + 1>(out_tile0, elts..., PackOutput<data_slot(C, 0)>{out_tile0 + C});
+        fit_packs<K, C + 1>(out_tile0, elts..., PackOutput<data_slot(C, 0)>{dfb_output(), out_tile0 + C});
     }
 }
 
@@ -188,7 +197,7 @@ ALWI void fit_sums(uint32_t out_tile0, Es... elts) {
 template <DataFormatReconfig First, uint32_t... Ps, class... Es>
 ALWI auto with_coefs(uint32_t j, std::integer_sequence<uint32_t, Ps...>, Es... elts) {
     return [=](auto next) {
-        next(elts..., CoefCopy<Ps, (Ps == 0 ? First : DataFormatReconfig::Enabled)>{j * coef_tiles_per_stream + Ps}...);
+        next(elts..., CoefCopy<Ps, (Ps == 0 ? First : DataFormatReconfig::Enabled)>{dfb_coef(), j * coef_tiles_per_stream + Ps}...);
     };
 }
 
@@ -206,10 +215,10 @@ ALWI void data_copies(uint32_t col0, Next next, Es... elts) {
         constexpr uint32_t t = XFirst ? (ordinal + 1) % NUM_TERMS : ordinal;
         constexpr DataFormatReconfig R = Step == 0 ? First : DataFormatReconfig::Enabled;
         if constexpr (t == 0) {
-            data_copies<K, XFirst, First, Step + 1>(col0, next, elts..., SublayerCopy<data_slot(c, 0), R>{col0 + c});
+            data_copies<K, XFirst, First, Step + 1>(col0, next, elts..., SublayerCopy<data_slot(c, 0), R>{dfb_sublayer(), col0 + c});
         } else {
             data_copies<K, XFirst, First, Step + 1>(
-                col0, next, elts..., ResidualCopy<data_slot(c, t), R>{residual_tile(t, col0 + c)});
+                col0, next, elts..., ResidualCopy<data_slot(c, t), R>{dfb_residual(), residual_tile(t, col0 + c)});
         }
     }
 }
@@ -243,23 +252,23 @@ constexpr uint32_t group_slot0(uint32_t g) { return g == 0 ? DST_DATA0 : DST_DAT
 template <uint32_t G, uint32_t K, class... Es>
 ALWI void grouped_terms(uint32_t j, uint32_t col, Es... elts) {
     if constexpr (group_first(G) >= NUM_TERMS) {
-        eltwise_chain(IterationShape::one_tile(), elts..., PackOutput<DST_DATA0>{j * block_col_tiles + col});
+        eltwise_chain(IterationShape::one_tile(), elts..., PackOutput<DST_DATA0>{dfb_output(), j * block_col_tiles + col});
     } else if constexpr (K == group_count(G)) {
         grouped_terms<G + 1, 0>(
             j, col, elts..., WeightedSum<group_count(G), group_first(G), group_slot0(G), DST_DATA0, (G > 0)>{});
     } else {
         constexpr uint32_t t = group_first(G) + K;
         if constexpr (t == 0) {
-            grouped_terms<G, K + 1>(j, col, elts..., SublayerCopy<group_slot0(G) + K>{col});
+            grouped_terms<G, K + 1>(j, col, elts..., SublayerCopy<group_slot0(G) + K>{dfb_sublayer(), col});
         } else {
-            grouped_terms<G, K + 1>(j, col, elts..., ResidualCopy<group_slot0(G) + K>{residual_tile(t, col)});
+            grouped_terms<G, K + 1>(j, col, elts..., ResidualCopy<group_slot0(G) + K>{dfb_residual(), residual_tile(t, col)});
         }
     }
 }
 
 template <uint32_t... Ps>
 ALWI void grouped_window(uint32_t j, uint32_t col, std::integer_sequence<uint32_t, Ps...>) {
-    grouped_terms<0, 0>(j, col, CoefCopy<Ps>{j * coef_tiles_per_stream + Ps}...);
+    grouped_terms<0, 0>(j, col, CoefCopy<Ps>{dfb_coef(), j * coef_tiles_per_stream + Ps}...);
 }
 
 // ======================= block schedule =======================
@@ -317,6 +326,13 @@ void kernel_main() {
 
     const uint32_t start_unit = get_arg_val<uint32_t>(0);
     const uint32_t num_units = get_arg_val<uint32_t>(1);
+
+    DataflowBuffer sublayer_buf(cb_sublayer_tiles), residual_buf(cb_residual_tiles), coef_buf(cb_coef_bcast),
+        output_buf(cb_output_tiles);
+    dfb_bound[0] = &sublayer_buf;
+    dfb_bound[1] = &residual_buf;
+    dfb_bound[2] = &coef_buf;
+    dfb_bound[3] = &output_buf;
 
     compute_kernel_hw_startup(cb_residual_tiles, cb_coef_bcast, cb_output_tiles);
 

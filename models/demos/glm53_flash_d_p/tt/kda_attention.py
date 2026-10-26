@@ -50,7 +50,9 @@ SP_AXIS, TP_AXIS = 0, 1
 # GLM_KDA_DECAY: "fork" (default) ttnn.bringup.prepare_chunk_recurrence(precise_gate_factors=True), the anchored gate
 # exponents formed exactly inside chunk preparation; "precise" k_dec_t recomputed by ttnn ops after the source op
 # (_PreciseDecayRecurrence, +1.4 ms per layer); "kernel" the source op's own terms (TF32-biased near the -5 bound)
-KDA_DECAY = os.environ.get("GLM_KDA_DECAY", "fork")
+# (llk_helper_library merge: "kernel" until the fork is re-cut from main's reworked op - its precise gate factors are
+# not on main: main's op fails the layer-0 KDA state check, worst head 0.0548 > 0.05; the fork 0.0227)
+KDA_DECAY = os.environ.get("GLM_KDA_DECAY", "kernel")
 assert KDA_DECAY in ("fork", "precise", "kernel"), KDA_DECAY
 PRECISE_DECAY = KDA_DECAY == "precise"
 
