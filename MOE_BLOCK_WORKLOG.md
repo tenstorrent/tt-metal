@@ -1916,3 +1916,23 @@ its fused-head programs at its first call); the shared expert is bf8 / HiFi2 vs 
   busiest chip is at most 1.18x the mean chip: EP 8 over 288 experts spreads even skewed routing.
 - Traced stress (spec defaults, shared expert HiFi3): 2000 replays of the 45-layer chain (real weights, chunk 5120 at
   51200), 904 s, no hang; 452.1 ms a replay (eager 452.7).
+
+## llk_helper_library merge: KDA fork, KDA projections, and a new flat+combine hang (2026-10-26, bh-lb-19 2x4)
+
+- KDA precise gate re-cut on main's prepare_chunk_recurrence (ttnn/ttnn/bringup/prepare_chunk_recurrence, CHANGELOG):
+  worst-head state 0.0269 (main's op 0.0548 fails the 0.05 bound); no perf cost (11442 -> 11482 tok/s).
+- KDA input projection: main's ttKDA runs ttnn.linear, so GLM's minimal_matmul schedule had gone unused; back on
+  minimal_matmul M4 K8 N8 (1.405 -> 1.169 ms a call, 34 a chunk): 11691 tok/s. Projections at HiFi3 (recurrence HiFi4;
+  accuracy equal to HiFi4 to 1e-5): 4.70 s, 11978 tok/s, top1 0.709.
+- The 320 KiB L1 path for the chunk terms is out of reach at GLM's geometry: 16 heads x 2560 rows a chip need 682 KiB
+  a core, and summarize_chunk_recurrence's static CBs at 16 chunks a group end at 1.17 MB (GLM_KDA_PREP_L1=1 clashes
+  by 166 KiB already at the component test's 1024 rows). Gain bound ~0.5 ms a layer of DRAM traffic; would need the
+  chunk split into halves or a streaming summarize.
+- NEW HANG on the merged tree (not on combine-lean-sender f57131f7774: 40/40 prefills clean, same box): 2 hangs in ~13
+  prefills (~1 in 4000 block calls), both chip 2, FlatWithProgram (flat expert + combine_rf). Chip 2's flat expert is
+  back-pressured end to end (y writer se6_dw waits for y-ring slots the combine sender drains; h / gate-up / x / DRISC
+  grants all behind it); the other chips' flat finished, combine loops spinning; fabric routers fully drained (every
+  sender channel at capacity, nothing in flight), links clean. So a credit / layout word is never seen, not stuck in
+  the fabric. The bring-up kernels are unchanged apart from include paths: suspect main's kernel-side dataflow / NoC /
+  fabric-adapter changes underneath. Triage + logs: scratch triage_stress1.txt, stress_fork_hang1_saved.log.
+  The perf numbers above come from runs that did not hang.
