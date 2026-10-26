@@ -79,6 +79,7 @@ def class_field_specs() -> dict:
     otherwise (see emitted_fields). Private (``_``-prefixed) fields are ignored.
     """
     specs: dict[str, list] = {}
+    classes = []
     for path in iter_source_files():
         try:
             tree = ast.parse(path.read_text())
@@ -87,11 +88,24 @@ def class_field_specs() -> dict:
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            if not any(
-                isinstance(b, ast.Name) and b.id in PARAM_BASES for b in node.bases
-            ):
+            classes.append(node)
+    # Source-owned routing parameters may subclass MATH_OP (or another concrete
+    # parameter) without adding CSV fields. Include those inherited columns too;
+    # otherwise a routing override silently hides a real runtime column.
+    pending = classes
+    while pending:
+        unresolved = []
+        changed = False
+        for node in pending:
+            bases = [b.id for b in node.bases if isinstance(b, ast.Name)]
+            if not any(base in PARAM_BASES or base in specs for base in bases):
+                unresolved.append(node)
                 continue
             fields = []
+            for base in bases:
+                for field in specs.get(base, []):
+                    if field[0] not in {name for name, _ in fields}:
+                        fields.append(field)
             for s in node.body:
                 if isinstance(s, ast.AnnAssign) and isinstance(s.target, ast.Name):
                     name = s.target.id
@@ -100,8 +114,20 @@ def class_field_specs() -> dict:
                     default_is_none = (
                         isinstance(s.value, ast.Constant) and s.value.value is None
                     )
-                    fields.append((name, default_is_none))
-            specs.setdefault(node.name, fields)
+                    replacement = (name, default_is_none)
+                    existing = next(
+                        (i for i, field in enumerate(fields) if field[0] == name), None
+                    )
+                    if existing is None:
+                        fields.append(replacement)
+                    else:
+                        fields[existing] = replacement
+            if node.name not in specs:
+                specs[node.name] = fields
+                changed = True
+        if not changed:
+            break
+        pending = unresolved
     return specs
 
 

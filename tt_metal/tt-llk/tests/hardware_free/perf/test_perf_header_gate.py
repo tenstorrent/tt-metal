@@ -20,6 +20,7 @@ efficiency-metric names) from drifting. Derivation helpers live in the device-fr
 """
 
 import ast
+import importlib
 import sys
 from pathlib import Path
 
@@ -38,6 +39,24 @@ from perf_schema_derive import (  # noqa: E402
     load_pure_module,
 )
 from tt_llk_perf import metrics as engine
+
+
+def test_parameter_subclasses_keep_inherited_columns(tmp_path, monkeypatch):
+    derive = importlib.import_module("perf_schema_derive")
+    source = tmp_path / "parameters.py"
+    source.write_text(
+        "class Routed(Concrete):\n    pass\n"
+        "class Concrete(TemplateParameter):\n    operation: str = None\n"
+        "class Required(Routed):\n    operation: str = 'default'\n"
+    )
+    monkeypatch.setattr(derive, "iter_source_files", lambda: iter([source]))
+    specs = derive.class_field_specs()
+    assert specs["Concrete"] == [("operation", True)]
+    assert specs["Routed"] == specs["Concrete"]
+    assert specs["Required"] == [("operation", False)]
+    call = ast.parse("Routed(operation=selected)", mode="eval").body
+    assert emitted_fields(call, specs) == ["operation"]
+
 
 # ── Per-test schema catalog (WH/BH) ───────────────────────────────────
 
