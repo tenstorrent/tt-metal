@@ -35,6 +35,9 @@ JUNK_ROWS = int(os.environ.get("GLM53_RAGGED_JUNK_ROWS", "65536"))  # x 4096 bf1
 LAYER = int(os.environ.get("GLM53_KDA_LAYER", "0"))
 # the HF reference needs a transformers that knows glm5_next (not every pod host has it): GLM53_RAGGED_HF=1
 HF = os.environ.get("GLM53_RAGGED_HF", "0") == "1"
+# G53F-0175 carry-in mode: GLM53_RAGGED_PRE=N runs an N-row full chunk at position 0 first (N % (rows*32) == 0) and the
+# ragged chunk at start N with that chunk's state -- the model's last chunk at depth (start > 0, a carried-in state)
+PRE = int(os.environ.get("GLM53_RAGGED_PRE", "0"))
 
 
 def _poison(mesh_device, value: float):
@@ -59,13 +62,20 @@ def test_kda_ragged_history(mesh_device):
     torch.manual_seed(0)
     x = (torch.randn(1, T, cfg.hidden_size) * 0.8).to(torch.bfloat16)
     x[:, S:] = 0  # the model's padding rows are the embedding of the pad id; zeros here (they are past actual_end)
+    x_pre = (torch.randn(1, PRE, cfg.hidden_size) * 0.8).to(torch.bfloat16) if PRE else None
     outs = []
     for junk in JUNK:
+        state = tt.allocate_state(1)
+        if PRE:  # the carried-in state of a prompt's earlier chunks (re-made per run: same input, same state)
+            assert PRE % (rows * 32) == 0, PRE
+            p_dev = mesh.upload(x_pre, ttnn.bfloat16, rows=1)
+            y_pre, state = tt.prefill_forward(p_dev, state, tt.scalar(0), None)
+            ttnn.deallocate(y_pre)
+            ttnn.deallocate(p_dev)
         _poison(mesh_device, junk)
         x_dev = mesh.upload(x, ttnn.bfloat16, rows=1)
-        state = tt.allocate_state(1)
-        end = tt.scalar(S) if S != T else None
-        y, new_state = tt.prefill_forward(x_dev, state, tt.scalar(0), end)
+        end = tt.scalar(PRE + S) if (S != T or PRE) else None
+        y, new_state = tt.prefill_forward(x_dev, state, tt.scalar(PRE), end)
         out = mesh.to_host(y, rows=1).float()[0]  # [T, 4096] in slab order
         rec = ttnn.to_torch(mesh.device_tensors(new_state.recurrent)[0]).float()
         outs.append((junk, out, rec))
