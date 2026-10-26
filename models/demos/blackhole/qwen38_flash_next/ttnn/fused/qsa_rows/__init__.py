@@ -62,22 +62,7 @@ def score_blocks_rows(score_rows, mask, *, cluster_axis: int):
     pages = blocks // PAGE
     # row r's chunk c at page r * pages + c; the gather stacks the devices' page runs, device-major
     paged = ttnn.reshape(score_rows, (1, 1, rows * pages, PAGE))
-    return _gather_and_merge(paged, rows, pages, mask, cluster_axis)
-
-
-def score_blocks_rows_from_scores(local_scores, mask, *, cluster_axis: int, pages):
-    """Program 1 fed by program 4: the indexer's local score rows ``[1, 1, rows, W >= blocks]`` (the resident blocks
-    and the cache's spare tile of columns) repaged by ``pages`` (:func:`score_pages`, or its composed slice + reshape)
-    straight into the gather's 2 KB pages, then the same all-gather and fused merge as :func:`score_blocks_rows`."""
-
-    rows, blocks = _mask_shape(mask)
-    paged = pages(local_scores, blocks)
-    return _gather_and_merge(paged, rows, blocks // PAGE, mask, cluster_axis)
-
-
-def _gather_and_merge(paged, rows: int, pages: int, mask, cluster_axis: int):
-    dram = ttnn.DRAM_MEMORY_CONFIG
-    gathered = ttnn.all_gather(paged, dim=2, cluster_axis=cluster_axis, memory_config=dram)
+    gathered = ttnn.all_gather(paged, dim=2, cluster_axis=cluster_axis, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(paged)
     if tuple(gathered.shape) != (1, 1, DEVICES * rows * pages, PAGE):
         raise RuntimeError(
@@ -86,104 +71,6 @@ def _gather_and_merge(paged, rows: int, pages: int, mask, cluster_axis: int):
     masked = qsa_block.score_merge(gathered, mask)
     ttnn.deallocate(gathered)
     return masked
-
-
-def _mask_shape(mask):
-    mshape = tuple(mask.shape)
-    if (
-        len(mshape) != 4
-        or mshape[:2] != (1, 1)
-        or not 1 <= mshape[2] <= ttnn.TILE_SIZE
-        or mshape[3] % PAGE
-        or mask.dtype != ttnn.bfloat16
-        or mask.layout != ttnn.ROW_MAJOR_LAYOUT
-    ):
-        raise ValueError(f"the block mask must be ROW_MAJOR bf16 [1, 1, 1..32, k * {PAGE}], got {mask.layout} {mshape}")
-    return mshape[2], mshape[3]
-
-
-# --- program 4: the indexer's rows as the gather's pages --------------------------------------------------------------
-
-PAGES_NAME = "qsa_score_pages"
-SCORE_PAGES = fp.kernel_source(NAME, "score_pages.cpp")
-PAGES_BATCH = 4  # pages per read / write round on a core (8 KB of L1)
-
-
-def score_pages_admits(local_scores, blocks) -> bool:
-    """Program 4's input contract as a predicate: one row tile of score rows ``[1, 1, 1..32, W >= blocks]`` bf16
-    ROW_MAJOR with ``blocks`` a positive multiple of the page; anything else (the 128-row chunk's four tiles, the slab)
-    keeps the chain's slice + reshape."""
-
-    shape = tuple(local_scores.shape)
-    return (
-        len(shape) == 4
-        and shape[:2] == (1, 1)
-        and 1 <= shape[2] <= ttnn.TILE_SIZE
-        and local_scores.dtype == ttnn.bfloat16
-        and local_scores.layout == ttnn.ROW_MAJOR_LAYOUT
-        and type(blocks) is int
-        and blocks > 0
-        and blocks % PAGE == 0
-        and blocks <= shape[3]
-    )
-
-
-def score_pages(local_scores, blocks: int):
-    """Program 4: the indexer's local score rows ``[1, 1, rows, W]`` bf16 ROW_MAJOR with ``W >= blocks`` (the chain
-    slices the ``blocks`` resident columns off the cache's spare tile) repaged as the all-gather's pages
-    ``[1, 1, rows * blocks // 1024, 1024]``: row r's chunk c at page ``r * chunks + c``.  One data-movement program
-    (pure 2 KB copies: the bytes are the chain's slice + reshape) in place of those two programs."""
-
-    shape = tuple(local_scores.shape)
-    if (
-        len(shape) != 4
-        or shape[:2] != (1, 1)
-        or not 1 <= shape[2] <= ttnn.TILE_SIZE
-        or local_scores.dtype != ttnn.bfloat16
-        or local_scores.layout != ttnn.ROW_MAJOR_LAYOUT
-    ):
-        raise ValueError(f"score rows must be ROW_MAJOR bf16 [1, 1, 1..32, W], got {local_scores.layout} {shape}")
-    if type(blocks) is not int or blocks <= 0 or blocks % PAGE or blocks > shape[3]:
-        raise ValueError(
-            f"blocks must be a positive multiple of {PAGE} within the rows' width {shape[3]}, got {blocks!r}"
-        )
-    rows, chunks = shape[2], blocks // PAGE
-    mesh = local_scores.device()
-    out = fp.allocate((1, 1, rows * chunks, PAGE), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, mesh)
-    work = fp.split_work(rows * chunks, mesh)
-    cores = fp.core_rectangle(work, mesh)
-    page_bytes = fp.TILE_BYTES[ttnn.bfloat16]  # 1024 bf16 = one 2 KB page
-    cta = [chunks, PAGES_BATCH, *fp.accessor_args(local_scores), *fp.accessor_args(out)]
-    cbs = [fp.cb_descriptor(0, ttnn.bfloat16, page_bytes, PAGES_BATCH, cores)]
-    kernel = fp.reader_kernel(
-        SCORE_PAGES,
-        cores,
-        cta,
-        [(w.core, [local_scores.buffer_address(), out.buffer_address(), w.start, w.count]) for w in work],
-    )
-    # the resident columns of the rows read once, the pages written once; the pages keep the rows' placement
-    meta = fp.program_meta(
-        NAME,
-        "score_pages",
-        rows,
-        partial=((local_scores, rows * blocks * 2),),
-        writes=(out,),
-        cores=len(work),
-        outputs=((out, local_scores),),
-    )
-    return fp.run_program([local_scores, out], fp.program_descriptor([kernel], cbs=cbs), meta=meta)
-
-
-def score_pages_composed(local_scores, blocks: int):
-    """The chain: ``ttnn.slice`` to the resident blocks, then the row-major reshape into the gather's pages."""
-
-    rows = int(local_scores.shape[2])
-    dram = ttnn.DRAM_MEMORY_CONFIG
-    sliced = ttnn.slice(local_scores, (0, 0, 0, 0), (1, 1, rows, blocks), memory_config=dram)
-    paged = ttnn.reshape(sliced, (1, 1, rows * (blocks // PAGE), PAGE))
-    if paged.buffer_address() != sliced.buffer_address():
-        ttnn.deallocate(sliced)
-    return paged
 
 
 def score_blocks_rows_composed(score_rows, mask, *, cluster_axis: int, topology=None):
@@ -240,24 +127,6 @@ register(
         fused=score_blocks_rows,
         composed=score_blocks_rows_composed,
         gate=None,  # the rows micro-test and the pass pair (the MTP lead's gate) stand for the family
-    )
-)
-
-register(
-    FusedKernel(
-        name=PAGES_NAME,
-        replaces=(
-            "the QSA verify tile's score slice to the resident blocks and the row-major reshape into the all-gather's "
-            "2 KB pages (2 programs per attention layer, verify and draft) as one data-movement program (qsa_rows program 4)"
-        ),
-        tolerance=BITWISE,
-        fused=score_pages,
-        composed=score_pages_composed,
-        admits=score_pages_admits,
-        # pure copies: the die test and the line test (bitwise the chain) are the gate.  Number of record, the pass pair
-        # of 2026-09-26 on the 1x4 p150 line (greedy fused, json / prose / chat560): verify replay -0.18 / -0.15 / -0.18 ms
-        # per pass, tokens per pass identical; default since.
-        gate=None,
     )
 )
 
@@ -374,15 +243,10 @@ register(
 
 __all__ = [
     "NAME",
-    "PAGES_NAME",
-    "score_pages_admits",
     "post_attention_rows_admits",
     "PA_NAME",
     "post_attention_rows",
     "post_attention_rows_composed",
-    "score_pages",
-    "score_pages_composed",
-    "score_blocks_rows_from_scores",
     "kv_stage",
     "main_tail_rows",
     "main_tail_rows_composed",

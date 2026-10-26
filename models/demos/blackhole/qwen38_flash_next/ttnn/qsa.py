@@ -3188,10 +3188,8 @@ class Qwen38TTNNQSA:
     _widen_partial_fused = None
     _selection_row_fused = None
     _score_merge_fused = None
-    _score_pages = None  # qsa_rows program 4 (qsa_score_pages): the indexer's rows straight into the gather's pages
     _post_attention_rows = None  # qsa_rows program 5: the tile's post-attention glue as one 48-core program
-    # the two programs' admission predicates, bound with the handles (the fused module is a local import of __init__)
-    _score_pages_admits = None
+    # its admission predicate, bound with the handle (the fused module is a local import of __init__)
     _post_attention_rows_admits = None
     _rows_fused = None  # ttnn/fused/qsa_rows: the verify-form glue on the 32-row tile (QWEN38_FUSED=qsa_rows)
     _lane_score_rows_fused = None
@@ -3377,11 +3375,7 @@ class Qwen38TTNNQSA:
         if fused_kernels.enabled("qsa_rows"):
             # the verify-form rows family (forward_verify_generic's glue on the 32-row tile), program by program
             self._rows_fused = fused_kernels.qsa_rows
-            self._score_pages_admits = fused_kernels.qsa_rows.score_pages_admits
             self._post_attention_rows_admits = fused_kernels.qsa_rows.post_attention_rows_admits
-            if fused_kernels.enabled(fused_kernels.qsa_rows.PAGES_NAME):
-                # program 4: the score slice + reshape before the gather as one data-movement program
-                self._score_pages = fused_kernels.kernel(fused_kernels.qsa_rows.PAGES_NAME).fused
             if fused_kernels.enabled(fused_kernels.qsa_rows.PA_NAME):
                 # program 5: the post-attention glue of the tile as one 48-core program
                 self._post_attention_rows = fused_kernels.kernel(fused_kernels.qsa_rows.PA_NAME).fused
@@ -5660,22 +5654,6 @@ class Qwen38TTNNQSA:
             )
             if rows != CHUNK_ROWS:
                 _deallocate(query_tile)
-            if (
-                self._score_pages is not None
-                and rows == CHUNK_ROWS
-                and chunk.indexer_neg_mask is not None
-                and self._score_pages_admits(local_scores, self.allocated_compressed_blocks)
-            ):
-                # qsa_rows program 4 + program 1: the indexer's rows repaged straight into the gather's pages (no slice
-                # to the resident blocks, no row-major reshape), then the all-gather and the fused merge as below
-                masked = self._rows_fused.score_blocks_rows_from_scores(
-                    local_scores, chunk.indexer_neg_mask, cluster_axis=TP_AXIS, pages=self._score_pages
-                )
-                _deallocate(local_scores)
-                _retag_tensor(masked, reference=state.compressed_index_cache, shard_dim=None)
-                self.mesh_contract.validate_tensor(masked, placement=TensorPlacement.REPLICATED)
-                _require_shape(masked, (1, 1, rows, self.allocated_compressed_blocks), "masked QSA chunk block scores")
-                return masked
             score_tiles.append(
                 ttnn.slice(
                     local_scores,

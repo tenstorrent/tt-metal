@@ -50,7 +50,6 @@ DEFAULT_ON: frozenset[str] = frozenset(
         "qsa_index_tail",
         "qsa_main_tail",
         "qsa_rows",
-        "qsa_score_pages",
         "qsa_rows_post_attention",
         "qsa_post_attention",
         "qsa_score_merge",

@@ -218,33 +218,6 @@ def test_score_merge_against_chain_per_row(mesh_device, rows):
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("rows", [1, 5, 32])
-def test_score_pages_against_chain(mesh_device, rows):
-    entry = fused.kernel(qr.PAGES_NAME)
-    assert entry.tolerance == fused.BITWISE, f"{entry.name}: tolerance {entry.tolerance}"
-    width = BLOCKS + ttnn.TILE_SIZE  # the resident blocks and the cache's spare tile of columns
-    cached = None
-    for seed in (941, 942):
-        rng = torch.Generator().manual_seed(seed)
-        owned = []
-        try:
-            local = upload(mesh_device, torch.randn(1, DIES, rows, width, generator=rng), BF16, layout=RM, shard_dim=1)
-            owned.append(local)
-            assert entry.admits(
-                local, BLOCKS
-            ), f"{entry.name} does not admit scores {tuple(local.shape)} {local.dtype} {local.layout}, blocks={BLOCKS}"
-            expected = entry.composed(local, BLOCKS)
-            owned.append(expected)
-            actual = entry.fused(local, BLOCKS)
-            owned.append(actual)
-            assert_shards_equal(actual, expected, f"score pages, rows={rows}, seed={seed}")
-            cached = assert_program_cache_stable(mesh_device, cached)
-        finally:
-            _free(owned)
-
-
-@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
-@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("rows", [1, 5, 32])
 def test_score_blocks_rows_against_all_reduce(mesh_device, rows):
     entry = fused.kernel(qr.NAME)
     assert entry.tolerance == fused.BITWISE, f"{entry.name}: tolerance {entry.tolerance}"
