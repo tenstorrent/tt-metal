@@ -109,6 +109,7 @@ def load_from_safetensors(
     model: ttml.modules.AbstractModuleBase,
     safetensors_path: str | os.PathLike,
     config: LlamaConfig,
+    strict: bool = False,
 ) -> None:
     """Load HuggingFace Llama .safetensors weights into a Python Llama model.
 
@@ -122,6 +123,7 @@ def load_from_safetensors(
         model: A Python Llama model instance.
         safetensors_path: Path to directory containing .safetensors file(s).
         config: The LlamaConfig used to build the model.
+        strict: Raise if any model parameter was not loaded.
     """
     from safetensors.numpy import load_file
 
@@ -426,6 +428,8 @@ def load_from_safetensors(
 
     # ── Report ──
     unused = [n for n in parameters if n not in used_params]
+    if unused and strict:
+        raise RuntimeError(f"{len(unused)} model parameters were NOT loaded from {safetensors_dir}: {unused}")
     if unused:
         print(f"Warning: {len(unused)} model parameters were NOT loaded from safetensors:")
         for n in unused:
