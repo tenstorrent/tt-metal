@@ -646,7 +646,8 @@ class TtDSAIndexer(LightweightModule):
         columns busy; a W-wide k keeps every column busy. The scores of the valid columns are the same per-column
         arithmetic (bit-identical). ``rows``: the scored rows per sub-block (bounds the superset margin). None when
         off, or when W reaches the allocation. Take it after the chunk's pool writes; the caller deallocates it."""
-        bucket = int(os.environ.get("GLM53_INDEXER_POOL_BUCKET", "0"))
+        # default 16384 since 2026-10-26 (bitwise end to end; 0 = off)
+        bucket = int(os.environ.get("GLM53_INDEXER_POOL_BUCKET", "16384"))
         if bucket <= 0:
             return None
         need = self._kv_len(cache, end // self.P, (self._extra_rows() + 1) * rows)

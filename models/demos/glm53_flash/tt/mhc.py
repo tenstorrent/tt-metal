@@ -58,7 +58,8 @@ MHC_POST_KERNEL = int(os.environ.get("GLM53_MHC_POST_KERNEL", "2"))
 # accuracy gate); 0 = the earlier stream-major n-split matmul + fast_reduce_nc path (A/B only)
 MHC_PREFILL_EXACT = os.environ.get("GLM53_MHC_PREFILL_EXACT", "1") == "1"
 # prefill h = sum_i pre_i x_i through the post-mix kernel's pre-mix mode instead of the composite slices + addcmul chain
-# (tt-blaze G53F-0197; "1" = on). Read at call time.
+# (tt-blaze G53F-0197; "1" = on, the default since 2026-10-26: bitwise on full 256k prefills; "0" = the composite chain).
+# Read at call time.
 MHC_PREFILL_HMIX_ENV = "GLM53_MHC_PREFILL_HMIX"
 # decode (T <= 32) pre-block: 1 = exact fp32 reductions of the K-split partials (ttnn.sum, SFPU) instead of
 # fast_reduce_nc (bf16 rounding) and h through the post-mix kernel's pre-mix mode + the composite's typecast +
@@ -904,7 +905,7 @@ class TtMHCFast(LightweightModule):
             h = ttnn.sharded_to_interleaved(hn, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(hn)
             return h
-        if MHC_PREFILL_EXACT and self.post_kernel == 2 and os.environ.get(MHC_PREFILL_HMIX_ENV, "0") == "1":
+        if MHC_PREFILL_EXACT and self.post_kernel == 2 and os.environ.get(MHC_PREFILL_HMIX_ENV, "1") == "1":
             # G53F-0197: the post-mix kernel's pre-mix mode on the prefill rows: SFPMUL of stream 0's term, then
             # SFPMADs in stream order -- the composite's multiply + addcmul chain below, term for term -- in one
             # pass over the packed streams (no stream slices, no column slices, one program instead of nine)

@@ -132,12 +132,12 @@ REGIONS_UNTILIZE = os.environ.get("GLM53_REGIONS_UNTILIZE", "direct")
 # ttnn.scatter of a slot -> token map + ttnn.embedding of every max_buf row; "custom" = custom_ops/region_scatter, only
 # the local picks' rows written, slots read from their fp32 TILE layout (with REGIONS_COMBINE=fused the uint32 copy is
 # never made). Bit-identical for every row the output depends on. Read at call time.
-REGIONS_SCATTER = os.environ.get("GLM53_REGIONS_SCATTER", "embedding")
+REGIONS_SCATTER = os.environ.get("GLM53_REGIONS_SCATTER", "custom")  # default since 2026-10-26 (G53F-0193)
 # regions path: how the routing tables are built (tt-blaze G53F-0195): "composite" = ~27 ttnn ops per sub-chunk (one-hot,
 # triangular-matmul rank, aligned counts + cumsum, the slot formula, gathers at the picks, uint32 row copies); "custom"
 # = custom_ops/route_table (two data-movement programs from the top-k ids and weights; needs REGIONS_SCATTER=custom and
 # REGIONS_COMBINE=fused, which read the fp32 TILE slots). Same values (integers < 2^24). Read at call time.
-REGIONS_ROUTE = os.environ.get("GLM53_REGIONS_ROUTE", "composite")
+REGIONS_ROUTE = os.environ.get("GLM53_REGIONS_ROUTE", "custom")  # default since 2026-10-26 (G53F-0195)
 # what the regions calls actually ran (host-side ints, no device sync): the region buffer rows and the combine path,
 # so an A/B can show the knob took effect (G53F-0183: a knob echoed in a summary is not its effect). Reset by the reader.
 REGIONS_STATS: dict = {}
