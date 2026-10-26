@@ -43,8 +43,7 @@ struct GdnDecodeStepInputs {
     Tensor g;       // fp32/bf16; plain: [1, 1, Nv] log decay; fused-conv: -exp(A_log), one row of Nv values
     Tensor state;   // [Bmax, Nv, Dk, Dv] fp32 (Bmax = 1 plain, >= B fused-conv), rows 0..B-1 updated in place
     Tensor weight;  // bf16 gated-norm weight, one row of Dv values
-    // fused-conv mode: packed history [Bmax, Nv, 4, 32, 32] bf16, user u's chunk c in row 2c + (u & 1), slot 3
-    // newest; shifted in place
+    // fused-conv: [Bmax, Nv, 4, 32, 32] bf16, user u's chunk c in row 2c + (u & 1), slot 3 newest; shifted in place
     std::optional<Tensor> conv_hist;
     // fused-conv mode: packed taps [Nv, 4, 32, 32] bf16, chunk c in rows 2c and 2c + 1, tap 0 oldest
     std::optional<Tensor> conv_taps;

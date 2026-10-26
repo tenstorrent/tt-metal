@@ -378,9 +378,8 @@ def _hist_b1(mesh, g):
 @torch.no_grad()
 @parametrize_mesh_tp()
 def test_gdn_b1_decode_step_vs_fused(mesh_device, reset_seeds, ensure_gc, monkeypatch):
-    """max_batch_size == 1 decode through gdn_decode_step (op on) vs the single-user fused kernels (op off), one real
-    Qwen3.8 GDN layer: prefill -> decode handoff, snapshot / restore, reset + re-prefill after the op ran, prepare
-    path."""
+    """B=1 decode, gdn_decode_step vs the single-user fused kernels on one real GDN layer: prefill handoff,
+    snapshot / restore, reset + re-prefill, prepare path."""
     mesh = mesh_device
     os.environ.setdefault("HF_MODEL", model_path())
     args = Qwen36ModelArgs(mesh, max_batch_size=1, max_seq_len=512)

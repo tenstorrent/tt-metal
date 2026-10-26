@@ -292,9 +292,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
     @staticmethod
     def _read_vllm_max_pixels(vc=None):
-        """max_pixels from vLLM's --mm-processor-kwargs (model_config.mm_processor_kwargs, mirrored on
-        model_config.multimodal_config.mm_processor_kwargs) of `vc` (default: the current vLLM config), or None when
-        unset / no vLLM config."""
+        """max_pixels from --mm-processor-kwargs of `vc` (default: the current vLLM config), or None when unset or
+        there is no config. The kwargs sit on model_config or model_config.multimodal_config."""
         try:
             if vc is None:
                 from vllm.config import get_current_vllm_config
@@ -386,13 +385,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         return (1, h, w)
 
     def _check_vision_bucket(self, grid_thw):
-        """Refuse an item whose padded bucket was not compiled before trace capture (warmup_vision).
-
-        Running the unwarmed tower after capture compiles programs that a later trace replay can clobber, which HANGS
-        the device (seen: tt_all_reduce). Checks membership in the warmed set, so a gap below the largest warmed bucket
-        is refused too. Raising here still fails this request's step (the engine reports the error) but avoids the
-        device hang. No check when warmup_vision never ran (tests / demos) or was disabled.
-        """
+        """Refuse an item whose bucket warmup_vision did not compile: compiling after trace capture can hang the device.
+        No check when warmup_vision never ran (tests, demos)."""
         warmed = getattr(self, "_vision_warmed_buckets", None)
         if not warmed:
             return
@@ -783,9 +777,8 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
                         "--mm-processor-kwargs '{\"max_pixels\": 1048576}' (or your serving limit)."
                     )
             else:
-                # Patches of any accepted item: image <= max_pixels/patch^2; a video (frames x H x W <= max_pixels,
-                # t = frames/temporal_patch_size) is <= max_pixels/(patch^2 * temporal_patch_size); the image bound
-                # covers both (conservative). Every bucket up to that one is reachable, so all of them are warmed.
+                # An item has at most max_pixels / patch^2 patches (a video fewer), and every bucket up to that one
+                # is reachable, so all of them are warmed.
                 need = -(-int(max_pixels) // vc.patch_size**2)
                 need_bucket = self._vision_bucket(need)
                 have = {self._vision_bucket(t * h * w) for t, h, w in grids}
