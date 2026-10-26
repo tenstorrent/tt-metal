@@ -125,9 +125,9 @@ MatmulBlockDims pick_matmul_block_dims(uint32_t rows, uint32_t cols, uint32_t ds
 }
 
 // Work item = one Q chunk (Sq_chunk_t query tile-rows of one batch/head), indexed
-// (batch * q_heads + head) * q_num_chunks + chunk. Each core gets a list of contiguous item runs and the
-// three kernels walk that list in order; the list is the whole work-distribution contract, so a
-// different policy only has to produce different lists.
+// (batch * q_heads + head) * q_num_chunks + chunk. Each core gets a list of contiguous item runs; the
+// three kernels walk it with for_each_work_item (kernels/sdpa_fw_work_list.hpp). The list is the whole
+// work-distribution contract, so a different policy only has to produce different lists.
 struct ItemRun {
     uint32_t first_item;
     uint32_t num_items;
