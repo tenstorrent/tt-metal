@@ -29,7 +29,11 @@ from sync_gradients_placements_common import (
     is_sharded_on_axis,
 )
 
-pytestmark = [pytest.mark.requires_device, pytest.mark.timeout(1800)]
+pytestmark = [
+    pytest.mark.requires_device,
+    pytest.mark.timeout(1800),
+    pytest.mark.usefixtures("strict_ccl_topology"),
+]
 
 
 @pytest.fixture(scope="module")
