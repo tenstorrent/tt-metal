@@ -10,7 +10,14 @@
 // the active experts active[g], active[g + G], ... (the active list comes from the routing matrix scanned here), one
 // column at a time, triple-buffered with transaction ids (one column in flight ahead of compute).
 //
-// runtime args: [w_addr, routing_addr, bank_id, vc, group]
+// runtime args: [w_addr, routing_addr, bank_id, vc, group, (ROUTING_FOLD) base_addr]
+//
+// E1 variants (decode roofline, 2026-10-26; op.py ``routing_fold`` / ``scan_words``, preprocessor-gated so the default
+// program is the one above):
+// * ROUTING_FOLD: the routing tensor is the router's full [M, E_total] matrix; this chip's column base (the first of
+//   its E experts) comes from a 32 B uint16 page (`base_addr`, one per chip, mesh-sharded) and the kernel reads the
+//   window of tiles covering [base, base + E) (routing_scan.hpp fold_*). Replaces the per-column selector matmul.
+// * SCAN_WORDS: the word-wise active scan (routing_scan.hpp scan_active_words) instead of the element scan.
 
 #include <stdint.h>
 
@@ -35,6 +42,9 @@ void kernel_main() {
     constexpr uint32_t page_bytes = get_compile_time_arg_val(8);
     constexpr uint32_t ppb = get_compile_time_arg_val(9);  // column pairs per bank
     constexpr auto routing_args = TensorAccessorArgs<10>();
+#ifdef ROUTING_FOLD
+    constexpr auto base_args = TensorAccessorArgs<routing_args.next_compile_time_args_offset()>();
+#endif
 
     constexpr uint32_t E_TILES = (E + 31) / 32;
     constexpr uint32_t col_bytes = kt * tile_bytes;
@@ -42,15 +52,41 @@ void kernel_main() {
     static_assert(pages_per_col * page_bytes == col_bytes, "page size must divide the column");
 
     // routing matrix tiles -> active experts -> this group's share
+#ifdef ROUTING_FOLD
+    constexpr uint32_t R_TILES = (E + 62) / 32;  // the worst-case fold window
+    cb_reserve_back(cb_r, R_TILES + 1);          // + the base page
+    const uint32_t r_l1 = get_write_ptr(cb_r);
+    const uint32_t base_addr = get_arg_val<uint32_t>(5);
+    const auto s_b = TensorAccessor(base_args, base_addr, 32);
+    const uint32_t b_l1 = r_l1 + R_TILES * 2048;
+    noc_async_read(s_b.get_noc_addr(0), b_l1, 32);
+    noc_async_read_barrier();
+    const uint32_t col_base = *reinterpret_cast<volatile tt_l1_ptr uint16_t*>(b_l1);
+    const uint32_t tb = fold_first_tile(col_base);
+    const uint32_t col_off = fold_col_off(col_base);
+    const uint32_t n_tiles = fold_tiles<E>(col_base);
+#else
+    constexpr uint32_t R_TILES = E_TILES;
     cb_reserve_back(cb_r, E_TILES);
     const uint32_t r_l1 = get_write_ptr(cb_r);
+    constexpr uint32_t tb = 0;
+    constexpr uint32_t col_off = 0;
+    constexpr uint32_t n_tiles = E_TILES;
+#endif
     const auto s_r = TensorAccessor(routing_args, routing_addr, 2048);
-    for (uint32_t i = 0; i < E_TILES; ++i) {
-        noc_async_read(s_r.get_noc_addr(i), r_l1 + i * 2048, 2048);
+    for (uint32_t i = 0; i < n_tiles; ++i) {
+        noc_async_read(s_r.get_noc_addr(tb + i), r_l1 + i * 2048, 2048);
     }
     noc_async_read_barrier();
     uint16_t active[E];
-    const uint32_t n = scan_active<E, M>(reinterpret_cast<volatile tt_l1_ptr uint16_t*>(r_l1), active);
+    const volatile tt_l1_ptr uint16_t* routing = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(r_l1);
+#if defined(SCAN_WORDS)
+    const uint32_t n = scan_active_words<E, M, R_TILES>(routing, active, col_off, n_tiles);
+#elif defined(ROUTING_FOLD)
+    const uint32_t n = scan_active_fold<E, M>(routing, active, col_off);
+#else
+    const uint32_t n = scan_active<E, M>(routing, active);
+#endif
 
     const uint64_t w_base = get_noc_addr_from_bank_id<true>(bank_id, w_addr);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);

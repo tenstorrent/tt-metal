@@ -431,6 +431,327 @@ def plan_from_env(env: dict, E_local: int, I: int, banks: int = 8) -> StreamPlan
     return plan
 
 
+# ---------------------------------------------------------------------------------------------------- E1 (2026-10-26)
+# Decode roofline action E1: the block ops' fixed cost (selector matmul + x copy folded, the word-wise scan, the fused
+# single program) and the 256-user dispatch form. Knobs (all default = today's path, read at construction in
+# tt/moe.py): GLM53_STREAM_FOLD=1 (routing_fold), GLM53_STREAM_SCAN=words (scan_words), GLM53_STREAM_FUSED=1 (fused),
+# GLM53_EXPERTS_32ROW=dense | dispatch | units (the 32-users/row expert form; dense = today's GLM53_DENSE_EXPERTS pass).
+E1_FOLD_ENV = "GLM53_STREAM_FOLD"
+E1_SCAN_ENV = "GLM53_STREAM_SCAN"
+E1_FUSED_ENV = "GLM53_STREAM_FUSED"
+EXPERTS_32ROW_ENV = "GLM53_EXPERTS_32ROW"
+EXPERTS_32ROW_MODES = ("dense", "dispatch", "units")
+NUM_L1_SEMAPHORES = 16  # tt_metal/impl/buffers/semaphore.hpp NUM_SEMAPHORES (host-side L1 semaphores per core)
+FUSED_SLOT_BITS = 4  # arrival counter per (group, expert-in-group): counts to `banks` (8) in 4 bits
+FUSED_SLOTS_PER_SEM = 7  # 7 x 4 = 28 bits: bit 31 (the NOC atomic's wrap bit) is never touched
+
+
+def e1_stream_knobs(env: dict) -> dict:
+    """``{"routing_fold", "scan_words", "fused"}`` from the env (defaults = today's program)."""
+    scan = env.get(E1_SCAN_ENV, "elements")
+    if scan not in ("elements", "words"):
+        raise ValueError(f"{E1_SCAN_ENV}={scan!r}: elements | words")
+    return dict(
+        routing_fold=env.get(E1_FOLD_ENV, "0") == "1",
+        scan_words=scan == "words",
+        fused=env.get(E1_FUSED_ENV, "0") == "1",
+    )
+
+
+def experts_32row_mode(env: dict) -> str:
+    mode = env.get(EXPERTS_32ROW_ENV, "dense")
+    if mode not in EXPERTS_32ROW_MODES:
+        raise ValueError(f"{EXPERTS_32ROW_ENV}={mode!r}: expected one of {EXPERTS_32ROW_MODES}")
+    return mode
+
+
+def fused_semaphores(groups: int, E_local: int) -> tuple[int, int]:
+    """(semaphores per gate|up group, total) of the fused op's arrival counters: group g's k-th expert lives in the
+    4-bit slot ``k % 7`` of semaphore ``g * per_group + k // 7``; a group has at most ceil(E / groups) experts."""
+    slots = -(-E_local // groups)
+    per_group = -(-slots // FUSED_SLOTS_PER_SEM)
+    total = groups * per_group
+    if total > NUM_L1_SEMAPHORES:
+        raise ValueError(
+            f"fused op: {groups} groups x {per_group} semaphores = {total} > {NUM_L1_SEMAPHORES} L1 semaphores "
+            f"(E_local = {E_local}: pick groups in {fused_group_choices(E_local)})"
+        )
+    return per_group, total
+
+
+def fused_group_choices(E_local: int, max_groups: int = 16) -> list[int]:
+    out = []
+    for g in range(1, max_groups + 1):
+        slots = -(-E_local // g)
+        if g * (-(-slots // FUSED_SLOTS_PER_SEM)) <= NUM_L1_SEMAPHORES:
+            out.append(g)
+    return out
+
+
+def down_readers_for(I: int, H: int, banks: int = 8) -> int:
+    """``op._down_readers``: the fewest readers per bank keeping <= 8 output columns and <= 128 tiles per block."""
+    C, seg = H // TILE // banks, I // TILE
+    return next(r for r in (1, 2, 4, 8, 16) if C % r == 0 and C // r <= 8 and (C // r) * seg <= 128)
+
+
+def fused_core_plan(
+    grid: tuple[int, int],
+    E_local: int,
+    I: int,
+    H: int,
+    banks: int = 8,
+    groups: int | None = None,
+    down_readers: int | None = None,
+) -> dict:
+    """Cores of the fused single program on a grid: the down readers per bank as the two-op form (2 at I = 256, 4 at
+    1024, 8 at 2048), then the gate|up groups = the largest of today's 12 that fits beside them and keeps the
+    arrival-counter semaphores within the 16 per core (13x10: 12 + 2 per bank = 112 cores; 8x8: 6 + 2 = 64)."""
+    gx, gy = grid
+    cores = gx * gy
+    readers = down_readers_for(I, H, banks) if down_readers is None else int(down_readers)
+    assert readers * banks <= cores, (readers, banks, cores)
+    room = (cores - readers * banks) // banks
+    choices = fused_group_choices(E_local)
+    if groups is None:
+        cand = [g for g in choices if g <= min(12, room)]
+        assert cand, f"no fused group count fits {grid} with {readers} down readers"
+        groups = max(cand)
+    else:
+        groups = int(groups)
+        assert groups <= room, f"{groups} gate|up groups do not fit beside {readers} down readers on {grid}"
+        assert groups in choices, f"{groups} groups need more than {NUM_L1_SEMAPHORES} semaphores at E = {E_local}"
+    spg, n_sems = fused_semaphores(groups, E_local)
+    return dict(
+        groups=groups,
+        down_readers=readers,
+        gate_up_cores=groups * banks,
+        down_cores=readers * banks,
+        sems_per_group=spg,
+        semaphores=n_sems,
+    )
+
+
+def plan_for_32row(
+    grid: tuple[int, int],
+    E_local: int,
+    I: int,
+    H: int,
+    T: int = 256,
+    w13: str = "bfp8",
+    w2: str = "bfp8",
+    units: bool = False,
+    expected_active: float | None = None,
+    banks: int = 8,
+    roofline: bool = False,
+) -> StreamPlan:
+    """The dispatch-op plan of the 32-users/row point (GLM53_EXPERTS_32ROW=dispatch | units). Default: the MEASURED
+    configuration (12 groups, 8 down readers = 2 output columns per core on 64 cores, no rotation: 779 us at 58
+    active on the chip test, expert_kernel_sweep.md section 10). ``roofline`` (GLM53_EXPERT_PLAN=roofline): the cost
+    model's choice at T gathered tokens with the real-routing activity (31 of 72 experts at 256 tokens) and
+    T x 8 / 288 rows per expert (one 32-row pass) -- a hypothesis (H1 rotation, 15 groups) the device A/B ranks. The
+    units form is forced when asked (its pair split only exists at ppb > 1: the (2,4) block's I = 1024; at the 8x4's
+    I = 256 it is the per-expert assignment). The planner's down expectation is calibrated at the EP width (I = 2048)
+    and is not used for the choice here."""
+    tokens_per_expert = T * 8 / 288
+    if expected_active is None:
+        expected_active = round(E_local * (1 - (1 - 8 / 288) ** T) * 0.9)  # 31 of 72 at T = 256 (measured 2026-10-20)
+    if roofline:
+        plan = plan_expert_stream(
+            grid=grid,
+            E_local=E_local,
+            K=H,
+            I=I,
+            H=H,
+            T=T,
+            w13=w13,
+            w2=w2,
+            expected_active=expected_active,
+            tokens_per_expert=tokens_per_expert,
+            ep=False,
+            banks=banks,
+        )
+    else:
+        plan = legacy_plan(E_local, I, banks)
+        plan.groups = min(12, core_grid_banks(grid, banks) - 1)  # 12 on 13x10; 7 on 8x8 (the down op's 64 cores aside)
+        plan.notes = [f"measured 32-users/row form (expert_kernel_sweep.md section 10: 779 us at 58 active) on {grid}"]
+    plan.down_readers = (
+        8  # the dispatch down op's split (2 output columns per core, 64 cores: the measured 779 us form)
+    )
+    if units:
+        plan.units = True
+        ppb = (I // TILE) // banks
+        plan.unit_pairs = max(1, min(plan.unit_pairs, ppb))
+        plan.notes.append("units form forced by GLM53_EXPERTS_32ROW=units")
+    return plan
+
+
+# per-phase model of one block-op launch pair (the E1 table): calibrated on the 2026-10-20 chip measurements of the
+# 8x4 shape (28 active: 341 us traced, gate|up ~235 / down ~106 eager split; 43 active 346 / 155; x in DRAM +30 us)
+PHASE_SCAN_ELEMENT_CYCLES = 12.0  # scan_active: tile_elem arithmetic + one volatile 16-bit load + compare per element
+PHASE_SCAN_WORD_CYCLES = 2.5  # scan_active_words: one volatile 32-bit load + OR per word (8 per face row)
+PHASE_CLOCK_GHZ = 1.35
+PHASE_LAUNCH_US = 3.0  # program launch + kernel start + the inter-op gap (0.5-1.5 us of gap in the profiles)
+PHASE_X_LOAD_US = 10.0  # 128 x 2 KB tile reads per core from the L1-interleaved copy, 96 cores convoying (H1)
+PHASE_X_LOAD_DRAM_US = 40.0  # the same from DRAM (measured: 380 vs 351 us gate|up eager, 2026-10-20)
+PHASE_SELECTOR_US = 8.1  # the per-column selector matmul [32, 288] x [288, 72] (hyb profile)
+PHASE_X_COPY_US = 2.3  # to_memory_config DRAM -> L1
+PHASE_GAP_US = 1.0  # one inter-op gap
+PHASE_STREAM_GBS = 376.0  # the two-point fit's marginal rate (tt/roofline.py EXPERT_GBS)
+PHASE_TAIL_US = 8.0  # the last pair's compute + act write after the stream ends (gate|up); output pack + write (down)
+PHASE_DOWN_ACT_US = 1.5  # one act[e] load (8 x 2 KB + barrier), overlapped with the compute after the first
+PHASE_DOWN_FIRST_US = 4.0  # the first expert's block (70 KB at the shared rate) before the down compute starts
+PHASE_RESIDUAL_US = 25.0  # measured 351 (341 traced + the two host ops) minus the modelled phases at 28 active: the
+# column-ramp / pipeline bubbles the two-point fit calls fixed cost; carried unchanged into every variant (conservative)
+
+
+def scan_us(E_local: int, M: int, n_active: int, tiles: int, words: bool) -> float:
+    """The routing scan of one kernel (both data-movement RISCs run it, concurrently; the reader's is the critical
+    one: no weight read is issued before it ends)."""
+    if words:
+        loads = M * tiles * 16  # 8 words x 2 face rows per token row per tile
+        picks_local = 8 * E_local / 288  # a token's picks that land on this chip's experts (~2 of its 8)
+        nonzero_rows = M * min(2 * tiles, picks_local) if n_active else 0  # face rows that need the bit tests
+        decode = nonzero_rows * 8 * 6  # 8 words x ~6 cycles of bit tests per non-zero face row
+        cycles = loads * PHASE_SCAN_WORD_CYCLES + decode
+    else:
+        cycles = ((E_local - n_active) * M + n_active * M / 4) * PHASE_SCAN_ELEMENT_CYCLES
+    return cycles / (PHASE_CLOCK_GHZ * 1e3)
+
+
+def launch_phase_table(
+    T_gathered: int,
+    n_active: int,
+    *,
+    E_local: int = 72,
+    K: int = 4096,
+    I: int = 256,
+    H: int = 4096,
+    w13: str = "bfp8",
+    w2: str = "bfp8",
+    routing_fold: bool = False,
+    scan_words: bool = False,
+    fused: bool = False,
+    x_l1: bool = True,
+    banks: int = 8,
+) -> dict:
+    """Per-phase rows of one block-op launch pair at ``T_gathered`` tokens (M = 32 rows per launch, tile-padded;
+    the 8x4 shape by default). Each row: (phase, bytes, floor_us, modelled_us, bound, action). The modelled column
+    is the host model (nothing measured here); ``total_us`` sums it; the anchors are the 2026-10-20 chip points."""
+    gu, dn = expert_bytes(K, I, H, w13, w2)
+    tiles = (E_local + 31) // 32
+    M = TILE
+    rows = []
+
+    def row(phase, nbytes, floor, model, bound, action):
+        rows.append(dict(phase=phase, bytes=nbytes, floor_us=floor, modelled_us=model, bound=bound, action=action))
+
+    scan_now = scan_us(E_local, M, n_active, tiles, scan_words)
+    scan_today = scan_us(E_local, M, n_active, tiles, False)
+    scan_w = scan_us(E_local, M, n_active, tiles, True)
+    # host ops before the launch
+    if routing_fold:
+        row("selector matmul (host op)", 0, 0.0, 0.0, "folded", "routing_fold: the kernels read the column window")
+        row("x copy DRAM -> L1 (host op)", 0, 0.0, 0.0, "folded", "the gather tilizes straight into L1 (compact)")
+    else:
+        row(
+            "selector matmul (host op)",
+            32 * 288 * 2 + 288 * 72 * 2,
+            0.1,
+            PHASE_SELECTOR_US + PHASE_GAP_US,
+            "launch/gap",
+            "E1 (a): routing_fold",
+        )
+        row(
+            "x copy DRAM -> L1 (host op)",
+            32 * K * 2,
+            0.7,
+            PHASE_X_COPY_US + PHASE_GAP_US,
+            "launch/gap",
+            "E1 (a): tilize into L1",
+        )
+    # gate|up launch
+    row("gate|up launch", 0, 0.0, PHASE_LAUNCH_US, "launch/gap", "E1 (b): one launch (fused)")
+    row("routing read (3 tiles / core)", tiles * 2048, 0.0, 1.0, "latency", "keep")
+    row(
+        "routing scan (NCRISC + BRISC, concurrent)",
+        0,
+        0.0,
+        scan_now,
+        "RISC loop",
+        f"E1 (b): scan_words ({scan_today:.0f} -> {scan_w:.0f} us)" if not scan_words else "scan_words",
+    )
+    row(
+        "x load (128 tiles / core, resident)",
+        32 * K * 2,
+        0.0,
+        PHASE_X_LOAD_US if x_l1 else PHASE_X_LOAD_DRAM_US,
+        "L1/NoC",
+        "keep in L1",
+    )
+    gu_bytes = n_active * gu
+    row(
+        "gate|up weight stream",
+        gu_bytes,
+        floor_us(gu_bytes, DRAM_PEAK_GBS),
+        floor_us(gu_bytes, PHASE_STREAM_GBS),
+        "DRAM",
+        "C12 bfp4 (bytes); the fused form overlaps the down stream",
+    )
+    row("gate|up compute tail + act write", 2048 * banks * n_active, 0.0, PHASE_TAIL_US, "compute/latency", "keep")
+    # down launch
+    row("down launch", 0, 0.0, 0.0 if fused else PHASE_LAUNCH_US, "launch/gap", "E1 (b): fused")
+    row(
+        "down routing read + scan",
+        tiles * 2048,
+        0.0,
+        0.0 if fused else 1.0 + scan_now,
+        "RISC loop",
+        "E1 (b): overlapped in the fused program",
+    )
+    row(
+        "act loads (first; the rest overlap)",
+        n_active * (I // TILE) * 2048,
+        0.0,
+        0.0 if fused else PHASE_DOWN_ACT_US,
+        "latency",
+        "keep",
+    )
+    dn_bytes = n_active * dn
+    dn_stream = floor_us(dn_bytes, PHASE_STREAM_GBS)
+    row(
+        "down weight stream",
+        dn_bytes,
+        floor_us(dn_bytes, DRAM_PEAK_GBS),
+        dn_stream * (0.25 if fused else 1.0),
+        "DRAM",
+        "fused: ~3/4 hidden under the gate|up stream (same DRAM; the exposed part is the last experts')",
+    )
+    row("output write (8 tiles / core)", (H // TILE) * 2048, 0.0, PHASE_TAIL_US, "latency", "keep")
+    row(
+        "column ramp / pipeline bubbles (measured residual)",
+        0,
+        0.0,
+        PHASE_RESIDUAL_US,
+        "launch/gap",
+        "the first column of every core at the shared DRAM rate (~35 us of compute idle) is not additive; the residual is what the fit calls fixed",
+    )
+    total = sum(r["modelled_us"] for r in rows)
+    floor = floor_us(gu_bytes + dn_bytes, DRAM_PEAK_GBS)
+    return dict(T=T_gathered, active=n_active, rows=rows, total_us=total, floor_us=floor, bytes=gu_bytes + dn_bytes)
+
+
+def e1_expected_us(n_active: int = 28, **kw) -> dict:
+    """The E1 ladder at one activity: today / fold / fold + words / fold + words + fused (modelled us per layer)."""
+    out = {}
+    out["today"] = launch_phase_table(32, n_active, **kw)["total_us"]
+    out["fold"] = launch_phase_table(32, n_active, routing_fold=True, **kw)["total_us"]
+    out["fold+words"] = launch_phase_table(32, n_active, routing_fold=True, scan_words=True, **kw)["total_us"]
+    out["fold+words+fused"] = launch_phase_table(32, n_active, routing_fold=True, scan_words=True, fused=True, **kw)[
+        "total_us"
+    ]
+    return out
+
+
 # ---------------------------------------------------------------------------------------------------- EP32 skew
 def active_prob(p: float, tokens: int) -> float:
     """P(an expert with per-token pick probability p is active among ``tokens`` tokens)."""
