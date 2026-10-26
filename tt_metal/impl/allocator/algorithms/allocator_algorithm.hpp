@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <optional>
 #include <vector>
@@ -33,6 +34,29 @@ public:
     DeviceAddr align(DeviceAddr address) const {
         DeviceAddr factor = (address + alignment_ - 1) / alignment_;
         return factor * alignment_;
+    }
+
+    DeviceAddr allocation_size(DeviceAddr size_bytes) const {
+        return align(std::max(size_bytes, min_allocation_size_));
+    }
+
+    // Choose an absolute address in [start, end). Account for both address alignment and reservation size.
+    std::optional<DeviceAddr> find_allocation_address(
+        DeviceAddr start, DeviceAddr end, DeviceAddr size_bytes, bool bottom_up) const {
+        const DeviceAddr size = allocation_size(size_bytes);
+        if (end < start || size > end - start) {
+            return std::nullopt;
+        }
+        if (bottom_up) {
+            const DeviceAddr padding = (alignment_ - start % alignment_) % alignment_;
+            if (padding > end - start - size) {
+                return std::nullopt;
+            }
+            return start + padding;
+        }
+        const DeviceAddr latest_start = end - size;
+        const DeviceAddr address = latest_start - latest_start % alignment_;
+        return address >= start ? std::optional<DeviceAddr>{address} : std::nullopt;
     }
 
     DeviceAddr max_size_bytes() const { return max_size_bytes_; }
