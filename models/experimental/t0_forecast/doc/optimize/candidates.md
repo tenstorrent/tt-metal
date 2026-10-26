@@ -6,10 +6,11 @@ Contract (`/home/andy/avan/fleet/t0-gamma/CONTRACT.md` v1.2):
   accumulation, norms at HiFi4 / fp32). Device time is primary (median of 5 `forward_device` calls, each after a
   0.3 s idle); steady wall time (median of 5 end-to-end calls) is secondary.
 - **Guards** (none may regress by more than 3 %): `long_context-accuracy` (32 x 8192 -> 1024, 288 patches, 32 read
-  out), `multivariate-accuracy` (128 series x 8 variates x 2048 -> 64, group attention over 8 rows),
-  `paper-performance` (bfp8 weights, LoFi).
+  out), `multivariate-accuracy` (128 series x 8 variates x 2048 -> 64, group attention over 8 rows).
+  `paper-performance` (bfp8 weights, LoFi) was a guard until D5 retired the performance precision; its rows below
+  are history, and its bench records are now `experimental_performance`, timing only.
 - **Floor:** the full PCC suite passes in one `pcc` job; target `pcc_normalized` >= 0.999 and `pcc_final` >= 0.99;
-  `performance` guard >= 0.995 / 0.98; module tests >= 0.999; any candidate within 0.0005 of round 0's target
+  (the `performance` guard's 0.995 / 0.98 is retired, D5); module tests >= 0.999; any candidate within 0.0005 of round 0's target
   `pcc_normalized` without an X gate.
 - **Gate metrics (D1)**, on the read-out quantiles in asinh space, every bench record and suite case
   (`tests/helpers.quantile_metrics`): `pcc_normalized`, `pcc_spread` (PCC of `h - mean_q(h)`), `pcc_row_p01` and
@@ -21,7 +22,9 @@ Contract (`/home/andy/avan/fleet/t0-gamma/CONTRACT.md` v1.2):
   row p01 0.002. **Floors in force:** D3 (the above, set at G1) plus D4 (the band floors `pcc_final_spread`,
   `spread_ratio` p01 / p50 / p99 / min per class, single and single_long performance floors, coverage at both
   precisions; drift of the band metrics against the round-2 bench, job 614). All in `tests/helpers.FLOORS` / `DRIFT` /
-  `DRIFT_BAND`, applied by `tests/perf/check_gates.py`.
+  `DRIFT_BAND`, applied by `tests/perf/check_gates.py`. **D5:** the performance precision is retired (its floors
+  gate nothing; check_gates reports its records as INFO); the coverage classes add `spread_ratio_inactive_p01` >= 0.80
+  and `pcc_spread_inactive` >= 0.95 (floor only, NaN = not applicable); a floored metric a record lacks fails.
 - **Precision exceptions (confirmed in D1):** fp32 dest accumulation on every matmul in both precisions (jobs 395,
   398); the patch encoder at HiFi4 (jobs 414, 417); the decoder output and monotone head in fp32 (job 383). Per-role
   sweep for the single-series cases: `iter_00/precision_sweep.json` (job 467), `precision_sweep_realistic.json` (job 475).
@@ -32,7 +35,7 @@ Contract (`/home/andy/avan/fleet/t0-gamma/CONTRACT.md` v1.2):
   after round 2 (-4.5 %).
 - **Commits:** one per accepted change, unsigned, one lowercase line, model paths only (PLAN.md section 7).
 
-Headline: `forward`, `paper`, `accuracy`. Guards: `long_context-accuracy`, `multivariate-accuracy`, `paper-performance`.
+Headline: `forward`, `paper`, `accuracy`. Guards: `long_context-accuracy`, `multivariate-accuracy` (`paper-performance` until D5).
 
 | round | candidate | paper wall ms | paper device ms | vs best | guards (device ms) | PCC (norm / final) | decision | evidence |
 |---|---|---|---|---|---|---|---|---|
