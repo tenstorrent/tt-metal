@@ -11,7 +11,7 @@ The device does not emulate q (agent rule 17): x and h are the tiles the flat op
 (P.12, Marko Staletovic's K3_SE=flat, combine_rf/examples/tt_k3_token_split_moe.py _build_shared_flat; FIX.9 deleted
 the ttnn.linear chain): the slice cut into SE_PARTS always-on "experts" of I/TP / SE_PARTS columns that every own token
 goes to (counts [S/SP] each, regions p S/SP; each part zero-padded to a multiple of 256 columns, the op's
-down-projection K block: 2x2 1152 -> 1280); the weights (W1 | W3 | W2 of the chip's columns, as stored [N, K],
+down-projection K block, and at least 33 tile columns, the op's one-subgrid plan: 2x2 1152 -> 1280, TP 4 576 -> 1280); the weights (W1 | W3 | W2 of the chip's columns, as stored [N, K],
 weights_nk) laid out once at load in the op's bank layout as bfloat8_b (the checkpoint's fp8 width, agent rule 7; bfp8
 rounds e4m3 values more than 3 binades below their 16-value group's largest, measured in tt/perf_shared_expert.py),
 the clamped SwiGLU in the op (limit 10), the routed experts' precision (EXPERTS_PRECISION: glm = LoFi + bfp8 x / h
@@ -52,8 +52,13 @@ TILE = 32
 SE_PARTS = 1
 # the op's down projection runs K in blocks of 8 tiles (se6_dcompute.cpp: static_assert kt_d % 8 == 0), so an expert's
 # intermediate is a multiple of 256: each part is zero-padded to it (2x2: 1152 -> 1280, +11 % work; 4x4 / 8x4 / 2x4:
-# 576 -> 768, +33 %). Zero W1 / W3 rows give h = silu(min(0, 10)) * clamp(0) = 0 there, and zero W2 columns add nothing.
+# 576 -> 1280 by ONE_SUBGRID_MIN below, 2.2x the work). Zero W1 / W3 rows give h = silu(min(0, 10)) * clamp(0) = 0 there, and zero W2 columns add nothing.
 DOWN_K = 256
+# the op plans an expert of <= 32 tile columns on 2 / 3 subgrids (flat_routed_expert_plan.cpp nsg, made for small H),
+# and at H 5120 those have no gate/up split (the weight ring of 2 pairs x 160 K tiles alone fills a core's L1): TT_FATAL
+# "no gate/up split for 24 tile columns" for the 4-column meshes' 576 -> 768 (W.1 port, DS41-115). The padded part is
+# at least 33 tile columns, the op's one-subgrid plan (the one the 2x2 seed's 1280 runs): 576 -> 1280 on TP 4.
+ONE_SUBGRID_MIN = 33 * TILE
 _DONE: dict = {}  # (mesh, down coordinators) -> the flat op's done words, shared by every layer's shared expert
 
 
@@ -99,7 +104,8 @@ class TtSharedExpert:
         P = SE_PARTS
         assert self.ip % (P * TILE) == 0, f"{self.ip} columns in {P} parts"
         self.S, self.P, self.ipart = chunk // R, P, self.ip // P
-        self.ipad = -(-self.ipart // DOWN_K) * DOWN_K  # the part's width in the op (zero-padded)
+        # the part's width in the op (zero-padded): a DOWN_K multiple in the op's one-subgrid range
+        self.ipad = -(-max(self.ipart, ONE_SUBGRID_MIN) // DOWN_K) * DOWN_K
         self.precision = settings.get("EXPERTS_PRECISION")
         assert self.precision in ("full", "glm"), self.precision
         full = self.precision == "full"

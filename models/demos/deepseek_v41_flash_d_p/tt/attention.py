@@ -18,7 +18,7 @@ Chain (one path on every box; nothing on the host per chunk except picking load-
     window KV      all_gather over axis 0 -> [S, 512] bf16 (every chip, natural order); rows at or past actual_end
                    zeroed (iota < end - start, load-time iota); ROW_MAJOR
     cache write    each SP row's rows in the server's order (ttnn.embedding with the load-time index row of
-                   (start mod S) / 32), then ttnn.experimental.deepseek_prefill.update_padded_kv_cache(kv_actual_global=
+                   (start mod S) / 32), then ttnn.bringup.update_padded_kv_cache(kv_actual_global=
                    start, valid_global=end, tp_axis=1): positions [start, end) land at the owner chip, TP-dedup, the
                    last record's pad rows written as zeros
     window carry   positions [start - 128, start) read back from the served cache: the same local rows sliced on every
@@ -246,7 +246,7 @@ class TtWindowCache:
         )
         self.tables.release_srv(idx)
         slab = ttnn.reshape(rows, [1, 1, g.w, self.WIDTH])
-        ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+        ttnn.bringup.update_padded_kv_cache(
             self.slab.tensor,
             slab,
             slot_idx=self.slab.slot,
@@ -323,7 +323,7 @@ class TtWindowCache:
             nat[:m] = rows[a : a + m].float()
             srv = nat[g.server_rows(p0 + a)].reshape(g.sp, 1, g.w, self.WIDTH)
             slab = _upload(self.mesh, srv, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (0, None))
-            ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
+            ttnn.bringup.update_padded_kv_cache(
                 self.slab.tensor,
                 slab,
                 slot_idx=self.slab.slot,

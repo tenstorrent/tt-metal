@@ -155,9 +155,11 @@ def _column_barrier(mesh, core) -> tuple:
     node = lambda ch: mesh.get_fabric_node_id(ttnn.MeshCoordinate(*ch))  # noqa: E731
     v = mesh.worker_core_from_logical_core(cc)
     desc = ttnn.MeshProgramDescriptor()
-    nconn = max(len(p) for p in chips.values())
     for (r, c), ports in chips.items():
         dirs = sorted(ports)  # (the chip's Y directions: a connection each)
+        # one connection per direction the chip has: a column end (1 direction on > 2 rows) must not open a second
+        # connection to the same router channel (the padded duplicate hung the 8x4 column ends, DS41-118)
+        nconn = len(dirs)
         prog = ttnn.ProgramDescriptor()
         prog.cbs = [
             ttnn.CBDescriptor(
@@ -170,11 +172,6 @@ def _column_barrier(mesh, core) -> tuple:
             d = first_hop((r, c), pr, R, C, wrap_x, wrap_y)
             args += [int(node(pr).chip_id), dirs.index(d)]
         for d in dirs:
-            args += list(
-                ttnn.setup_fabric_connection(node((r, c)), node(ports[d]["peer"]), ports[d]["links"][0], prog, cc)
-            )
-        for _ in range(nconn - len(dirs)):  # (a chip with one direction where others have two: unused, repeated)
-            d = dirs[0]
             args += list(
                 ttnn.setup_fabric_connection(node((r, c)), node(ports[d]["peer"]), ports[d]["links"][0], prog, cc)
             )

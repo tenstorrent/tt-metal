@@ -120,8 +120,11 @@ class TtIndexer:
         self.ccl = get_tt_ccl(mesh)
         self.topology = ttnn.Topology.Linear  # FABRIC_2D: no wrap assumed on the SP axis (every box)
         self.num_links = 2 if mesh.arch() == ttnn.Arch.BLACKHOLE else 1
+        # the q work unit divides the chip's query rows (indexer_score: whole q chunks): 64 at the seed's 1280 rows,
+        # 32 at 8x4's 160 (5 tiles; DS41-117)
+        q_chunk = max(q for q in range(32, min(Q_CHUNK, self.sq) + 1, 32) if self.sq % q == 0)
         self.score_cfg = ttnn.bringup.IndexerScoreProgramConfig(
-            q_chunk_size=min(Q_CHUNK, self.sq), k_chunk_size=K_CHUNK, head_group_size=0
+            q_chunk_size=q_chunk, k_chunk_size=K_CHUNK, head_group_size=0
         )
         self.score_ckc = attn_compute_config(mesh)  # the ring score: ATTN_FIDELITY (P.7)
         self._kbuf = {}  # compressed capacity T -> the ring's persistent gathered-key buffer [1, 1, T, hd]
