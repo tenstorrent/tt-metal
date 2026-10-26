@@ -37,6 +37,10 @@ void LayerNormPreAllGatherDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input.layout() == Layout::TILE, "Only tilized inputs supported.");
     TT_FATAL(
+        input.padded_shape()[-1] > 0 && input.padded_shape()[-2] > 0,
+        "Input must have non-zero height and width, got shape {}",
+        input.padded_shape());
+    TT_FATAL(
         input.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Only interleaved inputs supported.");
     TT_FATAL(
         args.memory_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
