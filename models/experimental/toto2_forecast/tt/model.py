@@ -64,6 +64,17 @@ def _pad_time_mask(mask: Tensor, padded_seq: int) -> Tensor:
     return full
 
 
+def _pad_variate_mask(mask: Tensor) -> Tensor:
+    """``(N, 1, V, V)`` -> ``(N, 1, V_pad, V_pad)`` with the pad keys hidden from every query; pad queries see the
+    real keys (their rows are dropped)."""
+    n, _, v, _ = mask.shape
+    vp = pad_to_tile(v)
+    full = torch.zeros(n, 1, vp, vp, dtype=torch.bool)
+    full[..., :v] = True
+    full[..., :v, :v] = mask
+    return full
+
+
 class TtToto2:
     """Device Toto 2.0 (single chip). Weights move host -> device once in ``__init__``."""
 
@@ -72,7 +83,7 @@ class TtToto2:
         self.weights = weights
         self.config = c = weights.config
         self.precision = p = precision or Toto2Precision.accuracy()
-        self._patch_proj = TtResidualMLP(device, weights.patch_proj, p)
+        self._patch_proj = TtResidualMLP(device, weights.patch_proj, p.for_role("embed"))
         self._layers = []
         for lw in weights.layers:
             attn = (TtVariateAttention if lw.is_variate else TtTimeAttention)(device, lw, c, p)
@@ -80,7 +91,11 @@ class TtToto2:
         kinds = [v for v, _, _ in self._layers]
         self._last_time = max(i for i, v in enumerate(kinds) if not v)
         assert all(kinds[self._last_time + 1 :]), "variate layers must follow the last time layer"
-        self._head = TtResidualMLP(device, weights.head, p)
+        import ttnn
+
+        self._head = TtResidualMLP(
+            device, weights.head, p.for_role("head"), out_dtype=ttnn.float32 if p.fp32_head_out else None
+        )
         self._constants: OrderedDict[tuple, object] = OrderedDict()
 
     @classmethod
@@ -119,7 +134,8 @@ class TtToto2:
         tokens = torch.zeros(r, sp, host.tokens.shape[-1])
         tokens[:, :s] = host.tokens
         # Tilizing on device is far cheaper than on the host for large batches.
-        tokens_rm = upload(self.device, tokens.reshape(1, 1, r * sp, -1), layout=ttnn.ROW_MAJOR_LAYOUT)
+        token_dtype = ttnn.float32 if self.precision.fp32_tokens else ttnn.bfloat16
+        tokens_rm = upload(self.device, tokens.reshape(1, 1, r * sp, -1), dtype=token_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         tokens_dev = ttnn.to_layout(tokens_rm, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(tokens_rm)
         owned = [tokens_dev]
@@ -129,8 +145,8 @@ class TtToto2:
             owned.append(time_mask)
         variate_mask = None
         if host.variate_mask is not None:
-            m = host.variate_mask[:, start : start + count]  # (B, count, V, V)
-            variate_mask = self._upload_small_mask(_additive(m.reshape(-1, 1, host.variates, host.variates)))
+            m = host.variate_mask[:, start : start + count].reshape(-1, 1, host.variates, host.variates)
+            variate_mask = upload(self.device, _additive(_pad_variate_mask(m)))
             owned.append(variate_mask)
         cos_q, sin_q, cos_k, sin_k = self._rope_tables(host, sp)
         time = TimeInputs(
@@ -266,13 +282,3 @@ class TtToto2:
             return tuple(out)
 
         return self._constant(("rope", s, padded_seq), make)
-
-    def _upload_small_mask(self, mask: Tensor):
-        """A mask whose last dims are not tile-aligned: the tile padding must be -inf, not 0."""
-        import ttnn
-
-        rows = upload(self.device, mask, layout=ttnn.ROW_MAJOR_LAYOUT)
-        padded = [*mask.shape[:-2], *(pad_to_tile(n) for n in mask.shape[-2:])]
-        out = ttnn.tilize_with_val_padding(rows, padded, float("-inf"), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(rows)
-        return out

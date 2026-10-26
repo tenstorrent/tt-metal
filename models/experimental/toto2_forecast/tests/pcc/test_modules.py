@@ -151,3 +151,49 @@ def test_modules(device, ckpt, case, precision_name):
     assert len([k for k in results if k.startswith("layer_")]) == n_layers
     bad = {k: v for k, v in results.items() if not v >= floor}
     assert not bad, f"below {floor}: {bad}"
+
+
+@pytest.mark.parametrize("variates,masked", [(8, True), (8, False), (4, True)], ids=["v8-mask", "v8-nomask", "v4-mask"])
+def test_variate_attention(device, variates, masked):
+    """The variate attention core (``_across_variates``) against torch SDPA, at V not tile-aligned. A user mask
+    must hide the key axis's tile padding (PLAN section 9, F1): the device pads V to 32 and masks the pad keys."""
+    import ttnn
+
+    from models.experimental.toto2_forecast.tests.golden.folded import FoldedToto2
+    from models.experimental.toto2_forecast.tt.attention import VariateInputs
+    from models.experimental.toto2_forecast.tt.common import upload
+    from models.experimental.toto2_forecast.tt.model import _additive, _pad_variate_mask
+
+    model = _model(device, "22m", "accuracy")
+    attn = model._layers[-1][1]
+    lw = model.weights.layers[-1]
+    d, h = model.config.d_model, model.config.num_heads
+    b, n = 4, 2
+    torch.manual_seed(0)
+    xn = torch.randn(b * variates * n, d)
+    mask = None
+    if masked:
+        ids = torch.zeros(b, variates, dtype=torch.long)
+        ids[1::2, variates // 2 :] = 1
+        ids[2, 0] = -1  # a fully missing patch's group
+        slots = ids[:, None, :].expand(b, n, variates)
+        mask = (slots[..., :, None] == slots[..., None, :]).reshape(b * n, 1, variates, variates)
+    inputs = VariateInputs(
+        batch=b,
+        variates=variates,
+        slots=n,
+        mask=None if mask is None else upload(device, _additive(_pad_variate_mask(mask))),
+    )
+    x_dev = upload(device, xn.reshape(1, 1, -1, d))
+    got = ttnn.to_torch(attn._across_variates(x_dev, inputs)).float().reshape(b, variates, n, d)
+
+    qkv = torch.nn.functional.linear(xn, lw.w_qkv, lw.b_qkv).reshape(b, variates, n, 3 * d).transpose(1, 2)
+    qkv = qkv.reshape(b * n, variates, 3 * d)
+    q, k, v = (FoldedToto2._heads(FoldedToto2(model.weights), qkv[..., i * d : (i + 1) * d]) for i in range(3))
+    ref = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=mask, scale=1.0 / 64)
+    ref = ref.transpose(1, 2).reshape(b, n, variates, d).transpose(1, 2)
+    # PCC is blind to a uniform shrink (pad keys in the softmax scale every output down), so gate the relative error.
+    rel = ((got - ref).norm() / ref.norm()).item()
+    p = pcc(got, ref)
+    print(f"\n[VARIATE] V={variates} mask={masked}: pcc {p:.6f} rel err {rel:.2e} |ref| max {ref.abs().max():.1f}")
+    assert p >= 0.9995 and rel < 0.02, (p, rel)

@@ -78,6 +78,8 @@ class Case:
     capture: str = "all"  # all | some (layers 0, 1, L/2, L-2, L-1) | head (scaler, head, q only)
     seed: int = 0
     chunk: int = 0  # items per chunk; 0 = one call
+    mix: str = "smooth"  # smooth (trend + sinusoid + noise, the unit-test goldens) | realistic (``REALISTIC``)
+    kind: str = ""  # realistic only: force one series kind for every row ("" = draw from the mix)
 
 
 SMALL = (
@@ -86,22 +88,36 @@ SMALL = (
     Case("mv_2x4x2048", 2, 4, 2048, 64, pattern="missing", series_ids="mixed", seed=2),
     Case("long_2x8192", 2, 1, 8192, 1024, seed=3),
 )
+# Single-series cases in the realistic mix (PLAN section 9: a per-row offset cannot carry their PCC).
+SINGLE = (
+    Case("single_rw_1x2048", 1, 1, 2048, 64, capture="some", seed=300, mix="realistic", kind="rw_seasonal"),
+    Case("single_sparse_1x2048", 1, 1, 2048, 64, capture="head", seed=301, mix="realistic", kind="intermittent"),
+    Case("single_shift_1x2048", 1, 1, 2048, 64, capture="head", seed=302, mix="realistic", kind="level_shift"),
+    Case("single_long_rw_1x8192", 1, 1, 8192, 1024, capture="head", seed=303, mix="realistic", kind="rw_seasonal"),
+)
 CASES = {
     "4m": SMALL,
-    "22m": SMALL,
+    "22m": SMALL + SINGLE,
     "313m": (
         Case("uni_16x2048", 16, 1, 2048, 64, capture="some", seed=10),
         Case("missing_16x2048", 16, 1, 2048, 64, pattern="missing", capture="some", seed=11),
         Case("mv_4x8x2048", 4, 8, 2048, 64, capture="some", seed=12),
+        # Smooth-mix bench input (round 0 before PLAN v1.1); kept for the collapsed-output comparison.
         Case("paper_1024x2048", 1024, 1, 2048, 64, capture="head", seed=100, chunk=64),
+        *SINGLE,
+        Case("paper_mix_1024x2048", 1024, 1, 2048, 64, capture="head", seed=110, chunk=64, mix="realistic"),
     ),
     "2.5B-FT": (
         Case("uni_16x2048", 16, 1, 2048, 64, capture="some", seed=10),
         Case("mv_4x8x2048", 4, 8, 2048, 64, capture="some", seed=12),
         Case("missing_16x2048", 16, 1, 2048, 64, pattern="missing", capture="head", seed=11),
+        # Smooth-mix bench inputs (round 0 before PLAN v1.1); kept for the collapsed-output comparison.
         Case("paper_1024x2048", 1024, 1, 2048, 64, capture="head", seed=100, chunk=64),
         Case("long_context_32x8192", 32, 1, 8192, 1024, capture="head", seed=101, chunk=8),
-        Case("multivariate_128x8x2048", 128, 8, 2048, 64, capture="head", seed=102, chunk=8),
+        *SINGLE,
+        Case("long_context_mix_32x8192", 32, 1, 8192, 1024, capture="head", seed=111, chunk=8, mix="realistic"),
+        Case("paper_mix_1024x2048", 1024, 1, 2048, 64, capture="head", seed=110, chunk=64, mix="realistic"),
+        Case("multivariate_mix_128x8x2048", 128, 8, 2048, 64, capture="head", seed=112, chunk=8, mix="realistic"),
     ),
 }
 # The GluonTS end-to-end case (stage E): Toto2GluonTSModel, context_length 4096, 64 series, ffill, left zero padding.
@@ -112,21 +128,98 @@ GENERATOR = (
     "P in {24,48,96,168}, + N(0, U(0.5,3)) noise; numpy default_rng(seed), rows drawn in (item, variate) order. "
     "pattern 'missing' (row r, r % 5): 0 clean; 1 ten scattered NaN; 2 NaN over t in [640,704) (two fully missing "
     "patches) plus scattered; 3 the first 90 steps NaN (backfill: patch 2 has 6 observations); 4 NaN in the last "
-    "context patch [T-20,T-10) plus a fully missing patch at [1024,1056). NaN -> mask False, value 0."
+    "context patch [T-20,T-10) plus a fully missing patch at [1024,1056). NaN -> mask False, value 0. "
+    "mix 'realistic' (the bench, single-series and GluonTS goldens, PLAN section 9): per row a kind drawn from "
+    "REALISTIC (rw_seasonal 0.35, intermittent 0.15, level_shift 0.15, multi_seasonal 0.15, smooth_trend 0.10, "
+    "spiky 0.10) unless the case forces one; level 10^U(-2,4), negative for 20 % of rows, unit |level| * U(0.05,0.5); "
+    "random-walk, seasonal and level-shift kinds add Gaussian noise at SNR ~ 1 (std x U(0.7,1.4)); intermittent = "
+    "Bernoulli(U(0.02,0.3)) x Poisson(U(1,20)); multivariate items mix a shared latent series (weight U(0.3,0.9)) "
+    "into each variate. See _realistic() for the exact draws; seeds per case below."
 )
+
+
+# The realistic mix (PLAN section 9, v1.1): kind -> weight.
+REALISTIC = {
+    "rw_seasonal": 0.35,  # random walk + one seasonality + noise at SNR ~ 1
+    "intermittent": 0.15,  # sparse counts: mostly zeros, Poisson bursts
+    "level_shift": 0.15,  # piecewise-constant level with 1-4 shifts, noise, weak seasonality
+    "multi_seasonal": 0.15,  # daily + weekly seasonality, noise at SNR ~ 1
+    "smooth_trend": 0.10,  # the smooth trend + sinusoid of the unit-test goldens
+    "spiky": 0.10,  # heavy-tailed (Student-t) noise and rare spikes on a seasonal base
+}
+
+
+def _smooth(rng, t: int) -> np.ndarray:
+    steps = np.arange(t)
+    level, trend = rng.uniform(10, 500), rng.uniform(-0.05, 0.2)
+    amp, period, phase = rng.uniform(1, 30), rng.choice([24, 48, 96, 168]), rng.uniform(0, 2 * np.pi)
+    return level + trend * steps + amp * np.sin(2 * np.pi * steps / period + phase) + rng.normal(0, rng.uniform(0.5, 3.0), t)
+
+
+def _seasonal(rng, t: int, periods) -> np.ndarray:
+    steps = np.arange(t)
+    return sum(
+        rng.uniform(0.3, 1.0) * np.sin(2 * np.pi * steps / p + rng.uniform(0, 2 * np.pi)) for p in periods
+    )
+
+
+def _realistic(rng, t: int, kind: str) -> np.ndarray:
+    """One series of ``kind`` with a log-uniform level (1e-2 .. 1e4) and a random sign for 20 % of the rows."""
+    level = 10 ** rng.uniform(-2, 4) * (-1 if rng.random() < 0.2 else 1)
+    unit = abs(level) * rng.uniform(0.05, 0.5)
+    if kind == "smooth_trend":
+        return _smooth(rng, t)
+    if kind == "intermittent":
+        active = rng.random(t) < rng.uniform(0.02, 0.3)
+        return active * rng.poisson(rng.uniform(1, 20), t).astype(np.float64)
+    if kind == "rw_seasonal":
+        signal = np.cumsum(rng.normal(0, rng.uniform(0.02, 0.1), t)) + _seasonal(rng, t, [rng.choice([12, 24, 48, 96, 168])])
+    elif kind == "multi_seasonal":
+        signal = _seasonal(rng, t, [24, 168]) + np.cumsum(rng.normal(0, 0.01, t))
+    elif kind == "level_shift":
+        signal = np.zeros(t)
+        for at in np.sort(rng.choice(np.arange(t // 8, t), rng.integers(1, 5), replace=False)):
+            signal[at:] += rng.normal(0, 2.0)
+        signal += 0.2 * _seasonal(rng, t, [24])
+    elif kind == "spiky":
+        signal = _seasonal(rng, t, [24]) + 0.3 * rng.standard_t(rng.uniform(2, 3), t)
+        spikes = rng.random(t) < 0.005
+        signal[spikes] += rng.choice([-1, 1], spikes.sum()) * rng.uniform(5, 15, spikes.sum())
+        return level + unit * signal
+    else:
+        raise ValueError(kind)
+    noise = rng.normal(0, signal.std() * rng.uniform(0.7, 1.4) + 1e-3, t)  # SNR ~ 1
+    return level + unit * (signal + noise)
+
+
+def _realistic_rows(rng, case: Case) -> np.ndarray:
+    """(B * V, T): each item's variates share a latent series (weight 0.3-0.9) plus their own series."""
+    kinds, weights = list(REALISTIC), np.array(list(REALISTIC.values()))
+    t = case.context
+    out = np.empty((case.batch * case.variates, t))
+    for b in range(case.batch):
+        pick = lambda: case.kind or kinds[rng.choice(len(kinds), p=weights / weights.sum())]
+        shared = _realistic(rng, t, pick()) if case.variates > 1 else None
+        for v in range(case.variates):
+            own = _realistic(rng, t, pick())
+            if shared is None:
+                out[b * case.variates + v] = own
+            else:
+                w = rng.uniform(0.3, 0.9)
+                out[b * case.variates + v] = w * shared + (1 - w) * own
+    return out
 
 
 def make_series(case: Case) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """``(target, target_mask, series_ids)``: (B, V, T) float32 with NaN replaced by 0, bool, (B, V) long."""
     rng = np.random.default_rng(case.seed)
     rows, t = case.batch * case.variates, case.context
-    steps = np.arange(t)
-    data = np.empty((rows, t), dtype=np.float64)
-    for r in range(rows):
-        level, trend = rng.uniform(10, 500), rng.uniform(-0.05, 0.2)
-        amp, period, phase = rng.uniform(1, 30), rng.choice([24, 48, 96, 168]), rng.uniform(0, 2 * np.pi)
-        noise = rng.uniform(0.5, 3.0)
-        data[r] = level + trend * steps + amp * np.sin(2 * np.pi * steps / period + phase) + rng.normal(0, noise, t)
+    if case.mix == "realistic":
+        data = _realistic_rows(rng, case)
+    else:
+        data = np.empty((rows, t), dtype=np.float64)
+        for r in range(rows):
+            data[r] = _smooth(rng, t)
     if case.pattern == "missing":
         for r in range(rows):
             kind = r % 5
@@ -277,15 +370,11 @@ def run_gluonts(model, spec: dict, out_path: Path) -> dict:
     rng = np.random.default_rng(spec["seed"])
     n, ctx, h = spec["series"], spec["context_length"], spec["horizon"]
     series = []
+    kinds, weights = list(REALISTIC), np.array(list(REALISTIC.values()))
     for i in range(n):
         length = 5000 if i % 4 else int(rng.integers(300, ctx))
-        t = np.arange(length)
-        x = (
-            rng.uniform(10, 500)
-            + rng.uniform(-0.05, 0.2) * t
-            + rng.uniform(1, 30) * np.sin(2 * np.pi * t / rng.choice([24, 48, 96, 168]) + rng.uniform(0, 2 * np.pi))
-            + rng.normal(0, rng.uniform(0.5, 3.0), length)
-        ).astype(np.float32)
+        kind = kinds[rng.choice(len(kinds), p=weights / weights.sum())]
+        x = _realistic(rng, length, kind).astype(np.float32)
         if i % 3 == 1:
             x[rng.choice(length, 12, replace=False)] = np.nan
         if i % 7 == 2:
@@ -368,6 +457,15 @@ def pip_freeze() -> list[str]:
 
 
 def update_manifest(ckpt: str, snapshot: Path, entries: dict):
+    """Read-modify-write under an exclusive lock: several golden jobs may run at once."""
+    import fcntl
+
+    with open(MANIFEST.with_suffix(".lock"), "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _update_manifest(ckpt, snapshot, entries)
+
+
+def _update_manifest(ckpt: str, snapshot: Path, entries: dict):
     manifest = json.loads(MANIFEST.read_text()) if MANIFEST.is_file() else {}
     manifest.update(
         {

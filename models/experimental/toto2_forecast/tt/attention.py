@@ -17,7 +17,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from models.experimental.toto2_forecast.tt.common import (
+    TILE,
     Toto2Precision,
+    pad_to_tile,
     linear,
     rms_norm,
     scaled_residual,
@@ -53,7 +55,7 @@ class VariateInputs:
     batch: int  # B
     variates: int  # V
     slots: int  # token slots per row at the variate layer
-    mask: object | None  # (B * slots, 1, V, V) additive, -inf in the tile padding; None = all variates visible
+    mask: object | None  # (B * slots, 1, V_pad, V_pad) additive, pad keys -inf; None = all variates visible
 
 
 class TtTimeAttention:
@@ -162,6 +164,10 @@ class TtVariateAttention:
         return y
 
     def _across_variates(self, xn, inputs: VariateInputs):
+        """SDPA over the V variates of each (item, token slot). With a series-id mask the variate axis is padded
+        to a whole tile with zero rows and the mask covers all 32 keys (pad keys -inf): SDPA with a user mask
+        does not mask the tile padding of a key axis that is not tile-aligned (PLAN section 9, F1). Without a
+        mask SDPA pads the logical V keys itself."""
         import ttnn
 
         p = self.precision
@@ -173,9 +179,19 @@ class TtVariateAttention:
         )
         ttnn.deallocate(qkv)
         blocks = ttnn.reshape(slot_major, (b * n, 1, v, width))
-        if inputs.mask is not None:
-            # The reshape leaves stale rows in the tile padding; with a user mask SDPA reads those key rows.
-            blocks = ttnn.fill_implicit_tile_padding(blocks, 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        padded = inputs.mask is not None and v % TILE != 0
+        if padded:
+            zeros = ttnn.zeros(
+                (b * n, 1, pad_to_tile(v) - v, width),
+                dtype=blocks.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            whole = ttnn.concat([blocks, zeros], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(zeros)
+            ttnn.deallocate(slot_major)
+            blocks = whole
         q, k, vv = ttnn.experimental.nlp_create_qkv_heads(
             blocks,
             num_heads=self.num_heads,
@@ -198,8 +214,11 @@ class TtVariateAttention:
             ttnn.deallocate(t)
         merged = ttnn.experimental.nlp_concat_heads(ctx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(ctx)
-        row_major = ttnn.permute(
-            ttnn.reshape(merged, (b, n, v, merged.shape[-1])), (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        d = merged.shape[-1]
+        if padded:
+            real = ttnn.slice(merged, (0, 0, 0, 0), (b * n, 1, v, d), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(merged)
+            merged = real
+        row_major = ttnn.permute(ttnn.reshape(merged, (b, n, v, d)), (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(merged)
-        return ttnn.reshape(row_major, (1, 1, b * v * n, row_major.shape[-1]))
+        return ttnn.reshape(row_major, (1, 1, b * v * n, d))

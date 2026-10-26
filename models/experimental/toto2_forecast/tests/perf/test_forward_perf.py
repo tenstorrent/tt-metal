@@ -10,13 +10,18 @@ Shapes (CONTRACT sections 1-2), parametrized ``<shape>-<precision>``:
     paper_313m    313m, 1024 x 2048 -> 64                                                       guard
     paper / performance                                                                         guard
 
-Inputs and CPU reference outputs come from the goldens (``tests/golden/make_goldens.py``, run in the reference
-venv); ``cpu_s`` is the reference ``forecast`` time recorded there (8 threads).
+Inputs and CPU reference outputs come from the realistic-mix goldens (``tests/golden/make_goldens.py``, run in the
+reference venv; PLAN section 9); ``cpu_s`` is the reference ``forecast`` time recorded there (8 threads).
 
 Per record: ``cold_s`` (first call, compile included), ``steady_s`` (median of 5 end-to-end ``forecast`` calls),
 the host / device split (medians of 5: ``prepare_s``, ``upload_s``, ``device_s`` after a 0.3 s idle,
-``postprocess_s``), ``pcc_normalized`` (head output in asinh space vs the hook on ``m.output_head``) and
-``pcc_final`` (quantiles), ``chip`` ($TTQ_CHIP_SERIAL). ``MODEL_PERF_JSON=<path>`` appends the records to a list.
+``postprocess_s``), the gate metrics of ``goldens.gate_metrics`` (``pcc_normalized``: head output in asinh space vs
+the hook on ``m.output_head``; ``pcc_spread``; ``pcc_row_p01`` / ``pcc_row_min``; ``pcc_final``: quantiles;
+``pcc_final_spread``; ``abs_err_max``), ``chip`` ($TTQ_CHIP_SERIAL). ``MODEL_PERF_JSON=<path>`` appends the records.
+
+Screening (skill section 5.2): ``BENCH_LAYERS=<L>`` keeps time layers 0 .. L-3, the last time layer and the variate
+layer (L layers). Device time then compares candidates at the same depth; the gate metrics are meaningless there
+and the floors are not asserted. ``BENCH_CASES=paper_313m-accuracy,...`` picks cases.
 """
 
 from __future__ import annotations
@@ -31,7 +36,13 @@ from pathlib import Path
 
 import pytest
 
-from models.experimental.toto2_forecast.tests.golden.goldens import have_golden, load_golden, pcc
+from models.experimental.toto2_forecast.tests.golden.goldens import (
+    below_floors,
+    floors_for,
+    gate_metrics,
+    have_golden,
+    load_golden,
+)
 
 # One device per module, so a loaded model (2.5B: about a minute) serves every case that uses it.
 pytestmark = pytest.mark.use_module_device
@@ -52,10 +63,10 @@ class Shape:
 SHAPES = {
     s.name: s
     for s in (
-        Shape("paper", "2.5B-FT", "paper_1024x2048"),
-        Shape("long_context", "2.5B-FT", "long_context_32x8192"),
-        Shape("multivariate", "2.5B-FT", "multivariate_128x8x2048"),
-        Shape("paper_313m", "313m", "paper_1024x2048"),
+        Shape("paper", "2.5B-FT", "paper_mix_1024x2048"),
+        Shape("long_context", "2.5B-FT", "long_context_mix_32x8192"),
+        Shape("multivariate", "2.5B-FT", "multivariate_mix_128x8x2048"),
+        Shape("paper_313m", "313m", "paper_mix_1024x2048"),
     )
 }
 # One model per process at a time, so 2.5B holds one precision's weights.
@@ -66,6 +77,9 @@ CASES = [
     ("paper", "performance"),
     ("paper_313m", "accuracy"),
 ]
+BENCH_LAYERS = int(os.environ.get("BENCH_LAYERS", "0"))
+if os.environ.get("BENCH_CASES"):
+    CASES = [tuple(c.rsplit("-", 1)) for c in os.environ["BENCH_CASES"].split(",")]
 FLOORS = {"accuracy": (0.999, 0.99), "performance": (0.995, 0.98)}
 _MODEL: dict = {}
 
@@ -95,7 +109,17 @@ def tt_model(device, checkpoint: str, precision_name: str):
     if key not in _MODEL:
         _MODEL.clear()
         gc.collect()
-        _MODEL[key] = TtToto2.from_checkpoint(device, checkpoint, Toto2Precision.named(precision_name))
+        precision = Toto2Precision.named(precision_name)
+        if BENCH_LAYERS:
+            from models.experimental.toto2_forecast.tt.weights import Toto2Weights
+
+            weights = Toto2Weights.from_checkpoint(checkpoint)
+            n = weights.config.num_layers
+            keep = [*range(BENCH_LAYERS - 2), n - 2, n - 1]
+            assert [weights.layers[i].is_variate for i in keep[-2:]] == [False, True], "layout: ... time, variate"
+            _MODEL[key] = TtToto2(device, weights.reduced(keep), precision)
+        else:
+            _MODEL[key] = TtToto2.from_checkpoint(device, checkpoint, precision)
     return _MODEL[key]
 
 
@@ -145,7 +169,8 @@ def test_forward_perf(device, shape_name, precision_name):
     prepare_s, upload_s, device_s, postprocess_s = (statistics.median(col) for col in zip(*splits))
 
     cap = golden["captures"]
-    pcc_normalized, pcc_final = pcc(head, cap["head_out"]), pcc(q, cap["q"])
+    metrics = gate_metrics(head, q, cap["head_out"], cap["q"])
+    pcc_normalized, pcc_final = metrics["pcc_normalized"], metrics["pcc_final"]
     b, v, t = i["target"].shape
     record = {
         "test": "forward",
@@ -166,11 +191,11 @@ def test_forward_perf(device, shape_name, precision_name):
         "device_s": device_s,
         "postprocess_s": postprocess_s,
         "split_runs": [dict(zip(("prepare_s", "upload_s", "device_s", "postprocess_s"), s)) for s in splits],
-        "pcc_normalized": pcc_normalized,
-        "pcc_final": pcc_final,
+        **metrics,
         "cpu_s": golden["cpu_s"],
         "cpu_threads": golden.get("threads"),
         "chip": os.environ.get("TTQ_CHIP_SERIAL"),
+        "bench_layers": BENCH_LAYERS or None,
     }
     print(
         f"\n[PERF] forward {shape.name} / {precision_name} ({shape.checkpoint})"
@@ -179,8 +204,12 @@ def test_forward_perf(device, shape_name, precision_name):
         f"\n  cold_s {cold_s:.3f}  steady_s {record['steady_s']:.3f}  ({', '.join(f'{s:.3f}' for s in steady)})"
         f"\n  split: prepare {prepare_s:.3f}  upload {upload_s:.3f}  device {device_s:.3f}  postprocess {postprocess_s:.3f}"
         f"\n  cpu_s {golden['cpu_s']:.1f} ({golden.get('threads')} threads)  speedup {golden['cpu_s'] / record['steady_s']:.1f}x"
-        f"\n  pcc_normalized {pcc_normalized:.6f}  pcc_final {pcc_final:.6f}"
+        f"\n  " + "  ".join(f"{k} {v:.6f}" for k, v in metrics.items())
     )
+    record["below_floors"] = below_floors(metrics, floors_for(shape.checkpoint, precision_name))
     _record(record)
+    if BENCH_LAYERS:
+        return
+    # The bench records every metric and asserts only the contract floors; the suite asserts the others.
     floor_n, floor_f = FLOORS[precision_name]
     assert pcc_normalized >= floor_n and pcc_final >= floor_f, (pcc_normalized, pcc_final)

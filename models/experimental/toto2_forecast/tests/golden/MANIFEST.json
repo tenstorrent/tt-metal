@@ -85,7 +85,7 @@
       "quantile_real_cap_k": 10000.0
     }
   },
-  "input_generator": "per row: level U(10,500) + trend U(-0.05,0.2)*t + amplitude U(1,30)*sin(2*pi*t/P + phase U(0,2pi)), P in {24,48,96,168}, + N(0, U(0.5,3)) noise; numpy default_rng(seed), rows drawn in (item, variate) order. pattern 'missing' (row r, r % 5): 0 clean; 1 ten scattered NaN; 2 NaN over t in [640,704) (two fully missing patches) plus scattered; 3 the first 90 steps NaN (backfill: patch 2 has 6 observations); 4 NaN in the last context patch [T-20,T-10) plus a fully missing patch at [1024,1056). NaN -> mask False, value 0.",
+  "input_generator": "per row: level U(10,500) + trend U(-0.05,0.2)*t + amplitude U(1,30)*sin(2*pi*t/P + phase U(0,2pi)), P in {24,48,96,168}, + N(0, U(0.5,3)) noise; numpy default_rng(seed), rows drawn in (item, variate) order. pattern 'missing' (row r, r % 5): 0 clean; 1 ten scattered NaN; 2 NaN over t in [640,704) (two fully missing patches) plus scattered; 3 the first 90 steps NaN (backfill: patch 2 has 6 observations); 4 NaN in the last context patch [T-20,T-10) plus a fully missing patch at [1024,1056). NaN -> mask False, value 0. mix 'realistic' (the bench, single-series and GluonTS goldens, PLAN section 9): per row a kind drawn from REALISTIC (rw_seasonal 0.35, intermittent 0.15, level_shift 0.15, multi_seasonal 0.15, smooth_trend 0.10, spiky 0.10) unless the case forces one; level 10^U(-2,4), negative for 20 % of rows, unit |level| * U(0.05,0.5); random-walk, seasonal and level-shift kinds add Gaussian noise at SNR ~ 1 (std x U(0.7,1.4)); intermittent = Bernoulli(U(0.02,0.3)) x Poisson(U(1,20)); multivariate items mix a shared latent series (weight U(0.3,0.9)) into each variate. See _realistic() for the exact draws; seeds per case below.",
   "golden_dir": "/home/andy/bringup/goldens/toto2",
   "checkpoints": {
     "4m": {
@@ -847,7 +847,9 @@
         "series_ids": "shared",
         "capture": "all",
         "seed": 0,
-        "chunk": 0
+        "chunk": 0,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 0.12092836294323206,
       "shapes": {
@@ -965,7 +967,9 @@
         "series_ids": "shared",
         "capture": "all",
         "seed": 1,
-        "chunk": 0
+        "chunk": 0,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 0.12736685201525688,
       "shapes": {
@@ -1083,7 +1087,9 @@
         "series_ids": "mixed",
         "capture": "all",
         "seed": 2,
-        "chunk": 0
+        "chunk": 0,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 0.15598174137994647,
       "shapes": {
@@ -1201,7 +1207,9 @@
         "series_ids": "shared",
         "capture": "all",
         "seed": 3,
-        "chunk": 0
+        "chunk": 0,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 0.1745511400513351,
       "shapes": {
@@ -1319,7 +1327,9 @@
         "series_ids": "shared",
         "capture": "some",
         "seed": 10,
-        "chunk": 0
+        "chunk": 0,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 4.327771528158337,
       "shapes": {
@@ -1432,7 +1442,9 @@
         "series_ids": "shared",
         "capture": "some",
         "seed": 11,
-        "chunk": 0
+        "chunk": 0,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 5.456377179827541,
       "shapes": {
@@ -1545,7 +1557,9 @@
         "series_ids": "shared",
         "capture": "some",
         "seed": 12,
-        "chunk": 0
+        "chunk": 0,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 10.221310558728874,
       "shapes": {
@@ -1658,7 +1672,9 @@
         "series_ids": "shared",
         "capture": "head",
         "seed": 100,
-        "chunk": 64
+        "chunk": 64,
+        "mix": "smooth",
+        "kind": ""
       },
       "cpu_s": 355.74484746996313,
       "shapes": {
@@ -1816,6 +1832,1189 @@
           32,
           1,
           1024
+        ]
+      }
+    },
+    "2.5B-FT/single_rw_1x2048.pt": {
+      "sha256": "bd04bfb542535d7cd437c8fbfa9adcc6d02413dee5be555e1d06b02ea2921e0a",
+      "bytes": 3841361,
+      "case": {
+        "name": "single_rw_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 300,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "rw_seasonal"
+      },
+      "cpu_s": 14.495672420132905,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "tokens_context": [
+          1,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          1,
+          1,
+          64,
+          2048
+        ],
+        "tokens_horizon": [
+          1,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          1,
+          1,
+          2,
+          2048
+        ],
+        "layer_0": [
+          1,
+          66,
+          2048
+        ],
+        "layer_1": [
+          1,
+          66,
+          2048
+        ],
+        "layer_24": [
+          1,
+          66,
+          2048
+        ],
+        "layer_46": [
+          1,
+          66,
+          2048
+        ],
+        "layer_47": [
+          66,
+          1,
+          2048
+        ],
+        "out_norm": [
+          1,
+          1,
+          66,
+          2048
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/single_sparse_1x2048.pt": {
+      "sha256": "fbbb37107dffb9cbfc2b86f4a4d88ccebe20b09c10eba141b134fb4516932e42",
+      "bytes": 36949,
+      "case": {
+        "name": "single_sparse_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 301,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "intermittent"
+      },
+      "cpu_s": 14.694550347980112,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/single_shift_1x2048.pt": {
+      "sha256": "dea969b5882eecb5ef3d872fafd36afa97ead3035c811f045245b6821f08bb6a",
+      "bytes": 36933,
+      "case": {
+        "name": "single_shift_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 302,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "level_shift"
+      },
+      "cpu_s": 12.261349981185049,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/single_long_rw_1x8192.pt": {
+      "sha256": "c86b78392cd7aa9c1128a9fb407a73bd7897c561065bac16b759cc42ba99c70a",
+      "bytes": 386213,
+      "case": {
+        "name": "single_long_rw_1x8192",
+        "batch": 1,
+        "variates": 1,
+        "context": 8192,
+        "horizon": 1024,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 303,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "rw_seasonal"
+      },
+      "cpu_s": 20.418751833960414,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          288
+        ],
+        "scale": [
+          1,
+          1,
+          288
+        ],
+        "loc_bf": [
+          1,
+          1,
+          288
+        ],
+        "scale_bf": [
+          1,
+          1,
+          288
+        ],
+        "head_in": [
+          1,
+          1,
+          32,
+          2048
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          32,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          1024
+        ]
+      }
+    },
+    "2.5B-FT/long_context_mix_32x8192.pt": {
+      "sha256": "81c028a463af7b8ff4789d77ddddea223bf3311abc448dbd728a58b09a1b1e0b",
+      "bytes": 12211221,
+      "case": {
+        "name": "long_context_mix_32x8192",
+        "batch": 32,
+        "variates": 1,
+        "context": 8192,
+        "horizon": 1024,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 111,
+        "chunk": 8,
+        "mix": "realistic",
+        "kind": ""
+      },
+      "cpu_s": 474.6615915368311,
+      "shapes": {
+        "loc": [
+          32,
+          1,
+          288
+        ],
+        "scale": [
+          32,
+          1,
+          288
+        ],
+        "loc_bf": [
+          32,
+          1,
+          288
+        ],
+        "scale_bf": [
+          32,
+          1,
+          288
+        ],
+        "head_in": [
+          32,
+          1,
+          32,
+          2048
+        ],
+        "head_out": [
+          9,
+          32,
+          1,
+          32,
+          32
+        ],
+        "q": [
+          9,
+          32,
+          1,
+          1024
+        ]
+      }
+    },
+    "22m/single_rw_1x2048.pt": {
+      "sha256": "76f5298952074d6fc96ed6021c990e929dd9bd1c0a6fafb8ac81b5088b338c68",
+      "bytes": 990481,
+      "case": {
+        "name": "single_rw_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 300,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "rw_seasonal"
+      },
+      "cpu_s": 0.1019986430183053,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "tokens_context": [
+          1,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          1,
+          1,
+          64,
+          512
+        ],
+        "tokens_horizon": [
+          1,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          1,
+          1,
+          2,
+          512
+        ],
+        "layer_0": [
+          1,
+          66,
+          512
+        ],
+        "layer_1": [
+          1,
+          66,
+          512
+        ],
+        "layer_3": [
+          1,
+          66,
+          512
+        ],
+        "layer_4": [
+          1,
+          66,
+          512
+        ],
+        "layer_5": [
+          66,
+          1,
+          512
+        ],
+        "out_norm": [
+          1,
+          1,
+          66,
+          512
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          512
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "22m/single_sparse_1x2048.pt": {
+      "sha256": "a97544a615e77690d4e77fdd1ab50988ff51c1ac959277b0118c138ce68e9356",
+      "bytes": 24661,
+      "case": {
+        "name": "single_sparse_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 301,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "intermittent"
+      },
+      "cpu_s": 0.07492657471448183,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          512
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "22m/single_shift_1x2048.pt": {
+      "sha256": "405e387d3a23bce34cbc0319ac3a3941bdd25d92a5b2056e62b5035c1a7210c1",
+      "bytes": 24645,
+      "case": {
+        "name": "single_shift_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 302,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "level_shift"
+      },
+      "cpu_s": 0.07024905225262046,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          512
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "22m/single_long_rw_1x8192.pt": {
+      "sha256": "73a6d274b2823bad959704d5c9394b36c896612d0ead964f59711b3f5b4ce015",
+      "bytes": 189605,
+      "case": {
+        "name": "single_long_rw_1x8192",
+        "batch": 1,
+        "variates": 1,
+        "context": 8192,
+        "horizon": 1024,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 303,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "rw_seasonal"
+      },
+      "cpu_s": 0.1389626250602305,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          288
+        ],
+        "scale": [
+          1,
+          1,
+          288
+        ],
+        "loc_bf": [
+          1,
+          1,
+          288
+        ],
+        "scale_bf": [
+          1,
+          1,
+          288
+        ],
+        "head_in": [
+          1,
+          1,
+          32,
+          512
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          32,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          1024
+        ]
+      }
+    },
+    "313m/single_rw_1x2048.pt": {
+      "sha256": "d8a8b94203fb7e1f79d69c410f48debb2f4bd2311276a2d2989986b0486e5736",
+      "bytes": 1940817,
+      "case": {
+        "name": "single_rw_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "some",
+        "seed": 300,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "rw_seasonal"
+      },
+      "cpu_s": 1.4624097510240972,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "tokens_context": [
+          1,
+          1,
+          64,
+          64
+        ],
+        "embed_context": [
+          1,
+          1,
+          64,
+          1024
+        ],
+        "tokens_horizon": [
+          1,
+          1,
+          2,
+          64
+        ],
+        "embed_horizon": [
+          1,
+          1,
+          2,
+          1024
+        ],
+        "layer_0": [
+          1,
+          66,
+          1024
+        ],
+        "layer_1": [
+          1,
+          66,
+          1024
+        ],
+        "layer_12": [
+          1,
+          66,
+          1024
+        ],
+        "layer_22": [
+          1,
+          66,
+          1024
+        ],
+        "layer_23": [
+          66,
+          1,
+          1024
+        ],
+        "out_norm": [
+          1,
+          1,
+          66,
+          1024
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "313m/single_sparse_1x2048.pt": {
+      "sha256": "f52b669d6f321f63ac9ab4d61ff84fdde4f8780a30d67530d71bc3785471adc8",
+      "bytes": 28757,
+      "case": {
+        "name": "single_sparse_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 301,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "intermittent"
+      },
+      "cpu_s": 1.3885325687006116,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "313m/single_shift_1x2048.pt": {
+      "sha256": "4273dd7464e21965991fce5a8e6f97f9570d6b4b9317607040f749cc79733135",
+      "bytes": 28741,
+      "case": {
+        "name": "single_shift_1x2048",
+        "batch": 1,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 302,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "level_shift"
+      },
+      "cpu_s": 1.33342888019979,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          66
+        ],
+        "scale": [
+          1,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1,
+          1,
+          66
+        ],
+        "head_in": [
+          1,
+          1,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          64
+        ]
+      }
+    },
+    "313m/single_long_rw_1x8192.pt": {
+      "sha256": "bd9e4302c7cb1cfbac498931f08123347e442f24a948e58e42213721e601096b",
+      "bytes": 255141,
+      "case": {
+        "name": "single_long_rw_1x8192",
+        "batch": 1,
+        "variates": 1,
+        "context": 8192,
+        "horizon": 1024,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 303,
+        "chunk": 0,
+        "mix": "realistic",
+        "kind": "rw_seasonal"
+      },
+      "cpu_s": 2.3323015412315726,
+      "shapes": {
+        "loc": [
+          1,
+          1,
+          288
+        ],
+        "scale": [
+          1,
+          1,
+          288
+        ],
+        "loc_bf": [
+          1,
+          1,
+          288
+        ],
+        "scale_bf": [
+          1,
+          1,
+          288
+        ],
+        "head_in": [
+          1,
+          1,
+          32,
+          1024
+        ],
+        "head_out": [
+          9,
+          1,
+          1,
+          32,
+          32
+        ],
+        "q": [
+          9,
+          1,
+          1,
+          1024
+        ]
+      }
+    },
+    "313m/paper_mix_1024x2048.pt": {
+      "sha256": "773c9427edbf31c2a831aa06a58d23841ba7c381f6b5535b6ce8058c37abb5da",
+      "bytes": 24687237,
+      "case": {
+        "name": "paper_mix_1024x2048",
+        "batch": 1024,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 110,
+        "chunk": 64,
+        "mix": "realistic",
+        "kind": ""
+      },
+      "cpu_s": 433.0879451474175,
+      "shapes": {
+        "loc": [
+          1024,
+          1,
+          66
+        ],
+        "scale": [
+          1024,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1024,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1024,
+          1,
+          66
+        ],
+        "head_in": [
+          1024,
+          1,
+          2,
+          1024
+        ],
+        "head_out": [
+          9,
+          1024,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1024,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/paper_mix_1024x2048.pt": {
+      "sha256": "7bfba096ebc3a77c91e4b42474ef2bb3f3afe201d01626d11159bf22ae944dbc",
+      "bytes": 33075845,
+      "case": {
+        "name": "paper_mix_1024x2048",
+        "batch": 1024,
+        "variates": 1,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 110,
+        "chunk": 64,
+        "mix": "realistic",
+        "kind": ""
+      },
+      "cpu_s": 2289.6432853941806,
+      "shapes": {
+        "loc": [
+          1024,
+          1,
+          66
+        ],
+        "scale": [
+          1024,
+          1,
+          66
+        ],
+        "loc_bf": [
+          1024,
+          1,
+          66
+        ],
+        "scale_bf": [
+          1024,
+          1,
+          66
+        ],
+        "head_in": [
+          1024,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          1024,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          1024,
+          1,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/multivariate_mix_128x8x2048.pt": {
+      "sha256": "ba7ae15852f0091f002e76c581cacb1d101f7cd7954a33e27db03dff95b991f3",
+      "bytes": 33076037,
+      "case": {
+        "name": "multivariate_mix_128x8x2048",
+        "batch": 128,
+        "variates": 8,
+        "context": 2048,
+        "horizon": 64,
+        "pattern": "clean",
+        "series_ids": "shared",
+        "capture": "head",
+        "seed": 112,
+        "chunk": 8,
+        "mix": "realistic",
+        "kind": ""
+      },
+      "cpu_s": 2573.488773174584,
+      "shapes": {
+        "loc": [
+          128,
+          8,
+          66
+        ],
+        "scale": [
+          128,
+          8,
+          66
+        ],
+        "loc_bf": [
+          128,
+          8,
+          66
+        ],
+        "scale_bf": [
+          128,
+          8,
+          66
+        ],
+        "head_in": [
+          128,
+          8,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          128,
+          8,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          128,
+          8,
+          64
+        ]
+      }
+    },
+    "2.5B-FT/gluonts_64x4096.pt": {
+      "sha256": "1ea3658131ccdb97daafca4d58ffc9891c5de480ec8c1ae9343e067615816f23",
+      "bytes": 4049354,
+      "case": {
+        "name": "gluonts_64x4096",
+        "series": 64,
+        "context_length": 4096,
+        "horizon": 64,
+        "seed": 200
+      },
+      "cpu_s": 160.4999031429179,
+      "shapes": {
+        "forecast_array": [
+          64,
+          9,
+          64
+        ],
+        "loc": [
+          64,
+          1,
+          129
+        ],
+        "scale": [
+          64,
+          1,
+          129
+        ],
+        "loc_bf": [
+          64,
+          1,
+          129
+        ],
+        "scale_bf": [
+          64,
+          1,
+          129
+        ],
+        "head_in": [
+          64,
+          1,
+          2,
+          2048
+        ],
+        "head_out": [
+          9,
+          64,
+          1,
+          2,
+          32
+        ],
+        "q": [
+          9,
+          64,
+          1,
+          64
         ]
       }
     }

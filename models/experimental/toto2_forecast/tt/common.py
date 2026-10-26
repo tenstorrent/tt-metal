@@ -19,32 +19,69 @@ from models.experimental.toto2_forecast.tt.preprocessing import TILE, pad_to_til
 
 @dataclass(frozen=True)
 class Toto2Precision:
-    """``accuracy``: bf16 weights, HiFi2 matmuls. ``performance``: bfloat8_b weights, LoFi matmuls, with one
-    per-role exception: SDPA stays at HiFi2 (a negligible share of the FLOPs; LoFi SDPA cost 22m at context 8192
-    0.9905 -> 0.9947 normalized PCC). Both: bf16 activations, RMSNorm at HiFi4 with fp32 accumulation, RoPE at
-    HiFi4. ``fp32_acc`` turns on fp32 dest accumulation in the matmuls and SDPA."""
+    """Precision policies (CONTRACT section 1; PLAN section 9 gate metrics). Per role:
+
+    | role                         | accuracy                          | performance                         |
+    |------------------------------|-----------------------------------|-------------------------------------|
+    | QKV, out_proj, fc1, fc2      | bf16 W, HiFi2, fp32 dest acc      | bfp8 W, LoFi, fp32 dest acc         |
+    | SDPA (time and variate)      | HiFi2, fp32 dest acc              | HiFi2, fp32 dest acc                |
+    | patch embedding (3 matmuls)  | fp32 tokens, bf16 W, HiFi4, fp32 acc | fp32 tokens, bf16 W, HiFi4, fp32 acc |
+    | head (3 matmuls)             | bf16 W, HiFi2, fp32 acc, fp32 out | bfp8 W, LoFi, fp32 acc, fp32 out    |
+    | RMSNorm                      | HiFi4, fp32 dest acc              | HiFi4, fp32 dest acc                |
+    | RoPE (rotary_embedding_llama)| HiFi4, bf16 dest                  | HiFi4, bf16 dest                    |
+    Activations are bf16 throughout (the head output fp32).
+
+    Measured (2.5B-FT, paper; ttq jobs 474, 482, 486, 501, 518):
+    - fp32 vs bf16 dest accumulation, accuracy, realistic paper_mix: active per-row PCC p01 0.9990 vs 0.9758 and
+      spread_ratio p99 1.05 vs 2.60 (bands up to 2.6x the reference's); device 8184 vs ~7465 ms (+9.6 %).
+    - performance, paper_mix: fp32 acc gives active p01 0.9944 / spread_ratio p99 1.36 vs 0.9705 / 2.79 with bf16
+      acc; bf16 FFN weights instead of bfp8 change nothing (0.9676 / 2.84), so the per-row error is accumulation.
+    - the patch embedding at HiFi2 drops mantissa bits of the bf16 tokens: rows whose within-patch variation sits at
+      the token ulp (strong trends) scored per-row PCC 0.21 / 0.22 / 0.67, 0.996 / 0.99 / 0.99 at HiFi4.
+    - the patch tokens are uploaded in fp32 (asinh values up to ~4 have a bf16 step of 0.016): on long_context_mix
+      spread_ratio p99 1.45 -> 1.12 and active per-row PCC p01 0.9912 -> 0.9991 (job 540).
+    - the head writes fp32: a near-constant forecast (intermittent series, head std 6e-4 around -0.22) is below the
+      bf16 ulp; fp32 output raised its PCC 0.804 -> 0.981.
+    - SDPA stays at HiFi2 in performance (LoFi cost 22m at context 8192 0.9905 -> 0.9947 normalized).
+    """
 
     name: str = "accuracy"
     bf8_weights: bool = False
     lofi: bool = False
     sdpa_lofi: bool = False
     fp32_acc: bool = False
+    hifi4: bool = False  # HiFi4 matmuls
+    embed_hifi4: bool = False  # the patch embedding at HiFi4 with fp32 accumulation
+    head_hifi4: bool = False  # the quantile head at HiFi4 with fp32 accumulation
+    fp32_tokens: bool = False  # patch tokens uploaded in fp32 (the embedding's first matmuls read them)
+    fp32_head_out: bool = False  # the head writes its output in fp32
+    ffn_bf16_weights: bool = False  # bf16 fc1 / fc2 weights under bf8_weights (a per-role exception)
 
     @classmethod
     def accuracy(cls) -> "Toto2Precision":
-        return cls()
+        return cls(fp32_acc=True, embed_hifi4=True, fp32_tokens=True, fp32_head_out=True)
 
     @classmethod
     def performance(cls) -> "Toto2Precision":
-        return cls(name="performance", bf8_weights=True, lofi=True)
+        return cls(
+            name="performance",
+            bf8_weights=True,
+            lofi=True,
+            fp32_acc=True,
+            embed_hifi4=True,
+            fp32_tokens=True,
+            fp32_head_out=True,
+        )
 
     @classmethod
     def named(cls, name: str) -> "Toto2Precision":
         return {"accuracy": cls.accuracy, "performance": cls.performance}[name]()
 
-    def weight_dtype(self):
+    def weight_dtype(self, role: str = ""):
         import ttnn
 
+        if role == "ffn" and self.ffn_bf16_weights:
+            return ttnn.bfloat16
         return ttnn.bfloat8_b if self.bf8_weights else ttnn.bfloat16
 
     def _config(self, math_fidelity, fp32_dest_acc_en: bool = False):
@@ -61,7 +98,17 @@ class Toto2Precision:
         import ttnn
 
         fidelity = ttnn.MathFidelity.LoFi if self.lofi else ttnn.MathFidelity.HiFi2
+        if self.hifi4:
+            fidelity = ttnn.MathFidelity.HiFi4
         return self._config(fidelity, fp32_dest_acc_en=self.fp32_acc)
+
+    def for_role(self, role: str) -> "Toto2Precision":
+        """The policy of one module: ``embed`` / ``head`` take HiFi4 + fp32 accumulation when asked."""
+        from dataclasses import replace
+
+        if (role == "embed" and self.embed_hifi4) or (role == "head" and self.head_hifi4):
+            return replace(self, bf8_weights=False, lofi=False, hifi4=True, fp32_acc=True)
+        return self
 
     def sdpa_config(self):
         import ttnn
@@ -111,8 +158,8 @@ def upload_bias(device, bias: torch.Tensor | None, *, pad_out: int | None = None
     return upload(device, b.reshape(1, -1))
 
 
-def linear(x, weight, precision: Toto2Precision, *, bias=None, activation=None):
-    """``x @ weight (+ bias)``, then ``activation`` ("silu")."""
+def linear(x, weight, precision: Toto2Precision, *, bias=None, activation=None, dtype=None):
+    """``x @ weight (+ bias)``, then ``activation`` ("silu"); output ``dtype`` (default: the input's)."""
     import ttnn
 
     return ttnn.linear(
@@ -120,6 +167,7 @@ def linear(x, weight, precision: Toto2Precision, *, bias=None, activation=None):
         weight,
         bias=bias,
         activation=activation,
+        dtype=dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=precision.matmul_config(),
     )

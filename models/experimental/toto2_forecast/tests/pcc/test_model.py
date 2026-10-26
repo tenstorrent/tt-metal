@@ -3,39 +3,54 @@
 
 """Full-model forecast PCC on device against the reference goldens (``TtToto2.forecast``, one forward).
 
-    pcc_normalized  head output (9, B, V, h, 32) in asinh-normalized space vs the hook on ``m.output_head``
-    pcc_final       quantiles (9, B, V, H) after sinh, rescale, clamp and sort vs the reference ``forecast``
+Gate metrics (``goldens.gate_metrics``; PLAN section 9 v1.1):
+    pcc_normalized      head output (9, B, V, h, 32) in asinh-normalized space vs the hook on ``m.output_head``
+    pcc_spread          the same minus its mean over the 9 quantiles (a quantile collapse scores 0)
+    pcc_row_p01 / min   per-series PCC of the head output, 1st percentile / minimum
+    pcc_final           quantiles (9, B, V, H) after sinh, rescale, clamp and sort vs the reference ``forecast``
+    pcc_final_spread    the same minus its quantile mean
+    abs_err_max         max abs error of the head output (judges near-constant series, ``goldens.degenerate_rows``)
 
-Floors (CONTRACT section 3): accuracy 0.999 / 0.99; performance 0.995 / 0.98.
+Floors: ``goldens.GATE_FLOORS`` (contract floors for pcc_normalized / pcc_final, proposed ones for the others).
 Cases take every path: clean (causal SDPA), missing patches (group mask), V = 8 sharing one series id (variate
-SDPA without a mask), V = 4 with two series ids (variate mask), and context 8192 (S = 288, 32 read-out tokens).
+SDPA without a mask), V = 4 with two series ids (variate mask), context 8192 (S = 288, 32 read-out tokens), and
+single series in the realistic mix at contexts 2048 and 8192.
+
+    TOTO2_PCC_JSON=<path>  appends one record per case
 """
 
 from __future__ import annotations
 
 import gc
+import json
+import os
+from pathlib import Path
+
 import pytest
 
-from models.experimental.toto2_forecast.tests.golden.goldens import have_golden, load_golden, pcc
+from models.experimental.toto2_forecast.tests.golden.goldens import (
+    below_floors,
+    floors_for,
+    gate_metrics,
+    have_golden,
+    load_golden,
+)
 
 # One device per module, so a loaded model (2.5B: about a minute) serves every case that uses it.
 pytestmark = pytest.mark.use_module_device
 
-FLOORS = {"accuracy": (0.999, 0.99), "performance": (0.995, 0.98)}
-# The unit-test checkpoints (no contract floor): at context 8192 (32 read-out tokens, whose head outputs vary
-# 3-10x less than at the last context token) the bf16 stream error of these small, high-tau models shows up as
-# 4m 0.9975 / 22m 0.9989 normalized PCC; fp32 accumulation everywhere lifts 22m to 0.99956 (ttq job 448).
-SMALL_FLOORS = {"accuracy": (0.995, 0.99), "performance": (0.99, 0.98)}
 SMALL = ("uni_4x2048", "missing_5x2048", "mv_2x4x2048", "long_2x8192")
 FULL = ("uni_16x2048", "missing_16x2048", "mv_4x8x2048")
+SINGLE = ("single_rw_1x2048", "single_sparse_1x2048", "single_shift_1x2048", "single_long_rw_1x8192")
 # Ordered by checkpoint and precision, so each process holds one model at a time.
 CASES = [
-    *((c, n, "accuracy") for c in ("4m", "22m") for n in SMALL),
+    *(("4m", n, "accuracy") for n in SMALL),
+    *(("22m", n, "accuracy") for n in SMALL + SINGLE),
     *(("22m", n, "performance") for n in SMALL),
-    *(("313m", n, "accuracy") for n in FULL),
-    *(("313m", n, "performance") for n in FULL[:1]),
-    *(("2.5B-FT", n, "accuracy") for n in FULL),
-    *(("2.5B-FT", n, "performance") for n in FULL[:1]),
+    *(("313m", n, "accuracy") for n in FULL + SINGLE),
+    *(("313m", n, "performance") for n in FULL[:1] + SINGLE[:1]),
+    *(("2.5B-FT", n, "accuracy") for n in FULL + SINGLE),
+    *(("2.5B-FT", n, "performance") for n in FULL[:1] + SINGLE[:1] + SINGLE[3:]),
 ]
 _MODEL: dict = {}
 
@@ -77,6 +92,14 @@ def run_forecast(model, golden):
     return q, head
 
 
+def _record(entry: dict) -> None:
+    path = os.environ.get("TOTO2_PCC_JSON")
+    if path:
+        out = Path(path)
+        data = json.loads(out.read_text()) if out.is_file() else []
+        out.write_text(json.dumps([*data, entry], indent=2) + "\n")
+
+
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("ckpt,case,precision_name", CASES, ids=[f"{c}-{n}-{p}" for c, n, p in CASES])
 def test_model(device, ckpt, case, precision_name):
@@ -86,7 +109,8 @@ def test_model(device, ckpt, case, precision_name):
     model = tt_model(device, ckpt, precision_name)
     q, head = run_forecast(model, golden)
     cap = golden["captures"]
-    pcc_normalized, pcc_final = pcc(head, cap["head_out"]), pcc(q, cap["q"])
-    floor_n, floor_f = (SMALL_FLOORS if ckpt in ("4m", "22m") else FLOORS)[precision_name]
-    print(f"\n[MODEL] {ckpt}/{case}/{precision_name}: pcc_normalized={pcc_normalized:.6f} pcc_final={pcc_final:.6f}")
-    assert pcc_normalized >= floor_n and pcc_final >= floor_f, (pcc_normalized, pcc_final)
+    metrics = gate_metrics(head, q, cap["head_out"], cap["q"])
+    _record({"ckpt": ckpt, "case": case, "precision": precision_name, **metrics})
+    print(f"\n[MODEL] {ckpt}/{case}/{precision_name}: " + " ".join(f"{k}={v:.6f}" for k, v in metrics.items()))
+    below = below_floors(metrics, floors_for(ckpt, precision_name))
+    assert not below, f"below floor: {below}"

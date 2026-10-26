@@ -31,7 +31,7 @@ class TtSwiGLU:
         self.beta = lw.beta_mlp
         f = config.d_ff
         fp = pad_to_tile(f)
-        dtype = precision.weight_dtype()
+        dtype = precision.weight_dtype("ffn")
         self._w_g = upload_linear(device, lw.w_fc1[:f], dtype, pad_out=fp)
         self._w_u = upload_linear(device, lw.w_fc1[f:], dtype, pad_out=fp)
         self._w_down = upload_linear(device, lw.w_fc2, dtype, pad_in=fp)
@@ -56,8 +56,10 @@ class TtSwiGLU:
 
 
 class TtResidualMLP:
-    def __init__(self, device, w: ResidualMLPWeights, precision: Toto2Precision):
+    def __init__(self, device, w: ResidualMLPWeights, precision: Toto2Precision, *, out_dtype=None):
+        """``out_dtype``: of the output (default bf16)."""
         self.precision = precision
+        self.out_dtype = out_dtype
         dtype = precision.weight_dtype()
         self._w1 = upload_linear(device, w.w1, dtype)
         self._b1 = upload_bias(device, w.b1)
@@ -70,10 +72,11 @@ class TtResidualMLP:
         import ttnn
 
         p = self.precision
-        hidden = linear(x, self._w1, p, bias=self._b1, activation="silu")
-        main = linear(hidden, self._w2, p)
+        out_dtype = self.out_dtype or ttnn.bfloat16
+        hidden = linear(x, self._w1, p, bias=self._b1, activation="silu", dtype=ttnn.bfloat16)
+        main = linear(hidden, self._w2, p, dtype=out_dtype)
         ttnn.deallocate(hidden)
-        skip = linear(x, self._ws, p, bias=self._b)
+        skip = linear(x, self._ws, p, bias=self._b, dtype=out_dtype)
         out = ttnn.add(main, skip, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(main)
         ttnn.deallocate(skip)

@@ -46,3 +46,185 @@ def pcc(got: torch.Tensor, expected: torch.Tensor) -> float:
     a, b = got.double().flatten(), expected.double().flatten()
     a, b = a - a.mean(), b - b.mean()
     return (a @ b / (a.norm() * b.norm())).item()
+
+
+def _pcc_or_zero(got: torch.Tensor, expected: torch.Tensor) -> float:
+    """PCC, 0.0 when either side has no variance (a collapsed output)."""
+    a, b = got.double().flatten(), expected.double().flatten()
+    a, b = a - a.mean(), b - b.mean()
+    denom = a.norm() * b.norm()
+    return 0.0 if denom == 0 else (a @ b / denom).item()
+
+
+# Row sets (fixed by the golden alone):
+# - active (PLAN section 9 v1.2): golden head std >= 5 % of the golden's global head std. Per-row PCC is
+#   ill-conditioned on flat rows (intermittent series forecast flat), where bf16 noise is comparable to the row's
+#   own variation; the per-row metrics with suffix _active and spread_ratio use the active rows.
+# - degenerate: near-constant reference series, within-series std below 1 % of its mean magnitude (floor 0.1).
+#   A case made only of them (a single flat series is "active" relative to itself) is judged by abs_err_max alone:
+#   its PCCs measure bf16 noise (2.5B-FT single_sparse_1x2048: head std 6e-4 around -0.22, device PCC 0.98 at max
+#   abs error 1.5e-3).
+ACTIVE_REL = 0.05
+DEGENERATE_REL = 0.01
+
+
+def _rows(head: torch.Tensor) -> torch.Tensor:
+    """(9, B, V, h, 32) -> (B * V, 9 * h * 32)."""
+    return head.double().permute(1, 2, 0, 3, 4).reshape(head.shape[1] * head.shape[2], -1)
+
+
+def active_rows(golden_head: torch.Tensor) -> torch.Tensor:
+    return _rows(golden_head).std(-1) >= ACTIVE_REL * golden_head.double().std()
+
+
+def degenerate_rows(golden_head: torch.Tensor) -> torch.Tensor:
+    rows = _rows(golden_head)
+    return rows.std(-1) < DEGENERATE_REL * rows.abs().mean(-1).clamp_min(0.1)
+
+
+def _quantiles(values: list[float], *qs: float) -> list[float]:
+    t = torch.tensor(values if values else [float("nan")], dtype=torch.float64)
+    return [torch.quantile(t, q).item() for q in qs]
+
+
+def gate_metrics(head: torch.Tensor, q: torch.Tensor, golden_head: torch.Tensor, golden_q: torch.Tensor) -> dict:
+    """Gate metrics of a forecast against the reference (PLAN section 9, v1.1-v1.3).
+
+    ``head`` (9, B, V, h, 32): head output at the read-out tokens, asinh-normalized; ``q`` (9, B, V, H) final.
+        pcc_normalized             PCC of the head output
+        pcc_spread                 PCC of the head output minus its mean over the 9 quantiles
+        pcc_row_p01 / _min         per-series PCC of the head output over every series: 1st percentile, minimum
+        pcc_row_p01_active / _min_active   the same over the active series (``active_rows``)
+        spread_ratio_p01 / _p99    per active series, |h - mean_q h| / |h_ref - mean_q h_ref| (norms over the
+                                   series' 9 x h x 32 values): 1st and 99th percentiles; a collapse scores 0
+        pcc_final                  PCC of the final quantiles
+        pcc_final_spread           PCC of the final quantiles minus their mean over the 9 quantiles
+        abs_err_max                max |head - reference| in normalized space
+        rows, rows_active, rows_degenerate
+    """
+    got, exp = _rows(head), _rows(golden_head)
+    active, degenerate = active_rows(golden_head), degenerate_rows(golden_head)
+    per_row = [_pcc_or_zero(a, b) for a, b in zip(got, exp)]
+    per_active = [p for p, a in zip(per_row, active) if a]
+    dev_spread = _rows(head - head.mean(0)).norm(dim=-1)
+    ref_spread = _rows(golden_head - golden_head.mean(0)).norm(dim=-1)
+    ratio = [(d / r).item() for d, r, a in zip(dev_spread, ref_spread, active) if a and r > 0]
+    row_p01, row_min = _quantiles(per_row, 0.01, 0.0)
+    act_p01, act_min = _quantiles(per_active, 0.01, 0.0)
+    ratio_p01, ratio_p99 = _quantiles(ratio, 0.01, 0.99)
+    return {
+        "pcc_normalized": _pcc_or_zero(head, golden_head),
+        "pcc_spread": _pcc_or_zero(head - head.mean(0), golden_head - golden_head.mean(0)),
+        "pcc_row_p01": row_p01,
+        "pcc_row_min": row_min,
+        "pcc_row_p01_active": act_p01,
+        "pcc_row_min_active": act_min,
+        "spread_ratio_p01": ratio_p01,
+        "spread_ratio_p99": ratio_p99,
+        "pcc_final": _pcc_or_zero(q, golden_q),
+        "pcc_final_spread": _pcc_or_zero(q - q.mean(0), golden_q - golden_q.mean(0)),
+        "abs_err_max": (head.double() - golden_head.double()).abs().max().item(),
+        "rows": int(active.numel()),
+        "rows_active": int(active.sum()),
+        "rows_degenerate": int(degenerate.sum()),
+    }
+
+
+# Metrics with an upper floor (a ceiling) and those recorded but not gated.
+CEILINGS = {"spread_ratio_p99", "abs_err_max"}
+RECORDED = {"pcc_row_p01", "pcc_row_min", "rows", "rows_active", "rows_degenerate"}
+
+
+def below_floors(metrics: dict, floors: dict) -> dict:
+    """The gated metrics that miss their floor (``CEILINGS``: exceed it). ``pcc_row_min_active`` takes
+    ``pcc_row_min_active_many`` past ``MANY_ROWS`` series. A case whose series are all degenerate is judged by
+    ``abs_err_max`` alone; ``abs_err_max`` gates nothing else."""
+    all_degenerate = metrics["rows_degenerate"] == metrics["rows"]
+    out = {}
+    for key, floor in floors.items():
+        if key in ("pcc_row_min_active_many", "abs_err_max"):
+            continue
+        if key == "pcc_row_min_active" and metrics["rows"] > MANY_ROWS:
+            floor = floors["pcc_row_min_active_many"]
+        if all_degenerate:
+            continue
+        value = metrics[key]
+        bad = not value <= floor if key in CEILINGS else not value >= floor
+        if bad:
+            out[key] = (round(value, 6), floor)
+    if all_degenerate and not metrics["abs_err_max"] <= floors["abs_err_max"]:
+        out["abs_err_max"] = (round(metrics["abs_err_max"], 6), floors["abs_err_max"])
+    return out
+
+
+def collapsed(head: torch.Tensor) -> torch.Tensor:
+    """Every quantile replaced by the mean over the quantile axis: the broken output the gate metrics must reject."""
+    return head.mean(0, keepdim=True).expand_as(head).clone()
+
+
+# Gate floors (asserted by tests/pcc/test_model.py; the bench records them). pcc_normalized / pcc_final are the
+# CONTRACT section 3 floors. The others are this worker's proposals for G1, chosen AFTER measuring round 0 (as PLAN
+# section 9 asks; history in GATE.md): from iter_00/pcc_metrics.json and bench.json with margin, each scored below
+# by a quantile-collapsed output (tests/golden/test_gate_metrics.py -> doc/golden/collapsed_metrics.json). They change
+# only by decision.
+# - pcc_row_min_active over more than MANY_ROWS series is set by ill-conditioned rows of the reference itself (313m
+#   paper_mix row 756: rounding the patch tokens to bf16 moves the fp32 reference head by up to 0.33).
+# - The unit-test checkpoints 4m and 22m have no contract floor; theirs sit lower (bf16 stream error of small,
+#   high-tau models at context 8192: 4m 0.9989 / 22m 0.9996 normalized).
+MANY_ROWS = 64
+GATE_FLOORS = {
+    "accuracy": {
+        "pcc_normalized": 0.999,
+        "pcc_spread": 0.998,
+        "pcc_row_p01_active": 0.99,
+        "pcc_row_min_active": 0.98,
+        "pcc_row_min_active_many": 0.9,
+        "spread_ratio_p01": 0.9,
+        "spread_ratio_p99": 1.25,
+        "pcc_final": 0.99,
+        "pcc_final_spread": 0.99,
+        "abs_err_max": 0.01,
+    },
+    "performance": {
+        "pcc_normalized": 0.995,
+        "pcc_spread": 0.99,
+        "pcc_row_p01_active": 0.97,
+        "pcc_row_min_active": 0.95,
+        "pcc_row_min_active_many": 0.9,
+        "spread_ratio_p01": 0.85,
+        "spread_ratio_p99": 3.0,
+        "pcc_final": 0.98,
+        "pcc_final_spread": 0.93,
+        "abs_err_max": 0.02,
+    },
+}
+SMALL_CHECKPOINT_FLOORS = {
+    "accuracy": {
+        "pcc_normalized": 0.995,
+        "pcc_spread": 0.995,
+        "pcc_row_p01_active": 0.99,
+        "pcc_row_min_active": 0.99,
+        "pcc_row_min_active_many": 0.9,
+        "spread_ratio_p01": 0.8,
+        "spread_ratio_p99": 1.2,
+        "pcc_final": 0.99,
+        "pcc_final_spread": 0.99,
+        "abs_err_max": 0.01,
+    },
+    "performance": {
+        "pcc_normalized": 0.99,
+        "pcc_spread": 0.98,
+        "pcc_row_p01_active": 0.9,
+        "pcc_row_min_active": 0.9,
+        "pcc_row_min_active_many": 0.8,
+        "spread_ratio_p01": 0.85,
+        "spread_ratio_p99": 1.7,
+        "pcc_final": 0.98,
+        "pcc_final_spread": 0.93,
+        "abs_err_max": 0.02,
+    },
+}
+
+
+def floors_for(ckpt: str, precision: str) -> dict:
+    return (SMALL_CHECKPOINT_FLOORS if ckpt in ("4m", "22m") else GATE_FLOORS)[precision]
