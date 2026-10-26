@@ -66,7 +66,7 @@
    "description": "the tt/ CPU oracle with BF4-rounded experts (the device's expert precision) as the column under test"
   },
   "slab2048-32k": {
-   "description": "the served default with the 2048-row prefill slab (--prefill-slab 2048; the slab's routed experts in one moe_compute call per layer): chunked prefill through the chunk trace for the remainder, sampling on, MTP off, 32768 context; needs a moe_compute that takes the slab's 2048 tokens in one call: where one call is capped below that, the server refuses the slab at start-up (Qwen38SlabRefused) and this configuration does not run",
+   "description": "the served default with the 2048-row prefill slab (--prefill-slab 2048): chunked prefill through the chunk trace for the remainder, sampling on, MTP off, 32768 context; on tt-metal main, whose moe_compute takes at most 128 tokens per call, the slab routes its experts in 16 calls of 128 tokens per layer (one call per layer where moe_compute takes the slab's 2048 tokens; the start-up log names the form)",
    "server": {
     "allocated_context": 32768,
     "mtp": null,
@@ -76,7 +76,7 @@
    }
   },
   "slab2048-mtp4-32k": {
-   "description": "chunked prefill with the 2048-row prefill slab and MTP drafting k=4 (--prefill-slab 2048 --mtp 4: the 128-row MTP chunk extension's slab form runs the slab's MTP rows inside the slab body), 32768 context; needs a moe_compute that takes the slab's 2048 tokens in one call: where one call is capped below that, the server refuses the slab at start-up (Qwen38SlabRefused) and this configuration does not run",
+   "description": "chunked prefill with the 2048-row prefill slab and MTP drafting k=4 (--prefill-slab 2048 --mtp 4: the 128-row MTP chunk extension's slab form runs the slab's MTP rows inside the slab body), 32768 context; on tt-metal main the slab routes its experts in 16 moe_compute calls of 128 tokens per layer (one call per layer where moe_compute takes the slab's 2048 tokens)",
    "server": {
     "allocated_context": 32768,
     "mtp": 4,
