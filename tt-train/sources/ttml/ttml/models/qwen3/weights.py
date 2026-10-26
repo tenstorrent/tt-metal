@@ -33,24 +33,79 @@ import torch
 import ttnn
 
 import ttml
-from ttml.common.utils import repermute_proj_rows, resolve_padded_load_shape, unpermute_proj_rows
+from ttml.common.utils import resolve_padded_load_shape
 from ttml.sharding import Sharding
 
 # =====================================================================
-# Weight permutation utilities (HF <-> ttml)
+# Weight permutation utilities (HF -> ttml)
 # =====================================================================
-# unpermute_proj_rows / repermute_proj_rows come from ttml.common.utils, which the
-# safetensors loaders share; they run on torch tensors as on numpy arrays.
+
+
+def unpermute_proj_rows(weight: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """Reorder rows: HF [real_half, imag_half] -> ttml interleaved [r0,i0,r1,i1,...]."""
+    if weight.dim() == 1:
+        total = weight.shape[0]
+        D = total // num_heads
+        half = D // 2
+        w = weight.view(num_heads, D)
+        first_half = w[:, :half]
+        second_half = w[:, half:]
+        interleaved = torch.stack([first_half, second_half], dim=2)
+        return interleaved.reshape(total)
+    elif weight.dim() == 2:
+        rows, cols = weight.shape
+        D = rows // num_heads
+        half = D // 2
+        w = weight.view(num_heads, D, cols)
+        first_half = w[:, :half, :]
+        second_half = w[:, half:, :]
+        interleaved = torch.stack([first_half, second_half], dim=2)
+        return interleaved.reshape(rows, cols)
+    else:
+        raise ValueError(f"Expected 1D or 2D tensor, got {weight.dim()}D")
 
 
 def unpermute_norm_weights(weight: torch.Tensor) -> torch.Tensor:
     """Reorder QK-Norm: HF [x1,x2,...,y1,y2,...] -> ttml [x1,y1,x2,y2,...]."""
-    return unpermute_proj_rows(weight, 1)
+    head_dim = weight.shape[0]
+    assert head_dim % 2 == 0
+    half = head_dim // 2
+    w = weight.view(2, half)
+    return w.t().contiguous().flatten()
+
+
+# =====================================================================
+# Inverse permutation utilities (ttml -> HF format, for gradient comparison)
+# =====================================================================
+
+
+def repermute_proj_rows(weight: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """Inverse of unpermute_proj_rows: ttml interleaved [r0,i0,r1,i1,...] -> HF [real_half, imag_half]."""
+    if weight.dim() == 1:
+        total = weight.shape[0]
+        D = total // num_heads
+        w = weight.view(num_heads, D)
+        reals = w[:, 0::2]  # even positions -> reals
+        imags = w[:, 1::2]  # odd positions -> imags
+        return torch.cat([reals, imags], dim=1).reshape(total)
+    elif weight.dim() == 2:
+        rows, cols = weight.shape
+        D = rows // num_heads
+        w = weight.view(num_heads, D, cols)
+        reals = w[:, 0::2, :]
+        imags = w[:, 1::2, :]
+        return torch.cat([reals, imags], dim=1).reshape(rows, cols)
+    else:
+        raise ValueError(f"Expected 1D or 2D tensor, got {weight.dim()}D")
 
 
 def repermute_norm_weights(weight: torch.Tensor) -> torch.Tensor:
     """Inverse of unpermute_norm_weights: ttml [x1,y1,x2,y2,...] -> HF [x1,x2,...,y1,y2,...]."""
-    return repermute_proj_rows(weight, 1)
+    head_dim = weight.shape[0]
+    assert head_dim % 2 == 0
+    half = head_dim // 2
+    w = weight.view(half, 2)
+    return w.t().contiguous().flatten()
 
 
 # =====================================================================
