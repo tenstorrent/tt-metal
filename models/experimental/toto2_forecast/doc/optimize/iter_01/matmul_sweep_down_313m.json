@@ -1,0 +1,13 @@
+{
+  "ckpt": "313m",
+  "rows": 98304,
+  "precision": "accuracy",
+  "roles": {
+    "down": [
+      {
+        "config": "linear (round 0)",
+        "ms": 3.4637059085071087
+      }
+    ]
+  }
+}
