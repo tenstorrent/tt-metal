@@ -17,7 +17,7 @@ single op with:  pytest test_sfpu_plot.py -k <Op> -s
 import math
 import os
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -1407,7 +1407,7 @@ class Case:
 
     op: MathOperation
     spec: StimuliSpec
-    fmt: InputOutputFormat = BF16
+    fmt: InputOutputFormat = field(default_factory=lambda: BF16)
     expect_pass: bool = True
     name: Optional[str] = None
     approx_mode: ApproximationMode = ApproximationMode.No
