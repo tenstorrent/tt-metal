@@ -150,10 +150,15 @@ def generate_unpack_tilize_combinations(
                                     None,
                                 )
                             )
-                        # Several runs per row: one row of the DEST capacity and two half rows, Float16_b 32x32 only.
+                        # Several runs per row: one row of the DEST capacity and two half rows, 32x32 only.
                         if (
                             not is_perf
-                            and in_fmt == DataFormat.Float16_b
+                            and in_fmt
+                            in (
+                                DataFormat.Float16_b,
+                                DataFormat.Float32,
+                                DataFormat.Int32,
+                            )
                             and tile_dims == (32, 32)
                         ):
                             capacity = DEST_SYNC_TILE_LIMITS[dest_sync] // (

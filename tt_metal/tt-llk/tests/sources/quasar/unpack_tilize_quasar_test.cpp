@@ -149,7 +149,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     for (std::uint32_t y = 0; y < BLOCK_RT_DIM; y++)
                     {
                         _llk_unpack_tilize_to_dest_set_src_offset_(tensor_shape, y * y_stride_external);
-                        _llk_unpack_tilize_to_dest_(0 /*l1_tile_idx*/, y * BLOCK_CT_DIM /*dst_tile_idx*/);
+                        for (std::uint32_t x = 0; x < FULL_CT_DIM; x += BLOCK_CT_DIM)
+                        {
+                            _llk_unpack_tilize_to_dest_(x /*l1_tile_idx*/, y * FULL_CT_DIM + x /*dst_tile_idx*/);
+                        }
                     }
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
                     {
