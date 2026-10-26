@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""jitter_compare.py [O3|Os ...]: the jitter band of v3tk's ordinary edits (jitter_runs.sh, RESULTS §96).
+"""jitter_compare.py [O3|Os ...] [--label=jit]: the jitter band of v3tk's ordinary edits (jitter_runs.sh, RESULTS §96).
 
 Per level, the base is the mean of the two v3tk runs (first and last in the job); their difference is the run-to-run
 noise. For each edit: the change of each suite's mean against the base, and its largest single-row change. Then the
@@ -33,15 +33,17 @@ def pct(xs, p):
     return xs[min(len(xs) - 1, int(round(p * (len(xs) - 1))))]
 
 
-for lvl in sys.argv[1:] or ["O3", "Os"]:
-    P = {"O3": "jit3", "Os": "jits"}[lvl]
+args = [a for a in sys.argv[1:] if not a.startswith("--label=")]
+LABEL = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--label=")), "jit")
+for lvl in args or ["O3", "Os"]:
+    P = LABEL + {"O3": "3", "Os": "s"}[lvl]
     a = {s: bw(f"{P}_base", s) for s in SUITES}
     b = {s: bw(f"{P}_base2", s) for s in SUITES}
     if not all(a.values()):
         print(f"{lvl}: base runs missing")
         continue
     base = {s: {k: (a[s][k] + b[s][k]) / 2 if b[s] else a[s][k] for k in a[s]} for s in SUITES}
-    print(f"\n=== -{lvl}: suite-mean change vs v3tk (cycles/packet), largest row change in brackets")
+    print(f"\n=== -{lvl}: suite-mean change vs the base build (cycles/packet), largest row change in brackets")
     print("%-12s" % "" + "".join("%18s" % s for s in SUITES))
     if all(b.values()):
         noise = {s: [b[s][k] - a[s][k] for k in a[s]] for s in SUITES}

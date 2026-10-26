@@ -17,6 +17,26 @@ chip and each connected Ethernet core (--all-eth: every non-harvested one) it re
 Output: OUT_DIR/index.json (topology, coordinates, register values, file list, timings, errors) and
 OUT_DIR/chip<C>/eth<NN>_l1.bin. hang_decode.py turns that into per-router channel/credit tables.
 
+Workers (Tensix cores; on by default, --no-workers skips them), after the routers, in this order:
+  wscan  every Tensix core of every chip: the mailbox head (0x60, 1232 B: launch-message ring, go messages, read
+         pointer), the test result-status word (--worker-status-addr, default 0x23480 = the test's result buffer at
+         the HAL's DEFAULT_UNRESERVED base + 32 KiB of local args) and the soft-reset register. A core is captured if
+         its go signal is GO with kernels enabled, or the launch slot it last executed holds the chip's newest program
+         (highest kernel id; same kernel config base) and is its own most recent slot, or its status word carries the
+         test's 0xabc0000x status;
+  wl1    each captured core's L1 from 0 to --worker-window (default 256 KiB: mailbox, fabric connection table,
+         kernel-config ring with binaries and runtime args, the test's local args, result buffer, kernel config
+         buffer, sender credit / header / sync regions); the whole L1 (1.5 MiB) for cores that still run a test
+         kernel (go GO in the newest program, or status STARTED), at most --worker-full-max of them;
+  wpass2 per captured core again: mailbox head, status word, soft reset, fabric connection credit words;
+  wniu   per captured core and NoC, the NIU transaction counters (NOC_STATUS 0..15, 48..61: requests sent / acks
+         and responses received), --no-worker-niu skips them;
+and then, without the device, the kernel ELFs of every non-router kernel of the run's cache (--kernel-cache, default
+the --meta cache=DIR value) are copied to OUT_DIR/cache/kernels/<name>/<hash>/<risc>/ (test kernels keep their
+DWARF types: the decoder takes struct layouts and compile-time args from them). A chip whose Tensix cores stop
+answering (4 in a row) has the rest of its scan skipped. Output: OUT_DIR/chip<C>/tensix_heads.bin (the scan) and
+OUT_DIR/chip<C>/tensix_<x>-<y>_l1.bin (noc0 x, y), described under index.json "workers".
+
 Read-only by construction: the only device accesses are tt-exalens NoC reads (Coordinate.noc_read -> UMD
 TTDevice.noc_read through a PCIe TLB window), with tt-exalens safe mode on (every address checked against its memory
 map; eth_mac_pcs_regs is marked unsafe and never touched). No writes, no resets, no ARC messages, no RISC halt /
@@ -66,6 +86,19 @@ L1_WORDS = {  # L1 words sampled in both register passes (liveness)
     0x100 + 1168: "go_msg0",  # mailboxes_t.go_messages[0] (signal in the top byte: 0x80 GO, 0 DONE)
     0x100 + 12: "launch_msg_rd_ptr",
 }
+# Tensix workers (Blackhole dev_mem_map.h / dev_msgs.h; the same mailboxes_t layout as the ERISC one above)
+W_L1_SIZE = 1536 * 1024
+W_MAILBOX = 0x60  # MEM_MAILBOX_BASE
+W_HEAD_SIZE = 1232  # mailboxes_t through go_message_index (+1216)
+W_LAUNCH_OFF, W_LAUNCH_SIZE, W_NUM_LAUNCH = 16, 144, 8
+W_GO_OFF, W_NUM_GO, W_GO_IDX_OFF = 1168, 9, 1216
+W_STATUS_ADDR = 0x1B480 + 0x8000  # test result buffer status word: DEFAULT_UNRESERVED + LOCAL_ARGS_BUFFER_SIZE
+W_FABRIC_RW = 0x9070 + 400  # tensix_fabric_connections_l1_info_t.read_write[16]: the routers' credit words
+W_WINDOW = 0x40000
+W_NIU_BASES = (0xFFB20000, 0xFFB30000)  # NOC0 / NOC1 register blocks; status counters at +0x200
+W_NIU_STATUS = tuple(range(0x0, 0x40, 4)) + tuple(range(0xC0, 0xF8, 4))  # NIU_MST_* 0..15, NIU_SLV_* 48..61
+W_STATUS_MAGIC = 0xABC00000  # TT_FABRIC_STATUS_MASK
+W_OBJCOPY = "/home/aagarwal/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-objcopy"  # as vc1_capture_lib.sh
 
 
 def now():
@@ -98,7 +131,7 @@ class Capture:
         self.t0 = now()
         self.index = {
             "tool": "hang_capture.py",
-            "format": 1,
+            "format": 1 if args.no_workers else 2,  # 2: has a "workers" part
             "host": socket.gethostname(),
             "pid": os.getpid(),
             "argv": sys.argv,
@@ -155,7 +188,8 @@ class Capture:
         self.fails[key] = self.fails.get(key, 0) + 1
         if self.fails[key] >= self.MAX_FAILS and key not in self.dead:
             self.dead.add(key)
-            msg = (f"chip {key[0]} eth {key[1]} {key[2]}: {self.MAX_FAILS} consecutive read failures, "
+            where = key[1] if isinstance(key[1], str) else f"eth {key[1]}"  # workers: "tensix <x>-<y>"
+            msg = (f"chip {key[0]} {where} {key[2]}: {self.MAX_FAILS} consecutive read failures, "
                    f"its remaining {key[2]} reads skipped")
             print("  !! " + msg, flush=True)
             self.index["errors"].append(msg)
@@ -360,6 +394,290 @@ class Capture:
         self.index["timings"]["l1_MBps"] = round(total / dt / 1e6, 3) if dt > 0 else None
         print(f"l1: {total} B in {dt:.2f} s ({self.index['timings']['l1_MBps']} MB/s)", flush=True)
 
+    # ------------------------------------------------------------ workers (Tensix cores), reads only
+    @staticmethod
+    def head_info(head):
+        """From a mailbox head: the go signal, the launch slot last executed (the current one if GO), that slot's
+        kernel id (highest watcher_kernel_id of a RISC with a kernel; -1 if none), kernel config base, enables and
+        dispatch mode, and whether it is the core's most recent slot (highest kernel id of the 8). Kernel ids come from
+        a process-wide counter, so they order programs; the host-assigned program id is 0 in these runs."""
+        rd = struct.unpack_from("<I", head, 12)[0] & (W_NUM_LAUNCH - 1)
+        gi = struct.unpack_from("<I", head, W_GO_IDX_OFF)[0]
+        sig = struct.unpack_from("<I", head, W_GO_OFF + 4 * (gi if gi < W_NUM_GO else 0))[0] >> 24
+        prev = (rd - 1) & (W_NUM_LAUNCH - 1)
+        slot = rd if sig == 0x80 else (prev if head[W_LAUNCH_OFF + W_LAUNCH_SIZE * prev + 48] == 0 else rd)
+
+        def kernel_id(i):
+            lb = W_LAUNCH_OFF + W_LAUNCH_SIZE * i
+            sizes = struct.unpack_from("<5I", head, lb + 72)
+            ids = struct.unpack_from("<5H", head, lb + 120)
+            return max((k for k, n in zip(ids, sizes) if n), default=-1)
+
+        ids = [kernel_id(i) for i in range(W_NUM_LAUNCH)]
+        lb = W_LAUNCH_OFF + W_LAUNCH_SIZE * slot
+        return {"sig": sig, "slot": slot, "kid": ids[slot], "kcb": struct.unpack_from("<I", head, lb)[0],
+                "enables": struct.unpack_from("<I", head, lb + 112)[0], "mode": head[lb + 48],
+                "latest": ids[slot] >= 0 and ids[slot] == max(ids)}
+
+    def worker_scan(self):
+        t = now()
+        a = self.args
+        wi = self.index.setdefault("workers", {})
+        wi["constants"] = {"mailbox": W_MAILBOX, "head_size": W_HEAD_SIZE, "status_addr": a.worker_status_addr,
+                           "window": a.worker_window, "l1_size": W_L1_SIZE, "fabric_rw": W_FABRIC_RW,
+                           "niu_bases": list(W_NIU_BASES), "niu_status": list(W_NIU_STATUS),
+                           "soft_reset_reg": SOFT_RESET_REG, "full_max": a.worker_full_max}
+        wi["chips"] = {}
+        self.wcores = []  # (chip_id, key, loc, rec, full)
+        want_chips = None if not a.chips else {int(x) for x in a.chips.split(",")}
+        nscan = 0
+        for chip_id, dev in sorted(self.ctx.devices.items()):
+            if want_chips is not None and chip_id not in want_chips:
+                continue
+            if self.over_budget():
+                self.index["errors"].append(f"wscan: time budget reached before chip {chip_id}")
+                break
+            try:
+                locs = dev.get_block_locations("functional_workers")
+            except Exception as e:  # noqa: BLE001
+                self.err(f"chip {chip_id} functional_workers block locations", e)
+                continue
+            fn = f"chip{chip_id}/tensix_heads.bin"
+            os.makedirs(os.path.join(self.out, f"chip{chip_id}"), exist_ok=True)
+            heads = bytearray()
+            ents = []
+            scanned = []
+            bad_run = 0  # consecutive cores whose mailbox read failed: a chip that stopped answering is cut short
+            for loc in locs:
+                if bad_run >= self.MAX_FAILS or self.over_budget():
+                    msg = (f"wscan: chip {chip_id}: " + (f"{bad_run} Tensix cores in a row unreadable"
+                                                         if bad_run >= self.MAX_FAILS else "time budget reached")
+                           + f", {len(locs) - len(scanned)} cores not scanned")
+                    print("  !! " + msg, flush=True)
+                    self.index["errors"].append(msg)
+                    break
+                rec = {"noc0": list(loc.to("noc0"))}
+                try:
+                    rec["translated"] = list(loc.to("translated"))
+                except Exception:  # noqa: BLE001
+                    rec["translated"] = None
+                try:
+                    rec["logical"] = list(loc.to("logical")[0])
+                except Exception:  # noqa: BLE001
+                    rec["logical"] = None
+                key = (chip_id, f"tensix {rec['noc0'][0]}-{rec['noc0'][1]}", "wscan")
+                head = None
+                try:
+                    head = self.read_block(loc, W_MAILBOX, W_HEAD_SIZE, key)
+                except Exception as e:  # noqa: BLE001
+                    rec["error"] = f"{type(e).__name__}: {e}"
+                    self.err(f"chip {chip_id} tensix {rec['noc0'][0]}-{rec['noc0'][1]} mailbox", e)
+                bad_run = 0 if head is not None else bad_run + 1
+                status, _ = self.rd32(loc, a.worker_status_addr, key)
+                sr, _ = self.rd32(loc, SOFT_RESET_REG, key)
+                nscan += 1
+                heads += head if head is not None else bytes(W_HEAD_SIZE)
+                ent = {"noc0": rec["noc0"], "translated": rec["translated"], "status": status, "soft_reset": sr,
+                       "head_ok": head is not None}
+                ents.append(ent)
+                scanned.append((loc, rec, head, status, sr, ent))
+            with open(os.path.join(self.out, fn), "wb") as f:
+                f.write(heads)
+            infos = []
+            for loc, rec, head, status, sr, ent in scanned:
+                info = None
+                if head is not None:
+                    try:
+                        info = self.head_info(head)
+                    except Exception:  # noqa: BLE001
+                        info = None
+                infos.append(info)
+            # The chip's newest program: the highest kernel id among device-dispatched slots that their cores last
+            # executed and that are those cores' most recent ones; its cores share that slot's kernel config base. A
+            # core left out of later programs keeps executing stale slots with nothing enabled, so its last-executed
+            # slot is not its most recent one.
+            cands = [i for i in infos if i and i["kid"] >= 0 and i["mode"] == 0 and (i["latest"] or i["sig"] == 0x80)]
+            top = max(cands, key=lambda i: i["kid"]) if cands else None
+            newest = {"kernel_id": top["kid"], "kernel_config": top["kcb"]} if top else None
+            crec = {"scan": {"heads_file": fn, "cores": ents, "newest_program": newest}, "cores": {}}
+            for (loc, rec, head, status, sr, ent), info in zip(scanned, infos):
+                why = []
+                if info is not None:
+                    if info["sig"] == 0x80 and info["enables"]:
+                        why.append("go")
+                    if (top and info["kid"] >= 0 and info["latest"] and info["mode"] == 0
+                            and info["kcb"] == top["kcb"]):
+                        why.append("newest-program")
+                if status is not None and (status & 0xFFF00000) == W_STATUS_MAGIC:
+                    why.append("status")
+                if a.workers_all:
+                    why.append("all")
+                if not why:
+                    continue
+                running = ("go" in why and "newest-program" in why) or status == W_STATUS_MAGIC
+                key = f"{rec['noc0'][0]}-{rec['noc0'][1]}"
+                rec["selected_because"] = why
+                rec["regs"] = {"pass1": {"status": status, "soft_reset": sr,
+                                         "go": None if info is None else info["sig"], "t": round(now() - self.t0, 4)}}
+                ent["selected"] = True
+                crec["cores"][key] = rec
+                self.wcores.append((chip_id, key, loc, rec, running))
+            wi["chips"][str(chip_id)] = crec
+        self.index["timings"]["wscan_s"] = round(now() - t, 3)
+        print(f"wscan: {nscan} Tensix cores, {len(self.wcores)} selected "
+              f"({sum(1 for c in self.wcores if c[4])} still running a test kernel), "
+              f"{self.index['timings']['wscan_s']} s", flush=True)
+        self.save_index()
+
+    def worker_l1(self):
+        t = now()
+        a = self.args
+        total, nfull = 0, 0
+        for chip_id, key, loc, rec, running in self.wcores:
+            if self.over_budget():
+                self.index["errors"].append(f"wl1: time budget reached before chip {chip_id} tensix {key}")
+                print(f"  time budget reached, L1 of chip {chip_id} tensix {key} and later cores skipped", flush=True)
+                break
+            full = running and nfull < a.worker_full_max
+            if running and not full:
+                rec.setdefault("notes", []).append(f"whole-L1 cap ({a.worker_full_max}) reached: window only")
+            nfull += full
+            size = W_L1_SIZE if full else a.worker_window
+            fkey = (chip_id, f"tensix {key}", "l1")
+            img = bytearray(size)
+            missing = []
+            tc = now()
+            for off in range(0, size, a.chunk):
+                n = min(a.chunk, size - off)
+                for attempt in (1, 2):
+                    try:
+                        img[off:off + n] = self.read_block(loc, off, n, fkey)
+                        break
+                    except Exception as e:  # noqa: BLE001
+                        if attempt == 2 or fkey in self.dead:
+                            missing.append([off, n, f"{type(e).__name__}: {e}"])
+                            self.err(f"chip {chip_id} tensix {key} L1 [{off:#x}, {off + n:#x})", e)
+            fn = f"chip{chip_id}/tensix_{key}_l1.bin"
+            with open(os.path.join(self.out, fn), "wb") as f:
+                f.write(img)
+            rec["l1"] = {"file": fn, "addr": 0, "size": size, "missing": missing, "t": round(tc - self.t0, 4),
+                         "read_s": round(now() - tc, 4)}
+            rec["full"] = full
+            if W_FABRIC_RW + 256 <= size and not any(m[0] <= W_FABRIC_RW < m[0] + m[1] for m in missing):
+                rec["regs"]["pass1"]["fabric_rw"] = bytes(img[W_FABRIC_RW:W_FABRIC_RW + 256]).hex()
+            total += size - sum(m[1] for m in missing)
+        dt = now() - t
+        self.index["timings"]["wl1_s"] = round(dt, 3)
+        self.index["timings"]["wl1_bytes"] = total
+        print(f"wl1: {len(self.wcores)} cores, {total} B in {dt:.2f} s", flush=True)
+        self.save_index()
+
+    def worker_pass2(self):
+        t = now()
+        a = self.args
+        for chip_id, key, loc, rec, running in self.wcores:
+            if self.over_budget():
+                self.index["errors"].append(f"wpass2: time budget reached before chip {chip_id} tensix {key}")
+                break
+            fkey = (chip_id, f"tensix {key}", "wpass2")
+            p = {"t": round(now() - self.t0, 4), "errors": []}
+            try:
+                head = self.read_block(loc, W_MAILBOX, W_HEAD_SIZE, fkey)
+                p["go"] = self.head_info(head)["sig"]
+                p["head_hex"] = bytes(head).hex()
+            except Exception as e:  # noqa: BLE001
+                p["errors"].append(f"head: {type(e).__name__}: {e}")
+            p["status"], e = self.rd32(loc, a.worker_status_addr, fkey)
+            if e:
+                p["errors"].append(f"status: {e}")
+            p["soft_reset"], e = self.rd32(loc, SOFT_RESET_REG, fkey)
+            if e:
+                p["errors"].append(f"soft_reset: {e}")
+            try:
+                p["fabric_rw"] = bytes(self.read_block(loc, W_FABRIC_RW, 256, fkey)).hex()
+            except Exception as e:  # noqa: BLE001
+                p["errors"].append(f"fabric_rw: {type(e).__name__}: {e}")
+            rec["regs"]["pass2"] = p
+        self.index["timings"]["wpass2_s"] = round(now() - t, 3)
+        print(f"wpass2: {len(self.wcores)} cores, {self.index['timings']['wpass2_s']} s", flush=True)
+        self.save_index()
+
+    def worker_niu(self):
+        t = now()
+        for chip_id, key, loc, rec, running in self.wcores:
+            if self.over_budget():
+                self.index["errors"].append(f"wniu: time budget reached before chip {chip_id} tensix {key}")
+                break
+            fkey = (chip_id, f"tensix {key}", "niu")
+            niu, errs = {}, []
+            for noc, base in enumerate(W_NIU_BASES):
+                regs = {}
+                for off in W_NIU_STATUS:
+                    v, e = self.rd32(loc, base + 0x200 + off, fkey)
+                    regs[hex(off)] = v
+                    if e:
+                        errs.append(f"noc{noc} {hex(off)}: {e}")
+                niu[str(noc)] = regs
+            rec["niu"] = niu
+            if errs:
+                rec["niu_errors"] = errs[:8]
+        self.index["timings"]["wniu_s"] = round(now() - t, 3)
+        print(f"wniu: {len(self.wcores)} cores, {self.index['timings']['wniu_s']} s", flush=True)
+        self.save_index()
+
+    def copy_kernel_elfs(self):
+        """No device access: the run's non-router kernel ELFs into OUT/cache. Test kernels (tt_fabric_*) keep the
+        DWARF type information the decoder reads with gdb (.debug_info/.debug_abbrev/.debug_str; line, location and
+        frame tables, relocations and symbols dropped: 0.5 MB instead of 1.5 MB, same layouts); the others (dispatch)
+        are stripped to their load image, which is all the decoder needs to name them."""
+        t = now()
+        src = self.args.kernel_cache or self.index["meta"].get("cache")
+        out = []
+        if not src or not os.path.isdir(src):
+            self.index.setdefault("workers", {})["kernel_elfs"] = {"source": src, "files": [], "note": "no cache dir"}
+            return
+        import glob
+        import shutil
+        import subprocess
+        objcopy = W_OBJCOPY if os.path.exists(W_OBJCOPY) else None
+
+        def put(p, dst, name):
+            if objcopy:
+                opts = (["--remove-section=.debug_line", "--remove-section=.debug_loclists",
+                         "--remove-section=.debug_rnglists", "--remove-section=.debug_frame",
+                         "--remove-section=.debug_aranges", "--remove-section=.rela.*", "--remove-section=.symtab",
+                         "--remove-section=.strtab"] if name.startswith("tt_fabric_") else ["--strip-all"])
+                try:
+                    r = subprocess.run([objcopy] + opts + [p, dst], capture_output=True, text=True, timeout=30)
+                    if r.returncode == 0:
+                        return
+                except (OSError, subprocess.SubprocessError):
+                    pass
+            shutil.copy2(p, dst)
+
+        seen = set()
+        for d in sorted(glob.glob(f"{src}/*/kernels/*/*/") + glob.glob(f"{src}/kernels/*/*/")):
+            parts = d.rstrip("/").split("/")
+            name, hsh = parts[-2], parts[-1]
+            if name == "fabric_erisc_router_v2" or (name, hsh) in seen:
+                continue
+            seen.add((name, hsh))
+            for risc in ("brisc", "ncrisc", "trisc0", "trisc1", "trisc2"):
+                for fname in (f"{risc}.elf.xip.elf", f"{risc}.elf"):
+                    p = os.path.join(d, risc, fname)
+                    if os.path.isfile(p):
+                        dst = os.path.join(self.out, "cache", "kernels", name, hsh, risc)
+                        os.makedirs(dst, exist_ok=True)
+                        try:
+                            put(p, os.path.join(dst, fname), name)
+                            out.append(f"cache/kernels/{name}/{hsh}/{risc}/{fname}")
+                        except OSError as e:
+                            self.err(f"copy {p}", e)
+                        break
+        self.index.setdefault("workers", {})["kernel_elfs"] = {"source": src, "files": out}
+        self.index["timings"]["kernel_elfs_s"] = round(now() - t, 3)
+        print(f"kernel ELFs: {len(out)} copied from {src} in {self.index['timings']['kernel_elfs_s']} s", flush=True)
+
     def summary(self):
         print("== capture summary ==")
         for chip_id, crec in sorted(self.index["chips"].items(), key=lambda kv: int(kv[0])):
@@ -376,10 +694,22 @@ class Capture:
                 if "pass2" not in rec.get("regs", {}):
                     parts[-1] += "(no pass2)"
             print(f"chip {chip_id}: eth {' '.join(parts) or '-'}; {nbytes} B L1")
+        for chip_id, crec in sorted(self.index.get("workers", {}).get("chips", {}).items(), key=lambda kv: int(kv[0])):
+            parts = []
+            for key, rec in sorted(crec["cores"].items()):
+                l1 = rec.get("l1")
+                tag = "full" if rec.get("full") else ("win" if l1 else "no L1")
+                if l1 and l1["missing"]:
+                    tag += f" partial {l1['size'] - sum(m[1] for m in l1['missing'])}"
+                parts.append(f"{key}({tag})")
+            print(f"chip {chip_id} tensix: {len(crec['scan']['cores'])} scanned, {len(parts)} captured: "
+                  f"{' '.join(parts) or '-'}")
         t = self.index["timings"]
         print(f"reads {self.n_reads}, read errors {self.n_read_errors}, total {t.get('elapsed_s')} s "
               f"(open {t.get('open_s')}, pass1 {t.get('pass1_s')}, l1 {t.get('l1_s')}, pass2 {t.get('pass2_s')}, "
-              f"txq {t.get('txq1_s')}+{t.get('txq2_s')})")
+              f"txq {t.get('txq1_s')}+{t.get('txq2_s')}"
+              + (f", workers scan {t.get('wscan_s')} l1 {t.get('wl1_s')} pass2 {t.get('wpass2_s')} "
+                 f"niu {t.get('wniu_s')}" if "wscan_s" in t else "") + ")")
         print(f"output: {self.out}")
 
 
@@ -394,6 +724,17 @@ def main():
     ap.add_argument("--time-budget", type=float, default=210.0, help="seconds; later phases are skipped past it")
     ap.add_argument("--meta", action="append", default=[], help="KEY=VALUE recorded in index.json")
     ap.add_argument("--no-txq", action="store_true", help="skip the Ethernet TX queue registers")
+    ap.add_argument("--no-workers", action="store_true", help="skip the Tensix (test worker) capture")
+    ap.add_argument("--worker-window", type=lambda x: int(x, 0), default=W_WINDOW,
+                    help="L1 bytes from 0 read per captured worker core (default 0x40000)")
+    ap.add_argument("--worker-full-max", type=int, default=32,
+                    help="at most this many still-running worker cores get their whole L1 read")
+    ap.add_argument("--worker-status-addr", type=lambda x: int(x, 0), default=W_STATUS_ADDR,
+                    help="the test result buffer's status word, read on every Tensix core (default 0x23480)")
+    ap.add_argument("--workers-all", action="store_true", help="capture every Tensix core's window (debug)")
+    ap.add_argument("--no-worker-niu", action="store_true", help="skip the workers' NIU transaction counters")
+    ap.add_argument("--kernel-cache", default="",
+                    help="run cache to copy the kernel ELFs from (default: the --meta cache=DIR value)")
     ap.add_argument("--verbose", action="store_true")
     args = ap.parse_args()
     os.makedirs(args.out_dir, exist_ok=True)
@@ -410,6 +751,17 @@ def main():
         if not args.no_txq:  # last: the TX queue register block is the one this tool reads that the router owns
             cap.reg_pass("txq1", txq_only=True)
             cap.reg_pass("txq2", txq_only=True)
+        if not args.no_workers:  # after the routers, so their capture is as before whatever happens here
+            try:
+                cap.worker_scan()
+                cap.worker_l1()
+                cap.worker_pass2()
+                if not args.no_worker_niu:
+                    cap.worker_niu()
+            except Exception as e:  # noqa: BLE001 - the router capture above is kept
+                cap.err("workers", e)
+                cap.index["workers_traceback"] = traceback.format_exc()
+                traceback.print_exc()
         cap.index["complete"] = not cap.over_budget()
     except Exception as e:  # noqa: BLE001
         cap.err("capture", e)
@@ -417,6 +769,11 @@ def main():
         traceback.print_exc()
         rc = 2
     cap.index["end_time"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    if not args.no_workers:  # files only, no device access
+        try:
+            cap.copy_kernel_elfs()
+        except Exception as e:  # noqa: BLE001
+            cap.err("kernel ELF copy", e)
     cap.save_index(final=True)
     cap.summary()
     return rc

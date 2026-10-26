@@ -25,6 +25,14 @@ Then a cross-router summary: per Ethernet link the sender's view (unsent, comple
 receiver's (packets pending, completion counters sent); per router-to-router NoC connection the upstream copy against
 the downstream register (downstream - copy = packets the downstream sent and has not credited back; 0 when quiet).
 "Inferred" slot positions assume a quiet ring (every retired packet completed); they are marked as such.
+
+Workers: when the capture has a "workers" part (hang_capture.py's Tensix capture), hang_workers.py decodes the test
+kernels (sender, receiver, sync) on the captured Tensix cores, using the kernel ELFs under CAPTURE_DIR/cache, CACHE_DIR
+or --kernel-cache (struct layouts and compile-time args from their DWARF via the toolchain's gdb, --gdb). It adds
+"== Workers: ... (per core) ==" after the router summaries (--quiet-workers drops it), and after "Traffic waiting":
+"Workers not finished (who waits for what)", "Workers by rank (mesh)" (--rank-bindings, default the VC1 split
+bindings), "Worker flows: sender vs receiver" and "Worker-router connections"; worker anomalies join "Anomalies".
+A capture without workers decodes exactly as before.
 """
 import argparse
 import glob
@@ -913,6 +921,14 @@ def main():
     ap.add_argument("--all-slots", action="store_true", help="print every slot header, not only busy channels")
     ap.add_argument("--chip", type=int, action="append", help="report only these chips (summaries stay global)")
     ap.add_argument("--quiet-routers", action="store_true", help="only the summaries and anomalies")
+    ap.add_argument("--no-workers", action="store_true", help="ignore the capture's Tensix (worker) part")
+    ap.add_argument("--quiet-workers", action="store_true", help="no per-core worker sections (summaries stay)")
+    ap.add_argument("--all-worker-rows", action="store_true",
+                    help="list every worker flow and connection, not only those that disagree")
+    ap.add_argument("--kernel-cache", action="append", default=[], help="more cache dirs with the kernel ELFs")
+    ap.add_argument("--gdb", default=None, help="riscv gdb for the kernels' DWARF (default: the tree's sfpi one)")
+    ap.add_argument("--rank-bindings", default=os.path.join(ROOT, "fabric_exp/vc1/p150x8_2x2_split_rank_bindings.yaml"),
+                    help="ttrun rank bindings (mesh id -> rank) for the worker rank view")
     args = ap.parse_args()
 
     idxp = os.path.join(args.capture_dir, "index.json")
@@ -978,6 +994,24 @@ def main():
             fn()
         except Exception:  # noqa: BLE001
             print("  !!! decoder error in summary:\n" + traceback.format_exc())
+    ws = None
+    if index.get("workers") and not args.no_workers:
+        try:
+            import hang_workers
+            any_cfg = next((c for c in cfgs.values() if c.ct), None)
+            dirs = [args.cache_dir, os.path.join(args.capture_dir, "cache")] + list(args.kernel_cache)
+            ws = hang_workers.WorkerSet(args.capture_dir, index, dirs, args.gdb or hang_workers.DEFAULT_GDB, cores,
+                                        by_coord, lambda b, off, _cfg: decode_header(b, off, any_cfg),
+                                        hang_workers.rank_bindings(args.rank_bindings),
+                                        any_cfg.header_size[1] if any_cfg else 36)
+            ws.all_rows = args.all_worker_rows
+            ws.decode()
+            if not args.quiet_workers:
+                ws.report_detail(print)
+        except Exception:  # noqa: BLE001 - the router decode above stands
+            print("  !!! decoder error in workers:\n" + traceback.format_exc())
+            rep.anoms.append("workers: decoder error (see the workers section)")
+            ws = None
     print("\n== Traffic waiting (non-zero counts; in a hang this is where packets and credits stopped) ==")
     waiting = 0
     for c in sorted(cores.values(), key=lambda c: (c.chip, c.chan)):
@@ -1002,6 +1036,13 @@ def main():
                       f"downstream free {e['ds'] & FREE_MASK} vs copy {e['copy'] & FREE_MASK} (diff {e['diff']})")
     if not waiting:
         print("  none: every channel empty, every copy equal to its downstream register")
+    if ws is not None:
+        try:
+            ws.report_summary(print)
+            rep.anoms.extend(ws.anomaly_lines())
+        except Exception:  # noqa: BLE001
+            print("  !!! decoder error in worker summary:\n" + traceback.format_exc())
+            rep.anoms.append("workers: decoder error in the summary")
     print("\n== Anomalies ==")
     unmatched = [c.name + ":" + a for c in cores.values() for a in ("e0", "e1")
                  if c.l1 is not None and c.match.get(a, {}).get("how") == "no match"]

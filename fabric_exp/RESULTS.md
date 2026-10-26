@@ -6060,6 +6060,125 @@ report in `results/twobytwo_report.txt`).
 - **v3t's cycle gains are separate**, from the per-path changes (§95). They were never attributed to the multiply
   removal.
 
+## 98. Round 13: v3v2 closes most E1 gaps; NoC programming through the API; a fourth VC1 hang with the fabric drained
+
+**Designs** (E1 design agent, offline; V3E1_NOTES §12). The E1 changes on v3tk:
+1. **Batch cut:** completion batches end at a record-word boundary.
+2. **Preset:** local writes program the command buffer once before the loop.
+3. **Decode:** the 2D route bytes are read as plain header fields.
+
+Rule from the user, mid-round: NoC programming goes through the provided NoC APIs, wrapped in named helpers.
+- Change 2 was first hand-written (six `NOC_CMD_BUF_WRITE_REG` per write; kept as `v3v_raw`).
+- It is now `local_write_init_state()` / `local_write_with_state()` over `noc_write_init_state`, `noc_write_with_state`
+  and `ncrisc_noc_set_transaction_id`, the stateful API the dispatch kernels use. Instruction counts match the raw form.
+- Audit of the current lead, v3tk:
+  - no raw command-buffer programming outside the study's DRISC-only blocks (PR drop list);
+  - two raw status reads in E1, the completion check and the deferral bypass. The API has only boolean forms of
+    those; count accessors are proposed as API additions (V3E1_NOTES §12.9).
+  - Main's fabric code has neither.
+
+**Variants and runs** (jobs 287–297, 303; all RELAXED and STRICT validation passed). Labels p14v, p14vb, p15v2,
+p15e, p15c, p15d, and v3tk re-run p15k.
+
+| Variant | Preset | Decode | Batch cut | NoC code |
+| --- | --- | --- | --- | --- |
+| v3v_raw (p14v) | yes | plain | yes | raw |
+| v3vb (p14vb) | no | plain | yes | raw |
+| v3vc (p15c) | yes | codec (as v3tk) | no | API |
+| v3vd (p15d) | yes | plain | no | API |
+| v3ve (p15e) | yes | fixed | no | API |
+| **v3v2 (p15v2)** | yes | fixed | yes | API |
+
+Suite means change vs v3t (4352 / mix / flushmix / 1D):
+
+| | -O3 | -O2 | -Os |
+| --- | --- | --- | --- |
+| v3vc | −1.16 / −1.00 / +0.01 / −1.67 | −1.48 / −1.11 / −0.11 / −1.87 | −1.65 / −1.65 / +0.01 / −1.66 |
+| v3ve | −0.83 / −0.74 / −0.14 / −1.69 | −1.26 / −0.91 / −0.10 / −1.87 | −2.38 / −2.72 / −0.99 / −1.64 |
+| **v3v2** | **−2.08 / −1.15 / −0.25 / −3.68** | **−2.52 / −1.13 / −0.97 / −3.82** | **−3.25 / −2.93 / −1.34 / −2.23** |
+
+| Row (-O3 / -O2 / -Os) | v3t | v3v2 |
+| --- | --- | --- |
+| N/S write 16 B | 117.1 / 116.1 / 123.1 | 115.2 / 114.7 / 116.0 |
+| N/S fused 4352 | 162.1 / 161.6 / 173.3 | 153.3 / 152.1 / 160.8 |
+| N/S scatter 4352 | 154.7 / 155.6 / 166.6 | 146.7 / 145.9 / 155.1 |
+| Forwarded fused 4352 (v3a -O3: 155.2) | 159.8 / 159.8 / 159.6 | 154.9 / 155.0 / 157.5 |
+| E/W scatter 4352 | 151.1 / 153.7 / 154.8 | 144.5 / 146.8 / 146.3 |
+| Linear 1-hop E/W scatter | 154.3 / 154.8 / 158.6 | 142.5 / 143.4 / 151.7 |
+| Mesh 1-hop E/W write 4352 | 128.1 / 128.8 / 127.5 | 130.5 / 131.1 / 130.2 |
+| E/W mixed size 4 | 117.8 / 118.0 / 118.6 | 121.5 / 121.9 / 121.6 |
+| Half-ring multicast write | 226.0 / 226.6 / 240.9 | 226.6 / 226.6 / 240.7 |
+
+**Attribution, from the controls**
+- **Preset (v3vc vs v3t):** scatter, fused and forwarded-fused gains.
+- **Decode as first written (v3vd vs v3vc):** the N/S regressions: N/S atomic 127.3 → 134.1, N/S mixed size +3.7,
+  N/S write 16 B +5.7.
+  - With plain fields, GCC loads the X route byte only after testing the Y byte, so the load waits.
+  - The fixed decode (v3ve) removes them.
+- **Batch cut (v3v2 vs v3ve):**
+  - Gains: 1D (Linear 1-hop scatter −6), N/S fused −3.
+  - Costs: mixed-size rows (E/W +3.7, N/S +2.5), Linear 3-hop write at -Os +3.4, Mesh 3-hop write +1.3.
+- **Unexplained:** the 4352 B one-hop write rows are +2.4 to +3.0 in every variant, including v3vc (preset only) and
+  v3vb (no preset).
+  - Not drift: v3tk re-run now (p15k) gives 128.1 / 128.6 on Mesh 1-hop E/W / N/S write, as at 09:00–18:00.
+  - Not counting: v3tk's old write call already counted every write on Blackhole (issue #28758 workaround).
+  - Back with the agent (disassembly of the one-hop write path).
+- **Half-ring at -Os:** untouched. Ring routers run the generic loop, not E1's program; closing it means bringing
+  rings onto E1's program.
+
+**Fourth VC1 hang** (job 295, v3vc at -Os).
+- Rank 0 never finished `MultiMeshAllToAll_size_4096 unicast_write`; rank 1 did. It is the same test family as all
+  three earlier hangs.
+- The armed read-only capture recorded all 48 routers (`results/p15cvc1_auto_hangcap`, decode in `decode.txt`):
+  - every router alive (heartbeat advancing on 48 of 48);
+  - the fabric fully drained: no packet waiting in any sender or receiver channel, every completion counter equal on
+    both sides of every link, every upstream credit copy equal to its downstream register.
+  - **So whatever rank 0 waits for is not held inside the routers.** Candidates: a test worker kernel waiting for a
+    credit or acknowledgement it never got, or the test's cross-rank synchronisation. The capture reads only the
+    routers.
+- After the job:
+  - the broker's fabric check failed;
+  - it held the device and reset it (`tt-smi -r`, about 4 minutes);
+  - the device recovered and the next jobs ran normally.
+- v3v2, v3ve and v3vd passed VC1 at all levels in the same session.
+- Per the standing rule, v3vc is blocked pending cause.
+
+**v3v4 and v3v5** (jobs 304–307, labels p16v4, p16v5; all validation passed, VC1 34/34 at every level).
+- **v3v4** = v3v2 with a 2D partial batch held for 8 idle passes instead of 4 (one constant).
+  - The design agent's explanation was more, smaller credit frames costing the sending E0. It is refuted:
+    - the one-hop 4352 B writes are unchanged (Mesh 1-hop E/W write 130.5 as in v3v2; E/W / N/S write 4352
+      130.5 / 130.8);
+    - its prediction for v3vd also failed: v3vd's N/S write rows are the worst of the four (132.3 / 132.5).
+  - v3v4 helps elsewhere: Mesh 3-hop write −0.8 to −1.8 vs v3v2, mixed-size rows −0.3 to −1.9, small writes −0.3 to
+    −1.0.
+  - It is the best candidate on means at every level. Change vs v3t (4352 / mix / flushmix / 1D): -O3
+    −2.11 / −1.38 / −0.23 / −3.70; -O2 −2.63 / −1.44 / −0.99 / −3.84; -Os −3.40 / −3.29 / −1.39 / −1.86.
+- **v3v5** = v3v4 with the batch cut in 1D only.
+  - Gains: the mixed-size rows return (E/W 117.8–118.9), and 1D keeps its gain (Linear 1-hop scatter 142.5).
+  - Losses: the 2D cut gains (N/S fused 156.1 vs 153.5, E/W scatter 146.9 vs 144.5), so its 2D, mix and flushmix
+    means are worse than v3v4's.
+  - Linear 3-hop write at -Os stays +3.8 (152.6), so that cost is from the 1D cut.
+- **Next hypothesis for the one-hop write rows:** every regressing variant has a faster E1, which spends more time
+  idle-polling on these E0-bound rows. E0 and E1 share the tile's L1, stream registers and NIU.
+  - Test: diagnostic-only builds with a fixed delay in E1's idle pass, `v3vc_d20/d50/d100`. Never for shipping.
+
+**E1 idle-delay sweep** (job 309, `diag_runs.sh`; diagnostic builds only; all benchmark suites passed).
+- Builds: v3vc_dN and v3tk_d50. After a pass with no progress, E1 spins N cycles on its own cycle counter.
+  Same-session references: v3vc (p17c), v3tk (p17k).
+
+| Row (-O3) | v3tk | v3vc | d8 | d20 | d50 | d100 | v3tk_d50 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Mesh 1-hop E/W write | 128.0 | 130.9 | 130.2 | 130.4 | 132.5 | 133.3 | 132.1 |
+| N/S write 4352 | 128.6 | 131.4 | 131.0 | 130.8 | 132.0 | 133.5 | 130.5 |
+| Mesh 3-hop E/W write | 143.8 | 145.2 | 146.9 | 147.5 | 149.9 | 156.2 | 148.3 |
+
+- **Idle-polling contention is ruled out.** Polling less makes the one-hop 4352 B rows worse, not better, and v3tk
+  degrades the same way.
+- These rows depend on how quickly E1 reacts when a packet arrives, which points at the credit round-trip latency
+  (send, receive, write, acknowledge, credit). It does not point at contention or at E1 throughput.
+- The design agent's polling-period floor sketch is therefore dropped.
+- The mechanism of the +2.4 to +3.0 in the v3v family is still open.
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then

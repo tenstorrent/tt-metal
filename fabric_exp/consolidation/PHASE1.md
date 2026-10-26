@@ -35,9 +35,10 @@ place (selector `TT_FABRIC_KERNEL_VERSION=2`, same host args); the `=3` selector
 | v3e1c | E1 | v3e1b + direct scatter/atomic/fused local delivery (scatter counters once per packet) | §94: scatter −7 to −12, atomic −4 to −11 vs v3a; forwarded fused still +5.6 |
 | v3l3be1c | both | Exact composition of v3l3b (E0) and v3e1c (E1); cleaned form `v3sb` (on v3r, PT_LOAD-identical) | §94: lead until v3t (§95). Means vs v3a -O3: -O3 −4.2/−3.6/−4.2/−0.1/−1.5, -O2 −2.3/−2.1/−4.1/−0.6/−1.6, -Os −0.3/+4.7/+0.9/+3.9/+1.9; hook no cost; VC1 passes all levels (once). Open: forwarded fused, E1 opt-level sensitivity, VC1 hang cause |
 | v3r / v3r2 | both | Mainline cleanup of v3l2be1b (PT_LOAD-identical) / plus six null cleanups | §94: v3r2 costs +1 to +2 on means and +4 to +6 on E1 scatter at -O3/-O2, 0 at -Os: E1's inlined main loop is layout-sensitive |
-| **v3t** | E1 | v3sb + E1 main loop in its own `noinline` function with no non-power-of-two constant multiplies; full-batch completion fast path; 1D decides once; VC2 guard | **§95: lead.** Means vs v3a -O3: -O3 −8.4/−4.8/−3.8/−0.5/−6.8, -O2 −6.6/−4.5/−3.9/−1.0/−6.3, -Os −5.4/−2.1/−1.3/+0.5/−1.4. Forwarded rows level-independent; VC1 passes all levels. Open: N/S rows and half-ring multicast at -Os, forwarded fused +4.6, hook +2.5 |
+| v3t | E1 | v3sb + E1 main loop in its own `noinline` function with no non-power-of-two constant multiplies; full-batch completion fast path; 1D decides once; VC2 guard | §95: lead until v3v4 (§98). Means vs v3a -O3: -O3 −8.4/−4.8/−3.8/−0.5/−6.8, -O2 −6.6/−4.5/−3.9/−1.0/−6.3, -Os −5.4/−2.1/−1.3/+0.5/−1.4. Forwarded rows level-independent; VC1 passes all levels. Open: N/S rows and half-ring multicast at -Os, forwarded fused +4.6, hook +2.5 |
 | v3t2 / v3tb | E1 | v3t + v3r2's six null cleanups / v3t with the loop inlined | §95: v3t2 = v3t within 0.4 on every mean and scatter row at all levels (the stability test passes); v3tb ≈ v3t on 2D, 1D +2.4, hook +3 |
-| **v3tk** | both | v3t reading the keepalive host setting `ETH_TXQ_SEQ_UPDATE_TIMEOUT` (builder: 1000 on Blackhole, 0 = firmware elsewhere) | §95: PT_LOAD-identical to v3t; on hardware without the study override it reproduces v3t at all three levels (means within 0.3, VC1 34/34) |
+| **v3v4** | E1 | v3tk + local-write preset via the NoC API (`local_write_init_state` / `local_write_with_state`), fixed 2D route decode, completion batches cut at record-word boundaries, 2D partial batch held 8 idle passes | **§98: lead (user, 2026-10-26).** Means vs v3t (4352/mix/flushmix/1D): -O3 −2.1/−1.4/−0.2/−3.7, -O2 −2.6/−1.4/−1.0/−3.8, -Os −3.4/−3.3/−1.4/−1.9; N/S -Os gap mostly closed; FWD fused 154.7 (beats v3a -O3). Known costs: one-hop 4352 B writes +2.4..3 (cause open), MixSize4 +3 (batch cut); half-ring -Os open |
+| v3tk | both | v3t reading the keepalive host setting `ETH_TXQ_SEQ_UPDATE_TIMEOUT` (builder: 1000 on Blackhole, 0 = firmware elsewhere) | §95: PT_LOAD-identical to v3t; on hardware without the study override it reproduces v3t at all three levels (means within 0.3, VC1 34/34) |
 
 Key findings so far: the whole -Os penalty is E1's (§88); v2/v3a's VC1 receiver admits on VC0's streams (§87).
 
@@ -87,6 +88,15 @@ Suite means decide, not single rows; a design within about a cycle of the best a
   loop's own function is the insulation; synth_mult is a documented gotcha.
 - 2x2 (§97, offline): constant multiplies have no effect; per-round work (termination, heartbeat, context switch)
   out of the loop function is what insulates E1's loop. The multiply rule is withdrawn.
+
+### Round 13 plan (2026-10-25): close v3t's remaining gaps, all E1 (E0 = v3sb's, -Os-robust per §94's injection)
+- N/S rows at -Os (+6 to +12 vs -O2; E/W rows are level-independent; N/S paths +6 to +10 instructions at -Os).
+- Half-ring multicast at -Os (+14) is in every E1 design, v3a's too: shared 1D multicast code.
+- Forwarded fused: v3t 159.8 at every level. v3a's 155.2 exists only at -O3 (-O2 159.5, -Os 189.9), so the target is
+  getting by structure what -O3 does for v3a.
+- Minor: E/W atomic +2 vs v3sb at -O3/-O2.
+- E1 design agent working offline on `variants/v3v` (V3E1_NOTES §12); then a hardware round with VC1 and the jitter
+  edits.
 
 ## Known defects in the tree's v2 (`fabric_erisc_router_v2.cpp`), left as is (user, 2026-10-25)
 Both come from the study's own changes; main's router has neither. v3 (v3e1b's E1 onward, v3r's generic loop) fixes

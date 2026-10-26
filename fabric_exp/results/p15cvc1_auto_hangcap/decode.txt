@@ -1,0 +1,255 @@
+capture results/p15cvc1_auto_hangcap: 2026-10-25T22:37:53+0000 on bh-lb-120-a08u24, complete=True, 0 capture errors, meta {'cache': '/home/aagarwal/.tt-metal-cache-p1vc1-v3vc-auto', 'label': 'p15cvc1_auto', 'level': 'auto', 'reason': 'timeout 240s', 'yaml': 'fabric_exp/vc1/vc1_split.yaml'}
+cache results/p15cvc1_auto_hangcap/cache: 96 router configs (48 E0, 48 E1); positional args for 96
+
+== Ethernet links: sender E0 view vs receiver E1 view ==
+   (completions: counter the sender has received / counter the receiver last sent; equal when quiet)
+  chip0/eth4 -> chip1/eth7: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:1000/1000 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip0/eth5 -> chip2/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip0/eth6 -> chip1/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip0/eth7 -> chip2/eth4: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:555/555 unsent 0  ch3:0/0 unsent 0  ch4:500/500 unsent 0  ch5:500/500 unsent 0  ch6:0/0 unsent 0
+  chip0/eth8 -> chip4/eth11: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip0/eth10 -> chip4/eth9: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip1/eth4 -> chip3/eth7: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:555/555 unsent 0  ch4:0/0 unsent 0  ch5:500/500 unsent 0  ch6:500/500 unsent 0
+  chip1/eth5 -> chip0/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip1/eth6 -> chip3/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip1/eth7 -> chip0/eth4: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:1000/1000 unsent 0
+  chip1/eth8 -> chip5/eth11: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip1/eth10 -> chip5/eth9: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip2/eth4 -> chip0/eth7: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:555/555 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:500/500 unsent 0  ch6:500/500 unsent 0
+  chip2/eth5 -> chip3/eth6: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:1000/1000 unsent 0
+  chip2/eth6 -> chip0/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip2/eth7 -> chip3/eth4: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip2/eth8 -> chip6/eth11: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip2/eth10 -> chip6/eth9: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip3/eth4 -> chip2/eth7: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip3/eth5 -> chip1/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip3/eth6 -> chip2/eth5: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:1000/1000 unsent 0
+  chip3/eth7 -> chip1/eth4: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:555/555 unsent 0  ch4:0/0 unsent 0  ch5:500/500 unsent 0  ch6:500/500 unsent 0
+  chip3/eth8 -> chip7/eth11: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip3/eth10 -> chip7/eth9: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip4/eth4 -> chip5/eth7: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip4/eth5 -> chip6/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip4/eth6 -> chip5/eth5: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:1000/1000 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip4/eth7 -> chip6/eth4: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:555/555 unsent 0  ch3:0/0 unsent 0  ch4:500/500 unsent 0  ch5:500/500 unsent 0  ch6:0/0 unsent 0
+  chip4/eth9 -> chip0/eth10: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip4/eth11 -> chip0/eth8: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip5/eth4 -> chip7/eth7: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:555/555 unsent 0  ch4:0/0 unsent 0  ch5:500/500 unsent 0  ch6:500/500 unsent 0
+  chip5/eth5 -> chip4/eth6: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:1000/1000 unsent 0
+  chip5/eth6 -> chip7/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip5/eth7 -> chip4/eth4: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip5/eth9 -> chip1/eth10: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip5/eth11 -> chip1/eth8: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip6/eth4 -> chip4/eth7: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:555/555 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:500/500 unsent 0  ch6:500/500 unsent 0
+  chip6/eth5 -> chip7/eth6: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:1000/1000 unsent 0
+  chip6/eth6 -> chip4/eth5: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip6/eth7 -> chip7/eth4: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip6/eth9 -> chip2/eth10: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip6/eth11 -> chip2/eth8: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip7/eth4 -> chip6/eth7: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip7/eth5 -> chip5/eth6: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip7/eth6 -> chip6/eth5: pending at receiver [rx0 0, rx1 0] | ch0:1055/1055 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:1000/1000 unsent 0
+  chip7/eth7 -> chip5/eth4: pending at receiver [rx0 0, rx1 0] | ch0:555/555 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:555/555 unsent 0  ch4:0/0 unsent 0  ch5:500/500 unsent 0  ch6:500/500 unsent 0
+  chip7/eth9 -> chip3/eth10: pending at receiver [rx0 0, rx1 0] | ch0:0/0 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+  chip7/eth11 -> chip3/eth8: pending at receiver [rx0 0, rx1 0] | ch0:2000/2000 unsent 0  ch1:0/0 unsent 0  ch2:0/0 unsent 0  ch3:0/0 unsent 0  ch4:0/0 unsent 0  ch5:0/0 unsent 0  ch6:0/0 unsent 0
+
+== Router-to-router NoC connections: upstream E1 copy vs downstream E0 channel register ==
+   (ds - copy = packets the downstream sent over Ethernet and has not credited back; 0 when quiet)
+  chip0/eth4 vc0 E -> chip0/eth10 ch2: copy 4 ds 4 N 4 diff 0
+  chip0/eth4 vc0 W -> chip0/eth7 ch2: copy 4 ds 4 N 4 diff 0
+  chip0/eth4 vc1 E -> chip0/eth10 ch5: copy 2 ds 2 N 2 diff 0
+  chip0/eth4 vc1 W -> chip0/eth7 ch5: copy 2 ds 2 N 2 diff 0
+  chip0/eth5 vc0 E -> chip0/eth8 ch1: copy 4 ds 4 N 4 diff 0
+  chip0/eth5 vc0 N -> chip0/eth6 ch2: copy 4 ds 4 N 4 diff 0
+  chip0/eth5 vc1 E -> chip0/eth8 ch4: copy 2 ds 2 N 2 diff 0
+  chip0/eth5 vc1 N -> chip0/eth6 ch5: copy 2 ds 2 N 2 diff 0
+  chip0/eth6 vc0 E -> chip0/eth8 ch2: copy 4 ds 4 N 4 diff 0
+  chip0/eth6 vc0 W -> chip0/eth5 ch2: copy 4 ds 4 N 4 diff 0
+  chip0/eth6 vc1 E -> chip0/eth8 ch5: copy 2 ds 2 N 2 diff 0
+  chip0/eth6 vc1 W -> chip0/eth5 ch5: copy 2 ds 2 N 2 diff 0
+  chip0/eth7 vc0 E -> chip0/eth10 ch1: copy 4 ds 4 N 4 diff 0
+  chip0/eth7 vc0 N -> chip0/eth4 ch2: copy 4 ds 4 N 4 diff 0
+  chip0/eth7 vc1 E -> chip0/eth10 ch4: copy 2 ds 2 N 2 diff 0
+  chip0/eth7 vc1 N -> chip0/eth4 ch5: copy 2 ds 2 N 2 diff 0
+  chip0/eth8 vc0 W -> chip0/eth5 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip0/eth8 vc0 N -> chip0/eth6 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip0/eth8 vc1 W -> chip0/eth5 ch4: copy 2 ds 2 N 2 diff 0
+  chip0/eth8 vc1 N -> chip0/eth6 ch4: copy 2 ds 2 N 2 diff 0
+  chip0/eth10 vc0 W -> chip0/eth7 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip0/eth10 vc0 N -> chip0/eth4 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip0/eth10 vc1 W -> chip0/eth7 ch4: copy 2 ds 2 N 2 diff 0
+  chip0/eth10 vc1 N -> chip0/eth4 ch4: copy 2 ds 2 N 2 diff 0
+  chip1/eth4 vc0 N -> chip1/eth10 ch2: copy 4 ds 4 N 4 diff 0
+  chip1/eth4 vc0 S -> chip1/eth7 ch2: copy 4 ds 4 N 4 diff 0
+  chip1/eth4 vc1 N -> chip1/eth10 ch5: copy 2 ds 2 N 2 diff 0
+  chip1/eth4 vc1 S -> chip1/eth7 ch5: copy 2 ds 2 N 2 diff 0
+  chip1/eth5 vc0 W -> chip1/eth6 ch3: copy 4 ds 4 N 4 diff 0
+  chip1/eth5 vc0 N -> chip1/eth8 ch3: copy 4 ds 4 N 4 diff 0
+  chip1/eth5 vc1 W -> chip1/eth6 ch6: copy 2 ds 2 N 2 diff 0
+  chip1/eth5 vc1 N -> chip1/eth8 ch6: copy 2 ds 2 N 2 diff 0
+  chip1/eth6 vc0 N -> chip1/eth8 ch2: copy 4 ds 4 N 4 diff 0
+  chip1/eth6 vc0 S -> chip1/eth5 ch2: copy 4 ds 4 N 4 diff 0
+  chip1/eth6 vc1 N -> chip1/eth8 ch5: copy 2 ds 2 N 2 diff 0
+  chip1/eth6 vc1 S -> chip1/eth5 ch5: copy 2 ds 2 N 2 diff 0
+  chip1/eth7 vc0 W -> chip1/eth4 ch3: copy 4 ds 4 N 4 diff 0
+  chip1/eth7 vc0 N -> chip1/eth10 ch3: copy 4 ds 4 N 4 diff 0
+  chip1/eth7 vc1 W -> chip1/eth4 ch6: copy 2 ds 2 N 2 diff 0
+  chip1/eth7 vc1 N -> chip1/eth10 ch6: copy 2 ds 2 N 2 diff 0
+  chip1/eth8 vc0 W -> chip1/eth6 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip1/eth8 vc0 S -> chip1/eth5 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip1/eth8 vc1 W -> chip1/eth6 ch5: copy 2 ds 2 N 2 diff 0
+  chip1/eth8 vc1 S -> chip1/eth5 ch6: copy 2 ds 2 N 2 diff 0
+  chip1/eth10 vc0 W -> chip1/eth4 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip1/eth10 vc0 S -> chip1/eth7 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip1/eth10 vc1 W -> chip1/eth4 ch5: copy 2 ds 2 N 2 diff 0
+  chip1/eth10 vc1 S -> chip1/eth7 ch6: copy 2 ds 2 N 2 diff 0
+  chip2/eth4 vc0 N -> chip2/eth5 ch1: copy 4 ds 4 N 4 diff 0
+  chip2/eth4 vc0 S -> chip2/eth10 ch1: copy 4 ds 4 N 4 diff 0
+  chip2/eth4 vc1 N -> chip2/eth5 ch4: copy 2 ds 2 N 2 diff 0
+  chip2/eth4 vc1 S -> chip2/eth10 ch4: copy 2 ds 2 N 2 diff 0
+  chip2/eth5 vc0 E -> chip2/eth4 ch2: copy 4 ds 4 N 4 diff 0
+  chip2/eth5 vc0 S -> chip2/eth10 ch3: copy 4 ds 4 N 4 diff 0
+  chip2/eth5 vc1 E -> chip2/eth4 ch5: copy 2 ds 2 N 2 diff 0
+  chip2/eth5 vc1 S -> chip2/eth10 ch6: copy 2 ds 2 N 2 diff 0
+  chip2/eth6 vc0 N -> chip2/eth7 ch1: copy 4 ds 4 N 4 diff 0
+  chip2/eth6 vc0 S -> chip2/eth8 ch1: copy 4 ds 4 N 4 diff 0
+  chip2/eth6 vc1 N -> chip2/eth7 ch4: copy 2 ds 2 N 2 diff 0
+  chip2/eth6 vc1 S -> chip2/eth8 ch4: copy 2 ds 2 N 2 diff 0
+  chip2/eth7 vc0 E -> chip2/eth6 ch2: copy 4 ds 4 N 4 diff 0
+  chip2/eth7 vc0 S -> chip2/eth8 ch3: copy 4 ds 4 N 4 diff 0
+  chip2/eth7 vc1 E -> chip2/eth6 ch5: copy 2 ds 2 N 2 diff 0
+  chip2/eth7 vc1 S -> chip2/eth8 ch6: copy 2 ds 2 N 2 diff 0
+  chip2/eth8 vc0 E -> chip2/eth6 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip2/eth8 vc0 N -> chip2/eth7 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip2/eth8 vc1 E -> chip2/eth6 ch6: copy 2 ds 2 N 2 diff 0
+  chip2/eth8 vc1 N -> chip2/eth7 ch6: copy 2 ds 2 N 2 diff 0
+  chip2/eth10 vc0 E -> chip2/eth4 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip2/eth10 vc0 N -> chip2/eth5 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip2/eth10 vc1 E -> chip2/eth4 ch6: copy 2 ds 2 N 2 diff 0
+  chip2/eth10 vc1 N -> chip2/eth5 ch6: copy 2 ds 2 N 2 diff 0
+  chip3/eth4 vc0 E -> chip3/eth5 ch3: copy 4 ds 4 N 4 diff 0
+  chip3/eth4 vc0 N -> chip3/eth10 ch3: copy 4 ds 4 N 4 diff 0
+  chip3/eth4 vc1 E -> chip3/eth5 ch6: copy 2 ds 2 N 2 diff 0
+  chip3/eth4 vc1 N -> chip3/eth10 ch6: copy 2 ds 2 N 2 diff 0
+  chip3/eth5 vc0 N -> chip3/eth10 ch1: copy 4 ds 4 N 4 diff 0
+  chip3/eth5 vc0 S -> chip3/eth4 ch1: copy 4 ds 4 N 4 diff 0
+  chip3/eth5 vc1 N -> chip3/eth10 ch4: copy 2 ds 2 N 2 diff 0
+  chip3/eth5 vc1 S -> chip3/eth4 ch4: copy 2 ds 2 N 2 diff 0
+  chip3/eth6 vc0 E -> chip3/eth7 ch3: copy 4 ds 4 N 4 diff 0
+  chip3/eth6 vc0 N -> chip3/eth8 ch3: copy 4 ds 4 N 4 diff 0
+  chip3/eth6 vc1 E -> chip3/eth7 ch6: copy 2 ds 2 N 2 diff 0
+  chip3/eth6 vc1 N -> chip3/eth8 ch6: copy 2 ds 2 N 2 diff 0
+  chip3/eth7 vc0 N -> chip3/eth8 ch1: copy 4 ds 4 N 4 diff 0
+  chip3/eth7 vc0 S -> chip3/eth6 ch1: copy 4 ds 4 N 4 diff 0
+  chip3/eth7 vc1 N -> chip3/eth8 ch4: copy 2 ds 2 N 2 diff 0
+  chip3/eth7 vc1 S -> chip3/eth6 ch4: copy 2 ds 2 N 2 diff 0
+  chip3/eth8 vc0 E -> chip3/eth7 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip3/eth8 vc0 S -> chip3/eth6 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip3/eth8 vc1 E -> chip3/eth7 ch5: copy 2 ds 2 N 2 diff 0
+  chip3/eth8 vc1 S -> chip3/eth6 ch6: copy 2 ds 2 N 2 diff 0
+  chip3/eth10 vc0 E -> chip3/eth5 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip3/eth10 vc0 S -> chip3/eth4 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip3/eth10 vc1 E -> chip3/eth5 ch5: copy 2 ds 2 N 2 diff 0
+  chip3/eth10 vc1 S -> chip3/eth4 ch6: copy 2 ds 2 N 2 diff 0
+  chip4/eth4 vc0 E -> chip4/eth11 ch2: copy 4 ds 4 N 4 diff 0
+  chip4/eth4 vc0 W -> chip4/eth5 ch2: copy 4 ds 4 N 4 diff 0
+  chip4/eth4 vc1 E -> chip4/eth11 ch5: copy 2 ds 2 N 2 diff 0
+  chip4/eth4 vc1 W -> chip4/eth5 ch5: copy 2 ds 2 N 2 diff 0
+  chip4/eth5 vc0 E -> chip4/eth11 ch1: copy 4 ds 4 N 4 diff 0
+  chip4/eth5 vc0 N -> chip4/eth4 ch2: copy 4 ds 4 N 4 diff 0
+  chip4/eth5 vc1 E -> chip4/eth11 ch4: copy 2 ds 2 N 2 diff 0
+  chip4/eth5 vc1 N -> chip4/eth4 ch5: copy 2 ds 2 N 2 diff 0
+  chip4/eth6 vc0 E -> chip4/eth9 ch2: copy 4 ds 4 N 4 diff 0
+  chip4/eth6 vc0 W -> chip4/eth7 ch2: copy 4 ds 4 N 4 diff 0
+  chip4/eth6 vc1 E -> chip4/eth9 ch5: copy 2 ds 2 N 2 diff 0
+  chip4/eth6 vc1 W -> chip4/eth7 ch5: copy 2 ds 2 N 2 diff 0
+  chip4/eth7 vc0 E -> chip4/eth9 ch1: copy 4 ds 4 N 4 diff 0
+  chip4/eth7 vc0 N -> chip4/eth6 ch2: copy 4 ds 4 N 4 diff 0
+  chip4/eth7 vc1 E -> chip4/eth9 ch4: copy 2 ds 2 N 2 diff 0
+  chip4/eth7 vc1 N -> chip4/eth6 ch5: copy 2 ds 2 N 2 diff 0
+  chip4/eth9 vc0 W -> chip4/eth7 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip4/eth9 vc0 N -> chip4/eth6 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip4/eth9 vc1 W -> chip4/eth7 ch4: copy 2 ds 2 N 2 diff 0
+  chip4/eth9 vc1 N -> chip4/eth6 ch4: copy 2 ds 2 N 2 diff 0
+  chip4/eth11 vc0 W -> chip4/eth5 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip4/eth11 vc0 N -> chip4/eth4 ch4: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip4/eth11 vc1 W -> chip4/eth5 ch4: copy 2 ds 2 N 2 diff 0
+  chip4/eth11 vc1 N -> chip4/eth4 ch4: copy 2 ds 2 N 2 diff 0
+  chip5/eth4 vc0 N -> chip5/eth9 ch2: copy 4 ds 4 N 4 diff 0
+  chip5/eth4 vc0 S -> chip5/eth5 ch2: copy 4 ds 4 N 4 diff 0
+  chip5/eth4 vc1 N -> chip5/eth9 ch5: copy 2 ds 2 N 2 diff 0
+  chip5/eth4 vc1 S -> chip5/eth5 ch5: copy 2 ds 2 N 2 diff 0
+  chip5/eth5 vc0 W -> chip5/eth4 ch3: copy 4 ds 4 N 4 diff 0
+  chip5/eth5 vc0 N -> chip5/eth9 ch3: copy 4 ds 4 N 4 diff 0
+  chip5/eth5 vc1 W -> chip5/eth4 ch6: copy 2 ds 2 N 2 diff 0
+  chip5/eth5 vc1 N -> chip5/eth9 ch6: copy 2 ds 2 N 2 diff 0
+  chip5/eth6 vc0 N -> chip5/eth11 ch2: copy 4 ds 4 N 4 diff 0
+  chip5/eth6 vc0 S -> chip5/eth7 ch2: copy 4 ds 4 N 4 diff 0
+  chip5/eth6 vc1 N -> chip5/eth11 ch5: copy 2 ds 2 N 2 diff 0
+  chip5/eth6 vc1 S -> chip5/eth7 ch5: copy 2 ds 2 N 2 diff 0
+  chip5/eth7 vc0 W -> chip5/eth6 ch3: copy 4 ds 4 N 4 diff 0
+  chip5/eth7 vc0 N -> chip5/eth11 ch3: copy 4 ds 4 N 4 diff 0
+  chip5/eth7 vc1 W -> chip5/eth6 ch6: copy 2 ds 2 N 2 diff 0
+  chip5/eth7 vc1 N -> chip5/eth11 ch6: copy 2 ds 2 N 2 diff 0
+  chip5/eth9 vc0 W -> chip5/eth4 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip5/eth9 vc0 S -> chip5/eth5 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip5/eth9 vc1 W -> chip5/eth4 ch5: copy 2 ds 2 N 2 diff 0
+  chip5/eth9 vc1 S -> chip5/eth5 ch6: copy 2 ds 2 N 2 diff 0
+  chip5/eth11 vc0 W -> chip5/eth6 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip5/eth11 vc0 S -> chip5/eth7 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip5/eth11 vc1 W -> chip5/eth6 ch5: copy 2 ds 2 N 2 diff 0
+  chip5/eth11 vc1 S -> chip5/eth7 ch6: copy 2 ds 2 N 2 diff 0
+  chip6/eth4 vc0 N -> chip6/eth5 ch1: copy 4 ds 4 N 4 diff 0
+  chip6/eth4 vc0 S -> chip6/eth9 ch1: copy 4 ds 4 N 4 diff 0
+  chip6/eth4 vc1 N -> chip6/eth5 ch4: copy 2 ds 2 N 2 diff 0
+  chip6/eth4 vc1 S -> chip6/eth9 ch4: copy 2 ds 2 N 2 diff 0
+  chip6/eth5 vc0 E -> chip6/eth4 ch2: copy 4 ds 4 N 4 diff 0
+  chip6/eth5 vc0 S -> chip6/eth9 ch3: copy 4 ds 4 N 4 diff 0
+  chip6/eth5 vc1 E -> chip6/eth4 ch5: copy 2 ds 2 N 2 diff 0
+  chip6/eth5 vc1 S -> chip6/eth9 ch6: copy 2 ds 2 N 2 diff 0
+  chip6/eth6 vc0 N -> chip6/eth7 ch1: copy 4 ds 4 N 4 diff 0
+  chip6/eth6 vc0 S -> chip6/eth11 ch1: copy 4 ds 4 N 4 diff 0
+  chip6/eth6 vc1 N -> chip6/eth7 ch4: copy 2 ds 2 N 2 diff 0
+  chip6/eth6 vc1 S -> chip6/eth11 ch4: copy 2 ds 2 N 2 diff 0
+  chip6/eth7 vc0 E -> chip6/eth6 ch2: copy 4 ds 4 N 4 diff 0
+  chip6/eth7 vc0 S -> chip6/eth11 ch3: copy 4 ds 4 N 4 diff 0
+  chip6/eth7 vc1 E -> chip6/eth6 ch5: copy 2 ds 2 N 2 diff 0
+  chip6/eth7 vc1 S -> chip6/eth11 ch6: copy 2 ds 2 N 2 diff 0
+  chip6/eth9 vc0 E -> chip6/eth4 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip6/eth9 vc0 N -> chip6/eth5 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip6/eth9 vc1 E -> chip6/eth4 ch6: copy 2 ds 2 N 2 diff 0
+  chip6/eth9 vc1 N -> chip6/eth5 ch6: copy 2 ds 2 N 2 diff 0
+  chip6/eth11 vc0 E -> chip6/eth6 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip6/eth11 vc0 N -> chip6/eth7 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip6/eth11 vc1 E -> chip6/eth6 ch6: copy 2 ds 2 N 2 diff 0
+  chip6/eth11 vc1 N -> chip6/eth7 ch6: copy 2 ds 2 N 2 diff 0
+  chip7/eth4 vc0 E -> chip7/eth5 ch3: copy 4 ds 4 N 4 diff 0
+  chip7/eth4 vc0 N -> chip7/eth9 ch3: copy 4 ds 4 N 4 diff 0
+  chip7/eth4 vc1 E -> chip7/eth5 ch6: copy 2 ds 2 N 2 diff 0
+  chip7/eth4 vc1 N -> chip7/eth9 ch6: copy 2 ds 2 N 2 diff 0
+  chip7/eth5 vc0 N -> chip7/eth9 ch1: copy 4 ds 4 N 4 diff 0
+  chip7/eth5 vc0 S -> chip7/eth4 ch1: copy 4 ds 4 N 4 diff 0
+  chip7/eth5 vc1 N -> chip7/eth9 ch4: copy 2 ds 2 N 2 diff 0
+  chip7/eth5 vc1 S -> chip7/eth4 ch4: copy 2 ds 2 N 2 diff 0
+  chip7/eth6 vc0 E -> chip7/eth7 ch3: copy 4 ds 4 N 4 diff 0
+  chip7/eth6 vc0 N -> chip7/eth11 ch3: copy 4 ds 4 N 4 diff 0
+  chip7/eth6 vc1 E -> chip7/eth7 ch6: copy 2 ds 2 N 2 diff 0
+  chip7/eth6 vc1 N -> chip7/eth11 ch6: copy 2 ds 2 N 2 diff 0
+  chip7/eth7 vc0 N -> chip7/eth11 ch1: copy 4 ds 4 N 4 diff 0
+  chip7/eth7 vc0 S -> chip7/eth6 ch1: copy 4 ds 4 N 4 diff 0
+  chip7/eth7 vc1 N -> chip7/eth11 ch4: copy 2 ds 2 N 2 diff 0
+  chip7/eth7 vc1 S -> chip7/eth6 ch4: copy 2 ds 2 N 2 diff 0
+  chip7/eth9 vc0 E -> chip7/eth5 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip7/eth9 vc0 S -> chip7/eth4 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip7/eth9 vc1 E -> chip7/eth5 ch5: copy 2 ds 2 N 2 diff 0
+  chip7/eth9 vc1 S -> chip7/eth4 ch6: copy 2 ds 2 N 2 diff 0
+  chip7/eth11 vc0 E -> chip7/eth7 ch5: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip7/eth11 vc0 S -> chip7/eth6 ch6: copy 4 ds 2 N 4 diff -2  (inactive set)
+  chip7/eth11 vc1 E -> chip7/eth7 ch5: copy 2 ds 2 N 2 diff 0
+  chip7/eth11 vc1 S -> chip7/eth6 ch6: copy 2 ds 2 N 2 diff 0
+
+== Traffic waiting (non-zero counts; in a hang this is where packets and credits stopped) ==
+  none: every channel empty, every copy equal to its downstream register
+
+== Anomalies ==
+  liveness: fabric heartbeat (0x7CC70) changed between passes on 48 of 48 cores
+  none
