@@ -26,7 +26,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-umd/types/arch.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>

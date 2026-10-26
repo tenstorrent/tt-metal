@@ -17,11 +17,8 @@ inline __attribute__((always_inline)) volatile tt_l1_ptr CceSpaRoutes* cce_spa_r
     return reinterpret_cast<volatile tt_l1_ptr CceSpaRoutes*>(MEM_CCE_SPA_ROUTES_BASE);
 }
 
-// local_mimir stays in the signature so existing kernels compile. The host wrote this core's
-// route table, so the destination instance selects the port.
-inline __attribute__((always_inline)) uint64_t
-cce_gddr_address(uint32_t local_mimir, uint32_t mimir_index, uint64_t offset) {
-    (void)local_mimir;
+// The host writes each core's route table, so the destination instance alone selects the D2D port.
+inline __attribute__((always_inline)) uint64_t cce_gddr_address(uint32_t mimir_index, uint64_t offset) {
     if (mimir_index >= CCE_SPA_ROUTES_MAX_INSTANCES) {
         __builtin_trap();
     }
@@ -31,9 +28,8 @@ cce_gddr_address(uint32_t local_mimir, uint32_t mimir_index, uint64_t offset) {
 }
 
 inline __attribute__((always_inline)) void cce_gddr_read(
-    uint32_t local_mimir, uint32_t mimir_index, uint64_t offset, uint32_t l1_address, uint32_t num_words) {
-    const volatile uint32_t* src =
-        reinterpret_cast<volatile const uint32_t*>(cce_gddr_address(local_mimir, mimir_index, offset));
+    uint32_t mimir_index, uint64_t offset, uint32_t l1_address, uint32_t num_words) {
+    const volatile uint32_t* src = reinterpret_cast<volatile const uint32_t*>(cce_gddr_address(mimir_index, offset));
     volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_address);
     for (uint32_t i = 0; i < num_words; i++) {
         dst[i] = src[i];
@@ -41,9 +37,9 @@ inline __attribute__((always_inline)) void cce_gddr_read(
 }
 
 inline __attribute__((always_inline)) void cce_gddr_write(
-    uint32_t local_mimir, uint32_t mimir_index, uint64_t offset, uint32_t l1_address, uint32_t num_words) {
+    uint32_t mimir_index, uint64_t offset, uint32_t l1_address, uint32_t num_words) {
     const volatile tt_l1_ptr uint32_t* src = reinterpret_cast<volatile const tt_l1_ptr uint32_t*>(l1_address);
-    volatile uint32_t* dst = reinterpret_cast<volatile uint32_t*>(cce_gddr_address(local_mimir, mimir_index, offset));
+    volatile uint32_t* dst = reinterpret_cast<volatile uint32_t*>(cce_gddr_address(mimir_index, offset));
     for (uint32_t i = 0; i < num_words; i++) {
         dst[i] = src[i];
     }
