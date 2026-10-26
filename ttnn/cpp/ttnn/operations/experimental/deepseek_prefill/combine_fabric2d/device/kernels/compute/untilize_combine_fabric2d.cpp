@@ -6,8 +6,11 @@
 // a batch of row-major tokens, in the buffer that core's readers take rows out of.
 //
 // A batch is one tile-row of the dispatched buffer: UNT_BATCH_ROWS tokens, `full_ct_dim` tiles wide. The
-// rows come out a block of tiles at a time so the input window stays small -- a whole tile-row is 458 kB at
-// the production shape and would not fit L1 on top of the output ring.
+// rows come out `block_ct_dim` tiles at a time, because llk_pack_untilize takes at most 8 tiles per call off
+// the dense path.
+//
+// Nothing here is format-specific: cb_in is declared in the dispatched buffer's format and cb_out in the
+// token format, so a BFLOAT8_B tile is dequantised by the unpacker on its way through.
 //
 // How many batches there are is data-dependent, so the dataflow kernel works it out and leaves it in
 // cb_batches before the first one arrives. Everything else this kernel needs is producer-consumer ordering

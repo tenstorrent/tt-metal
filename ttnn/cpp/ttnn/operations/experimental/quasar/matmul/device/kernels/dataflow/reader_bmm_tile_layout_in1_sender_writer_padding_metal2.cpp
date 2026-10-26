@@ -495,8 +495,12 @@ void kernel_main() {
     }
 
 #if OUT_SHARDED
-    cb_out.wait_front(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+    // The sharded output stays in place, so this kernel only waits for compute to finish it. Pop what it
+    // waited for so the buffer is left balanced.
+    const uint32_t out_sharded_num_tiles =
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h;
+    cb_out.wait_front(out_sharded_num_tiles);
+    cb_out.pop_front(out_sharded_num_tiles);
 #endif
     // [DEBUG #47797] Dump SW NoC issued-counters vs HW completion just before the drain. in1 hangs
     // in the nonposted-writes-sent wait (NIU_MST_NONPOSTED_WR_REQ_SENT == noc_nonposted_writes_num_issued).

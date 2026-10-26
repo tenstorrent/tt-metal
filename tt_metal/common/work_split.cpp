@@ -17,7 +17,7 @@
 #include <vector>
 
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 

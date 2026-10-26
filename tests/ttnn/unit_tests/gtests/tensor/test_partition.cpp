@@ -16,7 +16,14 @@
 #include <xtensor/utils/xtensor_simd.hpp>
 #include <xtensor/utils/xutils.hpp>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <bit>
+#include <cstring>
+#include <numeric>
+#include <type_traits>
+#include <tt-metalium/float8.hpp>
 #include <tuple>
 #include <vector>
 #include <sys/mman.h>
@@ -668,6 +675,225 @@ TEST(PartitionTest, ConcatNdimRowMajorOrder) {
     // 6, 7, 8, 9, 10, 11
     xt::xarray<int> expected = {{0, 1, 2, 3, 4, 5}, {6, 7, 8, 9, 10, 11}};
     EXPECT_TRUE(xt::allclose(result.expr(), expected));
+}
+
+template <typename T>
+T concat_payload(size_t index) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    if constexpr (sizeof(T) == 1) {
+        return std::bit_cast<T>(static_cast<uint8_t>(index));
+    } else if constexpr (sizeof(T) == 2) {
+        constexpr uint16_t bits[] = {
+            0x0000,
+            0x8000,
+            0x7f80,
+            0xff80,
+            0x7fc1,
+            0x7f81,
+            0xffd5,
+            0x0001,
+            0x8001,
+            0x3f80,
+            0xbf80,
+            0xffff,
+            0x7fff,
+            0x0080,
+            0x8080,
+            0x1234};
+        return std::bit_cast<T>(bits[index % std::size(bits)]);
+    } else if constexpr (sizeof(T) == 4) {
+        constexpr uint32_t bits[] = {
+            0x00000000,
+            0x80000000,
+            0x7f800000,
+            0xff800000,
+            0x7fc01234,
+            0x7f800001,
+            0xffc055aa,
+            0x00000001,
+            0x80000001,
+            0x3f800000,
+            0xbf800000,
+            0xffffffff,
+            0x7fffffff,
+            0x00800000,
+            0x80800000,
+            0x12345678};
+        return std::bit_cast<T>(bits[index % std::size(bits)]);
+    } else {
+        static_assert(sizeof(T) == 8);
+        constexpr uint64_t bits[] = {
+            0x0000000000000000,
+            0x8000000000000000,
+            0x7ff0000000000000,
+            0xfff0000000000000,
+            0x7ff8000000001234,
+            0x7ff0000000000001,
+            0xfff80000000055aa,
+            0x0000000000000001,
+            0x8000000000000001,
+            0x3ff0000000000000,
+            0xbff0000000000000,
+            0xffffffffffffffff,
+            0x7fffffffffffffff,
+            0x0010000000000000,
+            0x8010000000000000,
+            0x123456789abcdef0};
+        return std::bit_cast<T>(bits[index % std::size(bits)]);
+    }
+}
+
+// Compute expected values from logical coordinates, independently of the copy blocks.
+template <typename T>
+void check_concat_payloads(
+    const std::vector<size_t>& shape, const ttsl::SmallVector<int>& counts, const ttsl::SmallVector<int>& axes) {
+    using namespace ttnn::experimental::xtensor;
+    using PayloadBytes = std::array<std::byte, sizeof(T)>;
+    const size_t volume = std::accumulate(shape.begin(), shape.end(), size_t{1}, std::multiplies<size_t>());
+    const size_t pieces = std::accumulate(counts.begin(), counts.end(), size_t{1}, std::multiplies<size_t>());
+    std::vector<size_t> output_shape = shape;
+    std::vector<size_t> normalized_axes;
+    for (size_t i = 0; i < axes.size(); ++i) {
+        const size_t axis = axes[i] < 0 ? axes[i] + static_cast<int>(shape.size()) : axes[i];
+        normalized_axes.push_back(axis);
+        output_shape[axis] *= counts[i];
+    }
+
+    // Every adapter points into a guarded allocation, not its beginning. Both
+    // mutable and const pointers must refer to the logical start of the span.
+    constexpr size_t guard = 5;
+    std::vector<std::vector<T>> buffers(pieces, std::vector<T>(volume + 2 * guard));
+    std::vector<xt::xarray<T>> arrays;
+    std::vector<AdaptedView<T>> mutable_views;
+    std::vector<AdaptedView<const T>> const_views;
+    for (size_t piece = 0; piece < pieces; ++piece) {
+        for (size_t i = 0; i < buffers[piece].size(); ++i) {
+            buffers[piece][i] = concat_payload<T>(piece * 7 + i);
+        }
+        auto array = xt::xarray<T>::from_shape(shape);
+        if (volume != 0) {
+            std::memcpy(array.data(), buffers[piece].data() + guard, volume * sizeof(T));
+        }
+        arrays.push_back(std::move(array));
+        mutable_views.push_back(adapt(ttsl::Span<T>(buffers[piece].data() + guard, volume), shape));
+        const_views.push_back(adapt(ttsl::Span<const T>(buffers[piece].data() + guard, volume), shape));
+    }
+    const auto saved_buffers = buffers;
+    const size_t output_volume =
+        std::accumulate(output_shape.begin(), output_shape.end(), size_t{1}, std::multiplies<size_t>());
+
+    const auto verify = [&](const auto& output) {
+        EXPECT_EQ(std::vector<size_t>(output.expr().shape().begin(), output.expr().shape().end()), output_shape);
+        ASSERT_EQ(output.data().size(), output_volume);
+        for (size_t linear = 0; linear < output_volume; ++linear) {
+            std::vector<size_t> coords(shape.size());
+            size_t remaining = linear;
+            for (size_t d = shape.size(); d-- > 0;) {
+                coords[d] = remaining % output_shape[d];
+                remaining /= output_shape[d];
+            }
+            size_t piece = 0;
+            for (size_t i = 0; i < axes.size(); ++i) {
+                const size_t axis = normalized_axes[i];
+                piece = piece * counts[i] + coords[axis] / shape[axis];
+                coords[axis] %= shape[axis];
+            }
+            size_t source = 0;
+            for (size_t d = 0; d < shape.size(); ++d) {
+                source = source * shape[d] + coords[d];
+            }
+            // Compare representations so NaN payloads and signed zero must survive unchanged.
+            ASSERT_EQ(
+                std::bit_cast<PayloadBytes>(output.data()[linear]),
+                std::bit_cast<PayloadBytes>(saved_buffers[piece][guard + source]))
+                << "linear=" << linear << " piece=" << piece << " source=" << source;
+        }
+    };
+    const auto check = [&](const auto& expressions) {
+        verify(concat_ndim(expressions, counts, axes));
+        if (axes.size() == 1) {
+            verify(concat(expressions, axes.front()));
+        }
+    };
+    check(arrays);
+    check(mutable_views);
+    check(const_views);
+    for (size_t piece = 0; piece < pieces; ++piece) {
+        EXPECT_EQ(
+            std::memcmp(buffers[piece].data(), saved_buffers[piece].data(), buffers[piece].size() * sizeof(T)), 0);
+        if (volume != 0) {
+            EXPECT_EQ(std::memcmp(arrays[piece].data(), saved_buffers[piece].data() + guard, volume * sizeof(T)), 0);
+        }
+    }
+}
+
+template <typename T>
+class PartitionPayloadTest : public ::testing::Test {};
+using PartitionPayloadTypes =
+    ::testing::Types<bfloat16, float, double, int32_t, int8_t, uint8_t, uint16_t, uint32_t, float8_e4m3>;
+TYPED_TEST_SUITE(PartitionPayloadTest, PartitionPayloadTypes);
+
+TYPED_TEST(PartitionPayloadTest, SingleAxisCoordinateAndByteOracle) {
+    for (int axis : {0, 1, 2, -1, -2, -3}) {
+        for (int pieces : {1, 2, 3, 4}) {
+            SCOPED_TRACE(::testing::Message() << "axis=" << axis << " pieces=" << pieces);
+            check_concat_payloads<TypeParam>({2, 3, 4}, {pieces}, {axis});
+        }
+    }
+    check_concat_payloads<TypeParam>({2, 1, 3, 5}, {3}, {2});
+    check_concat_payloads<TypeParam>({4, 1, 2, 3}, {3}, {1});
+    check_concat_payloads<TypeParam>({1, 1, 17}, {4}, {-1});
+    // Includes every possible 8-bit payload and all wider payload patterns.
+    check_concat_payloads<TypeParam>({2, 256}, {3}, {-1});
+}
+
+TYPED_TEST(PartitionPayloadTest, MultiAxisFallbackByteOracle) {
+    check_concat_payloads<TypeParam>({2, 3, 4}, {2, 3}, {2, 0});
+    check_concat_payloads<TypeParam>({2, 3, 4}, {3, 2}, {-3, -1});
+    check_concat_payloads<TypeParam>({2, 3, 4}, {2, 2, 2}, {0, 1, 2});
+}
+
+TYPED_TEST(PartitionPayloadTest, ZeroVolumeAndEmptyInputs) {
+    for (const auto& shape : std::vector<std::vector<size_t>>{{0, 3, 4}, {2, 0, 4}, {2, 3, 0}}) {
+        for (int axis : {0, 1, 2, -1}) {
+            check_concat_payloads<TypeParam>(shape, {3}, {axis});
+        }
+        check_concat_payloads<TypeParam>(shape, {2, 3}, {0, 2});
+    }
+    const auto check_empty = [](const auto& inputs) {
+        const auto result = concat(inputs, -1);
+        EXPECT_TRUE(result.data().empty());
+        EXPECT_EQ(
+            std::vector<size_t>(result.expr().shape().begin(), result.expr().shape().end()), std::vector<size_t>{0});
+    };
+    check_empty(std::vector<xt::xarray<TypeParam>>{});
+    check_empty(std::vector<ttnn::experimental::xtensor::AdaptedView<TypeParam>>{});
+    check_empty(std::vector<ttnn::experimental::xtensor::AdaptedView<const TypeParam>>{});
+}
+
+TYPED_TEST(PartitionPayloadTest, NoAxesIdentity) {
+    check_concat_payloads<TypeParam>({2, 3, 4}, {}, {});
+    check_concat_payloads<TypeParam>({}, {}, {});
+}
+
+TEST(PartitionTest, SupportedAdapterLayoutAndOffsetContract) {
+    using namespace ttnn::experimental::xtensor;
+    std::vector<int32_t> values(24);
+    auto adapted = adapt(ttsl::Span<int32_t>(values.data() + 4, 12), {3, 4});
+    static_assert(decltype(adapted)::static_layout == xt::layout_type::row_major);
+    EXPECT_EQ(adapted.data(), values.data() + 4);
+    EXPECT_EQ(adapted.data_offset(), 0u);
+    EXPECT_TRUE(adapted.is_contiguous());
+    const std::vector<size_t> shape{3, 4};
+    const typename decltype(adapted)::strides_type strides{1, 3};
+    EXPECT_THROW(adapted.resize(shape, strides), std::runtime_error);
+    auto offset_view = xt::strided_view(adapted, {xt::range(1, 3), xt::all()});
+    auto strided_view = xt::strided_view(adapted, {xt::all(), xt::range(0, 4, 2)});
+    static_assert(!std::is_same_v<decltype(offset_view), AdaptedView<int32_t>>);
+    static_assert(!std::is_same_v<decltype(strided_view), AdaptedView<int32_t>>);
+    EXPECT_NE(offset_view.data_offset(), 0u);
+    EXPECT_FALSE(strided_view.is_contiguous());
+    // These xstrided_view types have no concat instantiation in partition.cpp.
 }
 
 }  // namespace

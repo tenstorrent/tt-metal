@@ -1,0 +1,227 @@
+{
+  "date": "2026-10-07",
+  "scope": "Post-cleanup component regression; not integrated TT synthesis",
+  "parent_revision": "04ba2da9",
+  "source_files_sha256": {
+    "config.py": "d0760ff8b76ca909e14f78c0fdebf8cec12cc90d66a2a36e569cebf087da4d9e",
+    "tests/test_audio_vae_config.py": "ddd35d1fd4d57941a0e5a7f9d59fc7b461045b9313edf6738d04149c0c04ec7f",
+    "tests/test_capture_manifest.py": "961ed3b2394122d6d5b151315448611563198a6addd042d455ca1d1c3d3ef7db",
+    "tests/test_component_device.py": "1fb8927d2af8b33959a88942e8bc02a970355cb7b75799fa3ea0e4bdf8156f4f",
+    "tests/test_config.py": "23ee22b857760e4782b615cea9da975278eb348eccc917dd450b2e646c80d8c6",
+    "tests/test_local_config.py": "ae7a615a4ebe11e494910a76c808be0fc3465db638b4e10365149689b96c3950",
+    "tests/test_metrics.py": "e58539541a190e3d915adcb7ba30dd3abc9552dfa35d0110ff6f8852cab3ffea",
+    "tt/__init__.py": "17939995523e785871158298d0806a5b5c8455ee023227e6cc2bd6047e5a0cd8",
+    "tt/audio_vae.py": "afa4939bc5028631a99aa38e07360533b25be731e87ba0da78e4d26afe58865b",
+    "tt/local.py": "9966c82914498ba223443bd9d656088c126ac7c8a47f21284471f20b444c91f2",
+    "tt/minicpm.py": "86412d12a482dd0ae2e526d9dc96e42c7fef32c4586104f5f3389d3bd5e90137",
+    "tt/ops.py": "edb2cb43442c14327a9aaa1a928bf172dc8605b7f6da1e7f61980bcf1f4ddf96",
+    "validation/__init__.py": "c359bf517f796fafe151594d6e19e0f471ead53338df6ffbf9186a77233e65a6",
+    "validation/capture_reference.py": "1e42e35d13e36eb6a70d741b0e638e2b74138391fe707e72fa69ff29b2df4cae",
+    "validation/manifest.py": "e8736a5aba88bb7b524293490572a567dd3d2f883702da82d96166278730fbba",
+    "validation/metrics.py": "52437c2e5780379cde4d9abe417e624857faf33ee9fb20423e41a52550f5f36b",
+    "validation/replay_component.py": "1ddfeac9700ba34342063566a227b314c9dda7a6f242a19ea226cd30909215c1",
+    "validation/validate_capture.py": "e5d3624c10eee0a0629f4dbbc0469667029d6594fa84f8f19bcb7221f4525fa3"
+  },
+  "checkpoint_revision": "32279effe8c19989596f05d353d1447f51d9e915",
+  "reference": "Same seed-42 native captures and component events as 2026-10-01; voice-reference capture for AudioVAE encode",
+  "device": "Blackhole p150b physical card 5, BDF 0000:c1:00.0, logical device 0",
+  "runtime": "ttnn 0.65.1rc17.dev6333+h3.3; torch 2.8.0+cpu; own model venv; not a fresh fork build",
+  "dtype": "bfloat16",
+  "math_fidelity": "HiFi4",
+  "fp32_dest_acc": true,
+  "min_pcc": 0.99,
+  "tests": {
+    "host": {
+      "run": 30,
+      "passed": 29,
+      "skipped_device": 1
+    },
+    "configured_tt": {
+      "run": 30,
+      "passed": 30,
+      "skipped": 0
+    },
+    "component_replays": {
+      "run": 16,
+      "passed": 16
+    }
+  },
+  "results": [
+    {
+      "component": "audio_vae.decode",
+      "event": "audio_vae.decode/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9997780554767073,
+        "relative_rms": 0.074961819482774,
+        "max_abs": 0.06673192977905273,
+        "reason": null
+      }
+    },
+    {
+      "component": "audio_vae.encode",
+      "event": "audio_vae.encode/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9991305870302343,
+        "relative_rms": 0.041924767929122635,
+        "max_abs": 0.6451358795166018,
+        "reason": null
+      }
+    },
+    {
+      "component": "base_lm.forward",
+      "event": "base_lm.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999093016953912,
+        "relative_rms": 0.013469685310683736,
+        "max_abs": 0.9999999999999964,
+        "reason": null
+      }
+    },
+    {
+      "component": "enc_to_lm_proj.forward",
+      "event": "enc_to_lm_proj.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999994253669465,
+        "relative_rms": 0.0010727603760027752,
+        "max_abs": 0.031249999999999667,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999565655780498,
+        "relative_rms": 0.009956832844698386,
+        "max_abs": 0.039062499999999944,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000004",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999424722024803,
+        "relative_rms": 0.01113820896623918,
+        "max_abs": 0.04687499999999978,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_decoder.estimator.forward",
+      "event": "feat_decoder.estimator.forward/000008",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999570429946455,
+        "relative_rms": 0.009339254119939255,
+        "max_abs": 0.046874999999999827,
+        "reason": null
+      }
+    },
+    {
+      "component": "feat_encoder.forward",
+      "event": "feat_encoder.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.999986249095286,
+        "relative_rms": 0.005287374434922693,
+        "max_abs": 0.023437499999999993,
+        "reason": null
+      }
+    },
+    {
+      "component": "fsq_layer.forward",
+      "event": "fsq_layer.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999976750998092,
+        "relative_rms": 0.002236713730102201,
+        "max_abs": 0.01562499999999985,
+        "reason": null
+      }
+    },
+    {
+      "component": "fusion_concat_proj.forward",
+      "event": "fusion_concat_proj.forward/000001",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.99999987181341,
+        "relative_rms": 0.0005065809354176657,
+        "max_abs": 0.12500000000000056,
+        "reason": null
+      }
+    },
+    {
+      "component": "lm_to_dit_proj.forward",
+      "event": "lm_to_dit_proj.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999993970180302,
+        "relative_rms": 0.0011050814926000727,
+        "max_abs": 0.03124999999999989,
+        "reason": null
+      }
+    },
+    {
+      "component": "res_to_dit_proj.forward",
+      "event": "res_to_dit_proj.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999993743053852,
+        "relative_rms": 0.0011195206754256836,
+        "max_abs": 0.0312500000000002,
+        "reason": null
+      }
+    },
+    {
+      "component": "residual_lm.forward",
+      "event": "residual_lm.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.999966047702125,
+        "relative_rms": 0.008422619696999041,
+        "max_abs": 0.2500000000000029,
+        "reason": null
+      }
+    },
+    {
+      "component": "stop_actn.forward",
+      "event": "stop_actn.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.9999999594317688,
+        "relative_rms": 0.0002843929542146668,
+        "max_abs": 0.003906249999999986,
+        "reason": null
+      }
+    },
+    {
+      "component": "stop_head.forward",
+      "event": "stop_head.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 1.0,
+        "relative_rms": 0.0,
+        "max_abs": 0.0,
+        "reason": null
+      }
+    },
+    {
+      "component": "stop_proj.forward",
+      "event": "stop_proj.forward/000000",
+      "metrics": {
+        "passed": true,
+        "pcc": 0.99999949543227,
+        "relative_rms": 0.0009184520632163894,
+        "max_abs": 0.03125000000000097,
+        "reason": null
+      }
+    }
+  ]
+}

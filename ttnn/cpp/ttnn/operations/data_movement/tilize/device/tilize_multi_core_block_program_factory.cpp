@@ -71,7 +71,7 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
         plan.split;
 
-    IDevice* device = a.device();
+    auto* device = a.device();
     // Same grid `make_block_plan` split over -- the runtime-arg loop below walks it in core order.
     const CoreCoord grid_size = device->compute_with_storage_grid_size();
     const CoreRangeSet available_grid = operation_attributes.sub_core_grids.has_value()
