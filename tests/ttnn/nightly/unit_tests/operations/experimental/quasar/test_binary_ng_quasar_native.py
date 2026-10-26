@@ -41,7 +41,7 @@ import torch
 
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _FPU_ADD_ROUNDINGS,
+    _add_goldens,
     _matches_none,
     _run,
 )
@@ -246,12 +246,6 @@ def _add_returning_operands(device, h_tiles=32, w_tiles=40, seed=0):
     return out, ta, tb
 
 
-def _add_goldens(ta, tb):
-    """The oracles of a bf16 add, on the operands as the device holds them."""
-    a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
-    return [rounding(a, b) for rounding in _FPU_ADD_ROUNDINGS]
-
-
 # The benchmark shape under the invocation's knobs: 40 tiles per cluster on the NoC path.
 _BENCHMARK_WRONG = _batched_wrong_tiles(_noc_split(32 * 40), _PARENT_KNOBS, _NOC_DRAM)
 
@@ -282,6 +276,7 @@ def test_native_factory_is_engaged(device):
 
 @pytest.mark.skipif(_native_enabled(), reason="negative control runs with TTNN_QSR_NATIVE=0")
 def test_fallback_factory_is_engaged(device):
+    assert is_quasar() == (device.arch() == ttnn.device.Arch.QUASAR), "ttnn.get_arch_name() disagrees with the device"
     _run_benchmark_add(device)
     sources = bound_kernel_sources()
     assert [s for s in sources if "kernels_qsr/" in s] == [], "fallback run bound native kernels"
@@ -351,7 +346,7 @@ _ARM_SRC = """
 import json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _FPU_ADD_ROUNDINGS, _matches_none)
+    _add_goldens, _matches_none)
 
 TILE_COUNTS = json.loads(os.environ["ARM_TILE_COUNTS"])
 
@@ -366,9 +361,7 @@ try:
         tb = ttnn.from_torch(torch.randn((32, tiles * 32), dtype=torch.float32), **cfg)
         out = ttnn.experimental.quasar.add(ta, tb, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                            dtype=ttnn.bfloat16)
-        a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
-        got = ttnn.to_torch(out)
-        differ = _matches_none(got, [rounding(a, b) for rounding in _FPU_ADD_ROUNDINGS])
+        differ = _matches_none(ttnn.to_torch(out), _add_goldens(ta, tb))
         if differ.any():
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())

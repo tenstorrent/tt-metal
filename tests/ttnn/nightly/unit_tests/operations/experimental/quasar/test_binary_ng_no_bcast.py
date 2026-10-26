@@ -39,7 +39,6 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
     _run,
     _run_special,
     _run_mixed,
-    _act,
     _height_sharded_config,
     _block_sharded_config,
     _width_sharded_config,

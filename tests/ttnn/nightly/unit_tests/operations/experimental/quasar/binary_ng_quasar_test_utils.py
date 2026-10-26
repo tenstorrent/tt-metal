@@ -103,9 +103,9 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
-# The largest ULP distance from torch's result on the device's operands, per dtype and op; fp32 as measured on ttsim.
-# bf16 takes production's bound of 1: on Quasar the SFPU multiply truncates and the FPU add rounds twice. maximum and
-# minimum select an operand, so they are exact.
+# The largest ULP distance from torch's result on the device's operands, per dtype and op, on Quasar (fp32 as measured
+# on ttsim); the Wormhole and Blackhole runs share these bounds. bf16 takes production's bound of 1: on Quasar the SFPU
+# multiply truncates and the FPU add rounds twice. maximum and minimum select an operand, so they are exact.
 _ULP = {
     ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 2, "maximum": 0, "minimum": 0},
     ttnn.bfloat16: {"add": 1, "subtract": 1, "multiply": 1, "divide": 1, "maximum": 0, "minimum": 0},
@@ -119,7 +119,8 @@ def _fpu_add_bf16(a, b):
     ea, eb = torch.frexp(a).exponent, torch.frexp(b).exponent
     a_big = ea >= eb
     big, small = torch.where(a_big, a, b), torch.where(a_big, b, a)
-    step = torch.exp2((torch.maximum(ea, eb) - 15).double())
+    # frexp's mantissa is in [0.5, 1), so the larger operand's bf16 ULP is 2**(e - 8); the FPU keeps 7 bits below it.
+    step = torch.exp2((torch.maximum(ea, eb) - (8 + 7)).double())
     aligned = torch.sign(small) * torch.floor(small.abs() / step + 0.5) * step
     rounded = (big + aligned).float().to(torch.bfloat16)
     # frexp gives a zero the exponent 0, which can make the zero the larger operand.
@@ -132,6 +133,12 @@ def _fpu_add_bf16(a, b):
 _FPU_ADD_ROUNDINGS = (_fpu_add_bf16, lambda a, b: (a.float() + b.float()).to(torch.bfloat16))
 
 
+def _add_goldens(ta, tb):
+    """The oracles of a bf16 add, on the operands as the device holds them."""
+    a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+    return [rounding(a, b) for rounding in _FPU_ADD_ROUNDINGS]
+
+
 def _matches_none(got, goldens, bound=0):
     """Per element: True where `got` is more than `bound` ULP from every golden."""
     return torch.stack([ulp_distance(got, golden) > bound for golden in goldens]).all(dim=0)
@@ -142,7 +149,7 @@ _EXACT_ACTS = {
     ttnn.float32: (None, ttnn.UnaryOpType.RELU, ttnn.UnaryOpType.SQUARE),
     ttnn.bfloat16: (None, ttnn.UnaryOpType.RELU),
 }
-# The other activations, after a multiply: the largest ULP distance measured (bf16 on ttsim, fp32 on craq-sim) against
+# The other activations, after a multiply: the largest ULP distance on Quasar (bf16 on ttsim, fp32 on craq-sim) against
 # a golden that rounds each intermediate to the dtype, or production's bound where larger (TANH: 5). Beside another op
 # the check is PCC only, and so is GELU's fused form, the fast lookup table (production's own bf16 bound: 30,000 ULP).
 _ACT_ULP = {
