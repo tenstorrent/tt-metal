@@ -111,6 +111,11 @@ _HASH_VOCAB_SIZE = 1024
 _HASH_GATE_MODES = (GateComputeMode.HASH_HOST, GateComputeMode.HASH_DEVICE)
 
 
+# run_model's default for routed_expert_hybrid_token_threshold: take the variant's own. A sentinel, because
+# None is a real setting (no hybrid split, the single-op dispatch).
+_VARIANT_THRESHOLD = object()
+
+
 def run_model(
     variant,
     config,
@@ -145,6 +150,7 @@ def run_model(
     skip_upstream_reference=False,
     overlap_routed_expert_with_combine=False,
     sp_axis=0,
+    routed_expert_hybrid_token_threshold=_VARIANT_THRESHOLD,
 ):
     """TtMoe PCC body — shared by every per-model test in this file.
 
@@ -545,8 +551,10 @@ def run_model(
         # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
         # fused-only sentinel for K2.7, 1792 for GLM 5.2, absent (single-op) everywhere else,
         # K3 included: its crossover is measured but parked until the split is enabled for it.
-        routed_expert_hybrid_token_threshold=getattr(
-            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
+        routed_expert_hybrid_token_threshold=(
+            getattr(variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None)
+            if routed_expert_hybrid_token_threshold is _VARIANT_THRESHOLD
+            else routed_expert_hybrid_token_threshold
         ),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
@@ -1097,6 +1105,9 @@ def test_glm_moe(
         padded_percent=padded_percent,
         overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(GLM53Config),
         sp_axis=sp_axis,
+        # The variant is DSv3 only for its CPU reference; the routed experts split as the GLM model's do,
+        # so moe_fused_swiglu runs (DeepSeekV3Config carries no threshold: single-op dispatch).
+        routed_expert_hybrid_token_threshold=GLM53Config.ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD,
     )
 
 
