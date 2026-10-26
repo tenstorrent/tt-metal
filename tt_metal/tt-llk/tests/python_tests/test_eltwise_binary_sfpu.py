@@ -67,6 +67,7 @@ from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    OUT_ZERO_POINT,
     SFPU_BCAST_DIM,
     SFPU_DST_ROUNDING_MODE,
     SIGN_MAGNITUDE_FORMAT,
@@ -758,6 +759,7 @@ def sfpu_binary(
             LOOP_FACTOR(loop_factor),
             NUM_FACES(),
             ZERO_POINT(0),
+            OUT_ZERO_POINT(0),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
@@ -1240,9 +1242,7 @@ def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs)
 
 # =============================================================================
 # Quant family. One tile pair: operand A in tile 0, the fp32 scale in tile 1.
-# Quant and requant run in 2's complement only. Blackhole rejects
-# SIGN_MAGNITUDE_FORMAT for them at compile time and nothing calls them with it.
-# Dequant runs with and without sign-magnitude.
+# Quant and requant run in 2's complement only; dequant also runs sign-magnitude.
 # =============================================================================
 
 _QUANT_INT8_MIN = -128
@@ -1270,6 +1270,7 @@ def _run_sfpu_binary_word_pairs(
     output_format,
     *,
     sign_magnitude=False,
+    out_zero_point_bits=0,
     is_perf=False,
     perf_report=None,
     run_types=None,
@@ -1319,6 +1320,7 @@ def _run_sfpu_binary_word_pairs(
             LOOP_FACTOR(loop_factor),
             NUM_FACES(),
             ZERO_POINT(zero_point_bits),
+            OUT_ZERO_POINT(out_zero_point_bits),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
@@ -1371,6 +1373,7 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
     # Wide enough that |a| near 2000 saturates the int8 clamp on both signs.
     scale = torch.rand(n, dtype=torch.float32) * 0.2 + 0.01
     zero_point = 3.0
+    out_zero_point = 1.0 if mathop == MathOperation.SfpuRequant else 0.0
 
     if a_is_int:
         a_float = torch.randint(-2000, 2000, (n,), dtype=torch.int32).to(torch.float32)
@@ -1378,10 +1381,10 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
         a_float = (torch.rand(n, dtype=torch.float32) - 0.5) * 4000.0
 
     # Dyadic edges, so they do not depend on the random draw. 0.25 and 0.5 are
-    # exact in fp32. Lanes 0 and 1 saturate to 127 and -128.
-    # Lane 2 is an exact half for requant (3 * 0.5 + zp = 4.5).
-    # Lane 4 is an exact half for quant (5 * 0.5 = 2.5).
-    # Lane 3 rounds a negative value to 0.
+    # exact in fp32. Lane 2 is an exact half (4.5 = 3 * 0.5 + zp); 5.5 would
+    # round to 6 under both tie rules. Lane 3 is in (-0.5, 0), which
+    # SFPSTOCHRND flushes to +0 on both Wormhole and Blackhole.
+    # Lane 4 is an exact half for quant (2.5 = 5 * 0.5).
     a_float[0], scale[0] = 4000.0, 0.25
     a_float[1], scale[1] = -4000.0, 0.25
     a_float[2], scale[2] = 3.0, 0.5
@@ -1398,30 +1401,28 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
         golden_active = ((a_float - zero_point) * scale).to(torch.float32)
     else:
         assert not sign_magnitude, f"{mathop.name} runs only in 2's complement"
-        # A * B of two fp32 values is exact in float64.
-        exact = a_float.double() * scale.double()
+        exact = a_float.double() * scale.double()  # exact in float64
         if mathop == MathOperation.SfpuQuant:
-            # Quant rounds A * B to nearest even and then adds the zero point.
             rounded = torch.round(exact) + zero_point
         else:
-            # The zero point goes in requant's first init argument and
-            # out_zero_point stays 0. The kernel rounds A * B + zp to fp32 and
-            # then rounds that to nearest even.
-            rounded = torch.round((exact + zero_point).float().double())
+            # requant_init adds zero_point before rounding and out_zero_point after.
+            rounded = (
+                torch.round((exact + zero_point).float().double()) + out_zero_point
+            )
         clamped = torch.clamp(rounded, _QUANT_INT8_MIN, _QUANT_INT8_MAX).to(torch.int32)
         golden_active = clamped.clone()
         assert (clamped == _QUANT_INT8_MIN).any() and (
             clamped == _QUANT_INT8_MAX
         ).any(), f"{mathop.name} stimuli never reach the int8 clamp"
-        # Exact halves round to even: quant 2.5 -> 2 (+3 = 5), requant 4.5 -> 4.
-        tie_lane, tie_value = (4, 5) if mathop == MathOperation.SfpuQuant else (2, 4)
+        # Ties round to even: quant 2.5 -> 2 (+3), requant 4.5 -> 4 (+1).
+        tie_lane, tie_value = (4, 5) if mathop == MathOperation.SfpuQuant else (2, 5)
         assert (
             clamped[tie_lane] == tie_value
         ), f"{mathop.name} exact half must round to even"
-        assert clamped[3] == 0, f"{mathop.name} lane 3 must round a negative value to 0"
 
     zp_for_kernel = -zero_point if is_dequant else zero_point
     zp_bits = struct.unpack("<I", struct.pack("<f", zp_for_kernel))[0]
+    out_zp_bits = struct.unpack("<I", struct.pack("<f", out_zero_point))[0]
     words = _run_sfpu_binary_word_pairs(
         mathop,
         a_staged.numpy().astype(np.int32),
@@ -1429,6 +1430,7 @@ def _run_quant(mathop, sign_magnitude, **run_kwargs):
         zp_bits,
         output_format,
         sign_magnitude=sign_magnitude,
+        out_zero_point_bits=out_zp_bits,
         **run_kwargs,
     )
     if words is None:
@@ -2665,6 +2667,7 @@ def _run_sfpu_add_top_row(
             LOOP_FACTOR(loop_factor),
             NUM_FACES(),
             ZERO_POINT(0),
+            OUT_ZERO_POINT(0),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,

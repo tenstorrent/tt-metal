@@ -1679,10 +1679,10 @@ constexpr bool is_quant_byte_binop(const BinaryOp op)
  * SIGN_MAGNITUDE_FORMAT and zero_point are quant-family only (QUANT, REQUANT,
  * DEQUANT). SIGN_MAGNITUDE_FORMAT must match the paired calculate call. zero_point
  * is the fp32 bit pattern of the zero point: +zp for QUANT and REQUANT, -zp for
- * DEQUANT.
+ * DEQUANT. out_zero_point is the fp32 bit pattern of requant's output zero point.
  */
 template <bool APPROXIMATION_MODE, bool DST_ACCUM_MODE, BinaryOp BINOP, int ITERATIONS = 32, std::uint32_t MATH_FORMAT = 0, bool SIGN_MAGNITUDE_FORMAT = false>
-void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point = 0)
+void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point = 0, [[maybe_unused]] std::uint32_t out_zero_point = 0)
 {
     static_assert(!(is_quant_byte_binop(BINOP) && SIGN_MAGNITUDE_FORMAT), "The 8-bit quant entry points run with SIGN_MAGNITUDE_FORMAT = false");
     if constexpr (
@@ -1840,16 +1840,13 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     }
     else if constexpr (BINOP == BinaryOp::QUANT)
     {
-        // quant_tile_init. On Blackhole, SIGN_MAGNITUDE_FORMAT with Int32 or UInt8 output fails a
-        // static_assert. On Wormhole the init takes the flag as unused; it only changes the
-        // SFPLOAD/SFPSTORE mode inside calculate_quant_int32.
+        // Blackhole rejects SIGN_MAGNITUDE_FORMAT here; Wormhole only uses it for the load/store mode.
         SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point);
     }
     else if constexpr (BINOP == BinaryOp::REQUANT)
     {
-        // The init macro calls requant_init through a function reference, which ignores default arguments.
-        // This test adds its zero point before rounding. It passes the zero point as zero_point and 0 as out_zero_point.
-        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point, 0u);
+        // Pass both: the macro calls requant_init through a function reference, which ignores default arguments.
+        SFPU_BINARY_INIT_FN_ARGS(requant_int32, sfpu::requant_init, (APPROXIMATION_MODE, SIGN_MAGNITUDE_FORMAT), zero_point, out_zero_point);
     }
     else if constexpr (BINOP == BinaryOp::DEQUANT)
     {
