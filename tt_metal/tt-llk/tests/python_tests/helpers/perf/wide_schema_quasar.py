@@ -92,6 +92,7 @@ DB_SCHEMA = [
     Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
     Column("input_tile_cnt", "int64", True, "configuration"),
+    Column("is_reduce_to_one", "bool", True, "configuration"),
     Column("k_dimm", "int64", True, "configuration"),
     Column("math_fidelity", "string", True, "configuration"),
     Column("math_transpose_faces", "string", True, "configuration"),
