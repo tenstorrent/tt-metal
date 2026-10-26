@@ -257,7 +257,7 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_a(
             else
             {
                 // Unpaired last slice: only one srcB bank was run, and srcB valid clear is disabled, so
-                // flipping srcB would park the next rut on a bank the unpacker never fills. Move srcA only.
+                // flipping srcB would park the next rut on a bank the unpacker does not fill for this step. Move srcA only.
                 TTI_SETRWC(p_setrwc::CLR_A, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
             }
         }
@@ -304,7 +304,7 @@ inline void matmul_run_no_mop_tdim_gt1_reuse_b(
             else
             {
                 // Unpaired last slice: only one srcA bank was run, and srcA valid clear is disabled, so
-                // flipping srcA would park the next rut on a bank the unpacker never fills. Move srcB only.
+                // flipping srcA would park the next rut on a bank the unpacker does not fill for this step. Move srcB only.
                 TTI_SETRWC(p_setrwc::CLR_B, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
             }
         }

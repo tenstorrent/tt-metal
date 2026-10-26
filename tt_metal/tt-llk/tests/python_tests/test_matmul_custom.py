@@ -66,7 +66,7 @@ MATMUL_FORMATS = input_output_formats(
 )
 DEST_ACC_MODES = [DestAccumulation.No, DestAccumulation.Yes]
 
-# Odd reuse length on the 16-tile dest (DestSync.Full); the SyncHalf sweeps above cannot reach it.
+# Odd t_dim on the 16-tile dest (DestSync.Full); the SyncHalf sweeps above cannot reach it.
 ODD_REUSE_DIMS = [
     ([rt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, ct_dim * TILE_DIM])
     for rt_dim, ct_dim in ODD_REUSE_RT_CT

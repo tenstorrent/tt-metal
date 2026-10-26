@@ -203,7 +203,7 @@ ALL_TEST_PARAMS = list(
             (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
         ),
-        # Odd reuse length on the full-dest blocks the sweep cannot reach.
+        # Odd t_dim on the full-dest blocks the sweep cannot reach.
         odd_reuse_matmul_params(),
     )
 )

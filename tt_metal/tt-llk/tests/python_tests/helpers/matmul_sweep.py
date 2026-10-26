@@ -93,7 +93,7 @@ DEST_RT_CT_BLOCKS = (
     (4, 2),
 )
 
-# Odd reuse length (rt, ct >= 3, min odd): 16-tile dest blocks the sweeps above never reach.
+# Odd t_dim (rt, ct >= 3 with min(rt, ct) odd): 16-tile dest blocks the sweeps above never reach.
 ODD_REUSE_RT_CT = ((3, 3), (3, 4), (4, 3), (3, 5), (5, 3))
 ODD_REUSE_KT_DIMS = (1, 2)
 

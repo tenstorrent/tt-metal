@@ -974,7 +974,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
             else
             {
                 // A step runs two tiles of the reused operand when a second one follows; the last tile of an odd
-                // reuse length runs on its own. The source-bank clears below depend on which shape this step has.
+                // t_dim runs on its own. The source-bank clears below depend on which shape this step has.
                 const bool paired = (t + 1) < t_dim;
 
                 if constexpr (matmul_throttle_drives_phases<math_fidelity, THROTTLE_LEVEL>())
@@ -1051,7 +1051,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                     else
                     {
                         // Unpaired last tile: only one srcB bank was run, and srcB valid clear is disabled, so
-                        // flipping srcB would park the next rut on a bank the unpacker never fills. Move srcA only.
+                        // flipping srcB would park the next rut on a bank the unpacker does not fill for this step. Move srcA only.
                         TTI_SETRWC(p_setrwc::CLR_A, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
                     }
                 }
@@ -1070,7 +1070,7 @@ inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_di
                     else
                     {
                         // Unpaired last tile: only one srcA bank was run, and srcA valid clear is disabled, so
-                        // flipping srcA would park the next rut on a bank the unpacker never fills. Move srcB only.
+                        // flipping srcA would park the next rut on a bank the unpacker does not fill for this step. Move srcB only.
                         TTI_SETRWC(p_setrwc::CLR_B, 0 /*rwc_cr*/, 0 /*rwc_d*/, 0 /*rwc_b*/, 0 /*rwc_a*/, p_setrwc::SET_ABD);
                     }
                 }
