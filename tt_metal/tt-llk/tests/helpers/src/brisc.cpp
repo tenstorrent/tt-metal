@@ -131,7 +131,7 @@ int main()
                 device_setup();
 
                 llk_perf::clear_debug_features();
-                // The counter bank registers, when the launch counts a zone.
+                // Counters on only (empty otherwise, counters.h): set up the counter banks before the TRISCs start.
                 llk_perf::configure_from_brisc();
 
                 clear_trisc_soft_reset();
