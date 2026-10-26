@@ -22,7 +22,7 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         Optional ``actual_start`` and ``actual_end`` are replicated device UINT32
         row-major scalars defining a nonempty global interval. ``actual_start`` is
         32-token aligned; ``actual_end`` need not be. Rows of a partial last chunk
-        past ``actual_end`` become identity recurrence steps: their gate, beta,
+        past ``actual_end`` become identity recurrence steps: their gate, beta-logit,
         key, and value inputs are replaced by zeros, so any padding, including
         NaN, is ignored. ``actual_end`` requires ``actual_start``. Omitting both bounds preserves the
         original unbounded call without allocating a scalar.
@@ -35,9 +35,10 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
             k (ttnn.Tensor): Flat keys ``[1, T, H*K]`` in BFLOAT16.
             v (ttnn.Tensor): Flat values ``[1, T, H*V]`` in BFLOAT16.
             g (ttnn.Tensor): Flat per-key log decays ``[1, T, H*K]`` in BFLOAT16.
-            beta (ttnn.Tensor): Per-token update strengths in FLOAT32 TILE layout, either
-                by chunk ``[H, N, 32, 1]`` or token-major ``[1, T, H]``, where ``N = T / 32``.
-                With ``beta_logits_column_offset``, BFLOAT16 pre-sigmoid logits instead (see below).
+            beta (ttnn.Tensor): Pre-sigmoid per-token update strengths: a token-major BFLOAT16 tensor
+                ``[1, T, columns]`` whose ``H`` columns from ``beta_logits_column_offset`` hold the logits,
+                such as the fused input projection. Preparation reads them in place and applies the
+                sigmoid in FP32.
             num_heads (int): Number of heads ``H``. Flat Q/K/G and V widths must be
                 divisible by ``H``.
 
@@ -54,17 +55,14 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 caller can fold a constant gate scale into preparation. The device product is exact for
                 any BF16-representable scale, so it is bit-identical to host-scaled ``g`` whenever that
                 host product is itself exact in BF16. Defaults to 1.0.
-            beta_logits_column_offset (int, optional): When given, ``beta`` is a token-major BF16 tensor
-                ``[1, T, columns]`` holding pre-sigmoid logits at these tile-aligned columns, such as the fused
-                input projection; preparation reads them in place and applies the sigmoid in FP32.
-                Defaults to None.
-            precise_gate_factors (bool): Bring-up option (GLM-5.3). Forms the anchored exponents G - G_last/2
-                and G_last/2 as matmuls of ``g`` with constant masks (exact for BF16 ``g``) and exponentiates them
-                in DST, so no large FP32 exponent is read at TF32 precision; the default path's TF32 subtraction
-                biases k_dec_t / q_decay / kd / intra near a -5 gate bound. Defaults to False (the source op).
+            beta_logits_column_offset (int): Tile-aligned first column of the beta logits in ``beta``.
+                Defaults to 0.
+            precise_gate_factors (bool): Form the anchored gate exponents exp(G - G_last/2), exp(G_last/2 - G)
+                and exp(G_last/2) as exact matmuls of the BF16 gate with constant masks, exponentiated in DST,
+                instead of reading the FP32 cumulative gate back at TF32 precision. Defaults to False.
 
         Returns:
-            list[ttnn.Tensor]: Seven new TILE-layout tensors, in order:
+            list[ttnn.Tensor]: Seven new TILE-layout tensors, where ``N = T / 32``, in order:
 
                 * ``v_beta[H,N,32,V]``
                 * ``kd[H,N,32,K]``
@@ -94,7 +92,7 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("gate_scale") = 1.0F,
-        nb::arg("beta_logits_column_offset") = nb::none(),
+        nb::arg("beta_logits_column_offset") = 0,
         nb::arg("precise_gate_factors") = false);
 }
 
