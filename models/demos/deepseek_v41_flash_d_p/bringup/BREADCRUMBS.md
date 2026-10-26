@@ -3126,3 +3126,37 @@ models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py -k "test_swe
 calls_auto.json from `DS41_MATMUL_CONFIG=auto ... -k test_capture`); A/B: `python -m models.demos.common.bringup.
 orchestrator measure --task P.24`; gate: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate P.24 --spec
 models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml --check`.
+
+## W.1 port (galaxy_8x4-full, run1): the seed's layers on 8x4 at chunk 5120
+
+What: the seed's 8 layers [0, 1, 2, 3, 14, 20, 21, 24] on mesh 8x4 (SP 8, TP 4: 640 rows a mesh row, 160 query rows a
+chip, hidden share 1280), each run from its golden input. Four 8x4-only failures, each fixed in place for every box:
+1. Shared expert (DS41-115): TP 4's slice 576 -> 768 (24 tile columns) lands in the flat op's 2 / 3-subgrid plans,
+   which have no gate/up split at H 5120 (TT_FATAL at load). tt/shared_expert.py pads each part to >= 33 tile columns
+   (ONE_SUBGRID_MIN), the one-subgrid plan the seed runs: 576 -> 1280 (2.2x shared-expert work on TP 4; 2x2 unchanged
+   at 1152 -> 1280). Better: a one-subgrid / HG option in the flat fork for It 24 (48 units on 48 cores), a perf pick.
+2. Served compressed caches (DS41-116): TP-dedup ratio-2 stripes are 640 / 2 / 4 = 80 rows a chip and the cache at
+   56320 is 880 rows; stock update_padded_kv_cache checks both in 32-row units. New fork ttnn.bringup.update_padded_kv_cache
+   (validation only, ROW_MAJOR copy path in rows; kernels untouched); tt/compressor.py and tt/attention.py call it.
+   Fork test tests/unit/test_row_stripes.py (8x4, exact vs torch, scalar + metadata + clamp; mutation of the reference
+   row fails it). The source op's tests do not collect on this tree (deepseek_v3_d_p tests conftest imports xing40's
+   settings, which pass the removed max_precision): baseline recorded as that error, see the fork's CHANGELOG.
+3. Indexer score (DS41-117): Q_CHUNK 64 does not divide 160 rows; tt/indexer.py takes the largest multiple of 32 <= 64
+   dividing the chip's rows (32 on 8x4, 64 on 2x2).
+4. Combine column barrier (DS41-118): tt/weighted_combine.py _column_barrier padded the column-end chips (1 fabric
+   direction on > 2 rows) with a duplicate connection to the same router channel; intermittent hang on rows 0 / 7.
+   Each chip now opens one connection per direction it has. Probe (8x4, add + barrier loop): old hangs < 50 calls,
+   fixed 2000 / 2000 (probe script not kept: tt-probe saves under tests/, outside this step's paths).
+Not changed (owner decisions / perf picks per the brief): settings defaults; mm_configs, link counts (indexer
+num_links 2), core grids; the shared expert's 2.2x padding and the score's q chunk 32 are Galaxy perf-pick inputs.
+Result: gate W.1 PASS. err_layer (limit): L00 0.0249 (0.054), L01 0.0368 (0.067), L02 0.0516 (0.090), L03 0.0711
+(0.107), L14 0.0320 (0.055), L20 0.0300 (0.037), L21 0.0436 (0.074), L24 0.0312 (0.0336, the tightest); err_state_max
+0.039; host_transfers_per_layer 0; load 1057 s, 2 chunks 91.6 s.
+OV-1: sparse_sdpa (160 query rows a chip after the reshard), the ring indexer (W 640, 160 rows; fix 3) and the served
+records (160-token sub-blocks, 80 / 40 compressed rows; fix 2) all run at 8x4's sizes in this gate, as do the
+4-column TP paths. Every row count comes from mesh.shape and the chunk.
+Gotchas: the gate --check takes ~20 min (8 layers load ~2.2 min each); a background tool call is cut at 10 min unless
+given a longer timeout. The units log (runs/.../logs/W.1.units.log) appends across runs.
+Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate W.1 --spec
+models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; fork test:
+`scripts/run_safe_pytest.sh --run-all ttnn/ttnn/bringup/update_padded_kv_cache/tests/unit/test_row_stripes.py`.

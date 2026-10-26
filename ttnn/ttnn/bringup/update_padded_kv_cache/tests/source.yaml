@@ -1,0 +1,25 @@
+# The source op's own tests (ttnn.experimental.deepseek_prefill.update_padded_kv_cache), run in place against this fork
+# (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests". The op's one test file (models/demos/deepseek_v3_d_p/tests/op_unit_tests) covers the
+# scalar and metadata paths, TILE / ROW_MAJOR, bf16 / bfp8 / fp8, the valid_global clamp, TP dedup, multi-head and the
+# split (RoPE / scaled fp8) inputs. Upstream CI runs its 2x4 cases (tests/pipeline_reorg/ops_unit_tests.yaml). Torus
+# cases (torus-x / torus-xy device params) are left out: this bring-up opens 2D fabric meshes only.
+#
+# Not covered upstream: a ROW_MAJOR TP-dedup write whose per-chip stripe is not a whole number of 32-row tiles (the
+# fork's one change); every upstream case keeps 32-row stripes, so on them the fork runs the original unchanged.
+upstream_sha: e3b3caa5c75e6deb0670edf8e9bc48f099b7e5c5
+swap:
+  ttnn.experimental.deepseek_prefill.update_padded_kv_cache: ttnn.bringup.update_padded_kv_cache
+tests:
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py
+    k: "2x4 and not torus"
+    mesh: [2, 4]
+    why: "the CI tier's cases: TP-dedup (tp_sharded, both layouts / dtypes, padded tail), valid_global clamp (metadata and scalar, mid-chunk / tail cases), metadata vs scalar, full-mesh rotated, split RoPE / scaled-fp8 inputs, on a fabric2d 2x4"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py
+    k: "2x2 and not torus"
+    mesh: [2, 2]
+    why: "the same families on 2x2 (the seed box's mesh), plus multi-head head stride and the tiled fp8 wraparound"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_update_padded_kv_cache.py
+    k: "1x1"
+    mesh: [1, 1]
+    why: "single-device cases: scaled fp8 packed row, the single-device write, multi-head stride"
