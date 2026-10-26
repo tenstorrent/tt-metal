@@ -68,7 +68,7 @@ REDUCE_TILE_DIMENSIONS = [
 
 
 def _fidelities_for_format(formats):
-    """LoFi fails for Float16/Float16_b/Float32 inputs — exclude at parametrize time."""
+    """LoFi fails for Float16_b/Float32 inputs, and it drops more of a Float16 mantissa than of a Float16_b one — exclude at parametrize time."""
     if formats.input_format in [
         DataFormat.Float16,
         DataFormat.Float16_b,
@@ -335,8 +335,15 @@ def _float16_stimuli(pool_type):
     return ["uniform"]
 
 
-# Float16 is the only exponent-A SrcA format, and its bug needs a 32-bit Dest, which
-# REDUCE_SWEEP would select only for a Float32 output; force dest_acc for every output.
+def _float16_fidelities(formats, stimulus):
+    # The non-uniform stimuli probe data values, not the fidelity phases.
+    if stimulus == "uniform":
+        return _fidelities_for_format(formats)
+    return [MathFidelity.HiFi4]
+
+
+# Only a Float16 SrcA takes the fp32-Dest path in llk_math_reduce.h, and it needs a 32-bit Dest,
+# which REDUCE_SWEEP would select only for a Float32 output; force dest_acc for every output.
 @parametrize(
     formats=[
         InputOutputFormat(DataFormat.Float16, output)
@@ -350,7 +357,7 @@ def _float16_stimuli(pool_type):
     dest_acc=[DestAccumulation.Yes],
     reduce_dim=REDUCE_DIMS,
     pool_type=POOL_TYPES,
-    math_fidelity=_fidelities_for_format,
+    math_fidelity=_float16_fidelities,
     is_reduce_to_one=_reduce_to_one_for_format,
     tile_dimensions=REDUCE_TILE_DIMENSIONS,
     stimulus=_float16_stimuli,

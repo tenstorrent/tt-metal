@@ -151,8 +151,7 @@ inline void reduce_row_advance_dest(const bool is_narrow_tile)
 // The analysis needs both operands in Float16; other combinations keep the base instruction stream.
 // Dest rows below are relative to the Dest counter. GMPOOL writes a 4-row block: with argmax set, rows 1-3 of the
 // block hold index data. Rows 4-15 of a face are scratch, cleared or overwritten before return.
-constexpr std::uint32_t REDUCE_SCALAR_POOL_ROW  = 4;
-constexpr std::uint32_t REDUCE_FP16_POOL_ROW    = 4;
+constexpr std::uint32_t REDUCE_POOL_ROW         = 4;
 constexpr std::uint32_t REDUCE_FP16_SCRATCH_ROW = 8;
 
 template <bool is_fp32_dest_acc_en>
@@ -198,7 +197,7 @@ inline __attribute__((noinline)) void reduce_fp16_convert_to_tf32(const std::uin
     TTI_ZEROSRC(0, 1, 0, 1);
     for (std::uint32_t i = 0; i < num_pooled_rows; i++)
     {
-        TT_MOVD2B(0, 1 + i, ADDR_MOD_0, p_movd2b::MOV_1_ROW, REDUCE_FP16_POOL_ROW + i * FACE_R_DIM);
+        TT_MOVD2B(0, 1 + i, ADDR_MOD_0, p_movd2b::MOV_1_ROW, REDUCE_POOL_ROW + i * FACE_R_DIM);
     }
     TTI_GATESRCRST(0b1, 0b1);
     TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_0, REDUCE_FP16_SCRATCH_ROW);
@@ -239,8 +238,8 @@ inline void reduce_fp16_clear_dest_rows(const std::uint32_t first_row, const std
 template <bool is_int_fpu_en, bool high_fidelity>
 inline __attribute__((noinline)) void reduce_row_max_fp16_face_row(const std::uint32_t num_faces_c_dim)
 {
-    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_FP16_POOL_ROW);
-    reduce_row_pool_all_faces<PoolType::MAX, high_fidelity, REDUCE_FP16_POOL_ROW, p_gpool::INDEX_EN>(num_faces_c_dim);
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, REDUCE_POOL_ROW);
+    reduce_row_pool_all_faces<PoolType::MAX, high_fidelity, REDUCE_POOL_ROW, p_gpool::INDEX_EN>(num_faces_c_dim);
     reduce_fp16_convert_to_tf32(1);
     reduce_fp16_max_into(REDUCE_FP16_SCRATCH_ROW + 1, 0);
     reduce_row_perform_transpose<is_int_fpu_en>();
@@ -281,10 +280,10 @@ inline __attribute__((noinline)) void reduce_col_max_fp16_finish(const std::uint
     reduce_set_tf32_src_override(false);
     math::_configure_default_zero_flag_state_();
 
-    reduce_fp16_clear_dest_rows(REDUCE_FP16_POOL_ROW, FACE_R_DIM);
+    reduce_fp16_clear_dest_rows(REDUCE_POOL_ROW, FACE_R_DIM);
     for (std::uint32_t i = 1; i < num_faces_c_dim; i++)
     {
-        reduce_fp16_clear_dest_rows(i * FACE_R_DIM + REDUCE_FP16_POOL_ROW, i * FACE_R_DIM + REDUCE_FP16_SCRATCH_ROW);
+        reduce_fp16_clear_dest_rows(i * FACE_R_DIM + REDUCE_POOL_ROW, i * FACE_R_DIM + REDUCE_FP16_SCRATCH_ROW);
     }
 }
 
@@ -296,7 +295,7 @@ inline void reduce_pool_face(const bool fp16_max)
 {
     if (fp16_max)
     {
-        reduce_pool_op<type, high_fidelity, clear_mode, REDUCE_FP16_POOL_ROW, p_gpool::INDEX_EN>();
+        reduce_pool_op<type, high_fidelity, clear_mode, REDUCE_POOL_ROW, p_gpool::INDEX_EN>();
     }
     else
     {
@@ -475,10 +474,10 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         for (std::uint32_t face_num = 0; face_num < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face_num++)
         {
             // Wait and pool
-            reduce_pool_face<type, high_fidelity, p_setrwc::CLR_AB, REDUCE_SCALAR_POOL_ROW>(fp16_max);
+            reduce_pool_face<type, high_fidelity, p_setrwc::CLR_AB, REDUCE_POOL_ROW>(fp16_max);
         }
         // Wait and pool
-        reduce_pool_face<type, high_fidelity, p_setrwc::CLR_NONE, REDUCE_SCALAR_POOL_ROW>(fp16_max);
+        reduce_pool_face<type, high_fidelity, p_setrwc::CLR_NONE, REDUCE_POOL_ROW>(fp16_max);
 
         // Need row in dest as column in src A
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
@@ -495,7 +494,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         }
         else
         {
-            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, REDUCE_SCALAR_POOL_ROW);
+            TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, REDUCE_POOL_ROW);
         }
         TTI_GATESRCRST(0b1, 0b1);
         TTI_TRNSPSRCB;
@@ -512,9 +511,8 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, ADDR_MOD_0, 4);
         if (fp16_src)
         {
-            math::_configure_default_zero_flag_state_();
             // Argmax GMPOOL leaves index data in rows 5-7; the TF32 conversion writes rows 8-15.
-            reduce_fp16_clear_dest_rows(fp16_max ? REDUCE_FP16_POOL_ROW + 1 : REDUCE_FP16_SCRATCH_ROW, FACE_R_DIM);
+            reduce_fp16_clear_dest_rows(fp16_max ? REDUCE_POOL_ROW + 1 : REDUCE_FP16_SCRATCH_ROW, FACE_R_DIM);
         }
 
         if constexpr (type == PoolType::MAX)
@@ -536,6 +534,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
         if (fp16_src)
         {
             reduce_set_tf32_src_override(false);
+            math::_configure_default_zero_flag_state_();
         }
     }
 }
