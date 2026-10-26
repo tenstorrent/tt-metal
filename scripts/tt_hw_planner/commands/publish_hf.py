@@ -95,6 +95,35 @@ def _validate_mesh_device(mesh_device: str) -> None:
     )
 
 
+# Chips per board, keyed by the base of a serve.hardware label ("p300x2" = two p300 boards = 4 chips).
+# Mirrors tt-model's _BOARD_CHIPS: its manifest check refuses a mesh_device that opens a different
+# number of chips than the hardware label implies.
+_BOARD_CHIPS = {"p100": 1, "p150": 1, "n150": 1, "p300": 2, "n300": 2}
+_SINGLE_CHIP_BOARD = {"blackhole": "p150", "wormhole_b0": "n150"}
+
+
+def _hardware_for_chips(hardware: str, arch: str | None, chips: int) -> str:
+    """The serve.hardware label for a model that opens `chips` chips of the box `hardware` names: the
+    box's own board when the chips fill whole boards (2 chips of a p300x2 -> p300), else the arch's
+    single-chip board (1 chip of a p300x2 -> p150). Unchanged when the label already matches or is not
+    a <board>[xN] label."""
+    import re as _re
+
+    m = _re.fullmatch(r"([a-z]+\d+)[a-z]?(?:x(\d+))?", str(hardware).lower())
+    if not m or m.group(1) not in _BOARD_CHIPS or chips < 1:
+        return hardware
+    base, per = m.group(1), _BOARD_CHIPS[m.group(1)]
+    if per * int(m.group(2) or 1) == chips:
+        return hardware
+    if chips % per:
+        single = _SINGLE_CHIP_BOARD.get(str(arch or "").lower())
+        if not single:
+            return hardware
+        base, per = single, 1
+    n = chips // per
+    return base if n == 1 else f"{base}x{n}"
+
+
 def _box_from_env(env: dict | None) -> str | None:
     """The planner box the run's DETECTED hardware is (its manifest env: arch family + chip count), or
     None when that matches no box or more than one -- never a guess."""
@@ -171,6 +200,7 @@ def _write_tt_model_yaml(
     _serve_args = ["--trust-remote-code"]
     if serve_hf_override:
         _serve_args += ["--hf-overrides", json.dumps({"architectures": [serve_hf_override]})]
+    hardware_given = hardware
     hardware = hardware or hw
     mesh_device = mesh_device or mesh
     if not (arch and hardware and mesh_device):
@@ -179,6 +209,21 @@ def _write_tt_model_yaml(
             "--arch / --hardware / --mesh was given" % (state.get("env") or {}).get("arch")
         )
     _validate_mesh_device(mesh_device)
+    # A run that opened fewer chips than its box (1 chip of a QB2) serves on that smaller mesh, and
+    # tt-model refuses a hardware label naming more chips than the mesh opens. So the label names the
+    # chips opened, and the card says which box they are on.
+    import re as _re
+
+    hw_phrase, perf_hw = _hardware_phrase(state, hardware), hardware
+    _mt = _re.fullmatch(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)", str(mesh_device))
+    if _mt and not hardware_given:
+        opened = int(_mt.group(1)) * int(_mt.group(2))
+        fitted = _hardware_for_chips(hardware, arch, opened)
+        if fitted != hardware:
+            unit = "chip" if opened == 1 else "chips"
+            hw_phrase = f"{opened} Tenstorrent {_arch_name({'env': {'arch': arch}})} {unit} of a {hardware}"
+            perf_hw = f"{opened} {unit} of a {hardware}"
+            hardware = fitted
     thr = state.get("throughput") or {}
     sv = state.get("serving") or {}
     pt = sv.get("per_token") or {}
@@ -193,7 +238,7 @@ def _write_tt_model_yaml(
     if batch:
         perf_bits.append(f"at batch {batch}")
     if hardware:
-        perf_bits.append(f"on {hardware}")
+        perf_bits.append(f"on {perf_hw}")
     perf = " ".join(perf_bits) or "measured on Tenstorrent; see the dashboard."
     lines = [
         'schema: "5.1"',
@@ -243,12 +288,12 @@ def _write_tt_model_yaml(
         "",
         "card:",
         f"  description: >",
-        f"    {slug}, brought up and optimized on {_hardware_phrase(state, hardware)}",
+        f"    {slug}, brought up and optimized on {hw_phrase}",
         f"    (kernel/lever autotuning against a PCC-gated end-to-end pipeline).",
         f"  performance: >",
         f"    {perf}.",
         f"  limitations: >",
-        f"    Validated on {_hardware_phrase(state, hardware)}.",
+        f"    Validated on {hw_phrase}.",
         f"  architecture: autoport ({slug})",
         f"  status: Experimental community bring-up",
         "  license:",
@@ -404,13 +449,29 @@ def _tt_validated_block(state: dict, hw_phrase: str, commit: str | None) -> str:
         f"Brought up and measured on {hw_phrase} through a PCC-gated end-to-end pipeline. "
         "Every figure in this section is measured on Tenstorrent hardware; the sections below are the "
         "upstream base-model card (measured by the base-model authors on GPU), reproduced for reference.\n\n"
-        + table + "\n"
+        + table
+        + "\n"
     )
 
 
 _GPU_TITLE_KEYS = (
-    "vllm", "sglang", "tensorrt", "trt-llm", "gpu", "cuda", "nvidia", "deploy", "deployment",
-    "quick start", "quickstart", "serving", "serve", "run with", "run on", "installation", "docker",
+    "vllm",
+    "sglang",
+    "tensorrt",
+    "trt-llm",
+    "gpu",
+    "cuda",
+    "nvidia",
+    "deploy",
+    "deployment",
+    "quick start",
+    "quickstart",
+    "serving",
+    "serve",
+    "run with",
+    "run on",
+    "installation",
+    "docker",
 )
 
 
@@ -425,7 +486,7 @@ def _strip_gpu_sections(body: str) -> str:
     kept = []
     for p in parts:
         m = re.match(r"##\s+(.*)", p)
-        title = (m.group(1).strip().lower() if m else "")
+        title = m.group(1).strip().lower() if m else ""
         low = p.lower()
         gpu_title = bool(title) and any(k in title for k in _GPU_TITLE_KEYS)
         gpu_body = (
@@ -561,10 +622,10 @@ def _tt_run_section(repo_id: str | None, base_weights: str | None = None) -> str
         "Then query it with any OpenAI client:\n\n"
         "```python\n"
         "from openai import OpenAI\n"
-        "client = OpenAI(base_url=\"http://localhost:20000/v1\", api_key=\"EMPTY\")\n"
+        'client = OpenAI(base_url="http://localhost:20000/v1", api_key="EMPTY")\n'
         "resp = client.chat.completions.create(\n"
-        f"    model=\"{model}\",\n"
-        "    messages=[{\"role\": \"user\", \"content\": \"What is the capital of Japan?\"}],\n"
+        f'    model="{model}",\n'
+        '    messages=[{"role": "user", "content": "What is the capital of Japan?"}],\n'
         "    max_tokens=256,\n"
         ")\n"
         "print(resp.choices[0].message.content)\n"
@@ -629,8 +690,11 @@ def _maybe_run_container_eval(args, slug, demo_dir) -> None:
             if "Application startup complete" in (lg.stdout + lg.stderr):
                 ready = True
                 break
-            st = _sp.run(["docker", "ps", "-a", "--filter", "name=" + cname, "--format", "{{.Status}}"],
-                         capture_output=True, text=True).stdout
+            st = _sp.run(
+                ["docker", "ps", "-a", "--filter", "name=" + cname, "--format", "{{.Status}}"],
+                capture_output=True,
+                text=True,
+            ).stdout
             if "Exited" in st:
                 break
             _t.sleep(30)
@@ -651,7 +715,12 @@ def _maybe_run_container_eval(args, slug, demo_dir) -> None:
 
 
 def _compose_mirrored_card(
-    state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None, demo_dir=None,
+    state: dict,
+    slug: str,
+    base_weights: str | None,
+    commit: str | None,
+    token: str | None,
+    demo_dir=None,
     repo_id: str | None = None,
 ) -> str | None:
     """A card that MIRRORS the upstream HF model card, with a TT-validated header whose numbers all
@@ -666,9 +735,17 @@ def _compose_mirrored_card(
     _, hw_tag, _ = _serve_target(None, state.get("env"))
     hw = _hardware_phrase(state, hw_tag)
     arch_tag = str((state.get("env") or {}).get("arch") or "").strip().lower()
-    fm = ["---", f"base_model: {base_weights}", "base_model_relation: finetune",
-          "library_name: tt-metal", "pipeline_tag: text-generation",
-          "tags:", "  - tenstorrent", "  - tt-metal", "  - ttnn"]
+    fm = [
+        "---",
+        f"base_model: {base_weights}",
+        "base_model_relation: finetune",
+        "library_name: tt-metal",
+        "pipeline_tag: text-generation",
+        "tags:",
+        "  - tenstorrent",
+        "  - tt-metal",
+        "  - ttnn",
+    ]
     if arch_tag:
         fm.append(f"  - {arch_tag}")
     fm.append("---")
@@ -683,7 +760,8 @@ def _compose_mirrored_card(
         "\n".join(fm)
         + f"\n\n# {base_weights} — on Tenstorrent\n\n{intro}\n\n"
         + _tt_validated_block(state, hw, commit)
-        + "\n" + _tt_run_section(repo_id, base_weights)
+        + "\n"
+        + _tt_run_section(repo_id, base_weights)
         + _tt_accuracy_section(_load_tt_eval(demo_dir) if demo_dir else {})
         + "\n## Base model (upstream) — reference\n\n"
         + body
@@ -691,7 +769,14 @@ def _compose_mirrored_card(
     )
 
 
-def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | None, token: str | None = None, repo_id: str | None = None) -> str:
+def _build_card(
+    state: dict,
+    slug: str,
+    base_weights: str | None,
+    commit: str | None,
+    token: str | None = None,
+    repo_id: str | None = None,
+) -> str:
     mirrored = _compose_mirrored_card(state, slug, base_weights, commit, token, repo_id=repo_id)
     if mirrored is not None:
         return mirrored
@@ -724,8 +809,7 @@ def _build_card(state: dict, slug: str, base_weights: str | None, commit: str | 
         "",
         f"# {slug} — Tenstorrent-optimized",
         "",
-        "Optimized for Tenstorrent hardware with kernel/lever autotuning "
-        "against a PCC-gated end-to-end pipeline.",
+        "Optimized for Tenstorrent hardware with kernel/lever autotuning " "against a PCC-gated end-to-end pipeline.",
         "",
     ]
     if base_weights:
@@ -2038,10 +2122,11 @@ def _run_container(args, state: dict, slug: str, demo_dir, commit: str | None) -
         print("  [publish-hf] " + val.stdout.strip())
     if val.returncode != 0:
         print("  [publish-hf] manifest validation failed:\n" + (val.stderr.strip()[-800:] or "(no detail)"))
-        print(
-            "  [publish-hf] Most commonly: the vLLM adapter dir (runtime.extra_models_dir) with a "
-            "vllm_metadata.json must exist and be under source.code. Author it, then re-run."
-        )
+        if any(k in val.stderr for k in ("extra_models_dir", "vllm_metadata", "source.code")):
+            print(
+                "  [publish-hf] The vLLM adapter dir (runtime.extra_models_dir) with a "
+                "vllm_metadata.json must exist and be under source.code. Author it, then re-run."
+            )
         return 3
 
     if getattr(args, "dry_run", False):
@@ -2206,7 +2291,9 @@ def _verify_published_package(args, slug: str, servable: bool) -> None:
                     outcome, detail = "error", f"container exited: {st}"
                     break
             if beat % 6 == 0:
-                print(f"  [publish-hf] verify: … waiting for the served container ({int(deadline - time.time())}s left)")
+                print(
+                    f"  [publish-hf] verify: … waiting for the served container ({int(deadline - time.time())}s left)"
+                )
             beat += 1
             time.sleep(10)
         if cname:
@@ -2240,7 +2327,6 @@ def _verify_published_package(args, slug: str, servable: bool) -> None:
         _upload_card_section(args, _VERIFY_TITLE, section)
     except Exception as e:  # noqa: BLE001
         print(f"  [publish-hf] verify: card section not written ({e}).")
-
 
 
 def _maybe_autocommit(args, demo_dir) -> None:
