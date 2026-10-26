@@ -91,7 +91,7 @@ TEST(MimirEmu, CceSramChannelsDoNotAliasThroughMetalCluster) {
 INSTANTIATE_TEST_SUITE_P(
     MimirEmu,
     CceSramRoundTripThroughMetalCluster,
-    ::testing::Range(0u, 4u),
+    ::testing::ValuesIn(cce_indices()),
     [](const ::testing::TestParamInfo<uint32_t>& info) { return fmt::format("Cce{}", info.param); });
 
 }  // namespace
