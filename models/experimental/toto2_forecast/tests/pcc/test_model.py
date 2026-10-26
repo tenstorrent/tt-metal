@@ -49,9 +49,9 @@ CASES = [
     *(("22m", n, "accuracy") for n in SMALL + SINGLE),
     *(("22m", n, "performance") for n in SMALL),
     *(("313m", n, "accuracy") for n in FULL + SINGLE),
-    *(("313m", n, "performance") for n in FULL[:1] + SINGLE[:1]),
+    *(("313m", n, "performance") for n in FULL + SINGLE),  # D4 condition 2: every case in both precisions
     *(("2.5B-FT", n, "accuracy") for n in FULL + SINGLE),
-    *(("2.5B-FT", n, "performance") for n in FULL[:1] + SINGLE[:1] + SINGLE[3:]),
+    *(("2.5B-FT", n, "performance") for n in FULL + SINGLE),
 ]
 _MODEL: dict = {}
 
