@@ -162,6 +162,7 @@ void kernel_main() {
                 if (index_is_defined[dim]) {
                     uint32_t index_l1_addr = 0;
 
+#ifdef TILIZE_INDEX
                     uint32_t index_noc_id;
                     if (dim == 4) {
                         index_noc_id = index_index / TILE_WIDTH;
@@ -169,7 +170,6 @@ void kernel_main() {
                         index_noc_id = index_index / TILE_HEIGHT;
                     }
 
-#ifdef TILIZE_INDEX
 #ifdef HAS_INDEX0
                     if (dim == 0) {
                         dfb_in1_obj.reserve_back(1);
