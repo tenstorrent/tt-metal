@@ -60,9 +60,9 @@ def test_sample_step_uses_device_seeds_and_copies_only_live_rows(batch, argmax):
     generator_method("_sample_step", ttnn=tt, append_tokens=append)(gen, state, argmax)
     tt.typecast.assert_called_once_with(state.seeds, tt.uint32)
     assert gen.samplers[argmax].seeds_tt_tensor is tt.typecast.return_value
-    gen.samplers[argmax].assert_called_once_with(tt.reshape.return_value, tt_out_tok=gen.sampling_output)
+    gen.samplers[argmax].assert_called_once_with(tt.pad.return_value, tt_out_tok=gen.sampling_output)
     gen.samplers[not argmax].assert_not_called()
-    tt.reshape.assert_called_once_with(state.logits, [1, 1, 32, 49152])
+    tt.pad.assert_called_once_with(state.logits, [(0, 0), (0, 0), (0, 32 - batch), (0, 0)], value=0)
     tt.slice.assert_called_once_with(gen.sampling_output, [0, 0, 0, 0], [1, 1, 1, batch])
     tt.copy.assert_called_once_with(tt.slice.return_value, state.tokens)
     tt.plus_one.assert_called_once_with(state.seeds, skip_negative_entries=True)

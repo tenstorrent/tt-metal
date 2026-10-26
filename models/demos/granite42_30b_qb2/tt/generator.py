@@ -204,7 +204,7 @@ class GraniteGenerator:
         sampler.seeds_tt_tensor = ttnn.typecast(s.seeds, ttnn.uint32)
         # The common sampler operates on a full tile. Only the live bucket rows
         # feed back into decode; the remaining rows cannot affect those draws.
-        logits = ttnn.reshape(s.logits, [1, 1, 32, s.logits.shape[-1]])
+        logits = ttnn.pad(s.logits, [(0, 0), (0, 0), (0, 32 - s.batch), (0, 0)], value=0)
         sampler(logits, tt_out_tok=self.sampling_output)
         tokens = ttnn.slice(self.sampling_output, [0, 0, 0, 0], [1, 1, 1, s.batch])
         ttnn.copy(tokens, s.tokens)
