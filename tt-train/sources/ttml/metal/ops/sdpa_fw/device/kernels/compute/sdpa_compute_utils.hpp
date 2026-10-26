@@ -103,8 +103,9 @@ void apply_mask_on_reg(
     add_binary_tile(register_idx, mask_register, register_idx);
 }
 
-// Per-row softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB
-// is Sq_chunk_t deep with row r in slot r. The caller owns waits/reserves/pushes of the row-deep CBs.
+// Softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB is
+// Sq_chunk_t deep with row r in slot r. The per-row helpers (one `row` argument) leave the CB
+// waits/reserves/pushes to the caller; the chunk-level ones (matmul_qk_by_v, update_cur_mm_out) do their own.
 
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
