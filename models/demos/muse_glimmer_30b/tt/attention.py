@@ -19,7 +19,6 @@ from models.demos.gemma4.tt.attention.operations import (
     apply_rope,
     chunked_prefill_sdpa,
     chunked_prefill_sdpa_sliding,
-    prefill_sdpa_program_config,
 )
 from models.demos.gemma4.tt.dram_sharded import _PREFILL_CUTOFF, TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.muse_glimmer_30b.tt.common import (
@@ -228,6 +227,20 @@ class MuseGlimmerAttention:
         xqkvg.deallocate(True)
         return qkv, gate
 
+    def _prefill_sdpa_config(self, seq_len):
+        """Prefill SDPA chunks measured on QB2: q 128; k 512 for long sequences, else 256 (128 for 128 rows)."""
+        if seq_len > 4096 and seq_len % 512 == 0:
+            k_chunk = 512
+        else:
+            k_chunk = 256 if seq_len % 256 == 0 else 128
+        grid = self.mesh_device.compute_with_storage_grid_size()
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
+            q_chunk_size=128,
+            k_chunk_size=k_chunk,
+            exp_approx_mode=False,
+        )
+
     def _gate_oproj(self, attn, gate, out_mem=ttnn.DRAM_MEMORY_CONFIG):
         """attn * sigmoid(gate) -> o_proj (partial sums) -> all_reduce."""
         # Fused SIGMOID is the accurate one: a bare UnaryOpType::SIGMOID emits sigmoid_tile_init() (unary_op_utils.cpp:815),
@@ -302,7 +315,7 @@ class MuseGlimmerAttention:
                 is_causal=True,
                 scale=a.sdpa_scale,
                 sliding_window_size=self.sliding_window,
-                program_config=prefill_sdpa_program_config(a.head_dim, seq_len, self.sliding_window),
+                program_config=self._prefill_sdpa_config(seq_len),
                 compute_kernel_config=self.sdpa_cfg,
             )
         for t in (q, k, v):
