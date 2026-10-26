@@ -22,6 +22,7 @@
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
+#include "tt-metalium/experimental/metal2_host_api/accessor_name.hpp"            // Metal 2.0 ArgName
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -630,16 +631,18 @@ public:
     struct KernelRTASchema {
         // Named arg names, in declaration order. Used to serialize ProgramRunArgs values
         // into the dispatch buffer and to validate that every declared name is supplied.
-        std::vector<std::string> runtime_arg_names;
-        std::vector<std::string> common_runtime_arg_names;
+        // (Typed ArgName, like the ProgramRunArgs tables they are matched against, so the
+        // per-enqueue lookups never build a temporary name from a std::string.)
+        std::vector<experimental::ArgName> runtime_arg_names;
+        std::vector<experimental::ArgName> common_runtime_arg_names;
 
         // Precomputed name -> slot-index maps mirroring the *_names vectors above (slot = the arg's
         // position within its dispatch-buffer section). Built once at Program construction so the
         // hot UpdateProgramRunArgs path does O(1) lookups instead of rebuilding a map per call —
         // that path is not bypassable via skip_validation, so per-call construction would be pure
         // host overhead on the inner re-enqueue loop.
-        std::unordered_map<std::string, size_t> runtime_arg_name_to_slot;
-        std::unordered_map<std::string, size_t> common_runtime_arg_name_to_slot;
+        std::unordered_map<experimental::ArgName, size_t> runtime_arg_name_to_slot;
+        std::unordered_map<experimental::ArgName, size_t> common_runtime_arg_name_to_slot;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single

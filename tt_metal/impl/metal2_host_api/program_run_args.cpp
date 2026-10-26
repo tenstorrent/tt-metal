@@ -386,7 +386,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
 
         // Validate named RTAs: every declared name set per-node, no extras.
         const auto& named_rta_names = schema->runtime_arg_names;
-        const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
+        const std::unordered_set<ArgName> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
         std::unordered_map<NodeCoord, size_t> named_rta_count_per_node;
         for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
@@ -1108,7 +1108,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 
         // --- Named RTAs: any may be omitted. Supplied names must be declared (no extras) and their
         //     target nodes must belong to the kernel. ---
-        const std::unordered_set<std::string> named_rta_name_set(
+        const std::unordered_set<ArgName> named_rta_name_set(
             schema->runtime_arg_names.begin(), schema->runtime_arg_names.end());
         for (const auto& [name, per_node] : kernel_params.runtime_arg_values) {
             TT_FATAL(
@@ -1127,7 +1127,7 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
         }
 
         // --- Named CRTAs: any may be omitted. Supplied names must be declared (no extras). ---
-        const std::unordered_set<std::string> named_crta_name_set(
+        const std::unordered_set<ArgName> named_crta_name_set(
             schema->common_runtime_arg_names.begin(), schema->common_runtime_arg_names.end());
         for (const auto& [name, _value] : kernel_params.common_runtime_arg_values) {
             (void)_value;

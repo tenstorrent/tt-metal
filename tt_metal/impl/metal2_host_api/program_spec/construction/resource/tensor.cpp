@@ -245,7 +245,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
         const std::vector<uint32_t>& binding_ctas = resolved.cta_payload;
 
         TensorBindingHandle handle;
-        handle.accessor_name = binding.accessor_name;
+        handle.accessor_name = binding.accessor_name.str();
         handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));

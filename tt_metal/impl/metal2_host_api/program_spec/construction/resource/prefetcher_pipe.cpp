@@ -117,7 +117,7 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
             const uint8_t prefetcher_pipe_id = program_impl.reserve_prefetcher_pipe_slot(
                 nodes, receiver_cores, first->ring_size, first->entry_size, num_credit_lanes);
             handles[&kernel].push_back(
-                {.accessor_name = binding.accessor_name, .prefetcher_pipe_id = prefetcher_pipe_id});
+                {.accessor_name = binding.accessor_name.str(), .prefetcher_pipe_id = prefetcher_pipe_id});
 
             // Sender role: the spec does not say which of the kernel's nodes hosts which pipe, so
             // every pipe's placement names all of them; the bind narrows it to the pipe's sender.

@@ -167,16 +167,16 @@ void ValidateDFBBindings(const KernelSpec& kernel, const ValidationContext& ctx)
     };
     std::unordered_map<DFBSpecName, DFBBoundRoles> dfb_bound_roles;
     for (const auto& dfb_binding : kernel.dfb_bindings) {
-        auto [it, inserted] =
-            accessor_bindings.try_emplace(dfb_binding.accessor_name, AccessorBindingInfo{dfb_binding.dfb_spec_name});
+        auto [it, inserted] = accessor_bindings.try_emplace(
+            dfb_binding.accessor_name.str(), AccessorBindingInfo{dfb_binding.dfb_spec_name});
         AccessorBindingInfo& info = it->second;
         if (inserted) {
             TT_FATAL(
-                IsValidCppIdentifier(dfb_binding.accessor_name),
+                IsValidCppIdentifier(dfb_binding.accessor_name.view()),
                 "Kernel '{}' DFB accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 dfb_binding.accessor_name);
-            ValidateAccessorNameLength(kernel.unique_id, "DFB", dfb_binding.accessor_name);
+            ValidateAccessorNameLength(kernel.unique_id, "DFB", dfb_binding.accessor_name.view());
         } else {
             TT_FATAL(
                 info.dfb_spec_name == dfb_binding.dfb_spec_name,
