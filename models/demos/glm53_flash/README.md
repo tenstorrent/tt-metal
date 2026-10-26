@@ -42,7 +42,7 @@ all fit with 1.1-2.0 GiB per chip to spare.
 | Batch | Hardware | ISL (tokens) | TTFT | T/S/U | Target T/S/U | T/S | Notes |
 |---|---|---|---|---|---|---|---|
 | 1   | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 265 ms | 12.5 | 60 | 12.5 | one run, one user per row (the 8 rows decode the same prompt in parallel; a single user's figures); decode step 80.1 ms; 128-token first token == HF |
-| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 266 ms | 12.0 | 33 | 385 | one run: one random token per user slot (diverse expert routing); decode step 83.1 ms; 128-token first token == HF head |
+| 32  | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 135 ms | 14.5 | 33 | 463 | one run (2026-10-26, `GLM53_STREAM_EXPERTS=1`: the streaming routed-expert op for the decode-shaped rows, the 16-row prefill slabs included; sharded mHC collapse norm): one random token per user slot (diverse expert routing); decode step 69.1 ms; first token == HF; the logits gate with this op is queued (the block-op path: 0.9948 / top-1 95.3 %) |
 | 256 | Galaxy 8x4 (Blackhole) | 16 (decode) / 128 (TTFT) | 139 ms | 8.7 | 19 | 2217 | one run: dense expert pass, one random token per user slot; decode step 115.5 ms; greedy id == host head for every user |
 | 8   | Galaxy 8x4 (Blackhole) | 65 514 | 32.4 s | 10.9 | 60 | 87 | one run (needle depth 0.56, retrieved): one prompt, replicated to the 8 rows; 2023 tok/s prefill on the regions path with the stacked copy kept; decode step 91.6 ms |
 | 1   | Galaxy 8x4 (Blackhole) | 65 514 | 32.4 s | 10.9 | 60 | 10.9 | the same run as the 8-user row above: a single user's figures (one user per row) |
