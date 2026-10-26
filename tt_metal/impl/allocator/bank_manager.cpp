@@ -534,25 +534,26 @@ uint64_t BankManager::allocate_buffer(
         allocator_id, size_per_bank, address_limit, additional_occupied_ranges, scoped_dependent_allocators);
 
     // Choose an address from the allowed ranges respecting alignment and direction
-    // Addresses should already be aligned to alignment_bytes_
+    // Preserve default alignment even when earlier explicit reservations created unaligned range boundaries
     std::optional<DeviceAddr> chosen;
     if (bottom_up) {
         for (const auto& r : available_ranges) {
-            DeviceAddr s = r.first;
-            if (s + size_per_bank <= r.second) {
-                chosen = s;
+            DeviceAddr aligned_start = ((r.first + alignment_bytes_ - 1) / alignment_bytes_) * alignment_bytes_;
+            if (aligned_start >= r.first && aligned_start + size_per_bank <= r.second) {
+                chosen = aligned_start;
                 break;
             }
         }
     } else {
         for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
             const auto& r = available_ranges[static_cast<size_t>(i)];
-            // Test the window's width rather than forming r.second - size_per_bank first: DeviceAddr
-            // is unsigned, so a request wider than r.second wraps to a huge value that compares
-            // >= r.first, and the allocation "succeeds" at a nonsense address instead of reporting.
-            if (r.second - r.first >= size_per_bank) {
-                chosen = r.second - size_per_bank;
-                break;
+            if (r.second >= size_per_bank) {
+                DeviceAddr max_start = r.second - size_per_bank;
+                DeviceAddr aligned_start = (max_start / alignment_bytes_) * alignment_bytes_;
+                if (aligned_start >= r.first && aligned_start + size_per_bank <= r.second) {
+                    chosen = aligned_start;
+                    break;
+                }
             }
         }
     }

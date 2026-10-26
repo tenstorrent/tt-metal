@@ -109,6 +109,38 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     std::vector<size_t>* segregated_list = nullptr;
     size_t segregated_item_index = 0;
     DeviceAddr best_address = bottom_up ? ~(DeviceAddr)0 : 0;
+    size_t target_offset = 0;
+
+    auto get_aligned_offset = [this, alloc_size, bottom_up](size_t block_index) -> std::optional<size_t> {
+        DeviceAddr lo = block_address_[block_index];
+        DeviceAddr size = block_size_[block_index];
+        DeviceAddr hi = lo + size;
+        if (size < alloc_size) {
+            return std::nullopt;
+        }
+        if (bottom_up) {
+            DeviceAddr abs_lo = lo + offset_bytes_;
+            DeviceAddr abs_aligned = align(abs_lo);
+            if (abs_aligned < offset_bytes_) {
+                return std::nullopt;
+            }
+            DeviceAddr aligned_lo = abs_aligned - offset_bytes_;
+            if (aligned_lo >= lo && aligned_lo + alloc_size <= hi) {
+                return static_cast<size_t>(aligned_lo - lo);
+            }
+        } else {
+            DeviceAddr abs_hi = hi + offset_bytes_;
+            if (abs_hi >= alloc_size) {
+                DeviceAddr max_abs_start = abs_hi - alloc_size;
+                DeviceAddr abs_aligned_start = (max_abs_start / alignment_) * alignment_;
+                if (abs_aligned_start >= lo + offset_bytes_) {
+                    DeviceAddr aligned_lo = abs_aligned_start - offset_bytes_;
+                    return static_cast<size_t>(aligned_lo - lo);
+                }
+            }
+        }
+        return std::nullopt;
+    };
 
     for (size_t i = size_segregated_index; i < free_blocks_segregated_by_size_.size(); i++) {
         auto& free_blocks = free_blocks_segregated_by_size_[i];
@@ -117,16 +149,23 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
             // counter avoids an empty list underflowing the start index.
             const size_t j = bottom_up ? n : free_blocks.size() - 1 - n;
             const size_t block_index = free_blocks[j];
+            auto offset_opt = get_aligned_offset(block_index);
+            if (!offset_opt.has_value()) {
+                continue;
+            }
+            size_t cand_offset = *offset_opt;
+            DeviceAddr cand_addr = block_address_[block_index] + cand_offset;
             if (policy_ == SearchPolicy::BEST) {
-                if (block_size_[block_index] == alloc_size) {
+                if (block_size_[block_index] == alloc_size && cand_offset == 0) {
                     target_block_index = block_index;
+                    target_offset = cand_offset;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                     break;
                 }
-                if (block_size_[block_index] >= alloc_size &&
-                    (!target_block_index.has_value() || block_size_[block_index] < block_size_[*target_block_index])) {
+                if (!target_block_index.has_value() || block_size_[block_index] < block_size_[*target_block_index]) {
                     target_block_index = block_index;
+                    target_offset = cand_offset;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
                 }
@@ -134,17 +173,14 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
                     break;
                 }
             } else {
-                if (block_size_[block_index] < alloc_size) {
-                    continue;
-                }
-
                 bool address_better =
-                    bottom_up ? block_address_[block_index] < best_address : block_address_[block_index] > best_address;
+                    bottom_up ? cand_addr < best_address : cand_addr > best_address;
                 if (!target_block_index.has_value() || address_better) {
                     target_block_index = block_index;
+                    target_offset = cand_offset;
                     segregated_list = &free_blocks;
                     segregated_item_index = j;
-                    best_address = block_address_[block_index];
+                    best_address = cand_addr;
                     break;
                 }
             }
@@ -161,11 +197,7 @@ std::optional<DeviceAddr> FreeListOpt::allocate(DeviceAddr size_bytes, bool bott
     segregated_list->erase(segregated_list->begin() + static_cast<std::ptrdiff_t>(segregated_item_index));
 
     // Allocate the block
-    size_t offset = 0;
-    if (!bottom_up) {
-        offset = block_size_[*target_block_index] - alloc_size;
-    }
-    size_t allocated_block_index = allocate_in_block(*target_block_index, alloc_size, offset);
+    size_t allocated_block_index = allocate_in_block(*target_block_index, alloc_size, target_offset);
     DeviceAddr start_address = block_address_[allocated_block_index];
     if (start_address + offset_bytes_ < address_limit) {
         TT_THROW(
