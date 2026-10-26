@@ -92,6 +92,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         validate_params(params)
         from models.demos.gemma4_d_p.config import MeshConfig
+        from models.demos.gemma4_d_p.tt.common import bounded_swa_enabled
         from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
         from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
 
@@ -101,6 +102,7 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
             num_users=params.num_users,
             max_seq_len=params.max_seq_len,
             prefill_chunk_size=params.chunk_size,
+            bounded_sliding_window_attention=bounded_swa_enabled(),
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params):

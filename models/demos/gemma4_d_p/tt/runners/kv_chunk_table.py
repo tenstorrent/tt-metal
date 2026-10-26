@@ -110,6 +110,8 @@ def _cache_streams(kv_caches):
 def _mesh_config(mesh_device, kv_caches):
     if not isinstance(kv_caches, Gemma4KvCaches):
         raise TypeError(f"expected Gemma4KvCaches, got {type(kv_caches).__name__}")
+    if kv_caches.bounded_sliding_window_attention:
+        raise ValueError("bounded sliding caches (GEMMA4_D_P_BOUNDED_SWA=1) have no migration table yet")
     mesh_config = MeshConfig(mesh_device)
     cp = mesh_config.cp_degree
     tp = mesh_config.tp_degree
