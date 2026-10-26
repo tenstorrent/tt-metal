@@ -83,6 +83,12 @@ def cmd_next(a):
 
 @command("gate", "run one gate")
 def cmd_gate(a):
+    if not os.environ.get("TT_VISIBLE_DEVICES"):  # F192: a gate run by hand sees the run mesh's cards (cached)
+        from models.demos.common.bringup.orchestrator import cached_cards
+
+        vis = cached_cards(Spec.load(a.spec).mesh)
+        if vis:
+            os.environ["TT_VISIBLE_DEVICES"] = vis
     spec, led = load(a)
     if a.status:
         for u, st in delta_status(spec, led, a.task):

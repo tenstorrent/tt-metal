@@ -108,7 +108,7 @@ from models.demos.common.bringup.knowledge import check as kcheck
 from models.demos.common.bringup.knowledge import usage as kusage
 from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.plan import op_request as OR
-from models.demos.common.bringup.testing import accuracy_guard, model_precision, ops_lint
+from models.demos.common.bringup.testing import accuracy_guard, cards, model_precision, ops_lint
 from models.demos.common.bringup.testing import serving as SV
 from models.demos.common.bringup.testing import settings_lint
 from models.demos.common.bringup.testing.noise_floor import TAPS_FILE
@@ -1266,6 +1266,8 @@ class Orchestrator:
                     self.led.update(task["id"], review=problems)
                     self.echo(f"  [{task['id']}] passed with problems for review: {len(problems)}")
                 return True
+            if res.verdict == "PASS":
+                return self.stop_passed_out_of_scope(task, problems)
             rejected = ""
             if role == "implement" and OR.deferrable(task) and not outside:
                 deferred, rejected = self.try_defer(task)
@@ -1286,6 +1288,17 @@ class Orchestrator:
         if self.pause_file.exists():
             self.echo(f"  [{tid}] paused before {before}; `resume` continues the task")
             raise SystemExit(PAUSED)
+
+    def stop_passed_out_of_scope(self, task: dict, problems: list[str]) -> bool:
+        """F190: every unit passed and the gate committed, but the attempt changed files outside its paths. No new
+        attempt (one cannot do better than a pass; W.1 attempt 2 deleted results/ and edited state.json): the task
+        stops for the overseer, who reverts or keeps those files; `resume` then reuses the passed units."""
+        self.led.update(task["id"], review=problems)
+        return self.stop_task(
+            task,
+            "gate passed and committed, but the attempt changed files outside its paths: revert or keep them, then "
+            "resume (the passed units are reused, no agent starts). " + "; ".join(problems),
+        )
 
     def stop_task(self, task: dict, why: str) -> bool:
         self.led.update(task["id"], status="STOPPED", reason=[why], history_add={"t": now(), "status": "STOPPED"})
@@ -1332,6 +1345,8 @@ class Orchestrator:
                     self.led.update(tid, review=problems)
                     self.echo(f"  [{tid}] passed with problems for review: {len(problems)}")
                 return True
+            if res.verdict == "PASS":
+                return self.stop_passed_out_of_scope(task, problems)
             previous = "\n".join(problems + [self.failure_text(res)])
         if self.last_chance_defer(task, previous, attempts, debugger_attempts):
             return True
@@ -2156,6 +2171,62 @@ def decide(orch: Orchestrator, tid: str, decision: str, note: str = "") -> int:
     return 0
 
 
+def commit_preflight(repo) -> list[str]:
+    """F191: what would make a gate's commit fail, checked when the run starts (CK.1 on the 8x4 node: a passed gate's
+    commit was refused for a missing git identity, found only after the gate). Empty when a commit can go through.
+    (Here, not in core/gate.py: a measured file's edit would re-run every passed unit, core/stamps.py.)"""
+    problems = []
+    for ident in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+        r = subprocess.run(["git", "var", ident], cwd=repo, capture_output=True, text=True)
+        if r.returncode != 0:
+            problems.append(
+                f"git cannot commit: no {ident.split('_')[1].lower()} identity ({r.stderr.strip().splitlines()[-1:]}); "
+                "set user.name / user.email for this repo"
+            )
+    gdir = Path(subprocess.check_output(["git", "rev-parse", "--absolute-git-dir"], cwd=repo, text=True).strip())
+    for name, what in (("MERGE_HEAD", "a merge"), ("rebase-merge", "a rebase"), ("rebase-apply", "a rebase / am")):
+        if (gdir / name).exists():
+            problems.append(f"git is in the middle of {what} ({gdir / name}); finish or abort it")
+    if (gdir / "index.lock").exists():
+        problems.append(f"git index is locked ({gdir / 'index.lock'}); another git process, or a stale lock")
+    return problems
+
+
+def cached_cards(shape) -> str | None:
+    """F192: the card subset already found for `shape` on this box (testing/cards.py cache; no probing), or None."""
+    rows, cols = int(shape[0]), int(shape[1])
+    n = cards.num_cards()
+    if n == 0 or rows * cols >= n:
+        return None
+    return cards._load().get(cards._key(), {}).get(f"{rows}x{cols}")
+
+
+def run_mesh_cards(shape, probe_fn=None) -> tuple[str | None, str | None]:
+    """F192: the cards a run on a mesh smaller than this box shows to its gates and agents, at launch:
+    (TT_VISIBLE_DEVICES value or None for every card, the problem when no subset forms the mesh). A miss is cached
+    (probing up to cards.MAX_PROBES subsets on every resume is too slow); delete "<RxC>:none" from the cache to
+    re-probe. (DeepSeek-V4.1: a 2x2 run on a Galaxy opened all 32 chips; no 2x2 subset exists there.)"""
+    rows, cols = int(shape[0]), int(shape[1])
+    n, k = cards.num_cards(), rows * cols
+    if n == 0 or k >= n:
+        return None, None
+    name = f"{rows}x{cols}"
+    miss = (
+        f"no subset of this box's {n} cards forms a {name} mesh (probed); a {name} run here needs a mesh-graph "
+        f'descriptor or a submesh of the whole box. To re-probe, delete "{name}:none" under "{cards._key()}" in '
+        f"{cards.CACHE}"
+    )
+    if cards._load().get(cards._key(), {}).get(f"{name}:none"):
+        return None, miss
+    found = cards.visible_devices((rows, cols), probe_fn or cards.probe)
+    if found is None:
+        cache = cards._load()
+        cache.setdefault(cards._key(), {})[f"{name}:none"] = True
+        cards._save(cache)
+        return None, miss
+    return found, None
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("command", choices=["run", "resume", "pause", "decide", "measure"])
@@ -2190,6 +2261,19 @@ def main(argv=None) -> int:
         orch.pause_file.write_text(now() + "\n")
         print(f"pause requested: the running orchestrator stops before its next task ({orch.pause_file})")
         return 0
+    if a.command in ("run", "resume"):  # F191: a gate's commit must not be the first to find git unable to commit
+        bad = commit_preflight(spec.repo)
+        if not os.environ.get("TT_VISIBLE_DEVICES"):  # F192: a run mesh smaller than the box sees only its cards
+            vis, why = run_mesh_cards(spec.mesh)
+            if vis:
+                os.environ["TT_VISIBLE_DEVICES"] = vis
+                print(f"{now()} cards: mesh {spec.mesh} on this box: TT_VISIBLE_DEVICES={vis}", flush=True)
+            bad += [why] if why else []
+        for b in bad:
+            print(f"{now()} PREFLIGHT: {b}", flush=True)
+        if bad:
+            print(f"{now()} STOPPED: the run did not start: fix the preflight problems above, then {a.command}")
+            return STOPPED
     orch.pause_file.unlink(missing_ok=True)
     orch.attempts_override = a.attempts
     if a.command == "resume":

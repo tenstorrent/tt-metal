@@ -13,6 +13,17 @@ import yaml
 from models.demos.common.bringup.core import metrics as M
 from models.demos.common.bringup.core.ledger import Ledger
 from models.demos.common.bringup.core.spec import Spec
+from models.demos.common.bringup.testing import cards as _cards
+
+
+@pytest.fixture(autouse=True)
+def _no_real_cards(tmp_path_factory, monkeypatch):
+    """F192: no selftest sees this box's cards (a launch path probes them through run_safe_pytest, which takes the
+    device next to a live run). A test that wants cards fakes DEV_DIR and CACHE itself."""
+    monkeypatch.setattr(_cards, "DEV_DIR", tmp_path_factory.mktemp("no_cards"))
+    monkeypatch.setattr(_cards, "CACHE", tmp_path_factory.mktemp("cards_cache") / "cards.json")
+    monkeypatch.delenv("TT_VISIBLE_DEVICES", raising=False)
+
 
 PY = sys.executable
 

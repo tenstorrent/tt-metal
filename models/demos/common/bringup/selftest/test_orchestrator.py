@@ -8,6 +8,7 @@ import sys
 
 import pytest
 
+from models.demos.common.bringup import orchestrator as O
 from models.demos.common.bringup.orchestrator import DONE, HUMAN, STOPPED, Orchestrator, command_violations
 from models.demos.common.bringup.plan import approvals
 from models.demos.common.bringup.selftest.conftest import PY, record_cmd
@@ -133,7 +134,7 @@ def test_changes_outside_the_allowed_paths_fail_the_attempt(orch):
     o = orch(
         [impl_task()],
         {
-            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999", "elsewhere.py": "x"}},
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.5", "elsewhere.py": "x"}},
             "C.1.implement.2.md": {"write": {"src/impl.txt": "0.999"}},
         },
     )
@@ -141,6 +142,31 @@ def test_changes_outside_the_allowed_paths_fail_the_attempt(orch):
     runs = o.led.state()["C.1"]["agent_runs"]
     assert any("outside the allowed paths" in p and "elsewhere.py" in p for p in runs[1]["problems"])
     assert len([r for r in runs if r["role"] == "implement"]) == 2
+
+
+def test_a_pass_with_changes_outside_the_paths_stops_for_the_overseer_not_a_new_attempt(orch, sandbox):
+    """F190 (W.1, DeepSeek-V4.1 8x4): every unit passed and committed, the only problem an out-of-scope file; a second
+    attempt started, found nothing to do and edited state.json / results/. Now: stop, the overseer decides, resume
+    reuses the pass and starts no agent."""
+    o = orch(
+        [impl_task()],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999", "elsewhere.py": "x"}},
+            "C.1.implement.2.md": {"write": {"src/impl.txt": "0.999"}},
+        },
+    )
+    assert o.run() == STOPPED
+    calls = orch.calls()
+    assert [c for c in calls if ".implement." in c] == ["C.1.implement.1.md bringup-engineer"]
+    entry = o.led.state()["C.1"]
+    assert entry["status"] == "STOPPED" and "gate passed and committed" in entry["reason"][0]
+    assert any("elsewhere.py" in p for p in entry["review"])
+    assert "src/impl.txt" not in O.dirty(sandbox.repo)  # the pass was committed
+    (sandbox.repo / "elsewhere.py").unlink()  # the overseer reverts it
+    o2 = O.Orchestrator(sandbox.spec, echo=orch.lines.append)
+    o2.led.update("C.1", status="TODO")  # as `resume` does
+    assert o2.run() == DONE and o2.led.status("C.1") == "PASS"
+    assert orch.calls() == calls  # no agent on resume
 
 
 def test_a_test_role_that_edits_the_implementation_is_caught(orch):
