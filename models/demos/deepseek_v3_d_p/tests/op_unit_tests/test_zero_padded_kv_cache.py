@@ -80,9 +80,7 @@ _MESH_INDIRECT = ["mesh_device", "device_params"]
 
 def _sp_split_dims(sp_axis, tp_dim=None):
     """ShardTensor2dMesh / ConcatMesh2dToTensor dims with the sequence (dim 2) on sp_axis."""
-    dims = [tp_dim, tp_dim]
-    dims[sp_axis] = 2
-    return tuple(dims)
+    return tuple(2 if i == sp_axis else tp_dim for i in range(2))
 
 
 def _init_cache_filled_with_ones(
