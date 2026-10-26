@@ -20,8 +20,9 @@ using namespace ckernel::math;
 
 // Same MVMUL stream as the standard matmul with rt_dim = 1: the MOP programmed by _llk_math_matmul_init_ does one
 // Tile x Tile multiply (4 MVMULs per fidelity phase for an in0 of up to 8 rows), releases SrcA and moves Dest to the
-// next output tile. The only difference is that a zero weight tile has no SrcA bank to consume, so this thread
-// skips its MOP and moves Dest past the tile instead.
+// next output tile. Zero weight tiles need no special case here: the unpack thread hands them over as zeroed SrcA
+// banks. Multiplying by zero costs one MOP of FPU time, but it keeps the metadata off this thread, whose RISC-V
+// loop (an L1 load and a branch per tile) was slower than the FPU work it skipped.
 
 /**
  * @brief Initializes addrmods and the MOP for compressed matrix multiply: Input0 (SrcB) x compressed Input1 (SrcA).
@@ -49,49 +50,24 @@ inline void _llk_math_compressed_custom_mm_init_(const DataFormat src_a_format, 
 /**
  * @brief Does compressed matrix multiply: Output [1, ct_dim] += Input0 [1, kt_dim] x Input1 [kt_dim, ct_dim], in tiles.
  *
- * Accumulates the ct_dim output tiles in Dest, starting at dst_index, over all kt_dim. Zero weight tiles, as
- * marked in the metadata, contribute nothing and are skipped.
+ * Accumulates the ct_dim output tiles in Dest, starting at dst_index, over all kt_dim. The unpack thread turns
+ * every zero weight tile into a zeroed SrcA bank, so this multiplies every tile and does not read the metadata.
  *
- * @param base_address_meta: Byte address of the kt_dim * ct_dim metadata words, the same words the unpack thread
- *        reads. Not L1_ADDRESS(): the RISC-V dereferences it.
  * @param dst_index: Index of the first output tile in Dest, in units of output tiles.
  * @param kt_dim: Number of tiles in the common dimension, values >= 1.
  * @param ct_dim: Number of tiles in the column dimension of Input 1, values = 1 - 16.
  * @note Call @ref _llk_math_compressed_custom_mm_init_ before this function.
- * @note On the unpack thread, pair with @ref _llk_unpack_compressed_custom_mm_ with the same metadata.
+ * @note On the unpack thread, pair with @ref _llk_unpack_compressed_custom_mm_ with the same kt_dim and ct_dim.
  */
-inline void _llk_math_compressed_custom_mm_(
-    const std::uint32_t base_address_meta, const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim)
+inline void _llk_math_compressed_custom_mm_(const std::uint32_t dst_index, const std::uint32_t kt_dim, const std::uint32_t ct_dim)
 {
-    const std::uint32_t* meta             = reinterpret_cast<const std::uint32_t*>(base_address_meta);
-    const std::uint32_t dst_rows_per_tile = 1U << ckernel::regfile[p_gpr_math::TILE_SHAPE_IDX];
-
     _set_dst_write_addr_by_rows_(dst_index);
 
     for (std::uint32_t k = 0; k < kt_dim; k++)
     {
-        bool src_b_consumed = false;
-
         for (std::uint32_t c = 0; c < ct_dim; c++)
         {
-            if (_llk_compressed_custom_mm_is_zero_tile_(*meta++))
-            {
-                // No SrcA bank to multiply: move Dest (and its carriage return) to the next output tile, as the
-                // tile-done MVMUL would have.
-                TT_SETRWC(p_setrwc::CLR_NONE, 0, (c + 1) * dst_rows_per_tile, p_setrwc::SET_D);
-            }
-            else
-            {
-                ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-                src_b_consumed = true;
-            }
-        }
-
-        if (!src_b_consumed)
-        {
-            // Every weight tile of the row was zero, so no MVMUL waited for this row's SrcB. Wait for it here,
-            // so the release below clears the bank the unpacker filled and not the one it is filling next.
-            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
+            ckernel_template::run_bank0_sw_cntl(instrn_buffer);
         }
 
         // Release this row's SrcB and rewind Dest to the first output tile for the next k.

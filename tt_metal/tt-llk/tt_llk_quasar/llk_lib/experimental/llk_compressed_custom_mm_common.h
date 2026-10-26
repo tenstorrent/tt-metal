@@ -27,11 +27,12 @@
 // Weight stream layout in L1: tiles in row-major (k, c) order, packed back to back at their own size
 // (MxInt8 1056 B, MxInt4 544 B, MxInt2 288 B); zero tiles take no space.
 //
-// Metadata: one 32-bit word per weight tile, in the same (k, c) order, read on the RISC-V by both the unpack
-// and the math thread. The word is the UNPACR0 ARG_FIFO mode-1 entry itself, with the address relative to the
-// start of the weight stream:
+// Metadata: one 32-bit word per weight tile, in the same (k, c) order, read on the RISC-V by the unpack thread
+// only (math multiplies every tile, a zero tile as a zeroed SrcA bank). The word is the UNPACR0 ARG_FIFO mode-1
+// entry itself, with the address relative to the start of the weight stream:
 //   [27:20] tile L1 format (DataFormat), 0 marks a zero tile
 //   [19:0]  tile offset from the weight stream base, in 16 B units
+// A zero tile's word is 0 as a whole, so testing for one is a single compare on the RISC-V.
 // Blackhole packs 3 bits per tile and decodes them on the RISC-V. On Quasar the RISC-V has to feed every tile
 // through the ARG_FIFO anyway, so storing the entry costs 4 B per tile (under 1.5% of an MxInt2 tile) and leaves a
 // single add per tile on the unpack thread.
@@ -49,7 +50,8 @@ static_assert(static_cast<std::uint32_t>(DataFormat::Float32) == 0, "compressed_
  */
 inline bool _llk_compressed_custom_mm_is_zero_tile_(const std::uint32_t entry)
 {
-    return (entry & COMPRESSED_MM_ENTRY_FORMAT_MASK) == 0;
+    // A non-zero tile always has a non-zero format; a zero tile's whole word is 0 (see the layout above).
+    return entry == 0;
 }
 
 /**

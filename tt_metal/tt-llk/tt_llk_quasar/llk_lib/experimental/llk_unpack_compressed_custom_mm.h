@@ -25,7 +25,8 @@ using namespace ckernel;
 // before each UNPACR0_TILE the RISC-V pushes one entry {tile_fmt[27:20], tile_addr[19:0]} and the unpacker takes
 // that tile's L1 address and format from the entry instead of from the buffer descriptor. The descriptor still
 // supplies the tile dimensions, and the unpacker blocks until an entry is available. Zero tiles push nothing and
-// unpack nothing; the math thread reads the same metadata and skips them too.
+// read nothing from L1: an UNPACR_NOP clears a SrcA bank to zero for them instead, so the math thread multiplies
+// every tile and never has to read the metadata.
 //
 // The unpack thread's FIFO is the vector-width one: 8 lines of up to four 32-bit entries, and every UNPACR0_TILE
 // pops one entry. A store at byte offset 16 * n of the mailbox window pushes a line of 4 - n entries, all holding
@@ -111,9 +112,10 @@ inline void _llk_unpack_compressed_custom_mm_init_(const std::uint32_t buf_desc_
 
 /**
  * @brief Unpacks a [1, kt_dim] row of Input0 tiles into SrcB and a [kt_dim, ct_dim] block of compressed Input1
- *        tiles into SrcA, skipping the zero tiles.
+ *        tiles into SrcA, zeroing SrcA for the zero tiles instead of reading them.
  *
- * For each k, unpacks Input0 tile k into SrcB once, then every non-zero weight tile (k, 0..ct_dim-1) into SrcA.
+ * For each k, unpacks Input0 tile k into SrcB once, then every weight tile (k, 0..ct_dim-1) into SrcA; a zero
+ * tile becomes a zeroed SrcA bank.
  *
  * @param base_address_in1: L1 address of the compressed weight stream, in 16 B units (L1_ADDRESS()).
  * @param base_address_meta: Byte address of the kt_dim * ct_dim metadata words. Not L1_ADDRESS(): the RISC-V
@@ -126,37 +128,82 @@ inline void _llk_unpack_compressed_custom_mm_init_(const std::uint32_t buf_desc_
 inline void _llk_unpack_compressed_custom_mm_(
     const std::uint32_t base_address_in1, const std::uint32_t base_address_meta, const std::uint32_t kt_dim, const std::uint32_t ct_dim)
 {
-    const std::uint32_t* meta = reinterpret_cast<const std::uint32_t*>(base_address_meta);
-    // Entries pushed since the FIFO was last seen empty; an upper bound on its fill level.
-    std::uint32_t entries_in_flight = 0;
+    const std::uint32_t* meta     = reinterpret_cast<const std::uint32_t*>(base_address_meta);
+    const std::uint32_t num_tiles = kt_dim * ct_dim;
 
     // Input0 tiles start at the base of their buffer descriptor; the SrcA counters stay at 0.
     TTI_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
 
-    for (std::uint32_t k = 0; k < kt_dim; k++)
+    const auto unpack_src_a = [&](const std::uint32_t entry) __attribute__((always_inline))
     {
-        // Input0 tile k -> SrcB, reused by every weight tile of this row.
-        ckernel_template::run_bank0_sw_cntl(instrn_buffer);
-
-        for (std::uint32_t c = 0; c < ct_dim; c++)
+        // Zero tiles are the minority; without the hint the compiler lays them out inline and jumps away for every
+        // stored tile.
+        if (__builtin_expect(_llk_compressed_custom_mm_is_zero_tile_(entry), 0))
         {
-            const std::uint32_t entry = *meta++;
-            if (_llk_compressed_custom_mm_is_zero_tile_(entry))
-            {
-                continue;
-            }
-
-            if (entries_in_flight == COMPRESSED_MM_ARG_FIFO_DEPTH)
-            {
-                _llk_unpack_compressed_custom_mm_wait_arg_fifo_empty_();
-                entries_in_flight = 0;
-            }
-
+            // No data in L1: hand math a zeroed SrcA bank, so it can run the same matmul for every tile.
+            TTI_UNPACR_NOP(p_unpacr::UNP_A, 1 /*Set_Dvalid*/, 0, 0, p_unpacr::UNP_CLRSRC_ZERO, p_unpacr::UNP_CLRSRC);
+        }
+        else
+        {
+            TTI_REPLAY(COMPRESSED_MM_UNPACK_SRC_A_REPLAY_IDX, 1, 0, 0, 0, 0);
             // The relative offset in [19:0] cannot carry into the format field: L1 is 4 MB, 2^18 16 B units.
             *unpack0_arg_fifo_push = entry + base_address_in1;
-            entries_in_flight++;
-            TTI_REPLAY(COMPRESSED_MM_UNPACK_SRC_A_REPLAY_IDX, 1, 0, 0, 0, 0);
+        }
+    };
+
+    // The RISC-V, not the unpacker, sets the pace here, so the loop is built to issue as few instructions per tile
+    // as possible:
+    //   - Tiles are taken in groups of COMPRESSED_MM_ARG_FIFO_DEPTH metadata words. A group pushes at most that many
+    //     entries, so one wait for an empty FIFO at its start replaces per-push accounting. The wait also drains
+    //     whatever a previous call left behind.
+    //   - The group's words are loaded before any is used. The core stalls on a load until its data arrives, so a
+    //     word used right after its load costs the full L1 latency on every tile; loads issued back to back overlap.
+    //   - Each UNPACR0 is issued before its entry is pushed: it blocks in the unpacker until the entry arrives.
+    //   - The SrcB unpack of Input0 tile k goes in front of the first weight tile of row k. With ct_dim == 1 that is
+    //     every tile, which needs no row counter.
+    constexpr std::uint32_t GROUP = COMPRESSED_MM_ARG_FIFO_DEPTH;
+    std::uint32_t c               = 0;
+    const auto unpack_tile        = [&](const std::uint32_t entry) __attribute__((always_inline))
+    {
+        if (ct_dim == 1)
+        {
+            ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+        }
+        else
+        {
+            if (c == 0)
+            {
+                ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+            }
+            if (++c == ct_dim)
+            {
+                c = 0;
+            }
+        }
+        unpack_src_a(entry);
+    };
+
+    std::uint32_t i = 0;
+    for (; i + GROUP <= num_tiles; i += GROUP)
+    {
+        std::uint32_t entries[GROUP];
+        for (std::uint32_t j = 0; j < GROUP; j++)
+        {
+            entries[j] = meta[i + j];
+        }
+        _llk_unpack_compressed_custom_mm_wait_arg_fifo_empty_();
+        for (std::uint32_t j = 0; j < GROUP; j++)
+        {
+            unpack_tile(entries[j]);
+        }
+    }
+    if (i < num_tiles)
+    {
+        _llk_unpack_compressed_custom_mm_wait_arg_fifo_empty_();
+        for (; i < num_tiles; i++)
+        {
+            unpack_tile(meta[i]);
         }
     }
 }

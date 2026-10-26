@@ -8,7 +8,7 @@ weights in1 [kt_dim * 32, ct_dim * 32] as a stream of 32x32 tiles in row-major (
 packed in its own MX format, with all-zero tiles left out. Next to it sits one metadata word per
 tile, which is the UNPACR0 ARG_FIFO mode-1 entry with a stream-relative address:
 
-    [27:20] tile L1 format (Quasar DataFormat code), 0 marks a zero tile
+    [27:20] tile L1 format (Quasar DataFormat code), 0 marks a zero tile, whose whole word is 0
     [19:0]  tile offset from the start of the stream, in 16 B units
 
 This is the Quasar counterpart of the Blackhole helpers in compressed_utils.py, which encode
@@ -76,8 +76,8 @@ def assign_random(kt_dim, ct_dim, zero_fraction, seed=0):
 def assign_with_zero_rows(kt_dim, ct_dim, seed=0):
     """Random formats, with every odd k-row entirely zero.
 
-    A k-row without a single non-zero tile is the one case where no MVMUL consumes that row's
-    SrcB, so the math thread has to release it on its own.
+    A k-row without a single stored tile reads nothing from the weight stream: every SrcA bank
+    of that row is a zeroed one, multiplied against the row's SrcB like any other.
     """
     assignment = assign_random(kt_dim, ct_dim, zero_fraction=0.25, seed=seed)
     for k in range(1, kt_dim, 2):

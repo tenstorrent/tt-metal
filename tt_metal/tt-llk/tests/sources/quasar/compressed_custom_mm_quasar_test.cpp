@@ -79,7 +79,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(math_format, math_format);
 
     _llk_math_compressed_custom_mm_init_<static_cast<ckernel::MathFidelity>(MATH_FIDELITY)>(math_format, math_format, tensor_shape_A);
-    _llk_math_compressed_custom_mm_(params.buffer_C[0], 0 /*dst_index*/, params.KT_DIM, params.CT_DIM);
+    _llk_math_compressed_custom_mm_(0 /*dst_index*/, params.KT_DIM, params.CT_DIM);
     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
 }
 

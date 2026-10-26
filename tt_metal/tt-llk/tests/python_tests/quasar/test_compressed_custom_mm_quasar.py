@@ -16,21 +16,26 @@ charged against PCC.
 Axes:
   * Weight assignment. MX is not a plain format axis here: switching format per tile is the
     feature under test. Each uniform format checks one decode path on its own, "mixed" switches
-    formats and skips zero tiles, "zero_rows" adds k-rows with no non-zero tile, the one case where
-    math releases SrcB without an MVMUL.
+    formats and interleaves zero tiles (unpacked as zeroed SrcA banks), "zero_rows" adds k-rows
+    with no stored tile at all.
   * (ct_dim, kt_dim, M): the grid corners plus odd sizes. The whole output is at most 16 tiles of
     M rows, one dest section by contract, so there is no dest bank switch to cover.
   * Fidelity: LoFi only. MX weights unpack to Float16_b, which get_valid_math_fidelities caps at LoFi.
+
+test_compressed_custom_mm_quasar_deepseek runs the realistic case: the DeepSeek shapes and weight
+distribution of the Blackhole test_matmul_custom_compressed_deepseek.
 """
 
 import pytest
 import torch
 from helpers.compressed_mx_utils import (
+    ZERO_TILE,
     assign_random,
     assign_uniform,
     assign_with_zero_rows,
     pack_compressed_in1,
 )
+from helpers.compressed_utils import DEEPSEEK_T420, FMT_CODE, generate_exact_assignment
 from helpers.constraints import get_valid_math_fidelities
 from helpers.custom_mm_utils import dense_result_rowmajor, pack_in0_faces
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -83,6 +88,24 @@ CT_KT_ROWS = [
     (2, 4, 2),
 ]
 
+# DeepSeek weight distribution, as in the Blackhole test_matmul_custom_compressed_deepseek: the same
+# shapes (M, K, N in datums) and the same tile-granular DEEPSEEK_T420 mix, its BFP levels mapped onto
+# the Quasar MX formats of the same width.
+DEEPSEEK_SHAPES = [
+    (1, 256, 64),  #  8x2
+    (1, 896, 32),  # 28x1
+    (1, 256, 224),  #  8x7
+    (1, 1792, 32),  # 56x1
+]
+_BFP_CODE_TO_MX = {
+    FMT_CODE["bfp8"]: DataFormat.MxInt8,
+    FMT_CODE["bfp4"]: DataFormat.MxInt4,
+    FMT_CODE["bfp2"]: DataFormat.MxInt2,
+    FMT_CODE["bfp0"]: ZERO_TILE,
+}
+# Each seed redraws the layout at the same distribution.
+DEEPSEEK_SEEDS = [0]
+
 # Prepacked operands go to L1 verbatim; StimuliConfig only reserves their regions, in units of one
 # Float16_b output-shaped tile (2 * M * 16 datums).
 _RESERVATION_FORMAT = DataFormat.Float16_b
@@ -95,24 +118,21 @@ def _reserved_tiles(num_bytes, tile_dimensions):
     return max(1, -(-num_bytes // tile_size))
 
 
-@pytest.mark.quasar
-@parametrize(
-    formats=FORMATS,
-    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
-    weight_assignment=list(WEIGHT_ASSIGNMENTS),
-    ct_kt_rows=CT_KT_ROWS,
-)
-def test_compressed_custom_mm_quasar(
-    formats, math_fidelity, weight_assignment, ct_kt_rows
+def _run_compressed_custom_mm(
+    formats,
+    math_fidelity,
+    ct_dim,
+    kt_dim,
+    in0_rows,
+    make_assignment,
+    spec=StimuliSpec.uniform(low=0.0, high=1.0),
 ):
-    ct_dim, kt_dim, in0_rows = ct_kt_rows
     torch_format = format_dict[formats.output_format]
 
     in0_dimensions = [in0_rows, kt_dim * TILE_DIM]
     in1_dimensions = [kt_dim * TILE_DIM, ct_dim * TILE_DIM]
     tile_dimensions = [in0_rows, TILE_DIM]
 
-    spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=in0_dimensions,
@@ -124,7 +144,7 @@ def test_compressed_custom_mm_quasar(
     in0 = src_A.reshape(in0_dimensions).to(torch_format)
     in1 = src_B.reshape(in1_dimensions).to(torch_format)
 
-    assignment = WEIGHT_ASSIGNMENTS[weight_assignment](kt_dim, ct_dim)
+    assignment = make_assignment(kt_dim, ct_dim)
     in1_stream, metadata, in1_dequant = pack_compressed_in1(
         in1, kt_dim, ct_dim, assignment
     )
@@ -201,3 +221,51 @@ def test_compressed_custom_mm_quasar(
         formats.output_format,
         custom_atol=matmul_acc_atol(golden_tensor, kt_dim),
     ), "Assert against golden failed"
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=FORMATS,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
+    weight_assignment=list(WEIGHT_ASSIGNMENTS),
+    ct_kt_rows=CT_KT_ROWS,
+)
+def test_compressed_custom_mm_quasar(
+    formats, math_fidelity, weight_assignment, ct_kt_rows
+):
+    ct_dim, kt_dim, in0_rows = ct_kt_rows
+    _run_compressed_custom_mm(
+        formats,
+        math_fidelity,
+        ct_dim,
+        kt_dim,
+        in0_rows,
+        WEIGHT_ASSIGNMENTS[weight_assignment],
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=FORMATS,
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
+    shape=DEEPSEEK_SHAPES,
+    seed=DEEPSEEK_SEEDS,
+)
+def test_compressed_custom_mm_quasar_deepseek(formats, math_fidelity, shape, seed):
+    M, K, N = shape
+
+    def make_assignment(kt_dim, ct_dim):
+        codes = generate_exact_assignment(K, N, DEEPSEEK_T420, seed=seed)
+        return [_BFP_CODE_TO_MX[code] for code in codes]
+
+    _run_compressed_custom_mm(
+        formats,
+        math_fidelity,
+        N // TILE_DIM,
+        K // TILE_DIM,
+        M,
+        make_assignment,
+        # Zero-mean, so the long-K outputs (kt up to 56) spread out; with [0, 1] they all land near
+        # K/4 and PCC compares little more than bf16 accumulation noise.
+        spec=StimuliSpec.uniform(low=-1.0, high=1.0),
+    )
