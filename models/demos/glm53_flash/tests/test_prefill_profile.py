@@ -463,6 +463,7 @@ def _trace_ab_layers(model, dev, prompt: torch.Tensor, f):
                 ttnn.deallocate(t)
 
         row = dict(kind="trace_ab_layer", layer=k, is_kda=bool(dec.is_kda), T_loc=int(x.shape[-2]))
+        tid = None
         try:
             for _ in range(2):
                 eager()
@@ -472,19 +473,26 @@ def _trace_ab_layers(model, dev, prompt: torch.Tensor, f):
             for t in [y_ref, *fresh]:
                 ttnn.deallocate(t)
             tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            y_tr, fresh_tr = run()
-            ttnn.end_trace_capture(dev, tid, cq_id=0)
+            try:
+                y_tr, fresh_tr = run()
+            finally:
+                # a capture that raised (a host write inside the layer: the DSA prefill, G53F-0208) must still be ended
+                # and released, or the device stays in capture mode and the process hangs at teardown (q41_a)
+                ttnn.end_trace_capture(dev, tid, cq_id=0)
             row["trace_s"], row["trace_enqueue_s"] = (
                 round(v, 5) for v in timed(lambda: ttnn.execute_trace(dev, tid, cq_id=0, blocking=False))
             )
             got = ttnn.to_torch(model.mesh.device_tensors(y_tr)[0])
             ttnn.release_trace(dev, tid)
+            tid = None
             for t in [y_tr, *fresh_tr]:
                 ttnn.deallocate(t)
             row["host_share"] = round(1 - row["trace_s"] / row["eager_s"], 3)
             row["bitwise"] = bool(torch.equal(ref, got))
         except Exception as e:  # noqa: BLE001 -- a layer that cannot be captured is a result, not a failure
             row["error"] = repr(e)[:400]
+            if tid is not None:
+                ttnn.release_trace(dev, tid)
         for t in temps:
             ttnn.deallocate(t)
         ttnn.deallocate(x)
