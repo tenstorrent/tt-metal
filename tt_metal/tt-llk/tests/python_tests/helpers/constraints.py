@@ -10,6 +10,7 @@ from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -160,12 +161,7 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     ]:
         return [MathFidelity.LoFi]
 
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
+    return list(ALL_MATH_FIDELITIES)
 
 
 def get_valid_eltwise_binary_math_fidelities(formats, math_op=None):
@@ -190,12 +186,7 @@ def get_valid_eltwise_binary_math_fidelities(formats, math_op=None):
         return [MathFidelity.LoFi, MathFidelity.HiFi2]
     elif input_format == DataFormat.Float32:
         return [MathFidelity.HiFi3, MathFidelity.HiFi4]
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
+    return list(ALL_MATH_FIDELITIES)
 
 
 def get_perf_math_operations():

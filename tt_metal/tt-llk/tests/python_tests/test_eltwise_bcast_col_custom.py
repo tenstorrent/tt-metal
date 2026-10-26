@@ -14,6 +14,7 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BroadcastType,
     DestAccumulation,
     DestSync,
@@ -168,12 +169,7 @@ def _canonical_bcast_col_config(
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     broadcast_type=[BroadcastType.Column],
     tile_rows=_TILE_ROWS,
     # Widths up to 256 fit a single dest section; 1024 (32 tiles) spans multiple
