@@ -14,7 +14,7 @@ import pytest
 import torch
 
 import ttnn
-from tt_py_test_utils_common.utility_functions import is_blackhole
+from tt_py_test_utils_common.utility_functions import is_blackhole, skip_for_slow_dispatch
 from tests.ttnn.unit_tests.operations.matmul.test_matmul_dram_sharded_multicore import (
     _check,
     _grid,
@@ -238,6 +238,7 @@ def test_multirow_fused_multicore_fallback(device, fp32):
 @pytest.mark.parametrize("workers", [0, 2], ids=["multicast", "multicore"])
 @pytest.mark.parametrize("m", [64, 65, 128])
 @pytest.mark.parametrize("fp32", [True, False])
+@skip_for_slow_dispatch("trace capture requires fast dispatch")
 def test_multirow_trace_with_input_updates(device, workers, m, fp32):
     x, w, _, kw, _ = _run(device, m, 1024, 1536, 8, 2, workers, fp32=fp32)
     trace = ttnn.begin_trace_capture(device, cq_id=0)
@@ -261,6 +262,7 @@ def test_multirow_trace_with_input_updates(device, workers, m, fp32):
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 8 * 1024 * 1024}], indirect=True)
 @pytest.mark.parametrize("fp32", [True, False])
+@skip_for_slow_dispatch("trace capture requires fast dispatch")
 def test_multirow_coalesced_reads_under_trace_pressure(device, fp32):
     # KB == storage-shard width coalesces both M tiles into a 16 KiB read. A tagged
     # read must enter the NoC before its zero outstanding count can mean complete.
