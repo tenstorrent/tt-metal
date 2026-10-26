@@ -24,7 +24,11 @@ import torch
 from models.demos.audio.qwen3_tts import stage_inputs
 from models.demos.audio.qwen3_tts.tests.reference_helpers import synthetic_voiced_clip
 from models.demos.audio.qwen3_tts.tt.generator_vllm import Qwen3TTSTalkerForConditionalGeneration
-from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import Qwen3TTSPipeline, build_streaming_clone_prefill
+from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_pipeline import (
+    Qwen3TTSPipeline,
+    ReferenceEncoders,
+    build_streaming_clone_prefill,
+)
 
 DEVICE_PARAMS = [{"l1_small_size": 65536, "trace_region_size": 90_000_000}]
 
@@ -60,7 +64,8 @@ def test_the_stage_reproduces_the_pipelines_frames(device, expect_error):
 
     # The reference: the pipeline's frame steps on its own contiguous cache.
     pipeline = Qwen3TTSPipeline(device, max_frames=MAX_MODEL_LEN, codec=False)
-    reference = stage_inputs.clone_reference(info, device)
+    # The stage encodes clips with the host encoders; so does its reference here.
+    reference = stage_inputs.clone_reference(info, device, ReferenceEncoders())
     # The length vLLM-Omni's estimate gives this payload: the builder's own, unfitted.
     prompt_len = build_streaming_clone_prefill(TEXT, reference, "English", pipeline.tables)[0].shape[1]
     embeddings, feed = stage_inputs.build_stage_prefill(info, reference, prompt_len, pipeline.tables)

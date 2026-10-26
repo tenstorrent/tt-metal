@@ -40,6 +40,8 @@ from models.demos.audio.qwen3_tts import audio as host_audio
 from models.demos.audio.qwen3_tts import frontend, sampling
 from models.demos.audio.qwen3_tts import weights as checkpoint
 from models.demos.audio.qwen3_tts.frontend import AUTO_LANGUAGE
+from models.demos.audio.qwen3_tts.reference.qwen3_codec_encoder_ref import CodecEncoderReference
+from models.demos.audio.qwen3_tts.reference.qwen3_speaker_ref import SpeakerReference
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_code_predictor_decode import (
     DEVICE_TOP_K_LIMIT,
     TtCodePredictorCachedDecoder,
@@ -190,21 +192,43 @@ class CloneReference:
 
 
 class ReferenceEncoders:
-    """The speaker and codec encoders' device weights, built once for a caller that encodes
-    many clips. Build it before any trace exists: weights allocated while a trace is live
-    are corrupted when it replays."""
+    """The speaker and codec encoders, built once for a caller that encodes many clips.
 
-    def __init__(self, device):
-        self.speaker = preprocess_speaker_parameters(device)
-        self.codec = TtCodecEncoder(device, preprocess_codec_encoder_parameters(device))
+    On the host by default, as the fp32 references: 16-31 ms (speaker) and 53-295 ms (codec)
+    a 3-10 s clip, compiling nothing. On device each new clip length compiles, 2.9 s for the
+    speaker and 25 s for the codec measured beside live traces, which stalls everything
+    else on that device. `device` puts them there anyway; build that before any trace
+    exists, since weights allocated while a trace is live are corrupted when it replays.
+    """
+
+    def __init__(self, device=None):
+        self.device = device
+        if device is None:
+            self.speaker = SpeakerReference()
+            self.codec = CodecEncoderReference()
+        else:
+            self.speaker = preprocess_speaker_parameters(device)
+            self.codec = TtCodecEncoder(device, preprocess_codec_encoder_parameters(device))
+
+    def voice(self, mel):
+        """Speaker mel [1, T, 128] -> embedding [1, 2048] on host."""
+        if self.device is None:
+            return self.speaker(mel).float()
+        return run_speaker_encoder(self.device, mel, self.speaker)
+
+    def codes(self, audio):
+        """Waveform [N] -> codes [16, T] on host."""
+        if self.device is None:
+            return self.codec(audio)[0]
+        return self.codec.encode(audio)[0]
 
 
 def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_only=False, encoders=None):
     """A reference clip -> `CloneReference`, running the encoders it needs on device.
 
     `x_vector_only=True` skips the codec encoder and needs no transcript. Without
-    `encoders` the encoders' weights are built for this call, which must not happen while a
-    trace is live; with `ReferenceEncoders` built beforehand, this runs beside live traces.
+    `encoders` the device encoders' weights are built for this call, which must not happen
+    while a trace is live; with `ReferenceEncoders`, this runs beside live traces.
     """
     audio = torch.as_tensor(audio, dtype=torch.float32).reshape(-1)
     expected = checkpoint.codec_config()["input_sample_rate"]
@@ -216,11 +240,13 @@ def build_clone_reference(device, audio, text=None, sample_rate=None, x_vector_o
             "beside the codes; pass x_vector_only=True to clone from the voice alone"
         )
 
-    embedding = run_speaker_encoder(device, host_audio.speaker_mel(audio), encoders and encoders.speaker)
+    mel = host_audio.speaker_mel(audio)
+    embedding = encoders.voice(mel) if encoders else run_speaker_encoder(device, mel)
     if x_vector_only:
         return CloneReference(None, embedding, text)
-
-    encoder = encoders.codec if encoders else TtCodecEncoder(device, preprocess_codec_encoder_parameters(device))
+    if encoders:
+        return CloneReference(encoders.codes(audio), embedding, text)
+    encoder = TtCodecEncoder(device, preprocess_codec_encoder_parameters(device))
     return CloneReference(encoder.encode(audio)[0], embedding, text)
 
 

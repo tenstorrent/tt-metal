@@ -96,8 +96,9 @@ class Qwen3TTSTalkerForConditionalGeneration:
         self.pipeline = Qwen3TTSPipeline(
             self.device, max_frames=self.max_seq_len, kv_cache=kv_cache, codec=False, batch=self.batch
         )
-        # Before any trace exists, so their weights are never allocated beside a live one.
-        self._encoders = ReferenceEncoders(self.device)
+        # On the host: a clip length the device encoders have not seen compiles for seconds,
+        # stalling every request on this device.
+        self._encoders = ReferenceEncoders()
         return kv_cache
 
     def warmup_model_prefill(self, kv_cache, can_sample_on_device, enable_trace):
