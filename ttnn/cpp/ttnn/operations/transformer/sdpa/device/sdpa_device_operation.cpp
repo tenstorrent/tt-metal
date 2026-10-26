@@ -431,6 +431,20 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
                 kv_length,
                 q_shape[2],
                 attrs.chunk_start_idx.value());
+        } else if (tensors.kv_pair_parity.has_value()) {
+            // Pair split: the op reads this chip's local keys below the chunk's end ((start + S) / 2 when start + S
+            // is a multiple of 128). Start (>= 0) and parity are only known on device, so require the least of
+            // those: chip 1 at start 0, i.e. the local tiles below global tile S / 32 (local_tiles_before in
+            // kernels/sdpa_pair_split.hpp with c = 1). S % 32 == 0 is checked with the parity tensor below.
+            const uint32_t sq_tiles = q_shape[2] / tt::constants::TILE_HEIGHT;
+            const uint32_t min_local_tokens =
+                ((sq_tiles / 4) * 2 + (sq_tiles % 4 > 2 ? sq_tiles % 4 - 2 : 0)) * tt::constants::TILE_HEIGHT;
+            TT_FATAL(
+                kv_length >= min_local_tokens,
+                "Pair split: the page table must cover at least the local keys below the chunk's end at start 0 "
+                "({} tokens). Got {}",
+                min_local_tokens,
+                kv_length);
         } else {
             // Flexible: only require KV length to cover Q
             TT_FATAL(
@@ -527,11 +541,7 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         // offset >= 0, so it is checked in both offset forms.
         const auto q_rows = static_cast<uint32_t>(q.logical_shape()[-2]);
         const auto k_rows = static_cast<uint32_t>(k.logical_shape()[-2]);
-        TT_FATAL(
-            q_rows <= k_rows,
-            "windowed Q shard has {} rows, more than the K sequence length {}.",
-            q_rows,
-            k_rows);
+        TT_FATAL(q_rows <= k_rows, "windowed Q shard has {} rows, more than the K sequence length {}.", q_rows, k_rows);
         if (!tensors.windowed_q_token_offset_tensor.has_value()) {
             // Scalar form. (When the tensor is supplied it overrides the scalar on device, and its
             // per-device values cannot be validated here without a readback -- tile alignment and
@@ -586,6 +596,58 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
 
     // Validate attention sink if provided
     validate_attention_sink();
+
+    if (tensors.kv_pair_parity.has_value()) {
+        // Pair split: the K / V cache holds this chip's half of every 128-token global block, read through the
+        // page table at local positions; the queries are the chunk's global positions.
+        const auto& parity = tensors.kv_pair_parity.value();
+        TT_FATAL(
+            attrs.chunk_start_idx_tensor.has_value(),
+            "kv_pair_parity_tensor needs the chunk start as a device tensor (chunk_start_idx_tensor)");
+        TT_FATAL(attrs.is_causal, "kv_pair_parity_tensor needs causal attention");
+        TT_FATAL(attrs.sliding_window_size.value_or(0) == 0, "kv_pair_parity_tensor does not support a sliding window");
+        TT_FATAL(!tensors.attention_sink.has_value(), "kv_pair_parity_tensor does not support an attention sink");
+        TT_FATAL(
+            !attrs.paged_cache_geometry.active(),
+            "kv_pair_parity_tensor does not support a paged cache geometry override");
+        TT_FATAL(
+            parity.storage_type() == StorageType::DEVICE && parity.buffer() != nullptr,
+            "kv_pair_parity_tensor must be allocated on device");
+        TT_FATAL(q.device() == parity.device(), "kv_pair_parity_tensor must be on the same device as Q");
+        TT_FATAL(
+            parity.dtype() == DataType::INT32 || parity.dtype() == DataType::UINT32,
+            "kv_pair_parity_tensor must be int32 or uint32, got {}",
+            parity.dtype());
+        TT_FATAL(parity.layout() == Layout::ROW_MAJOR, "kv_pair_parity_tensor must be ROW_MAJOR");
+        TT_FATAL(!parity.is_sharded(), "kv_pair_parity_tensor must be interleaved");
+        TT_FATAL(
+            parity.logical_shape().volume() == 1,
+            "kv_pair_parity_tensor must hold one element, got shape {}",
+            parity.logical_shape());
+        TT_FATAL(
+            q.logical_shape()[2] % tt::constants::TILE_HEIGHT == 0,
+            "kv_pair_parity_tensor needs a tile-aligned chunk length, got {}",
+            q.logical_shape()[2]);
+    }
+
+    if (tensors.lse_output.has_value()) {
+        const auto& lse = tensors.lse_output.value();
+        TT_FATAL(
+            attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value(),
+            "return_lse is supported for chunked prefill");
+        TT_FATAL(!tensors.attention_sink.has_value(), "return_lse does not support an attention sink");
+        TT_FATAL(!attrs.output_concat_heads, "return_lse does not support output_concat_heads");
+        TT_FATAL(
+            lse.storage_type() == StorageType::DEVICE && lse.buffer() != nullptr,
+            "lse output must be allocated on device");
+        TT_FATAL(lse.dtype() == DataType::FLOAT32, "lse output must be FLOAT32, got {}", lse.dtype());
+        TT_FATAL(lse.layout() == Layout::TILE, "lse output must be in TILE layout");
+        TT_FATAL(!lse.is_sharded(), "lse output must be interleaved");
+        const auto q_shape = q.logical_shape();
+        const ttnn::Shape expected({q_shape[0], q_shape[1], q_shape[2], 1});
+        TT_FATAL(
+            lse.logical_shape() == expected, "lse output must have shape {}, got {}", expected, lse.logical_shape());
+    }
 
     // Check padding: Only the sequence dimension may be padded. For all other dims, logical shape must be equal to
     // legacy shape
@@ -716,7 +778,9 @@ Tensor sdpa(
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     bool output_concat_heads,
-    const std::optional<Tensor>& attn_mask_block_map) {
+    const std::optional<Tensor>& attn_mask_block_map,
+    const std::optional<Tensor>& lse_output,
+    const std::optional<Tensor>& kv_pair_parity) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -749,6 +813,8 @@ Tensor sdpa(
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
             .attn_mask_block_map = attn_mask_block_map,
+            .lse_output = lse_output,
+            .kv_pair_parity = kv_pair_parity,
         });
 }
 }  // namespace ttnn::prim

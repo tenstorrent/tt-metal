@@ -237,6 +237,63 @@ ttnn::Tensor flash_multi_latent_attention_decode(
         head_dim_v);
 }
 
+std::tuple<ttnn::Tensor, ttnn::Tensor> paged_flash_multi_latent_attention_decode_with_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    const uint32_t head_dim_v,
+    const ttnn::Tensor& page_table_tensor,
+    const bool is_causal,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& attention_sink,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    // Same argument handling as paged_flash_multi_latent_attention_decode below.
+    uint32_t k_chunk_size = 0;
+    if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
+        k_chunk_size = program_config.value().k_chunk_size;
+        TT_FATAL(
+            (k_chunk_size & (k_chunk_size - 1)) == 0,
+            "User provided k_chunk_size must be power of 2, got: {}",
+            k_chunk_size);
+        TT_FATAL(k_chunk_size % 32 == 0, "User provided k_chunk_size must be multiple of 32, got: {}", k_chunk_size);
+    }
+    if (input_tensor_v.has_value()) {
+        TT_FATAL(
+            input_tensor_v.value().padded_shape()[-1] == head_dim_v,
+            "Head dimension of the V tensor must be equal to head_dim_v parameter value, got {} and {}",
+            input_tensor_v.value().padded_shape()[-1],
+            head_dim_v);
+    }
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+
+    return ttnn::prim::sdpa_decode_with_lse(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        cur_pos_tensor,
+        page_table_tensor,
+        attn_mask,
+        attention_sink,
+        is_causal,
+        true,
+        std::vector<uint32_t>(),
+        scale,
+        sliding_window_size,
+        memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+        program_config,
+        kernel_config_val,
+        k_chunk_size,
+        std::nullopt,
+        true,
+        head_dim_v);
+}
+
 ttnn::Tensor paged_flash_multi_latent_attention_decode(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,

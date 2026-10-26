@@ -11,12 +11,66 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/variant.h>
 
 #include "sdpa_decode.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::transformer {
+
+namespace {
+// return_lse=False returns the output tensor (the op is unchanged); True returns (output, lse).
+std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_mla_decode_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    uint32_t head_dim_v,
+    const ttnn::Tensor& page_table_tensor,
+    bool is_causal,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& attention_sink,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    bool return_lse) {
+    if (return_lse) {
+        return ttnn::transformer::paged_flash_multi_latent_attention_decode_with_lse(
+            input_tensor_q,
+            input_tensor_k,
+            input_tensor_v,
+            head_dim_v,
+            page_table_tensor,
+            is_causal,
+            attn_mask,
+            cur_pos_tensor,
+            attention_sink,
+            scale,
+            sliding_window_size,
+            memory_config,
+            program_config,
+            compute_kernel_config);
+    }
+    return ttnn::transformer::paged_flash_multi_latent_attention_decode(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        head_dim_v,
+        page_table_tensor,
+        is_causal,
+        attn_mask,
+        cur_pos_tensor,
+        attention_sink,
+        scale,
+        sliding_window_size,
+        memory_config,
+        program_config,
+        compute_kernel_config);
+}
+}  // namespace
 
 void bind_sdpa_decode(nb::module_& mod) {
     const auto* const doc =
@@ -143,10 +197,54 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
+    const auto* const paged_mla_doc =
+        R"doc(
+        Paged flash decode for multi-latent attention (MLA): V is the first `head_dim_v` columns of the K cache,
+        or a separate paged V cache `input_tensor_v` addressed by the same page table.
+
+        Shape identifiers used below: `b` is the batch size (the page table's rows), `nh` the number of Q heads
+        (`pnh` padded up to the tile height), `dh` the K head dimension, `block` the cache block size.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): Q [1 x b x nh x dh]; DRAM interleaved or height-sharded in L1.
+            input_tensor_k (ttnn.Tensor): paged K cache [num_blocks x 1 x block x dh].
+            input_tensor_v (ttnn.Tensor, optional): paged V cache [num_blocks x 1 x block x head_dim_v].
+            head_dim_v (int): the V head dimension.
+            page_table_tensor (ttnn.Tensor): int32 [b x max_blocks_per_user].
+
+        Keyword args:
+            is_causal (bool): Defaults to `True`.
+            attn_mask (ttnn.Tensor, optional): only with `is_causal=False`. Defaults to `None`.
+            cur_pos_tensor (ttnn.Tensor, optional): int32 [b]: user i attends to cache positions
+                [0, cur_pos[i]]; -1 skips the user. Required when causal. Defaults to `None`.
+            attention_sink (ttnn.Tensor, optional): Defaults to `None`.
+            scale (float, optional): Defaults to `None` (1 / sqrt(dh)).
+            sliding_window_size (int, optional): Defaults to `None`.
+            memory_config (ttnn.MemoryConfig, optional): of the output. Defaults to `None`.
+            program_config (SDPAProgramConfig, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
+            return_lse (bool): also return the log-sum-exp of every (user, head). Defaults to `False`, which
+                leaves the op (programs and results) unchanged. Needs one KV head, no attention sink and a TILE
+                layout Q.
+
+        Returns:
+            ttnn.Tensor: the output [1 x b x nh x head_dim_v], or with `return_lse=True` the tuple
+            (output, lse):
+
+            - lse: float32 [1 x b x nh x 1], TILE layout: `memory_config` when that is interleaved, otherwise
+              interleaved in the same buffer type as the output (L1 for an L1-sharded output). Each head's value is in column 0 of its tile row (the tile padding is 0), so
+              it broadcasts against the output along the last dim with ttnn eltwise ops. lse = m + log(l) in the kernel's logit space `scale * q.k`:
+              the log of the softmax denominator sum_k exp(scale * q.k) over the user's visible keys.
+            - A user with cur_pos = -1 (no visible key) gets output rows 0 and lse = -1e30 (finite).
+
+            Two partial attentions (o_a, lse_a), (o_b, lse_b) over disjoint key sets merge exactly as
+            w_x = exp(lse_x - max(lse_a, lse_b)), o = (w_a * o_a + w_b * o_b) / (w_a + w_b).
+        )doc";
+
     ttnn::bind_function<"paged_flash_multi_latent_attention_decode", "ttnn.transformer.">(
         mod,
-        doc,
-        &ttnn::transformer::paged_flash_multi_latent_attention_decode,
+        paged_mla_doc,
+        &paged_flash_mla_decode_wrapper,
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v") = nb::none(),
@@ -161,6 +259,7 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("sliding_window_size") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("program_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("return_lse") = false);
 }
 }  // namespace ttnn::operations::transformer

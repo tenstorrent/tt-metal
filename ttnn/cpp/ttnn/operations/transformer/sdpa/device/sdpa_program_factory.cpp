@@ -1279,6 +1279,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     const bool generated_padding_mask = use_padded_mask && !is_windowed;
     const bool use_mask_block_map = tensor_args.attn_mask_block_map.has_value();
     const bool use_k_range_ctrl = is_windowed || use_mask_block_map;
+    // Optional chunked-prefill features. Off (the default), neither adds a CB, define or kernel argument.
+    const bool return_lse = tensor_args.lse_output.has_value();
+    const bool pair_split = tensor_args.kv_pair_parity.has_value();
 
     // log_debug all of the above
     log_debug(tt::LogOp, "B: {}", B);
@@ -1864,6 +1867,21 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
+    // return_lse: compute hands the writer each Q chunk's final row max (stats format) and softmax denominator
+    // (sum format); the writer stages one fp32 LSE tile at a time.
+    uint32_t cb_lse_max = 0;
+    uint32_t cb_lse_sum = 0;
+    uint32_t cb_lse_out = 0;
+    if (return_lse) {
+        cb_lse_max = allocate_tile_cb(Sq_chunk_t, stats_tile_size, stats_df);
+        cb_lse_sum = allocate_tile_cb(Sq_chunk_t, sum_tile_size, sum_df);
+        cb_lse_out = allocate_tile_cb(1, fp32_tile_bytes, tt::DataFormat::Float32);
+    }
+    // Pair split: one zero output tile, written over the output rows that see no local key.
+    uint32_t cb_pair_zero = 0;
+    if (pair_split) {
+        cb_pair_zero = allocate_tile_cb(1, out_tile_size, out_df);
+    }
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
     const auto writer_cb_compile_time_args = cb_ids.writer_compile_time_args();
@@ -1875,6 +1893,27 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
+
+    // The optional features' kernel arguments go after everything else (accessor offsets passed as defines),
+    // so the default argument layout is untouched.
+    Buffer* lse_buffer = return_lse ? tensor_args.lse_output->buffer() : nullptr;
+    Buffer* pair_parity_buffer = pair_split ? tensor_args.kv_pair_parity->buffer() : nullptr;
+    if (return_lse) {
+        defines.emplace_back("SDPA_RETURN_LSE", "1");
+        defines.emplace_back("SDPA_LSE_M_CB", std::to_string(cb_lse_max));
+        defines.emplace_back("SDPA_LSE_L_CB", std::to_string(cb_lse_sum));
+        defines.emplace_back("SDPA_LSE_OUT_CB", std::to_string(cb_lse_out));
+        defines.emplace_back("SDPA_LSE_L_FP32", sum_df == tt::DataFormat::Float32 ? "1" : "0");
+        defines.emplace_back("SDPA_LSE_SCALE_BITS", std::to_string(scale_packed) + "u");
+        defines.emplace_back("SDPA_LSE_ACCESSOR_CT_OFFSET", std::to_string(writer_compile_time_args.size()));
+        TensorAccessorArgs(lse_buffer).append_to(writer_compile_time_args);
+    }
+    if (pair_split) {
+        defines.emplace_back("SDPA_PAIR_SPLIT", "1");
+        defines.emplace_back("SDPA_PAIR_ZERO_CB", std::to_string(cb_pair_zero));
+        defines.emplace_back("SDPA_PAIR_PARITY_CT_OFFSET", std::to_string(reader_compile_time_args.size()));
+        TensorAccessorArgs(pair_parity_buffer).append_to(reader_compile_time_args);
+    }
 
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2, fwd_done=3 (causal chains).
     if (kv_chain_semaphores) {
@@ -2081,6 +2120,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             reader_args.push_back(chain.prev_seg_count);
             reader_args.push_back(chain.next_seg_global_start);
         }
+        if (pair_split) {
+            reader_args.push_back(pair_parity_buffer);
+        }
 
         reader_desc.emplace_runtime_args(core, reader_args);
 
@@ -2103,6 +2145,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             writer_args.push_back(static_cast<uint32_t>(chain.participates));
             writer_args.push_back(static_cast<uint32_t>(chain.next_physical.x));
             writer_args.push_back(static_cast<uint32_t>(chain.next_physical.y));
+        }
+        if (return_lse) {
+            writer_args.push_back(lse_buffer);  // 13, or 16 after the causal chain tail
         }
         writer_desc.emplace_runtime_args(core, writer_args);
 

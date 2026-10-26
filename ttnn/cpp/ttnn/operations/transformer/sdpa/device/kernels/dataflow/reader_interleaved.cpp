@@ -12,6 +12,9 @@
 #include "api/tensor/noc_traits.h"
 #include "dataflow_common.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/windowed_loop_geometry.hpp"
+#ifdef SDPA_PAIR_SPLIT
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_pair_split.hpp"
+#endif
 
 // Fetch a KV chunk into L1 for forwarding. No CB lifecycle — caller manages
 // cb_reserve_back / cb_push_back. Single read barrier at end for lower latency.
@@ -213,6 +216,14 @@ void kernel_main() {
     // Global Q scheduling runtime args sit right after chain metadata.
     global_q_start = get_arg_val<uint32_t>(argidx++);
     global_q_count = get_arg_val<uint32_t>(argidx++);
+#ifdef SDPA_PAIR_SPLIT
+    // Pair-split prefill: the per-device parity tensor's address (int32, element 0) is the last runtime arg,
+    // after the 4-value windowed tail the host always sends and the feature tails. Its accessor follows the
+    // CB-id block in the compile-time args.
+    const uint32_t pair_parity_addr =
+        get_arg_val<uint32_t>(argidx + 4 + (use_mask_block_map ? 2 : 0) + (causal_chain ? 3 : 0));
+    uint32_t pair_parity = 0;
+#endif
 
     // Windowed K-range narrowing tail: the same four values the writer receives, so both kernels
     // resolve each Q chunk's global row range and windows identically (the writer self-computes the
@@ -357,6 +368,23 @@ void kernel_main() {
                 chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr), 4, {.page_id = 0}, {});
             noc.async_read_barrier();
             uint32_t chunk_start_idx = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
+#ifdef SDPA_PAIR_SPLIT
+            {
+                // Pair-split prefill: element 1 of the compute and writer chunk-start pages carries this
+                // device's parity. Staged through the compute page's (aligned) element 0, then the start is
+                // put back.
+                constexpr auto pair_parity_args = TensorAccessorArgs<SDPA_PAIR_PARITY_CT_OFFSET>();
+                const auto pair_parity_reader = TensorAccessor(pair_parity_args, pair_parity_addr);
+                volatile tt_l1_ptr uint32_t* page =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr);
+                noc.async_read(
+                    pair_parity_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr), 4, {.page_id = 0}, {});
+                noc.async_read_barrier();
+                pair_parity = page[0] & 1u;
+                page[0] = chunk_start_idx;
+                page[1] = pair_parity;
+            }
+#endif
             cb_chunk_compute.push_back(1);
 
             CircularBuffer cb_chunk_writer(cb_id_chunk_start_idx_writer);
@@ -365,6 +393,9 @@ void kernel_main() {
             noc.async_read(
                 chunk_start_idx_reader, CoreLocalMem<uint32_t>(chunk_start_write_ptr_2), 4, {.page_id = 0}, {});
             noc.async_read_barrier();
+#ifdef SDPA_PAIR_SPLIT
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_start_write_ptr_2)[1] = pair_parity;
+#endif
             cb_chunk_writer.push_back(1);
 
             const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
@@ -408,7 +439,14 @@ void kernel_main() {
         uint32_t valid_Skt_bound;
         if (chunk_start_idx_addr != 0) {
             // Flexible or ring: cap at valid_Skt so we never read past K/V extent.
+#ifdef SDPA_PAIR_SPLIT
+            // K is this chip's half of the cache: the local tiles below the chunk's end.
+            valid_Skt_bound = std::min(
+                sdpa_pair_split::local_tiles_before(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, pair_parity),
+                valid_Skt);
+#else
             valid_Skt_bound = std::min(chunked_q_chunk_offset * Sq_chunk_t + valid_Sqt, valid_Skt);
+#endif
         } else {
             // Scalar-offset factories already include the prefix in valid_Skt.
             // Adding it again can resolve page-table entries beyond the valid KV
@@ -579,7 +617,12 @@ void kernel_main() {
                 // Clamp to total K-tile extent (Skt = k_num_chunks * Sk_chunk_t). Without
                 // this, when Q-chunk extends past K (e.g., Sq_chunk_t > k_num_chunks*Sk_chunk_t),
                 // the K-loop pushes more chunks than compute consumes → CB deadlock.
+#ifdef SDPA_PAIR_SPLIT
+                // Local K tiles visible to the chunk's last row (at least one: see sdpa_pair_split.hpp).
+                const uint32_t q_high_unclamped = sdpa_pair_split::local_k_end(q_low_idx + Sq_chunk_t, pair_parity);
+#else
                 const uint32_t q_high_unclamped = q_low_idx + Sq_chunk_t;
+#endif
                 q_high_idx = q_high_unclamped < Skt ? q_high_unclamped : Skt;
             } else {
                 q_high_idx = Skt;

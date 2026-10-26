@@ -583,6 +583,28 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             "Attention sink must be in DRAM memory, but got {}",
             attention_sink.memory_config().buffer_type());
     }
+
+    if (tensor_args.lse_output.has_value()) {
+        const auto& lse = tensor_args.lse_output.value();
+        TT_FATAL(
+            lse.storage_type() == StorageType::DEVICE && lse.buffer() != nullptr,
+            "lse output must be allocated on device");
+        TT_FATAL(lse.dtype() == DataType::FLOAT32, "lse output must be FLOAT32, got {}", lse.dtype());
+        TT_FATAL(lse.layout() == Layout::TILE, "lse output must be in TILE layout, got {}", lse.layout());
+        TT_FATAL(!lse.is_sharded(), "lse output must be interleaved (DRAM or L1)");
+        TT_FATAL(operation_attributes.is_causal, "return_lse needs causal decode");
+        TT_FATAL(!tensor_args.attention_sink.has_value(), "return_lse is not supported with an attention sink");
+        TT_FATAL(!spec_multi_pos, "return_lse is not supported with spec_multi_pos_tiles");
+        TT_FATAL(k_shape[1] == 1, "return_lse needs one KV head, got {}", k_shape[1]);
+        TT_FATAL(input_tensors.at(0).layout() == Layout::TILE, "return_lse needs a TILE layout Q (got ROW_MAJOR)");
+        auto expected = compute_output_specs(operation_attributes, tensor_args).logical_shape();
+        expected[3] = 1;
+        TT_FATAL(
+            lse.logical_shape() == expected,
+            "lse output must have shape {} (the output's shape with a last dim of 1), got {}",
+            expected,
+            lse.logical_shape());
+    }
 }
 
 tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
@@ -637,6 +659,105 @@ tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
 Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
+}
+
+namespace {
+SdpaDecodeParams make_sdpa_decode_params(
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v,
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    std::optional<uint32_t> cache_position_modulo,
+    uint32_t spec_multi_pos_tiles) {
+    return SdpaDecodeParams{
+        .is_causal = is_causal,
+        .paged_attention = paged_attention,
+        .cur_pos = cur_pos,
+        .scale = scale,
+        .sliding_window_size = sliding_window_size,
+        .output_mem_config = output_mem_config,
+        .program_config = program_config,
+        .compute_kernel_config = compute_kernel_config,
+        .k_chunk_size = k_chunk_size,
+        .share_cache = share_cache,
+        .use_mla = use_mla,
+        .head_dim_v = head_dim_v,
+        .paged_cache_geometry =
+            paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+        .cache_position_modulo = cache_position_modulo,
+        .spec_multi_pos_tiles = spec_multi_pos_tiles,
+    };
+}
+}  // namespace
+
+std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
+    const Tensor& input_tensor_q,
+    const Tensor& input_tensor_k,
+    const std::optional<const Tensor>& input_tensor_v,
+    const std::optional<const Tensor>& cur_pos_tensor,
+    const std::optional<const Tensor>& page_table_tensor,
+    const std::optional<const Tensor>& attn_mask,
+    const std::optional<const Tensor>& attention_sink,
+    bool is_causal,
+    bool paged_attention,
+    const std::vector<uint32_t>& cur_pos,
+    std::optional<float> scale,
+    std::optional<uint32_t> sliding_window_size,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    uint32_t k_chunk_size,
+    std::optional<bool> share_cache,
+    std::optional<bool> use_mla,
+    std::optional<uint32_t> head_dim_v) {
+    using OperationType = SdpaDecodeDeviceOperation;
+    auto operation_attributes = make_sdpa_decode_params(
+        is_causal,
+        paged_attention,
+        cur_pos,
+        scale,
+        sliding_window_size,
+        output_mem_config,
+        program_config,
+        compute_kernel_config,
+        k_chunk_size,
+        share_cache,
+        use_mla,
+        head_dim_v,
+        std::nullopt,
+        std::nullopt,
+        0);
+    auto tensor_args = OperationType::tensor_args_t{
+        .q = input_tensor_q,
+        .k = input_tensor_k,
+        .v = input_tensor_v,
+        .cur_pos_tensor = cur_pos_tensor,
+        .page_table_tensor = page_table_tensor,
+        .attn_mask = attn_mask,
+        .attention_sink = attention_sink,
+    };
+    // [1, B, nh, 1] fp32: the output's shape with one column. Interleaved, in the output's buffer type.
+    auto lse_shape = OperationType::compute_output_specs(operation_attributes, tensor_args).logical_shape();
+    lse_shape[3] = 1;
+    const tt::tt_metal::MemoryConfig lse_mem_config =
+        output_mem_config.is_sharded()
+            ? tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, output_mem_config.buffer_type()}
+            : output_mem_config;
+    tensor_args.lse_output = create_device_tensor(
+        tt::tt_metal::TensorSpec(lse_shape, TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), lse_mem_config)),
+        input_tensor_q.device());
+    Tensor lse = tensor_args.lse_output.value();
+    Tensor out = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+    return {out, lse};
 }
 
 Tensor sdpa_decode(

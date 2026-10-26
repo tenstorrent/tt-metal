@@ -15,6 +15,7 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device.hpp"
 
 namespace ttnn::transformer {
@@ -505,7 +506,8 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& input_tensor_v,
-    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor) {
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    const std::optional<ttnn::Tensor>& kv_pair_parity_tensor) {
     TT_FATAL(
         chunk_start_idx.has_value() != chunk_start_idx_tensor.has_value(),
         "chunked_flash_mla_prefill takes exactly one of chunk_start_idx and chunk_start_idx_tensor (got {} and {})",
@@ -530,7 +532,76 @@ ttnn::Tensor chunked_flash_mla_prefill(
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val);
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        0,             // windowed_q_token_offset
+        std::nullopt,  // windowed_q_token_offset_tensor
+        std::nullopt,  // paged_cache_geometry
+        false,         // output_concat_heads
+        std::nullopt,  // attn_mask_block_map
+        std::nullopt,  // lse_output
+        kv_pair_parity_tensor);
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor> chunked_flash_mla_prefill_with_lse(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const uint32_t head_dim_v,
+    const ttnn::Tensor& page_table_tensor,
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    const std::optional<ttnn::Tensor>& kv_pair_parity_tensor) {
+    TT_FATAL(
+        chunk_start_idx.has_value() != chunk_start_idx_tensor.has_value(),
+        "chunked_flash_mla_prefill takes exactly one of chunk_start_idx and chunk_start_idx_tensor (got {} and {})",
+        chunk_start_idx.has_value(),
+        chunk_start_idx_tensor.has_value());
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
+    const auto out_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+    // [b, nqh, s, 1] fp32, interleaved in the output's buffer type.
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const tt::tt_metal::MemoryConfig lse_mem_config =
+        out_mem_config.is_sharded()
+            ? tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, out_mem_config.buffer_type()}
+            : out_mem_config;
+    Tensor lse = create_device_tensor(
+        tt::tt_metal::TensorSpec(
+            ttnn::Shape({q_shape[0], q_shape[1], q_shape[2], 1}),
+            tt::tt_metal::TensorLayout(DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::TILE), lse_mem_config)),
+        input_tensor_q.device());
+
+    Tensor out = ttnn::prim::sdpa(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        std::nullopt,       // attn_mask
+        page_table_tensor,  // page_table
+        std::nullopt,       // attention_sink
+        /*is_causal=*/true,
+        scale,
+        std::nullopt,  // sliding_window_size
+        chunk_start_idx,
+        chunk_start_idx_tensor,
+        true,  // use_mla
+        head_dim_v,
+        out_mem_config,
+        std::move(program_config),
+        kernel_config_val,
+        std::nullopt,  // cu_window_seqlens
+        0,             // windowed_q_token_offset
+        std::nullopt,  // windowed_q_token_offset_tensor
+        std::nullopt,  // paged_cache_geometry
+        false,         // output_concat_heads
+        std::nullopt,  // attn_mask_block_map
+        lse,
+        kv_pair_parity_tensor);
+    return {out, lse};
 }
 
 ttnn::Tensor ring_distributed_scaled_dot_product_attention(

@@ -14,6 +14,12 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
 #include "windowed_mask_gen.hpp"
+#ifdef SDPA_RETURN_LSE
+#include "sdpa_lse_utils.hpp"
+#endif
+#ifdef SDPA_PAIR_SPLIT
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_pair_split.hpp"
+#endif
 
 void kernel_main() {
     Noc noc;
@@ -125,6 +131,36 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
+#ifdef SDPA_RETURN_LSE
+    // LSE output: accessor after the CB-id block, address after the other runtime args (the causal-chain tail
+    // is present from kv chain mode 2 on).
+    constexpr auto lse_args = TensorAccessorArgs<SDPA_LSE_ACCESSOR_CT_OFFSET>();
+    constexpr uint32_t lse_arg_idx = get_compile_time_arg_val(27) >= 2 ? 16 : 13;
+    const auto lse_writer = TensorAccessor(lse_args, get_arg_val<uint32_t>(lse_arg_idx));
+    const auto lse_tile_shape = TensorTileShape(B, NQH, valid_Sqt, 1);
+    constexpr uint32_t cb_lse_max = SDPA_LSE_M_CB;
+    constexpr uint32_t cb_lse_sum = SDPA_LSE_L_CB;
+    constexpr uint32_t cb_lse_out = SDPA_LSE_OUT_CB;
+    constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
+    constexpr uint32_t lse_max_tile_bytes = get_tile_size(cb_lse_max);
+    constexpr uint32_t lse_sum_tile_bytes = get_tile_size(cb_lse_sum);
+    constexpr uint32_t lse_scale_bits = SDPA_LSE_SCALE_BITS;  // fp32 bits of the attention scale
+    // One fp32 staging tile, zero-filled once: each Q row tile only rewrites column 0.
+    CircularBuffer(cb_lse_out).reserve_back(1);
+    fill_tile_zeros<lse_tile_bytes>(noc, cb_lse_out, 0);
+    const uint32_t lse_tile_addr = CircularBuffer(cb_lse_out).get_write_ptr();
+#endif
+#ifdef SDPA_PAIR_SPLIT
+    // Pair split: one zero output tile, the source for the output rows that see no local key.
+    constexpr uint32_t cb_pair_zero = SDPA_PAIR_ZERO_CB;
+    CircularBuffer(cb_pair_zero).reserve_back(1);
+    fill_tile_zeros<tile_bytes>(noc, cb_pair_zero, 0);
+    const uint32_t pair_zero_addr = CircularBuffer(cb_pair_zero).get_write_ptr();
+    uint32_t pair_parity = 0;
+#endif
+    // Chunk start in tiles (pair split and LSE need the Q rows' global positions).
+    [[maybe_unused]] uint32_t chunk_start_tiles = 0;
+
     // Packed, the output is [B, 1, gqa_pack_sqt, NQH*gqa_pack*vDH], and a Q chunk may run into the next query head of
     // its group (q chunk not dividing Sq); the drain wraps those rows (head_wrap_tile_skip).
     const auto out_tile_shape =
@@ -195,6 +231,12 @@ void kernel_main() {
             cb_chunk_start.wait_front(1);
             auto chunk_start_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_chunk_start.get_read_ptr());
             uint32_t chunk_start_idx = chunk_start_ptr[0];
+#ifdef SDPA_PAIR_SPLIT
+            pair_parity = chunk_start_ptr[1] & 1u;  // the reader put this device's parity after the start
+#endif
+#if defined(SDPA_PAIR_SPLIT) || defined(SDPA_RETURN_LSE)
+            chunk_start_tiles = chunk_start_idx / tt::constants::TILE_HEIGHT;
+#endif
             cb_chunk_start.pop_front(1);
             const uint32_t q_chunk_size = Sq_chunk_t * tt::constants::TILE_HEIGHT;
             chunk_start_t_in_q_chunks_phase_1 = chunk_start_idx / q_chunk_size;
@@ -338,6 +380,59 @@ void kernel_main() {
                     out_row_stride,
                     first_row_in_head);
             }
+#ifdef SDPA_PAIR_SPLIT
+            // Q tiles that see no local key (chip 1, global positions 0..63): the kernel's rows there are fully
+            // masked, so overwrite them with 0 (the drains above end with a write barrier).
+            for (uint32_t r = 0; r < out_row_tile_count; ++r) {
+                const uint32_t gq = chunk_start_tiles + out_row_start_tile + r;
+                if (sdpa_pair_split::q_tile_sees_no_key(gq, pair_parity)) {
+                    for (uint32_t col = 0; col < vDHt; ++col) {
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(pair_zero_addr),
+                            out_writer,
+                            tile_bytes,
+                            {},
+                            {.page_id = out_tile_id + r * out_row_stride + col});
+                    }
+                }
+            }
+            noc.async_write_barrier();
+#endif
+#ifdef SDPA_RETURN_LSE
+            {
+                // This Q chunk's final row max and softmax denominator (Sq_chunk_t tiles each, column 0) from
+                // compute: lse = scale * m + log(l), one fp32 tile per Q row tile.
+                CircularBuffer cb_m(cb_lse_max);
+                CircularBuffer cb_l(cb_lse_sum);
+                cb_m.wait_front(Sq_chunk_t);
+                cb_l.wait_front(Sq_chunk_t);
+                for (uint32_t r = 0; r < out_row_tile_count; ++r) {
+#ifdef SDPA_PAIR_SPLIT
+                    const bool tile_sees_no_key =
+                        sdpa_pair_split::q_tile_sees_no_key(chunk_start_tiles + out_row_start_tile + r, pair_parity);
+#else
+                    constexpr bool tile_sees_no_key = false;
+#endif
+                    sdpa_lse::fill_lse_tile<SDPA_LSE_L_FP32 != 0>(
+                        lse_tile_addr,
+                        cb_m.get_read_ptr() + r * lse_max_tile_bytes,
+                        cb_l.get_read_ptr() + r * lse_sum_tile_bytes,
+                        32,
+                        lse_scale_bits,
+                        [tile_sees_no_key](uint32_t) { return tile_sees_no_key; });
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(lse_tile_addr),
+                        lse_writer,
+                        lse_tile_bytes,
+                        {},
+                        {.page_id = lse_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile + r, 0)});
+                    noc.async_writes_flushed();  // the staging tile is refilled for the next row tile
+                }
+                noc.async_write_barrier();
+                cb_m.pop_front(Sq_chunk_t);
+                cb_l.pop_front(Sq_chunk_t);
+            }
+#endif
         }
     }  // close phase
 }

@@ -12,6 +12,8 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include "sdpa.hpp"
@@ -260,6 +262,51 @@ ttnn::Tensor flash_mla_prefill_wrapper_input_tensor(
         memory_config,
         program_config,
         compute_kernel_config);
+}
+
+// return_lse=False returns the output tensor (the op is unchanged); True returns (output, lse).
+std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> chunked_flash_mla_prefill_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const uint32_t head_dim_v,
+    const ttnn::Tensor& page_table_tensor,
+    std::optional<int64_t> chunk_start_idx,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& input_tensor_v,
+    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
+    const std::optional<ttnn::Tensor>& kv_pair_parity_tensor,
+    bool return_lse) {
+    if (return_lse) {
+        return ttnn::transformer::chunked_flash_mla_prefill_with_lse(
+            input_tensor_q,
+            input_tensor_k,
+            head_dim_v,
+            page_table_tensor,
+            chunk_start_idx,
+            scale,
+            memory_config,
+            std::move(program_config),
+            compute_kernel_config,
+            input_tensor_v,
+            chunk_start_idx_tensor,
+            kv_pair_parity_tensor);
+    }
+    return ttnn::transformer::chunked_flash_mla_prefill(
+        input_tensor_q,
+        input_tensor_k,
+        head_dim_v,
+        page_table_tensor,
+        chunk_start_idx,
+        scale,
+        memory_config,
+        std::move(program_config),
+        compute_kernel_config,
+        input_tensor_v,
+        chunk_start_idx_tensor,
+        kv_pair_parity_tensor);
 }
 
 // Dispatch: chunk_start_idx_tensor present → flexible (runtime offset); else legacy (chunk_start_idx int).
@@ -1062,16 +1109,41 @@ void bind_sdpa(nb::module_& mod) {
             chunk_start_idx_tensor (ttnn.Tensor, optional): the chunk's start as a device tensor [1] int32, read at
                 runtime in place of chunk_start_idx, so one program serves every start (it must still be a multiple
                 of q_chunk_size). The page table then only has to cover the chunk's end. Defaults to `None`.
+            kv_pair_parity_tensor (ttnn.Tensor, optional): pair-split mode. A [1] int32 (or uint32) ROW_MAJOR
+                interleaved device tensor holding this device's parity c (0 or 1); on a mesh, shard it so the two
+                chips of a pair read 0 and 1. The K / V cache then holds chip c's half of every 128-token global
+                block: local key l (read through the page table at local position l) is global position
+                G(l, c) = 128 * (l >> 6) + 64 * c + (l & 63). Query i of the chunk is at global position
+                start + i (start from chunk_start_idx_tensor, which this mode requires; start and s multiples of
+                128 in MiMo's use) and sees local key l iff G(l, c) <= start + i; the op reads the local keys
+                below the chunk's end, [0, (start + s) / 2) when start + s is a multiple of 128, so the page table
+                must cover that many local tokens (validation can only check the start-0 amount, about s / 2,
+                since start and parity are read on device). A query that sees no local key (chip 1, global
+                positions 0..63) gets output rows 0. The parity is read on device, so both chips run the same
+                program. Defaults to `None`.
+            return_lse (bool): also return the log-sum-exp of every (head, query). Defaults to `False`, which
+                leaves the op (programs and results) unchanged. Not supported with an attention sink.
 
         Returns:
-            ttnn.Tensor: the output tensor [b x nqh x s x head_dim_v].
+            ttnn.Tensor: the output tensor [b x nqh x s x head_dim_v], or with `return_lse=True` the tuple
+            (output, lse):
+
+            - lse: float32 [b x nqh x s x 1], TILE layout: `memory_config` when that is interleaved, otherwise
+              interleaved in the same buffer type as the output. Each query's
+              value is in column 0 of its tile row (the tile padding is 0), so it broadcasts against the output with ttnn eltwise
+              ops. lse = m + log(l) in the kernel's logit space `scale * q.k`: the log of the softmax denominator
+              sum_k exp(scale * q.k) over the query's visible keys. A query with no visible key gets -1e30
+              (finite) and output 0.
+
+            Two partial attentions (o_a, lse_a), (o_b, lse_b) over disjoint key sets (e.g. the two chips of a
+            pair split) merge exactly as w_x = exp(lse_x - max(lse_a, lse_b)), o = (w_a o_a + w_b o_b) / (w_a + w_b).
 
         )doc";
 
     ttnn::bind_function<"chunked_flash_mla_prefill", "ttnn.transformer.">(
         mod,
         chunked_mla_doc,
-        &ttnn::transformer::chunked_flash_mla_prefill,
+        &chunked_flash_mla_prefill_wrapper,
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("head_dim_v").noconvert(),
@@ -1083,7 +1155,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("input_tensor_v").noconvert() = nb::none(),
-        nb::arg("chunk_start_idx_tensor").noconvert() = nb::none());
+        nb::arg("chunk_start_idx_tensor").noconvert() = nb::none(),
+        nb::arg("kv_pair_parity_tensor").noconvert() = nb::none(),
+        nb::arg("return_lse") = false);
 
     const auto* const ring_distributed_doc =
         R"doc(

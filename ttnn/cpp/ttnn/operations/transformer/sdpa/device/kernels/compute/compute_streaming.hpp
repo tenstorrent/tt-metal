@@ -16,6 +16,9 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_work_plan.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/ring_joint_ksplit.hpp"
+#ifdef SDPA_PAIR_SPLIT
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_pair_split.hpp"
+#endif
 
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
 #include "api/compute/experimental/matmul_custom.h"
@@ -837,8 +840,17 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             CircularBuffer(cur_sum_cb).wait_front(1);
 
             CircularBuffer(scratch_cb).reserve_back(1);
+#ifdef SDPA_RETURN_LSE
+            // return_lse: the same row reduction into DST[1] keeps l (the softmax denominator, column 0)
+            // past the reciprocal; it is packed to the LSE sum CB for the writer. Same format as scratch_cb.
+            static_assert(!use_attention_sink, "SDPA return_lse does not support an attention sink");
+            CircularBuffer(SDPA_LSE_L_CB).reserve_back(1);
+#endif
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
+#ifdef SDPA_RETURN_LSE
+            matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 1, 0, N, 1, N);
+#endif
             if constexpr (use_attention_sink) {
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
                 // max - sink with a negated scale is equivalent and avoids expanding the sink
@@ -876,8 +888,14 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
 
             tile_regs_wait();
             pack_tile(0, scratch_cb);
+#ifdef SDPA_RETURN_LSE
+            pack_tile(1, SDPA_LSE_L_CB);
+#endif
             tile_regs_release();
             CircularBuffer(scratch_cb).push_back(1);
+#ifdef SDPA_RETURN_LSE
+            CircularBuffer(SDPA_LSE_L_CB).push_back(1);
+#endif
 
             CircularBuffer(cur_sum_cb).pop_front(1);
         }
@@ -1200,11 +1218,26 @@ static void apply_lightweight_mask_streaming(
                 } else if (straddle_col == 0) {
                     // Fast path: K coords contiguous across cols.
                     if (apply_causal) {
+#ifdef SDPA_PAIR_SPLIT
+                        // K columns are this chip's local tiles: compare against the Q tile's local row
+                        // position, and stamp the diagonal only when the Q tile is on this chip.
+                        bool stamp_diag = true;
+                        const int32_t diag_col =
+                            sdpa_pair_split::local_q_tile(q_pos_u32, sdpa_pair_split::g_parity, stamp_diag) -
+                            static_cast<int32_t>(k_start_tile);
+#else
                         const int32_t diag_col = q_pos - static_cast<int32_t>(k_start_tile);
+#endif
                         if (diag_col < 0) {
                             stamper.neginf_suffix(0);
                         } else if (static_cast<uint32_t>(diag_col) < mask_cols) {
+#ifdef SDPA_PAIR_SPLIT
+                            if (stamp_diag) {
+                                stamper.stamp_tile_at(diag_col, primary_diag_idx);
+                            }
+#else
                             stamper.stamp_tile_at(diag_col, primary_diag_idx);
+#endif
                             stamper.neginf_suffix(diag_col + 1);
                         }
                     } else if constexpr (has_sliding_window && !is_causal_sdpa) {
@@ -1354,8 +1387,16 @@ inline bool sdpa_first_half_unmasked(
     if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled && !has_sliding_window && !use_provided_mask) {
         const bool plain_causal_stamp = apply_causal && !apply_sliding_window && mask_straddle_col == 0 &&
                                         active_Sk == Sk_chunk_t && !(apply_mask && lw_partial_tile_idx > 0);
+#ifdef SDPA_PAIR_SPLIT
+        // Local row position of the subblock's first (lowest) Q tile; a lower bound on its first masked column.
+        bool stamp_diag = true;
+        const int32_t first_diag_col =
+            sdpa_pair_split::local_q_tile(mask_q_start_tile + first_q_tile, sdpa_pair_split::g_parity, stamp_diag) -
+            static_cast<int32_t>(mask_k_start_tile);
+#else
         const int32_t first_diag_col =
             static_cast<int32_t>(mask_q_start_tile + first_q_tile) - static_cast<int32_t>(mask_k_start_tile);
+#endif
         return plain_causal_stamp && first_diag_col >= static_cast<int32_t>(active_Sk / 2);
     }
     return false;
@@ -2141,6 +2182,31 @@ static void sdpa_inner_loop_step(
     }
 }
 
+#ifdef SDPA_RETURN_LSE
+// return_lse: copy the Q chunk's final row max (cur.max, Sq_chunk_t stats tiles, still fronted) to the LSE max
+// CB for the writer. Leaves srcA and the packer in Float16_b, the state normalize_row_streaming leaves (the
+// stats, scratch and LSE CBs are all Float16_b on the streaming path).
+template <uint32_t Sq_chunk_t>
+static __attribute__((noinline)) void sdpa_lse_emit_max(uint32_t max_cb) {
+    constexpr uint32_t cb_lse_max = SDPA_LSE_M_CB;
+    reconfig_data_format_srca(max_cb);
+    pack_reconfig_data_format(cb_lse_max);
+    configure_single_tile_pack(cb_lse_max);
+    copy_init(max_cb);
+    CircularBuffer(max_cb).wait_front(Sq_chunk_t);
+    CircularBuffer(cb_lse_max).reserve_back(Sq_chunk_t);
+    for (uint32_t i = 0; i < Sq_chunk_t; ++i) {
+        tile_regs_acquire();
+        copy_tile(max_cb, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_lse_max);
+        tile_regs_release();
+    }
+    CircularBuffer(cb_lse_max).push_back(Sq_chunk_t);
+}
+#endif
+
 /**
  * Streaming SDPA (v2): single-device, non-ring variant.
  * Q-chunk / K-chunk outer loop with ping-pong buffer management.
@@ -2279,7 +2345,15 @@ void sdpa_standard_v2(
             const uint32_t q_chunk_global = q_chunk_local + chunked_q_chunk_offset;
             q_start_tile = q_chunk_global * Sq_chunk_t;
             if constexpr (is_causal_sdpa) {
+#ifdef SDPA_PAIR_SPLIT
+                // Local K tiles visible to the chunk's last row (K is this chip's half of the cache).
+                const uint32_t limit =
+                    (sdpa_pair_split::local_k_end(q_start_tile + Sq_chunk_t, sdpa_pair_split::g_parity) + Sk_chunk_t -
+                     1) /
+                    Sk_chunk_t;
+#else
                 const uint32_t limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+#endif
                 k_loop_end = limit < k_num_chunks ? limit : k_num_chunks;
             }
             if constexpr (has_sliding_window) {
@@ -2431,7 +2505,13 @@ void sdpa_standard_v2(
                 }
             } else if constexpr (is_causal_sdpa) {
                 if (is_last) {
+#ifdef SDPA_PAIR_SPLIT
+                    target_active_Sk =
+                        sdpa_pair_split::local_k_end(q_start_tile + Sq_chunk_t, sdpa_pair_split::g_parity) -
+                        k_chunk * Sk_chunk_t;
+#else
                     target_active_Sk = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+#endif
                 }
             }
             if (target_active_Sk < chunk_active_Sk) {
@@ -2462,6 +2542,10 @@ void sdpa_standard_v2(
             }
 
             if (is_last) {
+#ifdef SDPA_RETURN_LSE
+                // The Q chunk's final row max (raw q.k, column 0), for the writer's lse = scale * m + log(l).
+                sdpa_lse_emit_max<Sq_chunk_t>(cur.max);
+#endif
                 sdpa_cb_pop_front_out_of_line(cur.max, Sq_chunk_t);
             } else {
                 std::swap(prev, cur);
