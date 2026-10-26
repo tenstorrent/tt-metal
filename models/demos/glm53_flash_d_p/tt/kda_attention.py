@@ -63,6 +63,14 @@ def kda_fidelity():
     return getattr(ttnn.MathFidelity, os.environ.get("GLM_KDA_FIDELITY", "HiFi4"))
 
 
+def projection_fidelity():
+    """The KDA input / output projections: HiFi3 under the default HiFi4 (a lower GLM_KDA_FIDELITY applies as is).
+    L0 component test, projections alone: HiFi3 rel L2 0.0076, norm ratio 0.991..0.997, worst-head state 0.0269 (HiFi4
+    the same to 1e-5); HiFi2 0.0155, 0.983..0.990. 56k prefill 4.82 -> 4.70 s (11691 -> 11978 tok/s)."""
+    f = kda_fidelity()
+    return ttnn.MathFidelity.HiFi3 if f == ttnn.MathFidelity.HiFi4 else f
+
+
 KDA_OUT_RS = os.environ.get("GLM_KDA_OUT_RS", "fabric")
 KDA_LINKS = int(os.environ.get("GLM_MOE_LINKS", "2"))
 START_ALIGN = 64
@@ -355,8 +363,8 @@ class TtKdaAttention(LightweightModule):
             ),
             tp_ccl_topology=ttnn.Topology.Linear,
             gated_rms_output_dtype=ttnn.float32,
-            input_projection_math_fidelity=kda_fidelity(),
-            output_projection_math_fidelity=kda_fidelity(),
+            input_projection_math_fidelity=projection_fidelity(),
+            output_projection_math_fidelity=projection_fidelity(),
         )
 
     def _kda(self, s: int) -> ttKDA:
