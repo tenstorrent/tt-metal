@@ -415,7 +415,7 @@ class Qwen36DecoderLayer:
                             **_gm,
                         )
                 else:
-                    attn_output = self.attention.forward_decode(attn_input, **_dar_kw)
+                    attn_output = self.attention.forward_decode(attn_input, row_pos=position_tensor, **_dar_kw)
         elif self.is_full_attention:
             attn_output = self.attention.forward(
                 attn_input,

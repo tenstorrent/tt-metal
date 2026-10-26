@@ -1640,7 +1640,7 @@ class TPGatedDeltaNet:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _forward_decode_step_op(self, x, decode_ar=None):
+    def _forward_decode_step_op(self, x, decode_ar=None, row_pos=None):
         """Decode at width B (1 <= B <= _decode_B <= 32; state rows / slots [0:B]) through ONE op,
         ttnn.experimental.kda.gdn_decode_step: causal conv (packed history, updated in place) + SiLU + q/k/v split +
         gating (beta, g) + recurrence on rec_state rows [0:B] (in place) + gated RMSNorm * silu(z). Then the unchanged
@@ -1677,6 +1677,7 @@ class TPGatedDeltaNet:
             qkvz_dim=self.qkvz_dim_tp,
             fast_mode=True,
             fp32_state=self._decode_step_fp32_state,
+            row_pos=row_pos,
         )  # [1, B, Nv*Dv] bf16
         ttnn.deallocate(qkvzab)
         partial = self._row_proj(gated, tw["out"])
@@ -2947,10 +2948,9 @@ class TPGatedDeltaNet:
             **tpc.prefill_rs_kwargs(self.args),
         )
 
-    def forward_decode(self, x, decode_ar=None):
-        """decode_ar: tp_common.DecodeResidualAllReduce (QWEN36_DECODE_ALLREDUCE=1) -> x is the replicated
-        residual-norm output and the out-proj partial is all-reduced (replicated RES40, bf16 unless
-        QWEN36_DECODE_AR_GDN_FP32=1) instead of reduce-scattered."""
+    def forward_decode(self, x, decode_ar=None, row_pos=None):
+        """decode_ar (QWEN36_DECODE_ALLREDUCE=1): x is the replicated residual-norm output, the out-proj is all-reduced.
+        row_pos: [B] int32 decode positions; the gdn_decode_step path leaves rows at -1 untouched (paused requests)."""
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
         Bmax = self.B
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode conv→recurrence→norm/gate chain L1-resident
@@ -2967,7 +2967,7 @@ class TPGatedDeltaNet:
         if self._decode_op and not self.use_fused_recurrent_decode and B <= 32 and Bmax == self._decode_B:
             # gdn_decode_step op (QWEN36_GDN_DECODE_STEP_OP): every width 1..Bmax on the packed conv history.
             self._require_conv_fmt("packed")
-            return self._forward_decode_step_op(x, decode_ar)
+            return self._forward_decode_step_op(x, decode_ar, row_pos)
         if self._fused_decode and Bmax == 1 and B == 1 and not self.use_fused_recurrent_decode:
             # (Spec decode sets use_fused_recurrent_decode: its verify advances conv_states + rec_state with the fused
             # recurrent op, so decode must stay on that path too -- the fused-conv decode below keeps its history in

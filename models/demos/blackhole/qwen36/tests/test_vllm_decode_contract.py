@@ -359,6 +359,8 @@ def _scenario(name):
         return [User(i, 40, _sampled(i)) for i in range(3)], 40
     if name == "user_paused_resumed":  # user 0 sits out steps 10-15 in slot 1 (idle row) while user 1 decodes alone
         return [User(0, 40, GREEDY, pause=tuple(range(10, 16))), User(1, 40, GREEDY)], 46
+    if name == "paused_in_bucket":  # user 0 sits out steps 10-15 in row 3, inside the width-4 bucket of 3 active users
+        return [User(0, 40, GREEDY, pause=tuple(range(10, 16)))] + [User(i, 40, GREEDY) for i in (1, 2, 3)], 46
     raise KeyError(name)
 
 
@@ -369,6 +371,7 @@ SCENARIOS = [
     "page_table_growth",
     "topk_topp_seeded",
     "user_paused_resumed",
+    "paused_in_bucket",
 ]
 
 
@@ -436,13 +439,14 @@ def test_serving_decode_modes_agree(mesh_device, reset_seeds, ensure_gc, name):
             assert pos[row] == PROMPT_LEN + u.submitted, f"{name}/{mode}: row {row} position {pos[row]}"
         assert all(p == -1 for p in pos[len(got["last_layout"]) :]), f"{name}/{mode}: idle rows advanced: {pos}"
 
-    if name == "user_paused_resumed":
+    if any(u.pause for u in _scenario(name)[0]):
         # Sitting out steps must not change a request's stream or GDN state: compare with nobody pausing.
-        nopause = _run(gen, kv, "host_reload", [User(0, 40, GREEDY), User(1, 40, GREEDY)], 40)
+        steady = [User(u.uid, u.max_new, u.sampling) for u in _scenario(name)[0]]
+        nopause = _run(gen, kv, "host_reload", steady, max(u.max_new for u in steady))
         assert ref["tokens"] == nopause["tokens"], "pausing user 0 changed a token stream"
         row_p, row_n = ref["slots"], nopause["slots"]
         for (nm, ax, tp), (_, _, tn) in zip(ref["state"], nopause["state"]):
-            for uid in (0, 1):
+            for uid in row_p:
                 for d, (a_d, b_d) in enumerate(zip(tp, tn)):
                     same = torch.equal(a_d.narrow(ax, row_p[uid], 1), b_d.narrow(ax, row_n[uid], 1))
                     assert same, f"pause/resume: {nm} device {d} user {uid} differs from the no-pause run"

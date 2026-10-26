@@ -1502,7 +1502,7 @@ class Qwen36Model:
             if layer.is_full_attention:
                 x = layer.forward(x, cos, sin, position_tensor=cur_pos_tensor, page_table=page_table, mode="decode")
             else:
-                x = layer.forward(x, mode="decode")
+                x = layer.forward(x, position_tensor=cur_pos_tensor, mode="decode")
             if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
                 self._cap_rec = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         # Independent clone of the live last-layer output: the MTP head consumes this hidden on a
