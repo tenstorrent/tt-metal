@@ -100,7 +100,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DramShardedConfig& test_
 
     KernelSpec::CompileTimeArgs cta_bindings(reader_compile_args);
 
-    std::vector<std::string> named_rtas = {"src_addr", "l1_addr"};
+    std::vector<ArgName> named_rtas = {"src_addr", "l1_addr"};
 
     DataMovementHardwareConfig reader_hw_config;
     if (mesh_device.arch() == tt::ARCH::QUASAR) {

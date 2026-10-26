@@ -799,7 +799,7 @@ ProgramArtifacts create_no_bcast_artifacts(
     if (is_scalar) {
         writer_dfb_bindings.push_back(m2::ProducerOf(IN1, "in1"));
     }
-    m2::Group<std::string> writer_rt_names = {
+    m2::Group<m2::ArgName> writer_rt_names = {
         "start_tile_id", "dst_num_tiles", "dst_shard_width", "D", "N", "C", "Ht", "Wt", "cND"};
     if (is_scalar) {
         writer_rt_names.insert(writer_rt_names.begin(), "packed_scalar");
@@ -842,7 +842,7 @@ ProgramArtifacts create_no_bcast_artifacts(
         compute_dfb_bindings.push_back(m2::ConsumerOf(LLK_POST_RHS, "llk_post"));
     }
 
-    m2::Group<std::string> compute_rt_names = {"num_tiles"};
+    m2::Group<m2::ArgName> compute_rt_names = {"num_tiles"};
     // COL/SCALAR broadcast reuse the expanded tile across a freq/tile_start loop (COL: freq = Wt, one
     // tile-row; SCALAR: freq = Ht * Wt, the whole (N,C) slab); the compute reads freq and the per-core
     // tile offset as runtime args. ROW/NONE do not (their compute is a flat per-tile loop), so the args

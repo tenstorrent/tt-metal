@@ -299,7 +299,7 @@ ttnn::device_operation::ProgramArtifacts EmbeddingsFusedProgramFactory::create_p
         {enchantum::to_string(embeddings_index_type).data(), "1"},
     };
 
-    Group<std::string> reader_rta_names = {"input_start_id", "input_start_offset", "weight_offset", "num_blocks"};
+    Group<ArgName> reader_rta_names = {"input_start_id", "input_start_offset", "weight_offset", "num_blocks"};
     if (embeddings_type == EmbeddingsType::PADDED) {
         reader_rta_names.push_back("pad_token");
     }

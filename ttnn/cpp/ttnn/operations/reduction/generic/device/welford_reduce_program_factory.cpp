@@ -338,7 +338,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // --- Reader kernel ---
     std::string reader_source;
     KernelSpec::CompileTimeArgs reader_ct_args;
-    Group<std::string> reader_rta_names;
+    Group<ArgName> reader_rta_names;
     if (reduce_h || reduce_hw) {
         // H-reduce and HW-reduce: column-partitioned reader reads tiles column by column.
         // Welford processes one column at a time (SFPU can only track one running
@@ -389,7 +389,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     // --- Writer kernel ---
     std::string writer_source;
     KernelSpec::CompileTimeArgs writer_ct_args;
-    Group<std::string> writer_rta_names;
+    Group<ArgName> writer_rta_names;
     Group<DFBBinding> writer_dfb_bindings;
     KernelSpec::CompilerOptions::Defines writer_defines;
 
@@ -460,7 +460,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::string compute_kernel;
     KernelSpec::CompileTimeArgs compute_ct_args;
     std::string compute_rta_name;
-    const Group<std::string> compute_common_rta_names = {"post_mul_scaler_bits"};
+    const Group<ArgName> compute_common_rta_names = {"post_mul_scaler_bits"};
 
     if (reduce_hw) {
         compute_ct_args = {

@@ -608,7 +608,7 @@ void kernel_main() {
 TEST_F(CommandListTest, PatchingOneParameterKeepsEarlierPatchesInItsWindow) {
     // Three adjacent CRTAs, each its own parameter. A window holds at least 8 words, so at least two of the three
     // share a window wherever they land in the stream.
-    const std::vector<std::string> crta_names = {"first", "second", "third"};
+    const std::vector<m2::ArgName> crta_names = {"first", "second", "third"};
     auto kernel = MakeMinimalGen1DMKernel(kKernelName, DataMovementProcessor::RISCV_0);
     kernel.source = KernelSpec::SourceCode{R"(
 #include "api/dataflow/dataflow_api.h"
@@ -639,7 +639,7 @@ void kernel_main() {
 
     CmdListParameters parameters;
     for (const auto& name : crta_names) {
-        parameters.common_runtime_parameters[CmdListCommonRuntimeArgName{name}] = {
+        parameters.common_runtime_parameters[CmdListCommonRuntimeArgName{name.str()}] = {
             {.program = std::cref(program), .kernel_name = m2::KernelSpecName{kKernelName}, .arg_name = name}};
     }
     CommandListBuilder builder(*mesh_device_);
@@ -651,7 +651,7 @@ void kernel_main() {
     // a neighbor that an earlier patch changed.
     for (uint32_t i = 0; i < crta_names.size(); ++i) {
         command_list.update_args(
-            CmdListArgPatch{.common_runtime_args = {{CmdListCommonRuntimeArgName{crta_names[i]}, kValueA + i}}});
+            CmdListArgPatch{.common_runtime_args = {{CmdListCommonRuntimeArgName{crta_names[i].str()}, kValueA + i}}});
     }
 
     // One replay writes all three values, showing whether every patch survived.

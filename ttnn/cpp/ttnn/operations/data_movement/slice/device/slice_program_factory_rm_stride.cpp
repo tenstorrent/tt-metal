@@ -83,8 +83,8 @@ ttnn::device_operation::ProgramArtifacts SliceRmStrideProgramFactory::create_pro
     const uint32_t reader_num_varargs = using_4d_kernels ? 0u : (5u * tensor_rank);
     const uint32_t writer_num_varargs = using_4d_kernels ? 0u : tensor_rank;
 
-    Group<std::string> reader_arg_names;
-    Group<std::string> writer_arg_names;
+    Group<ArgName> reader_arg_names;
+    Group<ArgName> writer_arg_names;
     if (using_4d_kernels) {
         reader_arg_names = {
             "tensor_rank",

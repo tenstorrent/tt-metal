@@ -229,7 +229,7 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
     // positionally as well as by name; the sequence is what makes that legal, and it carries its own
     // length, which is why no tensor-count argument is passed.
     Group<TensorBinding> reader_tensor_bindings;
-    std::vector<std::string> input_accessor_names;
+    std::vector<AccessorName> input_accessor_names;
     reader_tensor_bindings.reserve(num_input_tensors);
     input_accessor_names.reserve(num_input_tensors);
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
@@ -308,8 +308,8 @@ ttnn::device_operation::ProgramArtifacts ConcatProgramFactory::create_program_ar
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = rm_layout ? Group<std::string>{"stick_size", "num_sticks", "start_id"}
-                                               : Group<std::string>{"num_pages", "start_id"},
+                .runtime_arg_names = rm_layout ? Group<ArgName>{"stick_size", "num_sticks", "start_id"}
+                                               : Group<ArgName>{"num_pages", "start_id"},
             },
         .hw_config = ttnn::create_writer_datamovement_config(),
     };

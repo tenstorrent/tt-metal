@@ -185,7 +185,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
     // Named RTA schema (per-node values supplied below). One named arg per legacy
     // positional slot; the legacy src/dst-address (slots 0,1) and semaphore-id (slot 4)
     // slots are gone — those are now bindings.
-    m2::Group<std::string> rta_names = {
+    m2::Group<m2::ArgName> rta_names = {
         "start_id",
         "num_pages",
         "controller_noc_x",
@@ -244,7 +244,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
 
     // Writer RTAs are the subset the drain phase needs (no sem/multicast coordination).
     {
-        m2::Group<std::string> writer_rta_names = {"start_id", "num_pages"};
+        m2::Group<m2::ArgName> writer_rta_names = {"start_id", "num_pages"};
         if (!tilized) {
             writer_rta_names.push_back("aligned_page_size");
         }

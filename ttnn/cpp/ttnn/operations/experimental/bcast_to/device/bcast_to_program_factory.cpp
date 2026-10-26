@@ -35,9 +35,9 @@ const TensorParamName INPUT{"input"};
 const TensorParamName OUTPUT{"output"};
 
 // Per-core runtime args shared by all three kernels; the writer also takes the output start tile.
-const Group<std::string> RTA_NAMES{
+const Group<ArgName> RTA_NAMES{
     "start_n", "start_c", "start_t", "start_th", "start_tw", "num_tiles", "n_stride", "c_stride", "N", "C", "Ht", "Wt"};
-const Group<std::string> WRITER_RTA_NAMES{
+const Group<ArgName> WRITER_RTA_NAMES{
     "start_n",
     "start_c",
     "start_t",

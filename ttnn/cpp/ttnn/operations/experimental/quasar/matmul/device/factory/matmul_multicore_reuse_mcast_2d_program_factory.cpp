@@ -3924,15 +3924,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
 
     // in0 sender RTA schema (interleaved vs block-sharded). The block-sharded fork reads sender_id +
     // 4 mcast dest coords + noc varargs.
-    m2::Group<std::string> in0_sender_rta_names =
-        in0_block_sharded ? m2::Group<std::string>{
+    m2::Group<m2::ArgName> in0_sender_rta_names =
+        in0_block_sharded ? m2::Group<m2::ArgName>{
                                 "sender_id",
                                 "in0_mcast_dest_noc_start_x",
                                 "in0_mcast_dest_noc_start_y",
                                 "in0_mcast_dest_noc_end_x",
                                 "in0_mcast_dest_noc_end_y",
                             }
-                          : m2::Group<std::string>{
+                          : m2::Group<m2::ArgName>{
                                 "in0_tensor_start_tile_id",
                                 "in0_mcast_dest_noc_start_x",
                                 "in0_mcast_dest_noc_start_y",
@@ -4119,7 +4119,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         }
         // Named RTAs. The legacy per-core padding-arg block (last-col vs interior) is modeled as fixed
         // named slots, padded to the max. The !output_is_sharded tail adds last_num_blocks_w_dim.
-        m2::Group<std::string> rta_names = {
+        m2::Group<m2::ArgName> rta_names = {
             "in1_tensor_start_tile_id",
             "in1_mcast_dest_noc_start_x",
             "in1_mcast_dest_noc_start_y",
@@ -4202,7 +4202,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 .accessor_name = "cb_bias",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
         }
-        m2::Group<std::string> rta_names = {
+        m2::Group<m2::ArgName> rta_names = {
             "in1_mcast_sender_noc_x",
             "in1_mcast_sender_noc_y",
             "out_tensor_start_tile_id",

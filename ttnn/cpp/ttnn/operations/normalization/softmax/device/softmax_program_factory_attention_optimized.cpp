@@ -382,7 +382,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             .dfb_spec_name = SUM_SCALER, .accessor_name = "sum_scaler", .endpoint_type = DFBEndpointType::PRODUCER},
     };
     Group<TensorBinding> reader_tensor_bindings = {TensorBinding{.tensor_parameter_name = SRC, .accessor_name = "src"}};
-    std::vector<std::string> reader_rta_names = {"blk", "num_rows", "tile_offset", "Wt"};
+    std::vector<ArgName> reader_rta_names = {"blk", "num_rows", "tile_offset", "Wt"};
     if (has_mask) {
         reader_bindings.push_back(DFBBinding{
             .dfb_spec_name = FUSED_ATTN, .accessor_name = "fused_attn", .endpoint_type = DFBEndpointType::PRODUCER});
@@ -494,7 +494,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         add_self_loop(RECIP, "recip");
     }
 
-    std::vector<std::string> compute_rta_names;
+    std::vector<ArgName> compute_rta_names;
     if (use_large_kernel) {
         compute_rta_names = {"num_rows", "Wt", "blk", "mask_padded_data", "dfb_length"};
     } else {

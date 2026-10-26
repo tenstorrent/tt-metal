@@ -2025,7 +2025,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     } else {
         // 1D sender: bias_tile_offset is read only under #ifdef FUSE_BIAS; remaining_tiles_to_push is
         // always referenced (in a constexpr-false ternary), so its name must exist.
-        std::vector<std::string> names = {"out_start_tile_id_w"};
+        std::vector<m2::ArgName> names = {"out_start_tile_id_w"};
         if (has_bias) {
             names.push_back("bias_tile_offset");
         }
