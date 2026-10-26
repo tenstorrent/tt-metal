@@ -5,10 +5,7 @@
 #include "sdpa_fw_config.hpp"
 
 #include <algorithm>
-#include <functional>
 #include <limits>
-#include <numeric>
-#include <queue>
 #include <tt-metalium/kernel_types.hpp>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -59,30 +56,23 @@ std::vector<CoreItemRuns> split_items_contiguous(uint32_t total_items, uint32_t 
     return per_core;
 }
 
-// Longest-first greedy assignment: items sorted by cost, descending, each to the least loaded core. Within
-// a core the order of items does not change its total work, so they are sorted, which folds consecutive
-// items into one run.
-std::vector<CoreItemRuns> split_items_longest_first(const std::vector<uint32_t>& item_costs, uint32_t num_cores) {
-    std::vector<uint32_t> order(item_costs.size());
-    std::iota(order.begin(), order.end(), 0U);
-    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return item_costs[a] > item_costs[b]; });
-
-    using Load = std::pair<uint64_t, uint32_t>;  // (load, core), min-heap
-    std::priority_queue<Load, std::vector<Load>, std::greater<>> loads;
-    for (uint32_t core = 0; core < num_cores; ++core) {
-        loads.emplace(0U, core);
-    }
-    std::vector<std::vector<uint32_t>> per_core_items(num_cores);
-    for (const uint32_t item : order) {
-        auto [load, core] = loads.top();
-        loads.pop();
-        per_core_items[core].push_back(item);
-        loads.emplace(load + item_costs[item], core);
-    }
-
+// Causal: Q chunk i of a sequence attends ~(i+1) K/V steps, so pairing chunk i with chunk
+// (q_num_chunks - 1 - i) gives every pair the same work. The pairs are handed out contiguously like
+// items above. The order of items within a core does not change its total work, so they are sorted,
+// which folds them into the fewest runs (a fully covered sequence is one run).
+std::vector<CoreItemRuns> split_items_paired(uint32_t num_seqs, uint32_t q_num_chunks, uint32_t num_cores) {
+    const uint32_t pairs_per_seq = q_num_chunks / 2U;
+    const auto pair_runs = split_items_contiguous(num_seqs * pairs_per_seq, num_cores);
     std::vector<CoreItemRuns> per_core(num_cores);
+    std::vector<uint32_t> items;
     for (uint32_t core = 0; core < num_cores; ++core) {
-        auto& items = per_core_items[core];
+        const auto [first_pair, num_pairs] = pair_runs[core].front();
+        items.clear();
+        for (uint32_t p = first_pair; p < first_pair + num_pairs; ++p) {
+            const uint32_t seq_base = (p / pairs_per_seq) * q_num_chunks;
+            items.push_back(seq_base + p % pairs_per_seq);
+            items.push_back(seq_base + (q_num_chunks - 1U - p % pairs_per_seq));
+        }
         std::sort(items.begin(), items.end());
         for (const uint32_t item : items) {
             append_item(per_core[core], item);
@@ -207,13 +197,13 @@ std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
     const uint32_t total_items = num_work_items(shape, chunks);
     TT_FATAL(num_cores > 0 && num_cores <= total_items, "split_work: need 1..{} cores, got {}", total_items, num_cores);
+    // Causal with an even chunk count and enough pairs for every core: heavy/light chunk pairs.
+    const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
+    const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
+    const uint32_t total_pairs = num_stacks * (q_num_chunks / 2U);
     std::vector<CoreItemRuns> per_core_runs;
-    if (shape.mask_type == AttentionMaskType::Causal) {
-        std::vector<uint32_t> item_costs(total_items);
-        for (uint32_t item = 0; item < total_items; ++item) {
-            item_costs[item] = num_kv_steps(shape, chunks, item);
-        }
-        per_core_runs = split_items_longest_first(item_costs, num_cores);
+    if (shape.mask_type == AttentionMaskType::Causal && q_num_chunks % 2U == 0U && total_pairs >= num_cores) {
+        per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
     }
     if (per_core_runs.empty() || !fits_runtime_args(per_core_runs)) {
         per_core_runs = split_items_contiguous(total_items, num_cores);
