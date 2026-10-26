@@ -359,7 +359,7 @@ inline void _gmg_merge4_runs_raw()
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     // There is a hardware bug that affects operations on LREG4-7 while this is enabled
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
 
@@ -403,7 +403,7 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale, s
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0          = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value   = Converter::as_float(eps);
@@ -478,7 +478,7 @@ inline void _gmg_merge4_top8()
     // _generalized_moe_gate_top8 lines for the second merge stage).
     TTI_SFPSHFT2(0, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG1, p_sfpu::LREG2, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     TTI_SFPSHFT2(0, p_sfpu::LREG4, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     TTI_SFPSHFT2(0, p_sfpu::LREG5, p_sfpu::LREG6, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
     _gmg_enable_index_tracking();
@@ -776,7 +776,7 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpu_reciprocal_init<APPROXIMATION_MODE>();
-    TTI_SFPCONFIG(0, 0xF, 1);
+    _init_sfpu_config_reg();
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
