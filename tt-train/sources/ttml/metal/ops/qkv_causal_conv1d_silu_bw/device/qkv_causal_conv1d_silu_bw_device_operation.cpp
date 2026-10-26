@@ -94,6 +94,12 @@ void QkvCausalConv1dSiluBackwardOperation::validate_on_program_cache_miss(
             in.preallocated_grad_input->logical_shape() == Shape({1, attrs.row_count, static_cast<uint32_t>(c)}),
             "{}: preallocated_grad_input must be [1,T,Q+K+V]",
             op_name);
+        // With row_splits > 1, split s reads the bottom faces of input tile row end(s) on its halo step while split
+        // s + 1 has already written grad_input over them.
+        TT_FATAL(
+            in.preallocated_grad_input->buffer()->address() != in.input.buffer()->address(),
+            "{}: preallocated_grad_input must not share a buffer with input",
+            op_name);
     }
 
     const uint64_t l1_bytes = available_l1_bytes(*in.input.device());

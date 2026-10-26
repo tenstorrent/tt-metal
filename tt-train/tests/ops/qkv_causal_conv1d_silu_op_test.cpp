@@ -485,6 +485,28 @@ TEST_F(QkvCausalConv1dSiluTest, PreallocatedGradInput) {
         preallocated);
     EXPECT_EQ(grad_input.buffer()->address(), preallocated.buffer()->address());
     expect_close(ref.grad_input, core::to_xtensor(preallocated), "grad_input");
+    // input is read after neighbouring rows of grad_input are written, so it cannot be the output.
+    EXPECT_THAT(
+        [&] {
+            metal::qkv_causal_conv1d_silu_bw(
+                d.grad_q,
+                d.grad_k,
+                d.grad_v,
+                d.input,
+                d.history,
+                d.taps[0],
+                d.taps[1],
+                d.taps[2],
+                d.taps[3],
+                s.Q,
+                s.K,
+                s.V,
+                0,
+                0,
+                true,
+                d.input);
+        },
+        ThrowsMessage<std::runtime_error>(HasSubstr("must not share a buffer with input")));
 }
 
 // Frozen taps: no tap gradient is produced, through the op and through the autograd wrapper.

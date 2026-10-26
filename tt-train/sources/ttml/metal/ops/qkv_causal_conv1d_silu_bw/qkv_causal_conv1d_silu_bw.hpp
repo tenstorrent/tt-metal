@@ -51,6 +51,8 @@ QkvCausalConv1dSiluBackwardWorkSplit qkv_causal_conv1d_silu_bw_work_split(
 // independent sequence that starts from history, so do not pair it with a sequence-parallel forward.
 // channel_chunk_size = 0 and row_splits = 0 are picked by qkv_causal_conv1d_silu_bw_work_split.
 // With compute_tap_grads = false the tap gradients are nullopt and their work is skipped.
+// preallocated_grad_input must not share a buffer with input: a split's halo step reads input rows that the next
+// split's writer has already overwritten.
 std::tuple<
     ttnn::Tensor,
     std::optional<ttnn::Tensor>,
