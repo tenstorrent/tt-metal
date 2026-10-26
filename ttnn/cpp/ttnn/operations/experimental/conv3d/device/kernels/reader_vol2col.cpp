@@ -141,11 +141,15 @@ FORCE_INLINE void read_input_row_maybe_staged(
 
 // Manages chunked CB writes: reserves TILE_HEIGHT pages, tracks patches written,
 // pushes when full, and flushes remaining at the end of a block.
-template <uint32_t cb_id, uint32_t padded_page_bytes, uint32_t patch_pad_bytes>
+// full_windows: a block of more than two tile rows that is not tile aligned runs in a 2 * TILE_HEIGHT page ring, and
+// cb_push_back wraps only when a push ends exactly on the ring end. Pushing the partial last tile row as a whole window
+// keeps every push on a window boundary; the pages past the last patch are never read as output rows.
+template <uint32_t cb_id, uint32_t padded_page_bytes, uint32_t patch_pad_bytes, bool full_windows>
 struct ChunkWriter {
     static constexpr uint32_t chunk_max = 32;  // TILE_HEIGHT
     uint32_t remaining;
-    uint32_t chunk_size;
+    uint32_t chunk_size;  // patches in the current window
+    uint32_t push_pages;  // pages reserved and pushed for the current window
     uint32_t in_chunk;
     uint32_t write_offset;
     Noc noc;
@@ -157,7 +161,8 @@ struct ChunkWriter {
         remaining = total_patches;
         in_chunk = 0;
         chunk_size = remaining < chunk_max ? remaining : chunk_max;
-        cb.reserve_back(chunk_size);
+        push_pages = full_windows ? chunk_max : chunk_size;
+        cb.reserve_back(push_pages);
         write_offset = 0;
         if constexpr (patch_pad_bytes > 0) {
             pre_zero_pages<padded_page_bytes>(noc, cb, 0, chunk_size);
@@ -174,12 +179,13 @@ struct ChunkWriter {
         if (in_chunk == chunk_size) {
             noc.async_read_barrier();
             noc.write_zeros_l1_barrier();
-            cb.push_back(chunk_size);
+            cb.push_back(push_pages);
             remaining -= chunk_size;
             in_chunk = 0;
             if (remaining > 0) {
                 chunk_size = remaining < chunk_max ? remaining : chunk_max;
-                cb.reserve_back(chunk_size);
+                push_pages = full_windows ? chunk_max : chunk_size;
+                cb.reserve_back(push_pages);
                 write_offset = 0;
                 if constexpr (patch_pad_bytes > 0) {
                     pre_zero_pages<padded_page_bytes>(noc, cb, 0, chunk_size);
@@ -195,13 +201,14 @@ struct ChunkWriter {
             if (in_chunk > 0) {
                 noc.async_read_barrier();
                 noc.write_zeros_l1_barrier();
-                cb.push_back(chunk_size);
+                cb.push_back(push_pages);
                 remaining -= chunk_size;
             }
             while (remaining > 0) {
                 const uint32_t cur = remaining < chunk_max ? remaining : chunk_max;
-                cb.reserve_back(cur);
-                cb.push_back(cur);
+                const uint32_t pages = full_windows ? chunk_max : cur;
+                cb.reserve_back(pages);
+                cb.push_back(pages);
                 remaining -= cur;
             }
         }
@@ -243,7 +250,8 @@ template <
     uint32_t stride_w,
     uint32_t cb_id,
     uint32_t padded_page_bytes,
-    uint32_t patch_pad_bytes>
+    uint32_t patch_pad_bytes,
+    bool full_windows>
 void vol2col_shard_to_cb(
     Noc noc,
     uint32_t shard_l1_base,
@@ -251,7 +259,7 @@ void vol2col_shard_to_cb(
     uint32_t h_base,
     uint32_t w_block,
     uint32_t w_block_end,
-    ChunkWriter<cb_id, padded_page_bytes, patch_pad_bytes>& chunk) {
+    ChunkWriter<cb_id, padded_page_bytes, patch_pad_bytes, full_windows>& chunk) {
     constexpr uint32_t kW_bytes = kW * C_in_block_bytes;
     experimental::set_read_state<kW_bytes>(noc, shard_l1_base);
     for (uint32_t w = w_block; w < w_block_end; w++) {
@@ -915,6 +923,11 @@ void kernel_main() {
     Noc noc;
 
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
+    // See ChunkWriter; compute.cpp derives the same constant and pops the same whole windows.
+    constexpr bool vol2col_full_windows = num_patches > 2 * 32 && num_patches % 32 != 0;
+    if constexpr (vol2col_full_windows) {
+        ASSERT(get_local_cb_interface(cb_vol2col).fifo_num_pages % 32 == 0);
+    }
     constexpr uint32_t H_in_W_in = H_in * W_in;
     constexpr uint32_t T_in_H_in_W_in = T_in * H_in * W_in;
 
@@ -1069,7 +1082,8 @@ void kernel_main() {
                                         coalesced_scratch_rows);
                                 }
 
-                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk(noc);
+                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes, vol2col_full_windows> chunk(
+                                    noc);
                                 chunk.init(num_patches);
 
                                 for (uint32_t t = t_block; t < t_block_end; t++) {
@@ -1141,7 +1155,8 @@ void kernel_main() {
                                             stride_w,
                                             cb_vol2col,
                                             padded_page_bytes,
-                                            patch_pad_bytes>(
+                                            patch_pad_bytes,
+                                            vol2col_full_windows>(
                                             noc, shard_l1_base, t_base, h_base, w_block, w_block_end, chunk);
                                     }
                                 }
@@ -1159,7 +1174,8 @@ void kernel_main() {
                                 const uint32_t w_block_s_start = w_block * stride_w;
                                 const uint32_t w_block_s_end = w_block_end * stride_w;
 
-                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes> chunk(noc);
+                                ChunkWriter<cb_vol2col, padded_page_bytes, patch_pad_bytes, vol2col_full_windows> chunk(
+                                    noc);
                                 chunk.init(num_patches);
 
                                 for (uint32_t t = t_block_s_start; t < t_block_s_end; t += stride_t) {

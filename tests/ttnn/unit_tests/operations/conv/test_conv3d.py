@@ -302,6 +302,32 @@ def test_conv3d_sweep_shapes(
 
 
 @pytest.mark.parametrize(
+    "input_shape, kernel_size, padding, blocks",
+    [
+        # (T_out_block, H_out_block, W_out_block): M = T * H * W output patches per block
+        ((1, 32, 2, 18, 18), (1, 1, 1), (0, 0, 0), (1, 9, 9)),  # M 81
+        ((1, 32, 2, 24, 24), (1, 1, 1), (0, 0, 0), (1, 12, 12)),  # M 144
+        ((1, 32, 4, 16, 20), (3, 3, 3), (0, 1, 1), (1, 8, 10)),  # M 80
+        ((1, 32, 4, 24, 24), (3, 3, 3), (0, 1, 1), (1, 12, 12)),  # M 144
+        ((1, 32, 2, 16, 16), (1, 1, 1), (0, 0, 0), (1, 8, 8)),  # M 64: control
+        ((1, 32, 2, 24, 16), (1, 1, 1), (0, 0, 0), (1, 12, 8)),  # M 96: control
+    ],
+    ids=["k111_m81", "k111_m144", "k333_m80", "k333_m144", "k111_m64", "k111_m96"],
+)
+def test_conv3d_unaligned_m_block_several_blocks_per_core(device, input_shape, kernel_size, padding, blocks):
+    """An M block above two tile rows that is not tile aligned, several blocks on one core (vol2col ring windows)."""
+    T_out_block, H_out_block, W_out_block = blocks
+    config = create_conv3d_config(
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_in_block=32,
+        compute_with_storage_grid_size=(1, 1),
+    )
+    run_conv3d_test(device, input_shape, 32, kernel_size, (1, 1, 1), 1, padding, "zeros", config=config)
+
+
+@pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, groups, padding, padding_mode",
     [
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), 1, (0, 1, 1), "replicate"],
