@@ -1895,3 +1895,12 @@ One variable set at a time; "off" = NO_MATH H_NODATA YRM_NOWRITE. us a call, M 9
   the snake loses +42 us sharing NOC0 links with the weight forwards. x alone (336) sits under the weight read floor
   (383), so the snake's rate is not what binds the real run; the read interference is.
 Logs: /localdev/mstaletovic/xonly/.
+
+### Gate/up placement nearer the banks: the ceiling (2026-10-26, bh-lb-09, Galaxy loads, one chip)
+W_NOFWD (weights still read from DRAM, never written to the gate/up cores) = what perfect proximity could reach.
+us a call at the Galaxy M (GLM-5.3 160 / GLM-Flash 142 / K3 91 / K2.7 107): old placement (DRISC_PLACE=0) 524 / 384 /
+1232 / 807; today's bank-aware placement (3a) 522 / 380 / 1216 / 807; no forwards at all 520 / 384 / 1208 / 775.
+- Left for any placement: 2 / 0 / 8 us. K2.7's 32 us is not distance: its job-1 slots send from tile 1, whose DMA +
+  NoC writes share that tile and port with the x reads (the 45 us job-1 lag); 3a's distance fix did not move it, x on
+  NOC0 (3b) cost more. The ceiling also drops the forwards' link sharing with the x snake, so it overstates placement.
+Logs: /localdev/mstaletovic/fc_ab/ (nofwd_*, place0_*).
