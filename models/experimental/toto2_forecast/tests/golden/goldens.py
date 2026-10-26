@@ -163,19 +163,19 @@ def below_floors(metrics: dict, floors: dict) -> dict:
     missing from ``metrics`` is a miss. ``pcc_row_min_active`` takes ``pcc_row_min_active_many`` past ``MANY_ROWS``
     series. A case whose series are all degenerate is judged by ``DEGENERATE_GATED`` alone; ``abs_err_max`` gates
     nothing else."""
-    all_degenerate = metrics["rows_degenerate"] == metrics["rows"]
+    degenerate = all_degenerate(metrics)
     out = {}
     for key, floor in floors.items():
         if key == "pcc_row_min_active_many":
             continue
         if key == "spread_ratio_p50_degenerate":
-            if not all_degenerate:
+            if not degenerate:
                 continue
             key = "spread_ratio_p50"  # D2: the degenerate range; gated even where spread_ratio_p50 is INFO (D3)
         elif key == "spread_ratio_p50":
-            if all_degenerate:
+            if degenerate:
                 continue
-        elif all_degenerate != (key in DEGENERATE_GATED):
+        elif degenerate != (key in DEGENERATE_GATED):
             continue
         if key == "pcc_row_min_active" and metrics["rows"] > MANY_ROWS:
             floor = floors["pcc_row_min_active_many"]
@@ -278,10 +278,9 @@ for _prec, _p99 in (("accuracy", 1.2), ("performance", 1.5)):
     SMALL_CHECKPOINT_FLOORS[_prec].update(spread_ratio_p50=(0.9, 1.1), spread_ratio_p99=_p99)
 SMALL_313M_P99 = {"accuracy": 1.25, "performance": 1.5}
 
-# D3 ruling 2: on 313m performance (P1) these band metrics are INFO until G3 (recorded and printed, not gated); they
-# are held by drift against the job 683/684 round-0 records instead (check_gates.py). G3 ships performance only if
-# they pass the D2 floors with no INFO exemption.
-INFO = {("313m", "performance"): {"spread_ratio_p50", "spread_ratio_p99", "spread_ratio_max", "spread_ratio_inactive_p50"}}
+# D3 ruling 2 put four 313m performance band metrics in an INFO set (recorded, not gated); D4 ruling 2 (performance
+# = P6) empties it: every D2 floor is gated on 313m performance.
+INFO: dict = {}
 
 
 def _all_floors(ckpt: str, prec: str) -> dict:
@@ -322,9 +321,17 @@ DRIFT = {
     "spread_ratio_p50": 0.01,
 }
 TWO_SIDED = {"spread_ratio_p50"}
-# D3 ruling 2: extra drift on 313m performance only (scale 1; the DRIFT margins above already give p50 +-0.02 and
-# p99 +0.10 there at twice the target margin).
-DRIFT_EXTRA = {("313m", "performance"): {"spread_ratio_inactive_p50": 0.15}}
+# D3 ruling 2's extra 313m performance drift (inactive_p50 +0.15) went away with the INFO set (D4 ruling 2).
+DRIFT_EXTRA: dict = {}
+# D4 ruling 1: an all-degenerate case gets no drift on PCC, pcc_row_* or spread_ratio (floors only: abs_err_max and
+# the 0.5-2.0 p50 range); abs_err_max may grow at most this fraction of the fixed record. A gross-error check, not
+# a band check: a collapse (0.00214) and a 0.3x band (0.00150) on 2.5B-FT single_sparse both pass it.
+DEGENERATE_ABS_ERR_GROWTH = 0.5
+
+
+def all_degenerate(metrics: dict) -> bool:
+    """D4 ruling 1: every series of the case is degenerate."""
+    return metrics["rows_degenerate"] == metrics["rows"]
 
 
 CEILINGS.update({"spread_ratio_max", "spread_ratio_inactive_p50"})
