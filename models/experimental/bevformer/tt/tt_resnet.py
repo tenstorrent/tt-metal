@@ -255,8 +255,15 @@ class TTResLayer:
     def run_per_camera(layers, x, group_input=None):
         """Consecutive per-camera ``layers`` with one group size on the DRAM batch ``x``, a group of
         cameras at a time: its rows go into L1, pass through every block of every layer there, and
-        the last layer's output is gathered back into one DRAM batch. Only that output crosses DRAM.
-        ``group_input``, given a group's index, returns its input already in L1 instead."""
+        the last layer's output is written back into one DRAM batch. Only that output crosses DRAM.
+        ``group_input``, given a group's index, returns its input already in L1 instead.
+
+        Each group writes its rows straight into the batch (``slice_write``) rather than the groups
+        being concatenated afterwards, which would copy the whole batch once more. A group whose rows
+        are whole tiles writes its TILE shards as they are. A tiled write must start on a tile row,
+        so groups that do not write ROW_MAJOR instead, untilized in L1; that batch suits its
+        consumers too, as a strided first block subsamples ROW_MAJOR and an FPN lateral tilizes its
+        DRAM input itself."""
         first = layers[0]
         assert all(layer.cameras == first.cameras for layer in layers), "chained layers share a group size"
         assert all(layer.whole_first_block is None for layer in layers[1:]), "only a run's first layer reads DRAM"
@@ -281,17 +288,33 @@ class TTResLayer:
             ttnn.deallocate(y)
             return staged
 
-        outs = []
-        for group in range(first.batch_size // first.cameras):
+        num_groups = first.batch_size // first.cameras
+        out = None
+        for group in range(num_groups):
             y = (group_input or slice_group)(group)
             for layer in layers:
                 for block in layer.layer:
                     y = block(y)
-            outs.append(ttnn.sharded_to_interleaved(y, ttnn.DRAM_MEMORY_CONFIG))
+            group_rows, channels = y.shape[2], y.shape[3]
+            tiled = group_rows % ttnn.TILE_SIZE == 0
+            if not tiled:
+                # Untilized from L1 interleaved, which handles rows that end inside a tile row.
+                staged = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(y)
+                y = ttnn.to_layout(staged, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+                ttnn.deallocate(staged)
+            if out is None:
+                out = ttnn.empty(
+                    (1, 1, num_groups * group_rows, channels),
+                    dtype=y.dtype,
+                    layout=ttnn.TILE_LAYOUT if tiled else ttnn.ROW_MAJOR_LAYOUT,
+                    device=y.device(),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            ttnn.experimental.slice_write(
+                y, out, [0, 0, group * group_rows, 0], [1, 1, (group + 1) * group_rows, channels], [1, 1, 1, 1]
+            )
             ttnn.deallocate(y)
-        out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        for o in outs:
-            ttnn.deallocate(o)
         return out
 
 
