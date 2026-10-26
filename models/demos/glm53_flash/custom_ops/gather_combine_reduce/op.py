@@ -40,6 +40,7 @@ class GatherCombineReduce:
 
     def __init__(self, device):
         self.device = device
+        self._parts: dict = {}
 
     def __call__(self, table: ttnn.Tensor, pos: ttnn.Tensor, weights: ttnn.Tensor) -> ttnn.Tensor:
         R, H = int(table.shape[-2]), int(table.shape[-1])
@@ -66,7 +67,23 @@ class GatherCombineReduce:
         out = ttnn.allocate_tensor_on_device(
             ttnn.Shape([1, 1, T, H]), ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
         )
+        # G53F-0206: per-geometry parts built once; a call sets the addresses (common runtime args) and a preset hash
+        key = (R, H, k, T, bool(pos_tile), pos_page)
+        cached = os.environ.get("GLM53_CUSTOM_OP_CACHE", "1") == "1"
+        parts = self._parts.get(key) if cached else None
+        if parts is None:
+            parts = self._build(
+                table, pos, weights, out, R, H, k, T, pos_tile, emb_dim_cb_tiles, emb_dim_bytes, pos_page
+            )
+            self._parts[key] = parts
+        reader, compute, writer, cbs, program_hash = parts
+        reader.common_runtime_args = [table.buffer_address(), pos.buffer_address()]
+        writer.common_runtime_args = [weights.buffer_address(), out.buffer_address()]
+        program = ttnn.ProgramDescriptor(kernels=[reader, compute, writer], semaphores=[], cbs=cbs)
+        program.custom_program_hash = program_hash
+        return ttnn.generic_op([table, pos, weights, out], program)
 
+    def _build(self, table, pos, weights, out, R, H, k, T, pos_tile, emb_dim_cb_tiles, emb_dim_bytes, pos_page):
         grid = self.device.compute_with_storage_grid_size()
         total_chunks = T // TOKENS_PER_CHUNK
         ncores = min(total_chunks, grid.x * grid.y)
@@ -99,14 +116,13 @@ class GatherCombineReduce:
         w_args = ttnn.TensorAccessorArgs(weights).get_compile_time_args()
         writer_ct += w_args + ttnn.TensorAccessorArgs(out).get_compile_time_args() + w_args + w_args + [0]
 
+        # no per-core runtime args (G53F-0206): the addresses are common args set per call, every kernel derives its
+        # token span from its logical position (row-major, the even split above)
+        span_ct = [total_chunks, ncores, grid.x]
+        reader_ct += span_ct
+        compute_ct += span_ct
+        writer_ct += span_ct
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        token_start = 0
-        for i, c in enumerate(cores):
-            n = base + (1 if i < extra else 0)
-            reader_rt[c.x][c.y] = [table.buffer_address(), pos.buffer_address(), token_start, n]
-            compute_rt[c.x][c.y] = [token_start, n]
-            writer_rt[c.x][c.y] = [weights.buffer_address(), out.buffer_address(), token_start, n]
-            token_start += n * TOKENS_PER_CHUNK
 
         kernels = [
             ttnn.KernelDescriptor(
@@ -117,7 +133,7 @@ class GatherCombineReduce:
                 config=ttnn.ReaderConfigDescriptor(),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=_pcr_kernel("deepseek_moe_post_combine_reduce_compute.cpp"),
+                kernel_source=str(KERNEL_DIR / "compute_gather_combine.cpp"),  # the shared compute, span from position
                 core_ranges=crs,
                 compile_time_args=compute_ct,
                 runtime_args=compute_rt,
@@ -126,12 +142,14 @@ class GatherCombineReduce:
                 ),
             ),
             ttnn.KernelDescriptor(
-                kernel_source=_pcr_kernel("deepseek_moe_post_combine_reduce_writer.cpp"),
+                kernel_source=str(KERNEL_DIR / "writer_gather_combine.cpp"),  # the shared writer, common-address args
                 core_ranges=crs,
                 compile_time_args=writer_ct,
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
             ),
         ]
-        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        return ttnn.generic_op([table, pos, weights, out], program)
+        program_hash = hash(
+            ("glm53_gather_combine", tuple(reader_ct), tuple(compute_ct), tuple(writer_ct), T, ncores, pos_cb)
+        ) & ((1 << 63) - 1)
+        return kernels[0], kernels[1], kernels[2], cbs, program_hash

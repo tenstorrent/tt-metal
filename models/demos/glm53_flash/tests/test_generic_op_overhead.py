@@ -6,7 +6,9 @@
 8 KB zero row), yet costs ~1.05 ms per call on the 8x4 mesh (G53F-0203); the mHC mix kernels cost ~1.25 ms per call
 at 64 rows and at 2048 rows alike (G53F-0202). This splits one call (``UU_N`` back-to-back calls, one synchronize):
 
-* ``full``: build the ProgramDescriptor in Python + ``ttnn.generic_op`` (what the model does);
+* ``full``: the op as the model calls it (cached per-geometry parts, addresses as common runtime args, preset hash);
+* ``full_uncached``: the descriptor rebuilt in Python every call (the pre-G53F-0206 pattern; G53F-0203 measured the
+  per-core-address version of it at 1.05 ms);
 * ``build``: the Python descriptor build alone (no device call);
 * ``reuse``: ``ttnn.generic_op`` with ONE prebuilt descriptor (same tensors) -- the C++ path: descriptor hash,
   program-cache hit, runtime-args override on every core of 32 devices, enqueue;
@@ -64,8 +66,12 @@ def test_generic_op_overhead(mesh_device):
         return round((t2 - t0) / N * 1e3, 3), round((t1 - t0) / N * 1e3, 3)
 
     row = {}
+    # cached (default since G53F-0206): per-geometry parts built once, addresses as common runtime args, preset hash
     row["full"], row["full_enqueue"] = timed(lambda: ttnn.deallocate(op(out, counts, offsets)))
+    op_u = UntilizeUsed(mesh_device, cached=False)  # the descriptor rebuilt in Python every call
+    row["full_uncached"], row["full_uncached_enqueue"] = timed(lambda: ttnn.deallocate(op_u(out, counts, offsets)))
     row["build"], _ = timed(lambda: op.descriptor(out, counts, offsets, y))
+    row["build_uncached"], _ = timed(lambda: op_u.descriptor(out, counts, offsets, y))
     _, desc = op.descriptor(out, counts, offsets, y)
     row["reuse"], row["reuse_enqueue"] = timed(lambda: ttnn.generic_op([out, counts, offsets, y], desc))
     desc.custom_program_hash = 0x6E5E_D0_0206

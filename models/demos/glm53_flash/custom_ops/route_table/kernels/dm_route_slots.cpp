@@ -37,6 +37,10 @@ constexpr auto pos_args = TensorAccessorArgs<bc_args.next_compile_time_args_offs
 constexpr auto wl_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
 constexpr auto counts_args = TensorAccessorArgs<wl_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+// the block split (G53F-0206): TOTAL_BLOCKS blocks over NCORES cores of a GRID_X-wide grid
+constexpr uint32_t TOTAL_BLOCKS = get_compile_time_arg_val(offsets_args.next_compile_time_args_offset() + 0);
+constexpr uint32_t NCORES = get_compile_time_arg_val(offsets_args.next_compile_time_args_offset() + 1);
+constexpr uint32_t GRID_X = get_compile_time_arg_val(offsets_args.next_compile_time_args_offset() + 2);
 constexpr uint32_t TILE_ROWS = 32;
 constexpr uint32_t TILE_ELEMS = 1024;
 constexpr uint32_t ROW_WORDS = row_bytes / 4;  // a block row's stride in L1 (>= E_LOC)
@@ -65,17 +69,22 @@ FORCE_INLINE uint32_t u32_to_f32(uint32_t v) {
 FORCE_INLINE uint32_t tile_off(uint32_t r, uint32_t j) { return (r < 16u ? 0u : 512u) + (r & 15u) * 16u + j; }
 
 void kernel_main() {
-    const uint32_t idx_addr = get_arg_val<uint32_t>(0);
-    const uint32_t w_addr = get_arg_val<uint32_t>(1);
-    const uint32_t table_addr = get_arg_val<uint32_t>(2);
-    const uint32_t bc_addr = get_arg_val<uint32_t>(3);
-    const uint32_t pos_addr = get_arg_val<uint32_t>(4);
-    const uint32_t wl_addr = get_arg_val<uint32_t>(5);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(6);
-    const uint32_t offsets_addr = get_arg_val<uint32_t>(7);
-    const uint32_t block0 = get_arg_val<uint32_t>(8);
-    const uint32_t nblocks = get_arg_val<uint32_t>(9);
-    const uint32_t write_tables = get_arg_val<uint32_t>(10);
+    // the buffer addresses are common runtime args (one list for every core), the block span per core (G53F-0206)
+    const uint32_t idx_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t table_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t bc_addr = get_common_arg_val<uint32_t>(3);
+    const uint32_t pos_addr = get_common_arg_val<uint32_t>(4);
+    const uint32_t wl_addr = get_common_arg_val<uint32_t>(5);
+    const uint32_t counts_addr = get_common_arg_val<uint32_t>(6);
+    const uint32_t offsets_addr = get_common_arg_val<uint32_t>(7);
+    // the core's block span: an even split of TOTAL_BLOCKS over the NCORES cores (row-major, the first TOTAL_BLOCKS %
+    // NCORES take one more) from the core's logical position -- no per-core runtime args (G53F-0206)
+    const uint32_t core_i = get_absolute_logical_y() * GRID_X + get_absolute_logical_x();
+    const uint32_t base_ = TOTAL_BLOCKS / NCORES, extra_ = TOTAL_BLOCKS % NCORES;
+    const uint32_t nblocks = base_ + (core_i < extra_ ? 1u : 0u);
+    const uint32_t block0 = core_i * base_ + (core_i < extra_ ? core_i : extra_);
+    const uint32_t write_tables = core_i == 0 ? 1u : 0u;
 
     const auto s_idx = TensorAccessor(idx_args, idx_addr, tile_bytes);
     const auto s_w = TensorAccessor(w_args, w_addr, tile_bytes);

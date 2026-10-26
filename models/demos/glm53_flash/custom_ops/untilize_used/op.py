@@ -21,6 +21,7 @@ way: same unpack, same pack), zeros on row ``R - 1``, unwritten elsewhere. Contr
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import ttnn
@@ -32,8 +33,12 @@ TILE = 32
 class UntilizeUsed:
     CB_IN, CB_CNT, CB_SCR_R, CB_SCR_W, CB_OUT = 0, 1, 2, 3, 16
 
-    def __init__(self, device):
+    def __init__(self, device, cached: bool = True):
         self.device = device
+        # G53F-0206: the per-geometry program parts (CBs, kernels, per-core args) are built once; a call only sets the
+        # buffer addresses (COMMON runtime args, one list per kernel) and hands generic_op a precomputed program hash
+        self.cached = cached
+        self._parts: dict = {}
 
     @staticmethod
     def _cb(crs, index, dtype, page, pages):
@@ -56,35 +61,50 @@ class UntilizeUsed:
         assert R % TILE == 0 and H % TILE == 0, (R, H)
         for t in (counts, offsets):
             assert t.dtype == ttnn.uint32 and t.layout == ttnn.ROW_MAJOR_LAYOUT and int(t.shape[-1]) == E
+        if y is None:
+            y = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([R, H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
+            )
+        key = (R, H, E)
+        cached = self.cached and os.environ.get("GLM53_CUSTOM_OP_CACHE", "1") == "1"  # read per call (A/B)
+        parts = self._parts.get(key) if cached else None
+        if parts is None:
+            parts = self._build(out, counts, offsets, y)
+            self._parts[key] = parts
+        reader, writer, compute, cbs, program_hash = parts
+        reader.common_runtime_args = [out.buffer_address(), counts.buffer_address(), offsets.buffer_address()]
+        writer.common_runtime_args = [y.buffer_address(), counts.buffer_address(), offsets.buffer_address()]
+        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+        program.custom_program_hash = program_hash
+        return y, program
+
+    def _build(self, out, counts, offsets, y):
+        R, H = int(out.shape[-2]), int(out.shape[-1])
+        E = int(counts.shape[-1])
         dev = self.device
         Wt = H // TILE
         tile_bytes = out.buffer_aligned_page_size()
         table_bytes = counts.buffer_aligned_page_size()
         assert offsets.buffer_aligned_page_size() == table_bytes
-        if y is None:
-            y = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([R, H]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, dev, ttnn.DRAM_MEMORY_CONFIG
-            )
         row_bytes = y.buffer_aligned_page_size()
         assert row_bytes == H * 2, (row_bytes, H)
 
         grid = dev.compute_with_storage_grid_size()
         ncores = grid.x * grid.y
-        cores = [ttnn.CoreCoord(i % grid.x, i // grid.x) for i in range(ncores)]
         crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
 
         reader_ct = [E, Wt, ncores, self.CB_IN, self.CB_CNT, self.CB_SCR_R, tile_bytes, table_bytes]
         for t in (out, counts, offsets):
             reader_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        reader_ct.append(grid.x)
         writer_ct = [E, Wt, ncores, self.CB_OUT, self.CB_SCR_W, row_bytes, table_bytes, R - 1]
         for t in (y, counts, offsets):
             writer_ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
+        writer_ct.append(grid.x)
         compute_ct = [Wt, self.CB_IN, self.CB_OUT, self.CB_CNT]
+        # no per-core runtime args: the addresses are common args and a core's index is its logical position, so a
+        # program-cache hit re-applies three short lists instead of every core's (G53F-0206)
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for i, c in enumerate(cores):
-            reader_rt[c.x][c.y] = [out.buffer_address(), counts.buffer_address(), offsets.buffer_address(), i]
-            writer_rt[c.x][c.y] = [y.buffer_address(), counts.buffer_address(), offsets.buffer_address(), i]
-            compute_rt[c.x][c.y] = []
 
         out_tile_bytes = TILE * TILE * 2
         cbs = [
@@ -94,27 +114,29 @@ class UntilizeUsed:
             self._cb(crs, self.CB_SCR_R, ttnn.uint32, 2 * table_bytes, 1),
             self._cb(crs, self.CB_SCR_W, ttnn.uint32, 2 * table_bytes + row_bytes, 1),
         ]
-        kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "reader_untilize_used.cpp"),
-                core_ranges=crs,
-                compile_time_args=reader_ct,
-                runtime_args=reader_rt,
-                config=ttnn.ReaderConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "writer_untilize_used.cpp"),
-                core_ranges=crs,
-                compile_time_args=writer_ct,
-                runtime_args=writer_rt,
-                config=ttnn.WriterConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "compute_untilize_used.cpp"),
-                core_ranges=crs,
-                compile_time_args=compute_ct,
-                runtime_args=compute_rt,
-                config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=False),
-            ),
-        ]
-        return y, ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
+        reader = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "reader_untilize_used.cpp"),
+            core_ranges=crs,
+            compile_time_args=reader_ct,
+            runtime_args=reader_rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        writer = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "writer_untilize_used.cpp"),
+            core_ranges=crs,
+            compile_time_args=writer_ct,
+            runtime_args=writer_rt,
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        compute = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "compute_untilize_used.cpp"),
+            core_ranges=crs,
+            compile_time_args=compute_ct,
+            runtime_args=compute_rt,
+            config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=False),
+        )
+        # the program cache key: everything above is a function of the geometry and the tensors' layouts
+        program_hash = hash(
+            ("glm53_untilize_used", R, H, E, tile_bytes, table_bytes, tuple(reader_ct), tuple(writer_ct))
+        )
+        return reader, writer, compute, cbs, program_hash & ((1 << 63) - 1)

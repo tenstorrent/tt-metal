@@ -17,6 +17,7 @@ dest (no 19-bit SrcA rounding), so the result matches the composite fp32 chain t
 
 from __future__ import annotations
 
+import os
 import struct
 from pathlib import Path
 
@@ -77,10 +78,14 @@ class MhcPostMix:
     # the column sets one SFPU slot load covers, see kernels/mhc_sfpu_x8.h); OUT as above.
     CB_COEF = 3
 
-    def __init__(self, n: int = 4, math_fidelity=ttnn.MathFidelity.HiFi4, version: int = 1):
+    def __init__(self, n: int = 4, math_fidelity=ttnn.MathFidelity.HiFi4, version: int = 1, cached: bool = True):
         self.n = n
         self.fidelity = math_fidelity
         self.version = version
+        # tt-blaze G53F-0206: v2's per-geometry program parts (CBs, kernels, per-core work split) are built once; a call
+        # sets the buffer addresses (common runtime args) and hands generic_op a precomputed program hash
+        self.cached = cached
+        self._v2_parts: dict = {}
 
     # ------------------------------------------------------------------ reference
     @staticmethod
@@ -261,6 +266,36 @@ class MhcPostMix:
             ), f"lane-layout post/comb must be [T,32] / [T,{n * TILE}] (got {post.padded_shape}, {comb.padded_shape})"
         assert list(out.padded_shape)[-2:] == [T, C if collapse else Cn], f"out {out.padded_shape} shape mismatch"
 
+        key = (
+            T,
+            Cn,
+            C,
+            y.dtype,
+            int(expand),
+            bool(collapse),
+            bool(hmode),
+            bool(post_first),
+            tuple(t.memory_config().buffer_type for t in (x, y, post, comb, out)),
+        )
+        cached = self.cached and os.environ.get("GLM53_CUSTOM_OP_CACHE", "1") == "1"  # read per call (A/B)
+        parts = self._v2_parts.get(key) if cached else None
+        if parts is None:
+            parts = self._build_v2(x, y, post, comb, out, collapse, hmode, post_first, T, C, expand)
+            self._v2_parts[key] = parts
+        reader, writer, compute, cbs, program_hash = parts
+        reader.common_runtime_args = [
+            x.buffer_address(),
+            y.buffer_address(),
+            post.buffer_address(),
+            comb.buffer_address(),
+        ]
+        writer.common_runtime_args = [out.buffer_address()]
+        program = ttnn.ProgramDescriptor(kernels=[reader, writer, compute], semaphores=[], cbs=cbs)
+        program.custom_program_hash = program_hash
+        return ttnn.generic_op([x, y, post, comb, out], program)
+
+    def _build_v2(self, x, y, post, comb, out, collapse, hmode, post_first, T, C, expand):
+        n = self.n
         R, Ct = T // TILE, C // TILE
         out_tiles = 1 if collapse else n
         y_bytes = FP32_TILE_BYTES if y.dtype == ttnn.float32 else FP32_TILE_BYTES // 2
@@ -302,18 +337,13 @@ class MhcPostMix:
             int(post_first and not collapse and not hmode),
         ]
 
+        # no per-core runtime args (G53F-0206): the addresses are common args set per call and every kernel derives its
+        # span of the R * Ct positions from its logical position (split_work's deal, column-major)
+        span_ct = [R * Ct, len(work), grid.y]
+        reader_ct += span_ct
+        writer_ct += span_ct
+        compute_ct += span_ct
         reader_rt, writer_rt, compute_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
-        for core, start, count in work:
-            reader_rt[core.x][core.y] = [
-                x.buffer_address(),
-                y.buffer_address(),
-                post.buffer_address(),
-                comb.buffer_address(),
-                start,
-                count,
-            ]
-            writer_rt[core.x][core.y] = [out.buffer_address(), start, count]
-            compute_rt[core.x][core.y] = [start, count]
 
         # fp32 operands unpack straight into the fp32 dest (SrcA holds 19 bits); dst_full_sync_en: the whole
         # 8-slot fp32 dest per acquire, kept resident across the per-stream packs
@@ -351,5 +381,13 @@ class MhcPostMix:
                 compiler_include_paths=[str(KERNEL_DIR)],
             ),
         ]
-        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        return ttnn.generic_op([x, y, post, comb, out], program)
+        geometry = (
+            str(self.fidelity),
+            str(y.dtype),
+            tuple(reader_ct),
+            tuple(writer_ct),
+            tuple(compute_ct),
+            tuple((c.x, c.y, start, count) for c, start, count in work),
+        )
+        program_hash = hash(("glm53_mhc_post_mix_v2",) + geometry) & ((1 << 63) - 1)
+        return kernels[0], kernels[1], kernels[2], cbs, program_hash

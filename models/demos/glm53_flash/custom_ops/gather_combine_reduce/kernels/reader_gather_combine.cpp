@@ -31,6 +31,10 @@ constexpr uint32_t tile_bytes = get_compile_time_arg_val(6);
 constexpr bool POS_TILE = get_compile_time_arg_val(7) != 0;
 constexpr auto table_args = TensorAccessorArgs<8>();
 constexpr auto pos_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
+// the chunk split (G53F-0206): TOTAL_CHUNKS chunks over NCORES cores of a GRID_X-wide grid, row-major
+constexpr uint32_t TOTAL_CHUNKS = get_compile_time_arg_val(pos_args.next_compile_time_args_offset());
+constexpr uint32_t NCORES = get_compile_time_arg_val(pos_args.next_compile_time_args_offset() + 1);
+constexpr uint32_t GRID_X = get_compile_time_arg_val(pos_args.next_compile_time_args_offset() + 2);
 constexpr uint32_t TOKENS_PER_CHUNK = 32;
 constexpr uint32_t chunk_pos_bytes = POS_TILE ? pos_page_bytes : TOKENS_PER_CHUNK * num_experts * 4;
 
@@ -54,10 +58,16 @@ FORCE_INLINE uint32_t slot_of(const CoreLocalMem<volatile uint32_t>& pos, uint32
 }
 
 void kernel_main() {
-    const uint32_t table_addr = get_arg_val<uint32_t>(0);
-    const uint32_t pos_addr = get_arg_val<uint32_t>(1);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(2);
-    const uint32_t num_chunks = get_arg_val<uint32_t>(3);
+    // the buffer addresses are common runtime args (one list for every core), the token span from the core's position
+    // (G53F-0206)
+    const uint32_t table_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
+    // the core's chunk span: an even split of TOTAL_CHUNKS over NCORES cores (row-major, the first TOTAL_CHUNKS %
+    // NCORES take one more) from the core's logical position -- no per-core runtime args (tt-blaze G53F-0206)
+    const uint32_t core_i = get_absolute_logical_y() * GRID_X + get_absolute_logical_x();
+    const uint32_t base_ = TOTAL_CHUNKS / NCORES, extra_ = TOTAL_CHUNKS % NCORES;
+    const uint32_t num_chunks = base_ + (core_i < extra_ ? 1u : 0u);
+    uint32_t token_start_idx = (core_i * base_ + (core_i < extra_ ? core_i : extra_)) * 32u;
 
     const auto s_table = TensorAccessor(table_args, table_addr, emb_dim_bytes);
     const auto s_pos = TensorAccessor(pos_args, pos_addr, pos_page_bytes);

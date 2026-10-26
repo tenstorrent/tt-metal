@@ -20,6 +20,7 @@ values < 2^24, distinct at the local picks), T % 32 == 0, k <= 16; returns ``buf
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import ttnn
@@ -34,6 +35,7 @@ class RegionScatter:
 
     def __init__(self, device):
         self.device = device
+        self._parts: dict = {}
 
     def __call__(self, x: ttnn.Tensor, pos: ttnn.Tensor, rows: int) -> ttnn.Tensor:
         T, H = int(x.shape[-2]), int(x.shape[-1])
@@ -48,7 +50,20 @@ class RegionScatter:
         )
         assert buf.buffer_aligned_page_size() == row_bytes
         pos_page = pos.buffer_aligned_page_size()
+        # G53F-0206: per-geometry parts built once; a call sets the addresses (common runtime args) and a preset hash
+        key = (T, H, k, rows)
+        cached = os.environ.get("GLM53_CUSTOM_OP_CACHE", "1") == "1"
+        parts = self._parts.get(key) if cached else None
+        if parts is None:
+            parts = self._build(x, pos, buf, T, H, k, rows, row_bytes, pos_page)
+            self._parts[key] = parts
+        kernel, cbs, program_hash = parts
+        kernel.common_runtime_args = [x.buffer_address(), pos.buffer_address(), buf.buffer_address()]
+        program = ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=cbs)
+        program.custom_program_hash = program_hash
+        return ttnn.generic_op([x, pos, buf], program)
 
+    def _build(self, x, pos, buf, T, H, k, rows, row_bytes, pos_page):
         grid = self.device.compute_with_storage_grid_size()
         blocks = T // TILE
         ncores = min(blocks, grid.x * grid.y)
@@ -74,20 +89,14 @@ class RegionScatter:
         ct = [k, row_bytes, rows - 1, self.CB_ROWS, self.CB_POS, NB, pos_page]
         for t in (x, pos, buf):
             ct += ttnn.TensorAccessorArgs(t).get_compile_time_args()
-        rt = ttnn.RuntimeArgs()
-        b0 = 0
-        for i, c in enumerate(cores):
-            n = base + (1 if i < extra else 0)
-            rt[c.x][c.y] = [x.buffer_address(), pos.buffer_address(), buf.buffer_address(), b0, n]
-            b0 += n
-        kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "dm_region_scatter.cpp"),
-                core_ranges=crs,
-                compile_time_args=ct,
-                runtime_args=rt,
-                config=ttnn.ReaderConfigDescriptor(),
-            )
-        ]
-        program = ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs)
-        return ttnn.generic_op([x, pos, buf], program)
+        ct += [blocks, ncores, grid.x]  # the kernel derives its block span from its logical position (G53F-0206)
+        rt = ttnn.RuntimeArgs()  # no per-core runtime args
+        kernel = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "dm_region_scatter.cpp"),
+            core_ranges=crs,
+            compile_time_args=ct,
+            runtime_args=rt,
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        program_hash = hash(("glm53_region_scatter", tuple(ct), T, ncores, NB * row_bytes, pos_page)) & ((1 << 63) - 1)
+        return kernel, cbs, program_hash

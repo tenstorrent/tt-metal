@@ -12,12 +12,12 @@
 // the post x8 tile (page r) into CB_COEF. Per position p = r * Ct + c: the n stream tiles x[r, i, c] (page (r*n + i)*Ct
 // + c) into CB_X and y[r, c] (page r*Ct + c, fp32 or bf16) into CB_Y.
 void kernel_main() {
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    const uint32_t y_addr = get_arg_val<uint32_t>(1);
-    const uint32_t post_addr = get_arg_val<uint32_t>(2);
-    const uint32_t comb_addr = get_arg_val<uint32_t>(3);
-    const uint32_t start_pos = get_arg_val<uint32_t>(4);
-    const uint32_t num_pos = get_arg_val<uint32_t>(5);
+    // the buffer addresses are common runtime args (one list for every core), the work split from the core's position
+    // (G53F-0206)
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t y_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t post_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t comb_addr = get_common_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_y = get_compile_time_arg_val(1);
@@ -31,6 +31,15 @@ void kernel_main() {
     constexpr auto y_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
     constexpr auto post_args = TensorAccessorArgs<y_args.next_compile_time_args_offset()>();
     constexpr auto comb_args = TensorAccessorArgs<post_args.next_compile_time_args_offset()>();
+    constexpr uint32_t TOTAL = get_compile_time_arg_val(comb_args.next_compile_time_args_offset());
+    constexpr uint32_t NCORES = get_compile_time_arg_val(comb_args.next_compile_time_args_offset() + 1);
+    constexpr uint32_t GRID_Y = get_compile_time_arg_val(comb_args.next_compile_time_args_offset() + 2);
+    // the core's span of the TOTAL positions: split_work's deal (column-major, the first TOTAL % NCORES cores one more)
+    // from the core's logical position -- no per-core runtime args (G53F-0206)
+    const uint32_t core_i = get_absolute_logical_x() * GRID_Y + get_absolute_logical_y();
+    const uint32_t base_ = TOTAL / NCORES, rem_ = TOTAL % NCORES;
+    const uint32_t num_pos = base_ + (core_i < rem_ ? 1u : 0u);
+    const uint32_t start_pos = core_i * base_ + (core_i < rem_ ? core_i : rem_);
 
     const uint32_t x_page = get_local_cb_interface(cb_x).fifo_page_size;
     const uint32_t y_page = get_local_cb_interface(cb_y).fifo_page_size;

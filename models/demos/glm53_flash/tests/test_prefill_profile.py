@@ -88,7 +88,7 @@ class Prof:
             self.acc[key] += time.perf_counter() - t
             return r
 
-        setattr(obj, name, timed)
+        object.__setattr__(obj, name, timed)  # GLMMesh is a frozen dataclass (G53F-0202 instrumentation)
 
     def take(self) -> dict[str, float]:
         out = dict(self.acc)

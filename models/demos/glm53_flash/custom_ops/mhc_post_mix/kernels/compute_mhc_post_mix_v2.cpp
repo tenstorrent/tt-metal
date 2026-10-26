@@ -44,6 +44,10 @@ constexpr bool EXPAND = get_compile_time_arg_val(9) != 0;
 constexpr bool HMODE = get_compile_time_arg_val(10) != 0;
 // POST_FIRST: the composite hc_post's term order, bit-identical to it (tt-blaze G53F-0188; mhc_sfpu::stream_mix)
 constexpr bool POST_FIRST = get_compile_time_arg_val(11) != 0;
+// the work split (G53F-0206): TOTAL positions over NCORES cores, column-major on a GRID_Y-tall grid
+constexpr uint32_t TOTAL = get_compile_time_arg_val(12);
+constexpr uint32_t NCORES = get_compile_time_arg_val(13);
+constexpr uint32_t GRID_Y = get_compile_time_arg_val(14);
 static_assert(N + 4 <= 8, "x_i, y, comb, post and out must fit the 8 fp32 dest slots");
 static_assert(N % 2 == 0 && N <= 4, "the x8 expansion pairs coefficients and keeps them in the left face");
 
@@ -112,8 +116,12 @@ FORCE_INLINE void h_position() {
 
 void kernel_main() {
     compute_kernel_hw_startup(CB_X, CB_OUT);
-    const uint32_t start_pos = get_arg_val<uint32_t>(0);
-    const uint32_t num_pos = get_arg_val<uint32_t>(1);
+    // the core's span of the TOTAL positions: split_work's deal (column-major, the first TOTAL % NCORES cores one more)
+    // from the core's logical position -- no per-core runtime args (G53F-0206)
+    const uint32_t core_i = get_absolute_logical_x() * GRID_Y + get_absolute_logical_y();
+    const uint32_t base_ = TOTAL / NCORES, rem_ = TOTAL % NCORES;
+    const uint32_t num_pos = base_ + (core_i < rem_ ? 1u : 0u);
+    const uint32_t start_pos = core_i * base_ + (core_i < rem_ ? core_i : rem_);
 
     CircularBuffer cbx(CB_X), cby(CB_Y), cbcoef(CB_COEF), cbo(CB_OUT);
 

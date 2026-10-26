@@ -25,12 +25,16 @@ constexpr uint32_t dummy_row = get_compile_time_arg_val(7);
 constexpr auto out_args = TensorAccessorArgs<8>();
 constexpr auto counts_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 constexpr auto offsets_args = TensorAccessorArgs<counts_args.next_compile_time_args_offset()>();
+// the grid width: a core's index is its logical position (row-major), so no per-core runtime args (G53F-0206)
+constexpr uint32_t GRID_X = get_compile_time_arg_val(offsets_args.next_compile_time_args_offset());
 
 void kernel_main() {
-    const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t counts_addr = get_arg_val<uint32_t>(1);
-    const uint32_t offsets_addr = get_arg_val<uint32_t>(2);
-    const uint32_t core_idx = get_arg_val<uint32_t>(3);
+    // the buffer addresses are common runtime args (one list for every core), the core's index from its logical
+    // position (G53F-0206)
+    const uint32_t out_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t counts_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t offsets_addr = get_common_arg_val<uint32_t>(2);
+    const uint32_t core_idx = get_absolute_logical_y() * GRID_X + get_absolute_logical_x();
 
     const auto s_out = TensorAccessor(out_args, out_addr, row_bytes);
     const auto s_counts = TensorAccessor(counts_args, counts_addr, table_bytes);

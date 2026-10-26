@@ -26,6 +26,10 @@ constexpr uint32_t pos_tile_bytes = get_compile_time_arg_val(6);
 constexpr auto x_args = TensorAccessorArgs<7>();
 constexpr auto pos_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
 constexpr auto buf_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
+// the block split (G53F-0206): TOTAL_BLOCKS blocks over NCORES cores of a GRID_X-wide grid
+constexpr uint32_t TOTAL_BLOCKS = get_compile_time_arg_val(buf_args.next_compile_time_args_offset() + 0);
+constexpr uint32_t NCORES = get_compile_time_arg_val(buf_args.next_compile_time_args_offset() + 1);
+constexpr uint32_t GRID_X = get_compile_time_arg_val(buf_args.next_compile_time_args_offset() + 2);
 constexpr uint32_t TILE_ROWS = 32;
 
 // the fp32 bit pattern of a non-negative integer value below 2^24 -> that integer (exact; no FPU on the data movers)
@@ -45,11 +49,16 @@ FORCE_INLINE uint32_t slot_at(const CoreLocalMem<volatile uint32_t>& tile, uint3
 }
 
 void kernel_main() {
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);
-    const uint32_t pos_addr = get_arg_val<uint32_t>(1);
-    const uint32_t buf_addr = get_arg_val<uint32_t>(2);
-    const uint32_t block0 = get_arg_val<uint32_t>(3);
-    const uint32_t nblocks = get_arg_val<uint32_t>(4);
+    // the buffer addresses are common runtime args (one list for every core), the block span per core (G53F-0206)
+    const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
+    const uint32_t pos_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t buf_addr = get_common_arg_val<uint32_t>(2);
+    // the core's block span: an even split of TOTAL_BLOCKS over the NCORES cores (row-major, the first TOTAL_BLOCKS %
+    // NCORES take one more) from the core's logical position -- no per-core runtime args (G53F-0206)
+    const uint32_t core_i = get_absolute_logical_y() * GRID_X + get_absolute_logical_x();
+    const uint32_t base_ = TOTAL_BLOCKS / NCORES, extra_ = TOTAL_BLOCKS % NCORES;
+    const uint32_t nblocks = base_ + (core_i < extra_ ? 1u : 0u);
+    const uint32_t block0 = core_i * base_ + (core_i < extra_ ? core_i : extra_);
 
     const auto s_x = TensorAccessor(x_args, x_addr, row_bytes);
     const auto s_pos = TensorAccessor(pos_args, pos_addr, pos_tile_bytes);

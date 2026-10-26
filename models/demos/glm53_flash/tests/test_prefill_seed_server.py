@@ -252,8 +252,12 @@ def test_prefill_seed_server(mesh_device):
     logger.info(f"[seed-server] model built in {time.time() - t0:.0f} s; warm-up prefill")
     # compile the programs at the lengths the ring will ask for (GLM53F_SEED_WARMUP, default 4 and 4092 tokens: the
     # first request at a new length otherwise pays its compile, 4.66 s vs 1.82 s at 4092, G53F-0085)
-    for n in [int(v) for v in os.environ.get("GLM53F_SEED_WARMUP", "4,4092").split(",") if v.strip()]:
-        for rep in range(2):  # the second pass is the warm cost (what a request at this length pays)
+    # "N" (two passes) or "N:REPS": a long warm-up (e.g. 1040000:1) creates every DSA pools-bucket width's programs and
+    # that length's tail before the first request (tt-blaze G53F-0205: a first 1M pass pays ~6 s for the bucket widths)
+    for spec_ in [v for v in os.environ.get("GLM53F_SEED_WARMUP", "4,4092").split(",") if v.strip()]:
+        n_, _, reps_ = spec_.partition(":")
+        n, reps = int(n_), int(reps_ or 2)
+        for rep in range(reps):  # the second pass is the warm cost (what a request at this length pays)
             ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[: min(n, MAX_SEQ)], dtype=torch.int64)
             ttnn.synchronize_device(mesh_device)
             tw = time.perf_counter()
