@@ -1,0 +1,11 @@
+RESULT B=4 slot=0 batched: min head in layers 0-15 0.999636 (layer 15 sliding_v, rows 2048+) / overall 0.986472 / RRMSE 0.164470 / min head 0.950837 (layer 39 sliding_v) / first differing layer 0
+RESULT B=4 slot=1 batched: min head in layers 0-15 0.999313 (layer 10 sliding_v, rows 2048+) / overall 0.980072 / RRMSE 0.199655 / min head 0.924196 (layer 39 sliding_v) / first differing layer 0
+RESULT B=4 slot=2 batched: min head in layers 0-15 0.998831 (layer 10 sliding_v, rows 2048+) / overall 0.975460 / RRMSE 0.221531 / min head 0.910933 (layer 57 sliding_v) / first differing layer 0
+RESULT B=4 slot=3 batched: min head in layers 0-15 0.999358 (layer 14 sliding_v, rows 4096+) / overall 0.994781 / RRMSE 0.102201 / min head 0.978944 (layer 51 sliding_v) / first differing layer 0
+RESULT B=4 untouched slot=4: min head in layers 0-15 1.000000 (layer 0 sliding_k, rows 0+) / overall 1.000000 / RRMSE 0.000000 / min head 1.000000 (layer 0 sliding_k) / first differing layer None
+RESULT B=5 slot=0 batched: min head in layers 0-15 0.999659 (layer 8 sliding_v, rows 6144+) / overall 0.994205 / RRMSE 0.107622 / min head 0.981898 (layer 39 sliding_v) / first differing layer 0
+RESULT B=5 slot=1 batched: min head in layers 0-15 0.999583 (layer 15 sliding_v, rows 0+) / overall 0.982060 / RRMSE 0.189433 / min head 0.937222 (layer 39 sliding_v) / first differing layer 0
+RESULT B=5 slot=2 batched: min head in layers 0-15 0.999052 (layer 10 sliding_v, rows 4096+) / overall 0.986028 / RRMSE 0.167149 / min head 0.949856 (layer 57 sliding_v) / first differing layer 0
+RESULT B=5 slot=3 batched: min head in layers 0-15 0.999638 (layer 8 sliding_v, rows 6144+) / overall 0.987896 / RRMSE 0.155609 / min head 0.949670 (layer 57 sliding_v) / first differing layer 0
+RESULT B=5 slot=4 batched: min head in layers 0-15 0.997704 (layer 13 sliding_v, rows 4096+) / overall 0.995836 / RRMSE 0.091260 / min head 0.986952 (layer 39 sliding_v) / first differing layer 0
+RESULT B=5 untouched slot=5: min head in layers 0-15 1.000000 (layer 0 sliding_k, rows 0+) / overall 1.000000 / RRMSE 0.000000 / min head 1.000000 (layer 0 sliding_k) / first differing layer None

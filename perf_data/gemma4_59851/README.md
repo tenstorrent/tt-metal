@@ -6,7 +6,7 @@ Branch `mmanzoor/gemma4-matmul-chunk-sweep` = main 6ba9d172b63 + the scripts in 
 Single Blackhole chip for the sweeps (one CP8/TP4 device's shapes, production code path); 8x4 galaxy for the layer
 profile.
 
-Results page: https://claude.ai/artifact/HcxvCfFyHP5fhGPPV1hNpt (private; source in `artifact/`).
+Results page: https://claude.ai/artifact/HcxvCfFyHP5fhGPPV1hNpt (Tenstorrent org; current source `artifact/gemma4_matmul_sweep_v5.html`).
 Issue comment draft: `issue_comment_draft.md`.
 
 ## Reproduce on any Blackhole galaxy
@@ -77,3 +77,48 @@ layer_shares.csv cell for cell, and `matmul_chunk_sweep_weights.py` reproduces t
 - **MLP is about 68% of matmul time at 8K**, and it still improves at larger C.
 - **SDPA is 50% of layer time at 8K.**
 - **PCC is >= 0.9987 everywhere** (explicit configs >= 0.9997). Real weights time within 1.3% of random weights.
+
+## 3 to 6 lanes of 2K, measured in the model (2026-10-23)
+
+A lane is the Gemma4 AgentX prefill simulator's lane (`models/demos/gemma4_d_p/agentx_sim`): a 2,048-token slice of a
+prefill step's token budget, so C = 8K is 4 lanes and C = 10K is 5. Ran on bh-glx-110 galaxies with `tsb` (the
+`lanes/cmds/*.sh` command files); plain commands below.
+
+Results in `lanes/`:
+- `one_request_per_step.csv`: one request at a 240K context, per 60-layer step (50 sliding layers at chunk 1 + 10 global
+  at the mean of first and last chunk): matmul, attention, CCL and whole-step ms. `one_request_layer_cells.csv` has
+  every layer cell (medians over 32 devices).
+- `batched_step_perf.csv`: draft PR #61264 traced step times, 1-6 lanes x 4 prefix mixes; `batched_kv_results.txt`:
+  batched KV vs each request prefilled alone at 4 and 5 lanes.
+
+| Lanes | C | Global attention | Matmuls per step | Whole step | per lane |
+|---|---|---|---|---|---|
+| 3 | 6144 | production | 39.5 ms | 143.1 ms | 47.7 ms |
+| 4 | 8192 | production | 45.2 ms | 183.8 ms | 45.9 ms |
+| 4 | 8192 | segmented off | 45.3 ms | 183.3 ms | 45.8 ms |
+| 5 | 10240 | segmented off | 48.3 ms | 217.7 ms | 43.5 ms |
+| 6 | 12288 | segmented off | 73.0 ms | 252.2 ms | 42.0 ms |
+
+Production 5 and 6 lanes do not run on main: the tuned global ring SDPA config at C = 10K / 12K (q128, segmented
+accumulation, `tt/attention/ring_sdpa_configs.json`) overflows the 70,656 B kernel-config buffer by about 1.2 KB.
+Batched 5 lanes needs `GEMMA4_ACTIVATIONS_DRAM_ONLY=1` (a matmul's CBs clash with L1 by about 72 KB) and then ends
+within +-1.2% per lane of production 4 lanes.
+
+Reproduce:
+- One request: branch `mmanzoor/gemma4-5lane-layer-perf` (main bed2f924d8a + sizes 6144/10240/12288 and a 245760
+  context in `demo/text_demo_prefill.py`, and the `GEMMA4_GLOBAL_NO_SEGMENTED=1` flag in `tt/attention/ring_prefill.py`):
+
+      GEMMA4_GLOBAL_NO_SEGMENTED=1 python -m tracy -p -r -v -o <dir> --op-support-count 20000 \
+        -m "pytest models/demos/gemma4_d_p/demo/text_demo_prefill.py::test_prefill_layer_perf_chunk_n[blackhole-chunkci-both-sz10240-ctx_240k-8x4]"
+      python models/demos/gemma4_d_p/scripts/layer_perf_shares.py <dir> --out shares.csv --context 245760   # this branch
+
+  Sizes 6144, 8192, 10240, 12288; without the flag for production 3 and 4 lanes.
+- Batched: branch `mmanzoor/gemma4-5lane-batched` (draft PR #61264 331926f18f4 + `G4B_LANE_COUNTS` / `G4B_KV_LANES`
+  hooks in `tests/test_batched_prefill.py`); it carries C++ changes, so build it first:
+
+      G4B_REPS=10 G4B_LANE_COUNTS=1,2,3,4 pytest -sv models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_batched_step_perf
+      G4B_REPS=10 G4B_LANE_COUNTS=1,4,5 GEMMA4_ACTIVATIONS_DRAM_ONLY=1 pytest -sv models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_batched_step_perf
+      G4B_KV_LANES=5 GEMMA4_ACTIVATIONS_DRAM_ONLY=1 pytest -sv models/demos/gemma4_d_p/tests/test_batched_prefill.py::test_batched_kv_matches_unbatched
+
+- With `tsb` on current main, builds need git metadata (`cmake/version.cmake`, since 8a7beeeaede); a tree copied
+  without `.git` fails at configure. Fill the `$Format:...$` fallbacks with `git describe` output first.
