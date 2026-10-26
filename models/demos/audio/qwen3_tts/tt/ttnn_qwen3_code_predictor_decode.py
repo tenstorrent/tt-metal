@@ -45,7 +45,7 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker_decode import (
     MLP_WEIGHT_DTYPE,
     NORM_NAMES,
     NORM_SHARD_HEIGHT,
-    ROPE_ROWS,
+    TILE_ROWS,
     decode_matmul_config,
     sharded_norm_plan,
 )
@@ -170,10 +170,10 @@ class TtCodePredictorCachedDecoder:
             torch.zeros(1, 1, parameters["input_width"]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._cos = ttnn.from_torch(
-            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, TILE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._sin = ttnn.from_torch(
-            torch.zeros(1, 1, ROPE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            torch.zeros(1, 1, TILE_ROWS, self.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
         self._k_shard = self._single_core_shard(0)
         self._v_shard = self._single_core_shard(1)
@@ -275,7 +275,7 @@ class TtCodePredictorCachedDecoder:
         if position not in self._position_inputs:
             cos, sin = self._rotary(1, offset=int(position))
             rows = lambda table: ttnn.from_torch(
-                table.reshape(1, 1, 1, -1).expand(1, 1, ROPE_ROWS, self.head_dim).contiguous(),
+                table.reshape(1, 1, 1, -1).expand(1, 1, TILE_ROWS, self.head_dim).contiguous(),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
