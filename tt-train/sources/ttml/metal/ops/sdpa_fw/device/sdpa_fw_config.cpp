@@ -5,6 +5,9 @@
 #include "sdpa_fw_config.hpp"
 
 #include <algorithm>
+#include <functional>
+#include <numeric>
+#include <queue>
 #include <tt-metalium/kernel_types.hpp>
 
 #include "metal/ttnn_all_includes.hpp"
@@ -29,6 +32,38 @@ bool fits_runtime_args(const std::vector<CoreItemRuns>& per_core_runs) {
         }
     }
     return true;
+}
+
+// Longest-first greedy assignment: items sorted by cost, descending, each to the least loaded core. Within
+// a core the order of items does not change its total work, so they are sorted, which folds consecutive
+// items into one run.
+std::vector<CoreItemRuns> split_items_longest_first(const std::vector<uint32_t>& item_costs, uint32_t num_cores) {
+    std::vector<uint32_t> order(item_costs.size());
+    std::iota(order.begin(), order.end(), 0U);
+    std::stable_sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) { return item_costs[a] > item_costs[b]; });
+
+    using Load = std::pair<uint64_t, uint32_t>;  // (load, core), min-heap
+    std::priority_queue<Load, std::vector<Load>, std::greater<>> loads;
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        loads.emplace(0U, core);
+    }
+    std::vector<std::vector<uint32_t>> per_core_items(num_cores);
+    for (const uint32_t item : order) {
+        auto [load, core] = loads.top();
+        loads.pop();
+        per_core_items[core].push_back(item);
+        loads.emplace(load + item_costs[item], core);
+    }
+
+    std::vector<CoreItemRuns> per_core(num_cores);
+    for (uint32_t core = 0; core < num_cores; ++core) {
+        auto& items = per_core_items[core];
+        std::sort(items.begin(), items.end());
+        for (const uint32_t item : items) {
+            append_item(per_core[core], item);
+        }
+    }
+    return per_core;
 }
 
 // Chunk knob in elements -> tiles. 0 = unset; otherwise it must be a tile multiple that divides S.
@@ -118,26 +153,6 @@ uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& 
     return sdpa_items::num_items(num_stacks, shape.St / chunks.Sq_chunk_t);
 }
 
-uint32_t num_causal_pairs(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
-    const bool pairs = shape.mask_type == AttentionMaskType::Causal && (shape.St / chunks.Sq_chunk_t) % 2U == 0U;
-    return pairs ? num_work_items(shape, chunks) / 2U : 0U;
-}
-
-namespace {
-
-// Main's rule: the balanced pairs only when every core gets one; fewer pairs than cores would idle cores.
-bool pairs_causal_chunks(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores) {
-    const uint32_t pairs = num_causal_pairs(shape, chunks);
-    return pairs > 0U && pairs >= num_available_cores;
-}
-
-}  // namespace
-
-uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_available_cores) {
-    return pairs_causal_chunks(shape, chunks, num_available_cores) ? num_causal_pairs(shape, chunks)
-                                                                   : num_work_items(shape, chunks);
-}
-
 SDPAForwardShape shape_of(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
@@ -158,22 +173,27 @@ SDPAForwardShape shape_of(
         .return_intermediates = return_intermediates};
 }
 
+uint32_t num_kv_steps(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t item) {
+    const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
+    return sdpa_items::num_kv_steps_of_chunk(
+        shape.mask_type == AttentionMaskType::Causal,
+        shape.St,
+        chunks.Sq_chunk_t,
+        chunks.Sk_chunk_t,
+        sdpa_items::first_row_tile_of(item, q_num_chunks, chunks.Sq_chunk_t));
+}
+
 std::vector<CoreItemRuns> split_work(
-    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores, uint32_t num_available_cores) {
-    const uint32_t total_units = num_work_units(shape, chunks, num_available_cores);
-    TT_FATAL(num_cores > 0 && num_cores <= total_units, "split_work: need 1..{} cores, got {}", total_units, num_cores);
-    if (pairs_causal_chunks(shape, chunks, num_available_cores)) {
-        const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
-        const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
-        auto per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
-        // A core gets at most three runs from the paired split (a pair is two runs, consecutive pairs fold
-        // into one), far below the runtime-arg limit. Falling back to the contiguous split would silently
-        // trade the balance away, so a list that does not fit is an error.
-        TT_FATAL(
-            fits_runtime_args(per_core_runs),
-            "SDPA forward: the paired work list of {} cores does not fit the runtime args",
-            num_cores);
-        return per_core_runs;
+    const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
+    const uint32_t total_items = num_work_items(shape, chunks);
+    TT_FATAL(num_cores > 0 && num_cores <= total_items, "split_work: need 1..{} cores, got {}", total_items, num_cores);
+    std::vector<CoreItemRuns> per_core_runs;
+    if (shape.mask_type == AttentionMaskType::Causal) {
+        std::vector<uint32_t> item_costs(total_items);
+        for (uint32_t item = 0; item < total_items; ++item) {
+            item_costs[item] = num_kv_steps(shape, chunks, item);
+        }
+        per_core_runs = split_items_longest_first(item_costs, num_cores);
     }
     return split_items_contiguous(num_work_items(shape, chunks), num_cores);  // one run per core: always fits
 }
@@ -233,43 +253,21 @@ SDPAForwardChunks resolve_chunks(
     }
 
     // Shape rule for the unset knobs, from the chunk sweep on Blackhole (S=2048/4096, D=64/128, every mask
-    // mode): four tile-rows per item and eight K/V tiles per step win or tie everywhere they fit; four K/V
-    // tiles do better once the inner dim reaches 128 tiles-wide traffic, or with a mask tensor and a single
-    // head per item (the step then reads mask tiles on top of K/V). With a mask tensor the item stacks up to
-    // four heads of the K/V group and keeps four rows: the stacked heads share the step's mask tiles as they
-    // share K/V, which halves or quarters the reader's traffic per head. Measured on p150b against the
-    // one-head pick: TinyLlama (D=64, 8 heads per group) 1843 -> 1377 us at one row, four heads, eight K/V
-    // tiles; Llama-3-8B (D=128, 4 heads per group) 3307 -> 2085 us at one row, four heads, four K/V tiles.
-    // Without a mask tensor the stacking does not pay (no mask reads to share; the unmasked TinyLlama shape
-    // ties at best), and the causal rows go out as light/heavy chunk pairs, where more rows per item only
-    // pay off once the work is scheduled by cost rather than paired; so those keep one head per item.
-    // The chunks shrink while they do not fit L1 or would leave cores idle: causal work goes out as
-    // light/heavy chunk pairs once there is a pair per core (main's rule), so on a causal shape that can
-    // pair (an even tile count, which main always paired) a pair per core is the floor (main's one-row
-    // chunks on every core), an item per core otherwise. An odd chunk count has no pairs, so it shrinks
-    // too: three four-row chunks of a twelve-tile sequence would go out contiguously and unbalanced where
-    // main paired. The picked rows shrink before the picked stacking: the stacking is the reuse.
-    //
-    // The units >= cores rule is main's, not a measured optimum, and it misses K/V reuse at the tensor-
-    // parallel shapes: 8 query heads at S=2048 on 130 cores give 128 two-row pairs, so the pick drops to
-    // one-row chunks although two-row pairs on 128 cores do the same per-core compute with half the K/V
-    // reads; and at 110 cores and S=4096 it keeps four-row chunks with 128 pairs, so 18 cores carry two.
-    // The cost-based scheduler (https://github.com/tenstorrent/tt-metal/pull/62646) replaces this rule.
-    constexpr uint32_t kDefaultRows = 4U;
-    constexpr uint32_t kMaxPickedHeads = 4U;
-    const bool has_mask_tensor = shape.mask_type == AttentionMaskType::Arbitrary;
-    SDPAForwardChunks chunks = user;
-    if (chunks.heads_per_item == 0U) {
-        // The largest of 4, 2, 1 that divides the K/V group.
-        const uint32_t heads_per_group = shape.q_heads / shape.kv_heads;
-        chunks.heads_per_item = has_mask_tensor ? kMaxPickedHeads : 1U;
-        while (heads_per_group % chunks.heads_per_item != 0U) {
-            chunks.heads_per_item /= 2U;
-        }
-    }
+    // mode): four query tile-rows per item and eight K/V tiles per step win or tie everywhere they fit;
+    // four K/V tiles do better once the inner dim reaches 128 tiles-wide traffic or with a mask tensor
+    // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
+    // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
+    // while they do not fit L1 or would leave cores idle.
+    constexpr uint32_t kDefaultSqChunkT = 4U;
+    const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
+    SDPAForwardChunks chunks{
+        .Sq_chunk_t = user.Sq_chunk_t,
+        .Sk_chunk_t = user.Sk_chunk_t,
+        .heads_per_item = std::max(user.heads_per_item, 1U)};
     if (chunks.Sq_chunk_t == 0U) {
-        chunks.Sq_chunk_t = std::max(kDefaultRows / chunks.heads_per_item, 1U);
-        while (chunks.Sq_chunk_t > 1U && shape.St % chunks.Sq_chunk_t != 0U) {
+        chunks.Sq_chunk_t = kDefaultSqChunkT;
+        while (chunks.Sq_chunk_t > 1U &&
+               (shape.St % chunks.Sq_chunk_t != 0U || num_work_items(shape, chunks) < num_available_cores)) {
             chunks.Sq_chunk_t /= 2U;
         }
     }
