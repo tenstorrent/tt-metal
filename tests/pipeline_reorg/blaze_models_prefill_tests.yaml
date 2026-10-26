@@ -1962,7 +1962,7 @@
     fi
     cd "${TT_METAL_HOME}"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_dflash_pcc.sh kimi27
-  test_type: prefill_runner_kv_pcc
+  test_type: k27_dflash_slots_probe
   test_tags: [kimi_k2_7, runner, kv_cache, dflash]
   test_group: disagg_prefill
   skus:
