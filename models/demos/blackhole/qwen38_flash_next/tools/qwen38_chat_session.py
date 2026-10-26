@@ -151,9 +151,17 @@ MTP_VERIFY_FORMS_MAX = 3
 MTP_GROWTH_ESTIMATE_MARGIN_PERCENT = 10
 RESIDENT_POST_BUILD_BYTES_PER_BANK_UPPER_BOUND = 64 << 20
 # A --long-chunks build's 128-row chunk state and trace (off the free side) and the MTP layer's own 128-row chunk
-# extension (added to the states remainder); from device measurements.
-LONG_CHUNKS_BYTES_PER_BANK_AFTER_CAPTURES = 1_603_483_392 - 1_569_890_816
-MTP_LONG_CHUNK_EXTENSION_BYTES_PER_BANK = 15_339_392 - 15_313_792
+# extension (added to the states remainder): device-measured builds without and with the long chunks.
+FREE_BYTES_PER_BANK_AFTER_CAPTURES_WITHOUT_LONG_CHUNKS = 1_603_483_392
+FREE_BYTES_PER_BANK_AFTER_CAPTURES_WITH_LONG_CHUNKS = 1_569_890_816
+LONG_CHUNKS_BYTES_PER_BANK_AFTER_CAPTURES = (
+    FREE_BYTES_PER_BANK_AFTER_CAPTURES_WITHOUT_LONG_CHUNKS - FREE_BYTES_PER_BANK_AFTER_CAPTURES_WITH_LONG_CHUNKS
+)
+MTP_STATES_BYTES_PER_BANK_WITHOUT_LONG_CHUNKS = 15_313_792
+MTP_STATES_BYTES_PER_BANK_WITH_LONG_CHUNKS = 15_339_392
+MTP_LONG_CHUNK_EXTENSION_BYTES_PER_BANK = (
+    MTP_STATES_BYTES_PER_BANK_WITH_LONG_CHUNKS - MTP_STATES_BYTES_PER_BANK_WITHOUT_LONG_CHUNKS
+)
 # Slab form of the 128-row twin: per 128-row slice one FP32 token tile page ``[1,1,4,32]`` and, after the first
 # slice, one 32-byte UINT32 position-offset page.
 MTP_SLAB_TOKEN_TILE_BYTES = 32 * 32 * 4
@@ -373,7 +381,12 @@ LANES_IMAGE_BYTES_PER_DEVICE_FIXED = 29_684_736  # the recurrent states, ring sl
 LANES_FIXED_BYTES_PER_DEVICE = 60_424_192  # the KV import scratch (13 layers x 4,096 rows) and the GDN lane rows qkv
 LANES_MOE_ROWS_SLOPE_BYTES_PER_BANK = 295_632  # the states remainder per verify MoE row (the 5- and 32-row terms' line)
 LANES_PER_LANE_SLOPE_CORRECTION_PERCENT = 7  # the measured per-lane increment over the modeled one
-LANES_TRACES_BYTES_PER_BANK = (51_000_000 + 47_000_000) // 8 + 7_400_000  # the three lane traces; an upper bound
+# The three lane traces, an upper bound: two measured per device (spread over the banks) and one measured per bank.
+LANES_TRACES_MEASURED_BYTES_PER_DEVICE = (51_000_000, 47_000_000)
+LANES_TRACE_MEASURED_BYTES_PER_BANK = 7_400_000
+LANES_TRACES_BYTES_PER_BANK = (
+    sum(LANES_TRACES_MEASURED_BYTES_PER_DEVICE) // RESIDENT_DRAM_BANKS + LANES_TRACE_MEASURED_BYTES_PER_BANK
+)
 LANE_KV_STAGINGS = 2  # ttnn/lanes.py KV_STAGINGS: the pagers' whole-lane KV slab pair
 # Per-bank device measurements of a 4 x 4 lane chain (k = 4) the model is checked against; the served extras are what a
 # served process carries beyond the timing tool's chain.

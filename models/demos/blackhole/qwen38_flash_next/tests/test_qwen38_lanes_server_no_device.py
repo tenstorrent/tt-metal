@@ -197,6 +197,8 @@ def test_lanes_admission_terms_cover_the_measured_128k_readings() -> None:
     pagers = session_module.LANES_MEASURED_PAGERS_BYTES_PER_BANK_128K
     assert pagers * 0.99 < remainders["pagers"] < pagers * 1.01
     assert remainders["traces"] > session_module.LANES_MEASURED_TRACES_BYTES_PER_BANK
+    traces = session_module.LANES_TRACES_BYTES_PER_BANK
+    assert remainders["traces"] == traces == (51_000_000 + 47_000_000) // 8 + 7_400_000 == 19_650_000, traces
     # the per-lane slope from 32k to 128k, measured against the model's
     slope_measured = (
         (verify_state - session_module.LANES_MEASURED_VERIFY_STATE_BYTES_PER_BANK_4X4_32K) / 4 / (131072 - 32768)

@@ -48,8 +48,11 @@ def weight_dtype_name(dtype) -> str:
 # slab state, the transients inside a layer).
 DRAM_MARGIN_BYTES = 512 << 20
 # The 2048-row slab's post-build DRAM need per device beyond the resident weights, the context state and the margin:
-# the upper end of a device-measured pass / OOM band at a 32k context.
-SLAB_WORKING_SET_BYTES = 2_010_176_000 - 436_797_440 - DRAM_MARGIN_BYTES  # 1,036,507,648 B (988.5 MiB)
+# the free DRAM after the build at the upper end of a device-measured pass / OOM band at a 32k context, less that
+# context's state (Qwen38ResidentContext(32768).context_state_bytes_per_device) and the margin.
+SLAB_BAND_FREE_AFTER_BUILD_BYTES = 2_010_176_000
+SLAB_BAND_CONTEXT_STATE_BYTES = 436_797_440
+SLAB_WORKING_SET_BYTES = SLAB_BAND_FREE_AFTER_BUILD_BYTES - SLAB_BAND_CONTEXT_STATE_BYTES - DRAM_MARGIN_BYTES
 
 
 def slab_working_set_bytes(rows: int) -> int:

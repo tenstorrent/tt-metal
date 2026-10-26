@@ -26,6 +26,7 @@ from models.demos.blackhole.qwen38_flash_next.ttnn import model as model_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import moe as moe_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import prefill_dense
 from models.demos.blackhole.qwen38_flash_next.ttnn import qsa as qsa_module
+from models.demos.blackhole.qwen38_flash_next.ttnn.builder import Qwen38ResidentContext
 from models.demos.blackhole.qwen38_flash_next.ttnn.contracts import (
     CHUNK_ROW_COUNTS,
     CHUNK_ROWS,
@@ -1209,3 +1210,13 @@ def test_the_resident_plan_is_the_fused_siblings_of_the_qsa_and_the_moe(expect_e
         prefill_dense.resident_plan("mlp")
     with expect_error(ValueError, match="dense weight dtype must be one of"):
         prefill_dense.resident_plan("qsa", "fp32")
+
+
+def test_the_slab_working_set_is_the_measured_band_less_the_32k_state_and_the_margin() -> None:
+    """The working-set term: the measured free DRAM after the build at the band's upper end, less the 32k context's
+    state the builder derives and the margin; 1,036,507,648 B (988.5 MiB) for every slab."""
+    context_state = Qwen38ResidentContext(32768).context_state_bytes_per_device
+    assert context_state == prefill_dense.SLAB_BAND_CONTEXT_STATE_BYTES == 436_797_440, context_state
+    working_set = prefill_dense.SLAB_WORKING_SET_BYTES
+    assert working_set == 2_010_176_000 - 436_797_440 - (512 << 20) == 1_036_507_648, working_set
+    assert all(prefill_dense.slab_working_set_bytes(rows) == working_set for rows in (256, 512, 2048)), working_set
