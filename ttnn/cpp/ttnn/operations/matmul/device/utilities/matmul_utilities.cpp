@@ -385,12 +385,81 @@ void move_common_entries(
     }
 }
 
+namespace {
+
+// The reader core per DRAM bank that one program can use on every device of the mesh.
+//
+// A device's optimal reader for a bank is the first unharvested worker column physically east of the bank's DRAM
+// column (tt_metal/common/core_assignment.cpp), and logical columns skip harvested ones, so on a Blackhole mesh whose
+// chips are harvested differently one logical column is a different physical column per chip. The reference chip's
+// column can then sit west of a bank's DRAM column on another chip, where NOC0 delivers that bank's data the long way
+// round the torus row, through the other DRAM column, sharing links with its banks' streams; the slowest chip then
+// sets the pace of every collective after the matmul. Per bank, the largest logical column over the devices is at or
+// east of the bank on every device (logical columns keep the physical order; Blackhole harvests columns only, so a
+// bank keeps its row). `robust` reports whether the devices disagree; when they agree (one device, a homogeneously
+// harvested mesh, non-Blackhole) the reference device's assignment is returned unchanged. Measured on a QuietBox 2
+// (east banks' worker column 6 / 7 / 5 / 7 on chips 0 / 1 / 2 / 3): gpt-oss-20b batch-32 decode, whose QKV, o_proj
+// and dense experts are DRAM-sharded matmuls, 15.44 -> 12.72 ms per step, same outputs.
+struct MeshDramBankWorkers {
+    std::vector<tt::tt_metal::CoreCoord> workers;
+    bool robust = false;
+    // robust only: the smallest logical column any device places an east-side bank's worker at. A west-side bank's
+    // reader at or past it sits east of the east DRAM column on that device, so its data would cross that column.
+    uint32_t east_min = std::numeric_limits<uint32_t>::max();
+    uint32_t west = 0;  // robust only: the west-side banks' worker column
+};
+
+MeshDramBankWorkers mesh_dram_bank_workers(const tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc) {
+    const auto devices = device.get_devices();
+    MeshDramBankWorkers out;
+    if (devices.empty()) {
+        out.workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+        return out;
+    }
+    std::vector<std::vector<tt::tt_metal::CoreCoord>> per;
+    per.reserve(devices.size());
+    for (auto* d : devices) {
+        per.push_back(d->get_optimal_dram_bank_to_logical_worker_assignment(noc));
+    }
+    out.workers = per.front();
+    const bool differ = std::any_of(per.begin(), per.end(), [&](const auto& a) { return a != per.front(); });
+    if (!differ || device.arch() != tt::ARCH::BLACKHOLE) {
+        return out;
+    }
+    for (uint32_t bank = 0; bank < out.workers.size(); ++bank) {
+        for (const auto& a : per) {
+            if (a.size() != out.workers.size() || a[bank].y != per.front()[bank].y) {
+                out.workers = per.front();  // not a column-harvest difference: keep the reference placement
+                return out;
+            }
+            out.workers[bank].x = std::max(out.workers[bank].x, a[bank].x);
+        }
+    }
+    out.robust = true;
+    out.west = std::numeric_limits<uint32_t>::max();
+    for (const auto& a : per) {
+        for (const auto& c : a) {
+            out.west = std::min<uint32_t>(out.west, c.x);
+        }
+    }
+    for (const auto& a : per) {
+        for (const auto& c : a) {
+            if (c.x > out.west) {
+                out.east_min = std::min<uint32_t>(out.east_min, c.x);
+            }
+        }
+    }
+    return out;
+}
+
+}  // namespace
+
 void get_optimal_dram_bank_to_reader_assignment(
     const tt::tt_metal::distributed::MeshDevice& device,
     std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
     tt::tt_metal::CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc) {
-    all_worker_cores_ordered = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    all_worker_cores_ordered = mesh_dram_bank_workers(device, noc).workers;
     std::set<tt::tt_metal::CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(tt::tt_metal::CoreRange(worker_core));
@@ -402,10 +471,24 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
     tt::tt_metal::distributed::MeshDevice& device,
     tt::tt_metal::NOC noc,
     uint32_t workers_per_bank,
-    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores) {
+    const tt::tt_metal::CoreRangeSet& secondary_reader_excluded_cores,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
     validate_num_workers_per_dram_bank(workers_per_bank);
 
-    const auto primary_workers = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    // coord: one chip's program (its own placement: a mesh's chips can differ in harvesting and in where each bank's
+    // best reader is); none: one program for the mesh, on the placement every chip can use (mesh_dram_bank_workers)
+    MeshDramBankWorkers mesh_workers;
+    if (coord != nullptr) {
+        const auto per_bank = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, *coord);
+        mesh_workers.workers.resize(per_bank.size());
+        for (const auto& [bank, core] : per_bank) {
+            TT_FATAL(bank < mesh_workers.workers.size(), "DRAM bank id {} out of range", bank);
+            mesh_workers.workers[bank] = core;
+        }
+    } else {
+        mesh_workers = mesh_dram_bank_workers(device, noc);
+    }
+    const auto& primary_workers = mesh_workers.workers;
     std::vector<DramBankReaderAssignment> assignments;
     assignments.reserve(primary_workers.size() * workers_per_bank);
 
@@ -437,6 +520,13 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     if (used.contains(candidate) || secondary_reader_excluded_cores.contains(candidate)) {
                         continue;
                     }
+                    // Heterogeneously harvested mesh (mesh_dram_bank_workers): keep every reader on the bank's side
+                    // of the DRAM columns on every device -- east of the bank's worker, and for a west-side bank west
+                    // of every device's east-side workers.
+                    if (mesh_workers.robust && (candidate.x < primary.x || (primary.x == mesh_workers.west &&
+                                                                            candidate.x >= mesh_workers.east_min))) {
+                        continue;
+                    }
                     // All readers address the bank by allocator bank id on the same NOC and therefore target the same
                     // firmware-approved endpoint. Place additional readers near the bank's primary
                     // reader to minimize NOC hops without routing one NOC to multiple endpoints.
@@ -445,7 +535,9 @@ std::vector<DramBankReaderAssignment> get_dram_bank_reader_assignments(
                     // heuristic; bank addressing still uses each executing chip's allocator table.
                     const uint32_t cost = tt::tt_metal::experimental::Device::get_worker_noc_hop_distance(
                         &device,
-                        tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
+                        coord != nullptr
+                            ? *coord
+                            : tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(device.shape().dims()),
                         candidate,
                         primary_workers[bank],
                         noc);
@@ -491,8 +583,23 @@ bool use_dram_sharded_multicore(
 }
 
 std::vector<std::vector<tt::tt_metal::CoreCoord>> get_dram_bank_adjacent_workers(
-    tt::tt_metal::distributed::MeshDevice& device, tt::tt_metal::NOC noc, uint32_t cores_per_bank, uint32_t num_banks) {
-    const auto anchors = device.get_optimal_dram_bank_to_logical_worker_assignment(noc);
+    tt::tt_metal::distributed::MeshDevice& device,
+    tt::tt_metal::NOC noc,
+    uint32_t cores_per_bank,
+    uint32_t num_banks,
+    const tt::tt_metal::distributed::MeshCoordinate* coord) {
+    // coord: one chip's program (its own placement); none: the placement every chip of the mesh can use
+    std::vector<tt::tt_metal::CoreCoord> anchors;
+    if (coord != nullptr) {
+        const auto per_bank = device.get_optimal_dram_bank_to_logical_worker_assignment(noc, *coord);
+        anchors.resize(per_bank.size());
+        for (const auto& [bank, core] : per_bank) {
+            TT_FATAL(bank < anchors.size(), "DRAM bank id {} out of range", bank);
+            anchors[bank] = core;
+        }
+    } else {
+        anchors = mesh_dram_bank_workers(device, noc).workers;
+    }
     TT_FATAL(num_banks <= anchors.size(), "{} banks requested, the device has {}", num_banks, anchors.size());
     const auto grid = device.compute_with_storage_grid_size();
     TT_FATAL(
