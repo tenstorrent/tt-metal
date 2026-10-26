@@ -104,75 +104,82 @@ void apply_mask_on_reg(
 }
 
 // Softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB is
-// Sq_chunk_t deep with row r in slot r. The per-row helpers (one `row` argument) leave the CB
-// waits/reserves/pushes to the caller; the chunk-level one (matmul_qk_by_v) does its own.
+// rows deep with row r in slot r. The row-range helpers (row0, n) leave the CB waits/reserves/pushes to
+// the caller; the block-level ones (apply_exp_inplace_and_find_exp_sum, matmul_qk_by_v) do their own.
 
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
 // exp, sum, reciprocal) to stay in DST at FP32 without pack/unpack round-trips through the CB.
 //
-// Max over row `row` of the score CB, folded with its running max, packed to cb_cur_max[row].
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t Sk_chunk_t = 1U>
-void update_cur_row_max_value(
+// Max over rows [row0, row0 + n) of the score CB, folded with their running max, packed to
+// cb_cur_max[row]. One DST pass: slot i holds row i's max, slot n + i its previous max, so n <= 4 without
+// the fold and n <= 2 with it.
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t Sk_chunk_t>
+void update_row_max_values(
     uint32_t cb_attention_weights,
     uint32_t cb_identity_scaler,
     uint32_t cb_cur_max,
     uint32_t cb_prev_max,
     bool do_eltwise_max,
-    uint32_t row) {
-    constexpr uint32_t reduce_dst_idx = 0;
-    constexpr uint32_t prev_max_dst_idx = 1U;
+    uint32_t row0,
+    uint32_t n) {
     reconfig_data_format(cb_attention_weights, cb_identity_scaler);
     reduce_init<pool_type, reduce_dim>(cb_attention_weights, cb_identity_scaler, cb_cur_max);
     tile_regs_acquire();
-    for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
-        reduce_tile<pool_type, reduce_dim>(
-            cb_attention_weights,
-            cb_identity_scaler,
-            /* in0 tile_idx */ row * Sk_chunk_t + n,
-            /* in1 tile_idx */ 0,
-            /* dst_reg_idx */ reduce_dst_idx);
+    for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t k = 0; k < Sk_chunk_t; ++k) {
+            reduce_tile<pool_type, reduce_dim>(
+                cb_attention_weights,
+                cb_identity_scaler,
+                /* in0 tile_idx */ (row0 + i) * Sk_chunk_t + k,
+                /* in1 tile_idx */ 0,
+                /* dst_reg_idx */ i);
+        }
     }
     reduce_uninit();
 
     if (do_eltwise_max) {
         reconfig_data_format_srca(cb_attention_weights, cb_prev_max);
         copy_init(cb_prev_max);
-        copy_tile(cb_prev_max, /* tile_idx */ row, /* register idx */ prev_max_dst_idx);
-
-        // find max value between current max and previous max
+        for (uint32_t i = 0; i < n; ++i) {
+            copy_tile(cb_prev_max, /* tile_idx */ row0 + i, /* register idx */ n + i);
+        }
         binary_max_tile_init();
-        binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, VectorMode::C);
+        for (uint32_t i = 0; i < n; ++i) {
+            binary_max_tile(i, n + i, i, VectorMode::C);
+        }
     }
     tile_regs_commit();
 
     tile_regs_wait();
     pack_reconfig_data_format(cb_cur_max);
-    pack_tile</* out_of_order */ true>(reduce_dst_idx, cb_cur_max, /* offset */ row);
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile</* out_of_order */ true>(i, cb_cur_max, /* offset */ row0 + i);
+    }
     tile_regs_release();
 }
 
-// P = exp(scale * (score - max)) written over row `row` of the score CB, sm_block_size tiles per DST
-// pass. The row's sum of P is built in cb_cur_exp_sum[row] by the packer: the first tile is packed
-// normally, the rest with L1-accumulate on, which adds the tile onto the one already in that slot.
-template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t Sk_chunk_t, uint32_t sm_block_size>
-void apply_exp_inplace_and_find_exp_sum(
-    uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum, uint32_t row) {
-    static_assert(Sk_chunk_t % sm_block_size == 0U, "sm_block_size must divide Sk_chunk_t");
+// P = exp(scale * (score - max)) written over the whole rows x Sk_chunk_t score block, pass_tiles tiles
+// (in row-major order) per DST pass. Each row's sum of P is built in cb_cur_exp_sum[row] by the packer: the
+// row's first tile is packed normally, the rest with L1-accumulate on, which adds the tile onto the slot.
+template <uint32_t scaler_fp32, uint32_t scaler_bf16, uint32_t rows, uint32_t Sk_chunk_t, uint32_t pass_tiles>
+void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t cb_cur_max, uint32_t cb_cur_exp_sum) {
+    constexpr uint32_t total = rows * Sk_chunk_t;
 
     reconfig_data_format(cb_attention_weights, cb_cur_max);
     sub_bcast_cols_init(cb_attention_weights, cb_cur_max);
 
-    for (uint32_t n0 = 0; n0 < Sk_chunk_t; n0 += sm_block_size) {
+    for (uint32_t t0 = 0; t0 < total; t0 += pass_tiles) {
+        const uint32_t n = (total - t0 < pass_tiles) ? (total - t0) : pass_tiles;
         // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
         // sdpa_exp_tile_scaled dispatches to the arch-appropriate path (WH sfpi mul or BH LREG12 fold).
         tile_regs_acquire();
-        for (uint32_t i = 0; i < sm_block_size; ++i) {
+        for (uint32_t i = 0; i < n; ++i) {
             sub_tiles_bcast_cols(
                 cb_attention_weights,
                 cb_cur_max,
-                /* in0 tile_idx */ row * Sk_chunk_t + n0 + i,
-                /* in1 tile_idx */ row,
+                /* in0 tile_idx */ t0 + i,
+                /* in1 tile_idx (row) */ (t0 + i) / Sk_chunk_t,
                 /* dst_reg_idx */ i);
             sdpa_exp_tile_scaled<scaler_fp32, scaler_bf16>(i);
         }
@@ -181,22 +188,23 @@ void apply_exp_inplace_and_find_exp_sum(
         tile_regs_wait();
         pack_reconfig_data_format(cb_attention_weights);
         pack_reconfig_l1_acc(false);
-        for (uint32_t i = 0; i < sm_block_size; ++i) {
-            pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ row * Sk_chunk_t + n0 + i);
+        for (uint32_t i = 0; i < n; ++i) {
+            pack_tile</* out_of_order */ true>(i, cb_attention_weights, /* offset */ t0 + i);
         }
 
-        // row sum: first tile overwrites the slot, the rest add onto it
+        // row sums: a row's first tile overwrites its slot, the rest add onto it
         pack_reconfig_data_format(cb_cur_exp_sum);
-        uint32_t i = 0;
-        if (n0 == 0U) {
-            pack_tile</* out_of_order */ true>(/* dst */ 0, cb_cur_exp_sum, /* offset */ row);
-            i = 1U;
-        }
-        if (i < sm_block_size) {
-            pack_reconfig_l1_acc(true);
-            for (; i < sm_block_size; ++i) {
-                pack_tile</* out_of_order */ true>(/* dst */ i, cb_cur_exp_sum, /* offset */ row);
+        bool accumulate = false;
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t t = t0 + i;
+            const bool first_of_row = (t % Sk_chunk_t == 0U);
+            if (first_of_row == accumulate) {
+                accumulate = !first_of_row;
+                pack_reconfig_l1_acc(accumulate);
             }
+            pack_tile</* out_of_order */ true>(i, cb_cur_exp_sum, /* offset */ t / Sk_chunk_t);
+        }
+        if (accumulate) {
             pack_reconfig_l1_acc(false);
         }
         tile_regs_release();
@@ -308,90 +316,98 @@ void matmul_qk_by_v(
     cb_push_back(cb_cur_mm_out, rows * Wt);
 }
 
-// exp(scale * (prev_max - cur_max)) for row `row` -> cb_exp_max_diff[row].
+// exp(scale * (prev_max - cur_max)) for rows [row0, row0 + n) -> cb_exp_max_diff[row], n <= 4 (one DST slot
+// per row).
 template <uint32_t scaler_fp32, uint32_t scaler_bf16>
-void update_exp_max_diff(
-    uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row) {
-    const uint32_t exp_max_diff_dst_idx = 0;
+void update_exp_max_diffs(
+    uint32_t cb_prev_max_value, uint32_t cb_cur_max_value, uint32_t cb_exp_max_diff, uint32_t row0, uint32_t n) {
     reconfig_data_format(cb_prev_max_value, cb_cur_max_value);
-    tile_regs_acquire();
     sub_init(cb_prev_max_value, cb_cur_max_value);
-    sub_tiles(
-        cb_prev_max_value,
-        cb_cur_max_value,
-        /* tile_idx */ row,
-        /* tile_idx */ row,
-        /* dst_reg_idx */ exp_max_diff_dst_idx);
-
-    // First-column scaled exp: exp(scale * (prev_max - cur_max)).
-    // Both max values are column vectors, so the result is a column vector —
-    // only column 0 has data. Process 4× fewer SFPU iterations than full-tile exp.
-    sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(exp_max_diff_dst_idx);
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < n; ++i) {
+        sub_tiles(cb_prev_max_value, cb_cur_max_value, /* tile_idx */ row0 + i, /* tile_idx */ row0 + i, i);
+    }
+    // First-column scaled exp: both max values are column vectors, so only column 0 has data and the
+    // SFPU runs 4x fewer iterations than a full-tile exp.
+    for (uint32_t i = 0; i < n; ++i) {
+        sdpa_exp_tile_first_column_scaled<scaler_fp32, scaler_bf16>(i);
+    }
     tile_regs_commit();
 
     tile_regs_wait();
     pack_reconfig_data_format(cb_exp_max_diff);
-    pack_tile</* out_of_order */ true>(exp_max_diff_dst_idx, cb_exp_max_diff, /* offset */ row);
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile</* out_of_order */ true>(i, cb_exp_max_diff, /* offset */ row0 + i);
+    }
     tile_regs_release();
 }
 
-// cur_sum[row] = prev_sum[row] * exp_max_diff[row] + cur_sum[row], in place.
-void update_cur_exp_sum_inplace(
-    uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_exp, uint32_t cb_exp_max_diff, uint32_t row) {
-    const uint32_t exp_sum_dst_idx = 0;
+// cur_sum[row] = prev_sum[row] * exp_max_diff[row] + cur_sum[row] for rows [row0, row0 + n), in place.
+// Two DST slots per row (product, current sum), so n <= 2.
+void update_cur_exp_sums_inplace(
+    uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_exp, uint32_t cb_exp_max_diff, uint32_t row0, uint32_t n) {
     reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_bcast_cols_init(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
-    // multiply previous exp sum with exp_max_diff
-    mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, row, row, exp_sum_dst_idx);
-
-    // copy current sum exp to next register
+    for (uint32_t i = 0; i < n; ++i) {
+        mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, row0 + i, row0 + i, i);
+    }
     copy_init(cb_cur_sum_exp);
-    copy_tile(cb_cur_sum_exp, /* tile_idx */ row, /* register idx */ exp_sum_dst_idx + 1U);
-
-    // add to updated previous exp sum with current exp sum
+    for (uint32_t i = 0; i < n; ++i) {
+        copy_tile(cb_cur_sum_exp, /* tile_idx */ row0 + i, /* register idx */ n + i);
+    }
     add_binary_tile_init();
-    add_binary_tile(exp_sum_dst_idx, exp_sum_dst_idx + 1U, exp_sum_dst_idx);
+    for (uint32_t i = 0; i < n; ++i) {
+        add_binary_tile(i, n + i, i);
+    }
     tile_regs_commit();
 
     tile_regs_wait();
     pack_reconfig_data_format(cb_cur_sum_exp);
-    pack_tile</* out_of_order */ true>(exp_sum_dst_idx, cb_cur_sum_exp, /* offset */ row);
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile</* out_of_order */ true>(i, cb_cur_sum_exp, /* offset */ row0 + i);
+    }
     tile_regs_release();
 }
 
-// Row-reduce tile `row` of cb_in_idx in place (matmul with a ones column).
+// Row-reduce tiles [row0, row0 + n) of cb_in_idx in place (matmul with a ones column), n <= 4.
 template <uint32_t cb_identity_scaler, uint32_t cb_matmul_reduce>
-void row_reduce_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
-    const uint32_t reduce_dst_idx = 0;
-
+void row_reduce_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
-
     matmul_init(cb_in_idx, cb_matmul_reduce, 0);
-    matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ row, /* tile_idx */ 0, reduce_dst_idx);
+    for (uint32_t i = 0; i < n; ++i) {
+        matmul_tiles(cb_in_idx, cb_matmul_reduce, /* tile_idx */ row0 + i, /* tile_idx */ 0, i);
+    }
     tile_regs_commit();
 
     tile_regs_wait();
     pack_reconfig_data_format(cb_in_idx);
-    pack_tile</* out_of_order */ true>(reduce_dst_idx, cb_in_idx, /* offset */ row);
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile</* out_of_order */ true>(i, cb_in_idx, /* offset */ row0 + i);
+    }
     tile_regs_release();
 }
 
-// 1/x on tile `row` of cb_in_idx in place.
-void recip_tile_inplace(uint32_t cb_in_idx, uint32_t row) {
-    const uint32_t dst_idx = 0;
+// 1/x on tiles [row0, row0 + n) of cb_in_idx in place, n <= 4.
+void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
     tile_regs_acquire();
     reconfig_data_format(cb_in_idx, cb_in_idx);
     copy_init(cb_in_idx);
-    copy_tile(cb_in_idx, /* tile_idx */ row, dst_idx);
+    for (uint32_t i = 0; i < n; ++i) {
+        copy_tile(cb_in_idx, /* tile_idx */ row0 + i, i);
+    }
     recip_tile_init();
-    MATH((recip_tile_first_column(dst_idx)));
+    for (uint32_t i = 0; i < n; ++i) {
+        MATH((recip_tile_first_column(i)));
+    }
     tile_regs_commit();
 
     tile_regs_wait();
     pack_reconfig_data_format(cb_in_idx);
-    pack_tile</* out_of_order */ true>(dst_idx, cb_in_idx, /* offset */ row);
+    for (uint32_t i = 0; i < n; ++i) {
+        pack_tile</* out_of_order */ true>(i, cb_in_idx, /* offset */ row0 + i);
+    }
     tile_regs_release();
 }
 

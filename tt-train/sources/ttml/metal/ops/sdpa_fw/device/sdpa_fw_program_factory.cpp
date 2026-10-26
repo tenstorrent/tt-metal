@@ -356,7 +356,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     //   qk_block_*     Q rows x K tiles per QK^T matmul_block call
     //   pv_block_*     Q rows x V feature tiles per PV matmul_block call (one slot stays free for the
     //                  broadcast rescale factor the previous accumulator is multiplied by)
-    //   sm_block_size  score tiles of one row per pass of the exp step
+    //   sm_block_size  score tiles per pass of the exp step
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
     const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
@@ -366,7 +366,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto pv_block = pick_matmul_block_dims(rows, vWt, dst_size - 1U);
     const uint32_t pv_block_h = pv_block.block_rows;
     const uint32_t pv_block_w = pv_block.block_cols;
-    const uint32_t sm_block_size = get_block_size(Sk_chunk_t, dst_size);
+    const uint32_t sm_block_size = dst_size;
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -613,7 +613,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         qk_block_w,      // K tiles per QK^T matmul_block call
         pv_block_h,      // item rows per PV matmul_block call
         pv_block_w,      // V feature tiles per PV matmul_block call
-        sm_block_size,   // score tiles of one row per DST pass in the exp step
+        sm_block_size,   // score tiles per DST pass in the exp step
         heads_per_item,  // Q heads stacked in one item
     };
     kernels.compute = tt::tt_metal::CreateKernel(
