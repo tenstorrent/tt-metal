@@ -260,8 +260,9 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     auto& cluster_desc = (*(this->driver_->get_cluster_description()));
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
-    if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule &&
-        this->target_type_ != tt::TargetDevice::EmuAxi && this->target_type_ != tt::TargetDevice::GrendelJtag) {
+    // Mock and emule have no register-backed reset. Every other target asks UMD to reset.
+    // UMD skips the reset when the descriptor has no Tensix cores.
+    if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
         this->assert_risc_reset();
     }
 }
@@ -311,9 +312,9 @@ void Cluster::generate_cluster_descriptor() {
             this->rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified(),
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
+    // Simulator, mock, and emule carry no Blackhole firmware version to check.
     if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock ||
-        this->target_type_ == TargetDevice::Emule || this->target_type_ == TargetDevice::EmuAxi ||
-        this->target_type_ == TargetDevice::GrendelJtag) {
+        this->target_type_ == TargetDevice::Emule) {
         return;
     }
 
