@@ -29,7 +29,8 @@ inline void sdpa_bcast_col_srcb_reuse_configure_mop(const std::uint32_t num_face
     //
     // ADD/SUB: the execute runs this MOP twice over the same dest rows (pass 1 ends on ADDR_MOD_3, which returns dest
     // to row 0 and advances SrcB to the second column source), so the dest-accumulate bit is always set; without it
-    // pass 2 would overwrite pass 1. The output tiles must therefore be zero on entry, as for MUL (see the init doc).
+    // pass 2 would overwrite pass 1. The output tiles must therefore be zero on entry, as for MUL, whose ELWMUL
+    // accumulates into dest regardless of that bit (see the init doc).
     if constexpr (eltwise_binary_type == EltwiseBinaryType::ELWADD)
     {
         ckernel_template tmp(num_tiles, num_faces, TT_OP_ELWADD(p_setrwc::CLR_A, p_elwise::DEST_ACCUM_EN, broadcast_type, ADDR_MOD_0, 0));
