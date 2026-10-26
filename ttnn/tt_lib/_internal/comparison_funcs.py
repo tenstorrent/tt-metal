@@ -2,8 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import torch
-import numpy as np
 from loguru import logger
 
 
@@ -17,42 +18,40 @@ def get_atol_rtol_pcc(golden, calculated, rtol=1e-05, atol=1e-04):
         calculated = calculated.to(torch.float)
 
     # Calculate atol and rtol
-    cal_atol = torch.max(torch.abs(golden - calculated)).item()
-    cal_rtol = torch.max(torch.abs(golden - calculated) / torch.abs(calculated)).item()
+    abs_diff = torch.abs(golden - calculated)
+    cal_atol = torch.max(abs_diff).item()
+    cal_rtol = torch.max(abs_diff / torch.abs(calculated)).item()
 
     # Calculate PCC
     def get_pcc(golden, calculated):
-        # Both tensors are nan
-        if torch.all(torch.isnan(golden)) and torch.all(torch.isnan(calculated)):
-            logger.warning("Both tensors are 'nan'")
-            return 1.0
+        # A nan or inf anywhere makes the float64 sum non-finite, so finite sums mean
+        # there is nothing to mask and the nan/inf handling below can be skipped.
+        all_finite = math.isfinite(golden.sum(dtype=torch.float64).item()) and math.isfinite(
+            calculated.sum(dtype=torch.float64).item()
+        )
+        if not all_finite:
+            golden_all_nan = torch.all(torch.isnan(golden))
+            calculated_all_nan = torch.all(torch.isnan(calculated))
 
-        # One tensor is all nan, the other is not
-        if torch.all(torch.isnan(golden)) or torch.all(torch.isnan(calculated)):
-            logger.error("One tensor is all nan, the other is not.")
-            return 0.0
+            # Both tensors are nan
+            if golden_all_nan and calculated_all_nan:
+                logger.warning("Both tensors are 'nan'")
+                return 1.0
 
-        # if torch.any(torch.isinf(golden)) or torch.any(torch.isinf(calculated)):
-        #    raise RuntimeError(f"Tensor overflow to infinity: \n{golden}\n{calculated}")
+            # One tensor is all nan, the other is not
+            if golden_all_nan or calculated_all_nan:
+                logger.error("One tensor is all nan, the other is not.")
+                return 0.0
 
-        # if torch.any(torch.isneginf(golden)) or torch.any(torch.isneginf(calculated)):
-        #    raise RuntimeError(f"Tensor overflow to negative infinity: \n{golden}\n{calculated}")
+            # if torch.any(torch.isinf(golden)) or torch.any(torch.isinf(calculated)):
+            #    raise RuntimeError(f"Tensor overflow to infinity: \n{golden}\n{calculated}")
 
-        # For now, mask all infs and nans so that we check the rest... TODO
-        golden = golden.clone()
-        golden[
-            torch.logical_or(
-                torch.isnan(golden),
-                torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
-            )
-        ] = 0
-        calculated = calculated.clone()
-        calculated[
-            torch.logical_or(
-                torch.isnan(calculated),
-                torch.logical_or(torch.isinf(calculated), torch.isneginf(calculated)),
-            )
-        ] = 0
+            # if torch.any(torch.isneginf(golden)) or torch.any(torch.isneginf(calculated)):
+            #    raise RuntimeError(f"Tensor overflow to negative infinity: \n{golden}\n{calculated}")
+
+            # For now, mask all infs and nans so that we check the rest... TODO
+            golden = torch.nan_to_num(golden, nan=0.0, posinf=0.0, neginf=0.0)
+            calculated = torch.nan_to_num(calculated, nan=0.0, posinf=0.0, neginf=0.0)
 
         if torch.equal(golden, calculated):
             return 1.0
@@ -70,15 +69,18 @@ def get_atol_rtol_pcc(golden, calculated, rtol=1e-05, atol=1e-04):
             logger.warning("One or both tensors are constant (zero std dev). PCC undefined; falling back to allclose.")
             return float(torch.allclose(golden, calculated, rtol=rtol, atol=atol))
 
-        cal_pcc = np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
-        )
-        # Read off-diagonal directly to avoid diagonal contamination.
-        cal_pcc = cal_pcc[0, 1]
+        # Two-pass Pearson in float64, as np.corrcoef computes it. copy=True keeps the
+        # in-place centering from writing into a float64 input.
+        g = golden.detach().flatten().to(torch.float64, copy=True)
+        c = calculated.detach().flatten().to(torch.float64, copy=True)
+        g -= g.mean()
+        c -= c.mean()
+        cal_pcc = (torch.dot(g, c) / torch.sqrt(torch.dot(g, g) * torch.dot(c, c))).item()
+        del g, c
 
-        if isinstance(cal_pcc, np.ma.core.MaskedConstant) or np.isnan(float(cal_pcc)):
-            logger.warning("PCC returned NaN/masked. Falling back to allclose.")
+        # A zero (underflowed) denominator gives nan or inf.
+        if not math.isfinite(cal_pcc):
+            logger.warning("PCC returned NaN/inf. Falling back to allclose.")
             return float(torch.allclose(golden, calculated, rtol=rtol, atol=atol))
 
         return cal_pcc
@@ -100,13 +102,12 @@ def comp_equal(golden, calculated):
     while len(golden.shape) < len(calculated.shape):
         golden = torch.unsqueeze(golden, 0)
 
-    _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
     equal = torch.equal(golden, calculated)
+    if equal:
+        return equal, "Equal check passed"
 
-    if not equal:
-        output_str += ", Equal check failed"
-
-    return equal, output_str
+    _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
+    return equal, output_str + ", Equal check failed"
 
 
 def comp_shape(golden, calculated):
@@ -121,8 +122,12 @@ def comp_allclose(golden, calculated, rtol=1e-05, atol=1e-08):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
 
-    _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
     passing = torch.allclose(golden, calculated, rtol, atol, True)
+    # allclose broadcasts, so a size mismatch still takes the full path below.
+    if passing and golden.numel() == calculated.numel():
+        return passing, "Allclose check passed"
+
+    _, _, _, output_str = get_atol_rtol_pcc(golden, calculated)
     if not passing:
         output_str += ", Allclose check failed"
     return passing, output_str
