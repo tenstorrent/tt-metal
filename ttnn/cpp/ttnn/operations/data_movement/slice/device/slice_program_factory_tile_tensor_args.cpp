@@ -46,7 +46,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     TT_FATAL(end_tensor.buffer() != nullptr, "End buffer should be allocated on device!");
     TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
-    tt::DataFormat dfb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat dfb_data_format =
+        ttnn::operations::data_movement::get_slice_dfb_data_format(input_tensor.dtype(), device->arch());
     uint32_t single_tile_size = tt::tile_size(dfb_data_format);
 
     constexpr uint32_t num_input_tiles = 2;
@@ -57,11 +58,13 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
         .num_entries = num_input_tiles,
         .data_format_metadata = dfb_data_format,
     };
-    DataflowBufferSpec dfb_tensor{
+    // The reader reads the start index tensor and then the end index tensor into this region, copying
+    // the indices out after each read. It is private to the reader and carries nothing between kernels,
+    // so it is a scratchpad: a DFB that one data-movement kernel both fills and drains is not supported
+    // on Gen2.
+    ScratchpadSpec tensor_scratch{
         .unique_id = TA_TENSOR,
-        .entry_size = single_tile_size,
-        .num_entries = 1,
-        .data_format_metadata = dfb_data_format,
+        .size_per_node = single_tile_size,
     };
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_tensor.padded_shape().rank());
@@ -116,8 +119,6 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
 
     constexpr uint32_t start_offset = 0;
 
-    // The staging buffer for the start / end index tensors is touched only by the reader, which runs
-    // the full reserve -> push -> wait -> pop handshake against itself; it binds both ends.
     KernelSpec reader{
         .unique_id = TA_READER,
         .source =
@@ -130,22 +131,16 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
                     .accessor_name = "in",
                     .endpoint_type = DFBEndpointType::PRODUCER,
                 },
-                DFBBinding{
-                    .dfb_spec_name = TA_TENSOR,
-                    .accessor_name = "tensor",
-                    .endpoint_type = DFBEndpointType::PRODUCER,
-                },
-                DFBBinding{
-                    .dfb_spec_name = TA_TENSOR,
-                    .accessor_name = "tensor",
-                    .endpoint_type = DFBEndpointType::CONSUMER,
-                },
             },
         .scratchpad_bindings =
             {
                 ScratchpadBinding{
                     .scratchpad_spec_name = TA_ID_PER_DIM,
                     .accessor_name = "id_per_dim",
+                },
+                ScratchpadBinding{
+                    .scratchpad_spec_name = TA_TENSOR,
+                    .accessor_name = "tensor",
                 },
             },
         .tensor_bindings =
@@ -259,8 +254,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileTensorArgsProgramFactory::crea
     ProgramSpec spec{
         .name = "slice_tile_tensor_args",
         .kernels = {std::move(reader), std::move(writer)},
-        .dataflow_buffers = {std::move(dfb_in), std::move(dfb_tensor)},
-        .scratchpads = {std::move(id_per_dim_scratch)},
+        .dataflow_buffers = {std::move(dfb_in)},
+        .scratchpads = {std::move(id_per_dim_scratch), std::move(tensor_scratch)},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = INPUT, .spec = input_tensor.tensor_spec()},

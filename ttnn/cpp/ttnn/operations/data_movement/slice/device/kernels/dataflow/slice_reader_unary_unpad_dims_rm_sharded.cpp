@@ -5,15 +5,13 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
-#include "api/core_local_mem.h"
-#include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     constexpr uint32_t stick_size_unpadded = get_arg(args::stick_size_unpadded);
-    constexpr uint32_t num_sticks_unpadded = get_arg(args::num_sticks_unpadded);
     // Buffer's aligned row stride (>= payload when W·E is not 16-aligned); begins_bytes = slice_start[-1] * E.
     constexpr uint32_t src_stride_bytes = get_arg(args::src_stride_bytes);
     constexpr uint32_t dst_stride_bytes = get_arg(args::dst_stride_bytes);
@@ -34,13 +32,17 @@ void kernel_main() {
     const uint32_t chunk_base = num_cores_read * 3;
 
     Noc noc;
-    // Create DataflowBuffers for Device 2.0 API
-    DataflowBuffer dfb_in(dfb::in);
-    DataflowBuffer dfb_out(dfb::out);
+    // This core's shard of the input and its shard of the output.
+    const LocalTensorAccessor<uint32_t> src_shard(tensor::src);
+    const LocalTensorAccessor<uint32_t> dst_shard(tensor::dst);
 
-    dfb_out.reserve_back(num_sticks_unpadded);
-    uint32_t l1_read_addr = dfb_in.get_write_ptr();
-    uint32_t l1_write_addr = dfb_out.get_write_ptr();
+    // Raw address needed: a sharded buffer sits at the same SRAM address on every core of its shard
+    // grid, so this core's input shard base is also the address of the input shard on each source core
+    // read below.
+    const uint32_t l1_read_addr =
+        static_cast<uint32_t>(local_mem::detail::AddressAccess::address(src_shard.local_mem()));
+    // Byte offset into this core's output shard, which the rows fill front to back.
+    uint32_t dst_offset = 0;
 
     uint32_t chunk_ptr_offset = 0;
     uint32_t read_noc_xy_ptr_offset = 0;
@@ -58,26 +60,24 @@ void kernel_main() {
             if constexpr (can_coalesce) {
                 uint32_t src_off = curr_start_id * src_stride_bytes;
                 uint32_t bytes = curr_num_sticks * stick_size_unpadded;
-                CoreLocalMem<uint32_t> dst(l1_write_addr);
                 noc.async_read(
                     UnicastEndpoint{},
-                    dst,
+                    dst_shard,
                     bytes,
                     {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = l1_read_addr + src_off},
-                    {.offset_bytes = 0});
-                l1_write_addr += curr_num_sticks * dst_stride_bytes;
+                    {.offset_bytes = dst_offset});
+                dst_offset += curr_num_sticks * dst_stride_bytes;
             } else {
                 uint32_t src_off = curr_start_id * src_stride_bytes + begins_bytes;
                 for (uint32_t s = 0; s < curr_num_sticks; ++s) {
-                    CoreLocalMem<uint32_t> dst(l1_write_addr);
                     noc.async_read(
                         UnicastEndpoint{},
-                        dst,
+                        dst_shard,
                         stick_size_unpadded,
                         {.noc_x = src_noc_x, .noc_y = src_noc_y, .addr = l1_read_addr + src_off},
-                        {.offset_bytes = 0});
+                        {.offset_bytes = dst_offset});
                     src_off += src_stride_bytes;
-                    l1_write_addr += dst_stride_bytes;
+                    dst_offset += dst_stride_bytes;
                 }
             }
             chunk_ptr_offset += 2;
