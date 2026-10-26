@@ -51,7 +51,7 @@ from models.demos.glm53_flash.custom_ops.kda_decode.op import selector_tiles
 from models.demos.glm53_flash.custom_ops.paged_pool_gather.op import PagedPoolGather
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
-from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
+from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, colsplit_enabled, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
 from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
 
@@ -1344,6 +1344,14 @@ class TtDSA(LightweightModule):
         pv = idx.pools_view(cache.index, slot, end, qb)
         o_parts = []
         for a0, a1, subs in sparse_block_plan(r0, r1, qb, ab):
+            if self._colsplit_block(a1 - a0, row_starts_of, cache, user):
+                o_parts.append(
+                    self._sparse_block_colsplit(
+                        q_i, w_i, q, cache, user, kv_rm, slot=slot, start=start, r0=r0, a0=a0, a1=a1, qb=qb,
+                        row_starts_of=row_starts_of, pos_floor=pos_floor, n_pools_valid=n_pools_valid, pv=pv,
+                    )
+                )  # fmt: skip
+                continue
             pools = []
             for q0, q1 in subs:
                 one = (q0, q1) == (r0, r1)
@@ -1415,8 +1423,101 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(part)
         return o_sparse
 
+    def _a2a_rows(self, n: int, H: int) -> bool:
+        """Whether ``_sparse_attention`` takes the all-to-all form for an n-row block of H local heads (column c
+        attends every head of row quarter c)."""
+        cols = self.mesh.cols if self.mesh is not None else 1
+        return cols > 1 and H % TILE != 0 and n % (TILE * cols) == 0 and os.environ.get("GLM53_SPARSE_A2A", "1") == "1"
+
+    def _colsplit_block(self, n: int, row_starts_of, cache, user: int) -> bool:
+        """G53F-0224 (``GLM53_INDEXER_COLSPLIT=1``): select an n-row attention block of the slab form with every
+        mesh column scoring / ranking / expanding only the row quarter its sparse attention keeps. Needs the
+        all-to-all attention (the quarters are its quarters), the shared scorer, no per-user cache owner and no
+        ``on_indices`` hook (which wants every row's index on every column)."""
+        if row_starts_of is None or self.on_indices is not None or not colsplit_enabled():
+            return False
+        if self.indexer.prefill_scorer_custom or cache.owner_of(user) is not None:
+            return False
+        return self._a2a_rows(n, self.H)
+
+    def _sparse_block_colsplit(
+        self, q_i, w_i, q, cache, user, kv_rm, *, slot, start, r0, a0, a1, qb, row_starts_of, pos_floor,
+        n_pools_valid, pv,
+    ) -> ttnn.Tensor:  # fmt: skip
+        """One attention block [a0, a1) of ``_sparse_rows`` with the column-split selection (``_colsplit_block``):
+        column c takes rows [a0 + c*nq, a0 + (c+1)*nq) of the index queries (``partition_cols``: a per-device
+        slice, the quarter ``mesh_partition`` hands the attention), scores them in sub-blocks of up to ``qb`` rows
+        at their TRUE positions (``select_pools(col_stride=nq)``: the scorer's linear device geometry + per-device
+        bounds), expands its quarter's ids and runs the all-to-all attention with them (``indices_local``). The
+        rows' scores, ranks and ids are the per-row arithmetic of the replicated form; only who computes them
+        changes. Returns the block's [1,1,a1-a0,H*Dv]."""
+        idx = self.indexer
+        cols = self.mesh.cols
+        n = a1 - a0
+        nq = n // cols
+        whole = (a0 - r0, a1 - r0) == (0, q_i.shape[2])
+        q_blk = q_i if whole else ttnn.slice(q_i, [0, 0, a0 - r0, 0], [1, idx.Hi, a1 - r0, idx.D])
+        w_blk = w_i if whole else ttnn.slice(w_i, [0, 0, a0 - r0, 0], [1, 1, a1 - r0, idx.Hi])
+        q_q = self.mesh.partition_cols(q_blk, 2)  # [1,Hi,nq,D]: this column's quarter
+        w_q = self.mesh.partition_cols(w_blk, 2)  # [1,1,nq,Hi]
+        if not whole:
+            ttnn.deallocate(q_blk)
+            ttnn.deallocate(w_blk)
+        self._mark("colsplit_partition")
+        pools = []
+        for j0 in range(0, nq, qb):
+            j1 = min(nq, j0 + qb)
+            one = (j0, j1) == (0, nq)
+            q_b = q_q if one else ttnn.slice(q_q, [0, 0, j0, 0], [1, idx.Hi, j1, idx.D])
+            w_b = w_q if one else ttnn.slice(w_q, [0, 0, j0, 0], [1, 1, j1, idx.Hi])
+            pools.append(
+                idx.select_pools(
+                    q_b,
+                    w_b,
+                    cache.index,
+                    slot,
+                    query_start=start + a0 + j0,
+                    num_pools_valid=n_pools_valid,
+                    row_starts=row_starts_of(a0 + j0),
+                    pos_floor=pos_floor,
+                    pools_view=pv,
+                    col_stride=nq,
+                )
+            )  # [1,1,j1-j0,512]: this column's rows
+            if q_b is not q_q:
+                ttnn.deallocate(q_b)
+            if w_b is not w_q:
+                ttnn.deallocate(w_b)
+        ttnn.deallocate(q_q)
+        ttnn.deallocate(w_q)
+        if len(pools) == 1:
+            top_p = pools[0]
+        else:
+            top_p = ttnn.concat(pools, dim=-2)  # [1,1,nq,512]
+            for p in pools:
+                ttnn.deallocate(p)
+        indices = idx.expand_pools(
+            top_p, query_start=start + a0, row_starts=row_starts_of(a0), pos_floor=pos_floor, col_stride=nq
+        )  # [1,1,nq,W]: this column's quarter of the block's index rows
+        q_a = q if (a0, a1) == (0, q.shape[-2]) else ttnn.slice(q, [0, 0, a0, 0], [1, 1, a1, self.H * self.Dq])
+        q_lat = self._absorb_q(q_a)
+        if q_a is not q:
+            ttnn.deallocate(q_a)
+        self._mark("absorb_q")
+        o_lat = self._sparse_attention(q_lat, kv_rm, indices, indices_local=True)  # consumes q_lat, indices
+        o = self._o_lat_to_heads(o_lat)  # [1,1,n,H*Dv]
+        ttnn.deallocate(o_lat)
+        self._mark("sparse_out")
+        return o
+
     def _sparse_attention(
-        self, q_lat: ttnn.Tensor, kv_rm: ttnn.Tensor, indices: ttnn.Tensor, *, owner: int | None = None
+        self,
+        q_lat: ttnn.Tensor,
+        kv_rm: ttnn.Tensor,
+        indices: ttnn.Tensor,
+        *,
+        owner: int | None = None,
+        indices_local: bool = False,
     ) -> ttnn.Tensor:
         """``sparse_sdpa`` of the absorbed queries ``q_lat`` [1,H,n,L] TILE (H = this chip's heads) over the
         ROW_MAJOR prefix copy ``kv_rm`` with the index rows ``indices`` [1,1,n,W] (replicated over the columns):
@@ -1463,14 +1564,20 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(o_x)
             self._mark("a2a_owner_to_heads")
             return o_lat
-        a2a = cols > 1 and H % TILE != 0 and n % (TILE * cols) == 0 and os.environ.get("GLM53_SPARSE_A2A", "1") == "1"
+        a2a = self._a2a_rows(n, H)
+        # G53F-0224 ``indices_local``: the index rows are already this column's quarter ([1,1,n/cols,W], the column
+        # split selected them there)
+        assert a2a or not indices_local, (n, H, "indices_local needs the all-to-all form")
         if a2a:
             q_x = self.mesh.all_to_all_cols(q_lat, in_dim=2, out_dim=1)  # [1,H*cols,n/cols,L]
             ttnn.deallocate(q_lat)
             q_rm = ttnn.to_layout(q_x, ttnn.ROW_MAJOR_LAYOUT)
             ttnn.deallocate(q_x)
-            idx = ttnn.mesh_partition(indices, 2, cluster_axis=TP_AXIS)  # [1,1,n/cols,W]: this column's quarter
-            ttnn.deallocate(indices)
+            if indices_local:
+                idx = indices
+            else:
+                idx = ttnn.mesh_partition(indices, 2, cluster_axis=TP_AXIS)  # [1,1,n/cols,W]: this column's quarter
+                ttnn.deallocate(indices)
             self._mark("a2a_heads_to_seq")
         else:
             q_rm0 = ttnn.to_layout(q_lat, ttnn.ROW_MAJOR_LAYOUT)

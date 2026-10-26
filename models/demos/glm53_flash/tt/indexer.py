@@ -325,6 +325,14 @@ def _no_crop() -> bool:
     return os.environ.get("GLM53_INDEXER_NO_CROP", "0") == "1"
 
 
+def colsplit_enabled() -> bool:
+    """G53F-0224: the slab prefill's index selection split over the mesh COLUMNS (``GLM53_INDEXER_COLSPLIT=1``; read
+    per call). The index queries are replicated over the tensor-parallel columns, so every column used to score and
+    rank every slab row; the sparse attention's all-to-all then hands column c only quarter c of the rows anyway
+    (``TtDSA._sparse_attention``). With the split, column c scores, ranks and expands quarter c only."""
+    return os.environ.get("GLM53_INDEXER_COLSPLIT", "0") == "1"
+
+
 class TtDSAIndexer(LightweightModule):
     def __init__(self, device, cfg: GLM53FlashConfig, idx_state_dict: dict[str, torch.Tensor], mesh=None):
         """``idx_state_dict``: raw tensors of ``self_attn.indexer.`` (prefix stripped). ``mesh`` (``tt/mesh.py``
@@ -624,14 +632,17 @@ class TtDSAIndexer(LightweightModule):
         row_starts: tuple[int, ...] | None = None,
         pos_floor: int = 0,
         pools_view: tuple[ttnn.Tensor, int] | None = None,
+        col_stride: int = 0,
     ) -> ttnn.Tensor:
         """The score + top-k half of ``select`` for a prefill sub-block: the ranked pool ids [1,1,T,512] uint32
         ROW_MAJOR of the T queries (descending score, each row over its own causal prefix), BEFORE the token
         expansion. The expansion (``expand_pools``) is linear in the rows and needs no score block, so the caller
         batches it over several sub-blocks (``TtDSA._sparse_rows``); the score block ([T, pools] bf16, 268 MB per
-        512 rows at 1 M positions) lives only inside this call. Same arguments as ``select`` (no ``row``)."""
+        512 rows at 1 M positions) lives only inside this call. Same arguments as ``select`` (no ``row``).
+        ``col_stride`` (G53F-0224, with ``row_starts``): the T queries of mesh column c sit ``c * col_stride`` rows
+        after its mesh row's start (each column holds its own rows, ``colsplit_enabled``)."""
         T = q.shape[1] if q_rows_form else q.shape[-2]
-        positions = self._row_positions(T, query_start, row_starts, pos_floor)
+        positions = self._row_positions(T, query_start, row_starts, pos_floor, col_stride)
         return self._rank_pools(
             q,
             w,
@@ -644,6 +655,7 @@ class TtDSAIndexer(LightweightModule):
             q_rows_form=q_rows_form,
             row_starts=row_starts,
             pools_view=pools_view,
+            col_stride=col_stride,
         )
 
     def pools_view(self, cache: "TtIndexCache", slot: int, end: int, rows: int) -> tuple[ttnn.Tensor, int] | None:
@@ -667,15 +679,22 @@ class TtDSAIndexer(LightweightModule):
         return view, width
 
     def expand_pools(
-        self, top_p: ttnn.Tensor, *, query_start: int, row_starts: tuple[int, ...] | None = None, pos_floor: int = 0
+        self,
+        top_p: ttnn.Tensor,
+        *,
+        query_start: int,
+        row_starts: tuple[int, ...] | None = None,
+        pos_floor: int = 0,
+        col_stride: int = 0,
     ) -> ttnn.Tensor:
         """The expansion half of ``select``: ranked pool ids [1,1,T,512] uint32 (consumed; the concatenation of
         consecutive ``select_pools`` sub-blocks starting at ``query_start``) -> the index rows [1,1,T,W] uint32
         ROW_MAJOR (4 token ids per pool, the tail ids of each query's incomplete pool, sentinel padding to a
         multiple of 128). ``row_starts`` / ``pos_floor`` as in ``select`` for the block's first row: the tail ids
-        of row r of the mesh are built from ``max(row_starts[r] + s, pos_floor)``."""
+        of row r of the mesh are built from ``max(row_starts[r] + s, pos_floor)`` (+ ``c * col_stride`` on column c
+        with ``col_stride``, G53F-0224)."""
         T = top_p.shape[-2]
-        positions = self._row_positions(T, query_start, row_starts, pos_floor)
+        positions = self._row_positions(T, query_start, row_starts, pos_floor, col_stride)
         tail = self._tail_ids(T, query_start, positions=positions)
         return self._expand_pools(top_p, tail, T, free_tail=False)
 
@@ -694,10 +713,12 @@ class TtDSAIndexer(LightweightModule):
         q_rows_form: bool = False,
         row_starts: tuple[int, ...] | None = None,
         pools_view: tuple[ttnn.Tensor, int] | None = None,
+        col_stride: int = 0,
     ) -> ttnn.Tensor:
         """Scores + top-512 pools of the T queries: [1,1,T,512] uint32 ROW_MAJOR ranked pool ids ([1,1,1,512] with
         ``row``). The score block is released here. ``pools_view`` (``pools_view``): score against that W-wide copy
-        of the user's pools instead of the whole allocation (same scores on the valid columns)."""
+        of the user's pools instead of the whole allocation (same scores on the valid columns). ``col_stride``
+        (G53F-0224): every column holds its own T queries (``select_pools``)."""
         # Multi-row meshes with the shared scorer: the op treats the mesh rows as sequence-parallel ranks
         # (``seq_shard_axes=[0]``: row r scores with chunk start + r*Sq; the queries are REPLICATED over the
         # tensor-parallel columns). The v1 prefill replicates the prompt over the rows too, so row r >= 1 scores
@@ -710,7 +731,18 @@ class TtDSAIndexer(LightweightModule):
         # start when the chunk start is max_r(row_starts[r] - r*T) (exact on the row attaining it, the last one
         # for equal slabs), so the same bounded top-k with the rows' TRUE bounds (row-sharded) selects exactly.
         bounded = False
-        if row_starts is not None and not q_rows_form:
+        seq_axes = [0]
+        if col_stride and row_starts is not None and not q_rows_form:
+            # G53F-0224: device (r, c) holds the T queries at row_starts[r] + c*col_stride + s. The op's linear form
+            # (seq_shard_axes=[]: device index d = r*cols + c, its chunk start op_start + d*T) is a superset of every
+            # device's true start when op_start = max_d(true_start(d) - d*T) -- exact on all of them for equal slabs
+            # with one sub-block per column quarter -- and the bounded top-k ranks every row over its TRUE prefix
+            R, C = len(row_starts), self.mesh.cols
+            op_start = max(s + c * col_stride - (r * C + c) * T for r, s in enumerate(row_starts) for c in range(C))
+            bounded = True
+            seq_axes = []
+            kv_len = self._kv_len(cache, max(num_pools_valid, (op_start + R * C * T) // self.P))
+        elif row_starts is not None and not q_rows_form:
             R = len(row_starts)
             op_start = max(s - r * T for r, s in enumerate(row_starts))
             bounded = R > 1
@@ -739,7 +771,7 @@ class TtDSAIndexer(LightweightModule):
                 program_config=self.score_cfg,
                 cache_batch_idx=0 if use_view else user,
                 kv_len=kv_len,
-                seq_shard_axes=[0],
+                seq_shard_axes=seq_axes,
             )  # [1,1,T,pools_per_user] (or the view's W) bf16, -inf where not visible
             self._mark("index_score")
             # The op scores the allocated width (pools_per_user, the KV pool size: 262 176 at 1 M positions); only
@@ -841,20 +873,45 @@ class TtDSAIndexer(LightweightModule):
         return mode == "custom"
 
     def _row_positions(
-        self, T: int, query_start: int, row_starts: tuple[int, ...] | None, pos_floor: int
+        self, T: int, query_start: int, row_starts: tuple[int, ...] | None, pos_floor: int, col_stride: int = 0
     ) -> torch.Tensor:
         """Absolute query positions as a host int64 [R, T]: one row (``query_start + s``) in the single-device
-        form, one per mesh row (``max(row_starts[r] + s, pos_floor)``) in the slab-local form (R = mesh rows)."""
+        form, one per mesh row (``max(row_starts[r] + s, pos_floor)``) in the slab-local form (R = mesh rows), one
+        per DEVICE with ``col_stride`` (G53F-0224: row r*cols + c = ``max(row_starts[r] + c*col_stride + s,
+        pos_floor)``, R = rows * cols)."""
         s = torch.arange(T, dtype=torch.int64)
         if row_starts is None:
             return (query_start + s).reshape(1, T)
         if self.mesh is None or len(row_starts) != self.mesh.rows:
             raise ValueError(f"row_starts {row_starts} must list one start per mesh row ({self.mesh})")
-        return torch.clamp(torch.tensor(row_starts, dtype=torch.int64).reshape(-1, 1) + s, min=pos_floor)
+        starts = torch.tensor(row_starts, dtype=torch.int64).reshape(-1, 1)
+        if col_stride:
+            cols = torch.arange(self.mesh.cols, dtype=torch.int64) * col_stride
+            starts = (starts + cols.reshape(1, -1)).reshape(-1, 1)  # [rows*cols, 1], device order r*cols + c
+        return torch.clamp(starts + s, min=pos_floor)
 
-    def _const(self, t: torch.Tensor, dtype, per_row: bool) -> ttnn.Tensor:
+    def _per_device(self, R: int) -> bool:
+        """Whether a constant of R geometry rows is per DEVICE (G53F-0224's column split: R = rows * cols)."""
+        return self.mesh is not None and self.mesh.cols > 1 and R == self.mesh.rows * self.mesh.cols
+
+    def _const(self, t: torch.Tensor, dtype, per_row: bool, grid: bool = False) -> ttnn.Tensor:
         """Upload a host constant: replicated (``per_row=False``, or one chip) or with dim 0 split over the mesh
-        rows and replicated over the columns (the slab-local prefill's per-row geometry; dim 0 = R entries)."""
+        rows and replicated over the columns (the slab-local prefill's per-row geometry; dim 0 = R entries), or
+        (``grid``, G53F-0224) with dim 0 split over BOTH axes, row-major (one geometry row per device): every chip
+        holds [t.shape[0] / (rows*cols), *t.shape[1:]]."""
+        if grid:
+            R, C = self.mesh.rows, self.mesh.cols
+            X = t.shape[0] // (R * C)
+            if t.dim() == 4 and X == 1 and t.shape[1] == 1:  # [R*C, 1, T, w] (tail ids) -> [1,1,T,w] per chip
+                return self.mesh.upload(
+                    t.reshape(R, C, *t.shape[2:]), dtype, rows=0, cols=1, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            if t.dim() == 2:  # [R*C*T, w] (bounds) -> [1,1,T,w] per chip -> [T, w]
+                dev = self.mesh.upload(
+                    t.reshape(R, C, X, t.shape[1]), dtype, rows=0, cols=1, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+                return ttnn.reshape(dev, [X, t.shape[1]])
+            raise ValueError(f"grid constant of shape {tuple(t.shape)}")
         if per_row and self.mesh is not None and self.mesh.rows > 1:
             return self.mesh.upload(t, dtype, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.from_torch(t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
@@ -907,7 +964,7 @@ class TtDSAIndexer(LightweightModule):
         key = (name, T, tuple(positions[:, 0].tolist()), tuple(positions[:, -1].tolist()), R, limit)
         if key not in self._const_cache:
             bounds = bound(positions).to(torch.int32).reshape(R * T, 1)
-            self._const_cache[key] = self._const(bounds, ttnn.uint32, per_row=R > 1)
+            self._const_cache[key] = self._const(bounds, ttnn.uint32, per_row=R > 1, grid=self._per_device(R))
         return self._const_cache[key]
 
     def _score_prefill_rows(
@@ -1001,7 +1058,9 @@ class TtDSAIndexer(LightweightModule):
             base = (rows + 1) // P * P
             ids = torch.stack([base + j for j in range(P - 1)], dim=-1).reshape(R, 1, T, P - 1)
             ids = torch.where(ids <= rows, ids, torch.full_like(ids, SENTINEL))
-            self._const_cache[key] = self._const(ids, ttnn.uint32, per_row=R > 1)  # [1,1,T,P-1] per chip
+            self._const_cache[key] = self._const(
+                ids, ttnn.uint32, per_row=R > 1, grid=self._per_device(R)
+            )  # [1,1,T,P-1]
         return self._const_cache[key]
 
     def _sentinels(self, T: int, n: int) -> ttnn.Tensor:
