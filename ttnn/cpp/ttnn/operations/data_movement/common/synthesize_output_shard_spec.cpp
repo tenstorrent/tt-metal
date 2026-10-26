@@ -35,6 +35,11 @@ ShardOrientation resolve_orientation(const SynthesizeOutputShardSpecOpts& opts) 
     return ShardOrientation::ROW_MAJOR;
 }
 
+bool rm_page_valid(uint64_t shard_width, uint32_t element_size_bytes, uint64_t tensor_width) {
+    const uint64_t page = shard_width * static_cast<uint64_t>(element_size_bytes);
+    return page != 0 && page % tt::tt_metal::hal::get_l1_alignment() == 0 && tensor_width % shard_width == 0;
+}
+
 }  // namespace
 
 ShardSpec synthesize_output_shard_spec(
@@ -167,11 +172,7 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
         return (mode == RmPageAlignmentMode::Strict) ? std::optional<ShardSpec>{std::nullopt} : std::optional{spec};
     }
     const uint64_t l1_page_align = static_cast<uint64_t>(tt::tt_metal::hal::get_l1_alignment());
-    auto rm_page_valid = [&](uint64_t shard_width) {
-        const uint64_t page = shard_width * static_cast<uint64_t>(element_size_bytes);
-        return page != 0 && (page % l1_page_align) == 0 && (tensor_width % shard_width) == 0;
-    };
-    if (rm_page_valid(spec.shape[1])) {
+    if (rm_page_valid(spec.shape[1], element_size_bytes, tensor_width)) {
         return spec;
     }
     // Only WIDTH_SHARDED can be repaired by shrinking nc; HEIGHT pins shard_width to tensor_width, BLOCK to the grid.
@@ -187,7 +188,7 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
         if (tensor_width % nc != 0) {
             continue;
         }
-        if (rm_page_valid(tensor_width / nc)) {
+        if (rm_page_valid(tensor_width / nc, element_size_bytes, tensor_width)) {
             chosen_cores = nc;
             new_shard_width = static_cast<uint32_t>(tensor_width / nc);
             break;
@@ -215,8 +216,7 @@ std::optional<ShardSpec> shrink_shard_for_rm_page_alignment(
 }
 
 bool rm_shard_page_valid(const ShardSpec& spec, uint32_t element_size_bytes, uint64_t tensor_width) {
-    const uint64_t page = static_cast<uint64_t>(spec.shape[1]) * element_size_bytes;
-    return page != 0 && page % tt::tt_metal::hal::get_l1_alignment() == 0 && tensor_width % spec.shape[1] == 0;
+    return rm_page_valid(spec.shape[1], element_size_bytes, tensor_width);
 }
 
 std::optional<ShardSpec> rm_block_shard_spec_or_fallback(

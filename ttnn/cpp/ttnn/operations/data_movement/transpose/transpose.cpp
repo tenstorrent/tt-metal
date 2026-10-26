@@ -265,9 +265,14 @@ ttnn::Tensor transpose_impl(
                     input_tensor, output_padded_shape, memory_config_arg->memory_layout(), input_orientation_hint);
                 if (spec.has_value()) {
                     resolved_mc = tt::tt_metal::MemoryConfig(
-                        memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(*spec));
+                        memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
                     copy_experimental_allocation_flags(*memory_config_arg, *resolved_mc);
                 } else {
+                    log_warning(
+                        tt::LogOp,
+                        "ttnn.transpose: no L1-aligned ROW_MAJOR BLOCK_SHARDED spec for output shape {}; falling back "
+                        "to INTERLEAVED",
+                        output_padded_shape);
                     resolved_mc = tt::tt_metal::MemoryConfig(
                         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, memory_config_arg->buffer_type());
                 }

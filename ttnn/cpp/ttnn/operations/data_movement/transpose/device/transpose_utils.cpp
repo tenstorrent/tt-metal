@@ -191,7 +191,7 @@ std::optional<ShardSpec> generate_transpose_rm_shard_spec(
     const ttnn::Shape& padded_out_shape,
     TensorMemoryLayout memory_layout,
     std::optional<ShardOrientation> orientation_hint) {
-    const auto rm_spec = generate_transpose_shard_spec(
+    auto rm_spec = generate_transpose_shard_spec(
         input_tensor, padded_out_shape, memory_layout, orientation_hint, OutputTiling::RowMajor);
     if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED) {
         return rm_spec;

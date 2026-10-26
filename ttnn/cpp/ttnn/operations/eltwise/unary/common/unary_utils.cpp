@@ -743,10 +743,29 @@ std::optional<tt::tt_metal::ShardSpec> generate_output_shard_spec(
             compute_grid_size,
             memory_layout,
             ttnn::operations::data_movement::common::RmPageAlignmentMode::Lenient);
-        if (memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED &&
-            !ttnn::operations::data_movement::common::rm_shard_page_valid(
-                spec, output_element_size_bytes, static_cast<uint64_t>(padded_out_shape[-1]))) {
-            return std::nullopt;
+        if (memory_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
+            const uint64_t tensor_width = padded_out_shape[-1];
+            auto tile_spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+                compute_grid_size,
+                padded_out_shape,
+                memory_layout,
+                {.is_tile = true, .orientation_hint = tt::tt_metal::ShardOrientation::ROW_MAJOR, .caller_tag = "Unary"});
+            if (tile_spec.shape[1] < tensor_width) {
+                tile_spec = spec;
+            }
+            auto block_spec = ttnn::operations::data_movement::common::rm_block_shard_spec_or_fallback(
+                spec, tile_spec, output_element_size_bytes, tensor_width, memory_layout);
+            if (!block_spec.has_value()) {
+                static std::once_flag warn_flag;
+                std::call_once(warn_flag, [] {
+                    log_warning(
+                        tt::LogOp,
+                        "Unary: no L1-aligned ROW_MAJOR BLOCK_SHARDED spec for the output; falling back to "
+                        "INTERLEAVED");
+                });
+                return std::nullopt;
+            }
+            spec = std::move(*block_spec);
         }
     }
     log_debug(tt::LogOp, "Unary: Generated shard spec over {} populated cores", spec.grid.num_cores());

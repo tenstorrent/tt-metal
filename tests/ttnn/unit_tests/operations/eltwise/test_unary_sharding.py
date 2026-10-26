@@ -820,6 +820,24 @@ def test_unary_row_major_specless_block_output_unaligned_page(device, width, dty
     assert torch.equal(ttnn.to_torch(ttnn_output), torch.relu(torch_input))
 
 
+@pytest.mark.parametrize("shape", [(1, 1, 64, 32), (1, 1, 100, 32), (1, 2, 96, 32)])
+def test_unary_row_major_specless_block_output_tile_width_spec(device, shape):
+    """When the synthesized shard width is not a valid row page but a tile-width shard covers the whole row, the specless
+    row-major BLOCK_SHARDED output keeps a BLOCK spec with shard width 32, the same as transpose (#58189)."""
+    shard_width = -(-shape[-1] // device.compute_with_storage_grid_size().x)
+    if (shard_width * 2) % 16 == 0 and shape[-1] % shard_width == 0:
+        pytest.skip(f"Synthesized BLOCK shard width {shard_width} is already a valid page on this grid")
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+    ttnn_output = ttnn.relu(ttnn_input, memory_config=out_mem_config)
+    mem_config = ttnn_output.memory_config()
+    assert mem_config.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    assert mem_config.shard_spec.shape[1] == 32
+    assert torch.equal(ttnn.to_torch(ttnn_output), torch.relu(torch_input))
+
+
 # The in-place sharded path pairs the input and output shard resident on each core with no data
 # movement, and used to be taken whenever the core grids matched. A different layout, orientation or
 # shard shape on the same grid puts different tensor regions on each core, and the output came back
