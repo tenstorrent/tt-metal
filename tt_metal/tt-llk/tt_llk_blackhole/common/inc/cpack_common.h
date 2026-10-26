@@ -528,6 +528,7 @@ __attribute__((always_inline)) inline void reconfig_packer_data_format(
     config.f.out_data_format = pack_output_dst_format;
     config.f.in_data_format  = pack_hw_src_format;
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
+    TT_SETDMAREG(0, UPPER_HALFWORD(config.val[2]), 0, HI_16(p_gpr_pack::TMP_LO));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
 
