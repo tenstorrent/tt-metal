@@ -853,8 +853,10 @@ def _w_prefetch_rows(mesh, call, scatter_dim, tA, tW, windows):
     senders = int(os.environ.get("MRS_SENDERS", SENDERS_PER_LINE[regime]))  # as create_mesh_program_descriptor
     w_split = -(-kb // 2) if senders >= 2 and kb >= 2 else kb
     parts = [(0, w_split)] + ([(w_split, kb)] if w_split < kb else [])
-    # env MRS_W_PREFETCH_PARTS (perf experiments only): k-row parts per window, one job each (default: the op's own)
-    pf_parts = int(os.environ.get("MRS_W_PREFETCH_PARTS", len(parts)))
+    # One job per window by default: two part senders multicasting into one line at the same time hung the
+    # device (3 in ~70 Galaxy runs); one sender per line ran clean. env MRS_W_PREFETCH_PARTS (perf experiments
+    # only): k-row parts per window, one job each.
+    pf_parts = int(os.environ.get("MRS_W_PREFETCH_PARTS", 1))
     if pf_parts != len(parts):
         step = -(-kb // pf_parts)
         parts = [(k, min(kb, k + step)) for k in range(0, kb, step)]

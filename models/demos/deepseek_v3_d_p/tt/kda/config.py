@@ -352,9 +352,9 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         overlap_output_gate=num_chunks <= _MAX_GROUP_CHUNKS,
         # Galaxy SP8xTP4 T=5120: 1.159 -> 1.099 ms; KDA_FUSED_MMRS=0 keeps the separate projection and reduce-scatter.
         fused_output_reduce_scatter=os.environ.get("KDA_FUSED_MMRS", "1") == "1",
-        # Off by default: with two concurrent part multicasts per line it hung 3 times in ~70 Galaxy runs
-        # (0 in 12 with it off). KDA_MMRS_PREFETCH=1 enables it.
-        output_weight_prefetch_windows=int(os.environ.get("KDA_MMRS_PREFETCH", "0")),
+        # The norm's reader lands the output projection's first weight window, one sender per line (Galaxy SP8xTP4
+        # T=5120: ~-6 us gate); KDA_MMRS_PREFETCH=0 turns it off.
+        output_weight_prefetch_windows=int(os.environ.get("KDA_MMRS_PREFETCH", "1")),
     )
 
 
