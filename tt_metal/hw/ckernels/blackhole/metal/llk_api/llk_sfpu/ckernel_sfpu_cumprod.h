@@ -17,10 +17,7 @@ constexpr std::uint32_t cumprod_step = 4;
 template <bool APPROXIMATION_MODE /*unused*/>
 inline void calculate_cumprod(const bool first) {
     if (first) {
-        TTI_SFPMOV(0, p_sfpu::LCONST_1, 4, 0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_1, 5, 0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_1, 6, 0);
-        TTI_SFPMOV(0, p_sfpu::LCONST_1, 7, 0);
+        set_carried_lregs<p_sfpu::LCONST_1>();
     }
     scan_tile_columns<cumprod_step>();
 }

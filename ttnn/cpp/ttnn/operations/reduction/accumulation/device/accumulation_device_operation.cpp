@@ -78,7 +78,7 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
             acc_dim < logical_rank - 2 ||
                 is_tile_axis_accumulation(input_tensor, acc_dim, attributes.dtype, attributes.flip, attributes.op),
             "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16/fp32 cumsum "
-            "and cumprod on 32x32 tiles",
+            "and cumprod on 32x32 tiles (only bf16 cumsum on Quasar)",
             acc_dim,
             logical_rank);
     }

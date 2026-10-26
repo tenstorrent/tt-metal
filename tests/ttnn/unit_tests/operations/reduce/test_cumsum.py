@@ -270,6 +270,11 @@ def test_cumsum_failing_cases(
         ttnn.cumsum(ttnn_input_tensor, memory_config=memory_config, dim=dim, out=ttnn_preallocated_tensor)
 
 
+def _compensated_sum_bound(x64, dim):
+    """K * eps32 * sum_{j<=i} |x_j| with K = 8, in float64: see test_cumsum_fp32_long_scan_accuracy."""
+    return 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=dim)
+
+
 @pytest.mark.parametrize(
     "size, dim",
     [
@@ -318,7 +323,7 @@ def test_cumsum_fp32_long_scan_accuracy(size, dim, sequence_type, device):
 
     x64 = torch_input.to(torch.float64)
     reference = torch.cumsum(x64, dim=dim)
-    bound = 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=dim)
+    bound = _compensated_sum_bound(x64, dim)
     err = (output - reference).abs()
 
     assert torch.isfinite(output).all()
@@ -348,7 +353,7 @@ def test_cumsum_disable_compensated_sum(device, n=8192):
 
     x64 = torch_input.to(torch.float64)
     reference = torch.cumsum(x64, dim=1)
-    bound = 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=1)
+    bound = _compensated_sum_bound(x64, 1)
 
     comp_err = (compensated - reference).abs()
     plain_err = (plain - reference).abs()
@@ -646,8 +651,8 @@ def test_cumsum_tile_axis_runs_in_place(size, dim, torch_dtype, device):
         assert_with_ulp(expected_result=torch.cumsum(torch_input, dim), actual_result=output, ulp_threshold=1)
     else:
         x64 = torch_input.to(torch.float64)
-        bound = 8.0 * 2.0**-23 * torch.cumsum(x64.abs(), dim=dim)
-        assert ((output.to(torch.float64) - torch.cumsum(x64, dim=dim)).abs() <= bound).all()
+        error = (output.to(torch.float64) - torch.cumsum(x64, dim=dim)).abs()
+        assert (error <= _compensated_sum_bound(x64, dim)).all()
 
 
 def _with_special_values(torch_input, dim):
