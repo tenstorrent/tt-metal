@@ -7,8 +7,9 @@ building the 45-layer model.
 Layer ``DB_LAYER`` (3) attention only, one slot; the prefix is seeded synthetically (``TtDSA.prefill_state`` in 32 K
 chunks: latent pages + pooled-key index, no attention); at every depth in ``DB_DEPTHS`` one all-sparse 16 K chunk runs
 through ``prefill_forward(slab=True)`` twice (cold, warm: same rows into the same pages), then once with the DSA
-``StageTimer`` (every stage synchronized: the split, not the wall). ``DB_VARIANTS`` = ``qblock:ablock[:bucket[:nocrop]]`` run
-at every depth (``GLM53_PREFILL_QBLOCK`` / ``_ABLOCK`` / ``GLM53_INDEXER_POOL_BUCKET`` / ``_NO_CROP``, read per call); each
+``StageTimer`` (every stage synchronized: the split, not the wall). ``DB_VARIANTS`` =
+``qblock:ablock[:bucket[:nocrop[:expand]]]`` run at every depth (``GLM53_PREFILL_QBLOCK`` / ``_ABLOCK`` /
+``GLM53_INDEXER_POOL_BUCKET`` / ``_NO_CROP`` / ``GLM53_INDEXER_EXPAND``, read per call); each
 variant's warm output (every mesh row's slab, column 0) is compared bitwise with the first variant's.
 
     GLM53_MESH_SHAPE=8,4 DB_DEPTHS=131072,524288,1015808 pytest models/demos/glm53_flash/tests/test_dsa_depth_bench.py -s
@@ -34,10 +35,12 @@ from models.demos.glm53_flash.tt.mesh import GLMMesh, mesh_device_params
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "8,4").split(","))
 LAYER = int(os.environ.get("DB_LAYER", "3"))
 DEPTHS = [int(v) for v in os.environ.get("DB_DEPTHS", "131072,524288,1015808").split(",")]
-# qblock:ablock[:bucket[:nocrop]] -- bucket = GLM53_INDEXER_POOL_BUCKET (G53F-0198, 0 = off), nocrop =
-# GLM53_INDEXER_NO_CROP (G53F-0199); the first variant is the reference
+# qblock:ablock[:bucket[:nocrop[:expand]]] -- bucket = GLM53_INDEXER_POOL_BUCKET (G53F-0198, 0 = off), nocrop =
+# GLM53_INDEXER_NO_CROP (G53F-0199), expand = GLM53_INDEXER_EXPAND (composite | custom, G53F-0210); the first variant
+# is the reference
 VARIANTS = [
-    (v.split(":") + ["0", "0"])[:4] for v in os.environ.get("DB_VARIANTS", "512:512:0,512:512:16384").split(",")
+    (v.split(":") + ["0", "0", "composite"])[:5]
+    for v in os.environ.get("DB_VARIANTS", "512:512:0,512:512:16384").split(",")
 ]
 CHUNK = 16384
 SEED_CHUNK = 32768
@@ -80,9 +83,10 @@ def test_dsa_depth_bench(mesh_device):
         xc = (torch.randn(1, 1, CHUNK, H, generator=g) * 0.5).to(torch.bfloat16)
         x_slab = mesh.upload(xc, ttnn.bfloat16, rows=2)  # row r holds slab r of the chunk
         ref = None
-        for qb, ab, bucket, nocrop in VARIANTS:
+        for qb, ab, bucket, nocrop, expand in VARIANTS:
             os.environ["GLM53_PREFILL_QBLOCK"], os.environ["GLM53_PREFILL_ABLOCK"] = qb, ab
             os.environ["GLM53_INDEXER_POOL_BUCKET"], os.environ["GLM53_INDEXER_NO_CROP"] = bucket, nocrop
+            os.environ["GLM53_INDEXER_EXPAND"] = expand
             walls, outs = [], []
             for _ in range(2):  # cold (compiles), warm: the same rows into the same pages
                 ttnn.synchronize_device(mesh_device)
@@ -107,6 +111,7 @@ def test_dsa_depth_bench(mesh_device):
                 ablock=int(ab),
                 bucket=int(bucket),
                 nocrop=int(nocrop),
+                expand=expand,
                 cold_ms=round(walls[0] * 1e3, 1),
                 warm_ms=round(walls[1] * 1e3, 1),
                 cold_eq_warm=cold_eq_warm,
@@ -119,6 +124,7 @@ def test_dsa_depth_bench(mesh_device):
         ttnn.deallocate(x_slab)
     os.environ.pop("GLM53_INDEXER_POOL_BUCKET", None)
     os.environ.pop("GLM53_INDEXER_NO_CROP", None)
+    os.environ.pop("GLM53_INDEXER_EXPAND", None)
     if OUT:
         with open(OUT, "w") as f:
             for r in rows_out:

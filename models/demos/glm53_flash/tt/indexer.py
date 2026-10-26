@@ -39,6 +39,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScoreDecode
+from models.demos.glm53_flash.custom_ops.pool_expand.op import PoolExpand
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import prefill_linear
@@ -312,6 +313,13 @@ class TtIndexCache:
         )
 
 
+def _expand_custom() -> bool:
+    """G53F-0210: the index rows from the ranked pools in one data-movement pass (``custom_ops/pool_expand``) instead of
+    the typecast / repeat / multiply / add / typecast / concat chain (``GLM53_INDEXER_EXPAND=custom``; read per call).
+    """
+    return os.environ.get("GLM53_INDEXER_EXPAND", "composite") == "custom"
+
+
 def _no_crop() -> bool:
     """G53F-0199: hand the bounded top-k the uncropped score rows (``GLM53_INDEXER_NO_CROP=1``; read per call)."""
     return os.environ.get("GLM53_INDEXER_NO_CROP", "0") == "1"
@@ -348,6 +356,7 @@ class TtDSAIndexer(LightweightModule):
         self._mesh_rows = tuple(device.shape)[0] if isinstance(device, ttnn.MeshDevice) else 1
         self._prefill_scorer: IndexScoreDecode | None = None
         self._topk_rows: TopkRows | None = None  # per-row bounded top-k (the multi-row prefill selection)
+        self._pool_expand: PoolExpand | None = None  # the fused index-row expansion (G53F-0210)
         # test hook: emulate mesh row r of a multi-row mesh on one chip (the shared scorer's chunk start + r*Sq
         # offset applied explicitly, the selection bounded per row as on the mesh)
         self.row_offset_sim = 0
@@ -783,6 +792,23 @@ class TtDSAIndexer(LightweightModule):
     def _expand_pools(self, top_p: ttnn.Tensor, tail: ttnn.Tensor, T: int, *, free_tail: bool) -> ttnn.Tensor:
         """Ranked pool ids [1,1,T,512] (consumed) + tail ids [1,1,T,P-1] -> index rows [1,1,T,W] uint32."""
         k_eff = self.cfg.index_topk
+        if (
+            _expand_custom()
+            and top_p.layout == ttnn.ROW_MAJOR_LAYOUT
+            and top_p.dtype == ttnn.uint32
+            and tail.layout == ttnn.ROW_MAJOR_LAYOUT
+            and self.P * int(top_p.shape[-1]) == k_eff
+        ):
+            # G53F-0210: the same integers in one data-movement pass (4p + j per ranked pool, the tail ids, sentinels)
+            if self._pool_expand is None:
+                self._pool_expand = PoolExpand(self.device, pool=self.P, align=128)
+            idx = self._pool_expand(top_p, tail)
+            ttnn.deallocate(top_p)
+            if free_tail:
+                ttnn.deallocate(tail)
+            self._mark("score_expand")
+            self._mark("ids_concat")
+            return idx
         # pool id p -> token ids 4p + j: exact in fp32 (ids < 2^24), [1,1,T,2048] uint32
         top_f = ttnn.typecast(top_p, ttnn.float32)
         top_rep = ttnn.repeat_interleave(top_f, self.P, dim=-1)

@@ -10,7 +10,8 @@ row, the regions path's row gathers, G53F-0186), then ``:<mhc>``, ``:<combine>``
 prefill's ``:<ablock>`` / ``:<qblock>`` rows, then ``:<route>``, ``:<hmix>`` and ``:<NAME=VALUE|...>`` env knobs):
 ``instr=1`` wraps every layer call, its attention core, its FFN core (MoE: router / experts / shared) with
 device synchronizations and installs the DSA ``StageTimer`` (the sync points change the overlap, so the
-instrumented total is an upper bound); ``instr=0`` times only whole chunks (the real cost). Rows go to
+instrumented total is an upper bound); ``instr=3`` adds op-level wraps (the regions MoE's model-local ops, its expert
+kernel and the common ttnn ops, keys ``op.*``, G53F-0212); ``instr=0`` times only whole chunks (the real cost). Rows go to
 ``PROF_OUT`` (jsonl): one per chunk with every component's seconds, plus a summary per pass.
 
     PROF_IDS=.../needle_260000_d10.ids PROF_RUNS=16384:1,16384:0 PROF_OUT=prof.jsonl \
@@ -72,14 +73,15 @@ class Prof:
     def __init__(self, device):
         self.device = device
         self.on = False
+        self.ops = False  # op-level wraps (instr 3, G53F-0212) on top of the component wraps
         self.acc: dict[str, float] = defaultdict(float)
         self.dsa_timer = StageTimer(device)
 
-    def wrap(self, obj, name: str, key: str, dsa_start: bool = False):
+    def wrap(self, obj, name: str, key: str, dsa_start: bool = False, ops: bool = False):
         fn = getattr(obj, name)
 
         def timed(*a, **k):
-            if not self.on:
+            if not self.on or (ops and not self.ops):
                 return fn(*a, **k)
             ttnn.synchronize_device(self.device)
             t = time.perf_counter()
@@ -90,7 +92,10 @@ class Prof:
             self.acc[key] += time.perf_counter() - t
             return r
 
-        object.__setattr__(obj, name, timed)  # GLMMesh is a frozen dataclass (G53F-0202 instrumentation)
+        if isinstance(obj, type):  # a class: every instance's calls (special methods are looked up on the type)
+            setattr(obj, name, timed)
+        else:
+            object.__setattr__(obj, name, timed)  # GLMMesh is a frozen dataclass (G53F-0202 instrumentation)
 
     def take(self) -> dict[str, float]:
         out = dict(self.acc)
@@ -129,6 +134,23 @@ def _instrument(model, prof: Prof):
         for name in ("all_gather_rows", "reduce_scatter_rows", "all_reduce_cols", "all_gather_cols", "all_reduce_rows"):
             if hasattr(m, name):
                 prof.wrap(m, name, f"ccl.{name}")
+    # tt-blaze G53F-0212 (instr 3 only): op-level wraps -- the regions MoE's model-local ops (class level: every
+    # instance), its expert kernel, and every to_layout / typecast / slice / reshape-free copy the model issues
+    from models.demos.glm53_flash.custom_ops.gather_combine_reduce.op import GatherCombineReduce
+    from models.demos.glm53_flash.custom_ops.region_scatter.op import RegionScatter
+    from models.demos.glm53_flash.custom_ops.route_table.op import RouteTable
+    from models.demos.glm53_flash.custom_ops.untilize_used.op import UntilizeUsed
+
+    for cls, key in (
+        (RouteTable, "op.route_table"),
+        (RegionScatter, "op.region_scatter"),
+        (UntilizeUsed, "op.untilize_used"),
+        (GatherCombineReduce, "op.gather_combine"),
+    ):
+        prof.wrap(cls, "__call__", key, ops=True)
+    prof.wrap(ttnn.experimental.deepseek_prefill, "unified_routed_expert_moe", "op.expert_kernel", ops=True)
+    for name in ("to_layout", "typecast", "slice", "matmul", "linear", "concat", "untilize", "add", "multiply"):
+        prof.wrap(ttnn, name, f"op.ttnn.{name}", ops=True)
 
 
 def _set_dsa_timer(model, prof: Prof, on: bool):
@@ -166,7 +188,8 @@ def test_prefill_profile(mesh_device):
     f = open(OUT, "a")
     full = prompt
     for p, spec in enumerate(RUNS):
-        chunk, instr, marks = int(spec[0]), spec[1] in ("1", "2"), spec[1] == "1"
+        chunk, instr, marks = int(spec[0]), spec[1] in ("1", "2", "3"), spec[1] == "1"
+        prof.ops = spec[1] == "3"
         prompt = full[: int(spec[2])] if len(spec) > 2 and spec[2] else full
         if len(spec) > 3 and spec[3]:  # regions sub-chunk (tt/moe.py REGIONS_T is read at call time)
             moe_mod.REGIONS_T = int(spec[3])

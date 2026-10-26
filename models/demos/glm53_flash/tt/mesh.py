@@ -281,6 +281,21 @@ class GLMMesh:
     def _async_topology(self):
         return self.topology if self.topology is not None else ttnn.Topology.Linear
 
+    @staticmethod
+    def _ccl_knobs(kind: str, links: int) -> dict:
+        """G53F-0211: per-call overrides of the async row / column CCLs' link and worker counts (read per call; the
+        defaults are the ones the prefill used so far). ``kind`` = ``AG`` | ``RS``: ``GLM53_CCL_<kind>_LINKS``,
+        ``GLM53_CCL_<kind>_WORKERS``, ``GLM53_CCL_<kind>_CHUNKS`` (chunks per sync), ``GLM53_CCL_<kind>_BUFFERS``
+        (buffers per channel). Each element's reduction order does not depend on how the slices are dealt over links
+        and workers."""
+        env = lambda k, d: int(os.environ.get(f"GLM53_CCL_{kind}_{k}", "") or d)
+        return dict(
+            num_links=env("LINKS", links),
+            chunks_per_sync=env("CHUNKS", 10),
+            num_workers_per_link=env("WORKERS", 2),
+            num_buffers_per_channel=env("BUFFERS", 2),
+        )
+
     def _all_gather_async(self, x, dim, axis, memory_config):
         ccl = self.ccl
         # tt-blaze G53F-0200: GLM53_CCL_GATHER_TOPOLOGY=ring (read per call) gathers over the physical ring of a 2D torus
@@ -298,14 +313,11 @@ class GLMMesh:
             persistent_output_buffer=None,
             dim=dim,
             multi_device_global_semaphore=ccl.get_and_cycle_ag_semaphore_handles(axis),
-            num_links=ccl.get_num_links(axis),
             cluster_axis=axis,
             topology=topo,
             memory_config=memory_config,
             barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(axis),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            **self._ccl_knobs("AG", ccl.get_num_links(axis)),
         )
 
     def _reduce_scatter_async(self, x, dim, axis, memory_config):
@@ -316,14 +328,11 @@ class GLMMesh:
             dim=dim,
             multi_device_global_semaphore=ccl.get_and_cycle_rs_semaphore_handles(axis),
             barrier_semaphore=ccl.get_and_cycle_barrier_semaphore_handle(axis),
-            num_links=ccl.get_num_links(axis),
             cluster_axis=axis,
             memory_config=memory_config,
             intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=self._async_topology(),
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            **self._ccl_knobs("RS", ccl.get_num_links(axis)),
         )
 
     def _ccl_kwargs(self, num_links=None):
