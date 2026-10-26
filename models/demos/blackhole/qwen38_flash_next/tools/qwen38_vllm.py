@@ -71,7 +71,13 @@ from models.demos.blackhole.qwen38_flash_next.tools.live_decode_diagnostic impor
     construct_live_decode_diagnostic,
     prepare_live_decode_diagnostic,
 )
-from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import WARM_TOKEN_ID, Qwen38PlainLaneDecoder
+from models.demos.blackhole.qwen38_flash_next.tools.qwen38_batch_decode import (
+    WARM_TOKEN_ID,
+    Qwen38PlainLaneDecoder,
+    pack_buckets_from_env,
+    pack_dram_bytes,
+    prefill_pack_enabled,
+)
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import (
     CHUNK_PREFILL_MIN_ROWS,
     RESIDUE_CLASSES,
@@ -397,6 +403,8 @@ def batch_pool_token_cap(max_model_len: int, max_num_seqs: int) -> int:
     extra = context - 32768
     free = DRAM_CHAIN_FREE_32K - extra * CONTEXT_BYTES_PER_TOKEN
     lanes = LANE_FIXED_BASE_32K + max_num_seqs * (LANE_FIXED_PER_LANE_32K + extra * CONTEXT_BYTES_PER_TOKEN_PER_LANE)
+    if prefill_pack_enabled():  # QWEN38_PREFILL_PACK=1: the pack's persistent state and bucket traces take DRAM too
+        lanes += pack_dram_bytes(pack_buckets_from_env())
     return max(0, (free - lanes - POOL_MARGIN_BYTES) // KV_BYTES_PER_TOKEN)
 
 
@@ -1056,6 +1064,8 @@ class Qwen38ForCausalLM:
         lanes = LANE_FIXED_BASE_32K + self.lanes * (
             LANE_FIXED_PER_LANE_32K + (self.allocated_context - 32768) * CONTEXT_BYTES_PER_TOKEN_PER_LANE
         )
+        if prefill_pack_enabled():  # the pack's persistent state and bucket traces (QWEN38_PREFILL_PACK=1)
+            lanes += pack_dram_bytes(pack_buckets_from_env())
         logger.info(
             f"batch pool admission: free {free / 2**30:.2f} GiB per device, pool {pool / 2**30:.2f} GiB, lane states "
             f"~{lanes / 2**30:.2f} GiB, margin {POOL_ADMISSION_MARGIN_BYTES / 2**30:.2f} GiB"

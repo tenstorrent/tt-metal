@@ -163,9 +163,13 @@ def test_input_images():
             assert gather[user].sum() == 0
         tile = conv[32 * user : 32 * user + 32]
         expected = [user * 256 + n - 3 + i for i in range(3) if n and n - 3 + i >= 0]
-        got = [int(tile[i].nonzero().flatten()[0]) for i in range(32) if tile[i].sum() > 0]
+        got = [int(tile[i].nonzero().flatten()[0]) for i in range(3) if tile[i].sum() > 0]
         assert got == expected, (user, n)
-        assert tile[3:].sum() == 0
+        assert tile[4:].sum() == 0
+        if n >= 4:
+            assert int(tile[3].nonzero().flatten()[0]) == user * 256 + n - 4
+        else:
+            assert tile[3].sum() == 0
     assert gather[8:].sum() == 0  # the unused select rows
     take, keep = images["ple_take"], images["ple_keep"]
     assert take.sum() == 4 and bool((take + keep == 1).all())  # four users with rows

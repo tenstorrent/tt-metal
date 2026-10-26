@@ -742,6 +742,8 @@ class Qwen38TTNNPackHostInputs:
     gather_select: Any
     ple_keep: tuple[Any, ...]
     ple_take: tuple[Any, ...]
+    # per user the PLE n-gram context after its real prompt tokens (what a single-path prefill leaves in ``slot.ple_context``)
+    contexts: tuple[Any, ...] = ()
 
 
 @dataclass
@@ -3430,7 +3432,8 @@ class Qwen38TTNNTextModel:
             mesh_mapper=replicate_tensor_2d_mesh_mapper(self.mesh_device),
         )
         marks.append(clock())
-        rows, _contexts = ple.host_rows_lanes(padded, [None] * bucket.users)
+        rows, lane_contexts = ple.host_rows_lanes(padded, [None] * bucket.users)
+        contexts = tuple(lane_contexts[user][lengths[user]] for user in range(len(lengths)))
         embedding_rows = ttnn.from_torch(
             rows.contiguous(),
             dtype=ttnn.bfloat16,
@@ -3465,6 +3468,7 @@ class Qwen38TTNNTextModel:
             gather_select=host(images["gather_select"], ttnn.bfloat16, (1, 1, *images["gather_select"].shape)),
             ple_keep=scalars(images["ple_keep"].tolist()),
             ple_take=scalars(images["ple_take"].tolist()),
+            contexts=contexts,
         )
         marks.append(clock())
         if timing is not None:
@@ -3589,13 +3593,18 @@ class Qwen38TTNNTextModel:
         output: Qwen38TTNNGenericDecodeOutput | None = None,
         pad_token: int = pack_module.PACK_PAD_TOKEN_ID,
         timing: dict | None = None,
+        info: dict | None = None,
     ) -> torch.Tensor:
         """Prepare, upload and run one pack (replaying ``trace_id`` when given, else the eager body), read back the users'
         logits ``[len(users), VOCAB_SIZE]``.  The landing sources are in the persistent buffers afterwards.  ``timing``
-        (a dict) receives ``prepare_ms`` (host input prep), ``upload_ms``, ``replay_ms`` (blocking replay wall)."""
+        (a dict) receives ``prepare_ms`` (host input prep), ``upload_ms``, ``replay_ms`` (blocking replay wall).  ``info`` (a dict)
+        receives ``contexts``: per user the PLE n-gram context after its real tokens (the host state of a landed lane).
+        """
 
         started = time.perf_counter()
         prepared = self.prepare_pack_inputs(pack_state, rows_per_user, users, pad_token=pad_token, timing=timing)
+        if info is not None:
+            info["contexts"] = list(prepared.contexts)
         prepared_at = time.perf_counter()
         self.upload_pack_inputs(pack_state, prepared)
         uploaded_at = time.perf_counter()

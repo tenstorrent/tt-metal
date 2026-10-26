@@ -7,7 +7,8 @@
 // n takes groups j, j + n, ...  The page table row (int32 ROW_MAJOR [1, 1, rows, max_blocks]) is read into L1 once.
 // Compile-time args: TensorAccessorArgs src, pool, page table.
 // Runtime args: 0 src, 1 pool, 2 page table addresses, 3 groups, 4 lane, 5 shift, 6 bs, 7 max_blocks, 8 core index,
-// 9 core count.  CB 0: one 64-byte aligned region = the 32-row group buffer, then the page table row.
+// 9 core count, 10 source row offset (a multiple of 32; 0 = the head of the source).  CB 0: one 64-byte aligned region
+// = the 32-row group buffer, then the page table row.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/noc_traits.h"
@@ -23,6 +24,7 @@ void kernel_main() {
     const uint32_t max_blocks = get_arg_val<uint32_t>(7);
     const uint32_t core = get_arg_val<uint32_t>(8);
     const uint32_t cores = get_arg_val<uint32_t>(9);
+    const uint32_t src_row0 = get_arg_val<uint32_t>(10);
     constexpr uint32_t ROW_BYTES = 1024, GROUP_ROWS = 32;
     constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr auto pool_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
@@ -45,7 +47,7 @@ void kernel_main() {
         const uint32_t t0 = g * GROUP_ROWS;
         const uint32_t dst0 = table[t0 >> shift] * bs + (t0 & (bs - 1));
         for (uint32_t k = 0; k < GROUP_ROWS; ++k) {
-            noc_async_read(src.get_noc_addr(t0 + k, 0), buffer + k * ROW_BYTES, ROW_BYTES);
+            noc_async_read(src.get_noc_addr(src_row0 + t0 + k, 0), buffer + k * ROW_BYTES, ROW_BYTES);
         }
         noc_async_read_barrier();
         for (uint32_t k = 0; k < GROUP_ROWS; ++k) {

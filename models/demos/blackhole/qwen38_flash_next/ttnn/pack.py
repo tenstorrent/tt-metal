@@ -33,9 +33,11 @@ Per GDN layer (35 of them, the pack state's ``layers[i]``):
 * recurrent state: ``layers[i].states[l]`` fp32 ``[96, 128, 128]`` per device (head dim 0 is the user-major
   ``(user, value head)`` of launch ``l``); user ``u`` is launch ``l = u // 8`` (:func:`gdn_state_slot`), heads
   ``12 * (u % 8) .. + 12``.  Launches of fewer than 8 users write the first ``12 * users`` heads.
-* last three conv-input rows: ``layers[i].conv_rows`` bf16 ``[1, 1, 512, 2560]``; user ``u`` has rows ``32 u .. 32 u + 2``
+* last conv-input rows: ``layers[i].conv_rows`` bf16 ``[1, 1, 512, 2560]``; user ``u`` has rows ``32 u .. 32 u + 2``
   (oldest first: the q|k|v rows ``P_u - 3 .. P_u - 1`` of its segment; a row before the sequence start is exact zero, as
   is every row of an empty slot).  This is the layout of the GDN ``history`` tile (rows 0..2 of a ``[1,1,32,2560]`` tile).
+  Row ``32 u + 3`` (P3d-3) is the row ``P_u - 4``: the fourth ring entry a single-path lane holds in its (dead) fixed-phase
+  slot 0.
 
 Per QSA layer (12): the KV rows and compressed rows are already in the chain's dense caches at the user's base
 (``state.layers[i].attention.packed_kv_cache`` rows ``base_u .. base_u + P_u - 1``, ``compressed_index_cache`` rows
@@ -69,6 +71,9 @@ CHUNK = 32
 PLE_BLOCK_ROWS = 128
 PLE_HISTORY_ROWS = 9
 CONV_HISTORY_ROWS = 3
+CONV_RING_ROWS = (
+    CONV_HISTORY_ROWS + 1
+)  # the conv ring's four entries: the history rows and the slot the next token takes
 CONV_SELECT_ROWS = CHUNK * PACK_MAX_USERS  # the stacked per-user history select: 32 rows per user slot, 16 slots
 GATHER_SELECT_ROWS = 32
 PACK_PAD_TOKEN_ID = 0  # qwen38_prefill_driver.CHUNK_PAD_TOKEN_ID
@@ -236,7 +241,8 @@ def pack_input_images(bucket: PackBucket, lengths: Sequence[int]) -> dict[str, o
 
     * ``row_mask_c`` fp32 ``[12, 64, 32, 1]``: 1.0 for a real row, 0.0 for a pad row (the GDN prims' page layout);
     * ``conv_select`` bf16 ``[512, 2048]``: row ``32 u + i`` (i < 3) one-hot at row ``u*S + P_u - 3 + i`` (zero when that is
-      before the sequence start, and for an empty slot): the user's last three conv-input rows;
+      before the sequence start, and for an empty slot): the user's last three conv-input rows; row ``32 u + 3`` one-hot at
+      ``u*S + P_u - 4`` (the ring's fourth entry, same rule);
     * ``gather_select`` bf16 ``[32, 2048]``: row u one-hot at row ``u*S + P_u - 1`` (zero for an empty slot);
     * ``ple_take`` / ``ple_keep`` float ``[16]``: per 128-row block, take = 1 for the block that holds the user's last real
       row (and keep = 1 - take); a block of a user without rows never takes.
@@ -256,6 +262,8 @@ def pack_input_images(bucket: PackBucket, lengths: Sequence[int]) -> dict[str, o
                 src = n - CONV_HISTORY_ROWS + i
                 if src >= 0:
                     conv[CHUNK * user + i, base + src] = 1.0
+            if n >= CONV_RING_ROWS:
+                conv[CHUNK * user + CONV_HISTORY_ROWS, base + n - CONV_RING_ROWS] = 1.0
             gather[user, base + n - 1] = 1.0
             take[(base + n - 1) // PLE_BLOCK_ROWS] = 1.0
     row_mask_c = keep_rows.reshape(1, PACK_ROWS // CHUNK, CHUNK, 1).expand(VALUE_HEADS, -1, -1, -1).contiguous()
@@ -292,6 +300,109 @@ def landing_rows(bucket: PackBucket, lengths: Sequence[int]) -> list[dict[str, o
             }
         )
     return rows
+
+
+# ----------------------------------------------------------------------------------------- landing (P3d-3) host images
+#
+# A user's landing writes its lane from the persistent sources above.  Every select below is an exact 0/1 matmul operand
+# (bf16, fp32 accumulation: one nonzero term per output element), written to a persistent device buffer per landing, so one
+# program serves every user, length and lane.  What a lane holds after a SINGLE-path prefill of ``P`` tokens (chunk prefill of
+# the first ``P - 1`` tokens, hand-off, the last token as a forced decode step), which the landing reproduces:
+#
+# * GDN recurrent: the state after all ``P`` tokens (the pack's final state: pad rows are an identity update).
+# * GDN ring (fixed phase, canonical slots): slot ``j`` holds the conv-input row of token ``P - 4 + j``, i.e. slot 1
+#   = row ``P - 3``, slot 2 = ``P - 2``, slot 3 = ``P - 1`` (the history the next step reads, oldest first) and slot 0 = row
+#   ``P - 4`` (dead: the next token overwrites it); a row before the sequence start is exact zero.  The position-dependent
+#   ring phase of the generic state cancels in the canonical order (``lanes.canonical_ring_source``), so the source row of
+#   slot ``j`` is ``conv_rows`` row ``32 u + (j - 1) % 4`` whatever ``P % 4`` is.
+# * QSA KV: rows ``0 .. round_up(P, 32) - 1`` of the user's segment in the lane's pages (rows past ``P`` are dead).
+# * QSA compressed index: the whole lane cache = the user's compressed rows with every row ``>= P // 4`` zeroed, zero past the
+#   segment's ``S/4`` rows (a landed lane keeps nothing of its previous occupant; the
+#   complete blocks are the only rows a decode reads; the open block's row is rewritten from the ring before it is scored).
+# * QSA staging tile: the 32-row tile that holds position ``P - 1``, rows past ``P - 1`` zero.
+# * QSA raw-key ring: row ``j <= (P - 1) % 4`` = the raw index key of position ``4 * ((P - 1) // 4) + j``, other rows zero.
+# * PLE slots: slot ``k`` (0..8) = the normalized PLE row of position ``P - 9 + k`` (zero before the sequence start).
+
+
+def conv_ring_source_row(slot: int) -> int:
+    """The row of a user's 32-row ``conv_rows`` tile that lands in canonical ring slot ``slot`` (0..3)."""
+
+    if not 0 <= slot < CONV_RING_ROWS:
+        raise ValueError(f"a ring slot is 0..{CONV_RING_ROWS - 1}, got {slot}")
+    return (slot - 1) % CONV_RING_ROWS
+
+
+def conv_hit_image(lanes: int, assignments: Sequence[tuple[int, int]], slot: int) -> torch.Tensor:
+    """bf16 ``[lanes, 512]``: row ``lane`` one-hot at ``conv_rows`` row ``32 user + conv_ring_source_row(slot)`` for every
+    ``(lane, user)``; its matmul with ``conv_rows`` is the ring slot's new content of the landed lanes (other rows zero).
+    """
+
+    image = torch.zeros(lanes, CONV_SELECT_ROWS)
+    for lane, user in assignments:
+        if not 0 <= lane < lanes or not 0 <= user < PACK_MAX_USERS:
+            raise ValueError(f"lane {lane} / user {user} out of range ({lanes} lanes, {PACK_MAX_USERS} users)")
+        image[lane, CHUNK * user + conv_ring_source_row(slot)] = 1.0
+    return image.to(torch.bfloat16)
+
+
+def conv_keep_image(lanes: int, assignments: Sequence[tuple[int, int]]) -> torch.Tensor:
+    """bf16 ``[lanes, 1]``: 0 for a landed lane, 1 for every other lane."""
+
+    keep = torch.ones(lanes, 1)
+    for lane, _user in assignments:
+        keep[lane, 0] = 0.0
+    return keep.to(torch.bfloat16)
+
+
+def compressed_select_image(bucket: PackBucket, user: int, length: int) -> torch.Tensor:
+    """bf16 ``[S/4, 512]``: row ``i < length // 4`` one-hot at compressed row ``user * S/4 + i`` of the pack's first 512 rows;
+    the other rows are zero (the open block and everything past the prompt)."""
+
+    check_lengths(bucket, [length])
+    per = bucket.blocks_per_user
+    image = torch.zeros(per, PACK_ROWS // BLOCK_ROWS)
+    for i in range(length // BLOCK_ROWS):
+        image[i, user * per + i] = 1.0
+    return image.to(torch.bfloat16)
+
+
+def staging_select_image(bucket: PackBucket, user: int, length: int) -> torch.Tensor:
+    """bf16 ``[32, 2048]``: row ``i <= (length - 1) % 32`` one-hot at pack row ``user * S + 32 * ((length - 1) // 32) + i`` (the
+    tile that holds position ``length - 1``); the later rows are zero."""
+
+    if not 1 <= length <= bucket.rows_per_user:
+        raise ValueError(f"a landed user holds 1..{bucket.rows_per_user} tokens, got {length}")
+    image = torch.zeros(CHUNK, PACK_ROWS)
+    tile = (length - 1) // CHUNK
+    for i in range((length - 1) % CHUNK + 1):
+        image[i, user * bucket.rows_per_user + CHUNK * tile + i] = 1.0
+    return image.to(torch.bfloat16)
+
+
+def raw_ring_select_image(bucket: PackBucket, user: int, length: int) -> torch.Tensor:
+    """bf16 ``[32, 2048]``: row ``j <= (length - 1) % 4`` one-hot at pack row ``user * S + 4 * ((length - 1) // 4) + j`` (the
+    raw index keys of the block that holds position ``length - 1``, up to it); the other rows are zero."""
+
+    if not 1 <= length <= bucket.rows_per_user:
+        raise ValueError(f"a landed user holds 1..{bucket.rows_per_user} tokens, got {length}")
+    image = torch.zeros(CHUNK, PACK_ROWS)
+    block = (length - 1) // BLOCK_ROWS
+    for j in range((length - 1) % BLOCK_ROWS + 1):
+        image[j, user * bucket.rows_per_user + BLOCK_ROWS * block + j] = 1.0
+    return image.to(torch.bfloat16)
+
+
+def ple_history_select_image(length: int) -> torch.Tensor:
+    """bf16 ``[137, 32]``: column ``k < 9`` one-hot at window row ``ple_history_first_row(length) + k`` (the nine history rows
+    before the first pad row); the other columns are zero."""
+
+    if length < 1:
+        raise ValueError(f"a landed user holds at least one token, got {length}")
+    image = torch.zeros(PLE_HISTORY_ROWS + PLE_BLOCK_ROWS, CHUNK)
+    first = ple_history_first_row(length)
+    for k in range(PLE_HISTORY_ROWS):
+        image[first + k, k] = 1.0
+    return image.to(torch.bfloat16)
 
 
 # ------------------------------------------------------------------------------------------------ device state records

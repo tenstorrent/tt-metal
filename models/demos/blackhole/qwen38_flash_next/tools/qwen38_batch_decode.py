@@ -22,6 +22,12 @@ pages from a seeded-shuffled free list over pages ``1 .. num_pages - 1`` (page 0
 the pages are non-contiguous and interleaved across lanes.  Admission writes the table, scatters the B=1 prefill's KV
 into the lane's pages (``model.admit_lane_kv_paged``) and moves the other families through the host pager (the pager
 layouts exclude the KV family).
+
+Multi-user pack (P3d-3, ``QWEN38_PREFILL_PACK=1``, default off; ``QWEN38_PACK_BUCKETS`` default ``128,256,512,1024`` rows per
+user): ``prepare`` also allocates the pack state (``ttnn/pack.py``), runs one eager pack per bucket and builds and warms the
+landing (``ttnn/pack_landing.py``) inside the chain's warm hook, before any capture; ``capture`` captures one pack trace per
+bucket after the lane trace; ``admit_pack(lanes, prompts, rows_per_user)`` prefills the prompts as ONE pack, lands each user
+into its lane (every family, device only; the lane then holds position ``P``) and returns the users' first-token logits.
 """
 
 from __future__ import annotations
@@ -41,14 +47,62 @@ from ttnn.tools.trace_allocation_tracker import TraceAllocationTracker, acknowle
 import ttnn
 from models.demos.blackhole.qwen38_flash_next.tools import resident_decode
 from models.demos.blackhole.qwen38_flash_next.tools.qwen38_chat_session import Qwen38TracedChain
+from models.demos.blackhole.qwen38_flash_next.ttnn import pack as pack_module
 from models.demos.blackhole.qwen38_flash_next.ttnn.lanes import (
     Qwen38LaneHostPool,
     Qwen38TTNNLaneImporter,
     Qwen38TTNNLanePager,
 )
+from models.demos.blackhole.qwen38_flash_next.ttnn.pack_landing import Qwen38TTNNPackLander
 from models.demos.blackhole.qwen38_flash_next.ttnn.qsa import Qwen38LanePaging
 
 WARM_TOKEN_ID = 1000  # any in-vocabulary id: the warm passes write garbage into lane state that a reset clears
+
+
+PREFILL_PACK_VARIABLE = "QWEN38_PREFILL_PACK"
+PACK_BUCKETS_VARIABLE = "QWEN38_PACK_BUCKETS"
+PACK_BUCKETS_DEFAULT = "128,256,512,1024"
+PACK_MIB = 1 << 20
+# DRAM per device of the pack (P3d-2 / P3d-3 measurements, 2026-10-26): the persistent state is 187.6 MiB plus 226.5 MiB per
+# GDN prims launch (36 layers x [96,128,128] fp32; a bucket of 128 rows per user runs two launches, the others one), the
+# landing's select and zero-tail buffers 18.8 MiB (the zero tails scale with the allocated context: 8 MiB at 32768); one trace
+# per enabled bucket (the whole pack body: 74.0 / 63.0 / 61.5 / 60.7 MiB for 128 / 256 / 512 / 1024 rows per user).
+# Total with all four buckets: 918.6 MiB (measured at B=8 and B=32, context 32768).
+PACK_FIXED_BYTES = int((187.6 + 18.8) * PACK_MIB)
+PACK_LAUNCH_BYTES = int(226.5 * PACK_MIB)
+PACK_TRACE_BYTES = {128: 74 * PACK_MIB, 256: 63 * PACK_MIB, 512: 62 * PACK_MIB, 1024: 61 * PACK_MIB}
+
+
+def prefill_pack_enabled(environ=None) -> bool:
+    """``QWEN38_PREFILL_PACK`` ("0" default = off, "1" = on); anything else is refused."""
+
+    value = (os.environ if environ is None else environ).get(PREFILL_PACK_VARIABLE, "0")
+    if value not in ("0", "1"):
+        raise ValueError(f"{PREFILL_PACK_VARIABLE} must be 0 or 1, got {value!r}")
+    return value == "1"
+
+
+def pack_buckets_from_env(environ=None) -> tuple[int, ...]:
+    """``QWEN38_PACK_BUCKETS``: comma-separated rows per user, each one of ``pack.PACK_BUCKETS`` (default all four),
+    returned ascending without duplicates."""
+
+    text = (os.environ if environ is None else environ).get(PACK_BUCKETS_VARIABLE, PACK_BUCKETS_DEFAULT)
+    try:
+        values = [int(part) for part in text.split(",") if part.strip()]
+    except ValueError:
+        raise ValueError(f"{PACK_BUCKETS_VARIABLE} must be comma-separated integers, got {text!r}") from None
+    if not values or any(v not in pack_module.PACK_BUCKETS for v in values):
+        raise ValueError(
+            f"{PACK_BUCKETS_VARIABLE} must list rows per user from {pack_module.PACK_BUCKETS}, got {text!r}"
+        )
+    return tuple(sorted(set(values)))
+
+
+def pack_dram_bytes(buckets: Sequence[int]) -> int:
+    """Per device DRAM the pack holds: its persistent state plus the bucket traces (pool admission counts it)."""
+
+    launches = max(len(pack_module.pack_bucket(rows).launches) for rows in buckets)
+    return PACK_FIXED_BYTES + launches * PACK_LAUNCH_BYTES + sum(PACK_TRACE_BYTES[rows] for rows in buckets)
 
 
 def lane_page_count(prompt_len: int, decode_steps: int, page_size: int) -> int:
@@ -164,6 +218,14 @@ class Qwen38PlainLaneDecoder:
         # P2a (vLLM adapter): compile the full-vocabulary gather of the lane logits in ``prepare`` (eager, misses allowed)
         # so ``read_full_logits`` runs under the closed miss guard; off for the P1 drivers (they read greedy ids only).
         self.warm_logits_gather = False
+        # P3d-3: the multi-user packed prefill (QWEN38_PREFILL_PACK=1; default off: serving is unchanged)
+        self.pack_enabled = prefill_pack_enabled()
+        self.pack_buckets: tuple[int, ...] = pack_buckets_from_env() if self.pack_enabled else ()
+        self.pack_state = None
+        self.pack_traces: dict[int, tuple[int, Any]] = {}
+        self.lander: Qwen38TTNNPackLander | None = None
+        self.pack_dram: dict[str, Any] = {}
+        self.last_pack: dict[str, Any] = {}
 
     # -- the two build phases ----------------------------------------------------------------------
 
@@ -232,6 +294,66 @@ class Qwen38PlainLaneDecoder:
         model.reset_lane_state_inplace(ls, zeros)
         ttnn.synchronize_device(mesh)
         self.timing["warm_s"] = time.perf_counter() - started
+        if self.pack_enabled:
+            self._prepare_pack(chain)
+
+    def _prepare_pack(self, chain: Any) -> None:
+        """The multi-user pack inside the chain's warm hook (before any capture: its persistent buffers must exist before
+        the chain's traces, P3d-2 problem 1): the pack state, one eager pack per enabled bucket (every program of the body
+        compiles here), the landing's select buffers and every landing program.  The pack traces are captured in
+        :meth:`capture`."""
+
+        if self.paging is None:
+            raise RuntimeError("the prefill pack lands into paged lanes")
+        if chain.slab_state is None or chain.slab_state.rows != pack_module.PACK_ROWS:
+            raise RuntimeError(f"the prefill pack runs on the {pack_module.PACK_ROWS}-row slab: the chain holds none")
+        model, mesh, ls = self.model, self.mesh, self.ls
+        started = time.perf_counter()
+        before = self._dram_free()
+        self.pack_state = model.allocate_pack_state(chain.state, chain.slab_state, buckets=self.pack_buckets)
+        ttnn.synchronize_device(mesh)
+        after_state = self._dram_free()
+        tokens = [[(7 * i + 13) % 5000 + 1 for i in range(40)]]
+        for rows in self.pack_buckets:
+            model.run_pack(self.pack_state, rows, chain.state, tokens)
+        self.lander = Qwen38TTNNPackLander(model, self.pack_state, chain.state, ls, self.pager_l)
+        after_lander = self._dram_free()
+        self.lander.warm()
+        model.reset_lane_state_inplace(ls, [0] * self.lanes)
+        ttnn.synchronize_device(mesh)
+        self.pack_dram.update(
+            before_state=before,
+            state_bytes=before - after_state,
+            lander_bytes=after_state - after_lander,
+            estimate_bytes=pack_dram_bytes(self.pack_buckets),
+        )
+        self.timing["pack_prepare_s"] = time.perf_counter() - started
+        logger.info(
+            f"prefill pack prepared: buckets {self.pack_buckets}, state {self.pack_dram['state_bytes'] / PACK_MIB:.1f} MiB, "
+            f"landing buffers {self.pack_dram['lander_bytes'] / PACK_MIB:.2f} MiB, {self.timing['pack_prepare_s']:.1f} s"
+        )
+
+    def _dram_free(self) -> int:
+        view = ttnn.get_memory_view(self.mesh, ttnn.BufferType.DRAM)
+        return int(view.num_banks) * int(view.total_bytes_free_per_bank)
+
+    def capture_pack(self) -> None:
+        """The pack traces, one per enabled bucket, after the lane capture (the bodies were run eagerly in
+        :meth:`_prepare_pack`, so nothing compiles here)."""
+
+        chain, mesh, model = self.chain, self.mesh, self.model
+        guard = lambda label: resident_decode.forbid_trace_body_host_io_and_sync(phase=f"pack {label}")  # noqa: E731
+        before = self._dram_free()
+        for rows in self.pack_buckets:
+            started = time.perf_counter()
+            trace_id, output = model.capture_prefill_pack(self.pack_state, rows, chain.state, guard=guard)
+            ttnn.synchronize_device(mesh)
+            self.pack_traces[rows] = (trace_id, output)
+            self.pack_dram.setdefault("trace_bytes", {})[rows] = before - self._dram_free()
+            before = self._dram_free()
+            self.pack_dram.setdefault("capture_s", {})[rows] = time.perf_counter() - started
+        self.pack_dram["traces_total_bytes"] = sum(self.pack_dram["trace_bytes"].values())
+        logger.info(f"prefill pack traces captured: {self.pack_dram}")
 
     def capture(self, vm: Any) -> None:
         """After the chain opened (its traces captured, the miss guard closed): the one capture of the lane body from
@@ -260,7 +382,9 @@ class Qwen38PlainLaneDecoder:
             *self.pager_g.kv_stagings,
         ):
             acknowledge_corruptible(tensor)
-        for trace_id in (*chain.trace_ids(), *self.trace_ids):
+        if self.pack_enabled:
+            self.capture_pack()
+        for trace_id in (*chain.trace_ids(), *self.trace_ids, *self.pack_trace_ids()):
             TraceAllocationTracker.verify_before_replay(mesh, trace_id)
         entries = resident_decode.program_cache_count(mesh)
         logger.info(f"program cache entries after the lane captures {entries} (chain {chain.program_cache_entries})")
@@ -270,6 +394,9 @@ class Qwen38PlainLaneDecoder:
         ttnn.synchronize_device(mesh)
         self.timing["capture_s"] = time.perf_counter() - started
         logger.info(f"plain lane decoder ready: {self.lanes} lanes, timing {self.timing}")
+
+    def pack_trace_ids(self) -> list[int]:
+        return [trace_id for trace_id, _ in self.pack_traces.values()]
 
     # -- admission ---------------------------------------------------------------------------------
 
@@ -326,6 +453,102 @@ class Qwen38PlainLaneDecoder:
         self.positions[lane] = length
         self.contexts[lane] = context
         return first_token
+
+    def admit_pack(
+        self,
+        lanes: Sequence[int],
+        prompts: Sequence[Sequence[int]],
+        rows_per_user: int,
+        pages: Sequence[Sequence[int]] | None = None,
+        users: Sequence[int] | None = None,
+    ) -> torch.Tensor:
+        """Prefill ``prompts`` (1..S tokens each, text) as ONE pack of bucket ``rows_per_user`` and land user ``users[i]``
+        (default: every prompt, in order) in lane ``lanes[i]``: pack replay, then the device-only landing of every family (``Qwen38TTNNPackLander``), the position
+        rows, the PLE contexts and the page rows.  Returns the users' first-token logits fp32 ``[len(prompts), VOCAB]`` (the
+        last prompt token is inside the pack; the caller picks / samples the token t0 and feeds it to the lane's first step).
+        ``pages``: page rows of the lanes (vLLM's block ids, external mode); omitted: allocated here like :meth:`admit`
+        (``decode_steps`` ahead).  The caller owns the lanes (free: no page row, no position)."""
+
+        if not self.pack_enabled or self.pack_state is None or rows_per_user not in self.pack_traces:
+            raise RuntimeError(f"no pack trace for {rows_per_user} rows per user (QWEN38_PREFILL_PACK=1, buckets)")
+        lanes = [int(lane) for lane in lanes]
+        prompts = [[int(t) for t in prompt] for prompt in prompts]
+        users = list(range(len(lanes))) if users is None else [int(u) for u in users]
+        bucket = self.pack_state.buckets[rows_per_user]
+        if not lanes or len(lanes) != len(users) or len(set(lanes)) != len(lanes) or len(set(users)) != len(users):
+            raise ValueError(f"{len(users)} users and {len(lanes)} lanes must be equal in number and distinct")
+        if not users or len(prompts) > bucket.users or min(users) < 0 or max(users) >= len(prompts):
+            raise ValueError(f"users {users} outside the {len(prompts)} prompts of a {bucket.users}-user pack")
+        for prompt in prompts:
+            if not 1 <= len(prompt) <= rows_per_user:
+                raise ValueError(f"{len(prompt)} tokens outside the {rows_per_user}-row bucket")
+        for lane in lanes:
+            if not 0 <= lane < self.lanes:
+                raise ValueError(f"lane {lane} outside the {self.lanes} lanes")
+            if self.page_rows[lane] or self.positions[lane] is not None:
+                raise RuntimeError(f"lane {lane} is still live: release it first")
+        landed = [prompts[u] for u in users]
+        model, ls, mesh = self.model, self.ls, self.mesh
+        started = time.perf_counter()
+        allocated = []
+        try:
+            for index, (lane, prompt) in enumerate(zip(lanes, landed)):
+                if pages is None:
+                    self.page_rows[lane] = self.allocator.allocate(
+                        lane_page_count(len(prompt), self.decode_steps, self.paging.page_size)
+                    )
+                    allocated.append(lane)
+                else:
+                    self.set_page_row(lane, pages[index])
+            model.write_lane_page_table(ls, page_table_rows(self.page_rows, self.lanes))
+            self.page_table_dirty = False  # the whole table, other lanes' pending changes included
+            trace_id, output = self.pack_traces[rows_per_user]
+            TraceAllocationTracker.verify_before_replay(mesh, trace_id)
+            timing: dict[str, float] = {}
+            info: dict[str, Any] = {}
+            logits = model.run_pack(
+                self.pack_state,
+                rows_per_user,
+                self.chain.state,
+                prompts,
+                trace_id=trace_id,
+                output=output,
+                timing=timing,
+                info=info,
+            )
+            packed = time.perf_counter()
+            for lane, prompt in zip(lanes, landed):
+                model.admit_lane_position(ls, lane, len(prompt), rope_shift=0)
+            self.lander.land([(lane, u, len(prompts[u])) for lane, u in zip(lanes, users)], rows_per_user)
+            ttnn.synchronize_device(mesh)
+        except BaseException:
+            for lane in lanes:
+                if pages is None and lane in allocated:
+                    self.allocator.release(self.page_rows[lane])
+                self.page_rows[lane] = []
+            self.page_table_dirty = True
+            raise
+        finished = time.perf_counter()
+        for lane, u in zip(lanes, users):
+            self.positions[lane] = len(prompts[u])
+            self.contexts[lane] = info["contexts"][u]
+        pack_ms = (packed - started) * 1e3
+        self.last_pack = {
+            "users": len(prompts),
+            "landed": len(users),
+            "rows_per_user": rows_per_user,
+            "pack_ms": pack_ms,
+            "prepare_ms": timing["prepare_ms"],
+            "upload_ms": timing["upload_ms"],
+            "replay_ms": timing["replay_ms"],
+            "logits_ms": pack_ms - timing["prepare_ms"] - timing["upload_ms"] - timing["replay_ms"],
+            "land_ms": (finished - packed) * 1e3,
+            "land_ms_per_user": (finished - packed) * 1e3 / len(users),
+            "total_ms": (finished - started) * 1e3,
+        }
+        self.last_admit = {"prefill_s": pack_ms / 1e3, "import_s": (finished - packed) / 1e3}
+        self.timing.setdefault("admit_pack_s", []).append(finished - started)
+        return logits[users]
 
     def move_into_lane(self, lane: int, length: int) -> None:
         """The chain's generic state (after ``length`` tokens) into lane ``lane``: the page table row is already written.
@@ -488,9 +711,18 @@ class Qwen38PlainLaneDecoder:
         ttnn.synchronize_device(mesh)
         mesh.set_program_cache_misses_allowed(True)
         try:
-            for trace_id in self.trace_ids:
+            for trace_id in (*self.trace_ids, *self.pack_trace_ids()):
                 ttnn.release_trace(mesh, trace_id)
             self.trace_ids.clear()
+            for _trace_id, output in self.pack_traces.values():
+                output.release_tensors()
+            self.pack_traces.clear()
+            if self.lander is not None:
+                self.lander.release()
+                self.lander = None
+            if self.pack_state is not None:
+                self.model.release_pack_state(self.pack_state)
+                self.pack_state = None
             for pager in (self.pager_l, self.pager_g):
                 if pager is not None:
                     pager.release()
