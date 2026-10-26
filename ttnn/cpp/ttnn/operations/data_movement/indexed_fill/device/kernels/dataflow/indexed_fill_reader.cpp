@@ -11,6 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/kernel_helper_functions/validation_helpers.hpp"
 #include "internal/local_mem/address_access.h"
@@ -87,10 +88,9 @@ void kernel_main() {
         extern INVALID_VALUE_PLACEHOLDER outer_stride_b;
         extern INVALID_VALUE_PLACEHOLDER num_slices;
 
-        // Raw SRAM base addresses for this core's shard (Case 2 bindings): direct-address
-        // arithmetic into input_a (both shard-local modes) and input_b (same-sharded mode only).
-        const uint32_t input_addr_a = s0.get_bank_base_address();
-        [[maybe_unused]] const uint32_t input_addr_b = s1.get_bank_base_address();
+        // This core's L1 shard of input_a (both shard-local modes), read at byte offsets as a loopback
+        // NoC source. input_b's shard (same-sharded mode only) is bound below, inside that branch.
+        const LocalTensorAccessor<uint32_t> input_a_shard(tensor::input_a);
 
         if (shard_ppb == 0 || total_local_batches == 0) {
             return;
@@ -121,15 +121,11 @@ void kernel_main() {
                 dfb_in0.reserve_back(1);
                 if (replace_b) {
                     if constexpr (IS_B_SAME_SHARDED) {
+                        // input_b is L1 width-sharded only in this mode (it may be DRAM otherwise).
+                        const LocalTensorAccessor<uint32_t> input_b_shard(tensor::input_b);
                         const uint32_t b_offset = (replace_src * shard_ppb + p) * shard_page_stride;
                         noc.async_read(
-                            UnicastEndpoint{},
-                            dfb_in0,
-                            page_size,
-                            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                             .addr = input_addr_b + b_offset},
-                            {.offset_bytes = 0});
+                            input_b_shard, dfb_in0, page_size, {.offset_bytes = b_offset}, {.offset_bytes = 0});
                         noc.async_read_barrier();
                     } else {
                         // Global tile index for the column slice this core handles:
@@ -147,14 +143,7 @@ void kernel_main() {
                     }
                 } else {
                     const uint32_t a_offset = (b_local * shard_ppb + p) * shard_page_stride;
-                    noc.async_read(
-                        UnicastEndpoint{},
-                        dfb_in0,
-                        page_size,
-                        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                         .addr = input_addr_a + a_offset},
-                        {.offset_bytes = 0});
+                    noc.async_read(input_a_shard, dfb_in0, page_size, {.offset_bytes = a_offset}, {.offset_bytes = 0});
                     noc.async_read_barrier();
                 }
                 dfb_in0.push_back(1);

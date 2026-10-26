@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -218,5 +219,17 @@ std::optional<tt::tt_metal::TensorTopology> all_to_all_output_topology(
     int32_t out_dim);
 std::optional<tt::tt_metal::TensorTopology> all_to_all_output_topology(
     const Tensor& input, std::optional<uint32_t> cluster_axis, int32_t out_dim);
+
+/**
+ * The label of an output computed from several labelled operands (a fused matmul of a collective's result by a
+ * weight, an elementwise op on a reduce_scatter result), as a TensorTopology over `mesh_coords`: the union launch()
+ * applies to plain ops (ttnn::device_operation::detail::compute_output_placements_and_shape), with
+ * `operands.front()` the label the operation computed itself, plus one rule: a sharded first operand fixes the
+ * result's distribution rank and sharded operands of another rank are left out, so a collapsed {N},[Shard{d}]
+ * collective result is not out-voted by N-D operands into Replicate on an axis whose devices hold distinct pieces.
+ */
+tt::tt_metal::TensorTopology union_topology(
+    const std::vector<std::reference_wrapper<const tt::tt_metal::TensorTopology>>& operands,
+    std::vector<tt::tt_metal::distributed::MeshCoordinate> mesh_coords);
 
 }  // namespace ttnn::operations::ccl::common

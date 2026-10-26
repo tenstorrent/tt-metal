@@ -21,7 +21,7 @@ FROM scratch AS sfpi-layer
 # See: https://docs.astral.sh/uv/guides/integration/docker/#installing-uv
 #############################################################
 
-ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9a23023be68b2ed09750ae636228e903a54a05ea56ed03a934d00fe9fbeded4b
+ARG UV_IMAGE=ghcr.io/astral-sh/uv@sha256:9f130421e930bfbdc563c00740466603f8723158e90297d07957c2294640262b
 FROM ${UV_IMAGE} AS uv-layer
 
 #############################################################
