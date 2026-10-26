@@ -105,6 +105,14 @@ constexpr char matmul_default_form()
         return matmul_forms_table[((k_class * 4 + fid) * 2 + (dst_sync == DstSync::SyncFull ? 1 : 0)) * 2 + (fp32_dest ? 1 : 0)][fmt];
     }
 }
+// Half sync tile MOP cells where the HiFi phase end op can ride on the last MVMUL (end_fold): HiFi2 with a 16-bit DEST and one k step per
+// section, Float16_b or Bfp8_b output. Elsewhere at half sync the earlier release of the held source read slower (unpack bound cells).
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format>
+constexpr bool matmul_half_end_fold()
+{
+    return dst_sync == DstSync::SyncHalf && math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 &&
+           (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b);
+}
 // Cells where the keys of the ttnn matmul kernels (the format each DEST section is packed to, the row MOP rule) pick a form that reads
 // slower than main's tile MOP and per-row unpack on the tt-llk sweep (perf_matmul_forms: every form of every perf_matmul Half cell,
 // ABBA against main, no fused post flip). Those cells keep main's form. A cell is the math fidelity, whether the contraction of a section

@@ -75,7 +75,8 @@ template <
     DataFormat in1_format = DataFormat::Invalid,
     DataFormat out_format = DataFormat::Invalid,
     std::uint32_t reuse_dir = 0,
-    bool row_end_fold = false>
+    bool row_end_fold = false,
+    bool half_end_fold = false>
 ALWI void matmul_block_math_dynamic_throttle(
     std::uint32_t in0_cb_id,
     std::uint32_t in1_cb_id,
@@ -104,7 +105,7 @@ ALWI void matmul_block_math_dynamic_throttle(
         }
     } else {
         if (throttled_mop_status != 0) {
-            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold>(
+            MATH((llk_math_matmul_init<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
             throttled_mop_status = 0;
         }
@@ -304,7 +305,8 @@ ALWI void matmul_block_init(
           llk_math_matmul_tile_mop<row_mop, kt_per_section, out_format>(),
           in1_order,
           reuse_dir,
-          row_end_fold>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+          row_end_fold,
+          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_per_section, out_format, in0_format, in1_format>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
     // Dynamic throttling is only available on Blackhole architecture
     MATH((throttled_mop_status = 0));
 #else
@@ -384,7 +386,8 @@ ALWI void matmul_block(
           in1_format,
           out_format,
           reuse_dir,
-          row_end_fold>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+          row_end_fold,
+          llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_per_section, out_format, in0_format, in1_format>()>(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
 #else
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
@@ -446,7 +449,8 @@ ALWI void matmul_block_k(
         in1_format,
         out_format,
         0,
-        row_end_fold>(
+        row_end_fold,
+        llk_math_matmul_half_end_fold<row_mop, matmul_elided_fidelity<in0_format, in1_format, out_format>(), kt_per_section, out_format, in0_format, in1_format>()>(
         in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim, num_k)));
 #else
     for (std::uint32_t k = 0; k < num_k; k++) {
