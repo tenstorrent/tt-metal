@@ -245,9 +245,12 @@ class GLMMesh:
     # ------------------------------------------------------------------ collectives
     @property
     def ccl(self):
-        """Persistent CCL semaphores (``models.common.modules.tt_ccl.TT_CCL``) for the async collectives."""
+        """Persistent CCL semaphores (``models.common.tt_ccl.TT_CCL``) for the async collectives."""
         if self._ccl is None:
-            from models.common.modules.tt_ccl import get_tt_ccl
+            try:  # tt-metal main keeps tt_ccl as models.common.tt_ccl (TTTv2 moved to tt-transformers)
+                from models.common.tt_ccl import get_tt_ccl
+            except ImportError:  # the 2026-10 base still has it under models.common.modules
+                from models.common.modules.tt_ccl import get_tt_ccl
 
             object.__setattr__(self, "_ccl", get_tt_ccl(self.device))  # frozen dataclass
         return self._ccl
