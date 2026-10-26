@@ -7,6 +7,7 @@ Shapes (inputs, head outputs and quantiles from ``tests/golden/make_goldens.py``
     paper          1024 univariate series x 2048 -> 64      (66 tokens per row, read-out token 63)
     long_context   32 x 15360 -> 1024                       (512 tokens per row, 31 stitched read-outs)
     multivariate   128 items x 8 variates x 2048 -> 64      (1024 rows, variate attention in every layer)
+    gift_e2e       64 series x U[256, 2048] -> 48, GIFT-Eval settings (symmetric averaging, make_positive)
 
 Each case is ``<shape>-<precision>``; the contract's target and guards are
 ``-k "paper or (long_context and accuracy) or (multivariate and accuracy)"``.
@@ -25,6 +26,8 @@ import statistics
 import time
 from pathlib import Path
 
+import subprocess
+
 import pytest
 import torch
 
@@ -37,7 +40,12 @@ from models.experimental.timesfm3_forecast.tests.golden_io import (
 
 STEADY_ITERS = 5
 DEVICE_SETTLE_S = 0.3
-SHAPES = {"paper": "bench_paper", "long_context": "bench_long_context", "multivariate": "bench_multivariate"}
+SHAPES = {
+    "paper": "bench_paper",
+    "long_context": "bench_long_context",
+    "multivariate": "bench_multivariate",
+    "gift_e2e": "gift64_h48",
+}
 # Sanity only (a catastrophic failure stops the run); the gates are judged from the record (``floor_ok``,
 # ``tests/perf/check_gates.py``).
 SANITY_PCC = 0.99
@@ -51,6 +59,13 @@ def _sync_time(device, fn):
     out = fn()
     ttnn.synchronize_device(device)
     return out, time.perf_counter() - start
+
+
+def _git_state() -> dict:
+    """PLAN v1.16: the commit and the model's dirty files, so check_gates.py can reject uncommitted evidence."""
+    here = Path(__file__).resolve().parents[2]
+    git = lambda *a: subprocess.run(["git", *a], cwd=here, capture_output=True, text=True).stdout.strip()  # noqa: E731
+    return {"git_head": git("rev-parse", "HEAD"), "git_dirty": git("status", "--porcelain", "--", "tt", "tests")}
 
 
 def _record(entry: dict) -> None:
@@ -71,11 +86,13 @@ def test_forward_perf(device, shape, precision):
     from models.experimental.timesfm3_forecast.tt.model import TtTimesFM3
 
     g = load_golden(SHAPES[shape])
-    contexts, horizon = list(g["contexts"].numpy()), g["horizon"]
+    c = g["contexts"]  # a list of tensors when the lengths differ (gift_e2e)
+    contexts = [t.numpy() for t in c] if isinstance(c, list) else list(c.numpy())
+    horizon, settings = g["horizon"], g.get("settings", {})
     tt = TtTimesFM3.from_checkpoint(device, TtPrecision.by_name(precision))
 
     def run():
-        prepared = tt.prepare_inputs(contexts, horizon)
+        prepared = tt.prepare_inputs(contexts, horizon, **settings)
         inputs = tt.upload_inputs(prepared)
         out = tt.forward_device(inputs)
         head, quantiles = tt.postprocess(out, prepared)
@@ -89,7 +106,7 @@ def test_forward_perf(device, shape, precision):
     splits = []
     for _ in range(STEADY_ITERS):
         start = time.perf_counter()
-        prepared = tt.prepare_inputs(contexts, horizon)
+        prepared = tt.prepare_inputs(contexts, horizon, **settings)
         prepare_s = time.perf_counter() - start
         inputs, upload_s = _sync_time(device, lambda: tt.upload_inputs(prepared))
         time.sleep(DEVICE_SETTLE_S)
@@ -135,6 +152,7 @@ def test_forward_perf(device, shape, precision):
             "policy": tt.precision.describe(),
             "cpu_s": g["cpu_s"],
             "chip": os.environ.get("TTQ_CHIP_SERIAL"),
+            **_git_state(),
         }
     )
     assert pcc_normalized >= SANITY_PCC, f"{shape}/{precision}: pcc_normalized {pcc_normalized}"

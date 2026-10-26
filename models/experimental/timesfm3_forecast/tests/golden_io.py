@@ -179,6 +179,15 @@ def head_metrics(expected: torch.Tensor, got: torch.Tensor, active: torch.Tensor
         "pcc_row_p01_active": float(torch.quantile(act, 0.01)),
         "pcc_row_min_active": float(act.min()),
         "rows_inactive": int((~active).sum()),
+        # PLAN v1.16: a gross single-element check (not a band check), drift-gated at 1.5x the fixed record.
+        "abs_err_max": float((g - e).abs().max()),
+        # PLAN v1.11: the inactive rows' own metric, max |error| over the golden-defined inactive set relative to
+        # the whole golden head's std; not applicable (absent) when the golden has no inactive rows.
+        **(
+            {"inactive_err_max_rel": float((gr[~active] - er[~active]).abs().max() / er.std())}
+            if (~active).any()
+            else {}
+        ),
     }
 
 

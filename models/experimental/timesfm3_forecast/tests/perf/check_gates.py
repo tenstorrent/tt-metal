@@ -11,7 +11,10 @@ For every record (``test``, ``name``, ``precision``) of the candidate:
   ``spread_ratio_p99`` may rise by at most its drift, ``spread_ratio_p50`` may move either way by at most its drift
   (``golden_io.DRIFT_CASE`` overrides a band per case); metrics without a ``golden_io.DRIFT`` entry (the min/max
   metrics) are floor-only;
-- every round-0 record must be present in the candidate.
+- every round-0 record must be present in the candidate;
+- ``abs_err_max`` may grow to at most 1.5x the fixed record's (PLAN v1.16; a gross single-element check, not a band
+  check), when the fixed record has it;
+- a record that carries ``git_dirty`` must have a clean tt/ and tests/ tree (PLAN v1.16).
 Device time is judged separately by ``compare_bench.py``. Exits 1 if any check fails.
 """
 
@@ -42,6 +45,17 @@ def main(candidate: str, round0: str) -> int:
         bad += 1
     for key, r in cand.items():
         print(f"== {'/'.join(str(k) for k in key)}")
+        if r.get("git_dirty"):
+            print(f"   dirty tree at {r.get('git_head', '?')[:11]}: {r['git_dirty']!r}  FAIL")
+            bad += 1
+        if "abs_err_max" in r:
+            ref = base.get(key, {}).get("abs_err_max")
+            if ref is None:
+                print(f"   abs_err_max            {r['abs_err_max']:.6f}  no fixed record")
+            else:
+                ok = r["abs_err_max"] <= 1.5 * ref
+                bad += not ok
+                print(f"   abs_err_max            {r['abs_err_max']:.6f}  <= 1.5 x {ref:.6f}  {'ok' if ok else 'DRIFT'}")
         for metric, (op, bound) in GATES[r["precision"]].items():
             if metric not in r:
                 print(f"   {metric:22s} missing")
