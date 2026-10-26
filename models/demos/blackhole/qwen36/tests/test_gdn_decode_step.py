@@ -194,13 +194,14 @@ def _pack_rows_user(rows, b, both=False):
     return out
 
 
+@pytest.mark.parametrize("idle", [False, True], ids=["all_active", "idle_rows"])
 @pytest.mark.parametrize("fp32_state", [False, True])
 @pytest.mark.parametrize("fast_mode", [False, True])
 @pytest.mark.parametrize("B", [1, 2, 4, 8, 16, 32])
-def test_gdn_decode_step_conv_batched(device, B, fast_mode, fp32_state):
+def test_gdn_decode_step_conv_batched(device, B, fast_mode, fp32_state, idle):
     if fp32_state and not fast_mode:
         pytest.skip("fp32_state needs fast_mode")
-    """Bmax = 32 state/history; B active users in rows/slots 0..B-1; slots >= B must be untouched."""
+    """Bmax = 32 state/history; B users in rows/slots 0..B-1; slots >= B and rows with row_pos -1 stay untouched."""
     torch.manual_seed(10 + B)
     Bmax = 32
     scale = Dk**-0.5
@@ -222,10 +223,14 @@ def test_gdn_decode_step_conv_batched(device, B, fast_mode, fp32_state):
     rows = (0.5 * torch.randn(B, W)).bfloat16()
     rows[:, az + 2 * Nv :] = 0
     # reference per user
+    idle_rows = ({1, B - 1} if B > 1 else {0}) if idle else set()
     refs = []
     h_ref = h_all.clone()
     new_hist = hist_host.clone()
     for b in range(B):
+        if b in idle_rows:
+            refs.append(None)
+            continue
         gated_ref, h_b, nh = _reference_conv(
             [t.float() for t in cs_all[b][1:]],
             rows[b].float(),
@@ -256,24 +261,37 @@ def test_gdn_decode_step_conv_batched(device, B, fast_mode, fp32_state):
         qkvz_dim=az,
         fast_mode=fast_mode,
         fp32_state=fp32_state,
+        row_pos=(
+            ttnn.from_torch(
+                torch.tensor([-1 if b in idle_rows else 100 for b in range(B)], dtype=torch.int32),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+            )
+            if idle
+            else None
+        ),
     )
     out_t = ttnn.to_torch(out).reshape(B, -1)
     h_t = ttnn.to_torch(state)
     hist_t = ttnn.to_torch(hist_dev)
-    worst_out = min(_pcc(out_t[b], refs[b]) for b in range(B))
-    worst_state = min(_pcc(h_t[b], h_ref[b]) for b in range(B))
+    active = [b for b in range(B) if b not in idle_rows]
+    worst_out = min((_pcc(out_t[b], refs[b]) for b in active), default=1.0)
+    worst_state = min((_pcc(h_t[b], h_ref[b]) for b in active), default=1.0)
+    idle_kept = all(torch.equal(h_t[b], h_all[b]) and torch.equal(hist_t[b], hist_host[b]) for b in idle_rows)
     untouched = torch.equal(h_t[B:], h_all[B:]) and torch.equal(hist_t[B:], hist_host[B:]) if B < Bmax else True
     hist_ok = torch.equal(hist_t[:B], new_hist[:B])
-    max_d = max((out_t[b] - refs[b]).abs().max().item() for b in range(B))
+    max_d = max(((out_t[b] - refs[b]).abs().max().item() for b in active), default=0.0)
     print(
-        f"B={B}: worst out pcc={worst_out:.6f} max|d|={max_d:.3e} worst state pcc={worst_state:.6f} hist shift exact={hist_ok} untouched={untouched}"
+        f"B={B}: worst out pcc={worst_out:.6f} max|d|={max_d:.3e} worst state pcc={worst_state:.6f} hist shift exact={hist_ok} untouched={untouched} idle kept={idle_kept}"
     )
     state_thr = 0.999 if fast_mode else 0.9999
-    assert worst_out > 0.999 and worst_state > state_thr and hist_ok and untouched, (
+    assert worst_out > 0.999 and worst_state > state_thr and hist_ok and untouched and idle_kept, (
         worst_out,
         worst_state,
         hist_ok,
         untouched,
+        idle_kept,
     )
 
 

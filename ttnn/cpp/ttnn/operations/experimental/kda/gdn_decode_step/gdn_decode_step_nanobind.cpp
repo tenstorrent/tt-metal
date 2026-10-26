@@ -47,6 +47,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
                 output; the updated state keeps the full fp32 sum (the default path truncates it to TF32), so it
                 differs in the last bits.
             fp32_state (bool): default False. fp32_state: keep the recurrent-state decay/add in exact fp32 on the SFPU (fast_mode only); avoids per-token state truncation.
+            row_pos (ttnn.Tensor, optional): fused-conv mode: ``[B]`` INT32 ROW_MAJOR decode positions. Rows with a
+                position < 0 keep their state and conv history (an idle decode row may hold a paused request).
         Returns:
             ttnn.Tensor: ``[1, B, Nv*Dv]`` normalized output; only logical rows ``0..B-1`` are valid.
         )doc",
@@ -71,7 +73,8 @@ void bind_gdn_decode_step(nb::module_& mod) {
         nb::arg("conv_taps") = nb::none(),
         nb::arg("qkvz_dim") = 0,
         nb::arg("fast_mode") = false,
-        nb::arg("fp32_state") = false);
+        nb::arg("fp32_state") = false,
+        nb::arg("row_pos") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::gdn_decode_step::detail

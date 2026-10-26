@@ -20,7 +20,7 @@ inline void write_tiles(const Accessor& acc, DataflowBuffer& dfb, Noc& noc, uint
 }
 }  // namespace
 
-template <uint32_t Kt, uint32_t Vt, uint32_t Nk, uint32_t Nv>
+template <uint32_t Kt, uint32_t Vt, uint32_t Nk, uint32_t Nv, uint32_t pos_bytes>
 TT_KERNEL void writer(uint32_t head, uint32_t u0, uint32_t nu) {
     const auto state_acc = TensorAccessor(tensor::state_out);
     const auto out_acc = TensorAccessor(tensor::out);
@@ -34,9 +34,28 @@ TT_KERNEL void writer(uint32_t head, uint32_t u0, uint32_t nu) {
     constexpr uint32_t rf = Nv / Nk;
     const uint32_t h = head;
     const uint32_t hk = h / rf;
+    uint32_t idle = 0;  // bit ui: row u0 + ui has position < 0, so its state and history are not written
+#if GDN_ROW_POS
+    {
+        const auto pos_acc = TensorAccessor(tensor::row_pos);
+        wshift.reserve_back(1);  // staging only, never pushed
+        noc.async_read(pos_acc, wshift, pos_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        auto lock = wshift.scoped_write_lock(1);
+        auto pos = lock.template get_ptr<volatile int32_t>();
+        for (uint32_t ui = 0; ui < nu; ++ui) {
+            idle |= (pos[u0 + ui] < 0 ? 1u : 0u) << ui;
+        }
+    }
+#endif
     for (uint32_t ui = 0; ui < nu; ++ui) {
         const uint32_t b = u0 + ui;
         const uint32_t bh = b * Nv + h;
+        if ((idle >> ui) & 1u) {
+            hnew.wait_front(KV);
+            hnew.pop_front(KV);
+            continue;
+        }
         wshift.reserve_back(4);
         zero_reserved(wshift, noc, 4);
         read_tiles_at(hist_acc, wshift, noc, bh * 4 + 1, 3, 0);

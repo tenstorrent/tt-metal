@@ -86,6 +86,7 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
     const m2::TensorParamName OUT{"out"};
     const m2::TensorParamName HIST{"hist"};
     const m2::TensorParamName TAPS{"taps"};
+    const m2::TensorParamName POS{"row_pos"};
 
     const auto fp32 = tt::DataFormat::Float32;
     const auto bf16 = tt::DataFormat::Float16_b;
@@ -246,7 +247,13 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
         }
         writer.tensor_bindings.push_back(m2::TensorBinding{QKV, "qkv_w"});
         writer.tensor_bindings.push_back(m2::TensorBinding{HIST, "hist_w"});
-        writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Nk", Nk}, {"Nv", Nv}};
+        uint32_t pos_bytes = 0;
+        if (a.skip_idle_rows) {
+            writer.tensor_bindings.push_back(m2::TensorBinding{POS, "row_pos"});
+            writer.compiler_options.defines.emplace("GDN_ROW_POS", "1");
+            pos_bytes = in.row_pos->buffer()->aligned_page_size();
+        }
+        writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}, {"Nk", Nk}, {"Nv", Nv}, {"pos_bytes", pos_bytes}};
     } else {
         writer.compile_time_args = {{"Kt", Kt}, {"Vt", Vt}};
     }
@@ -334,6 +341,11 @@ ttnn::device_operation::ProgramArtifacts GdnDecodeStepProgramFactory::create_pro
             m2::TensorParameter{.unique_id = TAPS, .spec = in.conv_taps->mesh_tensor().tensor_spec()});
         run_args.tensor_args.emplace(HIST, in.conv_hist->mesh_tensor());
         run_args.tensor_args.emplace(TAPS, in.conv_taps->mesh_tensor());
+        if (a.skip_idle_rows) {
+            tensor_parameters.push_back(
+                m2::TensorParameter{.unique_id = POS, .spec = in.row_pos->mesh_tensor().tensor_spec()});
+            run_args.tensor_args.emplace(POS, in.row_pos->mesh_tensor());
+        }
     }
 
     m2::ProgramSpec spec{

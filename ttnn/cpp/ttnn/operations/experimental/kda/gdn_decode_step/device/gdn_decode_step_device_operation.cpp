@@ -110,6 +110,20 @@ void GdnDecodeStepOperation::validate_on_program_cache_miss(const operation_attr
             "{}: conv_taps must be packed [Nv, 4, 32, 32] (got {})",
             kOp,
             ts);
+        if (in.row_pos.has_value()) {
+            const auto& p = *in.row_pos;
+            check_allocated_device_tensor(p, kOp, "row_pos");
+            check_layout(p, Layout::ROW_MAJOR, kOp, "row_pos");
+            check_interleaved(p, kOp, "row_pos");
+            check_same_device(in.qkv, p, kOp, "row_pos");
+            TT_FATAL(p.dtype() == DataType::INT32, "{}: row_pos must be INT32", kOp);
+            TT_FATAL(
+                p.logical_shape()[-1] == qs[1] && p.logical_volume() == qs[1],
+                "{}: row_pos must be one row of B = {} positions (got {})",
+                kOp,
+                qs[1],
+                p.logical_shape());
+        }
         TT_FATAL(
             2 * ((2 * Dk + Dv) / tt::constants::TILE_WIDTH) <= tt::constants::TILE_HEIGHT,
             "{}: packed head row needs <= 16 chunks (chunk c in row 2c)",
@@ -188,8 +202,10 @@ Tensor gdn_decode_step(
     const std::optional<Tensor>& conv_taps,
     uint32_t qkvz_dim,
     bool fast_mode,
-    bool fp32_state) {
+    bool fp32_state,
+    const std::optional<Tensor>& row_pos) {
     TT_FATAL(!fast_mode || conv_hist.has_value(), "{}: fast_mode needs the fused-conv mode (conv_hist)", kOp);
+    TT_FATAL(!row_pos.has_value() || conv_hist.has_value(), "{}: row_pos needs the fused-conv mode (conv_hist)", kOp);
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnDecodeStepOperation>(
         GdnDecodeStepParams{
@@ -207,6 +223,7 @@ Tensor gdn_decode_step(
             .qkvz_dim = qkvz_dim,
             .fast_mode = fast_mode,
             .fp32_state = fp32_state,
+            .skip_idle_rows = row_pos.has_value(),
         },
         GdnDecodeStepInputs{
             .qkv = qkv,
@@ -215,7 +232,8 @@ Tensor gdn_decode_step(
             .state = state,
             .weight = weight,
             .conv_hist = conv_hist,
-            .conv_taps = conv_taps});
+            .conv_taps = conv_taps,
+            .row_pos = row_pos});
 }
 
 }  // namespace ttnn::experimental::prim

@@ -35,6 +35,8 @@ struct GdnDecodeStepParams {
     // (UnpackToDest) instead of the FPU (SrcA, which truncates the fp32 state every token). Costs one extra KV-tile
     // DFB. Part of the program hash (default attribute hashing).
     bool fp32_state = false;
+    // row_pos given: rows at a position < 0 keep their state and conv history (an idle row may hold a paused request)
+    bool skip_idle_rows = false;
 };
 
 struct GdnDecodeStepInputs {
@@ -47,6 +49,7 @@ struct GdnDecodeStepInputs {
     std::optional<Tensor> conv_hist;
     // fused-conv mode: packed taps [Nv, 4, 32, 32] bf16, chunk c in rows 2c and 2c + 1, tap 0 oldest
     std::optional<Tensor> conv_taps;
+    std::optional<Tensor> row_pos;  // fused-conv: [B] int32 RM decode positions, -1 = idle row
 };
 
 }  // namespace ttnn::experimental::prim
