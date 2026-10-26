@@ -23,10 +23,10 @@
 #include <tt-metalium/core_coord.hpp>
 
 // UMD: re-exports tt::ARCH
-#include <tt-umd/types/arch.hpp>
+#include <umd/device/types/arch.hpp>
 #include <tt-metalium/device_types.hpp>
 // UMD: re-exports CoreType (used in IDevice::virtual_core_from_logical_core parameter).
-#include <tt-umd/types/core_coordinates.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include <tt_stl/span.hpp>
 

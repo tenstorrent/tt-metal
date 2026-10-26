@@ -10,16 +10,15 @@
 #include <functional>
 #include <optional>
 #include <string>
-
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
-#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_node_id.hpp>
-#include <tt-umd/utils/semver.hpp>
+#include <umd/device/utils/semver.hpp>
 
 namespace YAML {
 class Node;

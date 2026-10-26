@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 // UMD: re-exports tt::ARCH (used in hal::get_arch return type).
-#include <tt-umd/types/arch.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt::tt_metal::hal {
 

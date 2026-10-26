@@ -12,7 +12,7 @@
 
 #include <fmt/base.h>
 
-#include <tt-umd/types/arch.hpp>
+#include <umd/device/types/arch.hpp>
 
 namespace tt {
 
