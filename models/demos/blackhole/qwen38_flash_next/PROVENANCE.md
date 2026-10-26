@@ -26,6 +26,12 @@ Main's `moe_compute` caps one such call at 128 tokens for this model, so the mod
 `--prefill-slab` at start-up there and serves the chunked prefill; packed routing
 [#60469](https://github.com/tenstorrent/tt-metal/pull/60469) lifts that cap.
 
+The port leaves out three of the source's fused kernels: `qsa_score_pages` on the
+32-row verify tile, and the slab's `moe_combine` and `gdn_prefill_rows`. The op chains
+they replaced, which they matched bitwise, run instead. The `QWEN38_FUSED` and
+`QWEN38_FUSED_OFF` names that `docs/` gives for them are not registered, so a run
+that sets one stops at start-up.
+
 Applicable public GDN callers reuse Izajasz Wrosz's merged upstream
 [PR #57440](https://github.com/tenstorrent/tt-metal/pull/57440), commit
 `96cc4a7937f19ee205717577fcf4d10269d043b4`. The port does not add another public

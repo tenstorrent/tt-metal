@@ -292,11 +292,6 @@ def _chain_mapping(owner):
     return ttnn.subtract(_ONES_ROWS[key], owner, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
-# public names for the other MoE kernels' one-chip chain replicas (moe_combine)
-chain_mapping = _chain_mapping
-chain_compute_config = _compute_config
-
-
 def local_sum_rows(result) -> torch.Tensor:
     """``[rows, 2560]`` fp32 (the bf16 bits widened): the comparable form of the local sum."""
 

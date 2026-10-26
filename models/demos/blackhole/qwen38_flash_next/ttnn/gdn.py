@@ -1089,20 +1089,6 @@ def build_rows_selectors(accepted, constants: Qwen38TTNNGDNRowsConstants) -> Qwe
     return selectors
 
 
-# The rows-state fields the fused prefill rows form adds (None on every other form).
-_FUSED_ROWS_BUFFERS = ("sig", "o16", "gated", "history_next")
-
-
-def rows_qk_layout(tile_rows: int, fused_prefill: bool = False) -> tuple[tuple[int, ...], int]:
-    """The rows state's q/k local shape and mesh shard dim: token-major heads ``[1, T, 12, 128]`` (shard dim 2), or
-    under the slab's fused prefill rows form the chunk prims' own pad-free pages ``[12, NC, 32, 128]`` (shard dim 0:
-    the value heads lead), which ``gdn_pre_rows`` writes and ``ttnn.prim.chunk_gdn_prep`` reads without a relayout."""
-
-    if fused_prefill:
-        return fused.gdn_prefill_rows.buffer_layouts(tile_rows)["q"][0], 0
-    return (1, tile_rows, VALUE_HEADS_PER_DEVICE, HEAD_DIM), 2
-
-
 @dataclass
 class Qwen38TTNNGDNRowsState:
     """Per-layer persistent buffers of the ``rows``-row path (fixed addresses across passes).
@@ -1134,15 +1120,6 @@ class Qwen38TTNNGDNRowsState:
     # False: the pass buffers (qkv, q, k, v, beta, g, output) are another layer's slab rows state's; the slab's
     # layers run one after another, so the 35 GDN layers share one set (52 MB at 2048 rows) and keep their histories.
     owns_body: bool = True
-    # The slab's fused prefill rows form (QWEN38_FUSED=gdn_prefill_rows, bitwise): q/k/beta/g take the chunk prims'
-    # pad-free per-chunk pages and the four buffers below carry the pair's hand-offs.  None off the form.
-    fused_prefill: bool = False
-    sig: Any = None  # [1, 1, T, VALUE_WIDTH_PER_DEVICE] BF16: bf16(sigmoid(fp32 z)), the pre program's gate input
-    o16: Any = None  # [VALUE_HEADS_PER_DEVICE, T, HEAD_DIM] BF16: the scan's output cast, post_cast -> post_norm
-    gated: Any = None  # [1, 1, T, VALUE_WIDTH_PER_DEVICE] BF16: the gated rows the out-projection reads
-    # [1, 1, CHUNK_SIZE, QKV_WIDTH_PER_DEVICE] BF16: the next pass's FIR history, built by the gated epilogue and
-    # copied into the shared ``history`` by ``commit_rows_full`` (``forward_rows`` must not touch that buffer).
-    history_next: Any = None
     # The verify-rows wrap's per-layer buffers (``fused.gdn_rows_wrap.attach`` puts them here when that kernel runs
     # and this is the 32-row form), freed with the state.  While they are here the wrap owns the recurrence: the
     # prim layouts live in them and ``q`` / ``k`` / ``beta`` / ``g`` are not written.
@@ -1161,23 +1138,16 @@ class Qwen38TTNNGDNRowsState:
         layer_index: int,
         history=None,
         body: "Qwen38TTNNGDNRowsState | None" = None,
-        fused_prefill: bool = False,
     ) -> "Qwen38TTNNGDNRowsState":
         """``history`` hands over another rows state's history buffer (same layer): the two row forms then carry
         one FIR history and need no sync between them.  ``body`` hands over another layer's slab rows state whose
-        pass buffers this layer reuses (slab rows only).  ``fused_prefill`` allocates q/k in the chunk prims'
-        pad-free form with the fused pair's four extra buffers (slab rows only; a shared body carries its own
-        setting)."""
+        pass buffers this layer reuses (slab rows only)."""
 
         mesh_contract.validate_mesh(mesh_device)
         if constants.mesh_contract != mesh_contract:
             raise ValueError("GDN rows constants belong to a different physical mesh contract")
         if body is not None and (not is_slab_rows(constants.rows) or body.constants is not constants):
             raise ValueError("a shared GDN rows body is a slab option over the same constants")
-        if fused_prefill and not is_slab_rows(constants.rows):
-            raise ValueError("the fused prefill rows buffers are a slab option (gdn_prefill_rows)")
-        if body is not None and getattr(body, "fused_prefill", False) != fused_prefill:
-            raise ValueError("a shared GDN rows body and its layer disagree on the fused prefill rows form")
         allocated: list[Any] = []
 
         def zero(local_shape: tuple[int, ...], dtype, shard_dim: int, label: str):
@@ -1188,19 +1158,7 @@ class Qwen38TTNNGDNRowsState:
             return tensor
 
         tile_rows = constants.tile_rows
-        qk_shape, qk_shard_dim = rows_qk_layout(tile_rows, fused_prefill)
-        # Under the fused prefill rows form the pass buffers q / k / beta / g take the chunk prims' pad-free pages
-        # and four more buffers carry the pair's hand-offs; off the form they are not allocated at all.
-        extra = fused.gdn_prefill_rows.buffer_layouts(tile_rows) if fused_prefill else {}
-
-        def fused_buffer(name: str):
-            if not fused_prefill:
-                return None
-            if body is not None:
-                return getattr(body, name)
-            shape, dtype, shard_dim = extra[name]
-            return zero(shape, dtype, shard_dim, f"GDN rows fused {name}")
-
+        qk_shape = (1, tile_rows, VALUE_HEADS_PER_DEVICE, HEAD_DIM)
         try:
             result = cls(
                 layer_index=layer_index,
@@ -1215,30 +1173,22 @@ class Qwen38TTNNGDNRowsState:
                     if body is not None
                     else zero((1, 1, tile_rows, QKV_WIDTH_PER_DEVICE), ttnn.bfloat16, 3, "GDN rows qkv")
                 ),
-                q=body.q if body is not None else zero(qk_shape, ttnn.bfloat16, qk_shard_dim, "GDN rows q"),
-                k=body.k if body is not None else zero(qk_shape, ttnn.bfloat16, qk_shard_dim, "GDN rows k"),
+                q=body.q if body is not None else zero(qk_shape, ttnn.bfloat16, 2, "GDN rows q"),
+                k=body.k if body is not None else zero(qk_shape, ttnn.bfloat16, 2, "GDN rows k"),
                 v=(
                     body.v
                     if body is not None
                     else zero((1, 1, tile_rows, VALUE_WIDTH_PER_DEVICE), ttnn.bfloat16, 3, "GDN rows v")
                 ),
                 beta=(
-                    fused_buffer("beta")
-                    if fused_prefill
-                    else (
-                        body.beta
-                        if body is not None
-                        else zero((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3, "GDN rows beta")
-                    )
+                    body.beta
+                    if body is not None
+                    else zero((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3, "GDN rows beta")
                 ),
                 g=(
-                    fused_buffer("g")
-                    if fused_prefill
-                    else (
-                        body.g
-                        if body is not None
-                        else zero((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3, "GDN rows log decay")
-                    )
+                    body.g
+                    if body is not None
+                    else zero((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3, "GDN rows log decay")
                 ),
                 output=(
                     body.output
@@ -1248,11 +1198,6 @@ class Qwen38TTNNGDNRowsState:
                 mesh_contract=mesh_contract,
                 owns_history=history is None,
                 owns_body=body is None,
-                fused_prefill=fused_prefill,
-                sig=fused_buffer("sig"),
-                o16=fused_buffer("o16"),
-                gated=fused_buffer("gated"),
-                history_next=fused_buffer("history_next"),
             )
             result.validate()
             return result
@@ -1260,30 +1205,21 @@ class Qwen38TTNNGDNRowsState:
             _deallocate(*allocated)
             raise
 
-    @property
-    def fused_fields(self) -> tuple[str, ...]:
-        """The pass buffers the fused prefill rows form adds beside the eight (empty off the form)."""
-
-        return _FUSED_ROWS_BUFFERS if self.fused_prefill else ()
-
     def validate(self) -> None:
         owned = (self.history, self.qkv, self.q, self.k, self.v, self.beta, self.g, self.output)
-        owned += tuple(getattr(self, name) for name in self.fused_fields)
         if len({_tensor_key(tensor) for tensor in owned}) != len(owned):
             raise RuntimeError(f"GDN rows state requires {len(owned)} distinct backing tensors")
         tile_rows = self.constants.tile_rows
-        qk_shape, qk_shard_dim = rows_qk_layout(tile_rows, self.fused_prefill)
-        extra = fused.gdn_prefill_rows.buffer_layouts(tile_rows) if self.fused_prefill else {}
+        qk_shape = (1, tile_rows, VALUE_HEADS_PER_DEVICE, HEAD_DIM)
         expected = {
             "history": ((1, 1, CHUNK_SIZE, QKV_WIDTH_PER_DEVICE), ttnn.bfloat16, 3),
             "qkv": ((1, 1, tile_rows, QKV_WIDTH_PER_DEVICE), ttnn.bfloat16, 3),
-            "q": (qk_shape, ttnn.bfloat16, qk_shard_dim),
-            "k": (qk_shape, ttnn.bfloat16, qk_shard_dim),
+            "q": (qk_shape, ttnn.bfloat16, 2),
+            "k": (qk_shape, ttnn.bfloat16, 2),
             "v": ((1, 1, tile_rows, VALUE_WIDTH_PER_DEVICE), ttnn.bfloat16, 3),
-            "beta": extra.get("beta", ((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3)),
-            "g": extra.get("g", ((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3)),
+            "beta": ((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3),
+            "g": ((1, 1, tile_rows, VALUE_HEADS_PER_DEVICE), ttnn.float32, 3),
             "output": ((1, 1, self.constants.rows, HIDDEN_SIZE_PER_DEVICE), ttnn.bfloat16, 3),
-            **{name: extra[name] for name in self.fused_fields},
         }
         for name, (shape, dtype, shard_dim) in expected.items():
             tensor = getattr(self, name)
@@ -1291,14 +1227,11 @@ class Qwen38TTNNGDNRowsState:
             if tensor.dtype != dtype:
                 raise RuntimeError(f"GDN rows {name} must be {dtype}, got {tensor.dtype}")
             self.mesh_contract.validate_tensor(tensor, placement=TensorPlacement.HEAD_SHARDED, shard_dim=shard_dim)
-        if not self.fused_prefill and any(getattr(self, name) is not None for name in _FUSED_ROWS_BUFFERS):
-            raise RuntimeError("GDN rows buffers of the fused prefill form are set on a state that is not on it")
 
     def deallocate(self) -> None:
         _deallocate(
             *((self.history,) if self.owns_history else ()),
             *((self.qkv, self.q, self.k, self.v, self.beta, self.g, self.output) if self.owns_body else ()),
-            *(tuple(getattr(self, name) for name in self.fused_fields) if self.owns_body else ()),
         )
         if self.wrap_buffers is not None:
             self.wrap_buffers.deallocate()
@@ -1775,11 +1708,6 @@ class Qwen38TTNNGDN:
         )
         # projection -> gated output: the composed chain, or the fused kernel when QWEN38_FUSED names gdn_step
         self._step = fused.resolve("gdn_step")
-        # The prefill slab's GDN body: the two rows programs around the chunk prims when QWEN38_FUSED names
-        # gdn_prefill_rows and the pass's rows state carries their buffers, today's chain otherwise.  Resolved once,
-        # so a trace capture keeps the choice; the 32-row, 128-row, lane and decode bodies never read it.
-        self._prefill_rows = fused.resolve_admitted("gdn_prefill_rows")
-        self._prefill_rows_on = fused.enabled("gdn_prefill_rows")
         # the rows body between the projection and the out-projection: the wrap's two programs around the two prims
         # (a default) where the rows state carries its buffers, the chain elsewhere and under QWEN38_FUSED_OFF=gdn_rows_wrap
         self._rows_body_call = fused.resolve_admitted("gdn_rows_wrap")
@@ -1808,24 +1736,6 @@ class Qwen38TTNNGDN:
         if step is None:
             step = self._step = fused.resolve_admitted("gdn_step")
         return step
-
-    def _gdn_prefill_rows(self):
-        """The slab body: the fused pair when ``QWEN38_FUSED`` names ``gdn_prefill_rows`` and the call's rows state
-        meets its input contract, today's chain otherwise; resolved once (fakes that skip ``__init__`` here)."""
-
-        body = self.__dict__.get("_prefill_rows")
-        if body is None:
-            body = self._prefill_rows = fused.resolve_admitted("gdn_prefill_rows")
-        return body
-
-    def _fused_prefill_rows_buffers(self) -> bool:
-        """Whether a slab rows state allocated now carries the fused prefill rows buffers: the switch alone, read
-        once per module, so the buffers a capture binds match the callable that was resolved with it."""
-
-        on = self.__dict__.get("_prefill_rows_on")
-        if on is None:
-            on = self._prefill_rows_on = fused.enabled("gdn_prefill_rows")
-        return on
 
     def _rows_body_wrap(self):
         """Today's rows body from the projection to the out-projection: on a rows state that carries the wrap's
@@ -2508,8 +2418,6 @@ class Qwen38TTNNGDN:
     def allocate_rows_state(
         self, constants: Qwen38TTNNGDNRowsConstants, *, history=None, body: Qwen38TTNNGDNRowsState | None = None
     ) -> Qwen38TTNNGDNRowsState:
-        # gdn_prefill_rows (QWEN38_FUSED, bitwise) is a slab form: the chunk rows states keep the chain's buffers.
-        fused_prefill = is_slab_rows(constants.rows) and self._fused_prefill_rows_buffers()
         rows_state = Qwen38TTNNGDNRowsState.allocate(
             self.mesh_device,
             self.mesh_contract,
@@ -2517,7 +2425,6 @@ class Qwen38TTNNGDN:
             layer_index=self.weights.layer_index,
             history=history,
             body=body,
-            fused_prefill=fused_prefill,
         )
         # Whether this state runs the verify-rows wrap is decided here, before the warm pass: its buffers are the
         # admission, so the warm rounds, the capture and the commit that reads them cannot disagree.
@@ -2629,7 +2536,13 @@ class Qwen38TTNNGDN:
             projected = ttnn.to_memory_config(projected_ws, ttnn.L1_MEMORY_CONFIG)
             _deallocate(projected_ws)
         elif is_slab_rows(tile_rows):
-            projected = self._slab_projection(full_hidden, rows_state)
+            # one 2D-multicast matmul over every row on an interleaved copy of the weight
+            projected = prefill_linear(
+                full_hidden,
+                self.weights.qkvzab,
+                self.prefill_dense.program_config(tile_rows, HIDDEN_SIZE, PROJECTION_WIDTH_PER_DEVICE),
+                compute_kernel_config=self.projection_compute_config,
+            )
         else:
             projected_tiles = []
             for tile in dram_sharded_row_tiles(full_hidden, self.in_proj_act_memory_config):
@@ -2679,27 +2592,6 @@ class Qwen38TTNNGDN:
             pieces[name] = piece
         _deallocate(projected)
         return pieces["z"], pieces["a"], pieces["b"]
-
-    def _slab_projection(self, full_hidden, rows_state: Qwen38TTNNGDNRowsState):
-        """The slab's whole projection ``[1, 1, T, 4160]``: one 2D-multicast matmul over every row on an interleaved
-        copy of the weight, and the head-shard retag of the result.
-
-        ``_project_rows``' slab branch calls it and then slices; the fused prefill rows body (``fused/
-        gdn_prefill_rows.py``) calls it and reads the q|k|v, z and a/b columns out of the tensor itself.  The retag
-        and the two checks here are metadata and shape reads, so ``_project_rows`` repeating them costs nothing.
-        """
-
-        tile_rows = rows_state.constants.tile_rows
-        projected = prefill_linear(
-            full_hidden,
-            self.weights.qkvzab,
-            self.prefill_dense.program_config(tile_rows, HIDDEN_SIZE, PROJECTION_WIDTH_PER_DEVICE),
-            compute_kernel_config=self.projection_compute_config,
-        )
-        _retag_head_shard_after_reshape(projected, reference=rows_state.qkv, shard_dim=3)
-        self.mesh_contract.validate_tensor(projected, placement=TensorPlacement.HEAD_SHARDED, shard_dim=3)
-        _require_shape(projected, (1, 1, tile_rows, PROJECTION_WIDTH_PER_DEVICE), label="GDN rows projection")
-        return projected
 
     def _conv_window_rows(self, rows_state: Qwen38TTNNGDNRowsState):
         """``[history tile | qkv tiles]``: whole tiles on dim 2 (no row padding, so a plain tile concat).
@@ -3003,7 +2895,33 @@ class Qwen38TTNNGDN:
             _require_shape(normalized, (1, 1, tile_rows, VALUE_WIDTH_PER_DEVICE), label="GDN slab normalized output")
             gated = ttnn.multiply(normalized, sigmoid_bf16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             _deallocate(normalized, sigmoid_bf16)
-            output = self._slab_out_projection(gated, full_hidden, rows_state)
+            partial = prefill_linear(
+                gated,
+                self.weights.out,
+                self.prefill_dense.program_config(tile_rows, VALUE_WIDTH_PER_DEVICE, HIDDEN_SIZE),
+                compute_kernel_config=self.projection_compute_config,
+            )
+            _deallocate(gated)
+            self.mesh_contract.mark_local_partial(
+                partial, replicated_reference=full_hidden, expected_shape=(1, 1, tile_rows, HIDDEN_SIZE)
+            )
+            output = ttnn.reduce_scatter(
+                partial,
+                dim=3,
+                cluster_axis=TP_AXIS,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.collective_topology,
+            )
+            _deallocate(partial)
+            self.mesh_contract.mark_collective_shard(
+                output,
+                replicated_reference=full_hidden,
+                shard_dim=3,
+                expected_local_shape=(1, 1, tile_rows, HIDDEN_SIZE_PER_DEVICE),
+            )
+            _copy_inplace(output, rows_state.output, label="GDN slab output")
+            _deallocate(output)
+            output = rows_state.output
         else:
             # The long chunk folds one 32-row tile at a time: the head-major rows of tile c are a whole-tile
             # slice whose fold is the same metadata view, gated by the gate's rows of that tile straight into
@@ -3062,48 +2980,6 @@ class Qwen38TTNNGDN:
         _require_shape(rows_state.output, (1, 1, rows, HIDDEN_SIZE_PER_DEVICE), label="GDN rows output")
         return rows_state.output
 
-    def _slab_out_projection(self, gated, full_hidden, rows_state: Qwen38TTNNGDNRowsState):
-        """The slab's tail: one 2D-multicast out-projection over every gated row, one reduce-scatter, the rows
-        copied into the persistent output.  ``gated`` is consumed.
-
-        ``_gate_and_project_rows``' slab branch builds ``gated`` with the chain's ops and calls this; the fused
-        prefill rows body's ``gdn_post_rows`` writes the same rows into its persistent buffer and calls it too.
-        """
-
-        tile_rows = rows_state.constants.tile_rows
-        partial = prefill_linear(
-            gated,
-            self.weights.out,
-            self.prefill_dense.program_config(tile_rows, VALUE_WIDTH_PER_DEVICE, HIDDEN_SIZE),
-            compute_kernel_config=self.projection_compute_config,
-        )
-        if rows_state.fused_prefill:
-            # the fused body hands over its persistent pass buffer, which outlives the call
-            if _tensor_key(gated) != _tensor_key(rows_state.gated):
-                raise RuntimeError("the fused slab body must hand its own gated buffer to the out-projection")
-        else:
-            _deallocate(gated)
-        self.mesh_contract.mark_local_partial(
-            partial, replicated_reference=full_hidden, expected_shape=(1, 1, tile_rows, HIDDEN_SIZE)
-        )
-        output = ttnn.reduce_scatter(
-            partial,
-            dim=3,
-            cluster_axis=TP_AXIS,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.collective_topology,
-        )
-        _deallocate(partial)
-        self.mesh_contract.mark_collective_shard(
-            output,
-            replicated_reference=full_hidden,
-            shard_dim=3,
-            expected_local_shape=(1, 1, tile_rows, HIDDEN_SIZE_PER_DEVICE),
-        )
-        _copy_inplace(output, rows_state.output, label="GDN slab output")
-        _deallocate(output)
-        return rows_state.output
-
     def _out_proj_tile(self, gated_tile, full_hidden):
         """The 1-row out-proj on one gated 32-row tile in the out-proj activation shard, reduce-scattered."""
 
@@ -3152,13 +3028,6 @@ class Qwen38TTNNGDN:
         self._validate_state(state)
         rows = self._validate_rows_state(rows_state)
         full_hidden = self._all_gather_rows(hidden_rows, rows)
-        if is_slab_rows(rows_state.constants.tile_rows):
-            # The slab body only: the two rows programs around the chunk prims when the fused kernel serves this
-            # call, today's chain (the four calls below, in the same order) otherwise.  The 32-row and 128-row
-            # bodies never resolve it.
-            body = self._gdn_prefill_rows()
-            output, final_state = body(self, full_hidden, rows_state, state.recurrent, full_tile=full_tile)
-            return Qwen38TTNNGDNRowsResult(output, final_state, state, rows_state)
         # The body between the gather and the result: today's chain (``rows_body_composed``: the same calls in the
         # same order) or, on a rows state the verify-rows wrap owns, its two programs around the two chunk prims.
         body = self._rows_body()
@@ -3381,12 +3250,7 @@ class Qwen38TTNNGDN:
             _require_shape(final_state, (1, VALUE_HEADS_PER_DEVICE, HEAD_DIM, HEAD_DIM), label="GDN rows final state")
             _copy_inplace(final_state, state.recurrent, label="GDN rows committed state")
             _deallocate(final_state)
-        if rows_state.fused_prefill:
-            # The fused slab body's gated epilogue already built the next pass's history tile from the projection's
-            # last three rows (gdn_post_rows), in place of the seven programs of the branch below; the commit is the
-            # one copy, which is also what keeps ``forward_rows`` side-effect free on the shared history buffer.
-            _copy_inplace(rows_state.history_next, rows_state.history, label="GDN slab history")
-        elif is_slab_rows(rows_state.constants.tile_rows):
+        if is_slab_rows(rows_state.constants.tile_rows):
             # The last three new rows into history rows 0..2 (rows 3..31 zero) by row shifts: the last row tile
             # untilized, its rows 29..31 sliced, padded to a tile, tilized, copied into the persistent history.
             dram = ttnn.DRAM_MEMORY_CONFIG

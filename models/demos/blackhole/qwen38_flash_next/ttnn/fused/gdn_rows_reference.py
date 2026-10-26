@@ -3,9 +3,9 @@
 
 """The GDN rows chain (``ttnn/gdn.py``'s slab / rows path) as torch, op for op, with the chain's rounding points.
 
-Shared by the prefill rows kernels (``gdn_pre_rows`` / ``gdn_post_rows``, the 2048-row slab around the unchanged
-chunk prims) and the MTP verify-rows scan (the k + 1 consecutive rows of one tile): the two program families mirror the
-same chain ops, so they take one reference and one set of rounding rules.
+Shared by the rows kernels (``gdn_pre_rows`` / ``gdn_post_rows``, which the verify-rows wrap runs around the
+unchanged chunk prims) and the MTP verify-rows scan (the k + 1 consecutive rows of one tile): the two program
+families mirror the same chain ops, so they take one reference and one set of rounding rules.
 
 What this is: a STRUCTURAL reference.  Every function is one op of today's chain and packs where the chain's op packs
 (one bf16 rounding per bf16 op, fp32 kept where the chain keeps fp32).  Where the device's arithmetic inside an op is

@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gdn_pre_rows``: the GDN prefill rows chain from the projection to the chunk prims' inputs, one program.
+"""``gdn_pre_rows``: the GDN rows chain from the projection to the chunk prims' inputs, one program.
 
-Replaces the slab branch's P1 landing slices, ``_shifted_rows_slab`` (the FIR row shifts), ``_causal_conv_rows``
-(multiply + three ``mac`` + SiLU), ``_make_chunk_inputs`` (the GQA expand, both q/k rms_norms and scales, the v row
-mask, the beta and log-decay gates) and the composite's own q scale and head-major relayout, plus the z sigmoid the
-gated epilogue no longer has to wait for the scan to compute.  Every arithmetic step is the chain op's own LLK
-sequence in the chain op's DEST width with one pack per op, so the outputs are the chain's bits; the row shifts, the
-GQA copy, the page maps and the beta/g column transposes are data movement.
+Replaces the rows chain's landing slices, its FIR row shifts (the 0/1 selection matmuls of the 32-row tile,
+``_shifted_rows_slab`` on a slab), ``_causal_conv_rows`` (multiply + three ``mac`` + SiLU), ``_make_chunk_inputs``
+(the GQA expand, both q/k rms_norms and scales, the v row mask, the beta and log-decay gates) and the composite's
+own q scale and head-major relayout, plus the z sigmoid the gated epilogue no longer has to wait for the scan to
+compute.  Every arithmetic step is the chain op's own LLK sequence in the chain op's DEST width with one pack per
+op, so the outputs are the chain's bits; the row shifts, the GQA copy, the page maps and the beta/g column transposes
+are data movement.
 
 One program, two core groups on disjoint core rectangles, six kernels:
 
@@ -37,8 +38,8 @@ Blackhole and a template argument spelled with them fails to parse (the sibling 
 constants here are ``DF_BF16`` / ``DF_FP32``.
 
 What this module does NOT do: the history tile of the next pass (``commit_rows_full`` keeps it), the scan, and the
-gated epilogue (``gdn_post_rows``).  No registry entry yet: the model wiring stage adds ``gdn_prefill_rows`` with
-the composed chain.
+gated epilogue (``gdn_post_rows``).  No registry entry of its own: ``gdn_rows_wrap`` runs it on the 32-row verify
+tile; the device test also runs 128 rows.
 
 ``v`` runs the chain's own row-mask multiply (``ttnn.multiply(v_slice, row_mask_bf16_col)``, binary_ng's
 column-broadcast SFPU kernel) rather than being written as the SiLU left it: that op carries the rows mask AND the

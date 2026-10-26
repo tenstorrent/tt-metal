@@ -473,7 +473,6 @@ class Qwen38TTNNMoE:
     moe_post_fused = False
     shared_expert_fused = False
     moe_dense_fused = False
-    slab_combine_fused = False
     routing_in_l1 = False
     expert_owner = None
     # The prefill slab's dense linears (ttnn/prefill_dense) for the shared expert; the router and every decode linear
@@ -552,10 +551,6 @@ class Qwen38TTNNMoE:
         self.moe_post_fused = one_tile and fused.resolve("moe_post") is fused.kernel("moe_post").fused
         self.shared_expert_fused = one_tile and fused.resolve("shared_expert") is fused.kernel("shared_expert").fused
         self.routing_in_l1 = self.moe_post_fused and self._route_tail is fused.kernel("router_tail").fused
-        # The slab's combine as one program per layer (ttnn/fused/moe_combine: the page's owned rows read
-        # straight into tiles, the fused reduce's MAC in its slot order; bitwise the 512-row blocks), the default;
-        # QWEN38_FUSED_OFF=moe_combine restores the blocks.  It takes device d's owner row (below) and the routing rows.
-        self.slab_combine_fused = self.slab and fused.resolve("moe_combine") is fused.kernel("moe_combine").fused
         if self.shared_expert_fused and weights.shared_gate_up_scalar is None:
             raise ValueError("the fused shared expert needs weights loaded with it on (shared_gate_up_scalar is None)")
         # The MoE dense composite (ttnn/fused/moe_dense): the fused top-k, the fused shared expert's eltwise and down
@@ -666,8 +661,8 @@ class Qwen38TTNNMoE:
                 )
             mesh_contract.validate_tensor(self.expert_mapping, placement=TensorPlacement.REPLICATED)
             mesh_contract.validate_tensor(self.local_combine_output, placement=TensorPlacement.LOCAL_PARTIAL)
-            if self.moe_post_fused or self.slab_combine_fused:
-                # device d's [1, 512] expert owner row (the post and combine programs have no mesh coordinate)
+            if self.moe_post_fused:
+                # device d's [1, 512] expert owner row (the post program has no mesh coordinate)
                 self.expert_owner = ttnn.from_torch(
                     fused.moe_post.owner_rows(MESH_SHAPE[1]),
                     device=mesh_device,
@@ -724,9 +719,7 @@ class Qwen38TTNNMoE:
             raise RuntimeError(
                 "MoE instance is poisoned after an asynchronous forward failure"
             ) from self._poisoned_error
-        names = ("expert_mapping", "local_combine_output") + (
-            ("expert_owner",) if (self.moe_post_fused or self.slab_combine_fused) else ()
-        )
+        names = ("expert_mapping", "local_combine_output") + (("expert_owner",) if self.moe_post_fused else ())
         missing = tuple(name for name in names if getattr(self, name, None) is None)
         if self._owned_buffers_released or missing:
             raise RuntimeError(f"MoE instance-owned buffers are unavailable: {missing or 'released'}")
@@ -1154,19 +1147,6 @@ class Qwen38TTNNMoE:
 
         phase_observer("before-selective-reduce")
         dram = ttnn.DRAM_MEMORY_CONFIG
-        # getattr: the no-device aliasing test calls this method on a bare namespace without the flag
-        if getattr(self, "slab_combine_fused", False) and fused.moe_combine.admits(
-            combine, routing.scores, routing.indices, self.expert_owner
-        ):
-            # one program: the page's owned rows into tiles, the fused reduce's MAC over the ten slots, the tiled partial
-            partial = fused.moe_combine.moe_combine(
-                combine, routing.scores, routing.indices, self.expert_owner, memory_config=dram
-            )
-            self.mesh_contract.mark_local_partial(
-                partial, replicated_reference=full_hidden, expected_shape=self.row_contract.full_hidden
-            )
-            phase_observer("after-selective-reduce")
-            return partial
         block = SLAB_REDUCE_BLOCK_ROWS
         # A slab of exactly one block (512 rows) has no sub-range to slice: ``ttnn.slice`` over a tensor's full extent
         # returns its INPUT (an alias), and ``ttnn.concat`` of one tensor likewise, so the block's pages are the

@@ -1206,9 +1206,6 @@ def test_rows_bodies_are_the_pinned_walk() -> None:
         "_validate_state",
         "_validate_rows_state",
         "_all_gather_rows",
-        # the slab body, resolved once: the fused gdn_prefill_rows pair, or the chain's four calls below (which are
-        # what the composed callable runs); the 32-row and 128-row bodies take those four directly
-        "_gdn_prefill_rows",
         "_rows_body",
     ]
     composed = ast.parse(inspect.getsource(gdn_rows_wrap.rows_body_composed))

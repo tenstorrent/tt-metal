@@ -111,8 +111,8 @@ def qualifies(rows_state) -> bool:
 
 def attach(gdn, rows_state, environ=None) -> Buffers | None:
     """Allocate the wrap's buffers onto a newly allocated rows state and return them, or None when the wrap is switched
-    off (``QWEN38_FUSED_OFF=gdn_rows_wrap``) or the state is not the form it serves (another row count, the slab's
-    forms, a host fake).
+    off (``QWEN38_FUSED_OFF=gdn_rows_wrap``) or the state is not the form it serves (another row count, a slab, a
+    host fake).
 
     Called from ``allocate_rows_state``, so whether a rows state runs the wrap is fixed before the warm pass: the
     warm rounds and the capture take the same branch, and the commit that reads these buffers cannot find itself on

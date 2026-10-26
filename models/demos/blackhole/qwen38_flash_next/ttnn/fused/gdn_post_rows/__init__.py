@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""``gdn_post_rows``: the GDN prefill rows chain after the chunk scan, as two ``generic_op`` programs.
+"""``gdn_post_rows``: the GDN rows chain after the chunk scan, as two ``generic_op`` programs.
 
 The chain it mirrors is ``_gate_and_project_rows`` (``ttnn/gdn.py``) from the scan's output to the gate, plus the
 history tile ``commit_rows_full`` builds for the next pass: ``typecast(o fp32 -> bf16)``, ``rms_norm(weight=norm,
 epsilon=1e-6)``, the twelve head slices and the width concat, ``multiply(normalized, sigmoid_bf16)``, and the last
 tile row's q|k|v rows 29..31 moved into a fresh 32-row tile.  The z sigmoid is NOT here: it does not depend on the
 scan, so ``gdn_pre_rows`` produces it into the persistent ``sig`` buffer and this program takes it as an input.
+``gdn_rows_wrap`` runs both programs on the 32-row verify tile, ``post_norm`` without the history tile; the device
+test also runs 128 rows and the history tile.
 
 Two programs, because a compute kernel has one destination width and the chain's two arithmetic ops disagree:
 
@@ -215,8 +217,8 @@ def _require(condition: bool, message: str) -> None:
 
 def allocate_outputs(mesh, chunks: int, *, history: bool = True, gated_memory_config=ttnn.DRAM_MEMORY_CONFIG):
     """The programs' three output buffers for ``T = 32 * chunks`` rows: ``o16`` (post_cast's output and post_norm's
-    input), ``gated`` and, with ``history``, ``history_next``.  Persistent per slab body, as the chain's rows state
-    buffers are."""
+    input), ``gated`` and, with ``history``, ``history_next``: the device test's (``gdn_rows_wrap`` allocates its
+    ``o16`` and ``gated`` per call)."""
 
     rows = chunks * TILE
     return {
