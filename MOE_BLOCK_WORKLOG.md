@@ -1791,3 +1791,30 @@ Validation (2026-10-25, bh-lb-09):
   narrower engine cost the SE path nothing measurable (K3 its end 540 -> 516 2x4, 455 -> 445 ring). The LoudBox
   heads are SE-path bound: off by default there; on the Galaxy (chain 490 vs SE 457) ~-33 us expected.
 - Soak (planner path, router_split): K3 / K2.7 640 rows, 2000 + 500 traced replays each, every 25th checked - clean.
+
+## Host side of an untraced forward: prepared dispatch (2026-10-26, bh-lb-19 2x4, chunk 1280)
+Untraced, the K3 g224 block was host-bound: 4310 us wall, 3839 us of host enqueue against ~1958 us of device time
+(traced replay). py-spy (native) + cProfile of a warm forward loop (models/demos/moe_block/tests/zz_scratch_host_prof.py,
+local only): ~30% the fused head's / tail's _rebind copying every chip's whole ProgramDescriptor (KernelDescriptor copy
+and destruction) to rebind CBs to the arena taken again each call; ~31% generic_op's cache-hit slow path re-applying
+every runtime arg of every core of every chip (apply_descriptor_runtime_args: per-word lookups and bounds checks);
+~15% per-call tensor allocations (four L1 arenas, outputs); ~11% the enqueue itself. On main the descriptor-era
+cache-hit mechanism is the program factory's override_runtime_arguments (mesh_device_operation_adapter.hpp); generic_op
+has none, so Python-built programs always take the slow path.
+- New bringup op ttnn.bringup.prepare_program / run_prepared (ttnn/ttnn/bringup/prepared_program): the descriptor is
+  kept; prepare records the runtime-arg slots holding an io tensor's exact address and the CBs an io tensor backs; the
+  factory's override_runtime_arguments patches only those on a hit. Cache key = structural hash + every unpatched
+  runtime-arg value (a rebuilt descriptor with other frozen values must not hit the old program - the first version
+  without it gave NaNs in the tail). Python wrapper ttnn.bringup.prepared_program.generic_op for call sites that keep
+  their descriptor object.
+- Moved: the fused head (rebuilt only when the arena base or a non-x io address moves; x patched per call), the tail
+  (rebuilt when any address moves: its args point inside y / se / out), the token-split planner, dispatch prep and
+  zero gate, the sparse all-gather's cached path.
+| us, untraced | K3 g224 before / after | GLM-Flash before / after |
+|---|---|---|
+| host enqueue | 3839 / 1494 | 2757 / 1281 |
+| wall (synced each call) | 4310 / 2573 | 3847 / 2438 |
+| back to back (no syncs) | 4181 / 1966 | 2839 / 1672 |
+Bit-exact block outputs on four inputs (both models); test_moe_block eager PCC 0.9961-0.9962 (K3), traced replays
+unchanged (K3 2006-2011, GLM-Flash 1690-1695 us). Left on the host (K3): ~400 us of per-call arena allocations (SE,
+tail, combine + its fit check), ~110 us the fused flat + combine op, the rest the enqueues.

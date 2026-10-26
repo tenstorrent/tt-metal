@@ -736,7 +736,10 @@ def sparse_all_gather_2d(
         )
         hit = _DESC_CACHE.get(dkey)
         if hit is not None and hit[0] is output.device():
-            return ttnn.generic_op([plan_tensor, output], hit[1])
+            # (prepared dispatch: only the io tensors' address slots patched per call, not every runtime arg)
+            from ttnn.bringup.prepared_program import generic_op as prepared_generic_op
+
+            return prepared_generic_op([plan_tensor, output], hit[1])
     mesh_device = output.device()
     R, C = tuple(mesh_device.shape)
     N = R * C

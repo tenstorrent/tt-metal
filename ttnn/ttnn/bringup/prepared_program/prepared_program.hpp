@@ -1,0 +1,63 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+// A generic_op program prepared once and dispatched with only its tensor addresses patched.
+//
+// generic_op takes a MeshProgramDescriptor every call and, on a program-cache hit, re-applies every runtime arg of
+// every core of every chip from it (the descriptor slow path) - and its callers rebuild the descriptor to rebind
+// their CBs to arenas taken again each call. A PreparedProgram keeps the descriptor for good: prepare() records
+// which runtime-arg slots hold an io tensor's address (exact matches only) and which CBs an io tensor backs; each
+// run patches just those in the cached program (the program factory's override_runtime_arguments - the
+// descriptor-era cache-hit hook), so a call's host cost is the patch count, not the program size.
+//
+// Contract: every per-call tensor whose address a kernel takes (a runtime arg holding it, or a CB on it) is passed
+// in io_tensors - at prepare and at every run, at the same positions; addresses of tensors outside io_tensors and
+// every other runtime arg value are frozen at prepare. A constant equal to an io tensor's address is taken for it
+// (prepare refuses two distinct io tensors at one address).
+
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+#include <tt-metalium/experimental/mesh_program_descriptor.hpp>
+#include <tt_stl/reflection.hpp>
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::operations::bringup::prepared_program {
+
+struct RtPatch {  // runtime arg `arg` of kernel `kernel` on core (x, y) := address of io tensor `io`
+    uint32_t kernel = 0, x = 0, y = 0, arg = 0, io = 0;
+};
+struct CommonRtPatch {  // common runtime arg `arg` of kernel `kernel` := address of io tensor `io`
+    uint32_t kernel = 0, arg = 0, io = 0;
+};
+struct CbPatch {  // CB `cb` (descriptor order) onto io tensor `io`'s buffer, its descriptor's address offset kept
+    uint32_t cb = 0, io = 0;
+};
+
+struct Prepared {
+    tt::tt_metal::experimental::MeshProgramDescriptor desc;
+    // per mesh program (desc.mesh_programs order)
+    std::vector<std::vector<RtPatch>> rt;
+    std::vector<std::vector<CommonRtPatch>> crt;
+    std::vector<std::vector<CbPatch>> cbs;
+    size_t n_io = 0;
+    ttsl::hash::hash_t hash = 0;
+
+    // the mesh program covering coord (desc.mesh_programs index), or -1
+    int program_of(const ttnn::MeshCoordinate& coord) const;
+    size_t patch_count() const;
+};
+
+// Records the patches from the descriptor and the io tensors it was built against (see the contract above).
+std::shared_ptr<const Prepared> prepare(
+    tt::tt_metal::experimental::MeshProgramDescriptor desc, const std::vector<Tensor>& io_tensors);
+
+// Dispatches the prepared program on these io tensors (the output is the last, as generic_op).
+Tensor run(const std::shared_ptr<const Prepared>& prepared, const std::vector<Tensor>& io_tensors);
+
+}  // namespace ttnn::operations::bringup::prepared_program

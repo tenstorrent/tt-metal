@@ -55,6 +55,7 @@ from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import (
     flat_weight_regions,
 )
 from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import flat_layout, k3_gu64
+from ttnn.bringup.prepared_program import generic_op as prepared_generic_op
 
 import models.demos.glm53_flash_d_p.tt.mm_configs as mm_configs
 import ttnn
@@ -976,7 +977,7 @@ class TtK3TokenSplitMoE:
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = pd
             ttnn.freeze_program_hashes(md)  # (hash stored once: not re-hashed per call)
             self._plan_merged = {"key": k, "desc": md}
-        ttnn.generic_op([gi, gw, x, x_rm] + self.planner.tensors, self._plan_merged["desc"])
+        prepared_generic_op([gi, gw, x, x_rm] + self.planner.tensors, self._plan_merged["desc"])
         return self.planner.outs, x_rm
 
     def latent_down(self, x):
@@ -1035,7 +1036,7 @@ class TtK3TokenSplitMoE:
                 if self.routed_only and len(cache) < 512:
                     cache[k] = md
             self._prep_merged = {"key": k, "desc": md}
-            ttnn.generic_op([lat_rm, gi, xbuf, route], md)
+            prepared_generic_op([lat_rm, gi, xbuf, route], md)
         else:
             self.dprep(gi, lat_rm, xbuf, route)
         return xbuf, route
@@ -1094,7 +1095,7 @@ class TtK3TokenSplitMoE:
             self.desc = self.combine.rebind(arena)
         # (routed_only: rebound only when the experts op will build a program - _experts_combine)
         if zero:
-            ttnn.generic_op([arena, self.words], self.zero_desc)
+            prepared_generic_op([arena, self.words], self.zero_desc)
         return arena
 
     def experts_combine(self, xg, pl, arena, op=None):
@@ -1540,7 +1541,7 @@ class TtK3TokenSplitMoE:
         if self.desc is None:
             self.desc, self.l1_args = self.combine.build_l1(self.y, self.out, arena, dict(disp, manifest=self._man))
             self._desc_arena = arena
-        ttnn.generic_op([arena, self.words], self.zero_desc)
+        prepared_generic_op([arena, self.words], self.zero_desc)
         return arena
 
     def __call__(self, x, keep=False, hook=None):

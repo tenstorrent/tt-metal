@@ -1206,6 +1206,16 @@ class TailEngine:
                 ttnn.DRAM_MEMORY_CONFIG,
             )
         base = self.alloc_arena()
+        io = [y, w, se, out, self.arena]
+        # Prepared dispatch (ttnn.bringup.prepare_program): built and prepared for these addresses, each call patches
+        # only the CBs on the arena (taken again at its base); rebuilt when any address moves - the runtime args hold
+        # addresses inside y / se / out (rows at offsets), which exact-address patching cannot follow
+        pkey = (base,) + tuple(int(t.buffer_address()) for t in (y, w, se, out))
+        if self.state.get("pp") is not None and self.state.get("pkey") == pkey:
+            ttnn.bringup.run_prepared(self.state["pp"], io)
+            if not self.keep_arena:
+                self.free_arena()
+            return out
         key = (
             base,
             int(y.buffer_address()),
@@ -1218,7 +1228,8 @@ class TailEngine:
             self.state.update(key=key, md=self._mesh())
         else:
             self._rebind()
-        ttnn.generic_op([y, w, se, out, self.arena], self.state["md"])
+        self.state.update(pp=ttnn.bringup.prepare_program(self.state["md"], io), pkey=pkey)
+        ttnn.bringup.run_prepared(self.state["pp"], io)
         if not self.keep_arena:  # (keep_arena: a test reads it back)
             self.free_arena()
         return out

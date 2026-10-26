@@ -647,6 +647,20 @@ class HeadSE3:
             self.mesh,
             ttnn.DRAM_MEMORY_CONFIG,
         )
+        io = [x, w, y, self.eng.arena]
+        io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])
+        if self.routing is not None:
+            io += [self.routing.slots] + list(self.routing.outs.values())
+            if self.routing.dbg is not None:
+                io += [self.routing.dbg]
+        # Prepared dispatch (ttnn.bringup.prepare_program): the descriptor is built and prepared once; each call
+        # patches only the runtime args holding an io tensor's address (x: the block input, at a new address per
+        # call - its args are its base address) and the CBs on the arena. Rebuilt when the arena's base or any other
+        # io tensor's address moves (their args may point inside them, which exact-address patching cannot follow)
+        skey = (self.eng.base, len(io)) + tuple(int(t.buffer_address()) for t in io[1:])
+        if self.state.get("pp") is not None and self.state.get("skey") == skey:
+            ttnn.bringup.run_prepared(self.state["pp"], io)
+            return y
         key = (int(x.buffer_address()), int(y.buffer_address()), int(w.buffer_address()), self.eng.base)
         key += tuple(int(t.buffer_address()) for t in self.outputs.values())
         if self.state["key"] == key and self.state["arena"] is not self.eng.arena:
@@ -743,11 +757,6 @@ class HeadSE3:
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
                 progs.append((coord, prog, on))
             self.state.update(key=key, desc=md, progs=progs, arena=self.eng.arena)
-        io = [x, w, y, self.eng.arena]
-        io += list(self.outputs.values()) + (list(self.rw) if self.router is not None else [])
-        if self.routing is not None:
-            io += [self.routing.slots] + list(self.routing.outs.values())
-            if self.routing.dbg is not None:
-                io += [self.routing.dbg]
-        ttnn.generic_op(io, self.state["desc"])
+        self.state.update(pp=ttnn.bringup.prepare_program(self.state["desc"], io), skey=skey)
+        ttnn.bringup.run_prepared(self.state["pp"], io)
         return y

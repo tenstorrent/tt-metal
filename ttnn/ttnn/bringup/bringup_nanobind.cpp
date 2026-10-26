@@ -50,6 +50,9 @@ namespace ttnn::operations::bringup::mhc_pre_ttnn::detail {
 void bind_mhc_pre_ttnn(nb::module_& mod);
 }
 // END FORKED OPS (fork_op.py)
+namespace ttnn::operations::bringup::prepared_program::detail {
+void bind_prepared_program(nb::module_& mod);
+}
 
 namespace ttnn::bringup {
 
@@ -69,6 +72,7 @@ void py_module(nb::module_& mod) {
     ::ttnn::operations::bringup::mhc_post_ttnn::detail::bind_mhc_post_ttnn(mod);
     ::ttnn::operations::bringup::mhc_pre_ttnn::detail::bind_mhc_pre_ttnn(mod);
     // END FORKED OPS (fork_op.py)
+    ::ttnn::operations::bringup::prepared_program::detail::bind_prepared_program(mod);
 }
 
 }  // namespace ttnn::bringup
