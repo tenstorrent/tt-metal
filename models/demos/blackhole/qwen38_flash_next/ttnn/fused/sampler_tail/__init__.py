@@ -12,7 +12,9 @@ ascending, the table weights, the exact integer prefix sums, the two fp32 produc
 as the SFPU's), the kept prefix and the inverse CDF as the composite counts them.  The token is lane r of the fp32 TILE
 token row (the lanes greedy resolve's layout: rows 1..5, one per verify position later); the greedy flag copies the
 greedy tile.  Tolerance class BITWISE against the composite (:func:`device_sampler_reference` is the host model of
-both; the presence penalty extends it).
+both; the presence penalty extends it).  The guard row's lane 0 holds the rows' guard mask (bit r: row r's draw could
+depend on a token it did not read, ``device_sampler_reference``'s ``guard``): the host samples such a row over the full
+vocabulary instead.
 
 The history is a per-row bit array over the vocabulary (uint32 ROW_MAJOR ``[1,1,rows,HIST_WORDS]``) in an L1 shard on
 the program's core: the kernel sets the bit of the token it draws, the host zeroes the rows at request start and
@@ -79,10 +81,11 @@ def _shape(tensor) -> tuple[int, ...]:
 
 
 def stage_bytes(rows: int) -> int:
-    """The kernel's L1 stage: the token tile, the rows, the two scalar pages, the table chunks, the working arrays."""
+    """The kernel's L1 stage: the token tile, the rows, the two scalar pages, the table chunks, the guard page, the
+    working arrays."""
 
     work_words = 3 * LANES + 5 * MAX_TOP_K
-    return TILE_BYTES + rows * ROW_LANES * 4 + 2 * GRAIN + MAX_TOP_K * GRAIN + work_words * 4
+    return TILE_BYTES + rows * ROW_LANES * 4 + 3 * GRAIN + MAX_TOP_K * GRAIN + work_words * 4
 
 
 def history_image(rows: int, emitted: list[list[int]]) -> torch.Tensor:
@@ -124,14 +127,16 @@ def _rows_of(row) -> int:
 class Qwen38TTNNSamplerTailConstants:
     """The program's replicated device tensors: the policy row and the draws (host-written), the temperature table
     (host-written when the temperature changes), the rows' history bits (an L1 shard on the program's core: the kernel
-    writes it, the host zeroes it at request start).  The composite's interface (``write_policy``, ``write_uniform``,
-    ``mark_corruptible``, ``release``, ``resident_policy``) so the sampling chain extension holds either."""
+    writes it, the host zeroes it at request start), the guard row (kernel-written by every call).  The composite's
+    interface (``write_policy``, ``write_uniform``, ``mark_corruptible``, ``release``, ``resident_policy``) so the
+    sampling chain extension holds either."""
 
     rows: int
     policy_row: Any  # fp32 ROW_MAJOR [1,1,1,16]: top_k, top_p, min_weight, greedy_flag, presence_penalty
     uniforms: Any  # fp32 ROW_MAJOR [1,1,1,16]: lane r = row r's draw
     weight_table: Any  # fp32 ROW_MAJOR [1,1,1,65536]
     history: Any  # uint32 ROW_MAJOR [1,1,rows,HIST_WORDS], L1 height-sharded on core (0, 0)
+    guard: Any  # fp32 ROW_MAJOR [1,1,1,16]: lane 0 the rows' guard mask (bit r = row r)
     resident_temperature: float | None = None
     resident_policy: Any = None  # a Qwen38DeviceSamplerPolicy
     mesh_device: Any = field(default=None, repr=False)
@@ -176,6 +181,7 @@ class Qwen38TTNNSamplerTailConstants:
             history=upload(
                 history_image(rows, [[] for _ in range(rows)]), ttnn.uint32, cls.history_memory_config(rows)
             ),
+            guard=upload(torch.zeros(1, 1, 1, SCALAR_LANES, dtype=torch.float32), ttnn.float32),
             resident_temperature=1.0,
             resident_policy=greedy,
             mesh_device=mesh_device,
@@ -184,7 +190,7 @@ class Qwen38TTNNSamplerTailConstants:
         return result
 
     def tensors(self) -> tuple[Any, ...]:
-        return (self.policy_row, self.uniforms, self.weight_table, self.history)
+        return (self.policy_row, self.uniforms, self.weight_table, self.history, self.guard)
 
     def validate(self, mesh_contract: Qwen38MeshContract) -> None:
         expected = (
@@ -192,6 +198,7 @@ class Qwen38TTNNSamplerTailConstants:
             ("uniforms", (1, 1, 1, SCALAR_LANES), ttnn.float32),
             ("weight_table", (1, 1, 1, TABLE_SIZE), ttnn.float32),
             ("history", (1, 1, self.rows, HIST_WORDS), ttnn.uint32),
+            ("guard", (1, 1, 1, SCALAR_LANES), ttnn.float32),
         )
         for name, shape, dtype in expected:
             tensor = getattr(self, name)
@@ -257,7 +264,7 @@ class Qwen38TTNNSamplerTailConstants:
         self._write("history", history_image(self.rows, emitted), ttnn.uint32)
 
     def mark_corruptible(self) -> None:
-        for name in self.HOST_WRITTEN:
+        for name in (*self.HOST_WRITTEN, "guard"):  # the guard row: rewritten by every replay
             acknowledge_corruptible(getattr(self, name))
 
     def release(self) -> None:
@@ -277,7 +284,8 @@ def _policy_row(policy) -> torch.Tensor:
 
 def sampler_tail(row: Any, greedy_token_row: Any, constants: "Qwen38TTNNSamplerTailConstants", *, memory_config=None):
     """The composite's contract: the candidate row(s), the greedy token tile and the constants -> the fp32 TILE token
-    row (lane r = row r's id; the greedy tile itself when the flag is set).  Neither input is consumed."""
+    row (lane r = row r's id; the greedy tile itself when the flag is set), the rows' guard mask into
+    ``constants.guard``.  Neither input is consumed."""
 
     if not isinstance(constants, Qwen38TTNNSamplerTailConstants):
         raise TypeError("sampler_tail needs Qwen38TTNNSamplerTailConstants (the composite takes its own)")
@@ -293,7 +301,15 @@ def sampler_tail(row: Any, greedy_token_row: Any, constants: "Qwen38TTNNSamplerT
     mesh = row.device()
     token = fp.allocate(TOKEN_ROW_SHAPE, ttnn.float32, ttnn.TILE_LAYOUT, mesh, memory_config or ttnn.DRAM_MEMORY_CONFIG)
     core, one = _one_core(mesh)
-    accessed = [row, greedy_token_row, constants.policy_row, constants.uniforms, constants.weight_table, token]
+    accessed = [
+        row,
+        greedy_token_row,
+        constants.policy_row,
+        constants.uniforms,
+        constants.weight_table,
+        token,
+        constants.guard,
+    ]
     kernel = fp.reader_kernel(
         KERNEL,
         one,
@@ -309,6 +325,7 @@ def sampler_tail(row: Any, greedy_token_row: Any, constants: "Qwen38TTNNSamplerT
                     constants.weight_table.buffer_address(),
                     constants.history.buffer_address(),
                     token.buffer_address(),
+                    constants.guard.buffer_address(),
                 ],
             )
         ],
@@ -316,14 +333,14 @@ def sampler_tail(row: Any, greedy_token_row: Any, constants: "Qwen38TTNNSamplerT
     )
     pages = -(-stage_bytes(rows) // TILE_BYTES)
     # the candidate rows, the greedy tile and the two scalar pages in, the table's top-k weight chunks (64-byte
-    # grains), the history words of the candidates (L1) and the bit it sets, the token tile out; per row the
-    # penalty, order, weights, prefix sums and the two products over the 128 candidates
+    # grains), the history words of the candidates (L1) and the bit it sets, the token tile and the guard row out;
+    # per row the penalty, order, weights, prefix sums and the two products over the 128 candidates
     meta = fp.program_meta(
         NAME,
         "sample",
         rows,
         reads=(row, greedy_token_row, constants.policy_row, constants.uniforms),
-        writes=(token,),
+        writes=(token, constants.guard),
         dram_bytes=MAX_TOP_K * GRAIN,
         l1_bytes=rows * (LANES + 1) * 4,
         flops=rows * LANES * 6,

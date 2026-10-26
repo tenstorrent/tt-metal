@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The one-program sampler versus the composite and the host reference, with its presence history and trace reuse."""
+"""The one-program sampler versus the composite and the host reference, with its presence history, its guard row and
+trace reuse."""
 
 import dataclasses
 import os
@@ -29,6 +30,8 @@ SHARDS = 4
 SHARD_LANES = st.LANES // SHARDS
 SHARD_VOCAB = st.VOCAB_SIZE // SHARDS
 POLICY = ds.Qwen38DeviceSamplerPolicy(temperature=0.8, top_k=20, top_p=0.9, min_p=0.02, presence_penalty=0.5)
+# Every read lane kept: with one shard's lanes above all others, the kept minimum is the shard floor and the guard sets.
+GUARD_POLICY = ds.Qwen38DeviceSamplerPolicy(temperature=1.0, top_k=32, top_p=1.0, min_p=0.0, presence_penalty=2.0)
 
 
 def _candidate_rows(rows, rng):
@@ -45,6 +48,19 @@ def _candidate_rows(rows, rng):
     return host
 
 
+def _dominant_shard_rows(rows, rng):
+    """Candidate rows whose shard ``row % 4`` holds the row's 32 largest values, so the kept minimum under
+    ``GUARD_POLICY`` is the shard floor: the guard row's bit is set for every row."""
+
+    host = _candidate_rows(rows, rng)
+    for row in range(rows):
+        shard = row % SHARDS
+        start = shard * 2 * SHARD_LANES
+        values = host[0, 0, row, start : start + SHARD_LANES]
+        host[0, 0, row, start : start + SHARD_LANES] = (values + 16.0).to(torch.bfloat16).float()  # still bf16-exact
+    return host
+
+
 def _draws(rows, rng):
     return [
         int(numerator) * 2.0**-ds.UNIFORM_BITS
@@ -53,25 +69,30 @@ def _draws(rows, rng):
 
 
 def _expected(row_host, policy, draws, emitted):
-    tokens = []
+    samples = []
     for row, uniform in enumerate(draws):
         values, ids = ds.candidate_row_lanes(row_host[0, 0, row])
         history = set(emitted[row])
         seen = torch.tensor([int(token_id) in history for token_id in ids])
-        tokens.append(ds.device_sampler_reference(values, ids, policy, uniform, seen=seen).token_id)
-    return tokens
+        samples.append(ds.device_sampler_reference(values, ids, policy, uniform, seen=seen))
+    return samples
 
 
-def _assert_drawn(token, row_host, policy, draws, emitted, label):
-    """The token tile's draws, asserted equal to the host reference's for the same uniforms and history."""
+def _assert_drawn(token, constants, row_host, policy, draws, emitted, label):
+    """The token tile's draws and the guard row's mask (bit r: row r), asserted equal to the host reference's for the
+    same uniforms and history.  Returns the draws and the mask."""
 
     rows = len(draws)
     lanes = download_replica(token).reshape(-1)
     assert_tensors_equal(lanes[rows:], torch.zeros_like(lanes[rows:]), f"{label}: token lanes past the {rows} rows")
     drawn = lanes[:rows].to(torch.int64).tolist()
-    expected = _expected(row_host, policy, draws, emitted)
+    samples = _expected(row_host, policy, draws, emitted)
+    expected = [sample.token_id for sample in samples]
     assert drawn == expected, f"{label}: drew {drawn}, expected {expected}"
-    return drawn
+    mask = int(download_replica(constants.guard).reshape(-1)[0])
+    expected_mask = sum(1 << row for row, sample in enumerate(samples) if sample.guard)
+    assert mask == expected_mask, f"{label}: guard mask {mask:#x}, reference {expected_mask:#x}"
+    return drawn, mask
 
 
 def _assert_history(constants, rows, emitted, label):
@@ -116,9 +137,24 @@ def test_sampler_tail_reference_composite_and_reuse(mesh_device, rows):
                 token = entry.fused(row, greedy, constants)
                 owned.append(token)
                 label = f"eager draw {step}, seed={seed}"
-                drawn = _assert_drawn(token, row_host, POLICY, draws, emitted, label)
+                drawn, _ = _assert_drawn(token, constants, row_host, POLICY, draws, emitted, label)
                 emitted = [tokens + [token_id] for tokens, token_id in zip(emitted, drawn)]
                 _assert_history(constants, rows, emitted, label)
+            # A draw the read lanes cannot prove: every row's guard bit set, the draw still the reference's.
+            guard_host = _dominant_shard_rows(rows, rng)
+            guard_row = upload(mesh_device, guard_host, ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            owned.append(guard_row)
+            draws = _draws(rows, rng)
+            constants.write_policy(GUARD_POLICY)
+            constants.write_uniforms(draws)
+            token = entry.fused(guard_row, greedy, constants)
+            owned.append(token)
+            label = f"guarded draw, seed={seed}"
+            drawn, mask = _assert_drawn(token, constants, guard_host, GUARD_POLICY, draws, emitted, label)
+            assert mask == (1 << rows) - 1, f"{label}: guard mask {mask:#x}, every one of the {rows} rows expected"
+            emitted = [tokens + [token_id] for tokens, token_id in zip(emitted, drawn)]
+            _assert_history(constants, rows, emitted, label)
+            constants.write_policy(POLICY)
             if rows == 1:
                 # The composite takes no presence penalty and one row; the greedy flag copies the greedy tile.
                 composite = ds.Qwen38TTNNDeviceSamplerConstants.build(mesh_device, contract)
@@ -138,7 +174,7 @@ def test_sampler_tail_reference_composite_and_reuse(mesh_device, rows):
                     if policy.greedy:
                         assert_tensors_equal(token_host, greedy_host, f"{label}: greedy token tile")
                     else:
-                        _assert_drawn(token, row_host, policy, draws, emitted, label)
+                        _assert_drawn(token, constants, row_host, policy, draws, emitted, label)
                 constants.write_policy(POLICY)
             cached = assert_program_cache_stable(mesh_device, cached)
             # The served loop: the host rewrites the history and the draws between replays of the captured TAIL.
@@ -155,7 +191,7 @@ def test_sampler_tail_reference_composite_and_reuse(mesh_device, rows):
                     constants.write_uniforms(draws)
                     ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
                     label = f"replay {replay}, seed={seed}"
-                    drawn = _assert_drawn(token, row_host, POLICY, draws, emitted, label)
+                    drawn, _ = _assert_drawn(token, constants, row_host, POLICY, draws, emitted, label)
                     _assert_history(
                         constants, rows, [tokens + [token_id] for tokens, token_id in zip(emitted, drawn)], label
                     )

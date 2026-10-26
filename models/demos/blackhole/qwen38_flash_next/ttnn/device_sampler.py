@@ -192,12 +192,15 @@ class Qwen38DeviceSamplerPolicy:
 
 @dataclass(frozen=True)
 class Qwen38DeviceSample:
-    """What the composite decides for one row: the token, the kept prefix length and the chosen sorted lane."""
+    """What the composite decides for one row: the token, the kept prefix length and the chosen sorted lane; ``guard``
+    when a token the row did not read could change the draw (``fused/sampler_tail`` reports it, the host then samples
+    the full vocabulary)."""
 
     token_id: int
     kept: int
     sorted_lane: int
     uniform: float
+    guard: bool
 
 
 def device_sampler_reference(
@@ -212,7 +215,11 @@ def device_sampler_reference(
     """The host reference of :func:`sample_on_device` (and of ``fused/sampler_tail``) for one row: ``values`` fp32
     ``[128]`` and ``ids`` int64 ``[128]`` in lane order (shard d's 32 lanes at ``32 d``), the policy's temperature
     table, one draw ``u``; ``seen`` (bool ``[128]``: the lanes whose id the request has emitted) takes the policy's
-    presence penalty off those values first (an fp32 subtract, the host sampler's), required when it is nonzero."""
+    presence penalty off those values first (an fp32 subtract, the host sampler's), required when it is nonzero.
+
+    The guard: an unread token is at most its shard's smallest raw value, so the shard floor (the largest shard minimum
+    of the raw values) bounds them all; the row is exact over the vocabulary unless the kept minimum does not clear the
+    floor or the top-k minimum lies below it (an unread token in the top-k moves ``S_k`` and with it the top-p cut)."""
 
     if tuple(values.shape) != (LANES,) or values.dtype != torch.float32:
         raise ValueError(f"values must be fp32 [{LANES}], got {values.dtype} {tuple(values.shape)}")
@@ -223,6 +230,7 @@ def device_sampler_reference(
     if table is None:
         table = weight_table(policy.temperature)
     table = table.reshape(-1)
+    floor = values.reshape(TP_SIZE, SAMPLING_CANDIDATES_PER_DEVICE).min(dim=1).values.max()
     if policy.presence_penalty != 0:
         if seen is None or tuple(seen.shape) != (LANES,) or seen.dtype != torch.bool:
             raise ValueError(f"a presence policy needs the row's seen mask (bool [{LANES}]), got {seen}")
@@ -250,7 +258,8 @@ def device_sampler_reference(
     theta = _sfpu_mul(torch.tensor(uniform), total_kept)
     below = int((inclusive[:kept].to(torch.float32) <= theta).sum())
     lane = min(below, kept - 1)
-    return Qwen38DeviceSample(int(g_sorted[lane]), kept, lane, float(uniform))
+    guard = bool(s_sorted[kept - 1] <= floor) or bool(s_sorted[policy.top_k - 1] < floor)
+    return Qwen38DeviceSample(int(g_sorted[lane]), kept, lane, float(uniform), guard)
 
 
 def candidate_row_lanes(row: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
