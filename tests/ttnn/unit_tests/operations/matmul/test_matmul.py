@@ -425,6 +425,7 @@ def test_matmul_reuse_config_partial_batch_blocks(device, batch_shape, m, k, n, 
     [
         (4, 256, 256, 128, 16),
         (4, 128, 256, 128, 16),
+        (4, 256, 128, 128, 16),
     ],
 )
 @pytest.mark.parametrize("bias", [False, True])
@@ -447,7 +448,7 @@ def test_matmul_reuse_config_batches_per_core_packer_l1_acc(device, batch, m, k,
         device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, packer_l1_acc=True
     )
     if bias:
-        torch_bias = torch.randn((1, 1, 1, n), dtype=torch.bfloat16)
+        torch_bias = torch.randn((1, 1, m, n), dtype=torch.bfloat16)
         torch_output = torch_output + torch_bias.float()
         bias_tensor = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
         output = ttnn.linear(
