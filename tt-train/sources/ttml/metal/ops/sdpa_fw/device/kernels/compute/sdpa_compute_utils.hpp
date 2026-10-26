@@ -105,7 +105,7 @@ void apply_mask_on_reg(
 
 // Softmax helpers. Score CB is row-major (row r, K tile n at r * Sk_chunk_t + n); each stat CB is
 // Sq_chunk_t deep with row r in slot r. The per-row helpers (one `row` argument) leave the CB
-// waits/reserves/pushes to the caller; the chunk-level ones (matmul_qk_by_v, update_cur_mm_out) do their own.
+// waits/reserves/pushes to the caller; the chunk-level one (matmul_qk_by_v) does its own.
 
 // TODO: replace FPU reduce_tile(MAX) + sub_tiles_bcast_cols with SFPU equivalents once LLK
 // provides SFPU row-reduce-max and sub_bcast_col. This will allow the full softmax (max, sub,
@@ -203,22 +203,45 @@ void apply_exp_inplace_and_find_exp_sum(
     }
 }
 
-// O_step = P @ V for the whole chunk: P is Sq_chunk_t x Sk_chunk_t tiles (row-major), V is
-// Sk_chunk_t x Wt tiles (row-major, as read from DRAM). Each matmul_block call produces a
-// block_h x block_w rectangle of output tiles and accumulates over Sk_chunk_t inside DST.
-template <uint32_t Sk_chunk_t, uint32_t Sq_chunk_t>
+// Lightweight init for unary_bcast<COL> with B2D datacopy path.
+// Reads column 0 from a CB tile and replicates it to all 32 columns in a DST register.
+// Only reprograms UNPACK and MATH MOPs — safe inside a tile_regs_acquire block.
+// Uses reconfig_data_format_srcb so SrcA format register is preserved for the caller.
+void init_unary_bcast_col(uint32_t cb_col_vec) {
+    reconfig_data_format_srcb(cb_col_vec);
+    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
+        false, false, cb_col_vec)));
+    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(
+        cb_col_vec)));
+}
+
+// O_cur = O_prev * alpha + P @ V for the whole item, one block_h x block_w rectangle of output tiles per
+// DST pass. P is rows x Sk_chunk_t tiles (row-major), V is Sk_chunk_t x Wt tiles (row-major, as read
+// from DRAM). With `rescale`, the previous accumulator block is loaded into DST first (UnpackToDestFp32),
+// multiplied by its row's alpha (broadcast into the spare DST slot block_h * block_w), and the matmul
+// accumulates on top of it; so block_h * block_w must leave one DST tile free.
+template <uint32_t Sk_chunk_t, uint32_t rows>
 void matmul_qk_by_v(
     uint32_t Wt,
     uint32_t block_h,
     uint32_t block_w,
     uint32_t cb_attention_weights,
     uint32_t cb_value,
-    uint32_t cb_cur_mm_out) {
-    cb_wait_front(cb_attention_weights, Sq_chunk_t * Sk_chunk_t);
+    uint32_t cb_prev_mm_out,
+    uint32_t cb_exp_max_diff,
+    uint32_t cb_cur_mm_out,
+    bool rescale) {
+    cb_wait_front(cb_attention_weights, rows * Sk_chunk_t);
     cb_wait_front(cb_value, Sk_chunk_t * Wt);
-    cb_reserve_back(cb_cur_mm_out, Sq_chunk_t * Wt);
+    if (rescale) {
+        cb_wait_front(cb_prev_mm_out, rows * Wt);
+        cb_wait_front(cb_exp_max_diff, rows);
+    }
+    cb_reserve_back(cb_cur_mm_out, rows * Wt);
 
-    // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
+    const uint32_t alpha_dst = block_h * block_w;  // spare slot for the broadcast factor
+
+    // matmul maps: in0(attention_weights)->SrcB, in1(value)->SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
     pack_reconfig_data_format(cb_cur_mm_out);
     matmul_block_init(
@@ -229,9 +252,36 @@ void matmul_qk_by_v(
         /* rt_dim */ block_h,
         /* kt_dim */ Sk_chunk_t);
 
-    for (uint32_t row0 = 0; row0 < Sq_chunk_t; row0 += block_h) {
+    for (uint32_t row0 = 0; row0 < rows; row0 += block_h) {
         for (uint32_t col0 = 0; col0 < Wt; col0 += block_w) {
             tile_regs_acquire();
+            if (rescale) {
+                // DST[i*block_w + j] = O_prev[row0+i][col0+j] * alpha[row0+i]
+                reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);
+                copy_init(cb_prev_mm_out);
+                for (uint32_t i = 0; i < block_h; ++i) {
+                    for (uint32_t j = 0; j < block_w; ++j) {
+                        copy_tile(cb_prev_mm_out, (row0 + i) * Wt + col0 + j, i * block_w + j);
+                    }
+                }
+                init_unary_bcast_col(cb_exp_max_diff);
+                mul_binary_tile_init();
+                for (uint32_t i = 0; i < block_h; ++i) {
+                    unary_bcast<BroadcastType::COL>(cb_exp_max_diff, row0 + i, alpha_dst);
+                    for (uint32_t j = 0; j < block_w; ++j) {
+                        mul_binary_tile(i * block_w + j, alpha_dst, i * block_w + j);
+                    }
+                }
+                // The B2D broadcast and SFPU multiply leave the FPU in a different state: full re-init.
+                reconfig_data_format(cb_value, cb_attention_weights);
+                matmul_block_init(
+                    cb_attention_weights,
+                    cb_value,
+                    /* transpose */ 0,
+                    /* ct_dim */ block_w,
+                    /* rt_dim */ block_h,
+                    /* kt_dim */ Sk_chunk_t);
+            }
             for (uint32_t k = 0; k < Sk_chunk_t; ++k) {
                 matmul_block(
                     cb_attention_weights,
@@ -255,7 +305,7 @@ void matmul_qk_by_v(
             tile_regs_release();
         }
     }
-    cb_push_back(cb_cur_mm_out, Sq_chunk_t * Wt);
+    cb_push_back(cb_cur_mm_out, rows * Wt);
 }
 
 // exp(scale * (prev_max - cur_max)) for row `row` -> cb_exp_max_diff[row].
@@ -308,69 +358,6 @@ void update_cur_exp_sum_inplace(
     pack_reconfig_data_format(cb_cur_sum_exp);
     pack_tile</* out_of_order */ true>(exp_sum_dst_idx, cb_cur_sum_exp, /* offset */ row);
     tile_regs_release();
-}
-
-// Lightweight init for unary_bcast<COL> with B2D datacopy path.
-// Reads column 0 from a CB tile and replicates it to all 32 columns in a DST register.
-// Only reprograms UNPACK and MATH MOPs — safe inside a tile_regs_acquire block.
-// Uses reconfig_data_format_srcb so SrcA format register is preserved for the caller.
-void init_unary_bcast_col(uint32_t cb_col_vec) {
-    reconfig_data_format_srcb(cb_col_vec);
-    UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
-        false, false, cb_col_vec)));
-    MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(
-        cb_col_vec)));
-}
-
-// cur_mm_out[row] += prev_mm_out[row] * exp_max_diff[row]. The factor is one value per tile row
-// (column 0), broadcast across the tile; the add is done by the packer with L1-accumulate on.
-template <uint32_t Sq_chunk_t>
-void update_cur_mm_out(
-    uint32_t Wt, uint32_t block_size, uint32_t cb_prev_mm_out, uint32_t cb_cur_mm_out, uint32_t cb_exp_max_diff) {
-    cb_wait_front(cb_prev_mm_out, Sq_chunk_t * Wt);
-    cb_wait_front(cb_cur_mm_out, Sq_chunk_t * Wt);
-    cb_wait_front(cb_exp_max_diff, Sq_chunk_t);
-
-    pack_reconfig_data_format(cb_cur_mm_out);
-    pack_reconfig_l1_acc(true);
-
-    for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
-        for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
-            tile_regs_acquire();
-
-            // Load prev_mm_out tiles to DST via UnpackToDestFp32 (full FP32 precision)
-            reconfig_data_format(cb_prev_mm_out, cb_prev_mm_out);
-            copy_init(cb_prev_mm_out);
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                copy_tile(cb_prev_mm_out, row * Wt + tile_idx + block_idx, block_idx);
-            }
-
-            // Load this row's exp_max_diff with column broadcast to DST[block_size]
-            init_unary_bcast_col(cb_exp_max_diff);
-            unary_bcast<BroadcastType::COL>(cb_exp_max_diff, row, block_size);
-
-            // SFPU element-wise multiply: DST[i] = DST[i] * DST[block_size]
-            mul_binary_tile_init();
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                mul_binary_tile(block_idx, block_size, block_idx);
-            }
-
-            tile_regs_commit();
-            tile_regs_wait();
-            // The CB holds exactly one chunk, so the write pointer sits on the tiles already pushed:
-            // with L1-accumulate on this adds onto them.
-            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                pack_tile</* out_of_order */ true>(
-                    block_idx, cb_cur_mm_out, /* offset */ row * Wt + tile_idx + block_idx);
-            }
-            tile_regs_release();
-        }
-    }
-    pack_reconfig_l1_acc(false);
-
-    cb_pop_front(cb_cur_mm_out, Sq_chunk_t * Wt);
-    cb_reserve_back(cb_cur_mm_out, Sq_chunk_t * Wt);
-    cb_push_back(cb_cur_mm_out, Sq_chunk_t * Wt);
 }
 
 // Row-reduce tile `row` of cb_in_idx in place (matmul with a ones column).

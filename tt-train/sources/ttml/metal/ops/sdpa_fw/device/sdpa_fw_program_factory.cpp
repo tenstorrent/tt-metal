@@ -354,7 +354,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     //   block_size     output tiles per pass in the element-wise loops (one slot stays free for the
     //                  broadcast factor they multiply by)
     //   qk_block_*     Q rows x K tiles per QK^T matmul_block call
-    //   pv_block_*     Q rows x V feature tiles per PV matmul_block call
+    //   pv_block_*     Q rows x V feature tiles per PV matmul_block call (one slot stays free for the
+    //                  broadcast rescale factor the previous accumulator is multiplied by)
     //   sm_block_size  score tiles of one row per pass of the exp step
     constexpr bool fp32_dest_acc_en = true;
     const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
@@ -362,7 +363,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const auto qk_block = pick_matmul_block_dims(rows, Sk_chunk_t, dst_size);
     const uint32_t qk_block_h = qk_block.block_rows;
     const uint32_t qk_block_w = qk_block.block_cols;
-    const auto pv_block = pick_matmul_block_dims(rows, vWt, dst_size);
+    const auto pv_block = pick_matmul_block_dims(rows, vWt, dst_size - 1U);
     const uint32_t pv_block_h = pv_block.block_rows;
     const uint32_t pv_block_w = pv_block.block_cols;
     const uint32_t sm_block_size = get_block_size(Sk_chunk_t, dst_size);
@@ -381,7 +382,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         (mask_type == AttentionMaskType::Causal) ? kNumCausalMaskTiles : (2U * Sq_chunk_t * Sk_chunk_t);
     const uint32_t cb_gate_tiles = 2U * rows * vWt;
     const uint32_t cb_intermediate_tiles = rows * kIntermediateTiles;
-    // The compute kernel rewrites attention weights, stats and mm_out in place (pop, reserve, pack at the same
+    // The compute kernel rewrites attention weights and the stats in place (pop, reserve, pack at the same
     // offsets). That only works while each CB holds exactly one block, so these must stay single-buffered.
     const uint32_t cb_attention_weights_tiles = rows * Sk_chunk_t;
     const uint32_t cb_stat_tiles = rows;  // max / sum / exp-max-diff, one per row
