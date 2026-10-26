@@ -773,6 +773,8 @@ class TtPrefillTransformer(LightweightModule):
         on_layer_complete: Optional[Callable[[int, object], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         input_is_embedded: bool = False,
+        metadata: Optional[list] = None,
+        padding_config: Optional[ttnn.Tensor] = None,
     ):
         """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them): every layer runs its
         attention half once per non-empty chunk against that chunk's slot and offset, then its FFN half once
@@ -782,9 +784,13 @@ class TtPrefillTransformer(LightweightModule):
         GLM-5.3 indexer reuse is tracked per chunk: each "full" layer's top-k indices go to the following
         "shared" layers of the same chunk. A pipeline boundary that would have to carry them is not
         supported yet.
+
+        Traced form: ``metadata`` (one ChunkMetadata per chunk position, read on device) and
+        ``padding_config`` (the persistent MoE padding config) replace ``chunks``, which is then None.
         """
         assert self.is_chunked, "a packed forward is chunked prefill; build with is_chunked=True"
-        assert len(chunks) == self.forward_chunks, f"{len(chunks)} chunks for a model built for {self.forward_chunks}"
+        n = len(metadata) if metadata is not None else len(chunks)
+        assert n == self.forward_chunks, f"{n} chunks for a model built for {self.forward_chunks}"
         assert (
             not self.receives_indexer_indices and not self.forwards_indexer_indices
         ), "a packed forward cannot carry per-chunk indexer indices across a pipeline boundary yet"
@@ -817,6 +823,8 @@ class TtPrefillTransformer(LightweightModule):
                 indexer_indices=indexer_indices if (reuse and mode == "shared") else None,
                 return_indexer_indices=reuse,
                 index_kv_cache=index_kv_cache,
+                metadata=metadata,
+                padding_config=padding_config,
             )
             if reuse:
                 h, _, new_indices = ret
