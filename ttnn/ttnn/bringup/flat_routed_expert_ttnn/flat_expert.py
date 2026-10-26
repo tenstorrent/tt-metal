@@ -243,9 +243,18 @@ def _layout(device, x2=False, xcol=0, nh=1, nsg=1, sg_rects=None):
     opt = list(device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0))
     readers = opt + [ttnn.CoreCoord(c.x + 1, c.y) for c in opt]
     rcols = sorted({c.x for c in readers})
-    assert rcols == [0, 1, 6, 7] and (grid.x, grid.y) == (11, 10), (rcols, grid)
+    # DRAM readers in columns 0, 1 and E, E + 1 (as the C++ plan, flat_routed_expert_plan.cpp): the layout is written
+    # for E = 6 and its east part (rectangle, relays) moved east by E - 6; columns past the east rectangle are down
+    # cores (a p150's 11 x 10: E 6, none; a Galaxy chip's 12 x 10: E 6, column 11)
+    east = rcols[2] if len(rcols) == 4 else 0
+    assert rcols[:2] == [0, 1] and east >= 6 and rcols[3] == east + 1 and grid.x >= 11 + east - 6 and grid.y == 10, (
+        rcols,
+        grid,
+    )
+    shift = east - 6
     # gate/up rectangles (x0, x1, y0, y1): no reader inside (subgrids: rectangle k = subgrid k's gate/up cores)
     rects = [(2, 5, 0, 9), (8, 10, 0, 7)] if nsg == 1 else sg_rects
+    rects = [(x0 + shift, x1 + shift, y0, y1) if x0 > 6 else (x0, x1, y0, y1) for x0, x1, y0, y1 in rects]
     gu = [ttnn.CoreCoord(x, y) for x0, x1, y0, y1 in rects for y in range(y0, y1 + 1) for x in range(x0, x1 + 1)]
     taken = {(c.x, c.y) for c in readers + gu}
     # relays just east / south of their rectangle (NOC1 multicasts run -x / -y)
@@ -270,11 +279,12 @@ def _layout(device, x2=False, xcol=0, nh=1, nsg=1, sg_rects=None):
         relays = [ttnn.CoreCoord(1, y) for y in (4, 5, 3, 6, 2, 7, 1, 8) if (1, y) not in taken][:xcol]
         assert len(relays) == xcol
     elif XNOC == 1:
+        assert shift == 0, "MIMO_FL_XNOC=1 (probe): east DRAM readers in column 6 only"
         relays = [next(ttnn.CoreCoord(6, y) for y in (5, 3, 2, 7, 0, 8) if (6, y) not in taken), ttnn.CoreCoord(9, 8)]
     else:  # NOC0 multicasts run +x / +y: relays just west of their rectangle
         relays = [
             next(ttnn.CoreCoord(1, y) for y in (4, 5, 3, 6, 2, 7) if (1, y) not in taken),
-            next(ttnn.CoreCoord(7, y) for y in (3, 4, 2, 5, 1, 6) if (7, y) not in taken),
+            next(ttnn.CoreCoord(east + 1, y) for y in (3, 4, 2, 5, 1, 6) if (east + 1, y) not in taken),
         ]
     taken |= {(c.x, c.y) for c in relays}
     if x2:  # nh more relays per rectangle, next to the first (relay 2 + 2 j + k: rectangle k's j-th extra)
@@ -282,7 +292,7 @@ def _layout(device, x2=False, xcol=0, nh=1, nsg=1, sg_rects=None):
         for _ in range(nh):
             extra = [
                 next(ttnn.CoreCoord(1, y) for y in (5, 3, 6, 2, 7, 1, 8, 0, 9) if (1, y) not in taken),
-                next(ttnn.CoreCoord(7, y) for y in (4, 2, 5, 1, 6, 0, 7, 8, 9) if (7, y) not in taken),
+                next(ttnn.CoreCoord(east + 1, y) for y in (4, 2, 5, 1, 6, 0, 7, 8, 9) if (east + 1, y) not in taken),
             ]
             relays += extra
             taken |= {(c.x, c.y) for c in extra}

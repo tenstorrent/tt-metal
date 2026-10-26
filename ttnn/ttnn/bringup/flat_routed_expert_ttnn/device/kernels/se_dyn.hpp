@@ -364,7 +364,8 @@ inline void se_dyn_load(SeDyn& d, uint32_t dyn0, uint32_t scratch, uint32_t rows
     // SE_DYN_CB by everyone else once its semaphore SE_DYN_LSEM is set; [0, SE_MAX_E) counts, [SE_MAX_E, 2 SE_MAX_E)
     // regions per local expert)
 #if defined(COMPILE_FOR_BRISC)
-    const bool leader = my_x[0] == SE_DYN_LPX && my_y[0] == SE_DYN_LPY;
+    // (logical, not my_x / my_y: those are the translated NoC coordinate, the same on every chip only by accident)
+    const bool leader = get_absolute_logical_x() == SE_DYN_LLX && get_absolute_logical_y() == SE_DYN_LLY;
 #else
     constexpr bool leader = false;
 #endif

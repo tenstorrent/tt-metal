@@ -239,3 +239,37 @@ shapes, mesh, row-major y).
 - Needed by: deepseek_v41_flash_d_p FIX.1 (tt/shared_expert.py: no padding)
 - Files: `device/flat_routed_expert_plan.cpp`, `device/kernels/se6_dcompute.cpp`, `tests/unit/test_flat_widths.py`,
   `README.md`, `../INDEX.md`
+
+### The schedule leader found by its logical coordinate: no hang on Galaxy cards (2026-10-26, deepseek_v41_flash_d_p FIX.2)
+- What: `device/kernels/se_dyn.hpp` (SE_DYN_PULL): reader 0's BRISC knows it is the schedule leader by
+  `get_absolute_logical_x() / _y()` against the new defines `SE_DYN_LLX / SE_DYN_LLY` (reader 0's logical core), set in
+  `device/flat_routed_expert_program_factory.cpp`; `SE_DYN_LPX / SE_DYN_LPY` (its physical NoC0 xy, `flat_worker_noc0`)
+  are gone. `flat_expert.py` `_layout` (the Python parity builder): the `rcols == [0, 1, 6, 7] and grid == 11 x 10`
+  assert is now the C++ plan's rule (readers in columns 0, 1, E, E + 1, E >= 6, grid >= 11 + E - 6 wide, 10 rows) and the
+  east rectangle / east relays move by E - 6 as in flat_routed_expert_plan.cpp. tests/unit/test_flat_widths.py: the I
+  2304 skip on a 12-column grid removed.
+- Why (cause, from tt-triage of test_flat_uneven_split[glm_e12] on one Galaxy chip, 5 s dispatch timeout): every role
+  core sat in se_dyn_load's poll of the leader's semaphore SE_DYN_LSEM (36.9 M completed NoC reads, one in flight;
+  se10_fwd / se_reader / se5_recv / se6_drecv / se6_dw in noc_async_read_barrier, the computes in llk_wait_tiles), and
+  no core had set it. The leader compared `my_x[0] / my_y[0]` with a physical NoC0 coordinate, but Blackhole firmware
+  fills my_x from `NOC_ID_LOGICAL`, the translated coordinate. They agree only when no Tensix column west of reader 0
+  (logical (0, 9)) is harvested: true on the 2x2 QuietBox's p150s, false on Galaxy cards with physical column 1
+  harvested (triage: logical (0, 5) at physical 2-7; reader 0 physical (2, 11), translated (1, 11)). Probes:
+  `MIMO_FL_DYN_PULL=0` passed the same case; `MIMO_FL_DRISC=0` and `MIMO_FL_COLS=11` (the p150's core count) still
+  hung. The glm_e12 shape also hung on the full 8x4 FABRIC_2D mesh (so DS41-119's "mesh runs pass" was wrong: those
+  runs only used plans without SE_DYN_PULL, i.e. with reader tails or a combine attached, as every deepseek_v41
+  call does).
+- Option-off behaviour: no option. On a chip where the old check found the leader (physical == translated for reader
+  0) the new one selects the same core: same schedule, same kernels apart from the define names. Plans without
+  SE_DYN_PULL (reader tails, `flat_routed_expert_with_program`, subgrids) are unchanged.
+- Tests (one Galaxy chip, tests/unit/, --run-all, after the build): 24 passed / 14 failed / 3 skipped (the 2x2-mesh
+  tests skip on one card); before: 11 first-call hangs. Failures: 12 x TT_FATAL `p.nsg == 1` (TP2 / TP4 subgrid cases;
+  the same 12 as the QuietBox baseline, DS41-63) and 2 perf bands calibrated on the QuietBox p150, slow on the Galaxy
+  chip: mimo indexed_perf 1843456 / 1838520 ns (upper bound 1826488; it failed fast on the QuietBox, 1710341) and k2
+  indexed_rm 1573274 / 1575501 ns (upper 1572413; k2 has reader tails, so this change does not reach it: 1573083 ns in
+  FIX.1, before it). test_flat_routed_expert_op mimo / k2 now pass on the 12 x 10 grid (C++ plan == Python layout,
+  bit-identical y). The glm_e12 shape (64 tokens an expert) runs on the 8x4 mesh (probe). Not run on a QuietBox (not
+  on this box).
+- Needed by: deepseek_v41_flash_d_p FIX.2 (overseer: root-cause the flat op's Galaxy hangs, DS41-119)
+- Files: `device/flat_routed_expert_program_factory.cpp`, `device/kernels/se_dyn.hpp`, `flat_expert.py`,
+  `tests/unit/test_flat_widths.py`, `README.md`
