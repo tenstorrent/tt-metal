@@ -18,7 +18,6 @@ from models.demos.gemma4.tt.attention.operations import (
     _paged_fill_cache,
     apply_rope,
     chunked_prefill_sdpa,
-    chunked_prefill_sdpa_sliding,
 )
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.muse_glimmer_30b.tt.common import (
@@ -32,6 +31,51 @@ from models.demos.muse_glimmer_30b.tt.common import (
 )
 from models.demos.muse_glimmer_30b.tt.rms_norm import per_head_rms_norm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_o, pack_qkvg
+
+SLIDING_PREFILL_STRIDE = 4096
+
+
+def sliding_prefill_sdpa(
+    q, k, v, window, scale, program_config_fn, compute_kernel_config, stride=SLIDING_PREFILL_STRIDE
+):
+    """Causal sliding-window prefill SDPA in row strides: each stride attends over itself plus `window` rows of
+    history, so the cost grows with seq_len * (stride + window) instead of seq_len**2. q [1, Hq, S, D], k/v [1, Hkv, S, D].
+    """
+    S = q.shape[2]
+    hist = -(-window // 32) * 32
+    outs = []
+    for s in range(0, S, stride):
+        lo = max(0, s - hist)
+        hi = min(S, s + stride)
+        whole = lo == 0 and hi == S
+        if whole:
+            qs, ks, vs = q, k, v
+        else:
+            qs, ks, vs = (ttnn.slice(t, [0, 0, lo, 0], [1, t.shape[1], hi, t.shape[3]]) for t in (q, k, v))
+        o = ttnn.transformer.scaled_dot_product_attention(
+            qs,
+            ks,
+            vs,
+            is_causal=True,
+            scale=scale,
+            sliding_window_size=window,
+            program_config=program_config_fn(hi - lo),
+            compute_kernel_config=compute_kernel_config,
+        )
+        if not whole:
+            for t in (qs, ks, vs):
+                t.deallocate(True)
+        if s != lo:
+            part = ttnn.slice(o, [0, 0, s - lo, 0], [1, o.shape[1], hi - lo, o.shape[3]])
+            o.deallocate(True)
+            o = part
+        outs.append(o)
+    if len(outs) == 1:
+        return outs[0]
+    out = ttnn.concat(outs, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    for o in outs:
+        o.deallocate(True)
+    return out
 
 
 @functools.lru_cache(maxsize=None)
@@ -310,13 +354,14 @@ class MuseGlimmerAttention:
             ttnn.fill_cache(v_cache, vf, batch_idx=user_id)
 
         seq_len = x.shape[-2]
-        if seq_len > PREFILL_SDPA_MAX_SEQ:
+        if self.is_sliding and (seq_len > 2 * SLIDING_PREFILL_STRIDE or seq_len > PREFILL_SDPA_MAX_SEQ):
+            sdpa = sliding_prefill_sdpa(
+                q, k, v, self.sliding_window, a.sdpa_scale, self._prefill_sdpa_config, self.sdpa_cfg
+            )
+        elif seq_len > PREFILL_SDPA_MAX_SEQ:
             # Non-chunked prefill SDPA is wrong past 2^15 query rows: use gemma4's chunked paths instead.
-            if self.is_sliding:
-                sdpa = chunked_prefill_sdpa_sliding(q, k, v, self.sliding_window, a.head_dim, scale=a.sdpa_scale)
-            else:
-                assert page_table is not None, "prefill longer than 32768 tokens needs a paged KV cache"
-                sdpa = chunked_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, a.head_dim, scale=a.sdpa_scale)
+            assert page_table is not None, "prefill longer than 32768 tokens needs a paged KV cache"
+            sdpa = chunked_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, a.head_dim, scale=a.sdpa_scale)
         else:
             sdpa = ttnn.transformer.scaled_dot_product_attention(
                 q,
