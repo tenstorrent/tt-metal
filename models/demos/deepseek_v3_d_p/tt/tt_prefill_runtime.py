@@ -88,6 +88,9 @@ class TtPrefillRuntimeConfig:
     dflash_checkpoint_path: str = ""
     # Number of MTP prediction levels K to run after the trunk, 0 = off.
     mtp_levels: int = 0
+    # Decode's MTP level count D, 0 = K. Decode keeps one KV cache for all D levels, so with K = 1 the KV
+    # table publishes levels 2..D as aliases of level 1's rows and each chunk acks them with it.
+    mtp_decode_levels: int = 0
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
     # final stage (non-last ranks forward the hidden state instead of running a tail).
@@ -117,6 +120,16 @@ class TtPrefillRuntimeConfig:
     @property
     def tp_factor(self) -> int:
         return self.mesh_shape[self.tp_axis]
+
+    @property
+    def mtp_ack_levels(self) -> int:
+        """MTP levels the KV table publishes and each chunk acks: decode's D, or K when unset."""
+        levels = self.mtp_decode_levels or self.mtp_levels
+        assert levels == self.mtp_levels or (self.mtp_levels == 1 and levels > 1), (
+            f"mtp_decode_levels={self.mtp_decode_levels} needs mtp_levels=1 (got {self.mtp_levels}): only "
+            "level 1's rows can stand in for the levels decode runs on its one shared cache"
+        )
+        return levels
 
 
 class TtPrefillRuntime:
@@ -171,6 +184,8 @@ class TtPrefillRuntime:
         # callback. Everything happens before the first request; there is no lazy or repeat capture.
         #   _controller       — SubDeviceTraceController driving the segmented capture/replay
         #   _trace_input      — persistent per-chunk input buffer (captured address; updated in place)
+        #   _input_is_caller_filled — set by claim_persistent_input(); the caller fills _trace_input itself
+        #   _mtp_is_caller_filled — the same for _trace_mtp_tokens and claim_persistent_overhang()
         #   _trace_metadata   — 3 persistent 1-element uint32 tensors (slot_id, actual_start, actual_end)
         #   _trace_metadata_msg — persistent packed uint32 tensor holding the same three words (plus
         #                       provided_levels on a downstream MTP rank);
@@ -185,6 +200,8 @@ class TtPrefillRuntime:
         #                       captured callback reads them.
         self._controller = None
         self._trace_input = None
+        self._input_is_caller_filled = False
+        self._mtp_is_caller_filled = False
         self._trace_metadata = None
         self._trace_metadata_msg = None
         self._trace_d2h_service = None
@@ -340,7 +357,8 @@ class TtPrefillRuntime:
         )
 
         logger.info(
-            f"Building MTP predictor: num_levels={k}, layer_idx={mtp_cfg.mtp_layer_idx}, "
+            f"Building MTP predictor: num_levels={k}, decode_levels={self.config.mtp_ack_levels}, "
+            f"layer_idx={mtp_cfg.mtp_layer_idx}, "
             f"first_cache_slot={self.config.num_layers}, layer_num={self.config.num_layers + k}, "
             f"index_share={mtp_cfg.index_share_for_mtp_iteration}, cache={mtp_cache_path}"
         )
@@ -352,6 +370,7 @@ class TtPrefillRuntime:
             mtp_cfg,
             seq_len=self.config.chunk_size,
             num_levels=k,
+            decode_levels=self.config.mtp_ack_levels,
             layer_idx=mtp_cfg.mtp_layer_idx,
             first_cache_slot=self.config.num_layers,
             kv_only_last_level=self.config.kv_only_last_mtp_level,
@@ -614,6 +633,20 @@ class TtPrefillRuntime:
             return None
         return self._trace_indices_out if self._trace_captured else self.model.last_indexer_indices
 
+    def claim_persistent_input(self) -> ttnn.Tensor | None:
+        """Hand the traced forward's input buffer to the caller, which then fills it directly.
+        None when this runtime is not tracing, or keeps no single buffer for the whole input."""
+        if self.config.dflash_enabled and not self.config.is_first_rank:
+            return None
+        self._input_is_caller_filled = self._trace_input is not None
+        return self._trace_input
+
+    def claim_persistent_overhang(self) -> ttnn.Tensor | None:
+        """The MTP counterpart of :meth:`claim_persistent_input`, for the lookahead token buffer.
+        None when this rank keeps no such buffer."""
+        self._mtp_is_caller_filled = self._trace_mtp_tokens is not None
+        return self._trace_mtp_tokens
+
     def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build one chunk's device input for `prefill_chunk`: `chunk_size` SP-sharded token ids on the
         first rank, or a placeholder hidden-state activation on a non-first rank, which receives the
@@ -796,8 +829,9 @@ class TtPrefillRuntime:
     def _stage_trace_inputs(
         self, input_tensor: ttnn.Tensor, metadata_msg: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor] = None
     ) -> None:
-        """Copy one chunk's inputs into the captured persistent buffers and free them before the replay."""
-        if self._trace_mtp_tokens is not None:
+        """Copy one chunk's inputs into the captured persistent buffers before the replay, freeing only
+        the operands this runtime owns."""
+        if self._trace_mtp_tokens is not None and not self._mtp_is_caller_filled:
             assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
             ttnn.copy(mtp_tokens, self._trace_mtp_tokens)
             ttnn.deallocate(mtp_tokens)
@@ -807,10 +841,16 @@ class TtPrefillRuntime:
             ttnn.deallocate(input_tensor)
             ttnn.copy(partial, self._trace_partial_in)
             ttnn.deallocate(partial)
-        ttnn.copy(model_input, self._trace_input)
-        ttnn.deallocate(model_input)
+        if not self._input_is_caller_filled:
+            ttnn.copy(model_input, self._trace_input)
+            ttnn.deallocate(model_input)
         self._metadata_from_msg(metadata_msg)
-        ttnn.deallocate(metadata_msg)
+
+    @property
+    def trace_output(self) -> Optional[ttnn.Tensor]:
+        """The activation buffer this rank's traced forward writes, for the driver to send downstream.
+        None before the trace is captured, and on the last rank."""
+        return self._trace_output
 
     @property
     def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
@@ -977,6 +1017,8 @@ class TtPrefillRuntime:
                 num_levels=self.config.mtp_levels,
             )
         self._trace_indices_in = self.make_placeholder_indices() if self.receives_indexer_indices else None
+        self._input_is_caller_filled = False
+        self._mtp_is_caller_filled = False
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
         # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
@@ -1006,7 +1048,9 @@ class TtPrefillRuntime:
         warm_mtp_tokens = None
         if self._trace_mtp_tokens is not None:
             warm_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
-        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), self._meta_words_dev(words), warm_mtp_tokens)
+        warm_metadata_msg = self._meta_words_dev(words)
+        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), warm_metadata_msg, warm_mtp_tokens)
+        ttnn.deallocate(warm_metadata_msg)
         # Keep the output: send_warmup_inputs needs its spec.
         self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
@@ -1370,9 +1414,10 @@ class TtPrefillRuntime:
         only the KV-tail rank writes those layers, so only its LOCAL count grows.
 
         MTP widens it the same way: ``kv_migration_stages`` puts its K slots in the last rank's stage, so
-        the consumer needs an ack for each of them too.
+        the consumer needs an ack for each of them too. A decode running D > K levels on one shared cache
+        widens it to D: the table publishes the extra levels as aliases of level 1, and each is acked.
         """
-        extra = self.config.mtp_levels
+        extra = self.config.mtp_ack_levels
         if self.config.dflash_enabled:
             extra += self.drafter.config.num_hidden_layers
         return global_ack_layers + extra, local_ack_layers + (extra if self.config.is_last_rank else 0)
@@ -1548,6 +1593,19 @@ class TtPrefillRuntime:
                 layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
             ]
 
+        # Decode's MTP levels past level 1 read level 1's cache rows, so the table publishes them there too.
+        kvpe_alias_rows = None
+        computed_levels, decode_levels = self.config.mtp_levels, self.config.mtp_ack_levels
+        if decode_levels > computed_levels:
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
+
+            # From the gathered stages, not this rank's config: rank 0 builds the table and holds no MTP row.
+            physical_rows = (
+                merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers + computed_levels
+            )
+            level1_row = physical_rows - computed_levels
+            kvpe_alias_rows = {level1_row + level: level1_row for level in range(computed_levels, decode_levels)}
+
         # The table must describe the SAME layout the caches were allocated with and the write op produced.
         return build_and_serialize_kv_chunk_table(
             mesh_device=self.mesh_device,
@@ -1569,6 +1627,7 @@ class TtPrefillRuntime:
             stage_layouts=stage_layouts,
             layer_rows=self.kv_table_layer_rows(stage_layouts),
             index_layer_ids=index_layer_ids,
+            kvpe_alias_rows=kvpe_alias_rows,
         )
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):

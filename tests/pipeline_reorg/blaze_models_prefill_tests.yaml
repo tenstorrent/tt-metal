@@ -262,7 +262,7 @@
       timeout: 5
       tier: 1
       release_ready: false
-  owner_id: U089NPHL0GN # Diego Gomez
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: unit
   sp_config: sc1
@@ -1978,9 +1978,10 @@
   sp_config: sc4
 
 
-# 4-galaxy (SC4) GLM-5.3 MTP1 prefill KV accuracy and throughput, sharing a launcher with the SC1 MTP1
-# entry below. MTP is gated against its own tail-trace golden, not the manifest golden the entries above use.
-- name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC4"
+# 4-galaxy (SC4) GLM-5.3 MTP KV share prefill KV accuracy and throughput: prefill computes MTP level 1 and
+# publishes its KV for all 4 of decode's MTP levels. Shares a launcher with the SC1 entry below. MTP is gated
+# against its own tail-trace golden, not the manifest golden the entries above use.
+- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -1988,7 +1989,7 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 1
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc4 mtp_kv_share
   test_type: prefill_runner_kv_pcc
   test_tags: [glm_5_3, runner, kv_cache, mtp, glm53_trace]
   test_group: disagg_prefill
@@ -2069,9 +2070,9 @@
   sp_config: sc1
 
 
-# Single-galaxy (SC1) GLM-5.3 MTP1 prefill KV accuracy, same launcher as the SC4 entry above and the
-# control for it: one rank skips the D2D union-id transport, so a failure here is MTP1 itself.
-- name: "(GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, SC1"
+# Single-galaxy (SC1) GLM-5.3 MTP KV share prefill KV accuracy, same launcher as the SC4 entry above and the
+# control for it: one rank skips the D2D union-id transport, so a failure here is MTP prefill itself.
+- name: "(GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2079,8 +2080,8 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    echo "===== [1/2] (GLM-5.3-744B) MTP1 prefill KV accuracy + perf 55k@5k, runner ====="
-    bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 1 || exit $?
+    echo "===== [1/2] (GLM-5.3-744B) MTP KV share prefill KV accuracy + perf 55k@5k, runner ====="
+    bash models/demos/common/prefill/runners/ci/run_multirank_mtp_pcc.sh glm53 sc1 mtp_kv_share || exit $?
     echo "===== [2/2] (GLM-5.3-744B) MTP1 predictor multi-turn accuracy, 8 turn schedules ====="
     (
       export GLM53_HF_MODEL=/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4/
@@ -2123,9 +2124,9 @@
 # so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
 # Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
 # no fabric_profile -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it.
-# Traced, and the request runs to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd, the
-# tail is timed. Its throughput lands on the run page through the "(Kimi-K3-2.8T) disaggregated
-# prefill SC4 perf" summary job.
+# 83 slots (manifest), so eager: traced K3 holds one KDA slot. The request runs to 1M like GLM-5.3's:
+# only the 55k the golden spans is PCC'd, the tail is timed. Its throughput lands on the run page
+# through the "(Kimi-K3-2.8T) disaggregated prefill SC4 perf" summary job.
 # Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
 # four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
 # also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
@@ -2165,8 +2166,8 @@
 # Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
 # the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
 # decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
-# Traced like sc4, and timed to 250k like the other sc1 legs; 24 layers are no baseline for 93, so
-# its numbers stay in this job's log and out of the sc4 summary.
+# sc4's 83 slots, so eager like sc4, and timed to 250k like the other sc1 legs; 24 layers are no
+# baseline for 93, so its numbers stay in this job's log and out of the sc4 summary.
 - name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 250k@5k, SC1"
   cmd: |
     set -euo pipefail
@@ -2235,6 +2236,10 @@
   # runtime arguments. Only it can catch a regression in that path -- a trace replay never re-runs the
   # host runtime-arg patch the scalar form depends on. It shares this job because the fabric bring-up
   # dominates the step, so a separate job would roughly double the cost of the same coverage.
+  #
+  # The fabric suite runs a smoke subset (32-rank snake ring: bf16 gathers, slot select, multi-packet
+  # pages; traced metadata and the GLM sub-device path) to stay inside this bucket's 20 min budget.
+  # The full matrix (~100 cases on this torus, 4+ min) is not run here.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -2248,6 +2253,8 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
       exit $rc
     '
   test_type: high_bw_all_gather_perf

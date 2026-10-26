@@ -12,7 +12,7 @@ paged update, decode-assisted continuation and long-context accurate attention.
 import math
 
 import ttnn
-from models.common.modules.tt_ccl import TT_CCL
+from models.common.tt_ccl import TT_CCL
 
 from .collective_buffers import DecodeCollectiveBuffers
 from .optimized_decoder import MatmulGeometry, OptimizedDecoder, PrecisionPolicy
