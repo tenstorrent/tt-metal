@@ -28,6 +28,13 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     kimi_k3_program_config,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState, ttKDA
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
+    AffineTransform,
+    _sp_links,
+    distributed_prefix,
+    pack_transform,
+)
+from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
@@ -603,3 +610,120 @@ def assert_matches_reference(
             nrmse_threshold=nrmse.convolution,
             linf_threshold=0.1,
         )
+
+
+# The SP relay tests' geometry: the Kimi-K3 rows per rank at T=5120 on SP8, batch heads and key width.
+RELAY_ROWS, RELAY_HEADS, RELAY_KEY = 640, 24, 128
+
+
+class RelayTransforms:
+    """The SP relay tests' case: one transform per rank, its packed device copy, and the FP64 reference of the relay
+    around the ring."""
+
+    def __init__(self, mesh_device, seed: int):
+        generator = torch.Generator().manual_seed(seed)
+        self.sp_size, self.tp_size = tuple(mesh_device.shape)
+        # BF16-representable transforms make the BF16 transport exact for both paths.
+        self.a = (
+            (0.1 * torch.randn(self.sp_size, RELAY_HEADS, RELAY_KEY, RELAY_KEY, generator=generator)).bfloat16().float()
+        )
+        self.b = (
+            (0.1 * torch.randn(self.sp_size, RELAY_HEADS, RELAY_KEY, RELAY_KEY, generator=generator)).bfloat16().float()
+        )
+        self.initial = 0.1 * torch.randn(RELAY_HEADS, RELAY_KEY, RELAY_KEY, generator=generator)
+
+        def per_rank(host):
+            return ttnn.from_torch(
+                host.reshape((-1,) + host.shape[2:]),
+                dtype=ttnn.float32,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=(0, None), mesh_shape=(self.sp_size, self.tp_size)
+                ),
+            )
+
+        self.packed = pack_transform(AffineTransform(per_rank(self.a), per_rank(self.b)))
+        self.initial_tt = ttnn.from_torch(
+            self.initial,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        self.compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
+        )
+
+    def reference(self, start: int, final_in_landing: bool = False):
+        """Each rank's entry state, the final carry and the ranks the relay leaves the carry on."""
+        first_rank = (start // RELAY_ROWS) % self.sp_size
+        carry = self.initial.double()
+        entries = {}
+        for step in range(self.sp_size):
+            rank = (first_rank + step) % self.sp_size
+            entries[rank] = carry.float()
+            carry = self.a[rank].double() @ carry + self.b[rank].double()
+        # The final state is valid where the relay leaves it: the last chronological rank, and the first unless it
+        # stays in the first rank's final landing.
+        last_rank = (first_rank + self.sp_size - 1) % self.sp_size
+        return entries, carry.float(), {last_rank} if final_in_landing else {first_rank, last_rank}
+
+    def assert_matches_gather_and_chain(self, entry, final, actual_start, start: int, final_in_landing: bool = False):
+        chained_entry, chained_final = distributed_prefix(
+            self.packed,
+            self.initial_tt,
+            sequence_parallel_axis=0,
+            compute_config=self.compute_config,
+            actual_start=actual_start,
+            local_rows=RELAY_ROWS,
+        )
+        entries, carry, final_ranks = self.reference(start, final_in_landing)
+
+        def assert_matches_chain(got, chained, expected, name):
+            # The same products at the same fidelity in another operand and accumulation order (the relay accumulates
+            # the K-sum on top of B in DST, the chain adds B after the matmul): the relay must be no further from the
+            # FP64 reference than the gather + chain.
+            expected = expected.double()
+            relay_error = torch.linalg.vector_norm(got.double() - expected).item()
+            chain_error = torch.linalg.vector_norm(chained.double() - expected).item()
+            assert relay_error <= 1.01 * chain_error, f"{name}: relay error {relay_error} > chain error {chain_error}"
+
+        devices = zip(
+            ttnn.get_device_tensors(entry),
+            ttnn.get_device_tensors(final),
+            ttnn.get_device_tensors(chained_entry),
+            ttnn.get_device_tensors(chained_final),
+            strict=True,
+        )
+        for index, (local_entry, local_final, local_chained_entry, local_chained_final) in enumerate(devices):
+            rank, tp = divmod(index, self.tp_size)
+            name = f"start={start} rank={rank} tp={tp}"
+            got_entry = ttnn.to_torch(local_entry)
+            assert_accurate(entries[rank], got_entry, name=f"entry {name}", nrmse_threshold=0.025)
+            assert_matches_chain(got_entry, ttnn.to_torch(local_chained_entry), entries[rank], f"entry {name}")
+            if rank in final_ranks:
+                got_final = ttnn.to_torch(local_final)
+                assert_accurate(carry, got_final, name=f"final {name}", nrmse_threshold=0.03)
+                assert_matches_chain(got_final, ttnn.to_torch(local_chained_final), carry, f"final {name}")
+
+
+def make_relay(mesh_device, cores=None) -> RelayAffinePrefix:
+    """The relay of the RelayTransforms geometry on ``cores`` (the op's default placement when None)."""
+    return RelayAffinePrefix(
+        mesh_device,
+        sequence_parallel_axis=0,
+        batch_heads=RELAY_HEADS,
+        key_dim=RELAY_KEY,
+        value_dim=RELAY_KEY,
+        num_links=_sp_links(mesh_device, 0),
+        local_rows=RELAY_ROWS,
+        cores=cores,
+    )
+
+
+def relay_worker_columns(mesh_device) -> list:
+    """The right-hand three worker columns, column by column (as the model places the relay): the head cores are then
+    not in the row-major order of the landing buffers' shard grid."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    return [ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)]

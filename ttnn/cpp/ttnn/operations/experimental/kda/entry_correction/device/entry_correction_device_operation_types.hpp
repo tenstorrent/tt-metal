@@ -21,6 +21,10 @@ struct EntryCorrectionParams {
     std::vector<tt::tt_metal::CoreCoord> cores;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
+    // With a tail landing: head h's state lands on tail_landing_cores[h] (the relay's head cores, in head order), and
+    // its arrival counter is the global semaphore at tail_landing_semaphore_address on that core.
+    std::vector<tt::tt_metal::CoreCoord> tail_landing_cores;
+    uint32_t tail_landing_semaphore_address = 0;
 };
 
 struct EntryCorrectionInputs {
@@ -36,6 +40,10 @@ struct EntryCorrectionInputs {
     Tensor tail_entry;
     Tensor actual_start;
     std::optional<Tensor> actual_end;
+    // The split tail's entry states as relay_affine_prefix(leave_final_in_landing=True) leaves them on the first
+    // chronological rank: one K x K state per head core, stored by tile column, possibly still landing. Taken instead
+    // of tail_entry; the first rank waits for every column and consumes the arrival count, every call.
+    std::optional<Tensor> tail_landing;
 };
 
 }  // namespace ttnn::experimental::prim

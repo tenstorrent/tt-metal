@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -28,6 +29,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> entry_correction(
     const std::optional<ttnn::Tensor>& actual_end = std::nullopt,
     uint32_t sequence_parallel_axis = 0,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<ttnn::Tensor>& tail_landing = std::nullopt,
+    const std::vector<tt::tt_metal::CoreCoord>& tail_landing_cores = {},
+    const std::optional<tt::tt_metal::GlobalSemaphore>& tail_landing_semaphore = std::nullopt);
 
 }  // namespace ttnn::experimental::kda

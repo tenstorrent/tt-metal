@@ -62,14 +62,15 @@ void kernel_main() {
         cb_wait_front(cb_diff, chunks * kt);
         pack_reconfig_data_format(cb_out);
     }
+    // The group's seed lands first; the tail's is waited for only where it is used.
     if (need_group) {
         cb_wait_front(cb_seed, state_tiles);
     }
-    if (need_tail) {
-        cb_wait_front(cb_tail, state_tiles);
-    }
     for (uint32_t c = 0; c < chunks; ++c) {
         const uint32_t seed = c < group_chunks ? cb_seed : cb_tail;
+        if (c == group_chunks) {
+            cb_wait_front(cb_tail, state_tiles);
+        }
         cb_reserve_back(cb_out, kt);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_base);
@@ -98,6 +99,7 @@ void kernel_main() {
     // This core's tile rows of final = A @ seed + B.
     if (final) {
         const uint32_t seed = final_tail ? cb_tail : cb_seed;
+        cb_wait_front(seed, state_tiles);
         pack_reconfig_data_format(cb_final);
         for (uint32_t row = first_row; row < kt; row += row_stride) {
             cb_wait_front(cb_a, kt);
@@ -129,6 +131,8 @@ void kernel_main() {
         cb_pop_front(cb_seed, state_tiles);
     }
     if (need_tail) {
+        // Cores whose chunks and final rows all use the group seed never waited above; balance the reader's push.
+        cb_wait_front(cb_tail, state_tiles);
         cb_pop_front(cb_tail, state_tiles);
     }
 }

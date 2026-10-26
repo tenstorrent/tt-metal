@@ -16,17 +16,18 @@ constexpr uint32_t cb_stage = get_compile_time_arg_val(0);
 constexpr uint32_t sp_rank = get_compile_time_arg_val(1);
 constexpr uint32_t sp_size = get_compile_time_arg_val(2);
 constexpr uint32_t local_rows = get_compile_time_arg_val(3);
-constexpr uint32_t unit_bytes = get_compile_time_arg_val(4);        // one tile column of a head's state
-constexpr uint32_t chunk_bytes = get_compile_time_arg_val(5);       // one fabric packet
+constexpr uint32_t column_bytes = get_compile_time_arg_val(4);      // one tile column of a head's state
+constexpr uint32_t packet_bytes = get_compile_time_arg_val(5);      // one fabric packet, whole tiles
 constexpr uint32_t kt = get_compile_time_arg_val(6);                // tile columns per state
-constexpr uint32_t slots = get_compile_time_arg_val(7);             // unit buffers
+constexpr uint32_t slots = get_compile_time_arg_val(7);             // staged tile columns
 constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(8);  // on the head cores
 constexpr auto start_args = TensorAccessorArgs<9>();
-constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
-// One packet header per packet of each slot, out of this RISC's share of the pool.
-static_assert(
-    slots * chunks <= MEM_PACKET_HEADER_POOL_SIZE / MaxDMProcessorsPerCoreType / PACKET_HEADER_MAX_SIZE,
-    "the sender's packet headers exceed the packet header pool");
+constexpr uint32_t tile_bytes = column_bytes / kt;  // FP32 tiles
+constexpr uint32_t column_packets = (column_bytes + packet_bytes - 1) / packet_bytes;
+constexpr uint32_t headers = NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;  // this RISC's share of the pool
+static_assert(slots > 0 && slots < 16, "one read transaction id per staged column");
+static_assert(packet_bytes % tile_bytes == 0, "packets carry whole tiles");
+static_assert(headers >= 2, "one header in flight while the next piece's is filled");
 
 namespace {
 
@@ -39,6 +40,21 @@ void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id,
     (void)fabric_set_unicast_route<false>(
         reinterpret_cast<volatile tt_l1_ptr LowLatencyPacketHeader*>(hdr), static_cast<uint16_t>(1));
 #endif
+}
+
+// One read transaction id per packet of the staging ring when there are enough, else one per staged column.
+constexpr uint32_t read_trid(uint32_t piece) {
+    if constexpr (slots * column_packets < 16) {
+        return 1 + piece % (slots * column_packets);
+    } else {
+        return 1 + (piece / column_packets) % slots;
+    }
+}
+
+constexpr uint32_t piece_offset(uint32_t piece) { return piece % column_packets * packet_bytes; }
+
+constexpr uint32_t piece_bytes(uint32_t piece) {
+    return piece_offset(piece) + packet_bytes <= column_bytes ? packet_bytes : column_bytes - piece_offset(piece);
 }
 
 }  // namespace
@@ -65,6 +81,16 @@ void kernel_main() {
     const uint32_t stage = get_write_ptr(cb_stage);
     const auto start = TensorAccessor(start_args, start_address);
     noc_async_read(start.get_noc_addr(0), stage, sizeof(uint32_t));
+
+    // Open the fabric connection while the chronology word is in flight: on the first rank the relay starts here.
+    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[headers];
+    for (uint32_t i = 0; i < headers; ++i) {
+        hdrs[i] = PacketHeaderPool::allocate_header();
+        route_one_hop(hdrs[i], dst_chip_id, dst_mesh_id);
+    }
+    conn.open();
+
     noc_async_read_barrier();
     const auto topology =
         kda_chronology::derive(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage)[0], sp_rank, sp_size, local_rows);
@@ -74,73 +100,80 @@ void kernel_main() {
     const uint32_t landed_semaphore = last ? final_semaphore : arrival_semaphore;
     const uint32_t ack_semaphore = get_semaphore(ack_semaphore_id);
 
-    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg);
-    // The relay's unit is one tile column of a head's state (column-major storage): the successor computes that
-    // column of its state as soon as it lands. Units go through `slots` buffers: unit u + slots - 1 is read out of its
-    // head core while earlier units' packets are on the link, and a slot (and its packet headers) is reused only
-    // after its packets have left L1.
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[slots][chunks];
-    for (uint32_t b = 0; b < slots; ++b) {
-        for (uint32_t c = 0; c < chunks; ++c) {
-            hdrs[b][c] = PacketHeaderPool::allocate_header();
-            route_one_hop(hdrs[b][c], dst_chip_id, dst_mesh_id);
-        }
-    }
-    conn.open();
-    const uint32_t units = num_heads * kt;
-    const auto head_xy = [&](uint32_t u) { return get_arg_val<uint32_t>(head_args + u / kt); };
-    // Head k's writer counts its finished columns into its count semaphore on this core.
-    const auto ready = [&](uint32_t u) {
+    // A head's state is kt tile columns stored column-major, at the same address on its head core and (its landing)
+    // on the successor's. Each column goes out as column_packets packets ("pieces"). A piece's tiles are read out of
+    // the head core as soon as their column is packed, into a ring of `slots` column buffers, and the piece is sent as
+    // soon as its own read lands. A column's last piece counts the column into the successor head core's arrival
+    // semaphore, so the successor computes the column as soon as it lands.
+    const uint32_t pieces = num_heads * kt * column_packets;
+    const auto head_xy = [&](uint32_t column) { return get_arg_val<uint32_t>(head_args + column / kt); };
+    // Head k's writer counts its packed columns into its count semaphore on this core.
+    const auto ready = [&](uint32_t piece) {
+        const uint32_t column = piece / column_packets;
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                   get_semaphore(get_arg_val<uint32_t>(notify_args + u / kt)))[0] >= u % kt + 1;
+                   get_semaphore(get_arg_val<uint32_t>(notify_args + column / kt)))[0] >= column % kt + 1;
     };
-    uint32_t fetched = 0;  // units whose reads are issued
-    const auto fetch = [&](uint32_t u) {
-        const uint32_t xy = head_xy(u);
+    uint32_t fetched = 0;         // pieces whose reads are issued
+    uint32_t sent = 0;            // pieces sent
+    uint32_t flushed_pieces = 0;  // pieces that have left L1 (their headers and buffers are free)
+    const auto flush = [&]() {
+        noc_async_writes_flushed();
+        flushed_pieces = sent;
+    };
+    const auto fetch = [&]() {
+        const uint32_t column = fetched / column_packets;
+        if (column >= slots + flushed_pieces / column_packets) {
+            // Column - slots last used this buffer: its pieces must have left L1.
+            flush();
+        }
+        const uint32_t xy = head_xy(column);
+        const uint32_t offset = column % kt * column_bytes + piece_offset(fetched);
+        noc_async_read_set_trid(read_trid(fetched));
         noc_async_read(
-            get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + (u % kt) * unit_bytes),
-            stage + (u % slots) * unit_bytes,
-            unit_bytes);
+            get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + offset),
+            stage + column % slots * column_bytes + piece_offset(fetched),
+            piece_bytes(fetched));
+        ++fetched;
     };
-    for (uint32_t u = 0; u < units; ++u) {
-        // Issue every read the free slots allow, waiting only for unit u itself.
-        while (fetched < units && fetched < u + slots && (fetched == u || ready(fetched))) {
-            if (fetched == u) {
-                while (!ready(u)) {
+    for (; sent < pieces; ++sent) {
+        // Issue every read the free buffers allow, waiting only for this piece's.
+        while (fetched < pieces && fetched / column_packets < sent / column_packets + slots &&
+               (fetched == sent || ready(fetched))) {
+            if (fetched == sent) {
+                while (!ready(sent)) {
                 }
             }
-            if (fetched >= slots) {
-                // Unit fetched - slots last used this slot: its packets must have left L1.
-                noc_async_writes_flushed();
-            }
-            fetch(fetched);
-            ++fetched;
+            fetch();
         }
-        noc_async_read_barrier();
-        const uint32_t xy = head_xy(u);
+        const uint32_t column = sent / column_packets;
+        const uint32_t xy = head_xy(column);
         const uint32_t hx = xy & 0xFFFF;
         const uint32_t hy = xy >> 16;
-        if (u % kt == kt - 1) {
+        const bool column_end = sent % column_packets == column_packets - 1;
+        noc_async_read_barrier_with_trid(read_trid(sent));
+        if (column_end && column % kt == kt - 1) {
             // The head's last column has left its head core: release the head.
             noc_semaphore_inc(get_noc_addr(hx, hy, ack_semaphore), 1);
         }
-        const uint32_t buffer = stage + (u % slots) * unit_bytes;
-        const uint32_t column = landing + (u % kt) * unit_bytes;
-        for (uint32_t c = 0; c < chunks; ++c) {
-            const uint32_t offset = c * chunk_bytes;
-            const uint32_t bytes = offset + chunk_bytes <= unit_bytes ? chunk_bytes : unit_bytes - offset;
-            const uint64_t dst = get_noc_addr(hx, hy, column + offset);
-            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[u % slots][c];
-            if (c + 1 == chunks) {
-                hdr->to_noc_fused_unicast_write_atomic_inc(
-                    NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(hx, hy, landed_semaphore), 1, true}, bytes);
-            } else {
-                hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
-            }
-            conn.wait_for_empty_write_slot();
-            conn.send_current_slot_non_blocking(buffer + offset, bytes, reinterpret_cast<uint32_t>(hdr));
+        if (sent >= headers + flushed_pieces) {
+            flush();
         }
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[sent % headers];
+        const uint64_t dst = get_noc_addr(hx, hy, landing + column % kt * column_bytes + piece_offset(sent));
+        if (column_end) {
+            hdr->to_noc_fused_unicast_write_atomic_inc(
+                NocUnicastAtomicIncFusedCommandHeader{dst, get_noc_addr(hx, hy, landed_semaphore), 1, true},
+                piece_bytes(sent));
+        } else {
+            hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, piece_bytes(sent));
+        }
+        conn.wait_for_empty_write_slot();
+        conn.send_current_slot_non_blocking(
+            stage + column % slots * column_bytes + piece_offset(sent),
+            piece_bytes(sent),
+            reinterpret_cast<uint32_t>(hdr));
     }
+    noc_async_read_set_trid(0);
     noc_async_writes_flushed();
     conn.close();
     noc_async_atomic_barrier();

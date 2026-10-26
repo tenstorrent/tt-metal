@@ -9,20 +9,22 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.config import block_projection_program_config
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
-    AffineTransform,
-    _RelayFinalCarry,
-    _sp_links,
-    distributed_prefix,
-    pack_transform,
+from models.demos.deepseek_v3_d_p.tests.kda.utils import (
+    RELAY_HEADS,
+    RELAY_KEY,
+    RELAY_ROWS,
+    RelayTransforms,
+    make_relay,
+    relay_worker_columns,
 )
+from models.demos.deepseek_v3_d_p.tt.kda.config import block_projection_program_config, dram_width_sharded
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import _RelayFinalCarry
 from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import RelayAffinePrefix, RelayOutputGate
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
 pytestmark = run_for_blackhole()
 
-_ROWS, _HEADS, _KEY = 640, 24, 128
+_ROWS, _HEADS, _KEY = RELAY_ROWS, RELAY_HEADS, RELAY_KEY
 
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
@@ -53,102 +55,20 @@ _MESH_ONE_TILE_PACKETS = pytest.mark.parametrize(
 )
 
 
-class _Transforms:
-    """One transform per rank, its packed device copy, and the FP64 reference of the relay around the ring."""
-
-    def __init__(self, mesh_device, seed: int):
-        generator = torch.Generator().manual_seed(seed)
-        self.sp_size, self.tp_size = tuple(mesh_device.shape)
-        # BF16-representable transforms make the BF16 transport exact for both paths.
-        self.a = (0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
-        self.b = (0.1 * torch.randn(self.sp_size, _HEADS, _KEY, _KEY, generator=generator)).bfloat16().float()
-        self.initial = 0.1 * torch.randn(_HEADS, _KEY, _KEY, generator=generator)
-
-        def per_rank(host):
-            return ttnn.from_torch(
-                host.reshape((-1,) + host.shape[2:]),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, dims=(0, None), mesh_shape=(self.sp_size, self.tp_size)
-                ),
-            )
-
-        self.packed = pack_transform(AffineTransform(per_rank(self.a), per_rank(self.b)))
-        self.initial_tt = ttnn.from_torch(
-            self.initial,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
-        self.compute_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
-        )
-
-    def reference(self, start: int):
-        """Each rank's entry state, the final carry and the ranks the relay leaves the carry on."""
-        first_rank = (start // _ROWS) % self.sp_size
-        carry = self.initial.double()
-        entries = {}
-        for step in range(self.sp_size):
-            rank = (first_rank + step) % self.sp_size
-            entries[rank] = carry.float()
-            carry = self.a[rank].double() @ carry + self.b[rank].double()
-        # The final state is valid where the relay leaves it: the last chronological rank and the first.
-        return entries, carry.float(), {first_rank, (first_rank + self.sp_size - 1) % self.sp_size}
-
-    def assert_matches_gather_and_chain(self, entry, final, actual_start, start: int):
-        chained_entry, chained_final = distributed_prefix(
-            self.packed,
-            self.initial_tt,
-            sequence_parallel_axis=0,
-            compute_config=self.compute_config,
-            actual_start=actual_start,
-            local_rows=_ROWS,
-        )
-        entries, carry, final_ranks = self.reference(start)
-
-        def assert_matches_chain(got, chained, expected, name):
-            # The same products at the same fidelity in another operand and accumulation order (the relay accumulates
-            # the K-sum on top of B in DST, the chain adds B after the matmul): the relay must be no further from the
-            # FP64 reference than the gather + chain.
-            expected = expected.double()
-            relay_error = torch.linalg.vector_norm(got.double() - expected).item()
-            chain_error = torch.linalg.vector_norm(chained.double() - expected).item()
-            assert relay_error <= 1.01 * chain_error, f"{name}: relay error {relay_error} > chain error {chain_error}"
-
-        devices = zip(
-            ttnn.get_device_tensors(entry),
-            ttnn.get_device_tensors(final),
-            ttnn.get_device_tensors(chained_entry),
-            ttnn.get_device_tensors(chained_final),
-            strict=True,
-        )
-        for index, (local_entry, local_final, local_chained_entry, local_chained_final) in enumerate(devices):
-            rank, tp = divmod(index, self.tp_size)
-            name = f"start={start} rank={rank} tp={tp}"
-            got_entry = ttnn.to_torch(local_entry)
-            assert_accurate(entries[rank], got_entry, name=f"entry {name}", nrmse_threshold=0.025)
-            assert_matches_chain(got_entry, ttnn.to_torch(local_chained_entry), entries[rank], f"entry {name}")
-            if rank in final_ranks:
-                got_final = ttnn.to_torch(local_final)
-                assert_accurate(carry, got_final, name=f"final {name}", nrmse_threshold=0.03)
-                assert_matches_chain(got_final, ttnn.to_torch(local_chained_final), carry, f"final {name}")
-
-
-def _relay(mesh_device, cores=None) -> RelayAffinePrefix:
-    return RelayAffinePrefix(
-        mesh_device,
-        sequence_parallel_axis=0,
-        batch_heads=_HEADS,
-        key_dim=_KEY,
-        value_dim=_KEY,
-        num_links=_sp_links(mesh_device, 0),
-        local_rows=_ROWS,
-        cores=cores,
-    )
+def landed_final_states(relay: RelayAffinePrefix, landing_device_tensor) -> torch.Tensor:
+    """The [BH, K, K] states in one device's final landing, head h's taken from the relay's h-th head core (the
+    landing stores each state by tile column)."""
+    landing = ttnn.to_torch(landing_device_tensor)
+    grid = relay.final_landing.memory_config().shard_spec.grid
+    shard_of = {(c.x, c.y): i for i, c in enumerate(ttnn.corerange_to_cores(grid, row_wise=True))}
+    kt = _KEY // 32
+    states = []
+    for core in relay.head_cores:
+        shard = shard_of[(core.x, core.y)]
+        stored = landing[shard * _KEY : (shard + 1) * _KEY].reshape(kt, 32, kt, 32)
+        # The stored tile (i, j) is the state's tile (j, i).
+        states.append(stored.permute(2, 1, 0, 3).reshape(_KEY, _KEY))
+    return torch.stack(states)
 
 
 @_MESH
@@ -157,9 +77,9 @@ def _relay(mesh_device, cores=None) -> RelayAffinePrefix:
     "start", [0, 640, 672, 3232, 4480], ids=["aligned", "rotated", "split", "late-split", "last-rank"]
 )
 def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
-    transforms = _Transforms(mesh_device, seed=start)
+    transforms = RelayTransforms(mesh_device, seed=start)
     actual_start = make_actual_start(mesh_device, start)
-    entry, final, gate = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
+    entry, final, gate = make_relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
     assert gate is None
     transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
 
@@ -167,23 +87,26 @@ def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
 @_MESH_ONE_TILE_PACKETS
 def test_relay_affine_prefix_one_tile_packets(mesh_device):
     start = 672
-    transforms = _Transforms(mesh_device, seed=start)
+    transforms = RelayTransforms(mesh_device, seed=start)
     actual_start = make_actual_start(mesh_device, start)
-    entry, final, _ = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
+    entry, final, _ = make_relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
     transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
 
 
 @_MESH
-def test_relay_affine_prefix_with_output_gate(mesh_device):
+@pytest.mark.parametrize("weight_layout", ["interleaved", "dram_width_sharded"])
+def test_relay_affine_prefix_with_output_gate(mesh_device, weight_layout):
     """The output gate beside the relay, as the model lays it out: the relay on the right-hand worker columns, the
-    gate's matmul on the block from (0, 0), its first columns copied in by the relay columns' spare cores."""
+    gate's matmul on the block from (0, 0), its first columns copied in by the relay columns' spare cores. The gate's
+    weight is interleaved or, as the model keeps it, DRAM width-sharded over the banks; either way the gate equals
+    ttnn.linear with the interleaved weight bit for bit."""
     torch.manual_seed(0)
     start = 640
-    transforms = _Transforms(mesh_device, seed=start)
+    transforms = RelayTransforms(mesh_device, seed=start)
     actual_start = make_actual_start(mesh_device, start)
     grid = mesh_device.compute_with_storage_grid_size()
-    relay_columns = [ttnn.CoreCoord(x, y) for x in range(grid.x - 1, grid.x - 4, -1) for y in range(grid.y)]
-    relay = _relay(mesh_device, cores=relay_columns)
+    relay_columns = relay_worker_columns(mesh_device)
+    relay = make_relay(mesh_device, cores=relay_columns)
     copy_cores = [core for core in relay_columns if core not in relay.cores]
     replicate = lambda host: ttnn.from_torch(
         host,
@@ -201,9 +124,10 @@ def test_relay_affine_prefix_with_output_gate(mesh_device):
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True
     )
+    gate_weight = dram_width_sharded(mesh_device, ttnn.clone(w)) if weight_layout == "dram_width_sharded" else w
     output_gate = RelayOutputGate(
         input=x,
-        weight=w,
+        weight=gate_weight,
         program_config=config,
         compute_config=compute_config,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -234,8 +158,8 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
     second call must be as exact as the first, from the landing buffers and arrival counters the first left."""
     # Rank-aligned starts, the second rotated: without a split tail the carry is the prefix's final state.
     starts = (0, 640)
-    transforms = _Transforms(mesh_device, seed=starts[0])
-    relay = _relay(mesh_device)
+    transforms = RelayTransforms(mesh_device, seed=starts[0])
+    relay = make_relay(mesh_device)
     final_carry = _RelayFinalCarry.shared(mesh_device, 0, relay.num_links)
     results = []
     for start in starts:
@@ -259,3 +183,26 @@ def test_relay_affine_prefix_back_to_back(mesh_device):
                 name=f"carry start={start} rank={rank} tp={tp}",
                 nrmse_threshold=0.03,
             )
+
+
+@_MESH
+@pytest.mark.parametrize("start", [640, 672], ids=["rotated", "split"])
+def test_relay_affine_prefix_leaves_final_in_landing(mesh_device, start):
+    """With leave_final_in_landing the first rank does not take the last rank's final state: it stays in the first
+    rank's final landing, head h's on the relay's h-th head core, and the final-state output is valid on the last
+    rank only. The head cores go column by column, so their order differs from the landing's shard order."""
+    transforms = RelayTransforms(mesh_device, seed=start)
+    actual_start = make_actual_start(mesh_device, start)
+    relay = make_relay(mesh_device, cores=relay_worker_columns(mesh_device))
+    entry, final, _ = relay(transforms.packed, transforms.initial_tt, actual_start, leave_final_in_landing=True)
+    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start, final_in_landing=True)
+    _, carry, _ = transforms.reference(start)
+    first_rank = (start // _ROWS) % transforms.sp_size
+    landings = ttnn.get_device_tensors(relay.final_landing)
+    for tp in range(transforms.tp_size):
+        assert_accurate(
+            carry,
+            landed_final_states(relay, landings[first_rank * transforms.tp_size + tp]),
+            name=f"landed final start={start} tp={tp}",
+            nrmse_threshold=0.03,
+        )

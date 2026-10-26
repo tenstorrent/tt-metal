@@ -13,12 +13,16 @@ constexpr uint32_t sp_size = get_compile_time_arg_val(3);
 constexpr uint32_t local_rows = get_compile_time_arg_val(4);
 constexpr uint32_t kt = get_compile_time_arg_val(5);
 constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(6);
-constexpr auto entry_args = TensorAccessorArgs<7>();
+// The first rank waits for the last rank's final state and writes it to DRAM (else a later program takes it from
+// final_landing).
+constexpr bool copy_final_landing = get_compile_time_arg_val(7);
+constexpr auto entry_args = TensorAccessorArgs<8>();
 constexpr auto final_args = TensorAccessorArgs<entry_args.next_compile_time_args_offset()>();
 constexpr uint32_t state_tiles = kt * kt;
 
 // Head core: hands each finished tile column to the head's sender, then writes the entry state (and, on the last
-// rank, the final state) to DRAM; the first rank also writes the final state the last rank sends it.
+// rank, the final state) to DRAM; the first rank also writes the final state the last rank sends it, unless a later
+// program takes it from final_landing.
 void kernel_main() {
     size_t arg = 0;
     const uint32_t entry_address = get_arg_val<uint32_t>(arg++);
@@ -40,8 +44,8 @@ void kernel_main() {
     const auto entry = TensorAccessor(entry_args, entry_address);
     const auto final_state = TensorAccessor(final_args, final_address);
     const uint32_t tile_bytes = get_tile_size(cb_eout);
-    // Hand each tile column to this head's sender as it is packed (a count on the sender's core): the DRAM copies
-    // below are off the relay's path.
+    // Hand each tile column to this head's sender as it is packed (a count of packed columns on the sender's core):
+    // the DRAM copies below are off the relay's path.
     const uint64_t notify = get_noc_addr(sender_x, sender_y, get_semaphore(notify_semaphore_id));
     for (uint32_t j = 0; j < kt; ++j) {
         cb_wait_front(cb_eout, (j + 1) * kt);
@@ -64,7 +68,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_semaphore_id));
     noc_semaphore_wait_min(acked, 1);
     cb_pop_front(cb_eout, state_tiles);
-    if (position == 0) {
+    if (copy_final_landing && position == 0) {
         // The first rank's split tail enters at the final state, which the last rank sends here.
         volatile tt_l1_ptr uint32_t* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(final_semaphore);
         noc_semaphore_wait_min(landed, kt);

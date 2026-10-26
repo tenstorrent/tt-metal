@@ -30,7 +30,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> relay_affine
     const std::optional<ttnn::Tensor>& output_gate_copy_source,
     uint32_t output_gate_copy_source_column,
     uint32_t output_gate_copied_columns,
-    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores) {
+    const std::vector<tt::tt_metal::CoreCoord>& output_gate_copy_cores,
+    bool leave_final_in_landing) {
     TT_FATAL(
         packed.storage_type() == StorageType::DEVICE && packed.buffer() != nullptr,
         "relay_affine_prefix: packed must be an allocated device tensor");
@@ -74,6 +75,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, std::optional<ttnn::Tensor>> relay_affine
         local_rows,
         num_links,
         cores,
+        leave_final_in_landing,
         output_gate,
         output_gate_input,
         output_gate_weight,

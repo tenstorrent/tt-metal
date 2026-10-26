@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDAProgramConfig,
     block_projection_program_config,
     decay_projection_program_config,
+    dram_width_sharded,
     l1_when_it_fits,
     matmul_grid,
     tuned_projection_matmul_configs,
@@ -300,7 +301,9 @@ class ttKDA:
                 ttnn.TILE_SIZE
             )
             kept_end = gate_start + self.input_projection_gate_columns
-            self.output_gate_weight = ttnn.slice(fused, [0, kept_end], [hidden, gate_end])
+            self.output_gate_weight = dram_width_sharded(
+                mesh_device, ttnn.slice(fused, [0, kept_end], [hidden, gate_end])
+            )
             leading = ttnn.slice(fused, [0, 0], [hidden, kept_end])
             trailing = ttnn.slice(fused, [0, gate_end], [hidden, width])
             # Both pieces are whole tiles of the fused weight; concat widens to BF16, and casting back requantizes

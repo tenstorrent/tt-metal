@@ -70,10 +70,15 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             output_gate_copy_source_column (int, optional): The first copied tile column of the source.
             output_gate_copied_columns (int, optional): Copied tile columns; 0 copies nothing.
             output_gate_copy_cores (list[ttnn.CoreCoord], optional): The cores that copy, splitting the rows.
+            leave_final_in_landing (bool, optional): The first rank leaves the last rank's final state in
+                ``final_landing`` (and its arrival count in the final-state semaphore) for a later program to
+                wait on and take, such as ``entry_correction``'s ``tail_landing``, instead of waiting for it and
+                copying it to the final-state output. Defaults to False.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor | None]: FLOAT32 TILE-layout ``[B*H, K, K]`` entry
-                states, the final state in DRAM (valid on the first and last chronological ranks) and the
+                states, the final state in DRAM (valid on the first and last chronological ranks, or on the
+                last only with ``leave_final_in_landing``) and the
                 output gate's BFLOAT16 ``[..., M, 32 * output_gate_copied_columns + N]`` output, or None
                 without an output gate.
 
@@ -104,7 +109,8 @@ void bind_relay_affine_prefix(nb::module_& mod) {
         nb::arg("output_gate_copy_source") = nb::none(),
         nb::arg("output_gate_copy_source_column") = 0,
         nb::arg("output_gate_copied_columns") = 0,
-        nb::arg("output_gate_copy_cores") = std::vector<tt::tt_metal::CoreCoord>{});
+        nb::arg("output_gate_copy_cores") = std::vector<tt::tt_metal::CoreCoord>{},
+        nb::arg("leave_final_in_landing") = false);
 }
 
 }  // namespace ttnn::operations::experimental::kda::relay_affine_prefix::detail

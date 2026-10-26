@@ -86,13 +86,6 @@ void RelayAffinePrefixOperation::validate_on_program_cache_miss(
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tt::constants::TILE_HW * sizeof(float),
         "{}: the relay sends whole FP32 tiles",
         operation_name);
-    TT_FATAL(
-        relay_affine_prefix_sender_slots(key_tiles, mesh->arch()) > 0,
-        "{}: a tile column of K = {} tiles needs {} packet headers, the pool holds {} per RISC",
-        operation_name,
-        key_tiles,
-        relay_affine_prefix_column_packets(key_tiles),
-        fabric_packet_headers_per_risc(mesh->arch()));
 
     const std::span<const CoreCoord> head_cores(attrs.cores.data(), heads);
     for (const auto& [landing, name] :
@@ -203,6 +196,7 @@ std::tuple<Tensor, Tensor, std::optional<Tensor>> relay_affine_prefix(
     uint32_t local_rows,
     uint32_t num_links,
     const std::vector<tt::tt_metal::CoreCoord>& cores,
+    bool leave_final_in_landing,
     const std::optional<AffineRelayOutputGateParams>& output_gate,
     const std::optional<Tensor>& gate_input,
     const std::optional<Tensor>& gate_weight,
@@ -216,6 +210,7 @@ std::tuple<Tensor, Tensor, std::optional<Tensor>> relay_affine_prefix(
             .entry_mem_config = entry_memory_config,
             .compute_kernel_config = compute_kernel_config,
             .semaphore_addresses = semaphore_addresses,
+            .leave_final_in_landing = leave_final_in_landing,
             .output_gate = output_gate},
         RelayAffinePrefixInputs{
             .packed = packed,

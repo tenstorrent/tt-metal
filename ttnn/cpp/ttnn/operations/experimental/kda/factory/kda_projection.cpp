@@ -39,12 +39,32 @@ void check_projection(
     constexpr std::array accepted = {tt::tt_metal::DataType::BFLOAT16, tt::tt_metal::DataType::BFLOAT8_B};
     for (const auto& [tensor, tensor_name] : {std::pair{&a, "projection input"}, std::pair{&w, "projection weight"}}) {
         check_layout(*tensor, tt::tt_metal::Layout::TILE, name, tensor_name);
-        check_interleaved(*tensor, name, tensor_name);
         check_dtype_in(*tensor, accepted, "BFLOAT16 or BFLOAT8_B", name, tensor_name);
     }
+    check_interleaved(a, name, "projection input");
     const uint32_t mt = a.physical_volume() / a.padded_shape()[-1] / tt::constants::TILE_HEIGHT;
     const uint32_t kt = a.padded_shape()[-1] / tt::constants::TILE_WIDTH;
     const uint32_t nt = w.padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    // The weight is interleaved, or width-sharded over the DRAM banks as the 2D multicast's DRAM-sharded in1 path reads
+    // it: whole K per shard, ceil(N / banks) tile columns per bank.
+    const auto& w_memory = w.memory_config();
+    if (w_memory.is_sharded()) {
+        const uint32_t banks = w.device()->num_dram_channels();
+        const auto& spec = w_memory.shard_spec();
+        TT_FATAL(
+            w_memory.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+                w_memory.memory_layout() == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED && spec.has_value() &&
+                spec->shape[0] == w.padded_shape()[-2] &&
+                spec->shape[1] == (nt + banks - 1) / banks * tt::constants::TILE_WIDTH &&
+                spec->grid.num_cores() == banks,
+            "{}: a sharded projection weight must be DRAM width-sharded, {} tile columns over each of the {} banks, "
+            "one shard per bank",
+            name,
+            (nt + banks - 1) / banks,
+            banks);
+    } else {
+        check_interleaved(w, name, "projection weight");
+    }
     const auto box = normalized(program_config, a).allowed_worker_cores->bounding_box();
     const auto grid = a.device()->compute_with_storage_grid_size();
     TT_FATAL(w.padded_shape()[-2] == a.padded_shape()[-1], "{}: the projection's A and W K differ", name);

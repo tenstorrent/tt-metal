@@ -38,6 +38,11 @@ struct RelayAffinePrefixParams {
     // L1 addresses of the caller's entry-state and final-state arrival counters, kept alive across calls: a peer
     // counts into them before this rank's call starts, and each call subtracts the columns it consumed.
     std::array<uint32_t, 2> semaphore_addresses{};
+    // The first rank leaves the last rank's final state in final_landing, with its arrival count, for a later program
+    // to wait on and take (entry_correction's split tail), instead of waiting for it and copying it to the final-state
+    // output; that output is then valid on the last chronological rank only. The taking program must run before the
+    // barrier that separates consecutive calls.
+    bool leave_final_in_landing = false;
     std::optional<AffineRelayOutputGateParams> output_gate;
 };
 

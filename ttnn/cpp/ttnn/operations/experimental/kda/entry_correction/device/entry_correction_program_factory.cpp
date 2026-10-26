@@ -3,6 +3,9 @@
 
 #include "ttnn/operations/experimental/kda/entry_correction/device/entry_correction_program_factory.hpp"
 
+#include <algorithm>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -16,6 +19,8 @@ namespace ttnn::experimental::prim {
 
 namespace {
 
+using tt::tt_metal::CoreCoord;
+using tt::tt_metal::CoreRange;
 using tt::tt_metal::CoreRangeSet;
 
 constexpr uint32_t cb_seed = 0;
@@ -32,6 +37,25 @@ constexpr uint32_t cb_diff = 10;
 // On every core: the head's seeds have landed.
 constexpr uint32_t seed_semaphore_id = 0;
 constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/entry_correction/device/kernels/";
+
+// The rectangle the cores fill exactly, when they do and it leaves out the sender (one multicast reaches them all).
+std::optional<CoreRange> seed_rectangle(std::span<const CoreCoord> cores, const CoreCoord& sender) {
+    if (cores.empty()) {
+        return std::nullopt;
+    }
+    CoreCoord lo = cores.front();
+    CoreCoord hi = cores.front();
+    for (const auto& core : cores) {
+        lo = CoreCoord(std::min(lo.x, core.x), std::min(lo.y, core.y));
+        hi = CoreCoord(std::max(hi.x, core.x), std::max(hi.y, core.y));
+    }
+    const CoreRange box(lo, hi);
+    // The cores are distinct, so as many as the box holds means they fill it.
+    if (box.size() != cores.size() || box.contains(sender)) {
+        return std::nullopt;
+    }
+    return box;
+}
 
 tt::tt_metal::ProgramDescriptor build_program(
     const EntryCorrectionParams& attrs,
@@ -53,6 +77,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t bf16_tile = tt::constants::TILE_HW * sizeof(uint16_t);
     const CoreRangeSet cores = kda_factory_detail::merged_core_set(attrs.cores);
     const auto& end = in.actual_end.value_or(in.actual_start);
+    const bool tail_from_landing = in.tail_landing.has_value();
 
     tt::tt_metal::ProgramDescriptor desc;
     desc.semaphores.push_back(
@@ -86,7 +111,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         attrs.local_rows,
         kt,
         static_cast<uint32_t>(in.actual_end.has_value()),
-        cores_per_head};
+        cores_per_head,
+        static_cast<uint32_t>(tail_from_landing)};
     for (const auto* tensor : {&in.final_a, &in.final_b, &in.entry, &in.tail_entry, &in.actual_start, &end}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
     }
@@ -129,12 +155,30 @@ tt::tt_metal::ProgramDescriptor build_program(
              {head, first, first + per_core, part < kt ? part : kt, static_cast<uint32_t>(part == 0)}) {
             reader_rt.push_back(value);
         }
-        // The head's first core writes the head's seeds to the head's other cores (NoC x | y << 16 each).
+        if (tail_from_landing) {
+            // Where the head's tail seed lands: its address, the landing core (NoC x | y << 16) and the arrival
+            // counter there.
+            const auto landing = mesh->worker_core_from_logical_core(attrs.tail_landing_cores[head]);
+            reader_rt.push_back(in.tail_landing->buffer());
+            reader_rt.push_back(static_cast<uint32_t>(landing.x) | (static_cast<uint32_t>(landing.y) << 16));
+            reader_rt.push_back(attrs.tail_landing_semaphore_address);
+        }
+        // The head's first core writes the head's seeds to the head's other cores: one multicast when they fill a
+        // rectangle without it (start and end corner), else one write each; then every core for the semaphore
+        // increments (NoC x | y << 16 each).
         reader_rt.push_back(part == 0 ? cores_per_head - 1 : 0);
         if (part == 0) {
-            for (uint32_t other = 1; other < cores_per_head; ++other) {
-                const auto noc = mesh->worker_core_from_logical_core(attrs.cores[index + other]);
-                reader_rt.push_back(static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16));
+            const std::span<const CoreCoord> others(attrs.cores.data() + index + 1, cores_per_head - 1);
+            const auto rectangle = seed_rectangle(others, core);
+            const auto pack = [&](const CoreCoord& logical) {
+                const auto noc = mesh->worker_core_from_logical_core(logical);
+                return static_cast<uint32_t>(noc.x) | (static_cast<uint32_t>(noc.y) << 16);
+            };
+            reader_rt.push_back(static_cast<uint32_t>(rectangle.has_value()));
+            reader_rt.push_back(rectangle ? pack(rectangle->start_coord) : 0);
+            reader_rt.push_back(rectangle ? pack(rectangle->end_coord) : 0);
+            for (const auto& other : others) {
+                reader_rt.push_back(pack(other));
             }
         }
         reader.emplace_runtime_args(core, reader_rt);

@@ -26,6 +26,8 @@ constexpr uint32_t cb_chron = 4;
 constexpr uint32_t cb_stage = 5;
 // On the head cores: the sender releases a head once it has read the head's last column.
 constexpr uint32_t ack_semaphore_id = 0;
+// On the head cores: the previous head on the link has read its A block, so this one reads now.
+constexpr uint32_t read_turn_semaphore_id = 1;
 // On the sender cores, ids 0, 1, ...: per head the sender serves, the head's finished columns.
 constexpr uint32_t first_notify_semaphore_id = 0;
 constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/relay_affine_prefix/device/kernels/";
@@ -59,7 +61,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     const auto head_set = kda_factory_detail::merged_core_set(head_cores);
     const auto sender_set = kda_factory_detail::merged_core_set(sender_cores);
 
-    const uint32_t sender_slots = relay_affine_prefix_sender_slots(kt, in.packed.device()->arch());
+    // The sender stages up to one head's state (kt tile columns), reading later columns while earlier ones are on the
+    // link.
+    const uint32_t sender_slots = kt;
+    const uint32_t packet_bytes = relay_affine_prefix_packet_bytes(kt);
     desc.cbs = {
         kda_factory_detail::cb_descriptor(cb_a, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
         kda_factory_detail::cb_descriptor(cb_b, state_tiles, summary_tile, tt::DataFormat::Float16_b, head_set),
@@ -72,6 +77,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     };
     desc.semaphores.push_back(
         tt::tt_metal::SemaphoreDescriptor{.id = ack_semaphore_id, .core_ranges = head_set, .initial_value = 0});
+    desc.semaphores.push_back(
+        tt::tt_metal::SemaphoreDescriptor{.id = read_turn_semaphore_id, .core_ranges = head_set, .initial_value = 0});
     for (uint32_t k = 0; k < heads_per_link; ++k) {
         desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = first_notify_semaphore_id + k, .core_ranges = sender_set, .initial_value = 0});
@@ -81,6 +88,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> reader_ct = {cb_a, cb_b, cb_ein, cb_chron};
     reader_ct.insert(reader_ct.end(), chronology.begin(), chronology.end());
     reader_ct.push_back(kt);
+    reader_ct.push_back(read_turn_semaphore_id);
     for (const auto* tensor : {&in.packed, &in.initial_state, &in.actual_start}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(reader_ct);
     }
@@ -88,26 +96,33 @@ tt::tt_metal::ProgramDescriptor build_program(
     writer_ct.insert(writer_ct.end(), chronology.begin(), chronology.end());
     writer_ct.push_back(kt);
     writer_ct.push_back(ack_semaphore_id);
+    writer_ct.push_back(static_cast<uint32_t>(!attrs.leave_final_in_landing));
     for (const auto* tensor : {&entry, &final_state}) {
         tt::tt_metal::TensorAccessorArgs(tensor->buffer()).append_to(writer_ct);
     }
     std::vector<uint32_t> sender_ct = {cb_stage};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
-    sender_ct.insert(
-        sender_ct.end(), {kt * state_tile, relay_affine_prefix_packet_bytes(), kt, sender_slots, ack_semaphore_id});
+    sender_ct.insert(sender_ct.end(), {kt * state_tile, packet_bytes, kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
 
     tt::tt_metal::KernelDescriptor reader{
         .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_affine_prefix.cpp",
         .core_ranges = head_set,
         .compile_time_args = std::move(reader_ct),
-        .config = tt::tt_metal::ReaderConfigDescriptor{},
+        // The head cores' reader takes NoC 1 and their writer NoC 0, the reverse of the reader/writer default: the
+        // first rank's reader streams the initial state from DRAM while the output gate beside the relay streams its
+        // operands from DRAM over NoC 0, and sharing that NoC slows the whole gate.
+        .config =
+            tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1},
     };
     tt::tt_metal::KernelDescriptor writer{
         .kernel_source = std::string(kernel_dir) + "dataflow/writer_relay_affine_prefix.cpp",
         .core_ranges = head_set,
         .compile_time_args = std::move(writer_ct),
-        .config = tt::tt_metal::WriterConfigDescriptor{},
+        .config =
+            tt::tt_metal::DataMovementConfigDescriptor{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0},
     };
     tt::tt_metal::KernelDescriptor compute{
         .kernel_source = std::string(kernel_dir) + "compute/relay_affine_prefix.cpp",
@@ -120,8 +135,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         .kernel_source = std::string(kernel_dir) + "dataflow/sender_relay_affine_prefix.cpp",
         .core_ranges = sender_set,
         .compile_time_args = std::move(sender_ct),
-        // NoC 0, away from the head writers' DRAM copies (the writer default, NoC 1): the relay's hops are latency
-        // bound.
+        // NoC 0 (the sender cores run nothing else).
         .config =
             tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0},
@@ -137,6 +151,13 @@ tt::tt_metal::ProgramDescriptor build_program(
         reader_rt.push_back(in.actual_start.buffer());
         reader_rt.push_back(h);
         reader_rt.push_back(arrival_address);
+        // The heads take their DRAM reads in turn per link, in the order the sender streams them.
+        const bool has_next = h + attrs.num_links < batch_heads;
+        const auto next = mesh->worker_core_from_logical_core(head_cores[has_next ? h + attrs.num_links : h]);
+        reader_rt.push_back(static_cast<uint32_t>(h >= attrs.num_links));
+        reader_rt.push_back(static_cast<uint32_t>(has_next));
+        reader_rt.push_back(static_cast<uint32_t>(next.x));
+        reader_rt.push_back(static_cast<uint32_t>(next.y));
         reader.emplace_runtime_args(core, reader_rt);
         tt::tt_metal::KernelDescriptor::RTArgList writer_rt;
         writer_rt.push_back(entry.buffer());

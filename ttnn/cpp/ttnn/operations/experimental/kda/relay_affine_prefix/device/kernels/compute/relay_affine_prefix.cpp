@@ -19,21 +19,23 @@ constexpr uint32_t state_tiles = kt * kt;
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_ein, cb_eout);
     cb_wait_front(cb_a, state_tiles);
-    cb_wait_front(cb_b, state_tiles);
     // Per output tile column (column-major state): B's column (BF16, exact in the FP32 DST) is copied into DST first
     // and the K-sum accumulates on top of it, so the state never leaves DST between the product and the add. Column j
-    // needs only column j of E_in, so B's column is in DST before that column lands.
+    // needs only column j of E_in, so B's column is in DST before that column lands. B is stored column-major by tile
+    // too, and arrives column by column.
     for (uint32_t j = 0; j < kt; ++j) {
         cb_reserve_back(cb_eout, kt);
         tile_regs_acquire();
         reconfig_data_format_srca(cb_b);
         copy_init(cb_b);
+        cb_wait_front(cb_b, (j + 1) * kt);
         for (uint32_t r = 0; r < kt; ++r) {
-            copy_tile(cb_b, r * kt + j, r);
+            copy_tile(cb_b, j * kt + r, r);
         }
-        cb_wait_front(cb_ein, (j + 1) * kt);
         reconfig_data_format<SrcOrder::Reverse>(cb_a, cb_ein);
         matmul_block_init(cb_a, cb_ein, false, 1, kt, kt);
+        // Set up before waiting: the hop's latency runs from the column's landing to its last product.
+        cb_wait_front(cb_ein, (j + 1) * kt);
         for (uint32_t k = 0; k < kt; ++k) {
             matmul_block(cb_a, cb_ein, k, j * kt + k, 0, false, 1, kt, kt);
         }
